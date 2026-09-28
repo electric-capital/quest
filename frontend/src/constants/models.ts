@@ -56,6 +56,7 @@ const BUILTIN_MODELS: ModelInfo[] = ([
   { id: 'claude-haiku-4.5', name: 'Claude Haiku 4.5', provider: 'anthropic', providerLabel: 'Claude on Vertex', maxInputTokens: 200_000 },
   { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic', providerLabel: 'Claude on Vertex', maxInputTokens: 200_000 },
   { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', provider: 'anthropic', providerLabel: 'Claude on Vertex', maxInputTokens: 1_000_000 },
+  { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', provider: 'anthropic', providerLabel: 'Claude on Vertex', maxInputTokens: 1_000_000 },
   { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', provider: 'anthropic', providerLabel: 'Claude on Vertex', maxInputTokens: 200_000 },
   { id: 'claude-opus-4-7', name: 'Claude Opus 4.7', provider: 'anthropic', providerLabel: 'Claude on Vertex', maxInputTokens: 200_000 },
   { id: 'claude-opus-4-8', name: 'Claude Opus 4.8', provider: 'anthropic', providerLabel: 'Claude on Vertex', maxInputTokens: 1_000_000 },

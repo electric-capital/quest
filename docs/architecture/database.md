@@ -430,6 +430,7 @@ Two `StrEnum` enums are used by the LLM call analytics models (`LlmCallGemini` /
 | `CLAUDE_OPUS_4_7` | `"claude-opus-4-7"` | Anthropic Claude Opus 4.7 on Vertex AI |
 | `CLAUDE_OPUS_4_8` | `"claude-opus-4-8"` | Anthropic Claude Opus 4.8 on Vertex AI (1M-token input window) |
 | `CLAUDE_SONNET_5` | `"claude-sonnet-5"` | Anthropic Claude Sonnet 5 on Vertex AI (1M-token input window) |
+| `CLAUDE_SONNET_5_5` | `"claude-sonnet-5-5"` | Anthropic Claude Sonnet 5.5 on Vertex AI (1M-token input window) |
 | `CLAUDE_OPUS_5` | `"claude-opus-5"` | Anthropic Claude Opus 5 on Vertex AI (1M-token input window) |
 | `CLAUDE_OPUS_5_5` | `"claude-opus-5-5"` | Anthropic Claude Opus 5.5 on Vertex AI (1M-token input window) |
 | `DEEPSEEK_V4_FLASH_0731` | `"deepseek/deepseek-v4-flash-0731"` | DeepSeek V4 Flash 0731 snapshot served via OpenRouter (API-key backend; 1.31M-token input window) |

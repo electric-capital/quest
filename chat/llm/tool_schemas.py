@@ -1622,7 +1622,7 @@ _AGENT_TASK: ToolSpec = {
                 "description": (
                     "Optional: the model for this sub-agent to use. "
                     "If omitted, the sub-agent uses the same model as you. "
-                    "Valid values: 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.8-flash', 'claude-haiku-4.5', 'claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-opus-5', 'claude-opus-5-5'. "
+                    "Valid values: 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.8-flash', 'claude-haiku-4.5', 'claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-sonnet-5-5', 'claude-opus-5', 'claude-opus-5-5'. "
                     "Gemini 3.1 Pro ('gemini-3.1-pro-preview') is NOT available to sub-agents. "
                     "Use a faster/cheaper model for simple tasks like data retrieval, "
                     "and a more capable model for complex analysis or reasoning."
@@ -1681,7 +1681,7 @@ _AGENT_TASK_PARALLEL: ToolSpec = {
                             "description": (
                                 "Optional: the model for this sub-agent to use. "
                                 "If omitted, the sub-agent uses the same model as you. "
-                                "Valid values: 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.8-flash', 'claude-haiku-4.5', 'claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-opus-5', 'claude-opus-5-5'. "
+                                "Valid values: 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.8-flash', 'claude-haiku-4.5', 'claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-sonnet-5-5', 'claude-opus-5', 'claude-opus-5-5'. "
                                 "Gemini 3.1 Pro ('gemini-3.1-pro-preview') is NOT available to sub-agents. "
                                 "Use a faster/cheaper model for simple tasks like data retrieval."
                             ),
