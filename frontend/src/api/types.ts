@@ -1398,31 +1398,52 @@ export interface ModelSelectionUpdate {
 }
 
 // Schedule types
+export type RoutineScheduleType = 'daily' | 'weekly' | 'hourly' | 'every_n_minutes';
+
+// One row of the schedule run ledger (GET .../schedule `recent_runs`)
+export interface RoutineScheduleRun {
+  id: string;
+  schedule_id: string;
+  occurrence_at: string;
+  status: 'running' | 'completed' | 'failed' | 'interrupted' | 'missed';
+  attempt: number;
+  conversation_id: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
 export interface RoutineSchedule {
   id: string;
   routine_id: string;
   user_id: number;
-  schedule_type: 'daily' | 'hourly' | 'every_n_minutes';
+  schedule_type: RoutineScheduleType;
   daily_time_utc: string | null;
   daily_time_local: string | null;
   timezone: string | null;
+  // Weekly only: weekday numbers, 0=Monday .. 6=Sunday
+  weekly_days: number[] | null;
   hourly_minute: number | null;
   interval_minutes: number | null;
   is_enabled: boolean;
+  next_due_at: string | null;
   last_run_started_at: string | null;
   last_run_completed_at: string | null;
   is_running: boolean;
   last_conversation_id: string | null;
   created_at: string;
   updated_at: string | null;
+  // Present on GET .../schedule only
+  recent_runs?: RoutineScheduleRun[];
 }
 
 // Summary included in routine list responses (subset of full RoutineSchedule)
 export interface RoutineScheduleSummary {
   id: string;
-  schedule_type: 'daily' | 'hourly' | 'every_n_minutes';
+  schedule_type: RoutineScheduleType;
   daily_time_local: string | null;
   timezone: string | null;
+  weekly_days: number[] | null;
+  next_due_at: string | null;
   hourly_minute: number | null;
   interval_minutes: number | null;
   is_enabled: boolean;

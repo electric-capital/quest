@@ -285,7 +285,7 @@ def _routines_content(_base_url: str, _api_key: str) -> str:
 
 Routines are canned prompts attached to the current project. Each routine
 combines a name, a prompt, an optional model override, an optional schedule
-(daily / hourly / every-N-minutes automatic runs), and a set of auto-loaded
+(daily / weekly / hourly / every-N-minutes automatic runs), and a set of auto-loaded
 skills merged into every conversation the routine creates. Running a routine
 starts a new conversation in the project with the prompt as the first
 message.
@@ -298,8 +298,9 @@ that belongs to a project, and only see that project's routines.
 - **list_routines()** -- list this project's routines. Each entry carries
   `id`, `name`, the full `prompt`, `model` (null = the default model),
   `schedule` (null when unscheduled; otherwise `schedule_type`,
-  `daily_time_local` + `timezone` / `hourly_minute` / `interval_minutes`,
-  `is_enabled`, `is_running`, `last_run_completed_at`), and
+  `daily_time_local` + `timezone` (daily and weekly) / `weekly_days` /
+  `hourly_minute` / `interval_minutes`, `is_enabled`, `is_running`,
+  `next_due_at`, `last_run_completed_at`), and
   `autoloaded_skills` (`[{id, name}]`). Always list first so you have the
   current `id`s and values before proposing an edit.
 
@@ -347,9 +348,10 @@ create_action_request(
         "model": "<model id>",         # optional; a valid non-deprecated model id
         "clear_model": true,           # optional; reset to the default model
         "schedule": {                  # optional FULL replacement of the schedule
-            "schedule_type": "daily",  # daily | hourly | every_n_minutes
-            "daily_time_local": "09:00",          # daily only, "HH:MM"
-            "timezone": "America/New_York",       # daily only, IANA name
+            "schedule_type": "daily",  # daily | weekly | hourly | every_n_minutes
+            "daily_time_local": "09:00",          # daily + weekly, "HH:MM"
+            "timezone": "America/New_York",       # daily + weekly, IANA name
+            "weekly_days": [0, 2, 4],             # weekly only, 0=Mon .. 6=Sun
             "hourly_minute": 15,                  # hourly only, 0-59
             "interval_minutes": 30,               # every_n_minutes only, 1-1440
             "is_enabled": true                    # optional, default true
@@ -369,8 +371,11 @@ create_action_request(
   the complete new text.
 - `model` / `clear_model` and `schedule` / `clear_schedule` are mutually
   exclusive pairs. Each routine has at most one schedule; `schedule` creates
-  it when missing and fully replaces it otherwise. For a daily schedule,
-  pass the user's timezone (check `get_current_time` if unsure).
+  it when missing and fully replaces it otherwise. For a daily or weekly
+  schedule, pass the user's timezone (check `get_current_time` if unsure).
+- A run due while the server was down still starts when it comes back, if
+  it is not too late (hourly 45 min, daily 6 h, weekly 24 h); otherwise it
+  is recorded as missed. A run cut off by a restart is retried once.
 - `add_skill_ids` / `remove_skill_ids` take skill ids from `list_my_skills`;
   you can only add skills you can access (own / shared-with-you / public).
 - The routine must belong to the current project; bad ids, name collisions,
