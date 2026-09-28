@@ -645,6 +645,156 @@ async def get_usage_by_user(
     return result
 
 
+async def get_usage_by_model(
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+    routine_id_by_conversation: Optional[dict[str, str]] = None,
+    top_users: int = 10,
+) -> list[dict]:
+    """Return per-model token usage, cost and audience aggregates for a window.
+
+    Aggregates the raw ``llm_calls_*`` tables across ALL conversations whose
+    calls fall inside ``[start, end)`` (either bound optional) and folds the
+    buckets by model: one entry per distinct model id with its total spend,
+    how many distinct users and conversations used it, the share of its
+    spend accrued in routine-created conversations
+    (``routine_id_by_conversation`` -- conversation id -> ``routine_id`` on
+    its surviving row, same contract as ``get_usage_by_user``) and the share
+    accrued by sub-agent calls (the rows' ``call_type``, so an Opus
+    sub-agent spawned from a Gemini conversation lands on the Opus row),
+    plus the ``top_users`` most expensive users of the model.
+
+    Cost figures follow the usual convention: ``None`` when the model has
+    no pricing entry and no provider-reported amounts (then every split of
+    that model is None too), with a ``cost_source`` companion. Sorted by
+    known cost descending (ties: total tokens, then model id).
+
+    Returns:
+        [
+            {
+                "model": str,
+                "provider": str,
+                # get_usage_by_model_for_conversations entry shape for this
+                # one model (merged across every conversation/call type):
+                "usage": {...},
+                "known_cost_usd": float,      # ranking key, never None
+                "user_count": N,              # distinct users (call rows)
+                "conversation_count": N,      # distinct conversations
+                "cost_routines_usd": float | None,
+                "cost_routines_source": str | None,
+                "cost_subagents_usd": float | None,
+                "cost_subagents_source": str | None,
+                "users": [                    # top ``top_users`` by cost
+                    {
+                        "user_id": int,
+                        "call_count": N,
+                        "cost_usd": float | None,
+                        "cost_source": str | None,
+                        "known_cost_usd": float,
+                    },
+                    ...
+                ],
+            },
+            ...
+        ]
+    """
+    routine_by_conv = routine_id_by_conversation or {}
+    by_key, user_ids = await _collect_usage_buckets(
+        start=start, end=end, by_call_type=True
+    )
+
+    by_model: dict[str, dict] = {}
+    for (conv_id, model, call_type), bucket in by_key.items():
+        user_id = user_ids[conv_id]
+        cost = bucket["estimated_cost_usd"]
+        source = bucket["cost_source"]
+        entry = by_model.get(model)
+        if entry is None:
+            usage = {k: v for k, v in bucket.items() if k != "call_type"}
+            usage["metrics"] = dict(bucket["metrics"])
+            entry = by_model[model] = {
+                "usage": usage,
+                "known_cost_usd": 0.0,
+                "users": {},
+                "conversations": set(),
+                "cost_routines_usd": 0.0,
+                "cost_routines_source": None,
+                "cost_subagents_usd": 0.0,
+                "cost_subagents_source": None,
+            }
+        else:
+            # Same-tier pricing is linear in the token fields and the tier
+            # split happened per call upstream, so summing buckets across
+            # conversations and call types is exact.
+            usage = entry["usage"]
+            usage["call_count"] += bucket["call_count"]
+            usage["total_tokens"] += bucket["total_tokens"]
+            for field, value in bucket["metrics"].items():
+                usage["metrics"][field] += value
+            add_cost(usage, "estimated_cost_usd", "cost_source", cost, source)
+
+        if cost is not None:
+            entry["known_cost_usd"] += cost
+        entry["conversations"].add(conv_id)
+        if conv_id in routine_by_conv:
+            add_cost(entry, "cost_routines_usd", "cost_routines_source", cost, source)
+        if call_type == str(ApiCallType.SUB_AGENT):
+            add_cost(
+                entry, "cost_subagents_usd", "cost_subagents_source", cost, source
+            )
+
+        user_entry = entry["users"].setdefault(
+            user_id,
+            {
+                "user_id": user_id,
+                "call_count": 0,
+                "cost_usd": 0.0,
+                "cost_source": None,
+                "known_cost_usd": 0.0,
+            },
+        )
+        user_entry["call_count"] += bucket["call_count"]
+        if cost is not None:
+            user_entry["known_cost_usd"] += cost
+        add_cost(user_entry, "cost_usd", "cost_source", cost, source)
+
+    def _rounded(value: Optional[float]) -> Optional[float]:
+        return None if value is None else round(value, 6)
+
+    result = []
+    for model, entry in by_model.items():
+        usage = entry["usage"]
+        usage["estimated_cost_usd"] = _rounded(usage["estimated_cost_usd"])
+        users = sorted(
+            entry["users"].values(),
+            key=lambda u: (-u["known_cost_usd"], -u["call_count"], u["user_id"]),
+        )
+        result.append({
+            "model": model,
+            "provider": usage["provider"],
+            "usage": usage,
+            "known_cost_usd": round(entry["known_cost_usd"], 6),
+            "user_count": len(entry["users"]),
+            "conversation_count": len(entry["conversations"]),
+            "cost_routines_usd": _rounded(entry["cost_routines_usd"]),
+            "cost_routines_source": entry["cost_routines_source"],
+            "cost_subagents_usd": _rounded(entry["cost_subagents_usd"]),
+            "cost_subagents_source": entry["cost_subagents_source"],
+            "users": [
+                {
+                    **u,
+                    "cost_usd": _rounded(u["cost_usd"]),
+                    "known_cost_usd": round(u["known_cost_usd"], 6),
+                }
+                for u in users[:top_users]
+            ],
+        })
+    result.sort(key=lambda m: (
+        -m["known_cost_usd"], -m["usage"]["total_tokens"], m["model"],
+    ))
+    return result
+
+
 async def get_latest_context_tokens_for_conversations(
     conversation_ids: list[str],
 ) -> dict[str, int]:
@@ -828,7 +978,8 @@ async def _collect_usage_buckets(
     conversation_id_select: Optional[Select] = None,
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
-) -> tuple[dict[tuple[str, str], dict], dict[str, int]]:
+    by_call_type: bool = False,
+) -> tuple[dict[tuple, dict], dict[str, int]]:
     """Run the grouped per-provider queries and merge the tier buckets.
 
     Shared core of the aggregation entry points: filters by conversation
@@ -841,13 +992,19 @@ async def _collect_usage_buckets(
     normal- and a long-context bucket so tier pricing is exact; the
     buckets merge back into one entry per key.
 
+    ``by_call_type`` additionally splits the buckets on the rows'
+    ``call_type`` (top-level vs sub-agent), for callers that need to tell
+    sub-agent spend apart (the models report); the key then gains the
+    call type as a third element and each entry carries a ``call_type``.
+
     Returns:
-        ``(by_key, user_ids)``: ``by_key`` maps (conversation_id, model) to a
-        merged model entry; ``user_ids`` maps conversation_id -> owner
-        user_id as recorded on the call rows (available even when the
-        conversation row itself has been deleted).
+        ``(by_key, user_ids)``: ``by_key`` maps (conversation_id, model) --
+        or (conversation_id, model, call_type) -- to a merged model entry;
+        ``user_ids`` maps conversation_id -> owner user_id as recorded on
+        the call rows (available even when the conversation row itself has
+        been deleted).
     """
-    by_key: dict[tuple[str, str], dict] = {}
+    by_key: dict[tuple, dict] = {}
     user_ids: dict[str, int] = {}
     async with AsyncSessionLocal() as db:
         for (
@@ -871,12 +1028,21 @@ async def _collect_usage_buckets(
             else:
                 has_reported = literal(0)
                 reported_cost = literal(0.0)
+            group_cols = [
+                row_cls.conversation_id, row_cls.model, long_context, has_reported,
+            ]
+            if by_call_type:
+                group_cols.append(row_cls.call_type)
+                call_type_col = row_cls.call_type
+            else:
+                call_type_col = literal(None)
             stmt = (
                 select(
                     row_cls.conversation_id,
                     row_cls.model,
                     long_context,
                     has_reported,
+                    call_type_col,
                     func.count(row_cls.id),
                     # A conversation has exactly one owner; MAX picks it
                     # without widening the GROUP BY.
@@ -887,9 +1053,7 @@ async def _collect_usage_buckets(
                         for field in metric_fields
                     ),
                 )
-                .group_by(
-                    row_cls.conversation_id, row_cls.model, long_context, has_reported
-                )
+                .group_by(*group_cols)
             )
             if conversation_ids is not None:
                 stmt = stmt.where(row_cls.conversation_id.in_(conversation_ids))
@@ -903,8 +1067,8 @@ async def _collect_usage_buckets(
                 stmt = stmt.where(row_cls.created_at < end)
             result = await db.execute(stmt)
             for (
-                conv_id, model, is_long, is_reported, call_count, user_id,
-                reported, *sums
+                conv_id, model, is_long, is_reported, call_type, call_count,
+                user_id, reported, *sums
             ) in result.all():
                 metrics = {
                     field: int(value)
@@ -920,9 +1084,10 @@ async def _collect_usage_buckets(
                     )
                     source = COST_SOURCE_ESTIMATED if cost is not None else None
                 user_ids[conv_id] = int(user_id)
-                entry = by_key.get((conv_id, model))
+                key = (conv_id, model, call_type) if by_call_type else (conv_id, model)
+                entry = by_key.get(key)
                 if entry is None:
-                    by_key[(conv_id, model)] = {
+                    entry = {
                         "model": model,
                         "provider": provider,
                         "call_count": int(call_count),
@@ -931,6 +1096,9 @@ async def _collect_usage_buckets(
                         "cost_source": source,
                         "metrics": metrics,
                     }
+                    if by_call_type:
+                        entry["call_type"] = call_type
+                    by_key[key] = entry
                     continue
                 entry["call_count"] += int(call_count)
                 entry["total_tokens"] += total_tokens

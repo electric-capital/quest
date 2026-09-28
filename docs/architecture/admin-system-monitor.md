@@ -1,6 +1,6 @@
 # Admin System Reports
 
-Admin-only operator dashboard at `/admin/system-reports` (titled "System Reports"; the pre-rename `/admin/system-monitor` URL redirects, and the API prefix keeps the historical `system-monitor` name). A left-hand nav switches between report sections; ships with "Latest Conversations", "Cost Analysis", "Users", and "Guides".
+Admin-only operator dashboard at `/admin/system-reports` (titled "System Reports"; the pre-rename `/admin/system-monitor` URL redirects, and the API prefix keeps the historical `system-monitor` name). A left-hand nav switches between report sections; ships with "Latest Conversations", "Cost Analysis", "Users", "Models", and "Guides".
 
 ## Overview
 
@@ -11,9 +11,9 @@ Admin gating is enforced on the backend via the inline `is_admin(user["email"])`
 ## Key Files
 
 **Backend:**
-- `chat/routes/admin.py` -- `admin_latest_active_conversations`, `admin_most_expensive_conversations`, `admin_user_report`, and `admin_guides_report` handlers (admin check, limit clamping, date-range parsing via the shared `_resolve_range_window`, title resolution) sharing the `_admin_conversation_view` row assembler
+- `chat/routes/admin.py` -- `admin_latest_active_conversations`, `admin_most_expensive_conversations`, `admin_user_report`, `admin_model_report`, and `admin_guides_report` handlers (admin check, limit clamping, date-range parsing via the shared `_resolve_range_window`, title resolution) sharing the `_admin_conversation_view` row assembler
 - `db/conversation_store.py` -- `list_latest_active_conversations()` (joins `Conversation` to `User`, orders by `last_message_at DESC`) and the batch companion `get_conversations_with_users()`, sharing `_admin_conversation_row`; plus `list_conversation_activity_rows()`, the narrow all-conversation owner/routine/activity projection behind the user report
-- `db/llm_call_store.py` -- `_collect_usage_buckets()` grouped `GROUP BY (conversation_id, model, long_context_flag)` aggregation over the per-provider `llm_calls_gemini` / `llm_calls_anthropic` raw tables (one query per table, optional conversation-id and `created_at`-window filters), behind `get_usage_by_model_for_conversations()` (batch), `get_most_expensive_conversations()` (date-range top-N ranking), and `get_usage_by_user()` (date-range per-user fold with the routine cost split); plus `get_latest_context_tokens_for_conversations()` (batched latest top-level call context size)
+- `db/llm_call_store.py` -- `_collect_usage_buckets()` grouped `GROUP BY (conversation_id, model, long_context_flag)` aggregation over the per-provider `llm_calls_gemini` / `llm_calls_anthropic` raw tables (one query per table, optional conversation-id and `created_at`-window filters, optional `by_call_type` split adding the rows' `call_type` to the key), behind `get_usage_by_model_for_conversations()` (batch), `get_most_expensive_conversations()` (date-range top-N ranking), `get_usage_by_user()` (date-range per-user fold with the routine cost split), and `get_usage_by_model()` (date-range per-model fold with audience counts, routine + sub-agent cost shares and top users); plus `get_latest_context_tokens_for_conversations()` (batched latest top-level call context size)
 - `db/llm_pricing.py` -- static per-model USD list-price table and `estimate_cost_usd()` (cache read/write rates incl. the Anthropic 5m/1h TTL split; Gemini long-context tier >200K), consulted only for calls without a provider-reported amount
 - `db/guide_store.py` / `db/project_store.py` -- `list_all_guides()` (every user guide joined to its owner plus a per-guide routine reference count) and `list_all_project_guides()` (projects with non-empty `projects.guide` instructions) behind the guides report
 - `chat/storage.py` -- `ChatStorage.count_user_message_active_days()` (distinct UTC days with user messages, from chat_history.json) and the range-clipped day-set variant `user_message_active_days()`
@@ -23,15 +23,16 @@ Admin gating is enforced on the backend via the inline `is_admin(user["email"])`
 - `frontend/src/components/LatestActiveConversationsTable.tsx` / `.css` -- "Latest Conversations" polling section
 - `frontend/src/components/CostAnalysisTable.tsx` / `.css` -- "Cost Analysis" section (date-range selector + ranked table, fetch-on-demand)
 - `frontend/src/components/UsersReportTable.tsx` / `.css` -- "Users" section (date-range selector + per-user activity/cost table, fetch-on-demand)
+- `frontend/src/components/ModelsReportTable.tsx` / `.css` -- "Models" section (date-range selector + per-model cost/audience table, fetch-on-demand)
 - `frontend/src/components/GuidesReportTable.tsx` / `.css` -- "Guides" section (deprecation tracker: every user guide and project guide with owner, fetch-on-demand, client-side "Hide empty" toggle)
-- `frontend/src/components/ReportDateRange.tsx` / `.css` -- shared date-range picker (presets + custom start/end, `resolveRange` date math) used by Cost Analysis and Users
+- `frontend/src/components/ReportDateRange.tsx` / `.css` -- shared date-range picker (presets + custom start/end, `resolveRange` date math) used by Cost Analysis, Users and Models
 - `frontend/src/components/ConversationUsageCell.tsx` / `.css` -- shared per-model token-usage breakdown cell (native-field row format + exact-numbers tooltip), used by both tables
 - `frontend/src/components/AdminOpsMenu.tsx` -- "System Reports" menu item (admin-only, hidden during impersonation; sibling to "Impersonate user" and the shutdown button)
 - `frontend/src/App.tsx` -- `AdminSystemReportsRoute` at `/admin/system-reports`, plus a legacy `/admin/system-monitor` redirect
 - `quest.py` -- `serve_spa_admin` SPA catch-all for `/admin/{rest:path}` so direct browser loads serve `index.html` instead of 404 (safe because all admin API routes live under `/app/api/admin/...`; see [Frontend -- Backend SPA Support](frontend.md#backend-spa-support))
-- `frontend/src/api/client.ts` -- `fetchLatestActiveConversations()`, `fetchMostExpensiveConversations()`, `fetchAdminUserReport()`, `fetchAdminGuidesReport()`
-- `frontend/src/api/config.ts` -- `adminLatestActiveConversations`, `adminMostExpensiveConversations`, `adminUserReport`, `adminGuidesReport` URL builders
-- `frontend/src/api/types.ts` -- `AdminActiveConversation`, `AdminConversationModelUsage`, `AdminConversationUsageTotal`, `AdminUserReportRow`, `AdminGuideReportRow`, response types
+- `frontend/src/api/client.ts` -- `fetchLatestActiveConversations()`, `fetchMostExpensiveConversations()`, `fetchAdminUserReport()`, `fetchAdminModelReport()`, `fetchAdminGuidesReport()`
+- `frontend/src/api/config.ts` -- `adminLatestActiveConversations`, `adminMostExpensiveConversations`, `adminUserReport`, `adminModelReport`, `adminGuidesReport` URL builders
+- `frontend/src/api/types.ts` -- `AdminActiveConversation`, `AdminConversationModelUsage`, `AdminConversationUsageTotal`, `AdminUserReportRow`, `AdminModelReportRow`, `AdminGuideReportRow`, response types
 - `frontend/src/utils/formatters.ts` -- `formatRelativeTimestamp` shared by both tables' last-active columns
 
 See [Admin System Reports API](../api/admin-system-monitor-api.md) for the endpoint contracts.
@@ -73,7 +74,7 @@ A future iteration may replace polling with an admin-scoped per-user global on t
 
 Renders the top-30 most-expensive conversations for a selected date range, ranked most-expensive-first with a rank column and a prominent green "Est. cost" column.
 
-**Date range selector.** The shared `ReportDateRange` component (also used by the Users section): a preset dropdown (Last 7 / 30 / 90 days, Last 12 months, All time -- see `RANGE_PRESETS` in `ReportDateRange.tsx`) plus a "Custom range" option that swaps in two date inputs (either side may be left empty for an open-ended bound). Presets resolve to UTC dates ("Last N days" includes today, so the window starts N-1 days back) because the `llm_calls_*` rows are stamped in UTC; the backend interprets the inclusive `start`/`end` dates as UTC midnights.
+**Date range selector.** The shared `ReportDateRange` component (also used by the Users and Models sections): a preset dropdown (Today, Last 7 / 30 / 90 days, Last 12 months, All time -- see `RANGE_PRESETS` in `ReportDateRange.tsx`) plus a "Custom range" option that swaps in two date inputs (either side may be left empty for an open-ended bound). Presets resolve to UTC dates ("Last N days" includes today, so the window starts N-1 days back; "Today" is the current UTC date alone) because the `llm_calls_*` rows are stamped in UTC; the backend interprets the inclusive `start`/`end` dates as UTC midnights.
 
 **Ranking.** Server-side in `get_most_expensive_conversations()`: the same tier-bucketed grouped queries as the batch aggregation, filtered to the `created_at` window instead of a conversation-id list, ranked by each conversation's *known* cost (the sum of per-model figures that could be priced -- reported or estimated) so a conversation mixing priced and unpriced models still ranks by what can be priced -- while the displayed total keeps the null-when-partial convention (the FE shows "n/a" with a tooltip pointing at the per-model tooltips).
 
@@ -96,6 +97,20 @@ Renders one row per user for the selected date range (same `ReportDateRange` pic
 - **Token usage** -- the shared `ConversationUsageCell`, fed per-user aggregates: one merged entry per model across ALL the user's conversations in range, routines included (`get_usage_by_user()` in `db/llm_call_store.py` folds the same tier-bucketed (conversation, model) buckets by the call rows' `user_id`, so the tier pricing stays exact).
 
 The roster comes from `list_all_users()` -- zero-activity users keep their row so the report doubles as a "who is not using Quest" view. Calls whose conversation row was deleted count as non-routine (routine provenance dies with the row) and contribute no active days (the chat history file is gone); calls whose *user* was deleted keep their spend on a placeholder "(unknown user)" row. See [Admin System Reports API](../api/admin-system-monitor-api.md) for the exact row contract.
+
+## Models Section
+
+Renders one row per model id with at least one recorded call in the selected date range (same `ReportDateRange` picker and fetch-on-demand pattern as Cost Analysis and Users, incl. the stale-response guard), sorted by known in-range cost, so an admin can see which models carry the spend and who drives it. Columns per row (`AdminModelReportRow`):
+
+- **Model** -- the catalog display name (`getModelDisplayName()`, falling back to the raw id) over the raw model id; the row tooltip adds the provider.
+- **Cost** -- the model's total in-range spend across every user, conversation and call type (`usage_total.estimated_cost_usd`); `null`/"n/a" only when the model has no pricing entry and reported no amounts, with the usual `cost_source` provenance so the `~` drops only for fully provider-reported figures.
+- **Users** -- distinct users (per the call rows' `user_id`, so deleted users and deleted conversations still count) with at least one call to the model in range; the tooltip adds the distinct conversation count.
+- **Top users** -- the model's ten most expensive users (`top_users`), ranked by the priceable portion of their spend on this model (ties: call count), each showing name (or email) and cost with its own `cost_source`; the tooltip carries email, call count and the 4-decimal figure. `TopUsersCell` collapses past the top five behind a "+N more" toggle (`TOP_USER_ROWS_COLLAPSED` in `ModelsReportTable.tsx`). Identity comes from one `list_all_users()` roster lookup; a deleted user shows as "(unknown user)".
+- **Routine cost** -- the share of the model's spend accrued in routine-created conversations, split on the surviving conversation rows' `routine_id` exactly like the Users report (calls of deleted conversations count as non-routine). Zero renders as an em dash.
+- **Subagent cost** -- the share accrued by sub-agent calls, from the call rows' own `call_type` (`ApiCallType.SUB_AGENT`, i.e. `agent_task` / nested sub-agents), attributed to the model the sub-agent actually ran on: an Opus sub-agent spawned from a Gemini conversation lands on the Opus row. Cross-user subagent conversations (`origin="user_subagent"`) are ordinary top-level calls here. The two shares are independent (a sub-agent inside a routine run counts in both), so they need not sum to the total.
+- **Token usage** -- the shared `ConversationUsageCell` fed a single-entry `usage_by_model` list (this model, merged across conversations and call types) so the provider-native token fields and exact-numbers tooltip render like everywhere else.
+
+Aggregation is `get_usage_by_model()` in `db/llm_call_store.py`: `_collect_usage_buckets(by_call_type=True)` widens the tier-bucketed grouped query with the rows' `call_type`, and the fold merges the (conversation, model, call_type) buckets per model while tracking distinct users/conversations, the two cost shares and per-user spend for the top-N list. See [Admin System Reports API](../api/admin-system-monitor-api.md) for the exact row contract.
 
 ## Guides Section
 
