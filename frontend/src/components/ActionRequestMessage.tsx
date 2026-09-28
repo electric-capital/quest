@@ -6,6 +6,7 @@ import { emitRequestCountChange } from '../services/requestEvents';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
 import { ReviseFeedbackForm } from './ReviseFeedbackForm';
 import { ActionRequestPreviewFields } from './ActionRequestPreviewFields';
+import { AnimatedWidthButton } from './AnimatedWidthButton';
 import './ActionRequestMessage.css';
 
 interface ActionRequestMessageProps {
@@ -304,13 +305,13 @@ export const ActionRequestMessage = React.memo(function ActionRequestMessage({ m
           />
         ) : (
           <div className="action-request-buttons">
-            <button
+            <AnimatedWidthButton
               className="action-request-btn approve"
               onClick={handleApprove}
               disabled={isProcessing}
             >
               {pendingAction === 'approve' ? 'Processing...' : approveLabel}
-            </button>
+            </AnimatedWidthButton>
             <button
               className="action-request-btn revise"
               onClick={enterReviseMode}
@@ -318,7 +319,7 @@ export const ActionRequestMessage = React.memo(function ActionRequestMessage({ m
             >
               Revise
             </button>
-            <button
+            <AnimatedWidthButton
               className={`action-request-btn ${isSubagentReturn ? 'deny' : 'stop'}`}
               onClick={handleStopOrDeny}
               disabled={isProcessing}
@@ -329,7 +330,7 @@ export const ActionRequestMessage = React.memo(function ActionRequestMessage({ m
               {pendingAction === 'stop'
                 ? (isSubagentReturn ? 'Denying...' : 'Stopping...')
                 : (isSubagentReturn ? 'Deny' : 'Stop')}
-            </button>
+            </AnimatedWidthButton>
           </div>
         )}
       </div>

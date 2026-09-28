@@ -12,7 +12,7 @@
  * that stops propagation, which prevents this bubble-phase handler from firing.
  */
 
-import { useCallback, useEffect, type ReactNode } from 'react';
+import { useCallback, useEffect, type ReactNode, type Ref } from 'react';
 import { createPortal } from 'react-dom';
 
 interface ModalShellProps {
@@ -27,6 +27,8 @@ interface ModalShellProps {
    * elements at the overlay level).
    */
   modalClassName?: string;
+  /** Ref to the modalClassName wrapper element (ignored without one). */
+  modalRef?: Ref<HTMLDivElement>;
   /**
    * Override for the Escape key. Defaults to onClose. Pass null to disable
    * Escape handling entirely.
@@ -42,6 +44,7 @@ export function ModalShell({
   onClose,
   overlayClassName,
   modalClassName,
+  modalRef,
   onEscape,
   onKeyDown,
   children,
@@ -77,7 +80,7 @@ export function ModalShell({
       role="dialog"
       aria-modal="true"
     >
-      {modalClassName ? <div className={modalClassName}>{children}</div> : children}
+      {modalClassName ? <div ref={modalRef} className={modalClassName}>{children}</div> : children}
     </div>,
     document.body
   );

@@ -9,7 +9,7 @@
  * and the table always agree (see chat/routine_costs.py).
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { fetchRoutineCosts } from '../api/client';
 import type {
   RoutineCostBucket,
@@ -26,6 +26,11 @@ interface RoutineCostsSectionProps {
   routineId: string;
   /** Open one of the listed runs (its conversation); undefined = rows inert. */
   onOpenRun?: (conversationId: string) => void;
+  /**
+   * Called once the fetch settles (report or error rendered) so the host
+   * dialog can hold its size across the loading placeholder.
+   */
+  onLoaded?: () => void;
 }
 
 /** "Sep 20, 2:30 PM", with the year appended once it is not the current one. */
@@ -167,9 +172,15 @@ function RunRow({ run, onOpen }: { run: RoutineCostRun; onOpen?: (id: string) =>
   );
 }
 
-export function RoutineCostsSection({ projectId, routineId, onOpenRun }: RoutineCostsSectionProps) {
+export function RoutineCostsSection({ projectId, routineId, onOpenRun, onLoaded }: RoutineCostsSectionProps) {
   const [report, setReport] = useState<RoutineCostReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Latest onLoaded for the fetch callbacks (which outlive the render that
+  // passed it).
+  const onLoadedRef = useRef(onLoaded);
+  useEffect(() => {
+    onLoadedRef.current = onLoaded;
+  }, [onLoaded]);
 
   // One fetch per mount: the modal keys this section on the routine id, so a
   // different routine means a fresh instance (no in-place state reset).
@@ -177,11 +188,15 @@ export function RoutineCostsSection({ projectId, routineId, onOpenRun }: Routine
     let cancelled = false;
     fetchRoutineCosts(projectId, routineId)
       .then((data) => {
-        if (!cancelled) setReport(data);
+        if (cancelled) return;
+        setReport(data);
+        onLoadedRef.current?.();
       })
       .catch((err) => {
         console.error('Failed to load routine costs:', err);
-        if (!cancelled) setError('Failed to load costs. Please try again.');
+        if (cancelled) return;
+        setError('Failed to load costs. Please try again.');
+        onLoadedRef.current?.();
       });
     return () => {
       cancelled = true;

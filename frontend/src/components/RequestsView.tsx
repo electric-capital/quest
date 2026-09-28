@@ -12,6 +12,7 @@ import { onRequestCountChange } from '../services/requestEvents';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
 import { ReviseFeedbackForm } from './ReviseFeedbackForm';
 import { ActionRequestPreviewFields } from './ActionRequestPreviewFields';
+import { AnimatedWidthButton } from './AnimatedWidthButton';
 import './RequestsView.css';
 
 type FilterStatus = 'all' | 'open' | 'executed' | 'denied' | 'stopped';
@@ -461,13 +462,13 @@ export function RequestsView() {
                     />
                   ) : (
                     <div className="request-actions">
-                      <button
+                      <AnimatedWidthButton
                         className="request-btn approve"
                         onClick={() => handleApprove(request.id)}
                         disabled={request.id in pendingActions}
                       >
                         {pendingActions[request.id] === 'approve' ? 'Processing...' : (request.approve_label || 'Approve')}
-                      </button>
+                      </AnimatedWidthButton>
                       <button
                         className="request-btn revise"
                         onClick={() => enterReviseMode(request.id)}
@@ -475,7 +476,7 @@ export function RequestsView() {
                       >
                         Revise
                       </button>
-                      <button
+                      <AnimatedWidthButton
                         className={`request-btn ${request.request_type === 'subagent_return' ? 'deny' : 'stop'}`}
                         onClick={() => handleStopOrDeny(request.id, request.request_type)}
                         disabled={request.id in pendingActions}
@@ -486,7 +487,7 @@ export function RequestsView() {
                         {pendingActions[request.id] === 'stop'
                           ? (request.request_type === 'subagent_return' ? 'Denying...' : 'Stopping...')
                           : (request.request_type === 'subagent_return' ? 'Deny' : 'Stop')}
-                      </button>
+                      </AnimatedWidthButton>
                     </div>
                   )
                 )}

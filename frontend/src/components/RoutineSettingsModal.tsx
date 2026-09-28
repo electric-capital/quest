@@ -3,7 +3,7 @@
  * schedule) and for deleting it.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import {
   fetchRoutine,
   updateRoutine,
@@ -22,6 +22,7 @@ import { useConversationContext } from '../contexts/ConversationContext';
 import { getSelectableModels, DEPRECATED_MODEL_MAP, getModelDisplayName } from '../constants/models';
 import { ModalShell } from './ModalShell';
 import { RoutineCostsSection } from './RoutineCostsSection';
+import { useAnimatedHeight } from '../hooks/useAnimatedHeight';
 import './RoutineSettingsModal.css';
 import './settings/SkillsSection.css';
 
@@ -119,6 +120,9 @@ export function RoutineSettingsModal({
 
   // Section navigation state
   const [activeSection, setActiveSection] = useState<RoutineSettingsSection>('prompt');
+  // The Costs section refetches on every visit (it remounts); false from
+  // the moment it is opened until that fetch settles.
+  const [costsLoaded, setCostsLoaded] = useState(false);
 
   // Skills state (auto-loaded skill ids on this routine, plus lazy-loaded lists for picker tabs)
   const [routineAutoloadedSkillIds, setRoutineAutoloadedSkillIds] = useState<Set<string>>(new Set());
@@ -129,6 +133,21 @@ export function RoutineSettingsModal({
   const [sharedSkillsList, setSharedSkillsList] = useState<Skill[]>([]);
   const [sharedSkillsLoaded, setSharedSkillsLoaded] = useState(false);
   const [isLoadingSharedSkills, setIsLoadingSharedSkills] = useState(false);
+
+  // The dialog's height follows the active section's content, so switching
+  // sections (or data landing in one) glides it instead of snapping. While a
+  // section is showing a loading placeholder the height is held, so the
+  // dialog doesn't shrink around the placeholder and grow again moments
+  // later when the real content arrives.
+  const modalRef = useRef<HTMLDivElement>(null);
+  const sectionLoading =
+    (activeSection === 'costs' && !costsLoaded)
+    || (activeSection === 'schedule' && scheduleLoading)
+    || (activeSection === 'skills' && (skillsTab === 'my-skills' ? isLoadingMySkills : isLoadingSharedSkills));
+  const contentInnerRef = useAnimatedHeight(modalRef, {
+    hold: sectionLoading,
+    revision: `${activeSection}:${skillsTab}`,
+  });
 
   // Save/delete state
   const [isSaving, setIsSaving] = useState(false);
@@ -320,8 +339,10 @@ export function RoutineSettingsModal({
     target.style.height = `${newHeight}px`;
   }, []);
 
-  // Auto-size textarea on initial load and when navigating back to prompt section
-  useEffect(() => {
+  // Auto-size textarea on initial load and when navigating back to prompt
+  // section. Layout effect so the dialog never paints a 4-row textarea and
+  // then jumps to the grown one.
+  useLayoutEffect(() => {
     if (isOpen && promptTextareaRef.current && prompt) {
       const el = promptTextareaRef.current;
       el.style.height = 'auto';
@@ -563,6 +584,7 @@ export function RoutineSettingsModal({
       onEscape={handleEscape}
       overlayClassName="routine-settings-overlay"
       modalClassName="routine-settings-modal"
+      modalRef={modalRef}
     >
       <div className="routine-settings-header">
         <h2>Routine Settings</h2>
@@ -598,7 +620,10 @@ export function RoutineSettingsModal({
             </button>
             <button
               className={`routine-settings-nav-item ${activeSection === 'costs' ? 'active' : ''}`}
-              onClick={() => setActiveSection('costs')}
+              onClick={() => {
+                if (activeSection !== 'costs') setCostsLoaded(false);
+                setActiveSection('costs');
+              }}
             >
               Costs
             </button>
@@ -613,8 +638,11 @@ export function RoutineSettingsModal({
           </div>
         </nav>
 
-        {/* Right content */}
+        {/* Right content. The inner wrapper's box is the content's natural
+            height (the scrolling outer is sized by the dialog), which is
+            what the height glide watches. */}
         <div className="routine-settings-content">
+          <div className="routine-settings-content-inner" ref={contentInnerRef}>
           {activeSection === 'prompt' ? (
             <>
               {/* Name */}
@@ -907,6 +935,7 @@ export function RoutineSettingsModal({
               projectId={projectId}
               routineId={routine.id}
               onOpenRun={onOpenRunConversation}
+              onLoaded={() => setCostsLoaded(true)}
             />
           ) : activeSection === 'delete' ? (
             <>
@@ -943,6 +972,7 @@ export function RoutineSettingsModal({
               </div>
             </>
           ) : null}
+          </div>
         </div>
       </div>
     </ModalShell>

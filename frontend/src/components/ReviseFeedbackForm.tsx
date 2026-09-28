@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { AnimatedWidthButton } from './AnimatedWidthButton';
 import './ReviseFeedbackForm.css';
 
 interface ReviseFeedbackFormProps {
@@ -68,14 +69,14 @@ export function ReviseFeedbackForm({
         disabled={isProcessing}
       />
       <div className="revise-feedback-buttons">
-        <button
+        <AnimatedWidthButton
           type="button"
           className="revise-feedback-btn revise-feedback-send"
           onClick={handleSubmit}
           disabled={!canSubmit}
         >
           {isProcessing ? 'Processing...' : 'Send revision'}
-        </button>
+        </AnimatedWidthButton>
         <button
           type="button"
           className="revise-feedback-btn revise-feedback-cancel"

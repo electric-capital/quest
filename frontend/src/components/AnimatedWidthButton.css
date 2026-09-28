@@ -1,0 +1,23 @@
+/* Width-animated button (see AnimatedWidthButton.tsx). The label is kept on
+   one line and clipped so it never wraps while the box is still growing to
+   fit it. */
+.animated-width-btn {
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.animated-width-btn-label {
+  display: inline-block;
+  animation: animated-width-btn-label-in 0.2s ease-out;
+}
+
+@keyframes animated-width-btn-label-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animated-width-btn-label {
+    animation: none;
+  }
+}
