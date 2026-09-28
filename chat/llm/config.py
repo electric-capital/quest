@@ -169,6 +169,34 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "max_input_tokens": 1_000_000,
         "max_output_tokens": 128_000,
     },
+    # Released 2026-09-28. Same 1M/128K limits and $2/$10 list price as
+    # Sonnet 5 (same tokenizer too). Like Opus 5.5, thinking can no longer
+    # be switched off -- ``thinking: disabled`` and manual ``budget_tokens``
+    # both 400; the lowest setting is ``between_tools`` -- so
+    # ``thinking_effort`` is pinned explicitly at the model's own "high"
+    # default (the same level Sonnet 5 runs at here when the API default
+    # applies) rather than left to the API. Forced tool use (``tool_choice``
+    # any/tool) is rejected; the provider only ever uses the default auto
+    # choice. Notes longer than a sentence or two written between tool
+    # calls arrive as progress-update ``thinking`` blocks (empty at the
+    # default display), so that narration is not streamed to the UI. Its
+    # thinking blocks are bound to the model and the conversation: a refusal
+    # fallback or mid-conversation switch to another model runs without
+    # them (dropped server-side, not an error).
+    "claude-sonnet-5-5": {
+        "provider": "anthropic",
+        "display_name": "Claude Sonnet 5.5",
+        "vertex_model_id": "claude-sonnet-5-5",
+        "vertex_region": "global",
+        "max_input_tokens": 1_000_000,
+        "max_output_tokens": 128_000,
+        "thinking_effort": "high",
+        # Declines in more categories than Sonnet 5 (cyber, frontier_llm,
+        # bio, reasoning_extraction, general_harms). Anthropic's own
+        # server-side default retries cyber/frontier_llm declines on
+        # Sonnet 5, so that is the client-side chain here too.
+        "refusal_fallback_models": ["claude-sonnet-5"],
+    },
     "claude-opus-5": {
         "provider": "anthropic",
         "display_name": "Claude Opus 5",

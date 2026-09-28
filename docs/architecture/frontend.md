@@ -241,7 +241,7 @@ Thin compatibility shim over the `persistentWebSocket` singleton. After devplan 
 When sending a message, the manager automatically captures the browser's timezone using `Intl.DateTimeFormat().resolvedOptions().timeZone` and includes it in the `send_message` payload.
 
 **Model Selection**:
-The `sendMessage` method accepts a `model` parameter that specifies which LLM model to use (any registry model ID, e.g. `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`, `claude-haiku-4.5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-opus-5`, or `claude-opus-5-5`; deprecated Gemini models still work for conversations that already use them).
+The `sendMessage` method accepts a `model` parameter that specifies which LLM model to use (any registry model ID, e.g. `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`, `claude-haiku-4.5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-sonnet-5-5`, `claude-opus-5`, or `claude-opus-5-5`; deprecated Gemini models still work for conversations that already use them).
 
 This is included in the `send_message` payload and passed to the backend, which uses the model registry in `chat/llm/config.py` to determine the appropriate provider and route the request accordingly.
 

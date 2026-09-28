@@ -82,6 +82,11 @@ def test_opus_5_5_resolves_opus_4_8_fallback_chain():
     assert provider._get_fallback_chain("claude-opus-5-5") == ("claude-opus-4-8",)
 
 
+def test_sonnet_5_5_resolves_sonnet_5_fallback_chain():
+    provider = AnthropicProvider()
+    assert provider._get_fallback_chain("claude-sonnet-5-5") == ("claude-sonnet-5",)
+
+
 def test_models_without_config_have_no_chain():
     provider = AnthropicProvider()
     assert provider._get_fallback_chain("claude-sonnet-5") == ()

@@ -106,6 +106,7 @@ class TestRoutineSummaryFieldValues:
             "claude-opus-4-6",
             "claude-opus-4-7",
             "claude-sonnet-5",
+            "claude-sonnet-5-5",
             "claude-opus-5",
             "claude-opus-5-5",
             "gemini-3.5-flash-lite",

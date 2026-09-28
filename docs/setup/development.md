@@ -68,7 +68,7 @@ Configuration priority: environment variables > `server_config.json` > built-in 
 
 Model settings are in `server_config.json`, loaded by `load_server_config()` in `config/server_config.py`.
 
-- `model`: Default model name. Valid values: `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite-preview`, `gemini-3-flash-preview`, `gemini-3.5-flash` (all four deprecated -- still runnable but hidden from the model picker; prefer a current model), `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`, `claude-haiku-4.5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-opus-5`, `claude-opus-5-5`
+- `model`: Default model name. Valid values: `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite-preview`, `gemini-3-flash-preview`, `gemini-3.5-flash` (all four deprecated -- still runnable but hidden from the model picker; prefer a current model), `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`, `claude-haiku-4.5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-sonnet-5-5`, `claude-opus-5`, `claude-opus-5-5`
 
 ### Anthropic Vertex AI
 

@@ -10,9 +10,9 @@ ESTIMATE, not billing truth:
 
 - Batch discounts, negotiated/committed-use pricing, and Vertex vs direct-API
   differences are not modeled (Vertex list prices match the providers' own).
-- Claude Sonnet 5 has an introductory $2/$10 promo through 2026-08-31; the
-  table carries the standard $3/$15 list rate, so estimates run high until
-  the promo ends.
+- Claude Sonnet 5's launch $2/$10 promo became its standard list rate
+  (the scheduled 2026-09-01 increase to $3/$15 was cancelled; checked
+  2026-09-28). Sonnet 5.5 launched at the same $2/$10.
 - Gemini 3.6/3.7/3.8 Flash have an introductory $0.75/$3.75 promo through
   2026-12-31; the table carries the standard $1.50/$7.50 list rate, so
   estimates run high until the promo ends.
@@ -57,7 +57,8 @@ _GEMINI_PRICING: dict[str, dict] = {
 _ANTHROPIC_PRICING: dict[str, dict] = {
     "claude-haiku-4.5": {"input": 1.00, "output": 5.00},
     "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
-    "claude-sonnet-5": {"input": 3.00, "output": 15.00},
+    "claude-sonnet-5": {"input": 2.00, "output": 10.00},
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00},
     "claude-opus-4-6": {"input": 5.00, "output": 25.00},
     "claude-opus-4-7": {"input": 5.00, "output": 25.00},
     "claude-opus-4-8": {"input": 5.00, "output": 25.00},
