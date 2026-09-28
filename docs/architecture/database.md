@@ -182,13 +182,15 @@ The `RoutineSchedule` model in `db/models.py` maps to the `routine_schedules` ta
 | `id` | `String(36)` | Primary key | UUID string (generated at application layer via `uuid.uuid4()`) |
 | `routine_id` | `String(36)` | FK to `routines.id` (CASCADE), not null | One-to-one link to the parent routine (uniqueness enforced by `ix_routine_schedules_routine_id` unique index in `__table_args__`) |
 | `user_id` | `Integer` | FK to `users.id` (CASCADE), indexed, not null | Owner's integer ID (denormalized for fast per-user and scheduler queries) |
-| `schedule_type` | `String(20)` | Not null | Discriminator: `'daily'`, `'hourly'`, or `'every_n_minutes'` |
+| `schedule_type` | `String(20)` | Not null | Discriminator: `'daily'`, `'weekly'`, `'hourly'`, or `'every_n_minutes'` |
 | `daily_time_utc` | `String(5)` | Nullable | `"HH:MM"` in UTC (derived from `daily_time_local` + `timezone`) |
 | `daily_time_local` | `String(5)` | Nullable | `"HH:MM"` in the user's local timezone |
 | `timezone` | `String(64)` | Nullable | IANA timezone string (e.g., `"America/New_York"`) |
+| `weekly_days` | `String(20)` | Nullable | Weekly only: comma-separated weekday numbers, 0=Monday .. 6=Sunday (e.g. `"0,2,4"`) |
 | `hourly_minute` | `Integer` | Nullable | Minute offset from the top of each hour (0--59) |
 | `interval_minutes` | `Integer` | Nullable | Run interval in minutes (1--1440) |
 | `is_enabled` | `Boolean` | Default `True`, server default `"1"` | Whether the schedule is active |
+| `next_due_at` | `DateTime` | Nullable | Next occurrence (UTC) of an anchored (daily/weekly/hourly) schedule; the scheduler fires once the clock passes it and advances it on claim. NULL for interval schedules; NULL on an anchored row means "initialize from now" (migration `a3d6f8b2c917`) |
 | `last_run_started_at` | `DateTime` | Nullable | When the scheduler last started a run |
 | `last_run_completed_at` | `DateTime` | Nullable | When the last run completed successfully |
 | `is_running` | `Boolean` | Default `False`, server default `"0"` | Whether a run is currently in progress |
@@ -198,12 +200,29 @@ The `RoutineSchedule` model in `db/models.py` maps to the `routine_schedules` ta
 
 The unique index `ix_routine_schedules_routine_id` on `routine_id` and the composite index `ix_routine_schedules_enabled_type` on `(is_enabled, schedule_type)` are declared in `__table_args__` on the model. The unique index enforces the one-to-one relationship. An index `ix_routine_schedules_user_id` on `user_id` (declared on the column) supports fast per-user queries. The enabled/type index supports efficient scheduler polling. The `routine_id` column has a foreign key to `routines.id` with `ON DELETE CASCADE`, so schedules are automatically deleted when the parent routine is removed. The `user_id` column has a foreign key to `users.id` with `ON DELETE CASCADE`.
 
+## RoutineScheduleRun Model
+
+The `RoutineScheduleRun` model maps to the `routine_schedule_runs` table (migration `a3d6f8b2c917`): the run ledger, one row per scheduled occurrence. See [Scheduling Architecture](scheduling.md#run-ledger).
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | `String(36)` | Primary key | UUID string |
+| `schedule_id` | `String(36)` | FK to `routine_schedules.id` (CASCADE), not null | Owning schedule |
+| `occurrence_at` | `DateTime` | Not null | Nominal scheduled instant (UTC); claim time for interval schedules |
+| `status` | `String(20)` | Not null, indexed | `running` / `completed` / `failed` / `interrupted` / `missed` |
+| `attempt` | `Integer` | Not null, default 0 | Starts of this occurrence (0 for missed, 2 after one retry) |
+| `conversation_id` | `String(36)` | Nullable | Conversation of the latest attempt |
+| `started_at` / `finished_at` | `DateTime` | Nullable | Latest attempt's start / end |
+| `created_at` | `DateTime` | Default `utcnow` | Row creation |
+
+The unique index `ix_routine_schedule_runs_schedule_occurrence` on `(schedule_id, occurrence_at)` guarantees an occurrence is claimed at most once. Rows are pruned to the newest 100 per schedule.
+
 ### Cascade Deletion
 
 Schedules are cleaned up in multiple scenarios:
 
-- **Routine deletion**: `ON DELETE CASCADE` FK on `routine_schedules.routine_id` removes the schedule when the parent routine is deleted
-- **Project deletion**: Cascades through routines (project -> routine -> schedule)
+- **Routine deletion**: `ON DELETE CASCADE` FK on `routine_schedules.routine_id` removes the schedule when the parent routine is deleted, and `routine_schedule_runs.schedule_id` cascades on to its ledger rows
+- **Project deletion**: Cascades through routines (project -> routine -> schedule -> runs)
 - **User account deletion**: `ON DELETE CASCADE` FK on `routine_schedules.user_id` provides database-level cleanup
 
 ## Conversation Model

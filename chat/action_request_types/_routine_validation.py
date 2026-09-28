@@ -18,11 +18,12 @@ SCHEDULE_KEYS = frozenset(
         "timezone",
         "hourly_minute",
         "interval_minutes",
+        "weekly_days",
         "is_enabled",
     }
 )
 
-SCHEDULE_TYPES = ("daily", "hourly", "every_n_minutes")
+SCHEDULE_TYPES = ("daily", "weekly", "hourly", "every_n_minutes")
 
 # Preference order for the model a create_routine proposal gets when the
 # agent omits ``model``: Sonnet 5 first, Gemini 3.7 Flash as the fallback.
@@ -102,12 +103,12 @@ def validate_schedule_spec(schedule) -> dict:
 
     out: dict = {"schedule_type": schedule_type}
 
-    if schedule_type == "daily":
+    if schedule_type in ("daily", "weekly"):
         time_local = schedule.get("daily_time_local")
         tz_name = schedule.get("timezone")
         if not isinstance(time_local, str) or not isinstance(tz_name, str):
             raise ValueError(
-                "A daily schedule requires daily_time_local (\"HH:MM\") and "
+                f"A {schedule_type} schedule requires daily_time_local (\"HH:MM\") and "
                 "timezone (IANA name, e.g. \"America/New_York\")."
             )
         _validate_time_string(time_local)
@@ -117,6 +118,9 @@ def validate_schedule_spec(schedule) -> dict:
             raise ValueError(f"Invalid timezone: {tz_name}")
         out["daily_time_local"] = time_local
         out["timezone"] = tz_name
+        if schedule_type == "weekly":
+            from db.schedule_timing import validate_weekly_days
+            out["weekly_days"] = validate_weekly_days(schedule.get("weekly_days"))
     elif schedule_type == "hourly":
         minute = schedule.get("hourly_minute")
         if not isinstance(minute, int) or isinstance(minute, bool) or not (0 <= minute <= 59):
@@ -154,6 +158,12 @@ def describe_schedule(schedule: dict) -> str:
     schedule_type = schedule.get("schedule_type")
     if schedule_type == "daily":
         desc = f"Daily at {schedule.get('daily_time_local')} ({schedule.get('timezone')})"
+    elif schedule_type == "weekly":
+        from db.schedule_timing import describe_weekly_days
+        desc = (
+            f"Weekly on {describe_weekly_days(schedule.get('weekly_days'))} at "
+            f"{schedule.get('daily_time_local')} ({schedule.get('timezone')})"
+        )
     elif schedule_type == "hourly":
         desc = f"Hourly at minute {schedule.get('hourly_minute')}"
     else:
@@ -173,7 +183,7 @@ async def apply_schedule_spec(user_id: int, routine_id: str, spec: dict) -> None
     from db import schedule_store
 
     daily_time_utc = None
-    if spec["schedule_type"] == "daily":
+    if spec["schedule_type"] in ("daily", "weekly"):
         from chat.schedule_routes import _local_time_to_utc
         daily_time_utc = _local_time_to_utc(
             spec["daily_time_local"], spec["timezone"]
@@ -189,6 +199,7 @@ async def apply_schedule_spec(user_id: int, routine_id: str, spec: dict) -> None
             timezone_str=spec.get("timezone"),
             hourly_minute=spec.get("hourly_minute"),
             interval_minutes=spec.get("interval_minutes"),
+            weekly_days=spec.get("weekly_days"),
             is_enabled=spec["is_enabled"],
         )
     else:
@@ -201,6 +212,7 @@ async def apply_schedule_spec(user_id: int, routine_id: str, spec: dict) -> None
             timezone_str=spec.get("timezone"),
             hourly_minute=spec.get("hourly_minute"),
             interval_minutes=spec.get("interval_minutes"),
+            weekly_days=spec.get("weekly_days"),
         )
         if not spec["is_enabled"]:
             await schedule_store.update_schedule(

@@ -571,6 +571,7 @@ export function createRoutineSchedule(
     schedule_type: string;
     daily_time_local?: string;
     timezone?: string;
+    weekly_days?: number[];
     hourly_minute?: number;
     interval_minutes?: number;
   },
@@ -585,6 +586,7 @@ export function updateRoutineSchedule(
     schedule_type?: string;
     daily_time_local?: string;
     timezone?: string;
+    weekly_days?: number[];
     hourly_minute?: number;
     interval_minutes?: number;
     is_enabled?: boolean;

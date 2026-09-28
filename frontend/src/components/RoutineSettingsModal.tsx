@@ -17,7 +17,7 @@ import {
   fetchSharedWithMeSkills,
   ApiClientError,
 } from '../api/client';
-import type { Routine, Guide, RoutineSchedule, Skill } from '../api/types';
+import type { Routine, Guide, RoutineSchedule, RoutineScheduleRun, RoutineScheduleType, Skill } from '../api/types';
 import { useConversationContext } from '../contexts/ConversationContext';
 import { getSelectableModels, DEPRECATED_MODEL_MAP, getModelDisplayName } from '../constants/models';
 import { ModalShell } from './ModalShell';
@@ -27,6 +27,22 @@ import './RoutineSettingsModal.css';
 import './settings/SkillsSection.css';
 
 type RoutineSettingsSection = 'prompt' | 'schedule' | 'skills' | 'costs' | 'delete';
+
+// Weekday numbers match the server: 0=Monday .. 6=Sunday.
+const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function todayWeekday(): number {
+  // JS getDay() is 0=Sunday; convert to 0=Monday.
+  return (new Date().getDay() + 6) % 7;
+}
+
+const RUN_STATUS_LABELS: Record<RoutineScheduleRun['status'], string> = {
+  running: 'Running',
+  completed: 'Completed',
+  failed: 'Failed',
+  interrupted: 'Interrupted by restart',
+  missed: 'Missed (server was down)',
+};
 type RoutineSkillsTab = 'my-skills' | 'shared-with-me';
 
 function renderRoutineSkillCard(
@@ -111,8 +127,9 @@ export function RoutineSettingsModal({
 
   // Schedule state
   const [editingSchedule, setEditingSchedule] = useState<RoutineSchedule | null>(null);
-  const [scheduleType, setScheduleType] = useState<'daily' | 'hourly' | 'every_n_minutes'>('daily');
+  const [scheduleType, setScheduleType] = useState<RoutineScheduleType>('daily');
   const [dailyTimeLocal, setDailyTimeLocal] = useState('09:00');
+  const [weeklyDays, setWeeklyDays] = useState<number[]>(() => [todayWeekday()]);
   const [hourlyMinute, setHourlyMinute] = useState(0);
   const [intervalMinutes, setIntervalMinutes] = useState(30);
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
@@ -235,6 +252,7 @@ export function RoutineSettingsModal({
       setScheduleEnabled(false);
       setScheduleType('daily');
       setDailyTimeLocal('09:00');
+      setWeeklyDays([todayWeekday()]);
       setHourlyMinute(0);
       setIntervalMinutes(30);
       scheduleTokenRef.current = null;
@@ -248,6 +266,7 @@ export function RoutineSettingsModal({
             setScheduleEnabled(schedule.is_enabled);
             setScheduleType(schedule.schedule_type);
             if (schedule.daily_time_local) setDailyTimeLocal(schedule.daily_time_local);
+            if (schedule.weekly_days && schedule.weekly_days.length) setWeeklyDays(schedule.weekly_days);
             if (schedule.hourly_minute !== null) setHourlyMinute(schedule.hourly_minute);
             if (schedule.interval_minutes !== null) setIntervalMinutes(schedule.interval_minutes);
             scheduleTokenRef.current = schedule.updated_at ?? null;
@@ -361,6 +380,10 @@ export function RoutineSettingsModal({
       setError('Name and prompt cannot be empty');
       return;
     }
+    if (scheduleType === 'weekly' && weeklyDays.length === 0 && (scheduleEnabled || editingSchedule)) {
+      setError('Pick at least one day for a weekly schedule');
+      return;
+    }
 
     setIsSaving(true);
     setError(null);
@@ -411,16 +434,19 @@ export function RoutineSettingsModal({
       setLoadedRoutine(updatedRoutine);
 
       // Save schedule changes
+      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const scheduleTimingFields = {
+        schedule_type: scheduleType,
+        ...(scheduleType === 'daily' || scheduleType === 'weekly'
+          ? { daily_time_local: dailyTimeLocal, timezone: userTimezone }
+          : {}),
+        ...(scheduleType === 'weekly' ? { weekly_days: weeklyDays } : {}),
+        ...(scheduleType === 'hourly' ? { hourly_minute: hourlyMinute } : {}),
+        ...(scheduleType === 'every_n_minutes' ? { interval_minutes: intervalMinutes } : {}),
+      };
       if (scheduleEnabled) {
         // Schedule is enabled -- create or update the schedule record
-        const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        const baseScheduleData = {
-          schedule_type: scheduleType,
-          ...(scheduleType === 'daily' ? { daily_time_local: dailyTimeLocal, timezone: userTimezone } : {}),
-          ...(scheduleType === 'hourly' ? { hourly_minute: hourlyMinute } : {}),
-          ...(scheduleType === 'every_n_minutes' ? { interval_minutes: intervalMinutes } : {}),
-          is_enabled: true,
-        };
+        const baseScheduleData = { ...scheduleTimingFields, is_enabled: true };
 
         if (editingSchedule) {
           const updatedSchedule = await updateRoutineSchedule(projectId, routine.id, {
@@ -436,12 +462,8 @@ export function RoutineSettingsModal({
         }
       } else if (editingSchedule) {
         // Schedule exists but user disabled it -- update with is_enabled: false
-        const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
         const updatedSchedule = await updateRoutineSchedule(projectId, routine.id, {
-          schedule_type: scheduleType,
-          ...(scheduleType === 'daily' ? { daily_time_local: dailyTimeLocal, timezone: userTimezone } : {}),
-          ...(scheduleType === 'hourly' ? { hourly_minute: hourlyMinute } : {}),
-          ...(scheduleType === 'every_n_minutes' ? { interval_minutes: intervalMinutes } : {}),
+          ...scheduleTimingFields,
           is_enabled: false,
           expected_updated_at: scheduleTokenRef.current,
         });
@@ -494,7 +516,7 @@ export function RoutineSettingsModal({
     } finally {
       setIsSaving(false);
     }
-  }, [projectId, routine, loadedRoutine, name, prompt, guideId, model, isSaving, scheduleType, dailyTimeLocal, hourlyMinute, intervalMinutes, scheduleEnabled, editingSchedule, onRoutineUpdated, onClose]);
+  }, [projectId, routine, loadedRoutine, name, prompt, guideId, model, isSaving, scheduleType, dailyTimeLocal, weeklyDays, hourlyMinute, intervalMinutes, scheduleEnabled, editingSchedule, onRoutineUpdated, onClose]);
 
   // Conflict handlers. Discard rehydrates form state from the server's
   // current row and clears the dialog. Overwrite adopts the server's token
@@ -517,6 +539,7 @@ export function RoutineSettingsModal({
       setScheduleEnabled(current.is_enabled);
       setScheduleType(current.schedule_type);
       if (current.daily_time_local) setDailyTimeLocal(current.daily_time_local);
+      if (current.weekly_days && current.weekly_days.length) setWeeklyDays(current.weekly_days);
       if (current.hourly_minute !== null) setHourlyMinute(current.hourly_minute);
       if (current.interval_minutes !== null) setIntervalMinutes(current.interval_minutes);
       scheduleTokenRef.current = current.updated_at ?? null;
@@ -780,16 +803,46 @@ export function RoutineSettingsModal({
                       <select
                         className="routine-settings-select"
                         value={scheduleType}
-                        onChange={(e) => setScheduleType(e.target.value as 'daily' | 'hourly' | 'every_n_minutes')}
+                        onChange={(e) => setScheduleType(e.target.value as RoutineScheduleType)}
                         disabled={isSaving || !scheduleEnabled}
                       >
                         <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
                         <option value="hourly">Hourly</option>
                         <option value="every_n_minutes">Every N minutes</option>
                       </select>
                     </div>
 
-                    {scheduleType === 'daily' && (
+                    {scheduleType === 'weekly' && (
+                      <div className="routine-settings-field">
+                        <label className="routine-settings-label">Days</label>
+                        <div className="routine-settings-weekdays" role="group" aria-label="Days of the week">
+                          {WEEKDAY_LABELS.map((label, day) => {
+                            const selected = weeklyDays.includes(day);
+                            return (
+                              <button
+                                key={label}
+                                type="button"
+                                className={`routine-settings-weekday ${selected ? 'selected' : ''}`}
+                                aria-pressed={selected}
+                                onClick={() =>
+                                  setWeeklyDays((prev) =>
+                                    prev.includes(day)
+                                      ? prev.filter((d) => d !== day)
+                                      : [...prev, day].sort((a, b) => a - b),
+                                  )
+                                }
+                                disabled={isSaving || !scheduleEnabled}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {(scheduleType === 'daily' || scheduleType === 'weekly') && (
                       <div className="routine-settings-field">
                         <label className="routine-settings-label">
                           Time (your local timezone)
@@ -841,11 +894,44 @@ export function RoutineSettingsModal({
                       </div>
                     )}
 
-                    {/* Last run info */}
+                    {scheduleType !== 'every_n_minutes' && (
+                      <span className="routine-settings-label-hint">
+                        If the server is down at the scheduled time, the run starts when it comes back
+                        (up to {scheduleType === 'hourly' ? '45 minutes' : scheduleType === 'daily' ? '6 hours' : '24 hours'} late).
+                        A run cut off by a restart is retried once.
+                      </span>
+                    )}
+
+                    {/* Last / next run info */}
                     {editingSchedule && editingSchedule.last_run_completed_at && (
                       <div className="routine-settings-last-run">
                         Last run: {new Date(editingSchedule.last_run_completed_at).toLocaleString()}
                         {editingSchedule.is_running && ' (currently running)'}
+                      </div>
+                    )}
+                    {editingSchedule && editingSchedule.is_enabled && editingSchedule.next_due_at && (
+                      <div className="routine-settings-last-run">
+                        Next run: {new Date(editingSchedule.next_due_at).toLocaleString()}
+                      </div>
+                    )}
+
+                    {/* Recent scheduled occurrences from the run ledger */}
+                    {editingSchedule && editingSchedule.recent_runs && editingSchedule.recent_runs.length > 0 && (
+                      <div className="routine-settings-field routine-settings-recent-runs">
+                        <label className="routine-settings-label">Recent scheduled runs</label>
+                        <ul>
+                          {editingSchedule.recent_runs.map((run) => (
+                            <li key={run.id} className={`routine-run-status-${run.status}`}>
+                              <span className="routine-run-time">
+                                {new Date(run.occurrence_at).toLocaleString()}
+                              </span>
+                              <span className="routine-run-status">
+                                {RUN_STATUS_LABELS[run.status] ?? run.status}
+                                {run.attempt > 1 && ` (retry)`}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
                       </div>
                     )}
                   </div>

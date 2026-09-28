@@ -265,14 +265,22 @@ def _routine_to_dict(routine: Routine) -> dict:
 
 def _schedule_summary(schedule: RoutineSchedule) -> dict:
     """Extract a schedule summary for inclusion in routine list responses."""
+    from db.schedule_store import _next_due_view
+    from db.schedule_timing import parse_weekly_days
+
     return {
         "id": schedule.id,
         "schedule_type": schedule.schedule_type,
         "daily_time_local": schedule.daily_time_local,
         "timezone": schedule.timezone,
+        "weekly_days": (
+            parse_weekly_days(schedule.weekly_days)
+            if schedule.schedule_type == "weekly" else None
+        ),
         "hourly_minute": schedule.hourly_minute,
         "interval_minutes": schedule.interval_minutes,
         "is_enabled": schedule.is_enabled,
         "is_running": schedule.is_running,
+        "next_due_at": _next_due_view(schedule),
         "last_run_completed_at": schedule.last_run_completed_at.isoformat() if schedule.last_run_completed_at else None,
     }

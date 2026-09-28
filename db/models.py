@@ -591,8 +591,12 @@ class RoutineSchedule(Base):
     Each routine can have at most one schedule. The schedule_type determines
     which configuration columns are relevant:
     - 'daily': uses daily_time_utc, daily_time_local, timezone
+    - 'weekly': uses weekly_days plus daily_time_utc, daily_time_local, timezone
     - 'hourly': uses hourly_minute
     - 'every_n_minutes': uses interval_minutes
+
+    Anchored types (daily / weekly / hourly) keep their next occurrence in
+    next_due_at; see db/schedule_timing.py.
     """
 
     __tablename__ = "routine_schedules"
@@ -622,7 +626,7 @@ class RoutineSchedule(Base):
         nullable=False,
     )
 
-    # Schedule type discriminator: 'daily', 'hourly', 'every_n_minutes'
+    # Schedule type discriminator: 'daily', 'weekly', 'hourly', 'every_n_minutes'
     schedule_type: Mapped[str] = mapped_column(
         String(20), nullable=False
     )
@@ -641,6 +645,13 @@ class RoutineSchedule(Base):
     # IANA timezone string (e.g., "America/New_York")
     timezone: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
+    )
+
+    # --- Weekly schedule fields ---
+    # Comma-separated weekday numbers, Mon=0 .. Sun=6 (e.g. "0,2,4"). The
+    # time of day reuses daily_time_local / timezone / daily_time_utc.
+    weekly_days: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True
     )
 
     # --- Hourly schedule fields ---
@@ -671,6 +682,14 @@ class RoutineSchedule(Base):
         DateTime, nullable=True, default=None
     )
 
+    # Next occurrence (UTC) of an anchored schedule. The scheduler fires once
+    # the clock passes it and advances it on claim, so a late poll (e.g. after
+    # a restart) still catches the run. NULL for every_n_minutes, and NULL
+    # means "recompute from now" for anchored types.
+    next_due_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, default=None
+    )
+
     # Whether a run is currently in progress (for skip-if-running logic)
     is_running: Mapped[bool] = mapped_column(
         default=False, server_default="0"
@@ -687,6 +706,53 @@ class RoutineSchedule(Base):
     )
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True, default=None
+    )
+
+
+class RoutineScheduleRun(Base):
+    """One scheduled occurrence of a routine schedule: the run ledger.
+
+    ``occurrence_at`` is the nominal scheduled instant (the claim time for
+    every_n_minutes). The unique (schedule_id, occurrence_at) index makes a
+    double fire of the same occurrence impossible. ``status`` is one of
+    running / completed / failed / interrupted / missed. An interrupted run
+    (server shutdown or crash mid-run) is retried within the schedule type's
+    catch-up grace; ``attempt`` counts starts.
+    """
+
+    __tablename__ = "routine_schedule_runs"
+    __table_args__ = (
+        sa.Index(
+            "ix_routine_schedule_runs_schedule_occurrence",
+            "schedule_id", "occurrence_at", unique=True,
+        ),
+        sa.Index("ix_routine_schedule_runs_status", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    schedule_id: Mapped[str] = mapped_column(
+        String(36),
+        sa.ForeignKey("routine_schedules.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    occurrence_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    attempt: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+    conversation_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, default=None
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, default=None
+    )
+    finished_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
     )
 
 

@@ -31,9 +31,10 @@ router = APIRouter(
 
 
 class CreateScheduleRequest(BaseModel):
-    schedule_type: str  # 'daily', 'hourly', 'every_n_minutes'
-    daily_time_local: Optional[str] = None  # "HH:MM" in user's timezone
-    timezone: Optional[str] = None  # IANA timezone string
+    schedule_type: str  # 'daily', 'weekly', 'hourly', 'every_n_minutes'
+    daily_time_local: Optional[str] = None  # "HH:MM" in user's timezone (daily + weekly)
+    timezone: Optional[str] = None  # IANA timezone string (daily + weekly)
+    weekly_days: Optional[list[int]] = None  # weekly: 0=Monday .. 6=Sunday
     hourly_minute: Optional[int] = None  # 0-59
     interval_minutes: Optional[int] = None  # >= 1
 
@@ -42,6 +43,7 @@ class UpdateScheduleRequest(BaseModel):
     schedule_type: Optional[str] = None
     daily_time_local: Optional[str] = None
     timezone: Optional[str] = None
+    weekly_days: Optional[list[int]] = None
     hourly_minute: Optional[int] = None
     interval_minutes: Optional[int] = None
     is_enabled: Optional[bool] = None
@@ -58,11 +60,15 @@ async def get_routine_schedule(
     routine_id: str,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """Get the schedule for a routine (or 404 if no schedule)."""
+    """Get the schedule for a routine (or 404 if no schedule).
+
+    Includes ``recent_runs``: the newest run-ledger rows (completed / failed /
+    interrupted / missed / running).
+    """
     user_id = user["id"]
     await _validate_ownership(user_id, project_id, routine_id)
 
-    schedule = await get_schedule_for_routine(routine_id)
+    schedule = await get_schedule_for_routine(routine_id, include_runs=True)
     if not schedule:
         raise HTTPException(
             status_code=404,
@@ -82,12 +88,12 @@ async def create_routine_schedule(
     user_id = user["id"]
     await _validate_ownership(user_id, project_id, routine_id)
 
-    # Convert local time to UTC for daily schedules
-    daily_time_utc = None
-    if body.schedule_type == 'daily' and body.daily_time_local and body.timezone:
-        daily_time_utc = _local_time_to_utc(body.daily_time_local, body.timezone)
-
     try:
+        # Convert local time to UTC for daily / weekly schedules
+        daily_time_utc = None
+        if body.schedule_type in ('daily', 'weekly') and body.daily_time_local and body.timezone:
+            daily_time_utc = _local_time_to_utc(body.daily_time_local, body.timezone)
+
         schedule = await create_schedule(
             user_id=user_id,
             routine_id=routine_id,
@@ -97,6 +103,7 @@ async def create_routine_schedule(
             timezone_str=body.timezone,
             hourly_minute=body.hourly_minute,
             interval_minutes=body.interval_minutes,
+            weekly_days=body.weekly_days,
         )
     except ValueError as e:
         raise HTTPException(
@@ -125,16 +132,16 @@ async def update_routine_schedule(
             detail={"error": "not_found", "message": "No schedule exists for this routine"},
         )
 
-    # Rebuild UTC time if daily schedule params changed
-    daily_time_utc = ...
-    effective_type = body.schedule_type or schedule["schedule_type"]
-    if effective_type == 'daily':
-        local_time = body.daily_time_local or schedule.get("daily_time_local")
-        tz = body.timezone or schedule.get("timezone")
-        if local_time and tz:
-            daily_time_utc = _local_time_to_utc(local_time, tz)
-
     try:
+        # Rebuild UTC time if daily / weekly schedule params changed
+        daily_time_utc = ...
+        effective_type = body.schedule_type or schedule["schedule_type"]
+        if effective_type in ('daily', 'weekly'):
+            local_time = body.daily_time_local or schedule.get("daily_time_local")
+            tz = body.timezone or schedule.get("timezone")
+            if local_time and tz:
+                daily_time_utc = _local_time_to_utc(local_time, tz)
+
         updated = await update_schedule(
             schedule_id=schedule["id"],
             user_id=user_id,
@@ -146,6 +153,7 @@ async def update_routine_schedule(
             interval_minutes=body.interval_minutes if body.interval_minutes is not None else ...,
             is_enabled=body.is_enabled,
             expected_updated_at=body.expected_updated_at,
+            weekly_days=body.weekly_days if body.weekly_days is not None else ...,
         )
     except StaleScheduleError as e:
         # Return a flat-body 409 (no FastAPI `detail` wrapper) so the FE's
