@@ -13,6 +13,7 @@ import { useConversationContext } from '../contexts/ConversationContext';
 import { LatestActiveConversationsTable } from '../components/LatestActiveConversationsTable';
 import { CostAnalysisTable } from '../components/CostAnalysisTable';
 import { UsersReportTable } from '../components/UsersReportTable';
+import { ModelsReportTable } from '../components/ModelsReportTable';
 import { GuidesReportTable } from '../components/GuidesReportTable';
 import { AdminOpsMenu } from '../components/AdminOpsMenu';
 import './AdminSystemReportsPage.css';
@@ -32,6 +33,11 @@ const SECTIONS = [
     key: 'users',
     label: 'Users',
     component: UsersReportTable,
+  },
+  {
+    key: 'models',
+    label: 'Models',
+    component: ModelsReportTable,
   },
   {
     key: 'guides',

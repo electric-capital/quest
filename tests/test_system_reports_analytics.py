@@ -5,7 +5,9 @@ Covers the read-side additions behind the System Reports page:
 1. ``get_most_expensive_conversations()`` -- date-range-filtered, known-cost
    ranking over the raw ``llm_calls_*`` tables (top-N cost analysis), and
    ``get_usage_by_user()`` -- the per-user fold behind the Users report incl.
-   the routine cost split and its per-routine breakdown.
+   the routine cost split and its per-routine breakdown, and
+   ``get_usage_by_model()`` -- the per-model fold behind the Models report
+   (audience counts, routine + sub-agent cost shares, top users).
 2. ``get_latest_context_tokens_for_conversations()`` -- batched
    latest-top-level-call context size across both provider tables.
 3. ``ChatStorage.count_user_message_active_days()`` -- distinct UTC days
@@ -412,6 +414,140 @@ def test_usage_by_user_date_range_filters_calls(_isolated_db):
     assert result[7]["total"]["call_count"] == 1
     assert result[7]["models"][0]["metrics"]["output_tokens"] == 1_000
     assert result[7]["conversation_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# get_usage_by_model
+# ---------------------------------------------------------------------------
+
+def test_usage_by_model_folds_users_conversations_and_splits(_isolated_db):
+    """Per-model fold: one row per model merged across conversations and
+    call types, distinct user/conversation counts, the routine share from
+    the conversation mapping and the sub-agent share from call_type."""
+    store, models_mod = _isolated_db
+    chat_a, chat_b, routine_chat, gemini_chat = (str(uuid.uuid4()) for _ in range(4))
+    sub_agent = models_mod.ApiCallType.SUB_AGENT
+
+    # Opus: user 1 in two chats (one with a sub-agent call), user 2 in a
+    # routine chat -- 4 calls, 2 users, 3 conversations.
+    _record_anthropic(store, models_mod, chat_a, output_tokens=1_000, user_id=1)
+    _record_anthropic(store, models_mod, chat_a, output_tokens=2_000, user_id=1,
+                      call_type=sub_agent)
+    _record_anthropic(store, models_mod, chat_b, output_tokens=3_000, user_id=1)
+    _record_anthropic(store, models_mod, routine_chat, output_tokens=4_000, user_id=2)
+    # Gemini: a sub-agent spawned inside the Opus chat plus user 3's own chat.
+    _record_gemini(store, models_mod, chat_a, prompt=500, candidates=50, user_id=1,
+                   call_type=sub_agent)
+    _record_gemini(store, models_mod, gemini_chat, prompt=500, candidates=50, user_id=3)
+
+    result = _run(store.get_usage_by_model(
+        routine_id_by_conversation={routine_chat: "routine-1"}
+    ))
+
+    assert [m["model"] for m in result] == ["claude-opus-4-8", "gemini-3.5-flash"]
+    opus = result[0]
+    assert opus["provider"] == "anthropic"
+    assert opus["user_count"] == 2
+    assert opus["conversation_count"] == 3
+    assert opus["usage"]["call_count"] == 4
+    assert opus["usage"]["metrics"]["output_tokens"] == 10_000
+    assert "call_type" not in opus["usage"]
+    # Opus 4.8 list price: $5/M in, $25/M out; 100 input tokens per call.
+    def opus_cost(calls, out):
+        return calls * 100 * 5 / 1_000_000 + out * 25 / 1_000_000
+    assert opus["usage"]["estimated_cost_usd"] == pytest.approx(opus_cost(4, 10_000))
+    assert opus["known_cost_usd"] == pytest.approx(opus_cost(4, 10_000))
+    assert opus["cost_routines_usd"] == pytest.approx(opus_cost(1, 4_000))
+    assert opus["cost_routines_source"] == "estimated"
+    assert opus["cost_subagents_usd"] == pytest.approx(opus_cost(1, 2_000))
+    assert opus["cost_subagents_source"] == "estimated"
+    # Top users ranked by cost: user 1 ($ for 3 calls / 6K out) over user 2.
+    assert [(u["user_id"], u["call_count"]) for u in opus["users"]] == [(1, 3), (2, 1)]
+    assert opus["users"][0]["cost_usd"] == pytest.approx(opus_cost(3, 6_000))
+    assert opus["users"][0]["cost_source"] == "estimated"
+
+    gemini = result[1]
+    assert gemini["user_count"] == 2
+    assert gemini["conversation_count"] == 2
+    assert gemini["usage"]["call_count"] == 2
+    assert gemini["cost_routines_usd"] == 0.0
+    assert gemini["cost_routines_source"] is None
+    # The sub-agent call inside the Opus chat lands on the Gemini row.
+    assert gemini["cost_subagents_usd"] == pytest.approx(
+        gemini["usage"]["estimated_cost_usd"] / 2
+    )
+
+
+def test_usage_by_model_unpriced_model_nulls_its_own_row_only(_isolated_db):
+    store, models_mod = _isolated_db
+    plain_chat, other_chat = str(uuid.uuid4()), str(uuid.uuid4())
+    _record_gemini(store, models_mod, plain_chat, prompt=1_000, candidates=100,
+                   model="gemini-unpriced-model", user_id=1,
+                   call_type=models_mod.ApiCallType.SUB_AGENT)
+    _record_anthropic(store, models_mod, other_chat, output_tokens=1_000, user_id=1)
+
+    result = _run(store.get_usage_by_model(
+        routine_id_by_conversation={plain_chat: "routine-1"}
+    ))
+
+    # The priced model ranks first; the unpriced one has no known cost.
+    assert [m["model"] for m in result] == ["claude-opus-4-8", "gemini-unpriced-model"]
+    unpriced = result[1]
+    assert unpriced["usage"]["estimated_cost_usd"] is None
+    assert unpriced["known_cost_usd"] == 0.0
+    assert unpriced["cost_routines_usd"] is None
+    assert unpriced["cost_subagents_usd"] is None
+    assert unpriced["users"][0]["cost_usd"] is None
+    assert unpriced["user_count"] == 1
+    assert result[0]["usage"]["estimated_cost_usd"] is not None
+
+
+def test_usage_by_model_caps_top_users_and_filters_range(_isolated_db):
+    store, models_mod = _isolated_db
+    for user_id in range(1, 5):
+        _record_anthropic(store, models_mod, str(uuid.uuid4()),
+                          output_tokens=user_id * 1_000, user_id=user_id)
+    old_conv = str(uuid.uuid4())
+    old_row = _record_anthropic(store, models_mod, old_conv, output_tokens=100_000,
+                                user_id=9)
+    _set_created_at(store, models_mod.LlmCallAnthropic, old_row["id"],
+                    datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc))
+
+    (opus,) = _run(store.get_usage_by_model(
+        start=datetime(2026, 6, 1, tzinfo=timezone.utc), top_users=2
+    ))
+
+    # The backdated call is outside the window: 4 users, priciest two listed.
+    assert opus["user_count"] == 4
+    assert opus["usage"]["call_count"] == 4
+    assert [u["user_id"] for u in opus["users"]] == [4, 3]
+
+
+def test_usage_by_model_empty_window(_isolated_db):
+    store, _models_mod = _isolated_db
+    assert _run(store.get_usage_by_model()) == []
+
+
+def test_collect_usage_buckets_default_key_unchanged(_isolated_db):
+    """Without ``by_call_type`` the bucket key stays (conversation, model)
+    and entries carry no call_type -- the existing callers' contract."""
+    store, models_mod = _isolated_db
+    conv = str(uuid.uuid4())
+    _record_anthropic(store, models_mod, conv, output_tokens=10, user_id=1)
+    _record_anthropic(store, models_mod, conv, output_tokens=10, user_id=1,
+                      call_type=models_mod.ApiCallType.SUB_AGENT)
+
+    by_key, user_ids = _run(store._collect_usage_buckets())
+    assert set(by_key) == {(conv, "claude-opus-4-8")}
+    assert by_key[(conv, "claude-opus-4-8")]["call_count"] == 2
+    assert "call_type" not in by_key[(conv, "claude-opus-4-8")]
+    assert user_ids == {conv: 1}
+
+    by_key, _ = _run(store._collect_usage_buckets(by_call_type=True))
+    assert set(by_key) == {
+        (conv, "claude-opus-4-8", "top_level"),
+        (conv, "claude-opus-4-8", "sub_agent"),
+    }
 
 
 # ---------------------------------------------------------------------------

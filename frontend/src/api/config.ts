@@ -169,6 +169,7 @@ export const endpoints = {
   adminLatestActiveConversations: () => `${API_BASE_URL}/admin/system-monitor/latest-active-conversations`,
   adminMostExpensiveConversations: () => `${API_BASE_URL}/admin/system-monitor/most-expensive-conversations`,
   adminUserReport: () => `${API_BASE_URL}/admin/system-monitor/user-report`,
+  adminModelReport: () => `${API_BASE_URL}/admin/system-monitor/model-report`,
   adminGuidesReport: () => `${API_BASE_URL}/admin/system-monitor/guides-report`,
 
   adminSignIn: () => `${API_BASE_URL}/admin/sign-in`,

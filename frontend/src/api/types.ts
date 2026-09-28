@@ -1104,6 +1104,52 @@ export interface AdminUserReportResponse {
   users: AdminUserReportRow[];
 }
 
+// One of a model's most expensive users in the range (Models report).
+export interface AdminModelTopUser {
+  user_id: number;
+  // Empty email + "(unknown user)" name when call rows reference a user id
+  // that no longer exists in the users table.
+  user_email: string;
+  user_name: string;
+  // Calls this user made to the model in the range.
+  call_count: number;
+  // null when the model has no pricing entry and no reported amounts.
+  cost_usd: number | null;
+  cost_source: AdminCostSource | null;
+}
+
+// One row of the admin Models report (System Reports > Models): a model id
+// with at least one recorded call in the range, aggregated across every
+// user, conversation and call type.
+export interface AdminModelReportRow {
+  model: string;
+  provider: 'gemini' | 'anthropic' | 'openrouter';
+  // Distinct users (per the call rows) and conversations with at least one
+  // call to this model in the range.
+  user_count: number;
+  conversation_count: number;
+  // Share of the model's in-range spend accrued in routine-created
+  // conversations (surviving rows' routine_id) and by sub-agent calls
+  // (the call rows' call_type). Each null when an unpriced call landed in
+  // it; 0 with a null source when the model saw no such calls at all.
+  cost_routines_usd: number | null;
+  cost_routines_source: AdminCostSource | null;
+  cost_subagents_usd: number | null;
+  cost_subagents_source: AdminCostSource | null;
+  // Up to ten users ranked by their spend on this model (priceable
+  // portion first, then call count).
+  top_users: AdminModelTopUser[];
+  // Exactly one entry -- this model -- in the conversation-row shapes so
+  // the shared token cell renders it; usage_total mirrors that entry.
+  usage_by_model: AdminConversationModelUsage[];
+  usage_total: AdminConversationUsageTotal;
+}
+
+// Sorted by known in-range cost (descending; ties: total tokens, model id).
+export interface AdminModelReportResponse {
+  models: AdminModelReportRow[];
+}
+
 // One row of the admin Guides report (System Reports > Guides). A deprecation
 // tracker: every user guide (guides table, incl. empty auto-created default
 // rows) plus every project with non-empty project instructions

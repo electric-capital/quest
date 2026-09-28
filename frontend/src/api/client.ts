@@ -42,6 +42,7 @@ import type {
   LatestActiveConversationsResponse,
   MostExpensiveConversationsResponse,
   AdminUserReportResponse,
+  AdminModelReportResponse,
   AdminGuidesReportResponse,
   AdminSignInStatus,
   FeatureGate,
@@ -679,6 +680,15 @@ export function fetchAdminUserReport(
   end?: string,
 ): Promise<AdminUserReportResponse> {
   return apiGet(endpoints.adminUserReport(), {
+    query: { start: start || undefined, end: end || undefined },
+  });
+}
+
+export function fetchAdminModelReport(
+  start?: string,
+  end?: string,
+): Promise<AdminModelReportResponse> {
+  return apiGet(endpoints.adminModelReport(), {
     query: { start: start || undefined, end: end || undefined },
   });
 }

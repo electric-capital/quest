@@ -1,8 +1,8 @@
 /**
  * ReportDateRange - shared date-range picker for the System Reports sections
- * that window on a UTC date range (Cost Analysis, Users).
+ * that window on a UTC date range (Cost Analysis, Users, Models).
  *
- * A preset dropdown (Last 7/30/90 days, Last 12 months, All time) plus a
+ * A preset dropdown (Today, Last 7/30/90 days, Last 12 months, All time) plus a
  * custom start/end date pair; `resolveRange` maps the selection to the
  * endpoints' inclusive `start`/`end` query params. Extracted from
  * CostAnalysisTable so the two sections can never drift on the date math.
@@ -10,9 +10,11 @@
 
 import './ReportDateRange.css';
 
-// Shortcut presets: days counted back from today (inclusive), null = no
-// lower bound ("All time"). "Custom" swaps the preset for two date inputs.
+// Shortcut presets: days counted back from today (inclusive; 1 = today's
+// UTC date alone), null = no lower bound ("All time"). "Custom" swaps the
+// preset for two date inputs.
 export const RANGE_PRESETS = [
+  { key: 'today', label: 'Today', days: 1 },
   { key: 'last7', label: 'Last 7 days', days: 7 },
   { key: 'last30', label: 'Last 30 days', days: 30 },
   { key: 'last90', label: 'Last 90 days', days: 90 },

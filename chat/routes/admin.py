@@ -21,6 +21,7 @@ from db.conversation_store import (
 from db.llm_call_store import (
     get_latest_context_tokens_for_conversations,
     get_most_expensive_conversations,
+    get_usage_by_model,
     get_usage_by_model_for_conversations,
     get_usage_by_user,
 )
@@ -570,6 +571,88 @@ async def admin_user_report(
     for row in rows:
         del row["_known_cost"]
     return {"users": rows}
+
+
+def _model_user_view(user_usage: dict, info: Optional[dict]) -> dict:
+    """Project one top-user entry of the models report.
+
+    ``info`` is the users-table row (``list_all_users`` shape); None when the
+    call rows reference a user that has since been deleted -- the spend
+    stays visible under a placeholder identity, as in the user report.
+    """
+    return {
+        "user_id": user_usage["user_id"],
+        "user_email": info["email"] if info else "",
+        "user_name": (info.get("name") or "") if info else "(unknown user)",
+        "call_count": user_usage["call_count"],
+        "cost_usd": user_usage["cost_usd"],
+        "cost_source": user_usage["cost_source"],
+    }
+
+
+@router.get("/admin/system-monitor/model-report")
+async def admin_model_report(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Return per-model usage, cost and audience aggregates for a date range.
+
+    One row per model id with at least one recorded call in the range,
+    sorted by known in-range cost. Token/cost aggregation windows on the
+    ``llm_calls_*`` rows' ``created_at`` like the other ranged reports; the
+    routine share comes from the surviving conversation rows' ``routine_id``
+    (calls of deleted conversations count as non-routine) and the sub-agent
+    share from the call rows' own ``call_type``. ``top_users`` lists the ten
+    most expensive users of each model.
+    """
+    if not is_admin(user["email"]):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "forbidden",
+                "message": "Admin access required.",
+            }
+        )
+
+    _start_date, _end_date, start_dt, end_dt = _resolve_range_window(start, end)
+
+    conv_rows = await list_conversation_activity_rows()
+    routine_by_conv = {
+        row["id"]: row["routine_id"] for row in conv_rows if row["routine_id"]
+    }
+    usage_by_model = await get_usage_by_model(
+        start=start_dt, end=end_dt, routine_id_by_conversation=routine_by_conv
+    )
+    users_by_id = {u["id"]: u for u in await list_all_users()}
+
+    rows = [
+        {
+            "model": entry["model"],
+            "provider": entry["provider"],
+            "user_count": entry["user_count"],
+            "conversation_count": entry["conversation_count"],
+            "cost_routines_usd": entry["cost_routines_usd"],
+            "cost_routines_source": entry["cost_routines_source"],
+            "cost_subagents_usd": entry["cost_subagents_usd"],
+            "cost_subagents_source": entry["cost_subagents_source"],
+            "top_users": [
+                _model_user_view(u, users_by_id.get(u["user_id"]))
+                for u in entry["users"]
+            ],
+            # Same shapes as the conversation rows so the FE reuses the
+            # per-model token cell: exactly one model entry per row.
+            "usage_by_model": [entry["usage"]],
+            "usage_total": {
+                "call_count": entry["usage"]["call_count"],
+                "total_tokens": entry["usage"]["total_tokens"],
+                "estimated_cost_usd": entry["usage"]["estimated_cost_usd"],
+                "cost_source": entry["usage"]["cost_source"],
+            },
+        }
+        for entry in usage_by_model
+    ]
+    return {"models": rows}
 
 
 @router.get("/admin/system-monitor/guides-report")
