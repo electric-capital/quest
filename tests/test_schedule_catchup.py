@@ -364,6 +364,11 @@ def test_restart_interrupts_running_run_and_retries_once(env, monkeypatch):
     # interrupted, clears is_running and leaves a notice in the conversation.
     restart = DUE + timedelta(minutes=10)
     monkeypatch.setattr(env["scheduler"], "datetime", _FrozenDatetime(restart))
+    # The poll's once-a-day DST reconversion gate reads the (now frozen)
+    # clock; keep it suppressed for the frozen date too, otherwise it
+    # re-saves the schedule with a real-clock updated_at after the
+    # occurrence and the edited-after-occurrence guard blocks the retry.
+    monkeypatch.setattr(env["scheduler"], "_last_reconversion_date", restart.date())
     _run(env["scheduler"]._recover_interrupted_runs())
     assert _runs(env) == [(DUE, "interrupted", 1)]
     assert _schedule(env)["is_running"] is False
