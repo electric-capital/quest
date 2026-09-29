@@ -1303,6 +1303,9 @@ export interface InferenceModelInfo {
   // Admin toggle: disabled models are hidden from the picker and never
   // health-checked
   enabled: boolean;
+  // Context window (tokens) the app assumes for the model; for Ollama
+  // models this is also the num_ctx requested per call
+  max_input_tokens: number;
   // null when the model has never been health-checked
   status: InferenceModelStatus | null;
 }
@@ -1326,25 +1329,40 @@ export interface VertexProviderStatus {
   models: InferenceModelInfo[];
 }
 
-// One admin-configured provider instance (an OpenRouter configuration)
+// One admin-configured provider instance (an OpenRouter configuration or a
+// self-hosted inference server)
 export interface InferenceInstanceStatus {
   id: string;
   kind: string;
   kind_label: string;
   label: string;
+  // Usable at all: a stored key (OpenRouter) or a server URL (self-hosted)
   configured: boolean;
   // "store" = key file in the data directory, null = no key yet
   source: 'store' | null;
   credentials: { api_key_set: boolean };
   hint: string;
+  // false for self-hosted servers, whose key is optional
+  key_required: boolean;
+  // Self-hosted endpoints only; null on fixed-upstream kinds
+  base_url: string | null;
+  api_type: string | null;
   models: InferenceModelInfo[];
+}
+
+// One API type a self-hosted instance can speak
+export interface InferenceApiType {
+  id: string;
+  label: string;
+  description: string;
 }
 
 export interface InferenceProvidersListResponse {
   vertex: VertexProviderStatus;
   instances: InferenceInstanceStatus[];
-  // Instance kinds an admin can add
-  kinds: { kind: string; label: string }[];
+  // Instance kinds an admin can add (`endpoint` = carries its own base URL)
+  kinds: { kind: string; label: string; endpoint: boolean }[];
+  api_types: InferenceApiType[];
 }
 
 export interface VertexModelsUpdate {
@@ -1361,8 +1379,12 @@ export interface InferenceInstanceUpdate {
   label?: string;
   // Empty string keeps the currently stored key
   api_key?: string;
-  // Full replacement of the model list (wire ids), in display order
-  models?: { id: string; enabled: boolean }[];
+  // Self-hosted endpoints only
+  base_url?: string;
+  api_type?: string;
+  // Full replacement of the model list (wire ids), in display order; the
+  // optional name / context_length override the stored snapshot
+  models?: { id: string; enabled: boolean; name?: string; context_length?: number }[];
 }
 
 // One OpenRouter catalog entry (typeahead candidate)
@@ -1372,6 +1394,16 @@ export interface OpenRouterCatalogModel {
   context_length: number | null;
   max_completion_tokens: number | null;
   pricing: { prompt: number; completion: number; cache_read?: number } | null;
+  // Self-hosted discovery only: server-reported summary (family, size,
+  // quantization) and capabilities (e.g. "tools")
+  detail?: string;
+  capabilities?: string[] | null;
+}
+
+// Models a self-hosted instance's server reports right now (not cached)
+export interface InstanceCatalogResponse {
+  models: OpenRouterCatalogModel[];
+  error: string | null;
 }
 
 export interface OpenRouterCatalogResponse {

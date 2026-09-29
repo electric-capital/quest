@@ -7,7 +7,8 @@ same resolver:
 - the fixed Vertex catalog below (``MODEL_REGISTRY``: every Gemini and
   Anthropic model, bare ids), filtered by the admin's Vertex disabled set;
 - admin-configured provider instances (``config/inference_providers.py``:
-  today OpenRouter configurations, each with its own key and model list),
+  OpenRouter configurations with their own key, and self-hosted endpoints
+  with their own base URL / API type, each with its own model list),
   whose models carry qualified ids ``<instance_id>:<wire_id>``.
 
 Consumers should go through :func:`resolve_model` / the helper functions
@@ -402,7 +403,7 @@ def get_backend_for_model(model_id: str) -> str | None:
 
     Vertex-served models (all Gemini and Anthropic models) resolve to
     ``"vertex"``; instance-served models to their kind's backend label
-    (``"openrouter"``). Historical analytics rows recorded under ``"genapi"``
+    (``"openrouter"``, ``"local"``). Historical analytics rows recorded under ``"genapi"``
     keep that label in the DB. ``None`` for unknown models so callers can
     record without raising.
     """
@@ -432,10 +433,11 @@ def model_instance_id(model_id: str) -> str | None:
 
 
 def _instance_credentialed(instance_id: str, cache: dict[str, bool]) -> bool:
-    from config.inference_providers import effective_api_key
+    from config.inference_providers import get_instance, instance_configured
 
     if instance_id not in cache:
-        cache[instance_id] = bool(effective_api_key(instance_id)[0])
+        instance = get_instance(instance_id)
+        cache[instance_id] = instance is not None and instance_configured(instance)
     return cache[instance_id]
 
 
@@ -448,8 +450,10 @@ def get_configured_models() -> list[str]:
     - Vertex models need their family's ``vertex_project_id`` (Gemini:
       ``gemini_vertex``, Anthropic: ``anthropic``) and must not be in the
       admin's Vertex disabled set.
-    - Instance models need the instance's API key in the credential store
-      and their per-model ``enabled`` flag.
+    - Instance models need their instance configured (an API key in the
+      credential store for OpenRouter, a base URL for a self-hosted
+      endpoint -- ``instance_configured()``) and their per-model
+      ``enabled`` flag.
 
     Deprecated Vertex models are excluded regardless: they are still
     runnable (existing conversations/routines keep working) but must not
@@ -557,14 +561,18 @@ def get_provider_instance(provider_name: str, instance_id: str | None = None) ->
 
     Vertex providers (``gemini``, ``anthropic``) have a single instance and
     ignore ``instance_id``. Instance-backed providers (``openrouter``) get
-    one object per configured instance, each reading its own API key;
+    one object per configured instance, each reading its own key/endpoint;
     ``instance_id=None`` selects the legacy ``openrouter`` instance so
-    callers that only know the provider name keep working. Lazily created.
+    callers that only know the provider name keep working. A self-hosted
+    instance whose API type is ``ollama`` gets the native-transport
+    ``OllamaProvider`` subclass instead of the openai-SDK
+    ``OpenRouterProvider`` (the admin endpoint drops the cached object when
+    the API type changes). Lazily created.
 
     Raises:
         ValueError: If the provider name is unknown.
     """
-    from config.inference_providers import LEGACY_OPENROUTER_INSTANCE_ID
+    from config.inference_providers import LEGACY_OPENROUTER_INSTANCE_ID, get_instance
 
     if provider_name in ("gemini", "anthropic"):
         instance_id = None
@@ -582,8 +590,13 @@ def get_provider_instance(provider_name: str, instance_id: str | None = None) ->
         from chat.llm.anthropic_provider import AnthropicProvider
         instance = AnthropicProvider()
     elif provider_name == "openrouter":
-        from chat.llm.openrouter_provider import OpenRouterProvider
-        instance = OpenRouterProvider(instance_id)
+        configured = get_instance(instance_id)
+        if configured is not None and configured.get("api_type") == "ollama":
+            from chat.llm.ollama_provider import OllamaProvider
+            instance = OllamaProvider(instance_id)
+        else:
+            from chat.llm.openrouter_provider import OpenRouterProvider
+            instance = OpenRouterProvider(instance_id)
     else:
         raise ValueError(
             f"Unknown provider: {provider_name}. "

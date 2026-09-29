@@ -4,12 +4,14 @@ import {
   createInferenceInstance,
   deleteInferenceInstance,
   fetchInferenceProviders,
+  searchInstanceCatalog,
   searchOpenRouterCatalog,
   testInferenceModel,
   updateInferenceInstance,
   updateVertexModels,
 } from '../../api/client';
 import type {
+  InferenceApiType,
   InferenceInstanceStatus,
   InferenceModelInfo,
   InferenceProvidersListResponse,
@@ -170,12 +172,95 @@ function LivenessDot({ state }: { state: ModelCheckState }) {
   );
 }
 
+/** A per-model override the admin typed on a self-hosted model row. */
+export interface ModelEdit {
+  name?: string;
+  context_length?: number;
+}
+
+/**
+ * Inline editor under a self-hosted model row: the friendly name (local
+ * servers publish none, so the default is derived from the id) and the
+ * context window in tokens (what the app assumes for the model; for Ollama
+ * also the ``num_ctx`` requested on every call). Each field saves on blur
+ * or Enter when its value changed.
+ */
+function ModelEditFields({
+  model,
+  busy,
+  onEdit,
+}: {
+  model: InferenceModelInfo;
+  busy: boolean;
+  onEdit: (edit: ModelEdit) => void;
+}) {
+  // Initial values only: ModelRow keys this editor by the stored values, so
+  // a save that changes them remounts it with fresh state.
+  const [name, setName] = useState(model.display_name);
+  const [context, setContext] = useState(String(model.max_input_tokens));
+
+  const commitName = () => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setName(model.display_name);
+      return;
+    }
+    if (trimmed !== model.display_name) onEdit({ name: trimmed });
+  };
+  const commitContext = () => {
+    const parsed = Number.parseInt(context, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      setContext(String(model.max_input_tokens));
+      return;
+    }
+    if (parsed !== model.max_input_tokens) onEdit({ context_length: parsed });
+  };
+  const blurOnEnter = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') (event.target as HTMLInputElement).blur();
+  };
+
+  return (
+    <div className="inf-prov-model-edit">
+      <label className="inf-prov-model-edit-field">
+        <span>Name</span>
+        <input
+          type="text"
+          className="inf-prov-model-edit-input"
+          value={name}
+          disabled={busy}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={commitName}
+          onKeyDown={blurOnEnter}
+          aria-label={`Display name for ${model.wire_id}`}
+        />
+      </label>
+      <label className="inf-prov-model-edit-field">
+        <span>Context</span>
+        <input
+          type="number"
+          min={1}
+          step={1024}
+          className="inf-prov-model-edit-input inf-prov-model-edit-number"
+          value={context}
+          disabled={busy}
+          onChange={(e) => setContext(e.target.value)}
+          onBlur={commitContext}
+          onKeyDown={blurOnEnter}
+          aria-label={`Context window in tokens for ${model.wire_id}`}
+        />
+        <span>tokens</span>
+      </label>
+    </div>
+  );
+}
+
 /**
  * One model row: enabled checkbox, the wire id (what the API call sends) as
  * the primary label with the friendly name muted beside it, the liveness
  * dot + Recheck (only while the model is enabled and its provider is
- * credentialed -- disabled models are never checked), and an optional
- * remove button for instance models.
+ * credentialed -- disabled models are never checked), an optional remove
+ * button for instance models, and -- for self-hosted models -- the inline
+ * name / context editor.
  */
 function ModelRow({
   model,
@@ -185,6 +270,7 @@ function ModelRow({
   onCheck,
   onToggle,
   onRemove,
+  onEdit,
 }: {
   model: InferenceModelInfo;
   state: ModelCheckState;
@@ -193,6 +279,7 @@ function ModelRow({
   onCheck: () => void;
   onToggle: (enabled: boolean) => void;
   onRemove?: () => void;
+  onEdit?: (edit: ModelEdit) => void;
 }) {
   const showLiveness = model.enabled && checkable;
   const showName = model.display_name && model.display_name !== model.wire_id;
@@ -248,6 +335,14 @@ function ModelRow({
       {showLiveness && state.status === 'error' && (
         <p className="inf-prov-model-error">{state.error}</p>
       )}
+      {onEdit && (
+        <ModelEditFields
+          key={`${model.display_name}\u0000${model.max_input_tokens}`}
+          model={model}
+          busy={busy}
+          onEdit={onEdit}
+        />
+      )}
     </div>
   );
 }
@@ -268,15 +363,20 @@ function ModelsPanel({
   groups,
   busy,
   saveError,
+  note,
   onToggle,
   onRemove,
+  onEdit,
   children,
 }: {
   groups: ModelGroup[];
   busy: boolean;
   saveError: string;
+  // Extra sentence appended to the panel note (kind-specific guidance)
+  note?: string;
   onToggle: (model: InferenceModelInfo, enabled: boolean) => void;
   onRemove?: (model: InferenceModelInfo) => void;
+  onEdit?: (model: InferenceModelInfo, edit: ModelEdit) => void;
   children?: React.ReactNode;
 }) {
   const { stateFor, runCheck, runAll, anyChecking } = useModelChecks();
@@ -301,6 +401,7 @@ function ModelsPanel({
         Unchecked models are hidden from the model picker and never
         health-checked. Enabled models are checked at server startup with a
         minimal real inference call; the dot shows the latest result.
+        {note ? ` ${note}` : ''}
       </p>
       {nonEmpty.map((group, index) => (
         <div key={group.title ?? index} className="inf-prov-subsection">
@@ -315,6 +416,7 @@ function ModelsPanel({
               onCheck={() => runCheck(model.id)}
               onToggle={(enabled) => onToggle(model, enabled)}
               onRemove={onRemove ? () => onRemove(model) : undefined}
+              onEdit={onEdit ? (edit) => onEdit(model, edit) : undefined}
             />
           ))}
           {!group.configured && (
@@ -418,7 +520,7 @@ function VertexProviderCard({ status: initial }: { status: VertexProviderStatus 
 }
 
 // ---------------------------------------------------------------------------
-// OpenRouter model typeahead
+// Model typeahead (OpenRouter catalog / self-hosted server discovery)
 // ---------------------------------------------------------------------------
 
 function formatContext(tokens: number | null): string {
@@ -428,19 +530,37 @@ function formatContext(tokens: number | null): string {
     : `${Math.round(tokens / 1000)}K ctx`;
 }
 
+/** One typeahead row's muted second line. */
+function catalogMeta(m: OpenRouterCatalogModel): string {
+  const bits = [m.name];
+  if (m.detail) bits.push(m.detail);
+  if (m.context_length) bits.push(formatContext(m.context_length));
+  if (m.capabilities && !m.capabilities.includes('tools')) bits.push('no tool support');
+  return bits.join(' · ');
+}
+
+type CatalogSearch = (query: string) => Promise<{ models: OpenRouterCatalogModel[]; error: string | null }>;
+
 /**
- * "Add model" combobox over the cached OpenRouter catalog: debounced
- * substring search on id/name, plus a "use as custom id" row so a model the
- * catalog does not list yet (or an unreachable catalog) never blocks the
- * admin. Enter picks the highlighted row; Escape closes.
+ * "Add model" combobox: debounced substring search over a catalog (the
+ * cached OpenRouter list, or what a self-hosted server reports right now),
+ * plus a "use as custom id" row so a model the catalog does not list yet
+ * (or an unreachable catalog/server) never blocks the admin. Enter picks
+ * the highlighted row; Escape closes.
  */
 function AddModelCombobox({
   existing,
   disabled,
+  search,
+  placeholder,
+  emptyHint,
   onAdd,
 }: {
   existing: Set<string>;
   disabled: boolean;
+  search: CatalogSearch;
+  placeholder: string;
+  emptyHint: string;
   onAdd: (wireId: string) => void;
 }) {
   const [query, setQuery] = useState('');
@@ -458,7 +578,7 @@ function AddModelCombobox({
     setSearching(true);
     const timer = window.setTimeout(async () => {
       try {
-        const response = await searchOpenRouterCatalog(query.trim(), { limit: 12 });
+        const response = await search(query.trim());
         if (seq !== requestSeq.current) return;
         setResults(response.models.filter((m) => !existing.has(m.id)));
         setCatalogError(response.error);
@@ -471,7 +591,7 @@ function AddModelCombobox({
       }
     }, 200);
     return () => window.clearTimeout(timer);
-  }, [query, open, existing]);
+  }, [query, open, existing, search]);
 
   useEffect(() => {
     if (!open) return;
@@ -526,7 +646,7 @@ function AddModelCombobox({
       <input
         type="text"
         className="inf-prov-add-model-input"
-        placeholder="Add a model — search the OpenRouter catalog or type an id"
+        placeholder={placeholder}
         value={query}
         disabled={disabled}
         onChange={(e) => {
@@ -554,9 +674,7 @@ function AddModelCombobox({
               onClick={() => pick(m.id)}
             >
               <span className="inf-prov-typeahead-id">{m.id}</span>
-              <span className="inf-prov-typeahead-meta">
-                {m.name}{m.context_length ? ` · ${formatContext(m.context_length)}` : ''}
-              </span>
+              <span className="inf-prov-typeahead-meta">{catalogMeta(m)}</span>
             </div>
           ))}
           {customCandidate && (
@@ -574,12 +692,12 @@ function AddModelCombobox({
           )}
           {optionCount === 0 && (
             <div className="inf-prov-typeahead-empty">
-              {searching ? 'Searching…' : trimmed ? 'Already added' : 'Type to search the catalog'}
+              {searching ? 'Searching…' : trimmed ? 'Already added' : emptyHint}
             </div>
           )}
           {catalogError && (
             <div className="inf-prov-typeahead-empty inf-prov-typeahead-warning">
-              Catalog unavailable ({catalogError}) — custom ids still work.
+              Model list unavailable ({catalogError}) — custom ids still work.
             </div>
           )}
         </div>
@@ -588,8 +706,13 @@ function AddModelCombobox({
   );
 }
 
+const openRouterSearch: CatalogSearch = async (q) => {
+  const response = await searchOpenRouterCatalog(q, { limit: 12 });
+  return { models: response.models, error: response.error };
+};
+
 // ---------------------------------------------------------------------------
-// Provider-instance card (one OpenRouter configuration)
+// Provider-instance card (one OpenRouter configuration or self-hosted server)
 // ---------------------------------------------------------------------------
 
 /** Three-dot header menu holding the card's destructive action. */
@@ -651,14 +774,21 @@ function CardMenu({ items }: { items: { label: string; onClick: () => void; disa
 
 function InstanceCard({
   status: initial,
+  endpoint,
+  apiTypes,
   onDeleted,
 }: {
   status: InferenceInstanceStatus;
+  // The kind carries its own base URL + API type (self-hosted server)
+  endpoint: boolean;
+  apiTypes: InferenceApiType[];
   onDeleted: (instanceId: string) => void;
 }) {
   const [status, setStatus] = useState(initial);
   const [label, setLabel] = useState(initial.label);
   const [apiKey, setApiKey] = useState('');
+  const [baseUrl, setBaseUrl] = useState(initial.base_url ?? '');
+  const [apiType, setApiType] = useState(initial.api_type ?? apiTypes[0]?.id ?? 'openai');
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [saveError, setSaveError] = useState('');
   const [modelsBusy, setModelsBusy] = useState(false);
@@ -673,6 +803,9 @@ function InstanceCard({
   }, []);
 
   const labelDirty = label.trim() !== status.label;
+  const baseUrlDirty = endpoint && baseUrl.trim() !== (status.base_url ?? '');
+  const apiTypeDirty = endpoint && apiType !== status.api_type;
+  const selectedApiType = apiTypes.find((t) => t.id === apiType);
 
   const handleSave = useCallback(async () => {
     setSaveStatus('saving');
@@ -681,9 +814,13 @@ function InstanceCard({
       const updated = await updateInferenceInstance(status.id, {
         label: labelDirty ? label.trim() : undefined,
         api_key: apiKey,
+        base_url: baseUrlDirty ? baseUrl.trim() : undefined,
+        api_type: apiTypeDirty ? apiType : undefined,
       });
       setStatus(updated);
       setLabel(updated.label);
+      setBaseUrl(updated.base_url ?? '');
+      setApiType(updated.api_type ?? apiType);
       setApiKey('');
       setSaveStatus('saved');
       if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
@@ -695,9 +832,11 @@ function InstanceCard({
       if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
       statusTimeoutRef.current = window.setTimeout(() => setSaveStatus('idle'), 4000);
     }
-  }, [status.id, label, labelDirty, apiKey]);
+  }, [status.id, label, labelDirty, apiKey, baseUrl, baseUrlDirty, apiType, apiTypeDirty]);
 
-  const saveModels = useCallback(async (models: { id: string; enabled: boolean }[]) => {
+  type ModelListEntry = { id: string; enabled: boolean; name?: string; context_length?: number };
+
+  const saveModels = useCallback(async (models: ModelListEntry[]) => {
     setModelsBusy(true);
     setModelsError('');
     try {
@@ -711,7 +850,7 @@ function InstanceCard({
   }, [status.id]);
 
   const currentModels = useCallback(
-    () => status.models.map((m) => ({ id: m.wire_id, enabled: m.enabled })),
+    (): ModelListEntry[] => status.models.map((m) => ({ id: m.wire_id, enabled: m.enabled })),
     [status.models],
   );
 
@@ -721,10 +860,20 @@ function InstanceCard({
     saveModels(currentModels().filter((m) => m.id !== model.wire_id));
   const handleAdd = (wireId: string) =>
     saveModels([...currentModels(), { id: wireId, enabled: true }]);
+  const handleEdit = (model: InferenceModelInfo, edit: ModelEdit) =>
+    saveModels(currentModels().map((m) => (m.id === model.wire_id ? { ...m, ...edit } : m)));
+
+  const instanceSearch = useCallback<CatalogSearch>(
+    async (q) => {
+      const response = await searchInstanceCatalog(status.id, q, { limit: 12 });
+      return { models: response.models, error: response.error };
+    },
+    [status.id],
+  );
 
   const handleDelete = useCallback(async () => {
     const confirmed = window.confirm(
-      `Remove the "${status.label}" configuration? Its API key and model list are deleted; ` +
+      `Remove the "${status.label}" configuration? Its ${endpoint ? 'server settings' : 'API key'} and model list are deleted; ` +
       'conversations already using its models will fail on their next message.',
     );
     if (!confirmed) return;
@@ -737,9 +886,10 @@ function InstanceCard({
       setModelsError(errorMessage(error, 'Failed to remove'));
       setDeleting(false);
     }
-  }, [status.id, status.label, onDeleted]);
+  }, [status.id, status.label, endpoint, onDeleted]);
 
   const existing = new Set(status.models.map((m) => m.wire_id));
+  const dirty = !!apiKey.trim() || labelDirty || baseUrlDirty || apiTypeDirty;
 
   return (
     <CredentialCard
@@ -772,6 +922,35 @@ function InstanceCard({
             onChange={setLabel}
             placeholder={status.kind_label}
           />
+          {endpoint && (
+            <>
+              <CredentialField
+                id={`inf-prov-${status.id}-base-url`}
+                label="Server URL"
+                value={baseUrl}
+                onChange={setBaseUrl}
+                placeholder="http://192.168.1.20:8080 or http://ollama-box:11434"
+              />
+              <div className="svc-cred-row">
+                <label htmlFor={`inf-prov-${status.id}-api-type`} className="svc-cred-label">
+                  API type
+                </label>
+                <select
+                  id={`inf-prov-${status.id}-api-type`}
+                  className="svc-cred-input inf-prov-select"
+                  value={apiType}
+                  onChange={(e) => setApiType(e.target.value)}
+                >
+                  {apiTypes.map((t) => (
+                    <option key={t.id} value={t.id}>{t.label}</option>
+                  ))}
+                </select>
+                {selectedApiType && (
+                  <p className="inf-prov-field-hint">{selectedApiType.description}</p>
+                )}
+              </div>
+            </>
+          )}
           <CredentialField
             id={`inf-prov-${status.id}-api-key`}
             label="API key"
@@ -779,11 +958,12 @@ function InstanceCard({
             onChange={setApiKey}
             placeholder={secretPlaceholder(status.credentials.api_key_set, status.hint)}
             secret
+            optional={!status.key_required}
           />
           <SaveActions
             saveStatus={saveStatus}
             saveError={saveError}
-            disabled={!apiKey.trim() && !labelDirty}
+            disabled={!dirty}
             onSave={handleSave}
           />
         </div>
@@ -791,10 +971,32 @@ function InstanceCard({
           groups={[{ title: null, configured: status.configured, models: status.models }]}
           busy={modelsBusy || deleting}
           saveError={modelsError}
+          note={
+            endpoint
+              ? 'Self-hosted models are priced at $0. Rename a model or set its context window below each row' +
+                (apiType === 'ollama' ? ' — for Ollama the context window is requested on every call.' : '.') +
+                ' The system prompt alone is roughly 17K tokens, so the server must allow at least a 32K context' +
+                (apiType === 'ollama' ? '.' : ' (llama.cpp: -c 32768).')
+              : undefined
+          }
           onToggle={handleToggle}
           onRemove={handleRemove}
+          onEdit={endpoint ? handleEdit : undefined}
         >
-          <AddModelCombobox existing={existing} disabled={modelsBusy || deleting} onAdd={handleAdd} />
+          <AddModelCombobox
+            existing={existing}
+            disabled={modelsBusy || deleting || (endpoint && !status.configured)}
+            search={endpoint ? instanceSearch : openRouterSearch}
+            placeholder={
+              endpoint
+                ? status.configured
+                  ? 'Add a model — pick one the server reports or type its name'
+                  : 'Save the server URL first'
+                : 'Add a model — search the OpenRouter catalog or type an id'
+            }
+            emptyHint={endpoint ? 'The server reports no other models' : 'Type to search the catalog'}
+            onAdd={handleAdd}
+          />
         </ModelsPanel>
       </div>
     </CredentialCard>
@@ -808,13 +1010,16 @@ function InstanceCard({
 /**
  * Admin-only panel for LLM inference provider configuration. Vertex AI is
  * shown read-only (its credentials and project config are detected from the
- * server environment) with per-model enable checkboxes; every OpenRouter
- * configuration (provider instance) gets its own editable card with a
- * label, a write-only API key, and an admin-picked model list fed by the
- * OpenRouter catalog typeahead. Each card's Models panel shows the real
- * model id string used in API calls, the server-stored liveness verdict per
- * model (startup sweep + rechecks), and Recheck buttons. Instances are
- * added from the buttons at the bottom.
+ * server environment) with per-model enable checkboxes; every provider
+ * instance gets its own editable card -- an OpenRouter configuration with a
+ * label, a write-only API key and a model list fed by the OpenRouter
+ * catalog typeahead, or a self-hosted server with a label, server URL, API
+ * type (OpenAI-compatible / Ollama), optional key and a model list fed by
+ * what the server reports, with inline name / context editing per model.
+ * Each card's Models panel shows the real model id string used in API
+ * calls, the server-stored liveness verdict per model (startup sweep +
+ * rechecks), and Recheck buttons. Instances are added from the buttons at
+ * the bottom.
  */
 export function InferenceProvidersSection() {
   const [data, setData] = useState<InferenceProvidersListResponse | null>(null);
@@ -871,7 +1076,13 @@ export function InferenceProvidersSection() {
           <div className="inf-prov-cards">
             <VertexProviderCard status={data.vertex} />
             {data.instances.map((instance) => (
-              <InstanceCard key={instance.id} status={instance} onDeleted={handleDeleted} />
+              <InstanceCard
+                key={instance.id}
+                status={instance}
+                endpoint={data.kinds.find((k) => k.kind === instance.kind)?.endpoint ?? false}
+                apiTypes={data.api_types}
+                onDeleted={handleDeleted}
+              />
             ))}
           </div>
           <div className="inf-prov-footer">
