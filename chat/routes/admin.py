@@ -1150,6 +1150,7 @@ def _model_view(spec, statuses: dict) -> dict:
         "display_name": spec.display_name,
         "family": spec.family,
         "enabled": spec.enabled,
+        "max_input_tokens": spec.max_input_tokens,
         "status": statuses.get(spec.id),
     }
 
@@ -1183,6 +1184,8 @@ def _instance_status(instance: dict) -> dict:
     from chat.llm.health import get_model_health_store
     from config.inference_providers import INSTANCE_KINDS, effective_api_key
 
+    from config.inference_providers import instance_configured
+
     statuses = get_model_health_store().get_all()
     kind = INSTANCE_KINDS[instance["kind"]]
     api_key, source = effective_api_key(instance["id"])
@@ -1191,10 +1194,14 @@ def _instance_status(instance: dict) -> dict:
         "kind": instance["kind"],
         "kind_label": kind["label"],
         "label": instance["label"],
-        "configured": api_key is not None,
+        "configured": instance_configured(instance),
         "source": source,
         "credentials": {"api_key_set": api_key is not None},
         "hint": kind["hint"],
+        "key_required": kind["key_required"],
+        # Self-hosted endpoints only; null for fixed-upstream kinds
+        "base_url": instance.get("base_url") if kind["endpoint"] else None,
+        "api_type": instance.get("api_type") if kind["endpoint"] else None,
         "models": [
             _model_view(spec, statuses)
             for spec in list_model_specs()
@@ -1231,14 +1238,19 @@ async def admin_list_inference_providers(
     never include the key itself.
     """
     _require_admin(user)
-    from config.inference_providers import INSTANCE_KINDS, list_instances
+    from config.inference_providers import INSTANCE_KINDS, LOCAL_API_TYPES, list_instances
 
     return {
         "vertex": _vertex_status(),
         "instances": [_instance_status(inst) for inst in list_instances()],
         "kinds": [
-            {"kind": kind, "label": spec["label"]}
+            {"kind": kind, "label": spec["label"], "endpoint": spec["endpoint"]}
             for kind, spec in INSTANCE_KINDS.items()
+        ],
+        # API types a self-hosted instance can speak (the card's selector)
+        "api_types": [
+            {"id": api_type, "label": spec["label"], "description": spec["description"]}
+            for api_type, spec in LOCAL_API_TYPES.items()
         ],
     }
 
@@ -1301,10 +1313,11 @@ async def admin_create_inference_instance(
     body: InstanceCreate,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """Add an empty provider instance (no key, no models yet).
+    """Add an empty provider instance (no key/endpoint, no models yet).
 
-    The id is server-generated (``openrouter``, ``openrouter-2``, ...); the
-    admin then saves a key and picks models via the PUT endpoint.
+    The id is server-generated (``openrouter``, ``openrouter-2``, ...,
+    ``local``, ``local-2``, ...); the admin then saves a key or server URL
+    and picks models via the PUT endpoint.
     """
     _require_admin(user)
     from config.inference_providers import INSTANCE_KINDS, new_instance_id, upsert_instance
@@ -1330,6 +1343,10 @@ async def admin_create_inference_instance(
 class InstanceModelUpdate(BaseModel):
     id: str
     enabled: bool = True
+    # Optional per-model overrides (self-hosted models, whose servers
+    # publish no friendly name): omitted = keep the stored snapshot.
+    name: Optional[str] = None
+    context_length: Optional[int] = None
 
 
 class InstanceUpdate(BaseModel):
@@ -1338,6 +1355,9 @@ class InstanceUpdate(BaseModel):
     # without ever sending the key back out.
     label: Optional[str] = None
     api_key: Optional[str] = None
+    # Self-hosted endpoints only (400 on other kinds).
+    base_url: Optional[str] = None
+    api_type: Optional[str] = None
     # Full replacement of the model list, in display order.
     models: Optional[list[InstanceModelUpdate]] = None
 
@@ -1348,22 +1368,30 @@ async def admin_update_inference_instance(
     body: InstanceUpdate,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """Update an instance's label, API key and/or model list.
+    """Update an instance's label, API key, endpoint and/or model list.
 
     Models new to the instance get their metadata (name, context/output
-    limits, pricing) snapshotted from the cached OpenRouter catalog;
-    entries the catalog does not list are kept as custom ids with
-    conservative defaults. A key change drops cached SDK clients so the new
-    key is used on the next session, and every enabled model of the
-    instance is rechecked in the background (a failing verdict recorded
-    under the old key or before the model existed would otherwise keep it
-    hidden from the picker).
+    limits, pricing) snapshotted from the cached OpenRouter catalog or,
+    for a self-hosted instance, from what its server reports right now;
+    entries neither lists are kept as custom ids with conservative
+    defaults. Per-model ``name`` / ``context_length`` overrides in the
+    list replace the stored snapshot values (self-hosted servers publish
+    no friendly names, and the Ollama context length is what the provider
+    requests per call). A key or endpoint change drops cached SDK clients
+    -- and, since the API type picks the provider class, the cached
+    provider object -- so the next session uses the new settings, and
+    every enabled model of the instance is rechecked in the background (a
+    failing verdict recorded under the old settings or before the model
+    existed would otherwise keep it hidden from the picker).
     """
     _require_admin(user)
-    from chat.llm.config import reset_provider_client_caches
+    from chat.llm.config import drop_provider_instance, reset_provider_client_caches
     from chat.llm.health import get_model_health_store, schedule_model_rechecks
     from config.inference_providers import (
+        INSTANCE_KINDS,
+        LOCAL_API_TYPES,
         effective_api_key,
+        normalize_base_url,
         qualify_model_id,
         read_inference_credentials,
         upsert_instance,
@@ -1371,10 +1399,46 @@ async def admin_update_inference_instance(
     )
 
     instance = _instance_or_404(instance_id)
+    kind = INSTANCE_KINDS[instance["kind"]]
     key_changed = False
+    endpoint_changed = False
 
     if body.label is not None:
         instance["label"] = body.label
+
+    if body.base_url is not None or body.api_type is not None:
+        if not kind["endpoint"]:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_params",
+                    "message": f"{kind['label']} instances have a fixed endpoint.",
+                },
+            )
+        if body.base_url is not None:
+            base_url = normalize_base_url(body.base_url)
+            if base_url is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "invalid_params",
+                        "message": "base_url must be an http:// or https:// server URL.",
+                    },
+                )
+            endpoint_changed = endpoint_changed or base_url != instance.get("base_url")
+            instance["base_url"] = base_url
+        if body.api_type is not None:
+            if body.api_type not in LOCAL_API_TYPES:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "invalid_params",
+                        "message": f"Unknown api_type: {body.api_type} "
+                                   f"(one of {sorted(LOCAL_API_TYPES)}).",
+                    },
+                )
+            endpoint_changed = endpoint_changed or body.api_type != instance.get("api_type")
+            instance["api_type"] = body.api_type
 
     if body.api_key is not None:
         api_key = body.api_key.strip()
@@ -1383,7 +1447,11 @@ async def admin_update_inference_instance(
             config["api_key"] = api_key
             write_inference_credentials(instance_id, config)
             key_changed = True
-        elif not effective_api_key(instance_id)[0] and body.models is None and body.label is None:
+        elif (
+            kind["key_required"]
+            and not effective_api_key(instance_id)[0]
+            and body.models is None and body.label is None
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -1401,14 +1469,27 @@ async def admin_update_inference_instance(
             m.id.strip() for m in body.models
             if m.id.strip() and m.id.strip() not in existing
         ]
-        snapshots = await _catalog_snapshots(new_wire_ids)
+        snapshots = await _catalog_snapshots(instance, new_wire_ids)
         for item in body.models:
             wire_id = item.id.strip()
             if not wire_id or wire_id in seen:
                 continue
             seen.add(wire_id)
             base = existing.get(wire_id) or {"id": wire_id, **(snapshots.get(wire_id) or {})}
-            wanted.append({**base, "enabled": item.enabled})
+            entry = {**base, "enabled": item.enabled}
+            if item.name is not None and item.name.strip():
+                entry["name"] = item.name.strip()
+            if item.context_length is not None:
+                if item.context_length <= 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "invalid_params",
+                            "message": "context_length must be a positive token count.",
+                        },
+                    )
+                entry["context_length"] = item.context_length
+            wanted.append(entry)
         removed_ids = [
             qualify_model_id(instance_id, wire_id)
             for wire_id in existing if wire_id not in seen
@@ -1419,9 +1500,11 @@ async def admin_update_inference_instance(
 
     if removed_ids:
         await get_model_health_store().forget(removed_ids)
-    if key_changed:
+    if key_changed or endpoint_changed:
         reset_provider_client_caches()
-    if key_changed or body.models is not None:
+    if endpoint_changed:
+        drop_provider_instance(kind["provider"], instance_id)
+    if key_changed or endpoint_changed or body.models is not None:
         from chat.llm.config import get_configured_models
 
         prefix = f"{instance_id}:"
@@ -1433,23 +1516,76 @@ async def admin_update_inference_instance(
     return _instance_status(instance)
 
 
-async def _catalog_snapshots(wire_ids: list[str]) -> dict[str, dict]:
-    """Catalog metadata for ``wire_ids`` (empty dict per unlisted id).
+async def _catalog_snapshots(instance: dict, wire_ids: list[str]) -> dict[str, dict]:
+    """Catalog metadata for ``wire_ids`` (defaults per unlisted id).
 
-    Uses the cached catalog (no refresh) so a save never blocks on the
-    network beyond the first fetch; an unreachable catalog just means
-    custom-id defaults.
+    OpenRouter instances use the cached catalog (no refresh) so a save
+    never blocks on the network beyond the first fetch; self-hosted
+    instances ask their server (a short live request). An unreachable
+    catalog/server just means custom-id defaults -- for a self-hosted
+    instance the zero pricing and, on Ollama, the default context.
     """
     if not wire_ids:
         return {}
     import asyncio
 
-    from chat.llm.openrouter_catalog import catalog_snapshot, get_catalog
+    from chat.llm.openrouter_catalog import catalog_snapshot
+    from config.inference_providers import is_endpoint_kind
+
+    if is_endpoint_kind(instance["kind"]):
+        from chat.llm.local_catalog import default_snapshot, discover_models
+
+        listed = (await discover_models(instance))["models"] if instance.get("base_url") else []
+        return {
+            wire_id: catalog_snapshot(listed, wire_id) or default_snapshot(instance)
+            for wire_id in wire_ids
+        }
+
+    from chat.llm.openrouter_catalog import get_catalog
 
     catalog = await asyncio.to_thread(get_catalog)
     return {
         wire_id: catalog_snapshot(catalog["models"], wire_id) or {}
         for wire_id in wire_ids
+    }
+
+
+@router.get("/admin/inference-providers/instances/{instance_id}/catalog")
+async def admin_instance_catalog(
+    instance_id: str,
+    q: str = "",
+    limit: int = 20,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Typeahead candidates for a self-hosted instance: the models its
+    server reports right now (``/v1/models`` or Ollama's ``/api/tags``),
+    filtered like the OpenRouter catalog search. Not cached -- what a local
+    box serves changes whenever a model is loaded or pulled. ``error`` is
+    set (and ``models`` empty) when the server cannot be reached; an
+    instance with no base URL yet answers the same way (400 for kinds that
+    have no endpoint of their own).
+    """
+    _require_admin(user)
+    from chat.llm.local_catalog import discover_models
+    from chat.llm.openrouter_catalog import search_catalog
+    from config.inference_providers import is_endpoint_kind
+
+    instance = _instance_or_404(instance_id)
+    if not is_endpoint_kind(instance["kind"]):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_params",
+                "message": "Only self-hosted instances report their own model list.",
+            },
+        )
+    if not instance.get("base_url"):
+        return {"models": [], "error": "No server URL configured yet."}
+    result = await discover_models(instance)
+    limit = max(1, min(limit, 100))
+    return {
+        "models": search_catalog(result["models"], q, limit),
+        "error": result["error"],
     }
 
 

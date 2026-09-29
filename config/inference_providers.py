@@ -14,12 +14,15 @@ Providers:
   (``vertex.disabled_models``): a disabled model is hidden from the picker
   and never health-checked, but existing conversations keep running on it.
 
-- **Provider instances** (zero or more): each is one configuration of an
-  API-key provider kind -- today the only kind is ``openrouter`` -- with an
-  admin-chosen label, its own API key, and its own admin-chosen model list
-  (picked from the OpenRouter catalog or typed in as a custom id). Several
-  instances of the same kind can coexist (e.g. a personal and a team
-  OpenRouter key with different curated models).
+- **Provider instances** (zero or more): each is one configuration of a
+  provider kind (:data:`INSTANCE_KINDS`) with an admin-chosen label and its
+  own admin-chosen model list. ``openrouter`` instances hold an API key and
+  pick models from the OpenRouter catalog (or a typed custom id);
+  ``local`` instances point at a self-hosted inference server (``base_url``
+  + ``api_type``, optional key) and pick models from what that server
+  reports (``chat/llm/local_catalog.py``). Several instances of the same
+  kind can coexist (e.g. a personal and a team OpenRouter key with
+  different curated models, or a llama.cpp box and an Ollama box).
 
 **Qualified model ids.** Models served by an instance are identified
 everywhere (``conversations.model``, ``routines.model``, user defaults, the
@@ -78,16 +81,101 @@ logger = logging.getLogger(__name__)
 # Provider-instance kinds an admin can add. ``provider`` is the LLMProvider
 # implementation name (chat/llm/config.py get_provider_instance), ``backend``
 # the cost-analytics transport label recorded on llm_calls_* rows, ``hint``
-# the API-key input placeholder. Local inference (an OpenAI-compatible
-# endpoint with its own base URL) is the expected next kind.
+# the API-key input placeholder, ``key_required`` whether the instance is
+# unusable without a stored key (a self-hosted server usually has none:
+# the key is optional and sent as a bearer token only when set), and
+# ``endpoint`` whether the instance carries its own ``base_url`` +
+# ``api_type`` (self-hosted servers) instead of a fixed upstream.
+#
+# Both kinds run on the ``openrouter`` LLMProvider family -- the OpenAI
+# chat-completions message format, history shape and analytics table
+# (``llm_calls_openrouter``) -- because every self-hosted server speaks
+# that protocol (llama.cpp, vLLM, LM Studio, LocalAI, Ollama's ``/v1``
+# shim...). The transport differs per instance: the ``openai`` API type
+# goes through the openai SDK with the instance's base URL, the ``ollama``
+# API type through Ollama's native ``/api/chat`` (chat/llm/ollama_provider.py)
+# so the per-request context window can be set. ``backend`` tells the two
+# apart on analytics rows.
 INSTANCE_KINDS: dict[str, dict] = {
     "openrouter": {
         "label": "OpenRouter",
         "hint": "sk-or-v1-...",
         "provider": "openrouter",
         "backend": "openrouter",
+        "key_required": True,
+        "endpoint": False,
+    },
+    "local": {
+        "label": "Self-hosted",
+        "hint": "optional — only if the server checks one",
+        "provider": "openrouter",
+        "backend": "local",
+        "key_required": False,
+        "endpoint": True,
     },
 }
+
+# API types a self-hosted (``endpoint``) instance can speak. ``openai`` is
+# the OpenAI chat-completions protocol every local server implements
+# (llama.cpp ``llama-server``, vLLM, LM Studio, LocalAI, SGLang, TGI,
+# text-generation-webui, Ollama's compatibility layer): requests go to
+# ``<base_url>/v1/chat/completions`` and the model list comes from
+# ``<base_url>/v1/models``. ``ollama`` is Ollama's native API
+# (``/api/chat``, ``/api/tags``, ``/api/show``), preferred over its OpenAI
+# shim because only the native API accepts a per-request ``num_ctx`` --
+# Ollama otherwise runs every model at a small default context window
+# (4096 tokens without a GPU) and silently truncates the prompt.
+LOCAL_API_TYPES: dict[str, dict] = {
+    "openai": {
+        "label": "OpenAI-compatible",
+        "description": "llama.cpp, vLLM, LM Studio, LocalAI, SGLang… (/v1/chat/completions)",
+    },
+    "ollama": {
+        "label": "Ollama",
+        "description": "Ollama's native API (/api/chat) — sets the context window per request",
+    },
+}
+DEFAULT_LOCAL_API_TYPE = "openai"
+
+# Context window requested from Ollama (``options.num_ctx``) for a model
+# whose training context is unknown or larger than this. Ollama sizes the
+# KV cache from it on every load, so it is deliberately modest; the admin
+# can raise it per model (``context_length`` on the model entry).
+DEFAULT_OLLAMA_CONTEXT_LENGTH = 32_768
+
+# Self-hosted models are free per token (the hardware is already paid
+# for), so their pricing snapshot is an explicit zero rather than "unknown"
+# -- a null would make every cost report that includes them show no total.
+LOCAL_MODEL_PRICING: dict = {"prompt": 0.0, "completion": 0.0}
+
+
+def is_endpoint_kind(kind: str) -> bool:
+    """True for kinds carrying their own base URL (self-hosted servers)."""
+    return bool(INSTANCE_KINDS.get(kind, {}).get("endpoint"))
+
+
+def normalize_base_url(value) -> str | None:
+    """Normalize an admin-entered server URL; None when unusable.
+
+    Accepts ``http://`` / ``https://`` origins with an optional path prefix
+    (a reverse proxy may mount the server under one); a bare ``host:port``
+    gets ``http://``. Trailing slashes and a trailing ``/v1`` are dropped
+    so the API-type transports can append their own paths.
+    """
+    if not isinstance(value, str):
+        return None
+    url = value.strip()
+    if not url:
+        return None
+    if "://" not in url:
+        url = "http://" + url
+    scheme, _, rest = url.partition("://")
+    if scheme.lower() not in ("http", "https") or not rest or rest.startswith("/"):
+        return None
+    url = f"{scheme.lower()}://{rest}".rstrip("/")
+    if url.lower().endswith("/v1"):
+        url = url[:-3].rstrip("/")
+    return url or None
 
 # Instance ids double as credential file stems and as the left part of
 # qualified model ids, so they are restricted to a URL/file-safe slug with
@@ -367,7 +455,7 @@ def _normalize_instance(entry) -> dict | None:
             continue
         seen.add(model["id"])
         models.append(model)
-    return {
+    normalized = {
         "id": instance_id,
         "kind": kind,
         "label": (
@@ -376,6 +464,23 @@ def _normalize_instance(entry) -> dict | None:
         ),
         "models": models,
     }
+    if is_endpoint_kind(kind):
+        api_type = entry.get("api_type")
+        normalized["base_url"] = normalize_base_url(entry.get("base_url"))
+        normalized["api_type"] = (
+            api_type if api_type in LOCAL_API_TYPES else DEFAULT_LOCAL_API_TYPE
+        )
+    return normalized
+
+
+def instance_configured(instance: dict) -> bool:
+    """Whether an instance can serve requests at all: a stored API key for
+    key-required kinds, a base URL for self-hosted endpoints (their key is
+    optional). A config-presence check, not a live probe."""
+    kind = INSTANCE_KINDS[instance["kind"]]
+    if kind["endpoint"]:
+        return bool(instance.get("base_url"))
+    return bool(effective_api_key(instance["id"])[0])
 
 
 def _empty_config() -> dict:

@@ -1,4 +1,4 @@
-"""OpenRouter provider implementation using the openai SDK.
+"""OpenAI chat-completions provider implementation using the openai SDK.
 
 OpenRouter (https://openrouter.ai) exposes many third-party models behind
 one OpenAI-compatible chat-completions API, authenticated by a single API
@@ -6,6 +6,16 @@ key. The key is managed as an editable API-key inference provider
 (``config/inference_providers.py``), so personal deployments can run
 non-Vertex models with nothing but a key pasted into Settings >
 Inference Providers.
+
+The same class serves **self-hosted** instances (kind ``local`` with API
+type ``openai``): the instance's own base URL replaces OpenRouter's, the
+key is optional (sent as a bearer token only when stored) and the
+OpenRouter-only request extensions are left out. Every mainstream local
+server -- llama.cpp ``llama-server``, vLLM, LM Studio, LocalAI, SGLang,
+Ollama's compatibility layer -- speaks this protocol. Self-hosted
+instances with API type ``ollama`` use the ``OllamaProvider`` subclass
+(chat/llm/ollama_provider.py), which keeps this class's session/history
+format but talks Ollama's native API.
 
 Session history uses the OpenAI chat message format (plain dicts):
 ``{"role": "user"|"assistant"|"tool", "content": ...}`` with assistant
@@ -78,30 +88,75 @@ class OpenRouterProvider(LLMProvider):
 
         self.instance_id = instance_id or LEGACY_OPENROUTER_INSTANCE_ID
         self._client = None
+        # Set alongside the client: whether OpenRouter-only request
+        # extensions (usage accounting opt-in) apply to this endpoint.
+        self._is_openrouter = True
 
-    def _get_client(self):
-        """Return a cached AsyncOpenAI client pointed at OpenRouter.
+    def _endpoint(self) -> dict:
+        """Resolve where this instance's requests go.
 
-        The API key comes from this instance's file in the
-        inference-credential store (admin Settings > Inference Providers).
+        Returns ``{"base_url", "api_key", "headers", "openrouter"}``.
+        OpenRouter instances need their stored key; a self-hosted instance
+        needs its base URL and uses the stored key only when one exists
+        (the openai SDK insists on a non-empty key, so a placeholder is
+        sent otherwise -- local servers without ``--api-key`` ignore it).
+
+        Raises:
+            ValueError: descriptive "not configured" message for the admin.
         """
-        if self._client is not None:
-            return self._client
+        from config.inference_providers import (
+            effective_api_key,
+            get_instance,
+            is_endpoint_kind,
+        )
 
-        from openai import AsyncOpenAI
-        from config.inference_providers import effective_api_key
-
+        instance = get_instance(self.instance_id)
         api_key, _source = effective_api_key(self.instance_id)
+        if instance is not None and is_endpoint_kind(instance["kind"]):
+            base_url = instance.get("base_url")
+            if not base_url:
+                raise ValueError(
+                    f"No server URL configured for self-hosted inference "
+                    f"instance '{self.instance_id}'. Set it in Settings > "
+                    "Inference Providers (admin only)."
+                )
+            return {
+                "base_url": f"{base_url}/v1",
+                "api_key": api_key or "no-key",
+                "headers": None,
+                "openrouter": False,
+            }
         if not api_key:
             raise ValueError(
                 f"OpenRouter API key not configured for instance "
                 f"'{self.instance_id}'. Add it in Settings > Inference "
                 "Providers (admin only)."
             )
+        return {
+            "base_url": OPENROUTER_BASE_URL,
+            "api_key": api_key,
+            "headers": _OPENROUTER_HEADERS,
+            "openrouter": True,
+        }
+
+    def _get_client(self):
+        """Return a cached AsyncOpenAI client for this instance's endpoint.
+
+        The API key comes from this instance's file in the
+        inference-credential store (admin Settings > Inference Providers);
+        a self-hosted instance's base URL from its config entry.
+        """
+        if self._client is not None:
+            return self._client
+
+        from openai import AsyncOpenAI
+
+        endpoint = self._endpoint()
+        self._is_openrouter = endpoint["openrouter"]
         self._client = AsyncOpenAI(
-            base_url=OPENROUTER_BASE_URL,
-            api_key=api_key,
-            default_headers=_OPENROUTER_HEADERS,
+            base_url=endpoint["base_url"],
+            api_key=endpoint["api_key"],
+            default_headers=endpoint["headers"],
         )
         return self._client
 
@@ -111,7 +166,8 @@ class OpenRouterProvider(LLMProvider):
 
     def _get_openrouter_model_id(self, model: str) -> str:
         """Strip the instance qualifier: ``openrouter:deepseek/x`` -> the
-        OpenRouter wire id ``deepseek/x`` (bare legacy ids pass through)."""
+        wire id ``deepseek/x`` (bare legacy ids pass through; a self-hosted
+        ``local:qwen2.5:0.5b`` keeps the colon inside its wire id)."""
         from config.inference_providers import split_model_id
         return split_model_id(model)[1]
 
@@ -181,11 +237,14 @@ class OpenRouterProvider(LLMProvider):
             ),
             "stream": True,
             "stream_options": {"include_usage": True},
+        }
+        if self._is_openrouter:
             # OpenRouter-only extension: ask for the USD amount charged for
             # this request in the final usage chunk (``usage.cost``), which
             # the analytics layer prefers over its list-price estimate.
-            "extra_body": {"usage": {"include": True}},
-        }
+            # Self-hosted servers get a plain request (some reject unknown
+            # top-level fields).
+            api_kwargs["extra_body"] = {"usage": {"include": True}}
         if session.tools:
             api_kwargs["tools"] = session.tools
 

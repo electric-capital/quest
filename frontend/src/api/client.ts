@@ -58,6 +58,7 @@ import type {
   InferenceInstanceCreate,
   InferenceInstanceStatus,
   InferenceInstanceUpdate,
+  InstanceCatalogResponse,
   OpenRouterCatalogResponse,
   VertexModelsUpdate,
   VertexProviderStatus,
@@ -829,6 +830,17 @@ export function searchOpenRouterCatalog(
 ): Promise<OpenRouterCatalogResponse> {
   return apiGet(endpoints.adminOpenRouterCatalog(), {
     query: { q, limit: options.limit, refresh: options.refresh || undefined },
+  });
+}
+
+/** Models a self-hosted instance's server reports right now (live, uncached). */
+export function searchInstanceCatalog(
+  instanceId: string,
+  q: string,
+  options: { limit?: number } = {},
+): Promise<InstanceCatalogResponse> {
+  return apiGet(endpoints.adminInferenceInstanceCatalog(instanceId), {
+    query: { q, limit: options.limit },
   });
 }
 

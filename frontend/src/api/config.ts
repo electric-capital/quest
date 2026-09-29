@@ -200,6 +200,9 @@ export const endpoints = {
   adminInferenceInstance: (instanceId: string) =>
     `${API_BASE_URL}/admin/inference-providers/instances/${encodeURIComponent(instanceId)}`,
 
+  adminInferenceInstanceCatalog: (instanceId: string) =>
+    `${API_BASE_URL}/admin/inference-providers/instances/${encodeURIComponent(instanceId)}/catalog`,
+
   adminOpenRouterCatalog: () => `${API_BASE_URL}/admin/inference-providers/openrouter/catalog`,
 
   adminInferenceModelTest: () => `${API_BASE_URL}/admin/inference-providers/test-model`,

@@ -268,7 +268,7 @@ def test_new_instance_id_skips_config_entries_and_orphan_files(store):
     ip.load_inference_config()  # synthesizes openrouter-2 from the file
     assert ip.new_instance_id("openrouter") == "openrouter-3"
     with pytest.raises(ValueError):
-        ip.new_instance_id("local")
+        ip.new_instance_id("nope")
 
 
 def test_upsert_and_delete_instance(store):
@@ -705,7 +705,11 @@ def test_admin_list_shape(admin_routes, health_store):
     _run(health_store.record("claude-opus-4-8", False, "not enabled"))
     result = _run(admin_routes.admin_list_inference_providers(user=ADMIN_USER))
     assert "sk-or-secret" not in json.dumps(result)
-    assert result["kinds"] == [{"kind": "openrouter", "label": "OpenRouter"}]
+    assert result["kinds"] == [
+        {"kind": "openrouter", "label": "OpenRouter", "endpoint": False},
+        {"kind": "local", "label": "Self-hosted", "endpoint": True},
+    ]
+    assert [t["id"] for t in result["api_types"]] == ["openai", "ollama"]
 
     vertex = result["vertex"]
     assert vertex["kind"] == "detected"
@@ -776,7 +780,7 @@ def test_admin_create_instance(admin_routes):
 
     with pytest.raises(HTTPException) as exc_info:
         _run(admin_routes.admin_create_inference_instance(
-            admin_routes.InstanceCreate(kind="local"), user=ADMIN_USER,
+            admin_routes.InstanceCreate(kind="nope"), user=ADMIN_USER,
         ))
     assert exc_info.value.status_code == 400
 
