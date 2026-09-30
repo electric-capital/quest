@@ -13,6 +13,7 @@ Access the GitHub REST API using `authed_get` with the full GitHub API URL. Auth
 | `/user/orgs` | List organizations for the authenticated user |
 | `/repos/{owner}/{repo}` | Get a single repository |
 | `/repos/{owner}/{repo}/branches` | List branches |
+| `/repos/{owner}/{repo}/stargazers` | List users who have starred the repo (send `Accept: application/vnd.github.star+json` to also get `starred_at`) |
 | `/repos/{owner}/{repo}/issues` | List issues (also returns PRs) |
 | `/repos/{owner}/{repo}/issues/{issue_number}` | Get a single issue |
 | `/repos/{owner}/{repo}/issues/{issue_number}/comments` | List issue comments |
@@ -70,6 +71,12 @@ tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repo
 
 # List branches
 tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/branches?per_page=50"})
+
+# List who starred a repo -- one page of 100 user objects, saved for run_python post-processing
+tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/stargazers?per_page=100&page=1", "output_file": "stargazers-1.json"})
+
+# Same, with the time each star was given (items become {"starred_at": ..., "user": {...}})
+tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/stargazers?per_page=100&page=1", "headers": {"Accept": "application/vnd.github.star+json"}, "output_file": "stargazers-1.json"})
 
 # List open issues
 tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/issues?state=open&per_page=10"})
@@ -153,6 +160,7 @@ tool_call(tool_name="github_get_job_log", arguments={"owner": "owner", "repo": "
 - The `/repos/{owner}/{repo}/contents/{path}` endpoint returns base64-encoded content for files under 1MB. For files 1-100MB, use the `download_url` from the response. Files over 100MB are not retrievable via the contents endpoint.
 - The issues endpoint also returns pull requests (GitHub models PRs as issues). Use the `pulls` endpoint for PR-specific data.
 - Pagination: maximum `per_page=100`; GitHub silently caps larger values.
+- Stargazers are listed oldest star first, each with a full user object (~1 KB), so any page with more than a couple of users exceeds the inline size limit: pass `output_file` and pull out `login` (and `starred_at`) with `run_python`. The repo's `stargazers_count` (from `/repos/{owner}/{repo}`) tells you how many pages to fetch.
 - Search queries support GitHub's search syntax (qualifiers like `repo:`, `language:`, `state:`, `author:`, `is:pr`, `is:issue`).
 - For repositories inside organizations that require third-party OAuth app approval, the org admin must approve the Quest OAuth app before its repos are accessible.
 - GitHub Actions access is read-only: listing workflows/runs/jobs and reading per-job logs is supported, but triggering re-runs, canceling runs, deleting logs, and dispatching `workflow_dispatch` events are intentionally NOT exposed. Run-level zip log downloads (`/actions/runs/{run_id}/logs`) are also intentionally not surfaced in this iteration -- use per-job logs via `github_get_job_log` instead.

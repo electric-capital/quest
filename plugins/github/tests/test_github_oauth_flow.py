@@ -159,12 +159,44 @@ def test_callback_stores_oauth_blob_with_granted_scopes():
     assert blob["scope"] == "repo,read:org"
     assert blob["scopes"] == ["repo", "read:org"]
     assert blob["authorized_at"]
+    # Classic OAuth App tokens never expire: nothing to refresh.
+    assert "refresh_token" not in blob
+    assert "expires_at" not in blob
 
     # A full grant does not flag needs_reauth; a partial one does.
     assert github_needs_reauth({"oauth_blob": blob}) is False
     assert github_needs_reauth(
         {"oauth_blob": {"access_token": "gho_x", "scope": "repo"}}
     ) is True
+
+
+def test_callback_keeps_refresh_token_for_expiring_github_app_tokens():
+    # GitHub Apps (expiring user tokens on) return an 8-hour ghu_ token plus
+    # a ghr_ refresh token; dropping the refresh token strands routines.
+    request = _FakeRequest(cookies={
+        oauth_mod.COOKIE_NAME: "signed",
+        "github_oauth_state": _state_cookie("st4te"),
+    })
+    upsert = AsyncMock()
+    with _patch_authed_user(), _patch_client_config(), \
+            _patch_token_exchange({
+                "access_token": "ghu_new",
+                "expires_in": 28800,
+                "refresh_token": "ghr_new",
+                "refresh_token_expires_in": 15897600,
+                "scope": "",
+                "token_type": "bearer",
+            }), \
+            patch.object(oauth_mod, "upsert_credential", upsert), \
+            patch("chat.gemini_api.invalidate_user_sessions"):
+        _run(oauth_mod.auth_github_callback(request, code="c0de", state="st4te"))
+
+    blob = upsert.await_args.kwargs["oauth_blob"]
+    assert blob["access_token"] == "ghu_new"
+    assert blob["refresh_token"] == "ghr_new"
+    assert blob["expires_at"]
+    assert blob["refresh_token_expires_at"]
+    assert github_needs_reauth({"oauth_blob": blob}) is False
 
 
 def test_needs_reauth_skips_scope_check_for_github_app_tokens():

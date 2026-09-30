@@ -31,6 +31,7 @@ from plugins.github.upstream import (
     GITHUB_SCOPES,
     inject_github_bearer_auth,
     load_github_credentials,
+    MISSING_CREDENTIALS_ERROR,
 )
 
 _PLUGIN_DIR = Path(__file__).parent
@@ -43,8 +44,10 @@ def _github_skill_content(_base_url: str, _api_key: str) -> str:
 
 # authed_get service entry for the GitHub REST API. Read-only by
 # construction: only these GET paths are reachable, and the entry defines
-# no allowed_post_endpoints. GitHub OAuth App tokens do not expire, so
-# there is no retry_on_401/refresh plumbing.
+# no allowed_post_endpoints. GitHub App user tokens expire after 8 hours,
+# so the loader proactively refreshes them (plugins/github/upstream.py)
+# and retry_on_401 re-runs it -- re-reading the stored row -- as a
+# backstop; classic OAuth App tokens never expire and pass straight through.
 _GITHUB_SERVICE = {
     "key": "api.github.com",
     "entry": {
@@ -52,6 +55,7 @@ _GITHUB_SERVICE = {
         "load_credentials": load_github_credentials,
         "inject_auth": inject_github_bearer_auth,
         "requires_user": True,
+        "retry_on_401": True,
         # GitHub REST API requires a User-Agent header on every request
         # and recommends the versioned Accept header.  These are merged
         # into every outgoing request by _make_authed_request() before
@@ -60,16 +64,14 @@ _GITHUB_SERVICE = {
             "User-Agent": "Quest/1.0",
             "Accept": "application/vnd.github+json",
         },
-        "missing_credentials_error": {
-            "error": "github_oauth_required",
-            "message": "GitHub not connected. Please connect GitHub in Settings > Data Connections.",
-        },
+        "missing_credentials_error": MISSING_CREDENTIALS_ERROR,
         "allowed_endpoints": [
             r"^/user$",                                              # authenticated user profile
             r"^/user/repos$",                                        # list user repos
             r"^/user/orgs$",                                         # list user orgs
             r"^/repos/[^/]+/[^/]+$",                                 # get a repo
             r"^/repos/[^/]+/[^/]+/branches$",                        # list branches
+            r"^/repos/[^/]+/[^/]+/stargazers$",                      # list users who starred a repo
             r"^/repos/[^/]+/[^/]+/issues$",                          # list issues
             r"^/repos/[^/]+/[^/]+/issues/\d+$",                      # get a single issue
             r"^/repos/[^/]+/[^/]+/issues/\d+/comments$",             # list issue comments

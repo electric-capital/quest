@@ -5,8 +5,8 @@ The ``api.github.com`` entry is registered by the github plugin
 registered via the autouse fixture below.
 
 Covers:
-* GitHub is registered with the expected shape (no 401 retry, has
-  ``default_headers``, ``requires_user``).
+* GitHub is registered with the expected shape (401 retry backstop for
+  expiring GitHub App tokens, has ``default_headers``, ``requires_user``).
 * ``default_headers`` are merged into outgoing requests with the
   documented precedence (defaults < caller < inject_auth).
 * Allowed-endpoint gating accepts known paths and rejects unknown ones.
@@ -110,10 +110,10 @@ class TestGitHubRegistryEntry:
         entry = _SERVICE_REGISTRY["api.github.com"]
         assert entry["requires_user"] is True
 
-    def test_github_entry_has_no_retry_on_401(self):
-        """GitHub OAuth App tokens don't expire, so no 401 refresh."""
+    def test_github_entry_has_retry_on_401(self):
+        """GitHub App user tokens expire, so a 401 re-runs the loader."""
         entry = _SERVICE_REGISTRY["api.github.com"]
-        assert "retry_on_401" not in entry or entry["retry_on_401"] is False
+        assert entry["retry_on_401"] is True
 
     def test_github_entry_has_expected_default_headers(self):
         entry = _SERVICE_REGISTRY["api.github.com"]
@@ -141,6 +141,7 @@ class TestGitHubRegistryEntry:
             "/user/orgs",
             "/repos/owner/repo",
             "/repos/owner/repo/branches",
+            "/repos/owner/repo/stargazers",
             "/repos/owner/repo/issues",
             "/repos/owner/repo/issues/42",
             "/repos/owner/repo/issues/42/comments",
@@ -197,6 +198,7 @@ class TestGitHubRegistryEntry:
             "/gists",                                        # not in allow-list
             "/users/someone",                                # per plan, not exposed
             "/repos/owner/repo/collaborators",               # write-ish -- not exposed
+            "/repos/owner/repo/stargazers/extra",            # no sub-paths under stargazers
             "/repos/owner/repo/issues/abc",                  # non-numeric issue number
             # --- Actions negative cases ---
             "/repos/owner/repo/actions/runs/abc",            # non-numeric run_id

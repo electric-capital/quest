@@ -5,12 +5,13 @@ plugin's ``/auth/github`` namespace after plugin load. Same URLs as the
 pre-plugin core flow (``/auth/github``, ``/auth/github/callback``,
 ``/auth/github/disconnect``) so existing GitHub OAuth app registrations
 keep working; tokens now land in the ``user_service_credentials`` table
-(``oauth_blob``) instead of a dedicated ``users`` column.
+(``oauth_blob``) instead of a dedicated ``users`` column. Expiring GitHub
+App tokens are stored with their refresh token and refreshed by
+``plugins/github/upstream.py``.
 """
 
 import logging
 from html import escape
-from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 import httpx
@@ -26,7 +27,12 @@ from auth.popup_helpers import (
 )
 from db.user_service_credential_store import delete_credential, upsert_credential
 
-from plugins.github.upstream import GITHUB_SCOPES, load_github_client_config
+from plugins.github.upstream import (
+    GITHUB_SCOPES,
+    GITHUB_TOKEN_URL,
+    build_token_blob,
+    load_github_client_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +146,7 @@ async def auth_github_callback(request: Request, code: str = None, state: str = 
         # Exchange code for token
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                "https://github.com/login/oauth/access_token",
+                GITHUB_TOKEN_URL,
                 data={
                     "client_id": client_id,
                     "client_secret": client_secret,
@@ -173,21 +179,15 @@ async def auth_github_callback(request: Request, code: str = None, state: str = 
             if user_response.status_code == 200:
                 github_username = user_response.json().get("login")
 
-        # GitHub reports the GRANTED scopes as a comma-separated string;
-        # store them as a list too so the needs_reauth hook can compare
-        # against GITHUB_SCOPES without re-parsing.
-        scope_str = token_data.get("scope", "")
-        await upsert_credential(user["id"], "github", oauth_blob={
-            "access_token": access_token,
-            "token_type": token_data.get("token_type", "bearer"),
-            "scope": scope_str,
-            "scopes": [s.strip() for s in scope_str.split(",") if s.strip()],
-            "authorized_at": datetime.now(timezone.utc).isoformat(),
-        })
+        # Keeps the refresh token + expiry when GitHub issued an expiring
+        # (GitHub App) token, so the credential loader can refresh it.
+        blob = build_token_blob(token_data)
+        await upsert_credential(user["id"], "github", oauth_blob=blob)
 
         logger.info(
-            "[GitHub OAuth] User authenticated: %s (github_user=%s)",
-            user["email"], github_username or "unknown"
+            "[GitHub OAuth] User authenticated: %s (github_user=%s, expiring=%s)",
+            user["email"], github_username or "unknown",
+            "refresh_token" in blob,
         )
 
         # Invalidate cached chat sessions so the next message picks up the new system prompt
