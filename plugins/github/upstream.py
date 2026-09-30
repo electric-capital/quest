@@ -7,17 +7,56 @@ attached to user dicts as ``user["service_credentials"]["github"]``)
 both resolve here, so the OAuth router, the authed_get service entry,
 and the plugin tool share one implementation.
 
-GitHub OAuth App tokens do not expire, so there is no refresh logic:
-the credential loader simply reads the access token out of the stored
-blob. A token revoked on GitHub's side surfaces as an upstream 401.
+Two token shapes arrive depending on what the admin registered:
+
+* **Classic OAuth App** (``gho_``): the token never expires and the
+  exchange returns no refresh token, so the loader hands it out as-is.
+* **GitHub App** with "Expire user authorization tokens" on (GitHub's
+  default): the ``ghu_`` access token lives 8 hours and comes with a
+  ``ghr_`` refresh token good for 6 months. :func:`get_github_token`
+  refreshes near-expiry tokens under a per-user lock and persists the
+  rotated pair, so routines keep working unattended. Every refresh
+  invalidates BOTH the old access token and the old refresh token, so
+  the loader reads the stored row rather than trusting a user dict that
+  another turn or routine may have outdated.
+
+A token revoked on GitHub's side surfaces as an upstream 401 (or a
+failed refresh, reported as the reconnect message).
 """
 
-from typing import Optional
+import asyncio
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+import httpx
+
+logger = logging.getLogger(__name__)
 
 # OAuth scopes requested from GitHub. ``repo`` is required for private
 # repository read access (GitHub has no read-only repo scope for OAuth
 # apps); ``read:org`` covers org membership and org repo listings.
 GITHUB_SCOPES = ("repo", "read:org")
+
+# Code exchange and refresh share one endpoint.
+GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
+
+# Safety margin: refresh the token if it expires within 5 minutes.
+_REFRESH_MARGIN_SECONDS = 300
+
+_HTTP_TIMEOUT = 30.0
+
+# Per-user refresh locks so concurrent tool calls do not race duplicate
+# refreshes (the loser would present an already-rotated refresh token).
+_refresh_locks: dict[Any, asyncio.Lock] = {}
+
+MISSING_CREDENTIALS_ERROR = {
+    "error": "github_oauth_required",
+    "message": (
+        "GitHub not connected (or the connection expired). "
+        "Please connect GitHub in Settings > Data Connections."
+    ),
+}
 
 
 def load_github_client_config() -> dict:
@@ -99,9 +138,175 @@ def github_needs_reauth(row: dict) -> bool:
     return not set(GITHUB_SCOPES).issubset(granted_set)
 
 
+def token_expires_within(blob: dict, margin_seconds: int = _REFRESH_MARGIN_SECONDS) -> bool:
+    """Whether the blob's access token expires within ``margin_seconds``.
+
+    A blob without ``expires_at`` never expires (classic OAuth App tokens,
+    and GitHub App tokens with expiration opted out). An unparseable
+    timestamp reads as expired so a refresh is attempted.
+    """
+    expires_at_str = blob.get("expires_at")
+    if not expires_at_str:
+        return False
+    try:
+        expires_at = datetime.fromisoformat(expires_at_str)
+    except (TypeError, ValueError):
+        return True
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    return (expires_at - now).total_seconds() < margin_seconds
+
+
+def build_token_blob(token_data: dict, *, previous: Optional[dict] = None) -> dict:
+    """Build the ``oauth_blob`` JSON from a token-endpoint response.
+
+    Used for both the initial code exchange and refreshes. ``previous``
+    carries the original ``authorized_at`` (and the granted scope, which a
+    refresh response does not repeat) across refreshes. The expiry and
+    refresh-token fields are present only when GitHub issued an expiring
+    token; the refresh token is never carried over because GitHub
+    invalidates it on use.
+    """
+    previous = previous or {}
+    now = datetime.now(timezone.utc)
+    # GitHub reports the GRANTED scopes as a comma-separated string;
+    # store them as a list too so the needs_reauth hook can compare
+    # against GITHUB_SCOPES without re-parsing.
+    scope_str = token_data.get("scope") or previous.get("scope") or ""
+    blob = {
+        "access_token": token_data.get("access_token"),
+        "token_type": token_data.get("token_type", "bearer"),
+        "scope": scope_str,
+        "scopes": [s.strip() for s in scope_str.split(",") if s.strip()],
+        "authorized_at": previous.get("authorized_at") or now.isoformat(),
+    }
+    if token_data.get("refresh_token"):
+        blob["refresh_token"] = token_data["refresh_token"]
+    for field, lifetime_field in (
+        ("expires_at", "expires_in"),
+        ("refresh_token_expires_at", "refresh_token_expires_in"),
+    ):
+        try:
+            blob[field] = (now + timedelta(seconds=int(token_data[lifetime_field]))).isoformat()
+        except (KeyError, TypeError, ValueError):
+            pass
+    return blob
+
+
+def _set_user_blob(user: dict, blob: dict) -> None:
+    """Point the in-memory user dict at ``blob`` so later calls in the
+    same turn see it without a DB read."""
+    rows = user.setdefault("service_credentials", {})
+    rows.setdefault("github", {})["oauth_blob"] = blob
+
+
+async def _load_stored_blob(user: dict) -> Optional[dict]:
+    """Re-read the user's stored GitHub blob (None once disconnected)."""
+    from db.user_service_credential_store import get_credential
+
+    row = await get_credential(user["id"], "github")
+    blob = (row or {}).get("oauth_blob")
+    if blob:
+        _set_user_blob(user, blob)
+    return blob
+
+
+async def _refresh_github_token(user: dict, blob: dict) -> Optional[str]:
+    """Refresh the user's access token and persist the rotated blob.
+
+    Returns the new access token. When the refresh fails (server
+    unconfigured, refresh token expired or revoked, transport error) it
+    falls back to the current access token while that has not actually
+    expired yet, and otherwise returns None so callers surface the
+    reconnect message.
+    """
+    fallback = None if token_expires_within(blob, 0) else blob.get("access_token")
+    email = user.get("email", "unknown")
+    if not blob.get("refresh_token"):
+        return fallback
+
+    try:
+        config = load_github_client_config()
+    except Exception:
+        logger.warning("[GitHub] Token refresh skipped: server credentials not configured")
+        return fallback
+
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            response = await client.post(
+                GITHUB_TOKEN_URL,
+                data={
+                    "client_id": config.get("client_id"),
+                    "client_secret": config.get("client_secret"),
+                    "grant_type": "refresh_token",
+                    "refresh_token": blob["refresh_token"],
+                },
+                headers={"Accept": "application/json"},
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("[GitHub] Token refresh transport error for %s: %s", email, exc)
+        return fallback
+
+    # GitHub reports refresh errors (e.g. bad_refresh_token once the
+    # 6-month refresh token has aged out) as HTTP 200 with an error body.
+    try:
+        token_data = response.json()
+    except ValueError:
+        token_data = {}
+    if response.status_code != 200 or token_data.get("error") or not token_data.get("access_token"):
+        logger.warning(
+            "[GitHub] Token refresh failed for %s (HTTP %s): %s",
+            email, response.status_code,
+            token_data.get("error_description") or token_data.get("error") or response.text[:300],
+        )
+        return fallback
+
+    new_blob = build_token_blob(token_data, previous=blob)
+
+    from db.user_service_credential_store import upsert_credential
+    await upsert_credential(user["id"], "github", oauth_blob=new_blob)
+    _set_user_blob(user, new_blob)
+
+    logger.info("[GitHub] Refreshed access token for %s", email)
+    return new_blob["access_token"]
+
+
+async def get_github_token(user: dict) -> Optional[str]:
+    """Get a valid GitHub access token, refreshing when needed.
+
+    Returns None when GitHub is not connected or an expired token could
+    not be refreshed, so callers surface the reconnect message.
+    """
+    blob = get_user_github_oauth(user)
+    if not blob or not blob.get("access_token"):
+        return None
+    if not blob.get("refresh_token"):
+        # Non-expiring token -- nothing to refresh.
+        return blob["access_token"]
+
+    # Expiring token: start from the stored row, since another turn or
+    # routine may have refreshed (and thereby invalidated our copy).
+    blob = await _load_stored_blob(user)
+    if not blob or not blob.get("access_token"):
+        return None
+    if not token_expires_within(blob):
+        return blob["access_token"]
+
+    lock = _refresh_locks.setdefault(user["id"], asyncio.Lock())
+    async with lock:
+        # Another coroutine may have refreshed while we waited on the lock.
+        blob = await _load_stored_blob(user)
+        if not blob or not blob.get("access_token"):
+            return None
+        if not token_expires_within(blob):
+            return blob["access_token"]
+        return await _refresh_github_token(user, blob)
+
+
 async def load_github_credentials(user: dict):
-    """authed_get credential loader: the user's access token, or None."""
-    return (get_user_github_oauth(user) or {}).get("access_token")
+    """authed_get credential loader: a valid access token, or None."""
+    return await get_github_token(user)
 
 
 def inject_github_bearer_auth(token: str, headers: dict) -> None:

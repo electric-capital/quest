@@ -1,6 +1,6 @@
 # GitHub API Documentation
 
-This document describes how Quest accesses GitHub data for reading repositories, issues, pull requests, commits, file contents, search, and Actions (workflow runs, jobs, and job logs).
+This document describes how Quest accesses GitHub data for reading repositories, issues, pull requests, commits, file contents, stargazers, search, and Actions (workflow runs, jobs, and job logs).
 
 ## Overview
 
@@ -15,11 +15,11 @@ A dedicated `github_get_job_log` plugin tool (previously the core `get_github_jo
 | File | Description |
 |------|-------------|
 | `plugins/github/manifest.py` | The `QuestPlugin` manifest: credential schema (OAuth app client id/secret), oauth-kind `user_connection`, the `api.github.com` service entry (`allowed_endpoints` regex list covering core repo paths plus Actions runs/jobs/workflows, `default_headers`), the `system:github` skill, and the `github_get_job_log` tool |
-| `plugins/github/upstream.py` | `GITHUB_SCOPES`, `load_github_client_config()` (store + legacy fallback), credential loader/Bearer injector for the service entry, `connected`/`needs_reauth` hooks over the stored `oauth_blob` |
+| `plugins/github/upstream.py` | `GITHUB_SCOPES`, `load_github_client_config()` (store + legacy fallback), token-blob construction and the refreshing credential loader (`get_github_token()`), Bearer injector for the service entry, `connected`/`needs_reauth` hooks over the stored `oauth_blob` |
 | `plugins/github/oauth.py` | OAuth flow router (`/auth/github`, `/auth/github/callback`, `/auth/github/disconnect`), mounted by `mount_plugin_oauth_routers()` in quest.py |
 | `plugins/github/tools.py` | `github_get_job_log` handler (302 redirect, two-hop fetch, workspace download) |
 | `plugins/github/instructions.md` | LLM-facing `system:github` skill content (key paths, params, examples) |
-| `db/models.py` | `user_service_credentials` table -- the token JSON lives in the github row's `oauth_blob` (`access_token`, `token_type`, `scope`, granted `scopes` list, `authorized_at`) |
+| `db/models.py` | `user_service_credentials` table -- the token JSON lives in the github row's `oauth_blob` (`access_token`, `token_type`, `scope`, granted `scopes` list, `authorized_at`, and for expiring GitHub App tokens `refresh_token`/`expires_at`/`refresh_token_expires_at`) |
 
 ## Authentication
 
@@ -31,15 +31,15 @@ The callback records the scopes GitHub actually **granted**, and the plugin's `n
 
 The scope check only applies to classic OAuth App tokens (`gho_` prefix): when the configured client credentials belong to a **GitHub App**, the token exchange returns a `ghu_` user access token with an empty `scope` (permissions come from the app installation), so `needs_reauth` skips the comparison for `ghu_` tokens instead of flagging re-auth forever.
 
-**Credential loading:** `load_github_credentials()` in `plugins/github/upstream.py` reads `access_token` out of the `oauth_blob` on the user dict's attached `service_credentials["github"]` row. If the user has not connected GitHub, the handler returns the `missing_credentials_error` defined on the registry entry directing the user to Settings > Data Connections.
+**Credential loading:** `load_github_credentials()` in `plugins/github/upstream.py` delegates to `get_github_token()`. Classic OAuth App tokens (no refresh token stored) are read straight off the user dict's attached `service_credentials["github"]` row. Expiring GitHub App tokens (8-hour `ghu_` access token + rotating 6-month `ghr_` refresh token) are read from the stored row and refreshed within 5 minutes of expiry under a per-user lock; see [GitHub App Setup](github-app-setup.md#token-architecture) for the refresh semantics. If the user has not connected GitHub, or an expired token cannot be refreshed, the handler returns the `missing_credentials_error` (`MISSING_CREDENTIALS_ERROR` in `upstream.py`) directing the user to Settings > Data Connections.
 
-The GitHub service entry sets `requires_user: True` (per-user OAuth credentials) and does **not** set `retry_on_401` because GitHub OAuth App tokens do not expire -- no refresh logic is required.
+The GitHub service entry sets `requires_user: True` (per-user OAuth credentials) and `retry_on_401: True`: a 401 re-runs the loader, which re-reads the stored row and so picks up a token another turn or routine refreshed in the meantime.
 
 ## GitHub Read Access (via `authed_get`)
 
 GitHub reads use `authed_get` with the GitHub REST API at `api.github.com`. The plugin's service entry (registered into `_SERVICE_REGISTRY` at load) defines the allowed endpoint patterns via regex validation -- requests to non-matching paths are rejected.
 
-The allow-list covers core repository reads (repos, issues, pull requests, commits, contents, search, org repo lists) and read-only GitHub Actions endpoints (workflow runs, individual runs, jobs for a run, jobs for a re-run attempt, single jobs with their step array, workflow definitions, and runs filtered by workflow).
+The allow-list covers core repository reads (repos, issues, pull requests, commits, contents, stargazers, search, org repo lists) and read-only GitHub Actions endpoints (workflow runs, individual runs, jobs for a run, jobs for a re-run attempt, single jobs with their step array, workflow definitions, and runs filtered by workflow).
 
 See `plugins/github/manifest.py` for the full allowed endpoint list and `plugins/github/instructions.md` for the LLM-facing documentation (base URL, key paths, common query parameters, and example invocations).
 
@@ -96,8 +96,8 @@ The following GitHub capabilities are deliberately not exposed:
 **Why `authed_get` instead of proxy endpoints?**
 GitHub reads are standard GitHub REST API GET requests. Using `authed_get` eliminates the need for 19 dedicated proxy endpoints, reduces backend code, centralizes credential loading in the service registry, provides server-side path gating via `allowed_endpoints`, and participates in the shared `authed_get` large-response protection (size gate + blob storage). It also aligns GitHub with the same pattern used by Google Calendar, Drive, Docs, Sheets, Tasks, Gmail Raw, and Airtable.
 
-**Why no token refresh?**
-GitHub OAuth App tokens do not expire. The registry entry omits `retry_on_401` and no background refresh daemon or refresh-token coordination is needed. This simplifies the implementation compared to Google Services tokens (which require refresh logic in `auth/google_credentials.py`).
+**Why refresh in the credential loader?**
+Classic OAuth App tokens never expire, but deployments registered as a GitHub App get 8-hour user tokens, which previously went dead mid-day and broke unattended routines until the user clicked Reconnect (the popup closes itself because the app is already authorized). Refreshing in the loader -- the Twitter/X and Microsoft 365 pattern -- covers every caller (authed_get and `github_get_job_log`) and is a no-op for non-expiring tokens.
 
 **Why service-level `default_headers`?**
 GitHub's REST API rejects requests without a `User-Agent` header and recommends the versioned `Accept: application/vnd.github+json` header. Rather than hard-coding these in a GitHub-specific code path, the service registry descriptor schema includes a generic `default_headers` field that any service can populate. `_make_authed_request()` merges the service's default headers into every outgoing request with the precedence `default_headers < caller headers < inject_auth`, so callers can still override defaults and auth injection always wins.
@@ -115,6 +115,6 @@ Three reasons make job logs a poor fit for the generic `authed_get` path.
 **Why is GitHub a plugin?**
 Phase 5 of the plugin architecture ([Plugins](../../../docs/architecture/plugins.md)) needed a proving migration for the oauth-kind `UserConnectionSpec` -- a plugin-provided `/auth/<id>` router, token storage in `user_service_credentials.oauth_blob`, and the `needs_reauth` hook.
 
-GitHub was the natural candidate: its OAuth flow is the simplest of the core connectors (no refresh tokens), and its whole surface (service entry, skill, one tool, credential schema) fits the manifest.
+GitHub was the natural candidate: its OAuth flow was the simplest of the core connectors (refresh support for GitHub App tokens came later), and its whole surface (service entry, skill, one tool, credential schema) fits the manifest.
 
 The tool was renamed `get_github_job_log` -> `github_get_job_log` for the `<id>_` prefix rule (tool names have no persistence, so the rename is free); the store key (`github.json`), connected-services key, `system:github` id, and OAuth URLs are all unchanged.
