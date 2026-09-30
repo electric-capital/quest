@@ -1,10 +1,12 @@
-import { Plug, CreditCard } from 'lucide-react';
+import { Plug, CreditCard, Mail, Wifi, Laptop, Coins } from 'lucide-react';
 
 /**
- * Brand icons for the Data Connections add picker, keyed by the row's
- * `service` id from GET /connectors. Purely cosmetic: unknown services
- * (e.g. new plugins) fall back to a generic plug icon, so the picker
- * stays fully data-driven -- an entry here is optional polish.
+ * Brand icons for the Data Connections add picker (keyed by the row's
+ * `service` id from GET /connectors) and the admin Service Credentials
+ * section (keyed by the credential store's service id, e.g. `google_oauth`
+ * or `smtp`). Purely cosmetic: unknown services (e.g. new plugins) fall
+ * back to a generic plug icon, so both stay fully data-driven -- an entry
+ * here is optional polish.
  *
  * Brand marks are inline SVG path data (simple-icons, CC0) in each
  * brand's colors so they stay recognizable at tile size.
@@ -74,8 +76,25 @@ function TwilioIcon() {
   );
 }
 
+function MicrosoftIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
+      <path fill="#F25022" d="M1 1h10.5v10.5H1z" />
+      <path fill="#7FBA00" d="M12.5 1H23v10.5H12.5z" />
+      <path fill="#00A4EF" d="M1 12.5h10.5V23H1z" />
+      <path fill="#FFB900" d="M12.5 12.5H23V23H12.5z" />
+    </svg>
+  );
+}
+
 const SERVICE_ICONS: Record<string, () => JSX.Element> = {
   google_services: GoogleIcon,
+  google_oauth: GoogleIcon,
+  m365: MicrosoftIcon,
+  smtp: () => <Mail size={28} className="service-icon-mono" aria-hidden="true" />,
+  unifi: () => <Wifi size={28} className="service-icon-mono" aria-hidden="true" />,
+  iru: () => <Laptop size={28} className="service-icon-mono" aria-hidden="true" />,
+  coingecko: () => <Coins size={28} className="service-icon-mono" aria-hidden="true" />,
   slack: SlackIcon,
   telegram: TelegramIcon,
   twitter: XIcon,
