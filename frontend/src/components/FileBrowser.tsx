@@ -181,7 +181,7 @@ export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBr
     if (files && files.length > 0) {
       try {
         await uploadFiles(files);
-      } catch (err) {
+      } catch {
         // Error is handled in the hook
       }
       // Reset input
@@ -229,7 +229,7 @@ export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBr
     if (filesWithPaths.length > 0) {
       try {
         await uploadFilesWithPaths(filesWithPaths);
-      } catch (err) {
+      } catch {
         // Error is handled in the hook
       }
     }
@@ -251,7 +251,7 @@ export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBr
     const filePath = currentPath === '/' ? `/${item.name}` : `${currentPath}/${item.name}`;
     try {
       await downloadFile(filePath);
-    } catch (err) {
+    } catch {
       // Error is handled in the hook
     }
   }, [currentPath, downloadFile]);
@@ -263,7 +263,7 @@ export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBr
     const filePath = currentPath === '/' ? `/${item.name}` : `${currentPath}/${item.name}`;
     try {
       await downloadFolder(filePath);
-    } catch (err) {
+    } catch {
       // Error is handled in the hook
     }
   }, [currentPath, downloadFolder]);

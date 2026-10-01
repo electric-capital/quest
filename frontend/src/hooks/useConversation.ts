@@ -306,10 +306,10 @@ export function useConversation(conversationId: string, options?: UseConversatio
         const response = await fetchConversation(conversationId);
 
         // Convert messages to MessageContent format
-        const convertedMessages: MessageContent[] = response.messages.map((msg) => ({
+        const convertedMessages = response.messages.map((msg) => ({
           ...msg,
-          type: (msg as any).type || 'text',
-        }));
+          type: (msg as unknown as { type?: string }).type || 'text',
+        })) as unknown as MessageContent[];
 
         conversationStore.setMessages(conversationId, convertedMessages);
 

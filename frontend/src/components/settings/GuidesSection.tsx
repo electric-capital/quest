@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { errorMessage } from '../../utils/errorMessage';
 import { fetchGuides, updateGuide, deleteGuide, convertGuideToSkill } from '../../api/client';
 import type { Guide } from '../../api/types';
 import './GuidesSection.css';
@@ -70,9 +71,9 @@ export function GuidesSection({ onGuidesChanged, onNavigateToSkills }: GuidesSec
       setEditingGuideContent('');
       onGuidesChanged();
       showStatus('saved', 'Guide saved', 2000);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to update guide:', error);
-      showStatus('error', error.message || 'Failed to update guide', 3000);
+      showStatus('error', errorMessage(error, 'Failed to update guide'), 3000);
     }
   }, [editingGuideName, editingGuideContent, guidesList, onGuidesChanged, showStatus]);
 
@@ -84,9 +85,9 @@ export function GuidesSection({ onGuidesChanged, onNavigateToSkills }: GuidesSec
       await deleteGuide(guideId);
       setGuidesList(prev => prev.filter(g => g.id !== guideId));
       onGuidesChanged();
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to delete guide:', error);
-      showStatus('error', error.message || 'Failed to delete guide', 3000);
+      showStatus('error', errorMessage(error, 'Failed to delete guide'), 3000);
     }
   }, [onGuidesChanged, showStatus]);
 
@@ -107,9 +108,9 @@ export function GuidesSection({ onGuidesChanged, onNavigateToSkills }: GuidesSec
         `Converted to skill "${result.skill.name}"${result.autoload_enabled ? ' (auto-load enabled)' : ''}`,
         4000,
       );
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to convert guide:', error);
-      showStatus('error', error.message || 'Failed to convert guide', 3000);
+      showStatus('error', errorMessage(error, 'Failed to convert guide'), 3000);
     } finally {
       setConvertingGuideId(null);
     }

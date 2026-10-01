@@ -403,7 +403,6 @@ export const MessageContentRenderer = React.memo(function MessageContentRenderer
     const hasSubAgents = (stats.sub_agent_call_count ?? 0) > 0;
     const cachedTokens = stats.cached_tokens ?? 0;
     const hasCaching = cachedTokens > 0;
-    const topLevelCached = stats.top_level_cached_tokens ?? 0;
     const subAgentCached = stats.sub_agent_cached_tokens ?? 0;
     const hasNewInputTokens = stats.new_input_tokens !== undefined;
     const provider = stats.provider;

@@ -22,7 +22,7 @@ interface AdminOpsMenuProps {
  * dropdown with server operations.
  */
 export function AdminOpsMenu({ inline = false }: AdminOpsMenuProps = {}) {
-  const { isAdmin, isImpersonating, userEmail, impersonatorEmail } = useAuth();
+  const { isAdmin, isImpersonating, userEmail } = useAuth();
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const [isShuttingDown, setIsShuttingDown] = useState(false);

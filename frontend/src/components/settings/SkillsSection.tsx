@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { errorMessage } from '../../utils/errorMessage';
 import {
   fetchSkills, createSkill, updateSkill, deleteSkill,
   fetchSkillShares, addSkillShares, removeSkillShare, searchUsers,
@@ -118,9 +119,9 @@ export function SkillsSection() {
       setSkillSaveStatus('saved');
       if (skillSaveTimeoutRef.current) clearTimeout(skillSaveTimeoutRef.current);
       skillSaveTimeoutRef.current = window.setTimeout(() => setSkillSaveStatus('idle'), 2000);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to create skill:', error);
-      setSkillSaveError(error.message || 'Failed to create skill');
+      setSkillSaveError(errorMessage(error, 'Failed to create skill'));
       setSkillSaveStatus('error');
       if (skillSaveTimeoutRef.current) clearTimeout(skillSaveTimeoutRef.current);
       skillSaveTimeoutRef.current = window.setTimeout(() => { setSkillSaveStatus('idle'); setSkillSaveError(''); }, 3000);
@@ -146,9 +147,9 @@ export function SkillsSection() {
       setSkillSaveStatus('saved');
       if (skillSaveTimeoutRef.current) clearTimeout(skillSaveTimeoutRef.current);
       skillSaveTimeoutRef.current = window.setTimeout(() => setSkillSaveStatus('idle'), 2000);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to update skill:', error);
-      setSkillSaveError(error.message || 'Failed to update skill');
+      setSkillSaveError(errorMessage(error, 'Failed to update skill'));
       setSkillSaveStatus('error');
       if (skillSaveTimeoutRef.current) clearTimeout(skillSaveTimeoutRef.current);
       skillSaveTimeoutRef.current = window.setTimeout(() => { setSkillSaveStatus('idle'); setSkillSaveError(''); }, 3000);
@@ -162,9 +163,9 @@ export function SkillsSection() {
     try {
       await deleteSkill(skillId);
       setSkillsList(prev => prev.filter(s => s.id !== skillId));
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to delete skill:', error);
-      setSkillSaveError(error.message || 'Failed to delete skill');
+      setSkillSaveError(errorMessage(error, 'Failed to delete skill'));
       setSkillSaveStatus('error');
       if (skillSaveTimeoutRef.current) clearTimeout(skillSaveTimeoutRef.current);
       skillSaveTimeoutRef.current = window.setTimeout(() => { setSkillSaveStatus('idle'); setSkillSaveError(''); }, 3000);

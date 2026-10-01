@@ -52,7 +52,7 @@ The frontend is always built with `npm run build` and served as static files by 
 When running `npm run build`:
 
 1. **TypeScript Compilation** with strict checking
-   - `tsc` runs to verify types (no emit)
+   - `tsc -b` type-checks both referenced projects (`tsconfig.app.json` for `src/`, `tsconfig.node.json` for the Vite/Vitest configuration and the PostCSS plugin), no emit
    - Build fails if type errors exist
 
 2. **Vite Build** creates optimized bundles
@@ -3318,10 +3318,12 @@ python3 run.py --prod   # Production mode (port 8000)
 
 ### TypeScript Errors
 
-Run type checking:
+Run type checking (both the app and the Vite config project):
 ```bash
-npm run lint
+npm run typecheck
 ```
+
+ESLint (TypeScript + React hook rules) runs separately with `npm run lint`; see [Development Workflows](../setup/development-workflows.md#frontend-checks).
 
 ## Performance Considerations
 

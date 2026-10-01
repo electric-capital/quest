@@ -34,11 +34,11 @@ export class FileApiError extends Error {
  * Handle error responses from the API
  */
 async function handleErrorResponse(response: Response): Promise<never> {
-  let errorData: any = null;
+  let errorData: unknown = null;
 
   try {
     errorData = await response.json();
-  } catch (e) {
+  } catch {
     throw new FileApiError(
       response.statusText || 'Unknown error',
       response.status
@@ -50,13 +50,22 @@ async function handleErrorResponse(response: Response): Promise<never> {
   // bare `{detail: "text"}` for string details. A few endpoints return a flat
   // `{error, message}`. Pull the human message and code out of whichever shape
   // arrived so the modal shows the real reason instead of "Unknown error".
-  const detail = errorData?.detail;
+  const body = (errorData && typeof errorData === 'object' ? errorData : {}) as {
+    detail?: unknown;
+    message?: unknown;
+    error?: unknown;
+  };
+  const detail = body.detail;
+  const detailObj = detail && typeof detail === 'object'
+    ? (detail as { message?: unknown; error?: unknown })
+    : undefined;
   const message =
-    errorData?.message ??
-    (typeof detail === 'string' ? detail : detail?.message) ??
+    (typeof body.message === 'string' ? body.message : undefined) ??
+    (typeof detail === 'string' ? detail : undefined) ??
+    (typeof detailObj?.message === 'string' ? detailObj.message : undefined) ??
     'Unknown error';
-  const errorCode =
-    errorData?.error ?? (detail && typeof detail === 'object' ? detail.error : undefined);
+  const rawCode = body.error ?? detailObj?.error;
+  const errorCode = typeof rawCode === 'string' ? rawCode : undefined;
 
   throw new FileApiError(message, response.status, errorCode);
 }
