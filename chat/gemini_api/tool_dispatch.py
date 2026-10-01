@@ -5,7 +5,8 @@ handler tables (no per-tool ``elif`` ladder):
 
 - ``TOOL_CALL_HANDLERS``: dynamic tools invoked through the ``tool_call``
   meta tool. Keys mirror ``chat.llm.tool_schemas.TOOL_CALL_REGISTRY``;
-  plugins extend both via :func:`register_tool_call_handler`.
+  plugins extend both at once via :func:`register_dynamic_tool` (the
+  spec/handler pair registered as one unit).
 - ``DIRECT_TOOL_HANDLERS``: tools the model calls by their own name.
   Unknown direct names fall through to HTTP route dispatch
   (curl_proxy_get / curl_proxy_post).
@@ -472,6 +473,50 @@ def register_tool_call_handler(name: str, handler: ToolHandler) -> None:
             "spec before the handler"
         )
     TOOL_CALL_HANDLERS[name] = handler
+
+
+def register_dynamic_tool(spec: dict, handler: ToolHandler) -> None:
+    """Register a dynamic tool's spec AND handler as one unit.
+
+    The single registration surface for tool_call-routed tools contributed
+    outside the core tables (the plugin loader): the spec lands in
+    ``TOOL_CALL_REGISTRY`` and the handler in ``TOOL_CALL_HANDLERS``, and a
+    failure on the handler side removes the just-added spec again, so the
+    two tables can never hold a spec without its handler. Raises ValueError
+    (duplicate name, malformed spec, non-callable handler) with both tables
+    unchanged.
+    """
+    from chat.llm.tool_schemas import (
+        PLUGIN_TOOL_NAMES,
+        TOOL_CALL_REGISTRY,
+        register_tool_call_tool,
+    )
+    if not callable(handler):
+        raise ValueError(
+            f"Tool {spec.get('name', '')!r} handler is not callable"
+        )
+    register_tool_call_tool(spec)
+    try:
+        register_tool_call_handler(spec["name"], handler)
+    except BaseException:
+        # Undo only the spec this call added; whatever blocked the handler
+        # step (e.g. a pre-existing handler entry) is not ours to remove.
+        TOOL_CALL_REGISTRY.pop(spec["name"], None)
+        PLUGIN_TOOL_NAMES.discard(spec["name"])
+        raise
+
+
+def unregister_dynamic_tool(name: str) -> None:
+    """Remove a dynamic tool registered via :func:`register_dynamic_tool`.
+
+    Drops the spec, the handler, and the plugin-tool classification entry;
+    a name that is not registered is a no-op. Only for names added through
+    :func:`register_dynamic_tool` -- never call it with a core tool name.
+    """
+    from chat.llm.tool_schemas import PLUGIN_TOOL_NAMES, TOOL_CALL_REGISTRY
+    TOOL_CALL_REGISTRY.pop(name, None)
+    TOOL_CALL_HANDLERS.pop(name, None)
+    PLUGIN_TOOL_NAMES.discard(name)
 
 
 async def _dispatch_tool_call(

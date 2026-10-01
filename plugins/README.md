@@ -214,7 +214,10 @@ their `tests/` directories too (repo-root `conftest.py`). See
   `_PUBLIC_ALLOWLIST_MIGRATED_TOOLS` map in `config/plugins.py`).
 - A plugin that raises on import, fails validation, or errors during
   registration is logged and skipped — it never prevents the server from
-  booting.
+  booting. Registration is atomic: name clashes with live registry
+  entries are rejected before anything is mutated, and a failure partway
+  through rolls back the steps already done, so a skipped plugin leaves
+  no partial surface and a corrected one loads cleanly on the next start.
 - Directories starting with `_` or `.` are ignored by discovery
   (`plugins/_example/` is the in-repo smoke-test fixture, loaded only by
   the test suite).

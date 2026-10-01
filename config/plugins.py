@@ -57,6 +57,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Callable
 
 from config.plugin_types import QuestPlugin
 
@@ -404,91 +405,180 @@ def discover_plugins(
     return plugins
 
 
-def register_plugin(plugin: QuestPlugin) -> None:
-    """Fan a validated manifest out into the core registries.
+def _preflight_registration(plugin: QuestPlugin) -> None:
+    """Check a manifest against the LIVE registries before touching them.
 
-    Not atomic: a failure partway leaves earlier registrations in place
-    (callers treat the plugin as broken and skip it; the partial surface is
-    harmless because every registration is namespaced by the plugin id).
+    :func:`validate_plugin` covers everything static about a manifest; the
+    one class of problem it cannot see is a collision with what is already
+    registered (a core entry, or an earlier plugin). Every registration
+    function below also refuses duplicates, but checking them all up front
+    means the common failure -- a name clash -- is reported in one error
+    naming every conflict, with nothing mutated. Raises ValueError.
     """
-    from chat.system_skills import register_system_skill
+    from chat.system_skills import CATALOG
+    from chat.action_request_types import registry as ar_registry
+    from chat.llm.tool_schemas import ACTION_REQUEST_TYPE_ENUM, TOOL_CALL_REGISTRY
+    from chat.gemini_api.tool_dispatch import TOOL_CALL_HANDLERS
+    from chat.gemini_api.authed_get import _SERVICE_REGISTRY
+    from config.service_credentials import KNOWN_SERVICES
+    from config.service_specs import get_service_spec
+
+    conflicts: list[str] = []
+    if plugin.credential_schema and (
+        plugin.id in KNOWN_SERVICES or get_service_spec(plugin.id) is not None
+    ):
+        conflicts.append(f"credential service {plugin.id!r}")
+    for service in plugin.services:
+        if service["key"] in _SERVICE_REGISTRY:
+            conflicts.append(f"authed_get service {service['key']!r}")
+    for skill in plugin.system_skills:
+        if skill.id in CATALOG:
+            conflicts.append(f"system skill {skill.id!r}")
+    for handler in plugin.action_request_handlers:
+        type_name = str(handler.type_name)
+        if type_name in ar_registry._REGISTRY or type_name in ACTION_REQUEST_TYPE_ENUM:
+            conflicts.append(f"action-request type {type_name!r}")
+    for tool in plugin.tools:
+        name = tool.spec.get("name", "")
+        if name in TOOL_CALL_REGISTRY or name in TOOL_CALL_HANDLERS:
+            conflicts.append(f"tool {name!r}")
+    if conflicts:
+        raise ValueError(
+            f"Plugin {plugin.id!r} collides with already-registered entries: "
+            + ", ".join(conflicts)
+        )
+
+
+# Undo journal per registered plugin id: the exact inverse of every
+# registration step that succeeded, in order. Each closure removes ONLY
+# what its step added (the add functions refuse duplicates, so a step that
+# succeeded owns its entry outright), which is what lets a rollback or an
+# unregister never touch a core entry or another plugin's.
+_REGISTRATIONS: dict[str, list[Callable[[], None]]] = {}
+
+
+def _run_undo(journal: list[Callable[[], None]]) -> None:
+    """Run undo steps newest-first; a failing step is logged, the rest run."""
+    while journal:
+        undo = journal.pop()
+        try:
+            undo()
+        except Exception:
+            logger.exception("Plugin registry rollback step failed")
+
+
+def register_plugin(plugin: QuestPlugin) -> None:
+    """Fan a validated manifest out into the core registries, atomically.
+
+    Collisions with live registry entries are rejected up front by
+    :func:`_preflight_registration`; every step that then succeeds records
+    its inverse in an undo journal, and a failure at ANY later step runs
+    the journal before re-raising, so a plugin is either fully registered
+    or leaves no trace (the loader logs and skips it, and a corrected
+    manifest registers cleanly afterwards). The journal is kept per plugin
+    id for :func:`unregister_plugin`.
+    """
+    from chat.system_skills import CATALOG, register_system_skill
+    from chat.action_request_types import registry as ar_registry
     from chat.action_request_types.registry import register_handler
-    from chat.llm.tool_schemas import (
-        register_action_request_type,
-        register_tool_call_tool,
+    from chat.llm import tool_schemas
+    from chat.llm.tool_schemas import register_action_request_type
+    from chat.gemini_api import script_tool_call
+    from chat.gemini_api.tool_dispatch import (
+        register_dynamic_tool,
+        unregister_dynamic_tool,
     )
-    from chat.gemini_api.tool_dispatch import register_tool_call_handler
-    from chat.gemini_api.authed_get import register_service
+    from chat.gemini_api.authed_get import _SERVICE_REGISTRY, register_service
     from chat.gemini_api.script_tool_call import extend_script_allowlist
+    import config.service_credentials as service_credentials
+    import config.service_specs as service_specs
     from config.service_specs import register_plugin_credentials
 
-    # Admin credential surface: plugins that declare a credential_schema get
-    # a generic Settings card and a data/service_credentials/<id>.json store
-    # file (schema-driven -- see config/service_specs.py).
-    if plugin.credential_schema:
-        register_plugin_credentials(plugin)
+    if plugin.id in _REGISTRATIONS:
+        raise ValueError(f"Plugin {plugin.id!r} is already registered")
+    _preflight_registration(plugin)
 
-    for service in plugin.services:
-        register_service(service["key"], service["entry"])
+    journal: list[Callable[[], None]] = []
+    try:
+        # Admin credential surface: plugins that declare a credential_schema
+        # get a generic Settings card and a data/service_credentials/<id>.json
+        # store file (schema-driven -- see config/service_specs.py).
+        if plugin.credential_schema:
+            register_plugin_credentials(plugin)
 
-    for skill in plugin.system_skills:
-        register_system_skill(skill)
+            def _undo_credentials(pid=plugin.id):
+                service_specs._PLUGIN_SPECS.pop(pid, None)
+                service_credentials.KNOWN_SERVICES = tuple(
+                    s for s in service_credentials.KNOWN_SERVICES if s != pid
+                )
+            journal.append(_undo_credentials)
 
-    for handler in plugin.action_request_handlers:
-        register_handler(handler)
-        register_action_request_type(str(handler.type_name))
+        for service in plugin.services:
+            register_service(service["key"], service["entry"])
+            journal.append(
+                lambda key=service["key"]: _SERVICE_REGISTRY.pop(key, None)
+            )
 
-    for tool in plugin.tools:
-        spec = dict(tool.spec)
-        if tool.requires_service:
-            spec["requires_service"] = tool.requires_service
-        if tool.mutating:
-            spec["mutating"] = True
-        register_tool_call_tool(spec)
-        register_tool_call_handler(spec["name"], tool.handler)
+        for skill in plugin.system_skills:
+            register_system_skill(skill)
+            journal.append(lambda sid=skill.id: CATALOG.pop(sid, None))
 
-    if plugin.script_tool_allowlist:
-        extend_script_allowlist(plugin.script_tool_allowlist)
+        for handler in plugin.action_request_handlers:
+            type_name = str(handler.type_name)
+            register_handler(handler)
+            journal.append(
+                lambda key=type_name: ar_registry._REGISTRY.pop(key, None)
+            )
+            register_action_request_type(type_name)
+
+            def _undo_action_type(key=type_name):
+                if key in tool_schemas.ACTION_REQUEST_TYPE_ENUM:
+                    tool_schemas.ACTION_REQUEST_TYPE_ENUM.remove(key)
+            journal.append(_undo_action_type)
+
+        for tool in plugin.tools:
+            spec = dict(tool.spec)
+            if tool.requires_service:
+                spec["requires_service"] = tool.requires_service
+            if tool.mutating:
+                spec["mutating"] = True
+            register_dynamic_tool(spec, tool.handler)
+            journal.append(
+                lambda name=spec["name"]: unregister_dynamic_tool(name)
+            )
+
+        if plugin.script_tool_allowlist:
+            added = frozenset(plugin.script_tool_allowlist) \
+                - script_tool_call.SCRIPT_TOOL_CALL_ALLOWLIST
+            extend_script_allowlist(plugin.script_tool_allowlist)
+
+            def _undo_allowlist(names=added):
+                script_tool_call.SCRIPT_TOOL_CALL_ALLOWLIST = (
+                    script_tool_call.SCRIPT_TOOL_CALL_ALLOWLIST - names
+                )
+            journal.append(_undo_allowlist)
+    except BaseException:
+        _run_undo(journal)
+        raise
+
+    _REGISTRATIONS[plugin.id] = journal
 
 
 def unregister_plugin(plugin: QuestPlugin) -> None:
-    """Best-effort inverse of :func:`register_plugin`, plus ``_LOADED`` removal.
+    """Inverse of :func:`register_plugin`, plus ``_LOADED`` removal.
+
+    Replays the plugin's undo journal, so it removes exactly the entries
+    that plugin's registration added and nothing else (a manifest naming
+    a core entry it never got to register cannot pop that core entry).
+    A plugin with no journal (never registered, or already unregistered)
+    only has its ``_LOADED`` row dropped.
 
     The server never unloads plugins at runtime; this exists for test
     suites (tests/plugin_support.py fixtures and the loader tests) that
     register a plugin into the live registries and must restore them
-    afterwards. Keep the fan-out targets in sync with
-    :func:`register_plugin`.
+    afterwards.
     """
-    from chat.llm import tool_schemas
-    from chat.gemini_api import script_tool_call, tool_dispatch
-    from chat.gemini_api.authed_get import _SERVICE_REGISTRY
-    from chat.system_skills import CATALOG
-    from chat.action_request_types import registry as ar_registry
-
-    import config.service_credentials as service_credentials
-    import config.service_specs as service_specs
-
-    if service_specs._PLUGIN_SPECS.pop(plugin.id, None) is not None:
-        service_credentials.KNOWN_SERVICES = tuple(
-            s for s in service_credentials.KNOWN_SERVICES if s != plugin.id
-        )
-    for service in plugin.services:
-        _SERVICE_REGISTRY.pop(service["key"], None)
-    for skill in plugin.system_skills:
-        CATALOG.pop(skill.id, None)
-    for handler in plugin.action_request_handlers:
-        key = str(handler.type_name)
-        ar_registry._REGISTRY.pop(key, None)
-        if key in tool_schemas.ACTION_REQUEST_TYPE_ENUM:
-            tool_schemas.ACTION_REQUEST_TYPE_ENUM.remove(key)
-    tool_names = {tool.spec["name"] for tool in plugin.tools}
-    for name in tool_names:
-        tool_schemas.TOOL_CALL_REGISTRY.pop(name, None)
-        tool_dispatch.TOOL_CALL_HANDLERS.pop(name, None)
-    script_tool_call.SCRIPT_TOOL_CALL_ALLOWLIST = (
-        script_tool_call.SCRIPT_TOOL_CALL_ALLOWLIST - tool_names
-    )
+    _run_undo(_REGISTRATIONS.pop(plugin.id, []))
     _LOADED[:] = [p for p in _LOADED if p.id != plugin.id]
 
 

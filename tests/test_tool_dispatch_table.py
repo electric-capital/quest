@@ -15,7 +15,9 @@ from chat.gemini_api.tool_dispatch import (
     DIRECT_TOOL_HANDLERS,
     TOOL_CALL_HANDLERS,
     _dispatch_tool_call,
+    register_dynamic_tool,
     register_tool_call_handler,
+    unregister_dynamic_tool,
 )
 from chat.llm.tool_schemas import (
     ACTION_REQUEST_TYPE_ENUM,
@@ -125,6 +127,68 @@ class TestRegistration:
         finally:
             TOOL_CALL_REGISTRY.pop("tp_round_trip", None)
             TOOL_CALL_HANDLERS.pop("tp_round_trip", None)
+
+    def test_register_dynamic_tool_registers_both_tables(self):
+        from chat.llm.tool_schemas import PLUGIN_TOOL_NAMES
+        register_dynamic_tool(
+            {"name": "tp_pair", "description": "d",
+             "parameters": {"type": "object", "properties": {}}},
+            _dummy_handler,
+        )
+        try:
+            assert "tp_pair" in TOOL_CALL_REGISTRY
+            assert TOOL_CALL_HANDLERS["tp_pair"] is _dummy_handler
+            assert "tp_pair" in PLUGIN_TOOL_NAMES
+            result, _ = _dispatch(
+                "tool_call", {"tool_name": "tp_pair", "arguments": {}},
+            )
+            assert json.loads(result) == {"ok": True}
+        finally:
+            unregister_dynamic_tool("tp_pair")
+        assert "tp_pair" not in TOOL_CALL_REGISTRY
+        assert "tp_pair" not in TOOL_CALL_HANDLERS
+        assert "tp_pair" not in PLUGIN_TOOL_NAMES
+
+    def test_register_dynamic_tool_rolls_back_spec_when_handler_fails(self):
+        # Fault injection: a handler-side refusal (here a pre-existing
+        # handler entry with no spec) must not leave an orphan spec behind.
+        from chat.llm.tool_schemas import PLUGIN_TOOL_NAMES
+        TOOL_CALL_HANDLERS["tp_orphan"] = _dummy_handler
+        try:
+            with pytest.raises(ValueError, match="already registered"):
+                register_dynamic_tool(
+                    {"name": "tp_orphan", "description": "d",
+                     "parameters": {"type": "object", "properties": {}}},
+                    _dummy_handler,
+                )
+            assert "tp_orphan" not in TOOL_CALL_REGISTRY
+            assert "tp_orphan" not in PLUGIN_TOOL_NAMES
+            # The pre-existing handler entry was not ours; it stays.
+            assert TOOL_CALL_HANDLERS["tp_orphan"] is _dummy_handler
+        finally:
+            TOOL_CALL_HANDLERS.pop("tp_orphan", None)
+
+    def test_register_dynamic_tool_rejects_non_callable_handler_untouched(self):
+        with pytest.raises(ValueError, match="not callable"):
+            register_dynamic_tool(
+                {"name": "tp_nocall", "description": "d",
+                 "parameters": {"type": "object", "properties": {}}},
+                "not-a-callable",
+            )
+        assert "tp_nocall" not in TOOL_CALL_REGISTRY
+        assert "tp_nocall" not in TOOL_CALL_HANDLERS
+
+    def test_register_dynamic_tool_duplicate_core_name_untouched(self):
+        with pytest.raises(ValueError, match="already registered"):
+            register_dynamic_tool(
+                {"name": "get_current_time", "description": "d",
+                 "parameters": {"type": "object", "properties": {}}},
+                _dummy_handler,
+            )
+        # The core pair is intact (the failed spec add never reached the
+        # handler step, and the rollback only removes a spec it added).
+        assert TOOL_CALL_REGISTRY["get_current_time"]["name"] == "get_current_time"
+        assert "get_current_time" in TOOL_CALL_HANDLERS
 
     def test_action_request_type_duplicate_rejected(self):
         with pytest.raises(ValueError, match="already registered"):

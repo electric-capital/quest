@@ -15,7 +15,7 @@ from unittest.mock import patch
 import pytest
 
 from config import plugins as plugins_mod
-from config.plugin_types import PluginTool, QuestPlugin
+from config.plugin_types import CredentialField, PluginTool, QuestPlugin
 
 
 def _run(coro):
@@ -704,6 +704,237 @@ class TestLoadPlugins:
             plugins_mod._LOADED[:] = [
                 p for p in plugins_mod._LOADED if p.id != "tboom"
             ]
+
+
+# ---------------------------------------------------------------------------
+# Atomic registration (preflight + rollback)
+# ---------------------------------------------------------------------------
+
+
+def _example_surface_absent() -> None:
+    """Assert no trace of the _example plugin in any registry."""
+    from chat.system_skills import CATALOG
+    from chat.action_request_types import registry as ar_registry
+    from chat.llm import tool_schemas
+    from chat.gemini_api import script_tool_call, tool_dispatch
+    from chat.gemini_api.authed_get import _SERVICE_REGISTRY
+    import config.service_credentials as service_credentials
+    import config.service_specs as service_specs
+
+    assert "example" not in service_credentials.KNOWN_SERVICES
+    assert "example" not in service_specs._PLUGIN_SPECS
+    assert "api.example.com" not in _SERVICE_REGISTRY
+    assert "system:example" not in CATALOG
+    assert "example_echo" not in ar_registry._REGISTRY
+    assert "example_echo" not in tool_schemas.ACTION_REQUEST_TYPE_ENUM
+    assert "example_ping" not in tool_schemas.TOOL_CALL_REGISTRY
+    assert "example_ping" not in tool_schemas.PLUGIN_TOOL_NAMES
+    assert "example_ping" not in tool_dispatch.TOOL_CALL_HANDLERS
+    assert "example_ping" not in script_tool_call.SCRIPT_TOOL_CALL_ALLOWLIST
+    assert "example" not in plugins_mod._REGISTRATIONS
+
+
+class TestAtomicRegistration:
+    def test_preflight_reports_every_collision_without_mutating(self):
+        # Collides with a core tool AND a core authed_get service; the
+        # manifest is otherwise valid (unprefixed_tools exempts the name).
+        from chat.system_skills import CATALOG, SystemSkill
+        from chat.gemini_api.authed_get import _SERVICE_REGISTRY
+        import config.service_credentials as service_credentials
+
+        plugin = QuestPlugin(
+            id="tpre", label="X",
+            credential_schema=(
+                CredentialField(key="token", label="Token", type="secret"),
+            ),
+            services=({"key": "api.airtable.com", "entry": {
+                "name": "X", "load_credentials": lambda: None,
+                "inject_auth": lambda h, c: h,
+            }},),
+            system_skills=(SystemSkill(
+                id="system:tpre", name="X", description="d",
+                when_to_load="w", content_builder=lambda b, k: "",
+            ),),
+            tools=(_tool("memory_search"),),
+            unprefixed_tools=frozenset({"memory_search"}),
+        )
+        plugins_mod.validate_plugin(plugin, set())
+        with pytest.raises(ValueError) as excinfo:
+            plugins_mod.register_plugin(plugin)
+        message = str(excinfo.value)
+        assert "collides with already-registered entries" in message
+        assert "tool 'memory_search'" in message
+        assert "authed_get service 'api.airtable.com'" in message
+        # Nothing was registered -- not even the stages before the clash.
+        assert "tpre" not in service_credentials.KNOWN_SERVICES
+        assert "system:tpre" not in CATALOG
+        assert "tpre" not in plugins_mod._REGISTRATIONS
+        # The core entries the manifest named are untouched, and
+        # unregistering the never-registered manifest can't remove them.
+        plugins_mod.unregister_plugin(plugin)
+        assert _SERVICE_REGISTRY["api.airtable.com"]["name"] == "Airtable"
+        from chat.gemini_api.tool_dispatch import TOOL_CALL_HANDLERS
+        assert "memory_search" in TOOL_CALL_HANDLERS
+
+    @pytest.mark.parametrize("failing_step", [
+        "register_system_skill",
+        "register_action_request_type",
+        "register_dynamic_tool",
+        "extend_script_allowlist",
+    ])
+    def test_failure_at_any_stage_rolls_back_earlier_stages(self, failing_step):
+        # Fault injection: the _example plugin exercises every manifest
+        # field, so breaking one fan-out target at a time proves each
+        # earlier stage is undone (credentials, services, skills, action
+        # types, tools, allowlist) and no plugin-owned entry survives.
+        targets = {
+            "register_system_skill": "chat.system_skills.register_system_skill",
+            "register_action_request_type":
+                "chat.llm.tool_schemas.register_action_request_type",
+            "register_dynamic_tool":
+                "chat.gemini_api.tool_dispatch.register_dynamic_tool",
+            "extend_script_allowlist":
+                "chat.gemini_api.script_tool_call.extend_script_allowlist",
+        }
+        plugin = _load_example_plugin()
+        with patch(targets[failing_step], side_effect=RuntimeError("injected")):
+            with pytest.raises(RuntimeError, match="injected"):
+                plugins_mod.register_plugin(plugin)
+        _example_surface_absent()
+
+    def test_rolled_back_plugin_registers_cleanly_afterwards(self):
+        # The "stale collision" failure mode: a plugin whose first attempt
+        # died mid-registration must not block its own corrected retry.
+        plugin = _load_example_plugin()
+        with patch(
+            "chat.gemini_api.script_tool_call.extend_script_allowlist",
+            side_effect=RuntimeError("injected"),
+        ):
+            with pytest.raises(RuntimeError):
+                plugins_mod.register_plugin(plugin)
+        plugins_mod.register_plugin(plugin)
+        try:
+            from chat.system_skills import CATALOG
+            from chat.gemini_api import script_tool_call
+            assert "system:example" in CATALOG
+            assert "example_ping" in script_tool_call.SCRIPT_TOOL_CALL_ALLOWLIST
+        finally:
+            _unregister(plugin)
+        _example_surface_absent()
+
+    def test_corrected_manifest_registers_after_preflight_rejection(self):
+        broken = QuestPlugin(
+            id="tfix", label="X",
+            tools=(_tool("memory_search"),),
+            unprefixed_tools=frozenset({"memory_search"}),
+        )
+        with pytest.raises(ValueError, match="collides"):
+            plugins_mod.register_plugin(broken)
+        fixed = QuestPlugin(id="tfix", label="X", tools=(_tool("tfix_search"),))
+        plugins_mod.register_plugin(fixed)
+        try:
+            from chat.gemini_api.tool_dispatch import TOOL_CALL_HANDLERS
+            assert "tfix_search" in TOOL_CALL_HANDLERS
+        finally:
+            _unregister(fixed)
+        from chat.llm.tool_schemas import TOOL_CALL_REGISTRY
+        assert "tfix_search" not in TOOL_CALL_REGISTRY
+
+    def test_rollback_preserves_other_plugins_entries(self, example_plugin):
+        # A second plugin failing late must leave the already-loaded
+        # example plugin's surface (and the core tables) exactly as they
+        # were; the journal only ever holds the failing plugin's own adds.
+        from chat.system_skills import CATALOG, SystemSkill
+        from chat.gemini_api.authed_get import _SERVICE_REGISTRY
+        from chat.gemini_api.tool_dispatch import TOOL_CALL_HANDLERS
+
+        other = QuestPlugin(
+            id="tother", label="X",
+            services=({"key": "api.other.example", "entry": {
+                "name": "Other", "load_credentials": lambda: None,
+                "inject_auth": lambda h, c: h,
+            }},),
+            system_skills=(SystemSkill(
+                id="system:tother", name="X", description="d",
+                when_to_load="w", content_builder=lambda b, k: "",
+            ),),
+            tools=(_tool("tother_ping"),),
+        )
+        with patch(
+            "chat.gemini_api.tool_dispatch.register_dynamic_tool",
+            side_effect=RuntimeError("injected"),
+        ):
+            with pytest.raises(RuntimeError):
+                plugins_mod.register_plugin(other)
+        assert "api.other.example" not in _SERVICE_REGISTRY
+        assert "system:tother" not in CATALOG
+        assert "system:example" in CATALOG
+        assert _SERVICE_REGISTRY["api.example.com"]["name"] == "Example API"
+        assert "example_ping" in TOOL_CALL_HANDLERS
+        assert "memory_search" in TOOL_CALL_HANDLERS
+
+    def test_double_registration_rejected(self, example_plugin):
+        with pytest.raises(ValueError, match="already registered"):
+            plugins_mod.register_plugin(example_plugin)
+
+    def test_shared_allowlist_names_survive_another_plugins_unregister(self):
+        # Ownership: the allowlist undo subtracts only the names the plugin
+        # added. A name already allow-listed (here via a prior plugin) is
+        # not removed when a later plugin naming it is unregistered.
+        from chat.gemini_api import script_tool_call
+        first = QuestPlugin(
+            id="tfirst", label="X", tools=(_tool("tfirst_ping"),),
+            script_tool_allowlist=frozenset({"tfirst_ping"}),
+        )
+        plugins_mod.register_plugin(first)
+        try:
+            script_tool_call.extend_script_allowlist({"tfirst_ping"})  # no-op union
+            second = QuestPlugin(id="tsecond", label="X")
+            plugins_mod.register_plugin(second)
+            plugins_mod.unregister_plugin(second)
+            assert "tfirst_ping" in script_tool_call.SCRIPT_TOOL_CALL_ALLOWLIST
+        finally:
+            _unregister(first)
+        assert "tfirst_ping" not in script_tool_call.SCRIPT_TOOL_CALL_ALLOWLIST
+
+    def test_load_plugins_leaves_no_partial_surface(self, tmp_path, caplog):
+        # End to end through the loader: a plugin whose credential card and
+        # service register fine but whose tool clashes with a core tool is
+        # skipped with NO leftover card, store roster entry, or service.
+        _write_plugin(tmp_path, "tpart", textwrap.dedent("""
+            from config.plugin_types import CredentialField, PluginTool, QuestPlugin
+
+            async def _h(ctx, args):
+                return "{}"
+
+            def get_plugin():
+                return QuestPlugin(
+                    id="tpart", label="Partial",
+                    credential_schema=(
+                        CredentialField(key="token", label="Token", type="secret"),
+                    ),
+                    services=({"key": "api.partial.example", "entry": {
+                        "name": "Partial", "load_credentials": lambda: None,
+                        "inject_auth": lambda h, c: h,
+                    }},),
+                    tools=(PluginTool(
+                        spec={"name": "memory_search", "description": "d",
+                              "parameters": {"type": "object", "properties": {}}},
+                        handler=_h,
+                    ),),
+                    unprefixed_tools=frozenset({"memory_search"}),
+                )
+        """))
+        loaded_before = plugins_mod.get_loaded_plugins()
+        assert plugins_mod.load_plugins(plugins_dir=tmp_path) == loaded_before
+        assert "registration failed" in caplog.text
+        from chat.gemini_api.authed_get import _SERVICE_REGISTRY
+        import config.service_credentials as service_credentials
+        import config.service_specs as service_specs
+        assert "tpart" not in service_credentials.KNOWN_SERVICES
+        assert service_specs.get_service_spec("tpart") is None
+        assert "api.partial.example" not in _SERVICE_REGISTRY
+        assert "tpart" not in plugins_mod._REGISTRATIONS
 
 
 # ---------------------------------------------------------------------------
