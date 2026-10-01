@@ -400,10 +400,10 @@
   margin-top: 0.25rem;
 }
 
-/* Conversation list */
-.conversation-list {
-  overflow-x: hidden;
-}
+/* Conversation list. No overflow rule here on purpose: `overflow-x: hidden`
+   would force overflow-y to auto, turning the list into a scroll container
+   that clips a bottom row's absolutely positioned options menu (and shows a
+   stray scrollbar). Horizontal overflow is already hidden by .sidebar-panel. */
 
 /* "Load more" pager at the bottom of the paged top-level conversation list */
 .load-more-conversations-button {
