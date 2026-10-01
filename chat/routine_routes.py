@@ -13,7 +13,10 @@ from pydantic import BaseModel
 
 from chat.auth import get_current_user_cookie_or_apikey_checked
 from chat.routine_costs import get_routine_cost_report
-from config.feature_gates import guides_enabled_for
+from config.feature_gates import (
+    guides_enabled_for,
+    public_project_routines_enabled_for,
+)
 from db.project_store import get_project
 from db.routine_store import (
     StaleRoutineError,
@@ -56,6 +59,54 @@ def _require_guides_enabled(user: dict) -> None:
         )
 
 
+def project_routines_allowed(project: dict, user: dict) -> bool:
+    """Whether this project may have (and run) routines for this user.
+
+    Private projects always can. A public project can only while the admin
+    ``public_project_routines`` feature gate (and the ``public_projects``
+    gate it sits on) is open for the user: its routines run in the
+    internet-enabled sandbox, scheduled ones unattended.
+    """
+    return not project.get("public") or public_project_routines_enabled_for(
+        user["email"]
+    )
+
+
+def require_project_routines_allowed(project: dict, user: dict) -> None:
+    """400 ``public_project_routines_disabled`` unless routines are allowed.
+
+    The routine and schedule rows are untouched while the gate is closed
+    and become reachable again once access is restored.
+    """
+    if not project_routines_allowed(project, user):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "public_project_routines_disabled",
+                "message": (
+                    "Routines in public projects are disabled for your "
+                    "account or server-wide"
+                ),
+            },
+        )
+
+
+async def get_routine_project(user: dict, project_id: str) -> dict:
+    """The user's project for a routine/schedule endpoint, or an HTTP error.
+
+    404 when the project does not exist (or is not the user's), 400 when it
+    is a public project whose routines are gated off for this user.
+    """
+    project = await get_project(user["id"], project_id)
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": "Project not found"},
+        )
+    require_project_routines_allowed(project, user)
+    return project
+
+
 class CreateRoutineRequest(BaseModel):
     name: str
     prompt: str
@@ -95,6 +146,10 @@ async def list_project_routines(
             status_code=404,
             detail={"error": "not_found", "message": "Project not found"},
         )
+    # Routines of a public project are hidden while the gate is closed for
+    # this user (the rows are kept and come back when access is restored).
+    if not project_routines_allowed(project, user):
+        return {"routines": []}
 
     routines = await list_routines_with_schedules(project_id)
     return {"routines": routines}
@@ -109,24 +164,7 @@ async def create_project_routine(
     """Create a new routine in a project."""
     user_id = user["id"]
 
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
-
-    # Public projects cannot have routines (and therefore no schedules,
-    # which hang off routines): scheduled runs in an internet-enabled
-    # sandbox would run unattended.
-    if project.get("public"):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "public_project_no_routines",
-                "message": "Public projects cannot have routines",
-            },
-        )
+    await get_routine_project(user, project_id)
 
     if not body.name or not body.name.strip():
         raise HTTPException(
@@ -182,12 +220,7 @@ async def get_project_routine(
     """Get a specific routine by ID."""
     user_id = user["id"]
 
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    await get_routine_project(user, project_id)
 
     routine = await get_routine(user_id, routine_id)
     if not routine or routine["project_id"] != project_id:
@@ -214,12 +247,7 @@ async def get_project_routine_costs(
     """
     user_id = user["id"]
 
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    await get_routine_project(user, project_id)
 
     routine = await get_routine(user_id, routine_id)
     if not routine or routine["project_id"] != project_id:
@@ -241,12 +269,7 @@ async def update_project_routine(
     """Update a routine's name, prompt, and/or guide."""
     user_id = user["id"]
 
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    await get_routine_project(user, project_id)
 
     # Determine guide_id value using ellipsis sentinel:
     # - ... means "don't change" (default)
@@ -328,12 +351,7 @@ async def delete_project_routine(
     """Delete a routine."""
     user_id = user["id"]
 
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    await get_routine_project(user, project_id)
 
     deleted = await delete_routine(user_id, routine_id)
     if not deleted:
@@ -354,12 +372,7 @@ async def get_routine_autoloaded_skills_route(
     """Get auto-loaded skill IDs for a routine."""
     user_id = user["id"]
 
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    await get_routine_project(user, project_id)
 
     routine = await get_routine(user_id, routine_id)
     if not routine or routine["project_id"] != project_id:
@@ -383,18 +396,25 @@ async def toggle_routine_skill_autoload(
     """Toggle auto-load for a skill on a routine."""
     user_id = user["id"]
 
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    project = await get_routine_project(user, project_id)
 
     routine = await get_routine(user_id, routine_id)
     if not routine or routine["project_id"] != project_id:
         raise HTTPException(
             status_code=404,
             detail={"error": "not_found", "message": "Routine not found"},
+        )
+
+    # Public conversations load no skills of any tier (skill bodies are
+    # internal data), so a routine there cannot auto-load one. Turning an
+    # auto-load off stays allowed.
+    if project.get("public") and body.enabled:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "public_project_no_skills",
+                "message": "Routines in public projects cannot auto-load skills",
+            },
         )
 
     if not await user_can_access_skill(user_id, skill_id):

@@ -596,6 +596,20 @@ async def run_conversation_turn(
                     "server-wide. An admin can grant access in Settings > "
                     "Features."
                 )
+            # Sub-gate: a routine run (scheduled or one-click -- both carry
+            # the conversation's routine_id) in a public project needs the
+            # public_project_routines gate too. The scheduler and the
+            # run-start endpoint already refuse while it is closed; this is
+            # the backstop for every path into a routine conversation.
+            from config.feature_gates import FEATURE_PUBLIC_PROJECT_ROUTINES
+            if routine_id and not is_feature_enabled_for_user(
+                FEATURE_PUBLIC_PROJECT_ROUTINES, user["email"]
+            ):
+                raise RuntimeError(
+                    "Routines in public projects are disabled for your "
+                    "account or server-wide. An admin can grant access in "
+                    "Settings > Features."
+                )
 
         # Admin Model Selection usage rules (config/model_selection.py):
         # a model can be unticked for private and/or public conversations.
@@ -723,6 +737,7 @@ async def run_conversation_turn(
                 user_name=user.get("name", ""),
                 user_email=user["email"],
                 project_guide=resolved_project_guide,
+                is_routine=bool(routine_id),
             )
         else:
             system_prompt = get_system_prompt(

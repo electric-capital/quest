@@ -675,6 +675,7 @@ def get_public_project_system_prompt(
     user_name: str = "",
     user_email: str = "",
     project_guide: str = "",
+    is_routine: bool = False,
 ) -> str:
     """Build the system prompt for a conversation in a PUBLIC project.
 
@@ -690,6 +691,11 @@ def get_public_project_system_prompt(
     -- user-authored for this specific project), workspace/tool docs for the
     public subset, and an explicit Boundaries block so the model can explain
     the restrictions instead of flailing against them.
+
+    ``is_routine`` marks a routine run (scheduled or one-click, only possible
+    while the ``public_project_routines`` feature gate is open): as in
+    get_system_prompt(), the conversation is already named after its routine,
+    so the first-reply naming instruction and its tool are left out.
     """
     from chat.llm.tool_schemas import (
         TOOL_CALL_REGISTRY, PUBLIC_TOOL_CALL_ALLOWLIST,
@@ -728,9 +734,23 @@ def get_public_project_system_prompt(
 
 """
 
-    dynamic_tools_section = _build_dynamic_tools_section(
-        exclude=set(TOOL_CALL_REGISTRY) - set(PUBLIC_TOOL_CALL_ALLOWLIST),
-    )
+    public_exclude = set(TOOL_CALL_REGISTRY) - set(PUBLIC_TOOL_CALL_ALLOWLIST)
+    if is_routine:
+        public_exclude.add("set_conversation_name")
+    dynamic_tools_section = _build_dynamic_tools_section(exclude=public_exclude)
+
+    if is_routine:
+        naming_section = _ROUTINE_NAMING_SECTION
+    else:
+        naming_section = """**Conversation naming (IMPORTANT -- do this on every first reply):**
+
+When you receive the user's first message in a conversation, your response MUST follow these steps in order:
+
+1. Read and understand the user's request.
+2. Before doing any other work, call `tool_call(tool_name="set_conversation_name", arguments={"name": "<short summary>"})` to set the conversation name shown in the sidebar. This should be the FIRST tool call in your response.
+3. Then proceed to answer the user's request normally (calling other tools, generating text, etc.).
+
+The name should be a concise summary of the user's request -- aim for under 50 characters. Do not call this tool again after the first reply."""
 
     return f"""You are Quest, a personal AI assistant, running in a PUBLIC project. Conversations in this project have internet access from the code sandbox, and in exchange have NO access to the user's internal data or connected services.
 {identity_line}{project_section}
@@ -770,15 +790,7 @@ You have three tools available:
 - If the user asks for something that needs internal data or a connected service, tell them plainly that it requires a regular (private) conversation outside this public project -- do not attempt workarounds.
 - Files the user uploads to this project's workspace are fair game: the user chose to bring them into a public project.
 
-**Conversation naming (IMPORTANT -- do this on every first reply):**
-
-When you receive the user's first message in a conversation, your response MUST follow these steps in order:
-
-1. Read and understand the user's request.
-2. Before doing any other work, call `tool_call(tool_name="set_conversation_name", arguments={{"name": "<short summary>"}})` to set the conversation name shown in the sidebar. This should be the FIRST tool call in your response.
-3. Then proceed to answer the user's request normally (calling other tools, generating text, etc.).
-
-The name should be a concise summary of the user's request -- aim for under 50 characters. Do not call this tool again after the first reply.
+{naming_section}
 
 **Example usage:**
 

@@ -19,6 +19,11 @@ Restart resilience (the server is restarted routinely):
   cancellation, or by the startup sweep for a hard kill) with a notice in
   its conversation, and anchored runs are retried once in a new
   conversation while still within grace.
+
+Routines in public projects run only while the admin
+``public_project_routines`` feature gate is open for their owner (see
+``_public_routine_gated``): while it is closed their schedules are skipped
+without creating a conversation or a ledger row.
 """
 
 import asyncio
@@ -131,6 +136,47 @@ async def _recover_interrupted_runs() -> None:
                 )
 
 
+def _public_routine_gated(routine: dict) -> bool:
+    """Whether this routine must not run: public project, gate closed.
+
+    A routine in a public project runs unattended in the internet-enabled
+    sandbox, which an admin has to opt into (Settings > Features); the
+    check is per owner, like every other use of the gate.
+    """
+    if not routine.get("project_public"):
+        return False
+    from config.feature_gates import public_project_routines_enabled_for
+
+    return not public_project_routines_enabled_for(routine.get("user_email") or "")
+
+
+async def _skip_gated_schedule(schedule: dict, routine: dict, now: datetime) -> None:
+    """Pass over a due occurrence of a gated public-project routine.
+
+    An anchored schedule's ``next_due_at`` is moved past the occurrence, so
+    reopening the gate resumes at the next regular occurrence instead of
+    catching up on (or recording as missed) everything that came due while
+    it was closed. Logged once per skipped occurrence, never per poll.
+    Interval schedules need no bookkeeping: they simply stay un-run and
+    fire on the first poll after the gate reopens.
+    """
+    from db.schedule_store import set_next_due
+
+    if not schedule_timing.is_anchored(schedule["schedule_type"]):
+        return
+    next_due = _parse_iso(schedule.get("next_due_at_stored"))
+    if next_due is not None and now < next_due:
+        return
+    await set_next_due(schedule["id"], schedule_timing.occurrence_after(schedule, now))
+    if next_due is not None:
+        logger.info(
+            "[scheduler] %s: SKIPPED %s -- routines in public projects are "
+            "disabled for %s (schedule=%s)",
+            routine["name"], next_due.isoformat(), routine.get("user_email"),
+            schedule["id"],
+        )
+
+
 def _spawn_run(app, schedule: dict, routine: dict, run_id: str) -> None:
     # Fire-and-forget as an asyncio task so we don't block the scheduler
     # loop waiting for the model. Tracked so it can be cancelled on shutdown.
@@ -170,7 +216,9 @@ async def _poll_and_execute(app, now: datetime | None = None) -> None:
     for schedule in schedules:
         routine = schedule["routine"]
         try:
-            if schedule_timing.is_anchored(schedule["schedule_type"]):
+            if _public_routine_gated(routine):
+                await _skip_gated_schedule(schedule, routine, now)
+            elif schedule_timing.is_anchored(schedule["schedule_type"]):
                 await _check_anchored(app, schedule, routine, now)
             else:
                 await _check_interval(app, schedule, routine, now)
@@ -188,6 +236,8 @@ async def _retry_interrupted_runs(app, now: datetime) -> None:
         schedule = row["schedule"]
         occurrence_at = _parse_iso(row["occurrence_at"])
         if not _retry_eligible(schedule, occurrence_at, row["attempt"], now):
+            continue
+        if _public_routine_gated(schedule["routine"]):
             continue
         if not await claim_retry(row["id"]):
             continue

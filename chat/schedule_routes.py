@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from chat.auth import get_current_user_cookie_or_apikey_checked
-from db.project_store import get_project
+from chat.routine_routes import get_routine_project
 from db.routine_store import get_routine
 from db.schedule_store import (
     StaleScheduleError,
@@ -65,8 +65,7 @@ async def get_routine_schedule(
     Includes ``recent_runs``: the newest run-ledger rows (completed / failed /
     interrupted / missed / running).
     """
-    user_id = user["id"]
-    await _validate_ownership(user_id, project_id, routine_id)
+    await _validate_ownership(user, project_id, routine_id)
 
     schedule = await get_schedule_for_routine(routine_id, include_runs=True)
     if not schedule:
@@ -86,7 +85,7 @@ async def create_routine_schedule(
 ):
     """Create a schedule for a routine."""
     user_id = user["id"]
-    await _validate_ownership(user_id, project_id, routine_id)
+    await _validate_ownership(user, project_id, routine_id)
 
     try:
         # Convert local time to UTC for daily / weekly schedules
@@ -123,7 +122,7 @@ async def update_routine_schedule(
 ):
     """Update a routine's schedule."""
     user_id = user["id"]
-    await _validate_ownership(user_id, project_id, routine_id)
+    await _validate_ownership(user, project_id, routine_id)
 
     schedule = await get_schedule_for_routine(routine_id)
     if not schedule:
@@ -190,8 +189,7 @@ async def delete_routine_schedule(
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
     """Delete a routine's schedule."""
-    user_id = user["id"]
-    await _validate_ownership(user_id, project_id, routine_id)
+    await _validate_ownership(user, project_id, routine_id)
 
     deleted = await delete_schedule_for_routine(routine_id)
     if not deleted:
@@ -203,16 +201,16 @@ async def delete_routine_schedule(
     return {"success": True}
 
 
-async def _validate_ownership(user_id: int, project_id: str, routine_id: str):
-    """Validate that the user owns the project and the routine belongs to it."""
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+async def _validate_ownership(user: dict, project_id: str, routine_id: str):
+    """Validate that the user owns the project and the routine belongs to it.
 
-    routine = await get_routine(user_id, routine_id)
+    Also refuses public projects while routines there are gated off for the
+    user (``get_routine_project``), so a schedule cannot be created or
+    edited for a routine that is not allowed to run.
+    """
+    await get_routine_project(user, project_id)
+
+    routine = await get_routine(user["id"], routine_id)
     if not routine or routine["project_id"] != project_id:
         raise HTTPException(
             status_code=404,

@@ -60,7 +60,11 @@ class TestRoutineSummaryIncludesAllFields:
             model="gemini-3.1-pro-preview",
         )
         result = _routine_summary(routine)
-        expected_keys = {"id", "project_id", "user_id", "name", "prompt", "guide_id", "model"}
+        expected_keys = {
+            "id", "project_id", "user_id", "name", "prompt", "guide_id", "model",
+            # Joined project / owner fields for the public-project routines gate.
+            "project_public", "user_email",
+        }
         assert set(result.keys()) == expected_keys
         assert result["id"] == "routine-123"
         assert result["project_id"] == "proj-456"
