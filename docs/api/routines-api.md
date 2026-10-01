@@ -12,7 +12,7 @@ The agent has its own project-scoped surfaces over the same data: the read-only 
 
 ## Authentication
 
-All routine endpoints support dual authentication: session cookie OR API key Bearer token (same as other `/app/api/*` endpoints). See [Chat API Authentication](chat-api.md) for details. All endpoints validate that the authenticated user owns the specified project.
+All routine endpoints support dual authentication: session cookie OR API key Bearer token (same as other `/app/api/*` endpoints). See [Chat API Authentication](chat-api.md) for details. All endpoints validate that the authenticated user owns the specified project via `get_routine_project()` in `chat/routine_routes.py`, which also returns 400 `public_project_routines_disabled` for a public project unless the admin `public_project_routines` feature gate is open for the user (the list endpoint returns an empty list instead; see [feature-gates.md](../architecture/feature-gates.md)). In a public project, enabling a skill auto-load 400s `public_project_no_skills`.
 
 ## Routine Endpoints
 

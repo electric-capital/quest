@@ -389,6 +389,11 @@ async def create_project_conversation(
                 status_code=404,
                 detail={"error": "not_found", "message": "Routine not found"},
             )
+        # One-click run of a routine in a public project: refused while
+        # routines there are gated off for this user (the same gate the
+        # scheduler and run_conversation_turn enforce).
+        from chat.routine_routes import require_project_routines_allowed
+        require_project_routines_allowed(project, user)
 
     conversation_id, created_at_str = await ChatStorage.create_project_conversation(
         user_id, project_id, routine_id=body.routine_id,

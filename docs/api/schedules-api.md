@@ -10,7 +10,7 @@ Each routine can have at most one schedule. Four schedule types are supported: `
 
 ## Authentication
 
-All schedule endpoints support dual authentication: session cookie OR API key Bearer token (same as other `/app/api/*` endpoints). See [Chat API Authentication](chat-api.md) for details. All endpoints validate project and routine ownership via `_validate_ownership()` in `chat/schedule_routes.py`.
+All schedule endpoints support dual authentication: session cookie OR API key Bearer token (same as other `/app/api/*` endpoints). See [Chat API Authentication](chat-api.md) for details. All endpoints validate project and routine ownership via `_validate_ownership()` in `chat/schedule_routes.py`, which shares `get_routine_project()` with the routine routes: schedules of a public project's routines return 400 `public_project_routines_disabled` unless the admin `public_project_routines` feature gate is open for the user.
 
 ## Schedule Endpoints
 

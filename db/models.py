@@ -506,8 +506,9 @@ class Project(Base):
     # Conversations in a public project run with internet-enabled sandboxing
     # and are cut off from internal resources (skills, memories, connectors,
     # action requests) so a public project can never become a
-    # data-exfiltration path. Public projects cannot have routines or
-    # project skills.
+    # data-exfiltration path. Public projects cannot have project skills,
+    # and have routines only behind the ``public_project_routines`` feature
+    # gate.
     public: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=False, server_default=sa.false()
     )

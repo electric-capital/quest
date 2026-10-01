@@ -7,26 +7,45 @@ import { createRoutine, ApiClientError } from '../api/client';
 import type { Guide } from '../api/types';
 import { useConversationContext } from '../contexts/ConversationContext';
 import { getSelectableModels } from '../constants/models';
+import type { ModelInfo } from '../constants/models';
 import { ModalShell } from './ModalShell';
 import './NewRoutineModal.css';
 
 interface NewRoutineModalProps {
   isOpen: boolean;
   projectId: string | null;
+  /**
+   * The routine is being created in a PUBLIC project: its runs are
+   * public-project conversations, so only models the admin allows there
+   * are offered and the guide override (never applied in public
+   * conversations) is hidden.
+   */
+  isPublicProject?: boolean;
   onClose: () => void;
   onRoutineCreated: () => void;
 }
 
-export function NewRoutineModal({ isOpen, projectId, onClose, onRoutineCreated }: NewRoutineModalProps) {
+const DEFAULT_ROUTINE_MODEL = 'gemini-3.5-flash-lite';
+
+/** The usual routine default when offered, else the first offered model. */
+function defaultRoutineModel(models: ModelInfo[]): string {
+  if (models.some((m) => m.id === DEFAULT_ROUTINE_MODEL) || models.length === 0) {
+    return DEFAULT_ROUTINE_MODEL;
+  }
+  return models[0].id;
+}
+
+export function NewRoutineModal({ isOpen, projectId, isPublicProject = false, onClose, onRoutineCreated }: NewRoutineModalProps) {
   const { guides, enabledFeatures } = useConversationContext();
   // Guide overrides exist only while the admin `guides` feature gate is on
   // for this user (POST /routines 403s a guide_id otherwise).
-  const guidesEnabled = enabledFeatures.includes('guides');
+  const guidesEnabled = enabledFeatures.includes('guides') && !isPublicProject;
+  const selectableModels = getSelectableModels(isPublicProject ? 'public' : 'private');
 
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
   const [guideId, setGuideId] = useState<string | null>(null);
-  const [model, setModel] = useState<string>('gemini-3.5-flash-lite');
+  const [model, setModel] = useState<string>(DEFAULT_ROUTINE_MODEL);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -37,11 +56,11 @@ export function NewRoutineModal({ isOpen, projectId, onClose, onRoutineCreated }
       setName('');
       setPrompt('');
       setGuideId(null);
-      setModel('gemini-3.5-flash-lite');
+      setModel(defaultRoutineModel(getSelectableModels(isPublicProject ? 'public' : 'private')));
       setError(null);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
-  }, [isOpen]);
+  }, [isOpen, isPublicProject]);
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -151,7 +170,7 @@ export function NewRoutineModal({ isOpen, projectId, onClose, onRoutineCreated }
           onChange={(e) => setModel(e.target.value)}
           disabled={isCreating}
         >
-          {getSelectableModels().map((m) => (
+          {selectableModels.map((m) => (
             <option key={m.id} value={m.id}>{m.name}</option>
           ))}
         </select>

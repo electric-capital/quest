@@ -89,6 +89,12 @@ function renderRoutineSkillCard(
 interface RoutineSettingsModalProps {
   isOpen: boolean;
   projectId: string | null;
+  /**
+   * The routine lives in a PUBLIC project: its runs are public-project
+   * conversations, so only models the admin allows there are offered and
+   * the Skills section (public conversations load no skills) is hidden.
+   */
+  isPublicProject?: boolean;
   routine: Routine | null;
   onClose: () => void;
   onRoutineUpdated: () => void;
@@ -100,6 +106,7 @@ interface RoutineSettingsModalProps {
 export function RoutineSettingsModal({
   isOpen,
   projectId,
+  isPublicProject = false,
   routine,
   onClose,
   onRoutineUpdated,
@@ -107,6 +114,7 @@ export function RoutineSettingsModal({
   onOpenRunConversation,
 }: RoutineSettingsModalProps) {
   const { guides, enabledFeatures } = useConversationContext();
+  const selectableModels = getSelectableModels(isPublicProject ? 'public' : 'private');
   // While the admin `guides` feature gate is closed the guide list is not
   // loaded and a leftover override is ignored at run time; the block below
   // still shows so the user can clear it.
@@ -635,12 +643,14 @@ export function RoutineSettingsModal({
             >
               Schedule
             </button>
-            <button
-              className={`routine-settings-nav-item ${activeSection === 'skills' ? 'active' : ''}`}
-              onClick={() => setActiveSection('skills')}
-            >
-              Skills
-            </button>
+            {!isPublicProject && (
+              <button
+                className={`routine-settings-nav-item ${activeSection === 'skills' ? 'active' : ''}`}
+                onClick={() => setActiveSection('skills')}
+              >
+                Skills
+              </button>
+            )}
             <button
               className={`routine-settings-nav-item ${activeSection === 'costs' ? 'active' : ''}`}
               onClick={() => {
@@ -753,10 +763,10 @@ export function RoutineSettingsModal({
                   {/* Keep the routine's current model selectable when it is
                       deprecated (no longer offered for new picks) so saving
                       unrelated edits doesn't silently switch the model. */}
-                  {model && !getSelectableModels().some((m) => m.id === model) && (
+                  {model && !selectableModels.some((m) => m.id === model) && (
                     <option value={model}>{getModelDisplayName(model)} (deprecated)</option>
                   )}
-                  {getSelectableModels().map((m) => (
+                  {selectableModels.map((m) => (
                     <option key={m.id} value={m.id}>{m.name}</option>
                   ))}
                 </select>

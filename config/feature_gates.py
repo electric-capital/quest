@@ -51,6 +51,18 @@ FEATURE_USER_SUBAGENTS = "user_subagents"
 # outside the allowed list the gate behaves exactly as if it were closed.
 FEATURE_PUBLIC_PROJECTS = "public_projects"
 
+# Routines in public projects: a sub-gate of FEATURE_PUBLIC_PROJECTS. A
+# routine in a public project runs in the internet-enabled sandbox, and a
+# scheduled one does so unattended, so public projects have no routines
+# unless an admin opts in here. Closed for a user = the Routines section is
+# hidden in their public projects, the routine/schedule API refuses those
+# projects, one-click runs are refused, the scheduler skips their schedules
+# and run_conversation_turn refuses turns in routine-created conversations.
+# Nothing is deleted: the routine and schedule rows are preserved, so
+# reopening the gate restores them. Only effective while the user also has
+# FEATURE_PUBLIC_PROJECTS (see public_project_routines_enabled_for).
+FEATURE_PUBLIC_PROJECT_ROUTINES = "public_project_routines"
+
 # Legacy guides (see docs/architecture/guides.md): named system-prompt
 # presets deprecated in favor of skills. The gate exists so an existing
 # install can keep guides alive while its users migrate; new setups leave
@@ -81,6 +93,7 @@ FEATURE_VOICE_INPUT = "voice_input"
 KNOWN_FEATURES = (
     FEATURE_USER_SUBAGENTS,
     FEATURE_PUBLIC_PROJECTS,
+    FEATURE_PUBLIC_PROJECT_ROUTINES,
     FEATURE_GUIDES,
     FEATURE_VOICE_INPUT,
 )
@@ -91,6 +104,7 @@ KNOWN_FEATURES = (
 # ambiguous about which side it restricts.
 PER_USER_ACCESS_FEATURES = frozenset({
     FEATURE_PUBLIC_PROJECTS,
+    FEATURE_PUBLIC_PROJECT_ROUTINES,
     FEATURE_GUIDES,
     FEATURE_VOICE_INPUT,
 })
@@ -114,6 +128,19 @@ FEATURE_LABELS: dict[str, dict[str, str]] = {
             "to specific users. Turning this off (or removing a user from "
             "the list) hides the affected public projects and blocks new "
             "turns in their conversations until access is restored."
+        ),
+    },
+    FEATURE_PUBLIC_PROJECT_ROUTINES: {
+        "label": "Routines in public projects",
+        "description": (
+            "Lets users create, run and schedule routines in public "
+            "projects. Scheduled routines there run unattended in the "
+            "internet-enabled sandbox. Only applies to users who also have "
+            "access to Public projects. Access can be granted to all users "
+            "or only to specific users. Turning this off (or removing a "
+            "user from the list) hides the routines in the affected public "
+            "projects and stops them from running, including scheduled "
+            "runs, until access is restored."
         ),
     },
     FEATURE_GUIDES: {
@@ -151,6 +178,22 @@ def guides_enabled_for(user_email: str) -> bool:
     the conversation-loop guide resolution, the settings sync).
     """
     return is_feature_enabled_for_user(FEATURE_GUIDES, user_email)
+
+
+def public_project_routines_enabled_for(user_email: str) -> bool:
+    """Whether this user's public projects may have (and run) routines.
+
+    Requires both gates: a user without public-project access has no
+    visible public projects, so their routines must not run either. Shared
+    by every enforcement point (routine/schedule routes, one-click runs,
+    the scheduler, run_conversation_turn).
+    """
+    return (
+        is_feature_enabled_for_user(FEATURE_PUBLIC_PROJECTS, user_email)
+        and is_feature_enabled_for_user(
+            FEATURE_PUBLIC_PROJECT_ROUTINES, user_email
+        )
+    )
 
 
 def _normalize_email(email: str) -> str:

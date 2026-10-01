@@ -10,7 +10,7 @@ Projects can also have Skills -- reusable instruction definitions scoped to the 
 
 Projects can also have Routines -- canned prompts that create a new conversation and auto-send a prompt in one click. Routines can optionally have automatic schedules attached, allowing them to run on a timer without user interaction. See [Routines Architecture](routines.md) for the full routines documentation and [Scheduling Architecture](scheduling.md) for the scheduling system.
 
-A project can be created as a **public project**: an immutable creation-time mode (`projects.public`) that gives its conversations an internet-enabled script sandbox while cutting them off from every internal resource (skills, memories, connectors, action requests, sub-agents). Public projects cannot have routines or project skills, and cannot be created from an existing conversation. See [Public Projects Architecture](public-projects.md).
+A project can be created as a **public project**: an immutable creation-time mode (`projects.public`) that gives its conversations an internet-enabled script sandbox while cutting them off from every internal resource (skills, memories, connectors, action requests, sub-agents). Public projects cannot have project skills, cannot be created from an existing conversation, and have routines only while the admin `public_project_routines` feature gate is open for the user. See [Public Projects Architecture](public-projects.md).
 
 Standalone conversations (not in a project) continue to work exactly as before: each has its own workspace at `data/chats/{conversation_id}/workspace/`.
 

@@ -19,7 +19,9 @@ from sqlalchemy import select, delete, update as sa_update
 from sqlalchemy.exc import IntegrityError
 
 from db.engine import AsyncSessionLocal
-from db.models import RoutineSchedule, RoutineScheduleRun, Routine
+from db.models import (
+    Project, Routine, RoutineSchedule, RoutineScheduleRun, User,
+)
 from db import schedule_timing
 
 logger = logging.getLogger(__name__)
@@ -247,12 +249,16 @@ async def list_enabled_schedules() -> list[dict]:
     """List all enabled schedules (used by the scheduler daemon).
 
     Returns schedules joined with routine data (routine name, prompt, guide_id,
-    project_id) so the scheduler has everything it needs to execute runs.
+    project_id, plus the project's public flag and the owner's email for the
+    public-project routines gate) so the scheduler has everything it needs
+    to execute runs.
     """
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            select(RoutineSchedule, Routine)
+            select(RoutineSchedule, Routine, Project.public, User.email)
             .join(Routine, RoutineSchedule.routine_id == Routine.id)
+            .outerjoin(Project, Routine.project_id == Project.id)
+            .outerjoin(User, Routine.user_id == User.id)
             .where(RoutineSchedule.is_enabled == True)
         )
         rows = result.all()
@@ -262,9 +268,9 @@ async def list_enabled_schedules() -> list[dict]:
                 # Raw column (the public ``next_due_at`` fills in a computed
                 # value when NULL); the scheduler initializes NULL rows.
                 "next_due_at_stored": _iso(schedule_timing.as_utc(sched.next_due_at)),
-                "routine": _routine_summary(routine),
+                "routine": _routine_summary(routine, project_public, user_email),
             }
-            for sched, routine in rows
+            for sched, routine, project_public, user_email in rows
         ]
 
 
@@ -442,9 +448,14 @@ async def list_interrupted_runs() -> list[dict]:
     """Interrupted runs that still have attempts left, with schedule + routine."""
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            select(RoutineScheduleRun, RoutineSchedule, Routine)
+            select(
+                RoutineScheduleRun, RoutineSchedule, Routine,
+                Project.public, User.email,
+            )
             .join(RoutineSchedule, RoutineScheduleRun.schedule_id == RoutineSchedule.id)
             .join(Routine, RoutineSchedule.routine_id == Routine.id)
+            .outerjoin(Project, Routine.project_id == Project.id)
+            .outerjoin(User, Routine.user_id == User.id)
             .where(
                 RoutineScheduleRun.status == "interrupted",
                 RoutineScheduleRun.attempt < MAX_RUN_ATTEMPTS,
@@ -454,9 +465,12 @@ async def list_interrupted_runs() -> list[dict]:
         return [
             {
                 **_run_to_dict(run),
-                "schedule": {**_schedule_to_dict(schedule), "routine": _routine_summary(routine)},
+                "schedule": {
+                    **_schedule_to_dict(schedule),
+                    "routine": _routine_summary(routine, project_public, user_email),
+                },
             }
-            for run, schedule, routine in result.all()
+            for run, schedule, routine, project_public, user_email in result.all()
         ]
 
 
@@ -610,8 +624,17 @@ def _run_to_dict(run: RoutineScheduleRun) -> dict:
     }
 
 
-def _routine_summary(routine: Routine) -> dict:
-    """Extract the routine fields needed by the scheduler."""
+def _routine_summary(
+    routine: Routine,
+    project_public: bool = False,
+    user_email: Optional[str] = None,
+) -> dict:
+    """Extract the routine fields needed by the scheduler.
+
+    ``project_public`` / ``user_email`` come from the joined project and
+    owner rows: the scheduler skips schedules of public-project routines
+    while that feature is gated off for the owner.
+    """
     return {
         "id": routine.id,
         "project_id": routine.project_id,
@@ -620,4 +643,6 @@ def _routine_summary(routine: Routine) -> dict:
         "prompt": routine.prompt,
         "guide_id": routine.guide_id,
         "model": routine.model,
+        "project_public": bool(project_public),
+        "user_email": user_email,
     }

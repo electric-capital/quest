@@ -42,6 +42,10 @@ const PROJECT_CONVERSATIONS_POLL_INTERVAL_MS = 30_000;
 /** Page size for the paged top-level conversation list. */
 const CONVERSATIONS_PAGE_SIZE = 30;
 
+// Server-global feature gate key for routines in public projects
+// (config/feature_gates.py FEATURE_PUBLIC_PROJECT_ROUTINES).
+const PUBLIC_PROJECT_ROUTINES_FEATURE = 'public_project_routines';
+
 // --- Routine conversation grouping types and helpers ---
 
 interface RoutineConversationGroup {
@@ -309,7 +313,17 @@ export const Sidebar = React.memo(function Sidebar({ activeConversationId, onCon
     setScrollToMessageIndex,
     updateAvailable,
     appName,
+    enabledFeatures,
   } = useConversationContext();
+  // Public projects get routines only while an admin has the
+  // public_project_routines feature gate open for this user (the routine
+  // API and the scheduler enforce the same gate).
+  const publicRoutinesEnabled = enabledFeatures.includes(PUBLIC_PROJECT_ROUTINES_FEATURE);
+  // The routine modals trim themselves for a public project (public model
+  // list, no skill auto-loads or guide override).
+  const drilledProjectIsPublic = Boolean(
+    projects.find((p) => p.id === drilledProjectId)?.public,
+  );
 
   const navigate = useNavigate();
 
@@ -1439,8 +1453,9 @@ export const Sidebar = React.memo(function Sidebar({ activeConversationId, onCon
                     ) : (
                       <>
                         {/* Routines section -- hidden for public projects
-                            (the API rejects routine creation there) */}
-                        {!project.public && (
+                            unless the public_project_routines feature gate
+                            is open (the API rejects routines there otherwise) */}
+                        {(!project.public || publicRoutinesEnabled) && (
                         <div className="routines-section">
                           <div className="section-header">
                             <div className="section-label">Routines</div>
@@ -1833,6 +1848,7 @@ export const Sidebar = React.memo(function Sidebar({ activeConversationId, onCon
       <NewRoutineModal
         isOpen={showNewRoutineModal}
         projectId={drilledProjectId}
+        isPublicProject={drilledProjectIsPublic}
         onClose={() => setShowNewRoutineModal(false)}
         onRoutineCreated={handleRoutineCreated}
       />
@@ -1840,6 +1856,7 @@ export const Sidebar = React.memo(function Sidebar({ activeConversationId, onCon
       <RoutineSettingsModal
         isOpen={settingsRoutine !== null}
         projectId={drilledProjectId}
+        isPublicProject={drilledProjectIsPublic}
         routine={settingsRoutine}
         onClose={() => setSettingsRoutine(null)}
         onRoutineUpdated={handleRoutineUpdated}

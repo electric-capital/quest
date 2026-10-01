@@ -223,6 +223,7 @@ Routine names should be unique within a project, not globally per user. Differen
 - Routines are deleted when the parent project is deleted (via `ON DELETE CASCADE` FK on `routines.project_id`)
 - Routines are deleted when the owner's account is deleted (via explicit `delete_all_user_routines()` call and `ON DELETE CASCADE` FK on `routines.user_id`)
 - Deleting a guide sets `routines.guide_id` to NULL (via `ON DELETE SET NULL` FK)
+- Public projects have routines only while the admin `public_project_routines` feature gate is open for the user (API, one-click runs, scheduler and UI all gated -- see [feature-gates.md](feature-gates.md)); a routine there has no skill auto-loads or guide override, and its model list is the public-allowed one
 - The `routines` table and its indexes are created by the Alembic migration `6766d7c126ba`; the `model` column is added by migration `ae661b3ecf4c`
 - Running a routine manually does not use a dedicated backend endpoint; it composes existing conversation creation (with `routine_id`) and WebSocket message sending
 - Conversations created by a routine (manual or scheduled) have `routine_id` set on the `conversations` table; the `routine_id` FK uses `ON DELETE SET NULL` so deleting a routine preserves its conversations
