@@ -269,21 +269,31 @@ The `stopStreaming(conversationId)` method sends `{op: "stop", conversation_id}`
 
 ### Persistent WebSocket Connection Management
 
-`ConversationContext.tsx` calls `persistentWebSocket.connect()` once when `isAuthenticated` becomes true and `disconnect()` on logout / account-delete. The socket is shared across every conversation: subscribing to a conversation is `persistentWebSocket.subscribe(id)`.
+`AuthContext.tsx` calls `persistentWebSocket.connect()` once when `isAuthenticated` becomes true and `disconnect()` on logout / account-delete. The socket is shared across every conversation: subscribing to a conversation is `persistentWebSocket.subscribe(id)`.
 
 Subscriptions live until the 5-min server-side TTL expires (the singleton refreshes every 3 min while interested), so the React lifecycle does NOT fire `unsubscribe` on tab switch / unmount -- transient `text_delta` events for the away-conversation still land in the conversation store.
 
 Explicit `persistentWebSocket.unsubscribe(id)` exists for genuine teardown but is not on the lifecycle path. Reconnect / heartbeat / watchdog / subscription refresh are owned by the singleton (see [Realtime Architecture](realtime.md)).
 
-### Conversation Context (`src/contexts/ConversationContext.tsx`)
+### Application Contexts (`src/contexts/`)
 
-React context that provides application-wide conversation state.
+App-wide state is split into one React context per responsibility, composed by `AppProviders.tsx` (App.tsx wraps the routes in `<AppProviders>`). Every provider memoizes its `value`, and because each context holds only one kind of state, a consumer re-renders only when the state it actually reads changes -- a file-browser folder click no longer re-renders the sign-in screen, the composer or the sidebar. There is no umbrella hook: each component imports the hook(s) for the slices it needs (`useAuth()`, `useAppConfig()`, ...). Provider order in `AppProviders` matters only where one provider reads another: `AuthProvider` reads `AppConfigContext`; `AppearanceProvider`, `ProjectsProvider`, `GuidesProvider` and `ConversationModelsProvider` read `AuthContext` (and `ConversationModelsProvider` reads `AppConfigContext`).
 
-**Provided Values**:
-- `activeConversationId`: Currently selected conversation ID
-- `setActiveConversationId`: Function to change active conversation
-- `isAuthenticated`: Whether the user has a valid session
-- `isCheckingAuth`: Whether the session check is in progress
+| Context (hook) | Owns |
+|----------------|------|
+| `AppConfigContext.tsx` (`useAppConfig`) | Unauthenticated `GET /app/api/config` state: `appName`, `isDevMode`, `loginRestriction`, `loginMethod`, `passwordSelfService`, `availableModelIds` (+ `getAvailableModelIds()` ref read for async code), `refreshModelCatalog()`; the `whenConfigLoaded` promise other providers await; the `GET /app/api/version` redeploy poll (`updateAvailable`) |
+| `AuthContext.tsx` (`useAuth`) | The mount-time session check: `isAuthenticated`, `isCheckingAuth`, `userEmail`, `userName`, `isAdmin`, `enabledFeatures` + `refreshEnabledFeatures()`, `hasPassword`, `googleServicesConnected` / `hasAnyServiceConnected` + `refreshConnectionStatus()`, impersonation fields, and `sessionSnapshot` (the raw `GET /me` payload, set once by the mount-time check so Appearance / ConversationModels can hydrate from it). Also opens the persistent WebSocket when `isAuthenticated` turns true and closes it on sign-out |
+| `AppearanceContext.tsx` (`useAppearance`) | `theme` / `setTheme`, `colorTheme` / `setColorTheme` (details below) |
+| `NavigationContext.tsx` (`useNavigationState`) | `activeConversationId` (URL mirror), `showRequestsView`, `scrollToMessageIndex`, `isSettingsOpen` / `settingsInitialSection`, and the one-shot hand-offs `pendingRoutineMessage` (Sidebar routine run -> ChatPanel auto-send) and `pendingFirstMessage` (HomeComposer -> ChatPanel first send) |
+| `ProjectsContext.tsx` (`useProjects`) | `projects` / `projectsLoaded` / `loadProjects()` (loaded once authenticated), URL-mirrored `activeProjectId`, Sidebar `drilledProjectId` |
+| `GuidesContext.tsx` (`useGuides`) | Deprecated guide list `guides` / `guidesLoaded` / `loadGuides()`; fetched only while the `guides` feature gate is on for the user, cleared when it closes |
+| `ConversationModelsContext.tsx` (`useConversationModels`) | Default models + per-conversation overrides + provider locks (details below) |
+| `ConversationSkillsContext.tsx` (`useConversationSkills`) | Per-conversation queued / loaded skill ids (`get/setQueuedSkillsForConversation`, `get/setLoadedSkillsForConversation`, `markSkillsAsLoaded`) |
+| `FileBrowserStateContext.tsx` (`useFileBrowserState`) | Per-conversation file-browser path + history (`getFileBrowserState` / `setFileBrowserState`), used by `useFileBrowser` |
+
+**Boot order.** `AppConfigProvider` fetches the config and the initial version hash on mount and exposes `whenConfigLoaded`. `AuthProvider` runs `checkSession()` concurrently but awaits `whenConfigLoaded` before committing any session state, so `isCheckingAuth` only turns false once `loginMethod` is known (the sign-in screen never flashes the wrong form) and everything hydrated from the session sees the credentialed-model list. `ConversationModelsProvider` hydrates its defaults from `sessionSnapshot` as a render-time state adjustment rather than in an effect, so the first authenticated render already shows the user's stored default instead of the placeholder; `AppearanceProvider` applies the server theme in an effect (the localStorage cache has already set the pre-paint attribute). Unit tests for these boundaries live in `src/contexts/AppProviders.test.tsx` (`npm test`).
+
+**ConversationModelsContext values**:
 - `defaultModels` / `defaultModel`: Per-user "last-used" LLM model for new conversations, tracked separately per conversation visibility (`ModelVisibility` in `frontend/src/constants/models.ts`): `private` (`users.settings.default_model`, every conversation outside a public project) and `public` (`users.settings.public_default_model`, public-project conversations, whose admin allow-list differs -- see [Model Selection](model-selection.md)). `defaultModel` is the private one.
   - Sourced only from a fresh `GET /app/api/me` fetch (no localStorage); a stored pick that is unset/unknown/deprecated/disallowed-for-the-visibility/uncredentialed falls through (`resolveDefaultModel` -> `isModelSelectableFor`): the public context tries `public_default_model` then `default_model` (a first public project starts on the user's usual model when the admin allows it there), the private context only `default_model`; the final fallback is `resolveFallbackModel(availableIds, visibility)` -- Opus 4.8 (`DEFAULT_MODEL_ID`) when allowed + credentialed, else the admin's first top-level menu pick for that visibility, else the first offerable model in catalog order (e.g. Gemini 3.5 Flash-Lite on a Gemini-only local instance -- deprecated models are never picked).
   - Credentialed-ness comes from `available_models` on `GET /app/api/config`; resolution awaits the mount-time config fetch, and if that fetch fails the list stays `null` and availability is not checked.
@@ -291,50 +301,27 @@ React context that provides application-wide conversation state.
 - `setDefaultModel(model, visibility?)`: In-memory-only setter reflecting a picker change in the current composer's display. Does NOT write the server default or localStorage
 - `refreshDefaultModel(visibility?)`: Async; re-fetches `GET /app/api/me` and re-applies the resolved pick for that visibility (private when omitted). Called on every fresh new-chat composer mount (home composer + new empty per-conversation composer) AND on every private<->public context switch of a mounted composer -- `HomeComposer.tsx` re-runs it when the drilled project's `public` flag changes (drilling into / out of a public project keeps the home composer mounted) and re-seeds the draft-keyed selection with the result, `ChatPanel.tsx` re-runs it for an empty conversation when its asynchronous project fetch flips `isPublicProject` and seeds the conversation-keyed selection; a resolution for the previous context is discarded. Resolves to the resolved model id
 - `persistDefaultModel(model, visibility?)`: Best-effort fire-and-forget `PUT /app/api/settings { default_model }` (private) or `{ public_default_model }` (public). The ONLY server write of either key; called exclusively from the two first-send choke points (never on mere picker selection). The home flow carries `isPublicProject` on `pendingFirstMessage` so ChatPanel persists under the right key before its own project fetch resolves
+- `setDefaultModel(model, visibility?)`: In-memory-only setter reflecting a picker change in the current composer's display. Does NOT write the server default or localStorage
+- `getModelForConversation(conversationId)` / `setModelForConversation(conversationId, model)` / `hydrateModelForConversation(conversationId, model)`: the per-conversation override (`setModelForConversation` PATCHes `/conversations/{id}/model`; `hydrate*` only sets the in-memory value from a server response). Deprecated ids are remapped on read via `DEPRECATED_MODEL_MAP`
+- `setDraftModelForConversation(conversationId, model, visibility?)`: Draft-safe model setter for the home composer -- updates the in-memory per-conversation model map (and the visibility's default for display) but does NOT PATCH the server and does NOT persist the user-level default (the draft "conversation" doesn't exist yet; the default is persisted only on first send via `persistDefaultModel`). No localStorage
+- `getLockedProvider(conversationId)` / `lockConversationProvider(conversationId, provider)` / `isProviderLocked(conversationId)`: per-conversation provider locks, persisted in localStorage under `quest_locked_providers`. The lazy initializer migrates the pre-rename `praixy_locked_providers` key and strips any legacy `HOME_DRAFT_KEY` entry on load (see Provider Locking under the Model Selector section)
+
+**AppearanceContext values**:
 - `theme` / `setTheme`: Settings > Appearance colour scheme (`'light' | 'dark' | 'auto'`, helpers in `frontend/src/utils/theme.ts`).
   - Boots from the `quest_theme` localStorage cache (an inline `<script>` in `frontend/index.html` has already applied it to `<html data-theme>` before the first paint, so a forced scheme never flashes the OS scheme), then re-synced from `theme` on `GET /app/api/me` -- the server value in `users.settings.theme` is the source of truth and follows the user across devices.
   - `setTheme` applies the attribute immediately (auto removes it), updates the cache, and persists via `PUT /app/api/settings { theme }`, rejecting on a failed save so `AppearanceSection.tsx` can show the error while the local choice stays applied.
   - `index.css` also sets `color-scheme: light|dark` on `:root[data-theme]` so native controls and scrollbars match; the media-query side is handled by the build-time theme override plugin (see Vite Configuration)
 - `colorTheme` / `setColorTheme`: Settings > Appearance colour theme (`'prototype' | 'electric-blue' | 'alloy' | 'recall'`, registry + helpers in `frontend/src/utils/colorTheme.ts`). Same cycle as `theme`: boots from the `quest_color_theme` localStorage cache (the `index.html` boot script sets `<html data-color-theme>` pre-paint; the default `prototype` is never cached), re-synced from `color_theme` on `GET /app/api/me` (`users.settings.color_theme`, `null` = default), and persisted via `PUT /app/api/settings { color_theme }` (server validates against `COLOR_THEME_CHOICES`, `""` clears). `applyColorTheme` also keeps the `<meta name="theme-color">` in step with the computed `--accent`
-- `userEmail`: Current user's email (fetched via `GET /app/api/me`)
-- `userName`: Current user's display name (fetched via `GET /app/api/me`)
-- `googleServicesConnected`: Whether Google Services OAuth is connected (fetched via `GET /app/api/me`)
-- `isSettingsOpen`: Whether the settings modal is currently open
-- `setSettingsOpen`: Function to open/close the settings modal
-- `appName`: Application display name (`"DevQuest"` when `QUEST_ENV=dev`, `"Quest"` otherwise), fetched from `GET /app/api/config` on mount
-- `isDevMode`: Boolean indicating whether the app is running in dev mode (`QUEST_ENV=dev`). Used by `SignInScreen` to conditionally render the dev email login form
-- `showRequestsView`: Whether the Requests single-pane view is displayed
-- `setShowRequestsView`: Function to toggle the Requests view
-- `scrollToMessageIndex`: Target message index to scroll to (set by search result navigation, consumed by ChatPanel)
-- `setScrollToMessageIndex`: Function to set the scroll target message index
-- `getLockedProvider(conversationId)`: Returns the locked provider name for a conversation, or `null` if unlocked
-- `lockConversationProvider(conversationId, provider)`: Locks a conversation to a specific provider (e.g., `"gemini"` or `"anthropic"`)
-- `isProviderLocked(conversationId)`: Returns whether a conversation's provider is locked
-- `getQueuedSkillsForConversation(conversationId)`: Returns skill IDs queued (selected but not yet sent) for a conversation
-- `setQueuedSkillsForConversation(conversationId, skillIds)`: Sets queued skill IDs for a conversation
-- `setDraftModelForConversation(conversationId, model)`: Draft-safe model setter for the home composer -- updates the in-memory per-conversation model map (and `defaultModel` for display) but does NOT PATCH the server and does NOT persist the user-level default (the draft "conversation" doesn't exist yet; the default is persisted only on first send via `persistDefaultModel`). No localStorage
-- `pendingFirstMessage` / `setPendingFirstMessage`: First-message carry-forward field set by `HomeComposer` and consumed by `ChatPanel`'s auto-send effect (shape `{ conversationId, prompt, model, skillIds, flags, attachedFilenames }`); distinct from `pendingRoutineMessage` because it carries model + skillIds + flags, plus `attachedFilenames` (workspace-relative names of files uploaded before the first send; see the HomeComposer first-send flow)
-- `updateAvailable`: Boolean indicating the server has been redeployed since the page was loaded (triggers a reload banner in the Sidebar)
-- `getLoadedSkillsForConversation(conversationId)`: Returns skill IDs already loaded (sent) in a conversation
-- `setLoadedSkillsForConversation(conversationId, skillIds)`: Sets loaded skill IDs for a conversation (used for hydration from server)
-- `isImpersonating`: Whether the current session is an admin impersonating another user (from `GET /app/api/me`)
-- `impersonatorEmail`: Email of the impersonating admin, or `null` (from `GET /app/api/me`)
-- `impersonatorName`: Display name of the impersonating admin, or `null` (from `GET /app/api/me`)
 
-**Automatic Behaviors**:
-- Fetches app config via `GET /app/api/config` on mount (unauthenticated) to determine `appName` and `isDevMode`
-- Fetches server git hash via `fetchVersion()` on mount (unauthenticated; the same `GET /app/api/version` response also carries the release `version`/`tag`/`released`/`commits_since_tag` fields that `AboutSection.tsx` fetches on its own mount to show the tagged release -- see [Development Workflows -- Releases](../setup/development-workflows.md#releases)) and stores it in a ref.
-  - Polls `GET /app/api/version` every 60 seconds (`VERSION_POLL_INTERVAL_MS`) to detect server redeployments. When the hash changes, sets `updateAvailable` to `true` and stops polling.
-  - Polling is skipped when the browser tab is hidden (`document.hidden`); an immediate check runs when the tab becomes visible via `visibilitychange` event.
-  - If the initial fetch fails, the hash ref stays `null` and polling is a no-op
-- Checks session via `checkSession()` on mount (calls `GET /app/api/me` with cookie)
-- Sets `isAuthenticated` and stores `userEmail`, `userName`, and `hasAnyServiceConnected` from session response
-- If `hasAnyServiceConnected` is false, auto-opens the settings modal to the Data Connections section — desktop layout only; the mobile shell never auto-opens settings (its full-screen settings takeover would hijack the first view)
-- Subscribes to `persistentWebSocket.onGlobalEvent` for `conversation_list_changed` to auto-refresh the sidebar (replaces the prior `WebSocketManager.onStreamComplete` re-load)
-- Manages the per-user default model preference: hydrates `defaultModel` from `GET /app/api/me` on auth check, re-fetches it on every fresh new-chat composer mount via `refreshDefaultModel` (cross-tab correctness, no localStorage), and persists the chosen model server-side via `persistDefaultModel` (`PUT /app/api/settings`) only on the first send of a new chat. The per-conversation override (`PATCH /conversations/{id}/model`) is separate and unchanged
-- Remaps deprecated models to their replacements when resolving the default and per-conversation models (via `DEPRECATED_MODEL_MAP` from `frontend/src/constants/models.ts`)
-- Persists per-conversation provider locks in localStorage under `quest_locked_providers`. The lazy initializer strips any legacy `HOME_DRAFT_KEY` entry on load (see Provider Locking under the Model Selector section)
-- Provider `value` is memoized with `useMemo` so consumers only re-render when a value they depend on actually changes, preventing unnecessary render cascades when unrelated provider state updates
+**NavigationContext hand-offs**:
+- `pendingRoutineMessage` / `setPendingRoutineMessage`: `{ conversationId, prompt, guideId }`, set by the Sidebar when a routine is run and consumed by ChatPanel's auto-send effect
+- `pendingFirstMessage` / `setPendingFirstMessage`: First-message carry-forward set by `HomeComposer` and consumed by `ChatPanel`'s auto-send effect (shape `{ conversationId, prompt, model, skillIds, flags, isPublicProject, attachedFilenames, attachments }`); distinct from `pendingRoutineMessage` because it carries model + skillIds + flags, the public-project flag for persisting the right default, the workspace-relative names of files uploaded before the first send, and pasted-image refs (see the HomeComposer first-send flow)
+
+**Automatic behaviors** (by owner):
+- `AppConfigContext`: fetches `GET /app/api/config` on mount (unauthenticated) to determine `appName`, `isDevMode`, the sign-in method and the model catalog (`setModelCatalog()` runs before `availableModelIds` is set, since consumers read the module-state catalog during the re-render); fetches the server git hash via `fetchVersion()` on mount (the same `GET /app/api/version` response also carries the release `version`/`tag`/`released`/`commits_since_tag` fields that `AboutSection.tsx` fetches on its own mount -- see [Development Workflows -- Releases](../setup/development-workflows.md#releases)) and polls it every 60 seconds (`VERSION_POLL_INTERVAL_MS`), skipping hidden tabs and checking immediately on `visibilitychange`; when the hash changes, sets `updateAvailable` and stops polling. If the initial fetch fails, the hash ref stays `null` and polling is a no-op
+- `AuthContext`: checks the session via `checkSession()` on mount (`GET /app/api/me` with cookie), then stores identity / flags and sets `isAuthenticated`. App.tsx auto-opens the settings modal to Data Connections when `hasAnyServiceConnected` is false -- desktop layout only; the mobile shell never auto-opens settings (its full-screen settings takeover would hijack the first view)
+- `ProjectsContext` loads the project list once authenticated; `GuidesContext` loads the guide list while the `guides` gate is on
+- `ConversationModelsContext`: hydrates the per-visibility defaults from the session snapshot, re-fetches them on every fresh new-chat composer mount via `refreshDefaultModel` (cross-tab correctness, no localStorage), and persists the chosen model server-side via `persistDefaultModel` (`PUT /app/api/settings`) only on the first send of a new chat. The per-conversation override (`PATCH /conversations/{id}/model`) is separate and unchanged
 
 ### useConversation Hook (`src/hooks/useConversation.ts`)
 
@@ -358,7 +345,7 @@ React hook for subscribing to a specific conversation's state.
 - Subscribes to `persistentWebSocket.onConversationEvent(id, ...)` for `message_appended` events; on each event, calls `fetchConversationTail(id, lastKnown - 1)` to hydrate just the new tail and hands the rows to `conversationStore.insertMessagesBySeq` so they land at the seq-ordered position regardless of the resolution order of overlapping tail-fetches. Optimistic user bubbles are reconciled in-place (matching by content + `optimistic: true`) before the seq-ordered insert. On a `subscribed` envelope with `mode: "catchup"` the catchup messages are applied directly via the same `insertMessagesBySeq` path without a refetch; on `mode: "resync"` the conversation is fully refetched
 - Prevents re-fetching if already loaded
 - Already-seeded fast path: when the conversation store already holds an empty messages array for the id (`isLoaded && messages.length === 0`), the hook treats it as freshly seeded by the shared `seedNewConversation()` util (via `Sidebar.handleNewChat` or `HomeComposer`) and skips the `setLoading(true)` toggle on the safety-net `fetchConversation` call, so `ChatPanel` renders the empty composer immediately instead of falling back to the "Loading conversation..." placeholder
-- Hydrates loaded skills from the server via `fetchConversationLoadedSkills()` after loading conversation history; calls the `onLoadedSkills` callback to update `ConversationContext` state
+- Hydrates loaded skills from the server via `fetchConversationLoadedSkills()` after loading conversation history; calls the `onLoadedSkills` callback to update `ConversationSkillsContext` state
 
 ### Data Flow: Message Send with Conversation Switching
 
@@ -428,7 +415,7 @@ Each conversation has a unique URL, enabling deep linking, page reload, and brow
 
 ### Navigation Flow
 
-Conversation selection and creation now use `navigate()` from `react-router-dom` instead of setting state directly. The URL is the source of truth; a `useEffect` in `AppContent` syncs URL params (`conversationId`, `projectId`) into `ConversationContext` state so all components stay in sync.
+Conversation selection and creation now use `navigate()` from `react-router-dom` instead of setting state directly. The URL is the source of truth; a `useEffect` in `AppContent` syncs URL params (`conversationId`, `projectId`) into `NavigationContext` / `ProjectsContext` state so all components stay in sync.
 
 1. User clicks a conversation in the Sidebar (or creates a new one)
 2. Sidebar calls `onConversationSelect(id, projectId?)` or `onNewConversation(id, projectId?)`
@@ -451,11 +438,20 @@ Since the frontend is a single-page application, direct navigation to `/chats/<u
 
 ### Design Decisions
 
-**Why URL params as source of truth instead of React state?** URLs enable deep linking (share a conversation URL), page refresh (conversation reloads), and browser history navigation (back/forward buttons). The `useEffect` sync keeps the approach compatible with the existing `ConversationContext`-based state management used by Sidebar, ChatPanel, and other components.
+**Why URL params as source of truth instead of React state?** URLs enable deep linking (share a conversation URL), page refresh (conversation reloads), and browser history navigation (back/forward buttons). The `useEffect` sync keeps the approach compatible with the existing context-based state management used by Sidebar, ChatPanel, and other components.
 
 **Why `replace: true` on project redirects?** Without `replace`, navigating to `/chats/<id>` would push two history entries (the original `/chats/<id>` and the redirected `/projects/<pid>/<id>`). Using `replace` means the back button goes to the previous page, not the pre-redirect URL.
 
 ## Sidebar Component
+
+**Structure.** `Sidebar.tsx` is a shell: the brand bar, the two sliding panels, the update banner, the user bar, the modals, and the cross-list flows (drilling in and out of a project, New Chat, Run Routine, project/routine CRUD follow-ups). Everything else is delegated:
+
+- Data: `hooks/useTopLevelConversations.ts` (paged standalone list -- filters, keyset `loadMore`, stale-while-revalidate `refreshSilently` on `stream complete` / `conversation_list_changed`, in-place renames, optimistic `updateConversations`), `hooks/useProjectConversations.ts` (per-project lists -- on-demand `load`, the 30s visibility-aware poll while drilled, WS refresh of the drilled list, `update` / `seedEmpty`) and `hooks/useProjectRoutines.ts` (per-project routines + `routine_list_changed`). Each hook owns its own realtime subscriptions, so the Sidebar has none.
+- Row UI state and mutations: `hooks/useConversationListActions.ts` -- one instance per list (open options menu, inline rename, optimistic archive / unarchive / rename against the list's `update`).
+- Pure list derivation: `utils/sidebarItems.ts` (`applyConversationFilters`, `groupConversationsByRoutine`, `buildSortedSidebarItems`, `deriveProjectSidebarItems`, `formatRoutineTimestamp`), unit-tested without React.
+- Rendering: `components/sidebar/` -- `ProjectsSection`, `ConversationsSection` (header + list + the auto-paging Load more row, whose IntersectionObserver re-observes whenever `loadMore` changes identity), `ProjectPanel` (drill-down header, `RoutinesSection`, grouped list), the shared `ConversationRow` (one component for the top-level, project and routine-run rows; the routine-run `variant` shows the run timestamp and has no FLIP id), `ConversationFilterMenu`, `RequestsBadge` and `icons.tsx`. The section components render fragments where the stylesheet uses child selectors (`.sidebar-panel-main > .section-header`, `.drill-down-conversations > .section-header`), so the DOM shape is unchanged.
+
+Behavior checks for the hooks and helpers live beside them (`*.test.ts(x)`, run with `npm test`).
 
 The sidebar provides navigation: a brand bar at the top (app logo + name on the left; a New Chat icon button, a search icon button and a requests inbox icon button with an open-count badge on the right, Cmd/Ctrl+K also opens search), then a Projects section and a Conversations list. The brand bar is placed outside the sliding panels container (`.sidebar-panels`) so it remains visible when the user drills into a project.
 
@@ -497,7 +493,7 @@ A sidebar component that displays projects, conversations, a Requests section, a
 
 **Features**:
 - Automatic conversation and project list fetching on mount
-- Brand bar (`.sidebar-brand`) at the top of the sidebar: the `QuestLogo` mark + `appName` on the left, and two icon buttons on the right -- a search magnifier that opens the `SearchModal` (also toggled by the Cmd/Ctrl+K keyboard shortcut) and a requests inbox tray (Lucide `Inbox`) that activates the `RequestsView` in the main content area (via `setShowRequestsView` in `ConversationContext`).
+- Brand bar (`.sidebar-brand`) at the top of the sidebar: the `QuestLogo` mark + `appName` on the left, and two icon buttons on the right -- a search magnifier that opens the `SearchModal` (also toggled by the Cmd/Ctrl+K keyboard shortcut) and a requests inbox tray (Lucide `Inbox`) that activates the `RequestsView` in the main content area (via `setShowRequestsView` in `NavigationContext`).
   - The inbox button carries the `RequestsBadge` component pinned to its top-right corner (open action request count via event-driven refresh, see above; renders `9+` above nine) and takes an accent `active` state while the Requests view is showing.
   - Positioned outside `.sidebar-panels` so it stays visible when drilled into a project
 - Layout: the brand bar sits above the sliding panels container; within the panels, there is a Projects section (always visible) and Conversations list, separated by spacing under bold headers (no hairline dividers)
@@ -506,7 +502,7 @@ A sidebar component that displays projects, conversations, a Requests section, a
 - Clicking a project triggers a slide-left animation revealing the project's drill-down view (Routines section + Conversations section), with a back button to return to the main sidebar view.
   - Drilling in saves the current top-level conversation ID to a ref (`previousTopLevelConversationId`) and auto-selects the project's latest conversation (or shows an empty state if the project has no conversations). Drilling back restores the previously selected top-level conversation (or shows an empty state if none was selected before).
   - When `activeProjectId` is set from URL params (e.g., navigating to `/projects/<pid>/<id>`), the sidebar auto-drills into the corresponding project via a `useEffect`.
-  - The drilled-project id itself (`drilledProjectId`) lives in `ConversationContext` rather than Sidebar-local state so the root HomeComposer can target its first send at the drilled project (see the Home Screen section)
+  - The drilled-project id itself (`drilledProjectId`) lives in `ProjectsContext` rather than Sidebar-local state so the root HomeComposer can target its first send at the drilled project (see the Home Screen section)
 - Routines section (always visible in project drill-down): shows a "Create Routine" button when empty, a "+" button in section header when routines exist; each routine entry has a play button and a settings gear icon; see [Routines Architecture](../architecture/routines.md) for details
 - "New Chat" buttons (brand bar icon, the top-level Conversations header `+`, and the project drill-down Conversations header `+`) do NOT create a conversation. They navigate to `/` so the root [Home Screen](#home-screen-homecomposer) composer is shown, and the conversation is created as a response to the first message (`handleNewChat` / `handleNewProjectChat` in `frontend/src/components/Sidebar.tsx`; the phone top-bar new-chat button in `MobileShell.tsx` does the same).
   - While the Sidebar is drilled into a project, both the brand-bar pencil (`handleBrandBarNewChat`) and the project `+` keep the Sidebar drilled so the home composer creates the chat inside that project (the pencil is titled "New chat in this project" in that state); otherwise the target is a standalone chat.
@@ -528,7 +524,7 @@ A sidebar component that displays projects, conversations, a Requests section, a
   - Newly mounted rows don't animate and `prefers-reduced-motion` disables it entirely
 - Conversation rename: meatball menu "Rename" option triggers an inline text input replacing the conversation title. The input is pre-selected for immediate typing. Press Enter to save, Escape to cancel. Custom names are stored in the `custom_name` column on the `Conversation` model (max 100 chars). Custom names take priority over auto-generated titles. For routine sub-item conversations, custom names display with the timestamp in parentheses after (e.g., "Custom Name (2:30 PM)"). Clearing the name (empty input) reverts to the auto-generated title
 - Project conversation polling: when drilled into a project, the sidebar polls `fetchProjectConversations()` every 30 seconds to pick up conversations created server-side by scheduled routines. Polling skips when the browser tab is hidden (`document.hidden`) and triggers an immediate refresh when the tab becomes visible again via `visibilitychange` event. An in-flight guard (`pollInFlightRef`) prevents overlapping fetches. Errors are silently logged since the user did not initiate the request. The interval is defined as `PROJECT_CONVERSATIONS_POLL_INTERVAL_MS` (30,000 ms) at the top of the file
-- Version update banner: when `updateAvailable` is `true` (from `ConversationContext`), renders a sticky orange banner between the sidebar panels and the user info bar saying "Quest has updated. Please reload ASAP!" with a clickable "reload" link that calls `window.location.reload()`
+- Version update banner: when `updateAvailable` is `true` (from `AppConfigContext`), renders a sticky orange banner between the sidebar panels and the user info bar saying "Quest has updated. Please reload ASAP!" with a clickable "reload" link that calls `window.location.reload()`
 - Loading state ("Loading conversations...")
 - Error state with user-friendly error messages
 - Empty state ("No conversations yet. Start a new chat!")
@@ -639,7 +635,7 @@ Uses `@media (prefers-color-scheme: light)` to adapt:
 The main App component orchestrates the sidebar and content area. Uses `react-router-dom` for URL-based conversation routing (see URL-Based Routing section below for full details).
 
 **State Management**:
-Authentication is handled by `ConversationContext` using session cookies. The App component receives `isAuthenticated`, `isCheckingAuth`, and `activeConversationId` from context. URL params are the source of truth for active conversation and project; a `useEffect` syncs them into context state.
+Authentication is handled by `AuthContext` using session cookies. The App component receives `isAuthenticated`, `isCheckingAuth`, and `activeConversationId` from context. URL params are the source of truth for active conversation and project; a `useEffect` syncs them into context state.
 
 **Layout Structure**:
 ```
@@ -808,7 +804,7 @@ Currently uses `@media (prefers-color-scheme: light)` for theme support. Respons
 
 It owns all composer-local state and handlers: the auto-resizing textarea, Enter-to-send (with IME guard), clipboard image paste / attachment queue + two-phase upload, the generic file-attach ("Attach") button + queued-file chips, the model selector, the "+ Skill" button + `SkillSelectorModal`, the Flags popover / read-only flags label, and the `ContextIndicator`.
 
-It reads per-conversation model / skills / flags from `useConversationContext()` keyed by the passed `conversationId`, and does NOT call `useConversation` itself, so it can render before a conversation exists (the home screen passes an in-memory draft key as the `conversationId`).
+It reads per-conversation model / skills / flags from `useConversationModels()` / `useConversationSkills()` keyed by the passed `conversationId`, and does NOT call `useConversation` itself, so it can render before a conversation exists (the home screen passes an in-memory draft key as the `conversationId`).
 
 The host decides send behavior and gating via props (see `ComposerProps` in the file):
 
@@ -883,7 +879,7 @@ There is no live conversation yet, so the composer is bound to a stable in-memor
 
 `ChatPanel`'s auto-send effect (gated on `isLoaded && !isStreaming && messages.length === 0`) then clears the field, performs the real first send carrying the model/skills/flags (and the attached filenames -- see below), and locks the provider -- mirroring the existing `pendingRoutineMessage` auto-send pattern. This effect is the sole lock point for home-originated conversations, since the home composer sends with `skipSendLocks`.
 
-`pendingFirstMessage` (shape `{ conversationId, prompt, model, skillIds, flags, attachedFilenames }`) is defined on `ConversationContext` (see Conversation Context section).
+`pendingFirstMessage` (shape `{ conversationId, prompt, model, skillIds, flags, attachedFilenames }`) is defined on `NavigationContext` (see Application Contexts section).
 
 **Generic file upload on first send:** when the home composer's `onSend` carries queued `files`, `handleSend` uploads them via `uploadFiles(newId, files, '')` (the existing workspace `POST /files/upload` route -- no new endpoint) AFTER `createConversation()` resolves (so the workspace exists) and BEFORE navigation / the first send.
 
@@ -932,7 +928,7 @@ interface ChatPanelProps {
 - Flags icon button next to the skills icon button in the composer controls row, shown only on a fresh conversation (`messages.length === 0`); opens a checkbox popover of per-conversation opt-in behaviors (`AVAILABLE_FLAGS` in `frontend/src/constants/flags.ts`). Selected flags ride out-of-band on the first `send_message` payload. After the first message it becomes a read-only "N flag(s) enabled" label. See [Conversation Flags -- Composer UI](conversation-flags.md#composer-ui-out-of-band-selection)
 - Context usage indicator in the composer controls row via `ContextIndicator` component (percentage badge with color-coded thresholds, hover tooltip showing raw token counts, and info icon that opens `SystemPromptModal` to view the full system prompt)
 - `data-message-index` attributes on message elements for scroll targeting from search results
-- Scroll-to-message with highlight animation: when `scrollToMessageIndex` is set in `ConversationContext`, ChatPanel scrolls to the target message and applies a brief highlight animation, then clears the index
+- Scroll-to-message with highlight animation: when `scrollToMessageIndex` is set in `NavigationContext`, ChatPanel scrolls to the target message and applies a brief highlight animation, then clears the index
 - Read-only mode for Slack-driven conversations: when `useConversation` reports `origin === 'slack'` (populated from `GET /conversations/{id}`, see `frontend/src/api/types.ts`), the composer input is disabled, the Send/Stop button and the attach/skills/flags controls are hidden (the model trigger stays, disabled, showing the conversation's model), and the textarea placeholder explains that the user is driving the conversation via Slack. The `ContextIndicator` (and its system-prompt viewer) remain visible. See [Slack Socket Mode](slack-socket-mode.md) for why these conversations are one-sided in the web UI
 - Loading state ("Loading conversation...")
 - Error state with user-friendly error messages
@@ -1031,7 +1027,7 @@ Comprehensive CSS with dark/light mode support and animations:
 **Model Selector**:
 - Two-level menu (`frontend/src/components/ModelSelector.tsx`) positioned below the message input: a trigger button showing the current model's display name opens an upward popover (Flags-popover interaction pattern: outside-click and Escape close)
 - Top level shows the admin's slotted picks from `getTopLevelModels()` in `frontend/src/constants/models.ts` (Settings > Model Selection, see [Model Selection](model-selection.md); the server defaults are "Smart ($$$)" Claude Opus 4.8, "Faster ($$)" Claude Sonnet 5, "Fastest ($)" Gemini 3.8 Flash) -- each shown as its descriptor sublabeled with its concrete model name, or the bare name when the descriptor is empty -- plus an "All models" row whose flyout submenu (hover or click to open) lists the full selectable model list (already filtered by the conversation's private/public visibility via `getSelectableModels(visibility)`), scrolling with the current selection auto-scrolled into view
-- The model list is a **runtime catalog** (`frontend/src/constants/models.ts`): `GET /app/api/config` returns `models` (every known model -- the fixed Vertex registry plus each admin-configured OpenRouter instance's models under their `<instance>:<wire_id>` ids, incl. deprecated / admin-disabled ones so old conversations still label correctly -- with `display_name`, `provider`, `provider_label`, `max_input_tokens`, `deprecated`), and `ConversationContext` feeds it to `setModelCatalog()` before applying `available_models`. A hand-mirrored Vertex-only list is the pre-fetch fallback. Instance models get their instance label folded into the display name ("DeepSeek V4 Flash (OpenRouter)") so two instances of the same model are distinguishable. Lookups go through `getKnownModels()` / `getModelInfo()` / `getModelDisplayName()` / `getProviderForModel()` / `isDeprecatedModel()`; pickers use `getSelectableModels()` (deprecated entries excluded)
+- The model list is a **runtime catalog** (`frontend/src/constants/models.ts`): `GET /app/api/config` returns `models` (every known model -- the fixed Vertex registry plus each admin-configured OpenRouter instance's models under their `<instance>:<wire_id>` ids, incl. deprecated / admin-disabled ones so old conversations still label correctly -- with `display_name`, `provider`, `provider_label`, `max_input_tokens`, `deprecated`), and `AppConfigContext` feeds it to `setModelCatalog()` before applying `available_models`. A hand-mirrored Vertex-only list is the pre-fetch fallback. Instance models get their instance label folded into the display name ("DeepSeek V4 Flash (OpenRouter)") so two instances of the same model are distinguishable. Lookups go through `getKnownModels()` / `getModelInfo()` / `getModelDisplayName()` / `getProviderForModel()` / `isDeprecatedModel()`; pickers use `getSelectableModels()` (deprecated entries excluded)
 - The host (`Composer.tsx`) passes the selectable list already narrowed to `getSelectableModels()`, credentialed models, and the conversation's provider lock; recommended picks not in that list are hidden (a Gemini-only local instance shows no recommended rows, just "All models"). A current selection that isn't offered stays visible suffixed "(deprecated)" or "(no credentials)" so a conversation already on it keeps it and the user can switch away. The Slack read-only case renders the trigger disabled with a "Server default" label when the conversation has no explicit model
 - `getProviderForModel()` helper in `frontend/src/constants/models.ts` maps model IDs to provider names
 - Per-conversation persistence on the server (`conversations.model` column); the frontend hydrates the model selector from the `model` field in the conversation metadata and PATCHes changes back via `PATCH /conversations/{conversation_id}/model`
@@ -1039,7 +1035,7 @@ Comprehensive CSS with dark/light mode support and animations:
 - Selected model passed in the `send_message` payload on the persistent WS
 
 **Provider Locking**:
-After the first message in a conversation, the provider (Gemini or Anthropic) is locked. The model dropdown filters to only show models from the locked provider, preventing cross-provider switching mid-conversation. Provider locking is managed in `ConversationContext.tsx` (`lockedProviders` state, persisted in localStorage under `quest_locked_providers`).
+After the first message in a conversation, the provider (Gemini or Anthropic) is locked. The model dropdown filters to only show models from the locked provider, preventing cross-provider switching mid-conversation. Provider locking is managed in `ConversationModelsContext.tsx` (`lockedProviders` state, persisted in localStorage under `quest_locked_providers`).
 
 Locking is triggered in four scenarios: on first message send in the shared composer (`handleSend` in `frontend/src/components/Composer.tsx`, skipped when the host sets `skipSendLocks`), and in `ChatPanel.tsx` when loading an existing conversation that already has messages, during routine auto-send, and in the `pendingFirstMessage` auto-send effect for home-originated conversations.
 
@@ -1049,7 +1045,7 @@ The home composer must never write a lock: it is keyed by the stable draft key `
 
 `HomeComposer` therefore passes `skipSendLocks`, and locking for home-originated conversations happens on the real conversation id in `ChatPanel`'s `pendingFirstMessage` effect.
 
-To heal browsers poisoned by older builds, `ConversationContext.tsx`'s lazy initializer for `lockedProviders` strips any `HOME_DRAFT_KEY` entry on load; the localStorage blob is deliberately left stale and gets re-serialized on the next lock write. This is why `HOME_DRAFT_KEY` must stay byte-identical to the historical `'__home_draft__'` string.
+To heal browsers poisoned by older builds, `ConversationModelsContext.tsx`'s lazy initializer for `lockedProviders` strips any `HOME_DRAFT_KEY` entry on load; the localStorage blob is deliberately left stale and gets re-serialized on the next lock write. This is why `HOME_DRAFT_KEY` must stay byte-identical to the historical `'__home_draft__'` string.
 
 **Custom Scrollbars**:
 ```css
@@ -1939,7 +1935,7 @@ The app layout provides the main application structure with proper component com
 The main application component that orchestrates all UI components, manages global state, and defines URL-based route patterns.
 
 **State Management**:
-The App component uses `ConversationContext` for session-based auth state (`isAuthenticated`, `isCheckingAuth`) and conversation management. URL params (`useParams`) are the source of truth for the active conversation and project; a `useEffect` syncs them into context state.
+The App component uses `AuthContext` for session-based auth state (`isAuthenticated`, `isCheckingAuth`) and conversation management. URL params (`useParams`) are the source of truth for the active conversation and project; a `useEffect` syncs them into context state.
 
 **Features**:
 - URL-based routing via `react-router-dom` with three route patterns: `/`, `/chats/:conversationId`, `/projects/:projectId/:conversationId`
@@ -1947,10 +1943,10 @@ The App component uses `ConversationContext` for session-based auth state (`isAu
 - Session-based authentication via cookie (shows inline `SignInScreen` if not authenticated)
 - Navigation via `useNavigate()` instead of direct state setting -- conversation selection, creation, and project navigation all update the URL
 - Automatic redirect from `/chats/<id>` to `/projects/<pid>/<id>` when a conversation belongs to a project (via `handleProjectIdLoaded` callback from ChatPanel)
-- Conditional rendering of RequestsView vs chat panel + file browser based on `showRequestsView` state from `ConversationContext`
+- Conditional rendering of RequestsView vs chat panel + file browser based on `showRequestsView` state from `NavigationContext`
 - Callback-based communication between components
 - Empty state handling when no conversation is selected
-- Sets `document.title` to `appName` from `ConversationContext` ("DevQuest" in dev mode, "Quest" in production)
+- Sets `document.title` to `appName` from `AppConfigContext` ("DevQuest" in dev mode, "Quest" in production)
 - Loading screen heading uses `appName` for environment-aware branding
 
 **Layout Structure**:
@@ -2012,7 +2008,7 @@ Flexbox layout (see `frontend/src/App.css`):
 
 #### 4. AdminOpsMenu Component (`src/components/AdminOpsMenu.tsx`)
 
-An admin operations menu visible to admin users and during impersonation sessions. Reads `isAdmin`, `isImpersonating`, `userEmail`, and `impersonatorEmail` from `ConversationContext`.
+An admin operations menu visible to admin users and during impersonation sessions. Reads `isAdmin`, `isImpersonating`, `userEmail`, and `impersonatorEmail` from `AuthContext`.
 
 **Behavior**:
 - Renders a wrench icon button in one of two variants: the default inline variant (`inline` prop) sits in the sidebar's `UserInfoBar` next to the settings gear, so it never overlaps the composer; the floating variant (a small button fixed to the bottom-right corner of the viewport) is used only on the System Reports page, which has no sidebar
@@ -2044,8 +2040,8 @@ Defines shared CSS variables and minimal body resets:
 ```
 1. User visits / (or /chats/<id> or /projects/<pid>/<id> via deep link)
 2. React Router matches URL to route pattern
-3. ConversationContext fetches GET /app/api/config → derives appName ("DevQuest" or "Quest")
-4. ConversationContext calls checkSession() → GET /app/api/me with cookie
+3. AppConfigContext fetches GET /app/api/config → derives appName ("DevQuest" or "Quest")
+4. AuthContext calls checkSession() → GET /app/api/me with cookie
 5. App.tsx sets document.title to appName
 6. If session valid → isAuthenticated = true → main app shown
 7. If session fails → show inline SignInScreen component (heading uses appName)
@@ -2159,7 +2155,7 @@ Slide-right animation returns to main sidebar view
 ### Component Communication Architecture
 
 ```
-App.tsx (State Container, wrapped in ConversationProvider, with React Router)
+App.tsx (State Container, wrapped in AppProviders, with React Router)
     │
     ├── URL (source of truth for active conversation and project)
     │   ├── /                              → no conversation selected
@@ -2168,10 +2164,10 @@ App.tsx (State Container, wrapped in ConversationProvider, with React Router)
     │
     ├── useEffect syncs URL params → context (activeConversationId, activeProjectId)
     │
-    ├── appName (from ConversationContext, fetched via GET /app/api/config)
+    ├── appName (from AppConfigContext, fetched via GET /app/api/config)
     │   └── Sets document.title and loading screen heading
     │
-    ├── isAuthenticated (from ConversationContext, session cookie)
+    ├── isAuthenticated (from AuthContext, session cookie)
     │   └── If false → show inline SignInScreen (heading uses appName)
     │
     ├── activeConversationId (from context, synced from URL)
@@ -2196,7 +2192,7 @@ App.tsx (State Container, wrapped in ConversationProvider, with React Router)
 ### State Management Patterns
 
 #### 1. URL-Driven State
-Active conversation and project state is derived from the URL via `useParams()`. A `useEffect` in `AppContent` syncs URL params into `ConversationContext`, which flows down as props. Navigation uses `useNavigate()` from `react-router-dom` instead of direct state setting. See `frontend/src/App.tsx` for the sync effect and callback handlers.
+Active conversation and project state is derived from the URL via `useParams()`. A `useEffect` in `AppContent` syncs URL params into `NavigationContext` / `ProjectsContext`, which flows down as props. Navigation uses `useNavigate()` from `react-router-dom` instead of direct state setting. See `frontend/src/App.tsx` for the sync effect and callback handlers.
 
 #### 2. Callback Props
 Children communicate changes via callbacks that navigate to new URLs:
@@ -2259,7 +2255,7 @@ Future improvements:
 
 ```
 BrowserRouter (from react-router-dom, wraps entire app in main.tsx)
-└── ConversationProvider (session auth via checkSession(), app config via GET /app/api/config)
+└── AppProviders (AppConfigContext: GET /app/api/config; AuthContext: session auth via checkSession(); plus the appearance, navigation, projects, guides, models, skills and file-browser contexts)
     └── Routes
         ├── Route path="/" → AppContent
         ├── Route path="/chats/:conversationId" → AppContent
@@ -2300,12 +2296,12 @@ BrowserRouter (from react-router-dom, wraps entire app in main.tsx)
 ### Implementation Notes
 
 **Why direct WebSocket subscriptions instead of context-level triggers?**
-Previously, `ConversationContext` held `refreshTrigger` and `fileBrowserRefreshTrigger` state variables that were incremented on stream completion, causing every context consumer (Sidebar, ChatPanel, FileBrowser, etc.) to re-render. This caused visible UI flicker when LLM responses finished streaming.
+Previously, the monolithic `ConversationContext` held `refreshTrigger` and `fileBrowserRefreshTrigger` state variables that were incremented on stream completion, causing every context consumer (Sidebar, ChatPanel, FileBrowser, etc.) to re-render. This caused visible UI flicker when LLM responses finished streaming.
 
 The current approach has each component subscribe directly to its own realtime event in a `useEffect`. Sidebar uses `webSocketManager.onStreamComplete` plus `persistentWebSocket.onGlobalEvent` for `conversation_list_changed`; FileBrowser uses `persistentWebSocket.onGlobalEvent` for `file_list_changed`; ProjectTables uses `webSocketManager.onStreamComplete`. Only the subscribing component re-renders, avoiding unnecessary re-renders of unrelated components. Sidebar uses `silentLoadConversations()` with stale-while-revalidate to keep the existing conversation list visible during refresh.
 
 **Why URL-driven state instead of local state?**
-The active conversation and project are now derived from URL params via `react-router-dom`. This enables deep linking, page refresh, and browser back/forward navigation. The URL is the source of truth; a `useEffect` syncs params into `ConversationContext` so that components reading from context stay in sync.
+The active conversation and project are now derived from URL params via `react-router-dom`. This enables deep linking, page refresh, and browser back/forward navigation. The URL is the source of truth; a `useEffect` syncs params into `NavigationContext` / `ProjectsContext` so that components reading from context stay in sync.
 
 ### Testing Considerations
 
@@ -2682,7 +2678,7 @@ The frontend implements session-based authentication using the session cookie (n
 
 #### 1. Session-Based Authentication
 
-The `ConversationContext` checks authentication on mount by calling `checkSession()` (which hits `GET /app/api/me` with `credentials: 'include'`). If the session is valid, the user's email and name are stored in context state.
+`AuthContext` checks authentication on mount by calling `checkSession()` (which hits `GET /app/api/me` with `credentials: 'include'`). If the session is valid, the user's email and name are stored in context state.
 
 **Behavior**:
 - Calls `GET /app/api/me` with session cookie on mount
@@ -2703,7 +2699,7 @@ Shows a loading indicator while checking session. The page displays the `appName
 
 #### 3. Inline Sign-In
 
-If the session check fails, the frontend renders the `SignInScreen` component inline. The `SignInScreen` fetches the Google OAuth URL from `GET /auth/login-url` and displays a "Sign in with Google" button. When `isDevMode` is true (from ConversationContext), the SignInScreen also shows a dev login section below the Google button: an email input field and a "Dev Login" button separated by an "or" divider. Dev login submits `POST /auth/dev-login` with `{"email": "..."}` and reloads the page on success.
+If the session check fails, the frontend renders the `SignInScreen` component inline. The `SignInScreen` fetches the Google OAuth URL from `GET /auth/login-url` and displays a "Sign in with Google" button. When `isDevMode` is true (from AppConfigContext), the SignInScreen also shows a dev login section below the Google button: an email input field and a "Dev Login" button separated by an "or" divider. Dev login submits `POST /auth/dev-login` with `{"email": "..."}` and reloads the page on success.
 
 **Sign-In Scenarios**:
 - User not logged in (no session cookie)
@@ -2729,7 +2725,7 @@ If the session check fails, the frontend renders the `SignInScreen` component in
 ### Authentication Flow
 
 ```
-1. User visits / (or /chats/<id> or /projects/<pid>/<id>) → React Router matches route → ConversationProvider mounts
+1. User visits / (or /chats/<id> or /projects/<pid>/<id>) → React Router matches route → AppProviders mounts
 2. Fetches GET /app/api/config → derives appName ("DevQuest" or "Quest"), sets isDevMode
 3. checkSession() calls GET /app/api/me with cookie
 4. App.tsx sets document.title to appName
@@ -2742,7 +2738,7 @@ If the session check fails, the frontend renders the `SignInScreen` component in
 
 **Frontend**:
 - `frontend/src/utils/auth.ts` -- `checkSession()` function
-- `frontend/src/contexts/ConversationContext.tsx` -- Session check on mount, `isAuthenticated` state, `isDevMode` boolean for conditional dev login UI
+- `frontend/src/contexts/AuthContext.tsx` -- Session check on mount, `isAuthenticated` state; `frontend/src/contexts/AppConfigContext.tsx` -- `isDevMode` boolean for conditional dev login UI
 - `frontend/src/App.tsx` -- Shows `SignInScreen` when not authenticated
 - `frontend/src/components/SignInScreen.tsx` -- Fetches OAuth URL from `GET /auth/login-url`; in dev mode, also renders email input + "Dev Login" button for `POST /auth/dev-login`
 
@@ -2767,7 +2763,7 @@ If the session check fails, the frontend renders the `SignInScreen` component in
 
 The right panel displays and manages files in each conversation's workspace directory, and for project conversations, also shows a project database table browser. The `RightPanel` component (`frontend/src/components/RightPanel.tsx`) wraps both sections, splitting them vertically with a draggable divider when a project is active. Without a project, only the FileBrowser is rendered at full height.
 
-The panel header displays "Project Files" when the browsed workspace belongs to a project (the `projectId` prop RightPanel passes to `FileBrowser`, falling back to `activeProjectId` from `ConversationContext` when a host omits it) and "Workspace Files" otherwise. The whole panel is horizontally resizable via a drag handle on its left edge; see the RightPanel Component section for the persisted-width behavior.
+The panel header displays "Project Files" when the browsed workspace belongs to a project (the `projectId` prop RightPanel passes to `FileBrowser`, falling back to `activeProjectId` from `ProjectsContext` when a host omits it) and "Workspace Files" otherwise. The whole panel is horizontally resizable via a drag handle on its left edge; see the RightPanel Component section for the persisted-width behavior.
 
 **Home composer inside a project:** when the root [Home Screen](#home-screen-homecomposer) is on screen while the Sidebar is drilled into a project (URL `/`, so the URL-derived `projectId` prop is null and there is no conversation yet), the panel still shows that project's workspace and tables instead of the standalone empty state.
 
@@ -2832,7 +2828,7 @@ The main file browser panel displayed on the right side of the chat interface.
 - `conversationId`: Current conversation ID
 
 **Features**:
-- Context-aware header: shows "Project Files" when the conversation belongs to a project, "Workspace Files" otherwise (reads `activeProjectId` from `ConversationContext`)
+- Context-aware header: shows "Project Files" when the conversation belongs to a project, "Workspace Files" otherwise (reads `activeProjectId` from `ProjectsContext`)
 - List view of files and folders with extension-specific Lucide icons (folders use `Folder` icon; files use `getFileIconInfo()` from `frontend/src/utils/fileIcons.ts` to select icon and color class by extension)
 - File metadata display (size, modification date)
 - Click-to-view for text files, JSON files, images, PDFs, and CSVs: clicking a viewable file opens a `FileViewerModal`. Text files (`.md`, `.py`, `.txt`, `.json`), image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp`, `.bmp`, `.ico`, `.avif`), PDFs (`.pdf`), and CSVs (`.csv`) are viewable.
@@ -2913,7 +2909,7 @@ React hook managing file browser state and operations.
 - `createFolder(name)`: Create a new folder inside the current path via `createFolder()` in `frontend/src/api/fileApi.ts`; refreshes the listing on success
 
 **Path State**:
-- Per-conversation path state stored in `ConversationContext`
+- Per-conversation path state stored in `FileBrowserStateContext`
 - Navigation history maintained for back/forward
 - Path persists when switching between conversations
 
@@ -3047,7 +3043,7 @@ In-modal PDF preview built directly on pdfjs-dist (no wrapper library). Receives
 
 #### 7. RightPanel Component (`src/components/RightPanel.tsx`)
 
-Wrapper component that replaced the direct `<FileBrowser>` usage in `App.tsx`. Receives both `conversationId` and the URL-derived `projectId` as props, and reads `drilledProjectId` from `ConversationContext`.
+Wrapper component that replaced the direct `<FileBrowser>` usage in `App.tsx`. Receives both `conversationId` and the URL-derived `projectId` as props, and reads `drilledProjectId` from `ProjectsContext`.
 
 **Behavior**:
 - Without a project: renders FileBrowser at full height
@@ -3335,7 +3331,7 @@ The frontend uses a layered memoization strategy to prevent unnecessary re-rende
 
 **Per-conversation snapshots** -- `conversationStore.getConversationSnapshot(id)` in `frontend/src/store/conversationStore.ts` returns the state reference for a single conversation. The `useConversation` hook in `frontend/src/hooks/useConversation.ts` passes this as the snapshot function to `useSyncExternalStore`, so components only re-render when their specific conversation changes, not when any conversation in the store changes.
 
-**Context value memoization** -- The `ConversationProvider` in `frontend/src/contexts/ConversationContext.tsx` wraps its provider `value` in `useMemo`, so context consumers only re-render when a value they depend on actually changes.
+**Context value memoization** -- Every provider under `frontend/src/contexts/` owns one responsibility (see Application Contexts) and wraps its `value` in `useMemo`, so context consumers only re-render when a value they depend on actually changes.
 
 **Component memoization via `React.memo`** -- Key components are wrapped with `React.memo` to skip re-renders when their props have not changed:
 - `Sidebar` in `frontend/src/components/Sidebar.tsx`

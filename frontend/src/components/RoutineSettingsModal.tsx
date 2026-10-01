@@ -18,7 +18,8 @@ import {
   ApiClientError,
 } from '../api/client';
 import type { Routine, Guide, RoutineSchedule, RoutineScheduleRun, RoutineScheduleType, Skill } from '../api/types';
-import { useConversationContext } from '../contexts/ConversationContext';
+import { useAuth } from '../contexts/AuthContext';
+import { useGuides } from '../contexts/GuidesContext';
 import { getSelectableModels, DEPRECATED_MODEL_MAP, getModelDisplayName } from '../constants/models';
 import { ModalShell } from './ModalShell';
 import { RoutineCostsSection } from './RoutineCostsSection';
@@ -113,7 +114,8 @@ export function RoutineSettingsModal({
   onRoutineDeleted,
   onOpenRunConversation,
 }: RoutineSettingsModalProps) {
-  const { guides, enabledFeatures } = useConversationContext();
+  const { guides } = useGuides();
+  const { enabledFeatures } = useAuth();
   const selectableModels = getSelectableModels(isPublicProject ? 'public' : 'private');
   // While the admin `guides` feature gate is closed the guide list is not
   // loaded and a leftover override is ignored at run time; the block below

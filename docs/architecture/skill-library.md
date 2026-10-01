@@ -443,7 +443,7 @@ A "+ Skill" button appears next to the guide selector dropdown under the message
 
 **State management:**
 
-- `ConversationContext` maintains two per-conversation maps: `conversationQueuedSkills` (skills selected but not yet sent) and `conversationLoadedSkills` (skills already sent in a message)
+- `ConversationSkillsContext` maintains two per-conversation maps: `conversationQueuedSkills` (skills selected but not yet sent) and `conversationLoadedSkills` (skills already sent in a message)
 - When the user confirms skills in the modal, they are queued via `setQueuedSkillsForConversation()`
 - On the next message send, `ChatPanel` reads the queued skills, includes them as `skill_ids` in the persistent-WS `send_message` payload, then moves them from queued to loaded state
 - On conversation load, `useConversation` hydrates the loaded skills set from the server via `fetchConversationLoadedSkills()`

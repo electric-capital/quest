@@ -393,7 +393,7 @@ The count and enriched listing endpoints are in `chat/action_request_routes.py`.
 
 The local `onRequestCountChange()` bus is still emitted from `ActionRequestMessage` and `RequestsView` after a same-tab approve/revise/stop so the badge updates without waiting for the server publish to round-trip; the persistent-WS event arrives milliseconds later and is idempotent. Server publishers of `request_count_changed`: the action-request resolve endpoint and the `create_action_request` dispatch handler in `chat/gemini_api/turn_tools.py`.
 
-**Context state** (`frontend/src/contexts/ConversationContext.tsx`): The `showRequestsView` boolean and `setShowRequestsView` setter control whether the Requests pane is displayed.
+**Context state** (`frontend/src/contexts/NavigationContext.tsx`): The `showRequestsView` boolean and `setShowRequestsView` setter control whether the Requests pane is displayed.
 
 **App layout** (`frontend/src/App.tsx`): When `showRequestsView` is true, the main content area renders `RequestsView` instead of the chat panel and file browser.
 

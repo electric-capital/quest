@@ -82,7 +82,7 @@ let catalog: ModelInfo[] = BUILTIN_MODELS;
  * `models`). Instance-served models get their instance label folded into the
  * display name ("DeepSeek V4 Flash (OpenRouter)") so pickers, message
  * footers and settings dropdowns all tell two instances of the same model
- * apart. Called from ConversationContext when config arrives; a malformed
+ * apart. Called from AppConfigContext when config arrives; a malformed
  * payload keeps the previous catalog.
  */
 export function setModelCatalog(models: AppModelInfo[] | undefined | null): void {

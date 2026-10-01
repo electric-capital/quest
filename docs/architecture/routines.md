@@ -48,12 +48,12 @@ The model can inspect and (with user approval) create or edit a project's routin
 
 ## Run Routine Flow
 
-Running a routine is entirely frontend-driven. The flow involves the Sidebar, ConversationContext, and ChatPanel working together:
+Running a routine is entirely frontend-driven. The flow involves the Sidebar, the NavigationContext / ConversationModelsContext hand-off state, and ChatPanel working together:
 
 1. User clicks the play button next to a routine in the project drill-down view in `frontend/src/components/Sidebar.tsx` (`handleRunRoutine()`)
 2. Sidebar creates a new conversation in the project via `createProjectConversation(projectId, routineId)`, passing the routine's ID so the backend links the conversation to the routine
-3. If the routine has a `model`, Sidebar calls `setModelForConversation()` on `ConversationContext` to set the model for the new conversation
-4. Sidebar sets `pendingRoutineMessage` on `ConversationContext` with the conversation ID, prompt text, and the routine's guide ID (the guide override)
+3. If the routine has a `model`, Sidebar calls `setModelForConversation()` on `ConversationModelsContext` to set the model for the new conversation
+4. Sidebar sets `pendingRoutineMessage` on `NavigationContext` with the conversation ID, prompt text, and the routine's guide ID (the guide override)
 5. `ChatPanel` mounts for the new conversation, detects `pendingRoutineMessage` matching its `conversationId`, and auto-sends the prompt via `webSocketManager.sendMessage()`, forwarding the guide ID in the `send_message` envelope
 6. ChatPanel clears `pendingRoutineMessage` after sending
 
@@ -91,7 +91,7 @@ Routine conversations do not go through the model-driven first-reply naming that
 
 - Name input (max 100 characters)
 - Prompt textarea
-- Guide override dropdown: shows all non-default user guides (from `ConversationContext.guides`) plus a "None" option that maps to `guide_id: null` (guides are deprecated; the hint says so). Rendered only while the `guides` feature gate is on for the user (`enabled_features` from `GET /me`); otherwise the modal sends `guide_id: null`
+- Guide override dropdown: shows all non-default user guides (from `GuidesContext.guides`) plus a "None" option that maps to `guide_id: null` (guides are deprecated; the hint says so). Rendered only while the `guides` feature gate is on for the user (`enabled_features` from `GET /me`); otherwise the modal sends `guide_id: null`
 - Model selector dropdown: shows the non-deprecated models from the shared `SELECTABLE_MODELS` view in `frontend/src/constants/models.ts` (Gemini 3.1 Flash-Lite, Gemini 3 Flash, Gemini 3.5 Flash, Gemini 3.5 Flash-Lite, Gemini 3.6 Flash, and the Claude models); default is Gemini 3 Flash. The routine-settings modal additionally keeps a routine's stored deprecated model (e.g. Gemini 3.1 Pro) as an extra "(deprecated)" option so saving unrelated edits doesn't silently switch the model
 
 The form resets when the modal opens. On submit, it calls `createRoutine()` and fires the `onRoutineCreated` callback, which triggers a reload of the routines list in the sidebar. Styles are in `frontend/src/components/NewRoutineModal.css`.
@@ -186,7 +186,7 @@ The `user_id` column is technically derivable from `project_id` (via the project
 The `update_routine()` function needs to distinguish three states for both `guide_id` and `model`: "don't change" (default), "set to a specific value" (string), and "clear the value" (`None`). Python's ellipsis (`...`) serves as an unambiguous sentinel that cannot be confused with `None`. The API layer translates `clear_guide`/`clear_model` boolean flags into the sentinel pattern (see `chat/routine_routes.py`).
 
 **Why is running a routine purely frontend-driven?**
-The "run" action is just creating a conversation and sending a message -- two operations the frontend already handles. Keeping the logic in the frontend avoids adding a dedicated backend endpoint for an operation that composes existing primitives. The `pendingRoutineMessage` pattern in `ConversationContext` coordinates the creation and auto-send across components.
+The "run" action is just creating a conversation and sending a message -- two operations the frontend already handles. Keeping the logic in the frontend avoids adding a dedicated backend endpoint for an operation that composes existing primitives. The `pendingRoutineMessage` pattern in `NavigationContext` coordinates the creation and auto-send across components.
 
 **Why allow routines to specify a model?**
 Different routines may have different complexity levels. A simple data retrieval routine might work well with Gemini 3.1 Flash-Lite (fastest, cheapest), a daily summary routine with Gemini 3 Flash (faster, cheaper), while a complex analysis routine might need a more capable model like Claude Opus. Storing the model on the routine lets users configure this once and have it apply consistently across both manual and scheduled runs.

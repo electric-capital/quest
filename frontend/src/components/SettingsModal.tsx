@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { fetchConnectors, fetchSettings } from '../api/client';
 import type { ConnectorRow, UserSettings } from '../api/types';
-import { useConversationContext } from '../contexts/ConversationContext';
+import { useAppConfig } from '../contexts/AppConfigContext';
+import { useAuth } from '../contexts/AuthContext';
+import { useGuides } from '../contexts/GuidesContext';
+import { useNavigationState } from '../contexts/NavigationContext';
 import { useIsMobile } from '../hooks/useIsMobile';
 import {
   DataConnectionsSection,
@@ -97,7 +100,10 @@ const SECTION_LABELS = Object.fromEntries(
 ) as Record<SettingsSection, string>;
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
-  const { isAdmin, enabledFeatures, loginMethod, refreshConnectionStatus, loadGuides: refreshContextGuides, settingsInitialSection, setSettingsInitialSection } = useConversationContext();
+  const { isAdmin, enabledFeatures, refreshConnectionStatus } = useAuth();
+  const { loginMethod } = useAppConfig();
+  const { loadGuides: refreshContextGuides } = useGuides();
+  const { settingsInitialSection, setSettingsInitialSection } = useNavigationState();
   const guidesEnabled = enabledFeatures.includes(GUIDES_FEATURE);
   const passwordLogin = loginMethod === 'password';
   const visibleMainSections = MAIN_SECTIONS.filter(

@@ -91,11 +91,11 @@ In addition to cookie naming, `QUEST_ENV` also drives UI branding: the unauthent
 
 When `QUEST_ENV=dev`, the `POST /auth/dev-login` endpoint enables email-based login without Google OAuth, useful for testing multi-user features locally.
 
-**Key Files:** `auth/dev_login.py` (endpoint), `chat/auth.py` (`check_user_allowed()` relaxation), `frontend/src/components/SignInScreen.tsx` (dev login UI), `frontend/src/contexts/ConversationContext.tsx` (`isDevMode` boolean)
+**Key Files:** `auth/dev_login.py` (endpoint), `chat/auth.py` (`check_user_allowed()` relaxation), `frontend/src/components/SignInScreen.tsx` (dev login UI), `frontend/src/contexts/AppConfigContext.tsx` (`isDevMode` boolean)
 
 **Flow:**
 
-1. Frontend fetches `GET /app/api/config` and detects `quest_env === "dev"`, sets `isDevMode = true` in ConversationContext
+1. Frontend fetches `GET /app/api/config` and detects `quest_env === "dev"`, sets `isDevMode = true` in AppConfigContext
 2. SignInScreen shows an email input field and "Dev Login" button below the Google sign-in button (separated by an "or" divider)
 3. User enters any email address and clicks "Dev Login"
 4. Frontend POSTs `{"email": "..."}` to `/auth/dev-login` with `credentials: 'include'`

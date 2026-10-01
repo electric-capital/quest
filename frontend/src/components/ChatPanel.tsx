@@ -12,7 +12,9 @@ import rehypeKatex from 'rehype-katex';
 import remarkMathCurrencyGuard from '../utils/remarkMathCurrencyGuard';
 import { useNavigate } from 'react-router-dom';
 import { useConversation } from '../hooks/useConversation';
-import { useConversationContext } from '../contexts/ConversationContext';
+import { useConversationModels } from '../contexts/ConversationModelsContext';
+import { useConversationSkills } from '../contexts/ConversationSkillsContext';
+import { useNavigationState } from '../contexts/NavigationContext';
 import { webSocketManager } from '../services/WebSocketManager';
 import { compactConversation, duplicateConversationWorkspace, fetchProject } from '../api/client';
 import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, ComposerAttachmentRef } from '../api/types';
@@ -137,13 +139,14 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   const {
     getModelForConversation, hydrateModelForConversation,
     lockConversationProvider, isProviderLocked,
+    refreshDefaultModel, persistDefaultModel,
+  } = useConversationModels();
+  const {
     pendingRoutineMessage, setPendingRoutineMessage,
     pendingFirstMessage, setPendingFirstMessage,
-    setQueuedSkillsForConversation,
     scrollToMessageIndex, setScrollToMessageIndex,
-    setLoadedSkillsForConversation,
-    refreshDefaultModel, persistDefaultModel,
-  } = useConversationContext();
+  } = useNavigationState();
+  const { setQueuedSkillsForConversation, setLoadedSkillsForConversation } = useConversationSkills();
   const selectedModel = getModelForConversation(conversationId);
 
   // Callback to hydrate loaded skills when conversation is loaded from the server

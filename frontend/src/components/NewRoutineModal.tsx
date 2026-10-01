@@ -5,7 +5,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { createRoutine, ApiClientError } from '../api/client';
 import type { Guide } from '../api/types';
-import { useConversationContext } from '../contexts/ConversationContext';
+import { useAuth } from '../contexts/AuthContext';
+import { useGuides } from '../contexts/GuidesContext';
 import { getSelectableModels } from '../constants/models';
 import type { ModelInfo } from '../constants/models';
 import { ModalShell } from './ModalShell';
@@ -36,7 +37,8 @@ function defaultRoutineModel(models: ModelInfo[]): string {
 }
 
 export function NewRoutineModal({ isOpen, projectId, isPublicProject = false, onClose, onRoutineCreated }: NewRoutineModalProps) {
-  const { guides, enabledFeatures } = useConversationContext();
+  const { guides } = useGuides();
+  const { enabledFeatures } = useAuth();
   // Guide overrides exist only while the admin `guides` feature gate is on
   // for this user (POST /routines 403s a guide_id otherwise).
   const guidesEnabled = enabledFeatures.includes('guides') && !isPublicProject;

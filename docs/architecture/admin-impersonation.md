@@ -18,7 +18,7 @@ Admins (users whose email is in the `admin_emails` list in `server_config.json`)
 **Frontend:**
 - `frontend/src/components/AdminOpsMenu.tsx` -- Impersonation UI (user picker, amber button state, end impersonation button)
 - `frontend/src/components/AdminOpsMenu.css` -- Amber/orange styling for impersonation state
-- `frontend/src/contexts/ConversationContext.tsx` -- `isImpersonating`, `impersonatorEmail`, `impersonatorName` state values
+- `frontend/src/contexts/AuthContext.tsx` -- `isImpersonating`, `impersonatorEmail`, `impersonatorName` state values
 - `frontend/src/api/client.ts` -- `fetchAdminUsers()`, `impersonateUser()`, `stopImpersonation()` API functions
 - `frontend/src/api/config.ts` -- Endpoint URL builders (`adminUsers`, `adminImpersonate`, `adminStopImpersonation`)
 - `frontend/src/api/types.ts` -- `is_impersonating`, `impersonator_email`, `impersonator_name` on the `/me` response type
@@ -30,7 +30,7 @@ Admins (users whose email is in the `admin_emails` list in `server_config.json`)
 3. Admin selects a target user. Frontend sends `POST /app/api/admin/impersonate` with `{user_id}` -- `chat/routes/admin.py` (`admin_impersonate`)
 4. Backend validates admin status, prevents nested impersonation, creates a signed cookie `{v, uid: target, imp: admin}` with 1-hour max_age -- `auth/session.py`
 5. Frontend reloads; `GET /app/api/me` returns the target user's identity plus `is_impersonating: true`, `impersonator_email`, `impersonator_name` -- `chat/routes/user.py`
-6. ConversationContext stores impersonation state; AdminOpsMenu renders amber button with impersonation info -- `frontend/src/contexts/ConversationContext.tsx`, `frontend/src/components/AdminOpsMenu.tsx`
+6. AuthContext stores impersonation state; AdminOpsMenu renders amber button with impersonation info -- `frontend/src/contexts/AuthContext.tsx`, `frontend/src/components/AdminOpsMenu.tsx`
 
 ## Ending Impersonation
 

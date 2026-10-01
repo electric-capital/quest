@@ -52,5 +52,8 @@ jobs:
       - name: Typecheck
         run: npm run lint
 
+      - name: Test
+        run: npm test
+
       - name: Build
         run: npm run build

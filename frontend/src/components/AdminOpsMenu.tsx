@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useConversationContext } from '../contexts/ConversationContext';
+import { useAuth } from '../contexts/AuthContext';
 import { triggerAdminShutdown, fetchAdminUsers, impersonateUser, stopImpersonation } from '../api/client';
 import type { UserSearchResult } from '../api/types';
 import './AdminOpsMenu.css';
@@ -22,7 +22,7 @@ interface AdminOpsMenuProps {
  * dropdown with server operations.
  */
 export function AdminOpsMenu({ inline = false }: AdminOpsMenuProps = {}) {
-  const { isAdmin, isImpersonating, userEmail, impersonatorEmail } = useConversationContext();
+  const { isAdmin, isImpersonating, userEmail, impersonatorEmail } = useAuth();
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const [isShuttingDown, setIsShuttingDown] = useState(false);

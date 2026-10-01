@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import './SignInScreen.css';
-import { useConversationContext } from '../contexts/ConversationContext';
+import { useAppConfig } from '../contexts/AppConfigContext';
 import { passwordLogin, requestPasswordLink } from '../api/client';
 
 interface DevAccount {
@@ -146,7 +146,7 @@ function PasswordSignIn({ selfService }: { selfService: boolean }) {
 }
 
 export function SignInScreen() {
-  const { appName, isDevMode, loginRestriction, loginMethod, passwordSelfService } = useConversationContext();
+  const { appName, isDevMode, loginRestriction, loginMethod, passwordSelfService } = useAppConfig();
   const [authUrl, setAuthUrl] = useState<string | null>(null);
   const [googleUnavailable, setGoogleUnavailable] = useState(false);
   const [error, setError] = useState<string | null>(null);

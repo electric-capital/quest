@@ -44,7 +44,7 @@ The WebSocket connection sends the session cookie automatically. WebSocket messa
 
 Checks if the user has a valid session by calling `GET /app/api/me` with `credentials: 'include'`. Returns `{ email, name, google_services_connected, has_any_service_connected }` if authenticated, `null` otherwise.
 
-Used by `ConversationContext` on mount to determine authentication state. The `has_any_service_connected` flag is used to auto-open the settings panel to the Data Connections section for users with zero connected services (truly new users).
+Used by `AuthContext` on mount to determine authentication state. The `has_any_service_connected` flag is used to auto-open the settings panel to the Data Connections section for users with zero connected services (truly new users).
 
 ## UI Components Using the Client
 
@@ -52,7 +52,7 @@ Components that consume the API client are primarily in `frontend/src/components
 
 ## Authentication Flow
 
-On mount, `ConversationContext.tsx` calls `checkSession()` (in `frontend/src/utils/auth.ts`) which hits `GET /app/api/me` with the session cookie. If unauthenticated, `SignInScreen.tsx` is shown. If `has_any_service_connected` is false (new user), settings auto-opens to Data Connections. Post-OAuth-popup updates use `refreshConnectionStatus()` in `ConversationContext.tsx`.
+On mount, `AuthContext.tsx` calls `checkSession()` (in `frontend/src/utils/auth.ts`) which hits `GET /app/api/me` with the session cookie. If unauthenticated, `SignInScreen.tsx` is shown. If `has_any_service_connected` is false (new user), settings auto-opens to Data Connections. Post-OAuth-popup updates use `refreshConnectionStatus()` in `AuthContext.tsx`.
 
 ## Type Definitions
 

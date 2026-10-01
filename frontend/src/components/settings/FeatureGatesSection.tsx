@@ -5,7 +5,7 @@ import {
   fetchAdminUsers,
 } from '../../api/client';
 import type { FeatureGate, UserSearchResult } from '../../api/types';
-import { useConversationContext } from '../../contexts/ConversationContext';
+import { useAuth } from '../../contexts/AuthContext';
 import './ServiceCredentialsSection.css';
 import './FeatureGatesSection.css';
 
@@ -20,7 +20,7 @@ import './FeatureGatesSection.css';
  * checkbox roster, each change saved immediately like the toggle.
  */
 export function FeatureGatesSection() {
-  const { refreshEnabledFeatures } = useConversationContext();
+  const { refreshEnabledFeatures } = useAuth();
   const [features, setFeatures] = useState<FeatureGate[] | null>(null);
   const [loadError, setLoadError] = useState('');
   const [savingFeature, setSavingFeature] = useState<string | null>(null);
