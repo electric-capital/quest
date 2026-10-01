@@ -31,7 +31,7 @@ jobs:
         run: uv run pytest -q
 
   frontend:
-    name: Frontend typecheck and build
+    name: Frontend typecheck, lint, tests and build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -50,6 +50,9 @@ jobs:
         run: npm ci
 
       - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
         run: npm run lint
 
       - name: Test

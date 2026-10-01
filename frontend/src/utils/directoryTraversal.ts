@@ -28,13 +28,6 @@ interface FileSystemDirectoryReader {
   ): void;
 }
 
-// Augment DataTransferItem with webkitGetAsEntry
-declare global {
-  interface DataTransferItem {
-    webkitGetAsEntry?(): FileSystemEntry | null;
-  }
-}
-
 /** Filenames to silently exclude from folder uploads (OS metadata files). */
 const IGNORED_FILENAMES = new Set(['.DS_Store']);
 

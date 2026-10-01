@@ -22,7 +22,7 @@
  * plus Escape-to-close and hover-or-click to open the submenu.
  */
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   getModelDisplayName, getModelInfo, getTopLevelModels, isDeprecatedModel, isModelAllowedFor,
 } from '../constants/models';

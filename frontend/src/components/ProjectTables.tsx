@@ -3,6 +3,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { errorMessage } from '../utils/errorMessage';
 import { fetchProjectTables, deleteProjectTable } from '../api/projectDbApi';
 import { webSocketManager } from '../services/WebSocketManager';
 import { TableViewerModal } from './TableViewerModal';
@@ -31,8 +32,8 @@ export function ProjectTables({ projectId }: ProjectTablesProps) {
     try {
       const data = await fetchProjectTables(projectId);
       setTables(data.tables);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load tables');
+    } catch (err) {
+      setError(errorMessage(err, 'Failed to load tables'));
     } finally {
       if (!silent) {
         setLoading(false);
@@ -153,8 +154,8 @@ export function ProjectTables({ projectId }: ProjectTablesProps) {
                             setViewerTable(null);
                           }
                           await loadTables();
-                        } catch (err: any) {
-                          setError(err.message || 'Failed to delete table');
+                        } catch (err) {
+                          setError(errorMessage(err, 'Failed to delete table'));
                         }
                       }}
                     >

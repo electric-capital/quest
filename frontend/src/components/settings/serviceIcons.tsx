@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react';
 import { Plug, CreditCard, Mail, Wifi, Laptop, Coins } from 'lucide-react';
 
 /**
@@ -87,7 +88,7 @@ function MicrosoftIcon() {
   );
 }
 
-const SERVICE_ICONS: Record<string, () => JSX.Element> = {
+const SERVICE_ICONS: Record<string, () => ReactElement> = {
   google_services: GoogleIcon,
   google_oauth: GoogleIcon,
   m365: MicrosoftIcon,

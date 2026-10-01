@@ -3,7 +3,7 @@
  * Uses useSyncExternalStore pattern for React integration
  */
 
-import type { MessageContent, SubAgentToolUseMessage, SubAgentToolResultMessage, SubAgentToolCallInfo, SubAgentFinishedInfo, PendingWaitInfo, ExpensiveResumeInfo } from '../api/types';
+import type { MessageContent, SubAgentToolResultMessage, SubAgentToolCallInfo, SubAgentFinishedInfo, PendingWaitInfo, ExpensiveResumeInfo } from '../api/types';
 
 /**
  * State for a single conversation

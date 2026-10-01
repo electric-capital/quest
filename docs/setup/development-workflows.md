@@ -2,7 +2,7 @@
 
 ## Overview
 
-Development workflow for the Quest project: branching and PRs, syntax checking, the pytest test suite, and the frontend unit tests.
+Development workflow for the Quest project: branching and PRs, syntax checking, the pytest test suite, and the frontend checks (typecheck, lint, unit tests, build).
 
 ## Branching & Pull Requests
 
@@ -11,7 +11,7 @@ All work lands on `main` through pull requests -- never commit directly to `main
 1. Branch from up-to-date `origin/main` (e.g. `feat/<topic>` or `fix/<topic>`).
 2. Develop and verify in local mode (`python3 run.py`; see [Run Modes](../architecture/run-modes.md)) and run the test suite before committing.
 3. Push the branch and open a PR against `main` (`gh pr create`).
-4. CI (`.github/workflows/ci.yml`) runs on every PR and push to `main`: the backend job runs `uv sync --locked` + `uv run pytest`, the frontend job runs `npm ci`, `npm run lint` (tsc), `npm test` (vitest) and `npm run build` on Node 24. Fix a red check before asking for review.
+4. CI (`.github/workflows/ci.yml`) runs on every PR and push to `main`: the backend job runs `uv sync --locked` + `uv run pytest`, the frontend job runs `npm ci`, `npm run typecheck`, `npm run lint`, `npm test` and `npm run build` on Node 24 (see "Frontend Checks"). Fix a red check before asking for review.
 5. A human reviews and merges. Agents open PRs; they do not merge them.
 
 ## Key Files
@@ -62,13 +62,37 @@ Plugin-specific tests live in the plugin's own directory, not in `tests/`:
 - Core cross-cutting tests that need a real plugin registered (connector rows, dispatch tables, the action-request schema) stay in `tests/` and use the same-named fixtures from `tests/conftest.py`.
 - **Out-of-tree plugins**: when `QUEST_PLUGIN_PATH` names extra plugin roots (see [Plugins](../architecture/plugins.md)), a bare `uv run pytest` from the repo root also collects `<root>/<name>/tests/` for every plugin directory there that has one (repo-root `conftest.py`; explicit path arguments disable the auto-append). Out-of-tree suites follow the exact same layout and conftest recipe -- `pythonpath` in pyproject.toml keeps the repo root importable so they can import quest modules and `tests.plugin_support`.
 
-## Frontend Tests
+## Frontend Checks
+
+Four commands, run from `frontend/`, each with one job. CI runs all of them in this order:
 
 ```bash
-cd frontend && npm test
+cd frontend
+npm run typecheck   # tsc -b: type errors in src/ and the Vite/Vitest config
+npm run lint        # eslint .: TypeScript + React hook rules
+npm test            # vitest run: unit tests under jsdom
+npm run build       # tsc -b && vite build: what run.py ships
 ```
 
+### Typecheck
+
+`frontend/tsconfig.json` is a solution file (`files: []` plus project references), so a plain `tsc` checks nothing and exits 0. `npm run typecheck` runs `tsc -b`, which builds both referenced projects: `tsconfig.app.json` covers `src/` (including the test files) and `tsconfig.node.json` covers `vite.config.ts`, `vitest.config.ts` and `themeOverridePlugin.ts`. Both have `noEmit`; the only output is the incremental `.tsbuildinfo` under `node_modules/.tmp/`. `npm run build` runs the same `tsc -b` before Vite.
+
+### Lint
+
+`npm run lint` runs ESLint over every `.ts`/`.tsx` file with `frontend/eslint.config.js`: `@eslint/js` recommended, `typescript-eslint` recommended and `eslint-plugin-react-hooks` recommended. Errors fail CI; `react-hooks/exhaustive-deps` is a warning and is reported but does not fail the job.
+
+`eslint-plugin-react-hooks` 6+ also ships rules derived from the React Compiler (`set-state-in-effect`, `refs`, `immutability`, `preserve-manual-memoization`). This build does not use the compiler and the codebase relies on idioms those rules forbid (latest-value refs assigned during render, modals resetting local state when opened, hand-rolled memoization), so they are switched off in `eslint.config.js` with a comment explaining why. Turning them on is a behaviour-affecting refactor to do on its own. Do not add further blanket exceptions; a one-off `// eslint-disable-next-line <rule> -- <reason>` at the site is the way to document a deliberate violation.
+
+### Tests
+
 Frontend unit tests run with [Vitest](https://vitest.dev/) under jsdom (`frontend/vitest.config.ts`, kept separate from `vite.config.ts` so the build-only plugins stay out of the test pipeline), with React Testing Library for hooks and providers. Test files live beside the code they cover as `*.test.ts` / `*.test.tsx` under `frontend/src/` and are type-checked by the app tsconfig. Mock the API client (`src/api/client`) and the realtime singletons (`src/services/*`) with `vi.mock`; the existing hook tests (`src/hooks/*.test.tsx`) and the context boundary test (`src/contexts/AppProviders.test.tsx`) show the pattern. `npm test` runs once and exits (`vitest run`); use `npx vitest` for watch mode.
+
+The realtime path has its own suites, each driving the exact envelopes the server publishes (see [Realtime](../architecture/realtime.md)):
+
+- `src/services/WebSocketManager.test.ts` -- send receipts: the `client_send_id` stamp on `send_message`, the 15 s `send_message_accepted` window, the `not_connected` / `unconfirmed` failed states with Retry / Discard, late receipts, `send_message_rejected` rollback and the `run_active` reconcile on `subscribed` acks.
+- `src/services/PersistentWebSocket.test.ts` -- reconnect / catchup at the socket level with a scripted fake `WebSocket` and fake timers: the per-conversation `last_seq` recorded from `message_appended` / `subscribed`, persisted to sessionStorage and re-sent on every `subscribe` after a drop, exponential backoff, the liveness watchdog and the discarded-socket guard.
+- `src/hooks/useConversation.test.tsx` -- what the hook does with the server's verdict: `catchup` rows inserted by seq with optimistic-bubble reconciliation, `resync` (ack mode or the server-pushed event) refetching the conversation, `message_appended` tail fetches deduped by seq.
 
 ## Releases
 
@@ -96,7 +120,7 @@ The `v*` tag namespace is reserved for releases and protected on GitHub by the "
 ## Constraints
 
 - Syntax checking validates compilation only, not runtime correctness (missing modules, undefined names pass)
-- Only `.py` files are checked; frontend TypeScript/React files are not covered
+- Only `.py` files are checked by the syntax test; frontend TypeScript/React files are covered by the separate frontend checks above
 
 ## Design Decisions
 

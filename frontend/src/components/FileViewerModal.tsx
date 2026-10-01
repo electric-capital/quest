@@ -10,6 +10,7 @@ import rehypeHighlight from 'rehype-highlight';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import remarkMathCurrencyGuard from '../utils/remarkMathCurrencyGuard';
+import { errorMessage } from '../utils/errorMessage';
 import { fetchFileContent, saveFileToDrive } from '../api/fileApi';
 import { API_BASE_URL } from '../api/config';
 import { JsonTreeViewer } from './JsonTreeViewer';
@@ -32,10 +33,6 @@ const CSV_MAX_CELL_LENGTH = 200;
 
 function isMarkdownFile(fileName: string): boolean {
   return fileName.toLowerCase().endsWith('.md');
-}
-
-function isJsonFile(fileName: string): boolean {
-  return fileName.toLowerCase().endsWith('.json');
 }
 
 function computeDefaultDocName(fileName: string): string {
@@ -296,8 +293,8 @@ export function FileViewerModal({ isOpen, conversationId, filePath, fileName, is
     try {
       const result = await saveFileToDrive(conversationId, filePath, docName.trim());
       setSaveSuccess(result.url);
-    } catch (err: any) {
-      setSaveError(err.message || 'Failed to save to Google Drive');
+    } catch (err) {
+      setSaveError(errorMessage(err, 'Failed to save to Google Drive'));
     } finally {
       setSaving(false);
     }

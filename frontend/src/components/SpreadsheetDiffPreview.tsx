@@ -1,4 +1,3 @@
-import React from 'react';
 import type { SpreadsheetDiffGrid } from '../api/types';
 import './SpreadsheetDiffPreview.css';
 
