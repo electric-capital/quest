@@ -105,7 +105,11 @@ external repos and load via `QUEST_PLUGIN_PATH`):
   credential schema (OAuth app client id/secret), an **oauth-kind**
   per-user connection (`oauth.py` router + granted-scope `needs_reauth`
   hook), the `api.github.com` `authed_get` service entry, the
-  `system:github` skill, and the `github_get_job_log` tool.
+  `system:github` skill, the `github_get_job_log` tool, and three
+  approval-gated action requests (`github_trigger_workflow`,
+  `github_comment_on_issue`, `github_set_issue_state`) whose
+  `validate_against_upstream` hooks read the target from GitHub to name
+  it on the card.
 - `plugins/m365/` — the Microsoft 365 (Outlook Mail) integration (plugin
   id `m365`): an oauth-kind connection with **expiring tokens** — the
   credential loader proactively refreshes near-expiry Microsoft Graph
