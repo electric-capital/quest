@@ -1,7 +1,11 @@
 import { useEffect, useCallback } from 'react'
 import { Routes, Route, Navigate, useParams, useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
-import { ConversationProvider, useConversationContext } from './contexts/ConversationContext'
+import { AppProviders } from './contexts/AppProviders'
+import { useAppConfig } from './contexts/AppConfigContext'
+import { useAuth } from './contexts/AuthContext'
+import { useNavigationState } from './contexts/NavigationContext'
+import { useProjects } from './contexts/ProjectsContext'
 import { Sidebar } from './components/Sidebar'
 import { ChatPanel } from './components/ChatPanel'
 import { HomeComposer } from './components/HomeComposer'
@@ -18,16 +22,14 @@ function AppContent() {
   const {
     activeConversationId,
     setActiveConversationId,
-    isAuthenticated,
-    isCheckingAuth,
-    appName,
     isSettingsOpen,
     setSettingsOpen,
-    hasAnyServiceConnected,
-    setActiveProjectId,
     showRequestsView,
     setShowRequestsView,
-  } = useConversationContext()
+  } = useNavigationState()
+  const { isAuthenticated, isCheckingAuth, hasAnyServiceConnected } = useAuth()
+  const { appName } = useAppConfig()
+  const { setActiveProjectId } = useProjects()
 
   const params = useParams<{ conversationId?: string; projectId?: string }>()
   const navigate = useNavigate()
@@ -166,7 +168,8 @@ function AppContent() {
 }
 
 function AdminSystemReportsRoute() {
-  const { isAuthenticated, isCheckingAuth, appName } = useConversationContext();
+  const { isAuthenticated, isCheckingAuth } = useAuth();
+  const { appName } = useAppConfig();
 
   if (isCheckingAuth) {
     return (
@@ -188,7 +191,7 @@ function AdminSystemReportsRoute() {
 
 function App() {
   return (
-    <ConversationProvider>
+    <AppProviders>
       <Routes>
         <Route path="/" element={<AppContent />} />
         <Route path="/chats/:conversationId" element={<AppContent />} />
@@ -200,7 +203,7 @@ function App() {
         {/* Legacy deep links from before the "System Reports" rename. */}
         <Route path="/admin/system-monitor" element={<Navigate to="/admin/system-reports" replace />} />
       </Routes>
-    </ConversationProvider>
+    </AppProviders>
   )
 }
 

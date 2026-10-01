@@ -124,7 +124,7 @@ The frontend is a modern single-page application built with:
 
 **Main Components**:
 - **App**: Main application component with URL-based routing and three-column layout
-  - Wrapped in `ConversationProvider` and `BrowserRouter` for global state and client-side routing
+  - Wrapped in `AppProviders` and `BrowserRouter` for global state and client-side routing
   - Three route patterns: `/`, `/chats/:id`, `/projects/:pid/:id` -- URL params are the source of truth for active conversation
   - Sidebar (with Requests, Search, Projects, and Conversations sections) + ChatPanel + FileBrowser layout spanning full browser window
   - Session cookie auth with inline `SignInScreen` if not authenticated (no redirect to `/auth/`)
@@ -138,7 +138,7 @@ The frontend is a modern single-page application built with:
 - **SearchModal**: Conversation search modal (`frontend/src/components/SearchModal.tsx`)
   - Debounced typeahead input calling `searchConversations()` in `frontend/src/api/client.ts`
   - Keyboard navigation through results, highlighted query matches in snippets
-  - Selecting a result navigates to the conversation and scrolls to the matching message via `scrollToMessageIndex` in `ConversationContext`
+  - Selecting a result navigates to the conversation and scrolls to the matching message via `scrollToMessageIndex` in `NavigationContext`
 - **ChatPanel**: Main chat interface with message display and input
   - Uses `useConversation` hook for per-conversation state
   - `data-message-index` attributes on message elements for scroll targeting from search results
@@ -172,7 +172,7 @@ The frontend is a modern single-page application built with:
 - **UserInfoBar**: User profile bar at bottom of sidebar
   - Displays user name (or email prefix as fallback), email, and avatar initial
   - Gear icon opens the SettingsModal
-  - User info fetched via `GET /app/api/me` (stored in `ConversationContext`)
+  - User info fetched via `GET /app/api/me` (stored in `AuthContext`)
 - **SettingsModal**: Full-screen settings panel
   - 80% viewport modal rendered via `createPortal` to `document.body`
   - `SettingsModal.tsx` is a thin shell providing modal chrome, left nav sidebar, and section routing
@@ -180,7 +180,7 @@ The frontend is a modern single-page application built with:
   - 6 per-section sub-components in `frontend/src/components/settings/`, each managing its own state and data fetching, mounting/unmounting as the user navigates tabs:
     - `DataConnectionsSection` -- OAuth connectors (Google Services, Slack, Telegram, plugin rows like GitHub and Twitter/X) with Connect/Reconnect buttons and popup handling; API key connectors (Airtable, api_key-kind plugin rows) with shared `ApiKeyForm`. See [OAuth Popup Flow](oauth-popup.md)
     - `MemoriesSection` -- Memory CRUD with archive toggle, inline editing, "Show archived" toggle
-    - `GuidesSection` -- Guide CRUD with default guide handling, inline editing, save status feedback. After mutations, `refreshContextGuides()` updates `ConversationContext`
+    - `GuidesSection` -- Guide CRUD with default guide handling, inline editing, save status feedback. After mutations, `refreshContextGuides()` updates `GuidesContext`
     - `SkillsSection` -- Tabbed interface ("My Skills" / "Shared with Me"), skill CRUD, visibility badges, sharing with type-ahead user search, auto-load toggle with server-backed persistence via `user_skill_autoloads` table
 - **SkillSelectorModal**: Multi-select modal for loading skills into the current conversation (see `frontend/src/components/SkillSelectorModal.tsx`)
   - Fetches all accessible skills and auto-loaded skill IDs on open
@@ -194,16 +194,16 @@ The frontend is a modern single-page application built with:
   - Popup-blocked fallback: shows direct link to open OAuth URL in a new tab if browser blocks the popup
   - Escape key closes modal; overlay click closes modal
 - **SignInScreen**: Inline sign-in component displayed for unauthenticated users
-  - Heading uses `appName` from `ConversationContext` ("DevQuest" in dev mode, "Quest" in production)
+  - Heading uses `appName` from `AppConfigContext` ("DevQuest" in dev mode, "Quest" in production)
   - Fetches Google OAuth URL from `GET /auth/login-url` and displays a "Sign in with Google" button
-  - When `isDevMode` is true (from ConversationContext), shows a dev login section below the Google button: email input field + "Dev Login" button, separated by an "or" divider. Submits `POST /auth/dev-login` with `{"email": "..."}` and reloads the page on success
+  - When `isDevMode` is true (from AppConfigContext), shows a dev login section below the Google button: email input field + "Dev Login" button, separated by an "or" divider. Submits `POST /auth/dev-login` with `{"email": "..."}` and reloads the page on success
   - Replaces the previous redirect-to-`/auth/` behavior for fresh/unauthenticated users
 - **FileBrowser**: Right-side panel for workspace file management
   - List view of files/folders with icons and metadata
   - Upload files and folders via drag-and-drop (folders recursively traversed via `directoryTraversal.ts`), upload files via Upload Files button, create new folders in the current path via New Folder button (opens `NewFolderModal`), download files, download folders as zip
   - Inline viewing of text files (`.md`, `.py`, `.txt`), images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp`, `.bmp`, `.ico`, `.avif`), and PDFs (`.pdf`, via the pdf.js-based `PdfViewer` with thumbnail rail) via FileViewerModal, with Save to Drive for `.md` files
   - Folder navigation with back/forward/up buttons
-  - Per-conversation path state via `ConversationContext`
+  - Per-conversation path state via `FileBrowserStateContext`
   - Auto-refresh on `file_list_changed` per-user globals (emitted by workspace-mutating tools and REST routes), filtered by active conversation / project, with a 200ms debounce
   - Structured error display for partial upload failures
 - **API Client**: Type-safe REST API functions
@@ -211,7 +211,7 @@ The frontend is a modern single-page application built with:
 **State Management Architecture**:
 - **conversationStore**: Observable store holding per-conversation state (messages, streaming, errors)
 - **WebSocketManager**: Singleton shim over `persistentWebSocket` that routes WebSocket messages to the correct conversation in the store; exposes `onStreamComplete` and `onConversationRenamed` callback subscriptions for component-level refresh (Sidebar subscribes for conversation list refresh; ProjectTables subscribes for the project DB table list refresh). The FileBrowser instead subscribes to `persistentWebSocket.onGlobalEvent` for `file_list_changed` per-user globals so it refreshes mid-turn after each workspace mutation
-- **ConversationContext**: React context providing:
+- **Application contexts** (`frontend/src/contexts/*Context.tsx`, one per responsibility, composed by `AppProviders` -- see [Frontend](frontend.md#application-contexts-srccontexts)): React contexts providing:
   - activeConversationId, auth state, per-conversation browser path state, user info (`userEmail`, `userName`), `googleServicesConnected` flag, `hasAnyServiceConnected` flag
   - settings modal state (`isSettingsOpen`, `setSettingsOpen`)
   - `refreshConnectionStatus()` for updating connection state after OAuth popup completion
@@ -590,7 +590,7 @@ The `run_script` and `run_python` tools execute scripts in ephemeral Podman cont
     - (Messages route to correct conversation even if user switches conversations)
 12. Backend saves all structured messages (text, tool_use, tool_result, action_request) to chat_history.json
 13. On stream complete, WebSocketManager transfers streamingMessages to messages in store
-14. WebSocketManager notifies stream complete → ConversationContext triggers Sidebar refresh
+14. WebSocketManager notifies stream complete → the Sidebar's list hooks (`useTopLevelConversations` / `useProjectConversations`) refresh their lists
 15. WebSocket closes with code 1000 (normal closure)
 ```
 
@@ -737,7 +737,7 @@ Disconnect resilience is implemented in `_run_send_message` (`chat/realtime/sock
 6. search_conversations() scans chat_history.json files with case-insensitive matching
 7. Backend returns highlighted snippets (max 3 per conversation, 50 total)
 8. SearchModal displays results with keyboard navigation
-9. User clicks/selects a result → navigates to conversation URL and sets scrollToMessageIndex in ConversationContext
+9. User clicks/selects a result → navigates to conversation URL and sets scrollToMessageIndex in NavigationContext
 10. ChatPanel loads conversation and scrolls to the target message with highlight animation
 ```
 
@@ -764,7 +764,7 @@ The chat app uses an inline sign-in screen on `/` instead of redirecting to a se
 
 ```
 1. User visits / in browser
-2. ConversationContext fetches GET /app/api/config, detects quest_env === "dev", sets isDevMode = true
+2. AppConfigContext fetches GET /app/api/config, detects quest_env === "dev", sets isDevMode = true
 3. SignInScreen shows dev login section: email input + "Dev Login" button below the Google sign-in button
 4. User enters any email address and clicks "Dev Login"
 5. Frontend POSTs {"email": "..."} to /auth/dev-login
@@ -783,9 +783,9 @@ When the user visits the chat app after logging in, the frontend authenticates d
 
 ```
 1. User visits / (session cookie already set from OAuth login)
-2. ConversationContext fetches GET /app/api/config to determine appName ("DevQuest" or "Quest")
+2. AppConfigContext fetches GET /app/api/config to determine appName ("DevQuest" or "Quest")
 3. App.tsx sets document.title to appName; frontend shows loading state with appName heading
-4. ConversationContext calls checkSession() which hits GET /app/api/me with cookie
+4. AuthContext calls checkSession() which hits GET /app/api/me with cookie
 4. Backend validates session cookie (named `COOKIE_NAME` from `auth/config.py`, environment-dependent) via `get_user_from_cookie()` in `auth/session.py` (strict type checks on `uid` and `v` fields: must be int, not bool, and uid must be positive), returns { email, name, google_services_connected, has_any_service_connected }
 5. Frontend sets isAuthenticated = true, stores userEmail, userName, googleServicesConnected, and hasAnyServiceConnected
 6. If has_any_service_connected is false (no services connected at all), settings auto-opens to Data Connections section
@@ -801,16 +801,16 @@ If the session check fails (not logged in, expired session, etc.):
 
 ```
 User Info Flow:
-1. ConversationContext calls checkSession() on mount
+1. AuthContext calls checkSession() on mount
 2. checkSession() calls GET /app/api/me with credentials: 'include' (cookie auth)
 3. Backend returns { email, name, google_services_connected, has_any_service_connected } from the database
-4. ConversationContext stores userEmail, userName, googleServicesConnected, hasAnyServiceConnected, sets isAuthenticated = true
+4. AuthContext stores userEmail, userName, googleServicesConnected, hasAnyServiceConnected, sets isAuthenticated = true
 5. If hasAnyServiceConnected is false (no services connected at all), settings auto-opens to Data Connections
 6. Sidebar renders UserInfoBar at bottom with name, email, avatar initial, and gear icon
 
 Settings Flow (Custom Instructions):
 1. User clicks gear icon in UserInfoBar
-2. ConversationContext sets isSettingsOpen = true
+2. App.tsx sets isSettingsOpen (NavigationContext) = true
 3. SettingsModal opens (rendered via createPortal to document.body)
 4. Modal loads current settings: GET /app/api/settings
 5. User edits custom system prompt and clicks Save
@@ -836,7 +836,7 @@ Settings Flow (Data Connections):
    calls window.opener.postMessage() and closes the popup (see generate_oauth_popup_success_page()
    in auth/popup_helpers.py)
 8. DataConnectionsSection listens for postMessage events and re-fetches connector status on completion
-9. ConversationContext.refreshConnectionStatus() is called to update app-level connection state
+9. AuthContext.refreshConnectionStatus() is called to update app-level connection state
 10. Fallback: if browser blocks the popup, an inline direct link is shown
 11. This section auto-opens when authenticated but no services are connected (truly new users only)
 See [OAuth Popup Flow Architecture](oauth-popup.md) for full details
@@ -887,7 +887,7 @@ On the backend, `run_conversation_turn()` resolves the skill contents via `get_a
 
 Loaded skill IDs are persisted to `data/chats/{id}/loaded_skills.json` via `ChatStorage.add_loaded_skill_ids()` in `chat/storage.py`, and retrieved via `GET /app/api/conversations/{id}/loaded-skills` for hydration on page reload. See [Skill Library Architecture](skill-library.md) for details.
 
-- **Frontend files**: `frontend/src/components/SkillSelectorModal.tsx` (modal), `frontend/src/components/ChatPanel.tsx` ("+ Skill" button), `frontend/src/contexts/ConversationContext.tsx` (queued/loaded skill state), `frontend/src/hooks/useConversation.ts` (hydration from server)
+- **Frontend files**: `frontend/src/components/SkillSelectorModal.tsx` (modal), `frontend/src/components/ChatPanel.tsx` ("+ Skill" button), `frontend/src/contexts/ConversationSkillsContext.tsx` (queued/loaded skill state), `frontend/src/hooks/useConversation.ts` (hydration from server)
 - **Backend files**: `chat/routes/conversations.py` (`GET /conversations/{id}/loaded-skills`), `chat/realtime/socket.py` (`skill_ids` extraction from the persistent-WS `send_message` payload), `chat/storage.py` (loaded skills file persistence), `chat/gemini_api/conversation.py` (skill resolution, `_wrap_message_with_metadata()` injection, `ChatStorage.add_loaded_skill_ids()`), `chat/gemini_api/system_prompt.py` (conversation skills guidance in system prompt)
 
 **Conditional System Instructions**:

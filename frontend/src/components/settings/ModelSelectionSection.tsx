@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { fetchModelSelection, updateModelSelection } from '../../api/client';
 import type { ModelSelectionListResponse, ModelSelectionRow } from '../../api/types';
 import type { ModelVisibility } from '../../constants/models';
-import { useConversationContext } from '../../contexts/ConversationContext';
+import { useAppConfig } from '../../contexts/AppConfigContext';
 import { SaveActions } from './ServiceCredentialsSection';
 import type { SaveStatus } from './ServiceCredentialsSection';
 import './ServiceCredentialsSection.css';
@@ -123,7 +123,7 @@ function ModelMenuPreview({
  * and are saved as one full replacement; the previews render the draft.
  */
 export function ModelSelectionSection() {
-  const { refreshModelCatalog } = useConversationContext();
+  const { refreshModelCatalog } = useAppConfig();
   const [data, setData] = useState<ModelSelectionListResponse | null>(null);
   const [loadError, setLoadError] = useState('');
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});

@@ -36,7 +36,12 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useConversationContext } from '../contexts/ConversationContext';
+import { useAppConfig } from '../contexts/AppConfigContext';
+import { useAuth } from '../contexts/AuthContext';
+import { useConversationModels } from '../contexts/ConversationModelsContext';
+import { useConversationSkills } from '../contexts/ConversationSkillsContext';
+import { useNavigationState } from '../contexts/NavigationContext';
+import { useProjects } from '../contexts/ProjectsContext';
 import { createConversation, createProjectConversation, ApiClientError } from '../api/client';
 import { uploadComposerAttachments, uploadFiles } from '../api/fileApi';
 import { seedNewConversation } from '../utils/newConversation';
@@ -59,20 +64,20 @@ interface HomeComposerProps {
 }
 
 export function HomeComposer({ onNewConversation }: HomeComposerProps) {
+  const { userName } = useAuth();
+  const { appName } = useAppConfig();
   const {
-    userName,
-    appName,
     getModelForConversation,
     setDraftModelForConversation,
     refreshDefaultModel,
+  } = useConversationModels();
+  const {
     getQueuedSkillsForConversation,
     setQueuedSkillsForConversation,
     setLoadedSkillsForConversation,
-    setPendingFirstMessage,
-    setActiveProjectId,
-    drilledProjectId,
-    projects,
-  } = useConversationContext();
+  } = useConversationSkills();
+  const { setPendingFirstMessage } = useNavigationState();
+  const { setActiveProjectId, drilledProjectId, projects } = useProjects();
 
   // When the Sidebar is drilled into a project, the first send targets that
   // project; name it under the greeting so the destination is visible.

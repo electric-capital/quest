@@ -95,7 +95,7 @@ The Guides feature maintains full backward compatibility with the existing custo
 
 ### Guide State Management
 
-`frontend/src/contexts/ConversationContext.tsx` keeps only the guide LIST (`guides`, `guidesLoaded`, `loadGuides()`), consumed by the Settings Guides section refresh, the routine guide-override dropdown in `NewRoutineModal.tsx`, and the read-only guide display in `RoutineSettingsModal.tsx` (the settings modal no longer offers guide selection -- a routine that still has a `guide_id` shows the guide's name with a Clear button, and routines without one show no guide UI at all; see [Routines Architecture](routines.md)).
+`frontend/src/contexts/GuidesContext.tsx` keeps only the guide LIST (`guides`, `guidesLoaded`, `loadGuides()`), consumed by the Settings Guides section refresh, the routine guide-override dropdown in `NewRoutineModal.tsx`, and the read-only guide display in `RoutineSettingsModal.tsx` (the settings modal no longer offers guide selection -- a routine that still has a `guide_id` shows the guide's name with a Clear button, and routines without one show no guide UI at all; see [Routines Architecture](routines.md)).
 
 Per-conversation guide selection, guide locking, and the associated localStorage keys (`quest_conversation_guides`, `quest_default_guide`, `quest_locked_conversations`) were removed along with the composer guide selector; stale localStorage entries are simply ignored.
 
@@ -114,7 +114,7 @@ The "Guides" section in `settings/GuidesSection.tsx` manages existing guides onl
 - Edit existing guides inline (name and content)
 - Delete any guide, the default included (with confirmation dialog)
 - Save status feedback ("Guide saved" / error message)
-- After any mutation (update/convert/delete), `refreshContextGuides()` is called to update the guide list in `ConversationContext` (which feeds the `NewRoutineModal` guide-override dropdown and the `RoutineSettingsModal` read-only guide display)
+- After any mutation (update/convert/delete), `refreshContextGuides()` is called to update the guide list in `GuidesContext` (which feeds the `NewRoutineModal` guide-override dropdown and the `RoutineSettingsModal` read-only guide display)
 
 ## Design Decisions
 

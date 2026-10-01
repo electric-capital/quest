@@ -9,7 +9,7 @@
 
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useConversationContext } from '../contexts/ConversationContext';
+import { useAuth } from '../contexts/AuthContext';
 import { LatestActiveConversationsTable } from '../components/LatestActiveConversationsTable';
 import { CostAnalysisTable } from '../components/CostAnalysisTable';
 import { UsersReportTable } from '../components/UsersReportTable';
@@ -49,7 +49,7 @@ const SECTIONS = [
 type SectionKey = (typeof SECTIONS)[number]['key'];
 
 export function AdminSystemReportsPage() {
-  const { isAdmin } = useConversationContext();
+  const { isAdmin } = useAuth();
   const [sectionKey, setSectionKey] = useState<SectionKey>('latest');
 
   if (!isAdmin) {

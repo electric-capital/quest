@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { changePassword } from '../../api/client';
-import { useConversationContext } from '../../contexts/ConversationContext';
+import { useAuth } from '../../contexts/AuthContext';
 import './SignInSettings.css';
 
 const MIN_PASSWORD_LENGTH = 8;
@@ -11,7 +11,7 @@ const MIN_PASSWORD_LENGTH = 8;
  * gets a fresh cookie from the server.
  */
 export function PasswordSection() {
-  const { userEmail, hasPassword, setHasPassword, isImpersonating } = useConversationContext();
+  const { userEmail, hasPassword, setHasPassword, isImpersonating } = useAuth();
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');

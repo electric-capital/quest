@@ -7,7 +7,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchActionRequestsEnriched, fetchActionRequestCounts, resolveActionRequest } from '../api/client';
 import type { EnrichedActionRequest, ActionRequestCountsResponse } from '../api/types';
-import { useConversationContext } from '../contexts/ConversationContext';
+import { useNavigationState } from '../contexts/NavigationContext';
 import { onRequestCountChange } from '../services/requestEvents';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
 import { ReviseFeedbackForm } from './ReviseFeedbackForm';
@@ -42,9 +42,7 @@ function formatTimestamp(isoTimestamp: string): string {
 }
 
 export function RequestsView() {
-  const {
-    setShowRequestsView,
-  } = useConversationContext();
+  const { setShowRequestsView } = useNavigationState();
 
   const navigate = useNavigate();
 

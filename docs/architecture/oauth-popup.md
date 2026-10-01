@@ -9,7 +9,7 @@ This document describes the OAuth popup flow used by connector buttons (Google S
 3. `openOAuthPopup()` in `frontend/src/utils/oauthPopup.ts` opens a centered 600x700 popup window
 4. The popup navigates through the OAuth provider's consent flow (Google, Slack, or Telegram's multi-step auth)
 5. On completion, the backend callback returns an HTML page (instead of redirecting to `/`) that calls `window.opener.postMessage()` and closes itself
-6. `DataConnectionsSection` receives the `postMessage` event, re-fetches connector status, and calls `refreshConnectionStatus()` on `ConversationContext`
+6. `DataConnectionsSection` receives the `postMessage` event, re-fetches connector status, and calls `refreshConnectionStatus()` on `AuthContext`
 7. The settings panel updates to reflect the new connection status without a page reload
 
 ## Popup Flag Propagation
@@ -95,7 +95,7 @@ If `window.open()` returns `null` (browser blocked the popup), `DataConnectionsS
 
 ## refreshConnectionStatus()
 
-`refreshConnectionStatus()` in `frontend/src/contexts/ConversationContext.tsx` calls `checkSession()` (which hits `GET /app/api/me`) to refresh the `googleServicesConnected` and `hasAnyServiceConnected` flags. This ensures the app-level state reflects the latest connection status after an OAuth popup completes. It is called both on `postMessage` receipt and on popup close detection.
+`refreshConnectionStatus()` in `frontend/src/contexts/AuthContext.tsx` calls `checkSession()` (which hits `GET /app/api/me`) to refresh the `googleServicesConnected` and `hasAnyServiceConnected` flags. This ensures the app-level state reflects the latest connection status after an OAuth popup completes. It is called both on `postMessage` receipt and on popup close detection.
 
 ## Non-Popup Fallback
 

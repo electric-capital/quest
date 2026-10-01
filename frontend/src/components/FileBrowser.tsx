@@ -10,7 +10,7 @@ import { extractFilesFromDataTransfer } from '../utils/directoryTraversal';
 import { getFileIconInfo } from '../utils/fileIcons';
 import { FileViewerModal } from './FileViewerModal';
 import { NewFolderModal } from './NewFolderModal';
-import { useConversationContext } from '../contexts/ConversationContext';
+import { useProjects } from '../contexts/ProjectsContext';
 import { Folder, Upload, FolderPlus, Eye, EyeOff } from 'lucide-react';
 import type { FileEntry } from '../api/types';
 import './FileBrowser.css';
@@ -85,7 +85,7 @@ function formatDate(isoString: string): string {
 }
 
 export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBrowserProps) {
-  const { activeProjectId } = useConversationContext();
+  const { activeProjectId } = useProjects();
   const projectId = projectIdProp === undefined ? activeProjectId : projectIdProp;
   const {
     currentPath,

@@ -39,7 +39,7 @@ Upstream service endpoints (`/api/gmail-*`, `/api/docs-*`, etc.) return JSON err
 
 ### Frontend Authentication Flow
 
-The frontend authenticates via session cookie without storing any API key. On mount, `ConversationContext.tsx` calls `GET /app/api/me` with `credentials: 'include'`. If unauthenticated, the inline `SignInScreen` component is shown. The flow is implemented in `frontend/src/utils/auth.ts` (`checkSession`), `frontend/src/contexts/ConversationContext.tsx`, and `frontend/src/components/SignInScreen.tsx`.
+The frontend authenticates via session cookie without storing any API key. On mount, `AuthContext.tsx` calls `GET /app/api/me` with `credentials: 'include'`. If unauthenticated, the inline `SignInScreen` component is shown. The flow is implemented in `frontend/src/utils/auth.ts` (`checkSession`), `frontend/src/contexts/AuthContext.tsx`, and `frontend/src/components/SignInScreen.tsx`.
 
 ## REST Endpoints
 
@@ -221,7 +221,7 @@ Retrieve the list of manually loaded skill IDs for a conversation. Used by the f
 
 **Implementation**: `get_conversation_loaded_skills()` in `chat/routes/conversations.py`. Reads from `ChatStorage.get_loaded_skill_ids()` in `chat/storage.py`, which reads `data/chats/{conversation_id}/loaded_skills.json`.
 
-**Frontend Usage**: `useConversation` hook in `frontend/src/hooks/useConversation.ts` calls `fetchConversationLoadedSkills(conversationId)` from `frontend/src/api/client.ts` after loading conversation history, hydrating the loaded skills set in `ConversationContext` so the Skill Selector Modal can show already-loaded skills as greyed out. See [Skill Library Architecture](../architecture/skill-library.md) for the full conversation skill loader feature.
+**Frontend Usage**: `useConversation` hook in `frontend/src/hooks/useConversation.ts` calls `fetchConversationLoadedSkills(conversationId)` from `frontend/src/api/client.ts` after loading conversation history, hydrating the loaded skills set in `ConversationSkillsContext` so the Skill Selector Modal can show already-loaded skills as greyed out. See [Skill Library Architecture](../architecture/skill-library.md) for the full conversation skill loader feature.
 
 ---
 
@@ -275,7 +275,7 @@ Search across all conversation messages for the authenticated user, returning hi
 
 **Implementation**: `search_endpoint()` in `chat/routes/conversations.py`. Delegates to `ChatStorage.search_conversations()` in `chat/storage.py`, which performs file-based scanning of `chat_history.json` files with case-insensitive matching.
 
-**Frontend Usage**: The `SearchModal` component (`frontend/src/components/SearchModal.tsx`) calls `searchConversations(query)` in `frontend/src/api/client.ts` with debounced typeahead input. Results display with highlighted snippets and keyboard navigation. Clicking a result navigates to the conversation and scrolls to the matching message via `scrollToMessageIndex` in `ConversationContext`.
+**Frontend Usage**: The `SearchModal` component (`frontend/src/components/SearchModal.tsx`) calls `searchConversations(query)` in `frontend/src/api/client.ts` with debounced typeahead input. Results display with highlighted snippets and keyboard navigation. Clicking a result navigates to the conversation and scrolls to the matching message via `scrollToMessageIndex` in `NavigationContext`.
 ---
 
 ### Composer Attachments
@@ -376,7 +376,7 @@ Custom 4xxx codes from `chat/realtime/socket.py`: 4401 (auth failed / revoked), 
 
 ### Get Current User Info
 
-`GET /app/api/me` -- Returns user email, display name, connection status, admin flag, `default_model` (the per-user "last-used" default web/composer model for private conversations, raw from `users.settings.default_model`) and `public_default_model` (the same for public-project conversations, raw from `users.settings.public_default_model`); either may be `null` -- the FE owns the fallback per visibility: Opus 4.8 when allowed + credentialed, else the admin's first top-level pick, else the first offerable model per `available_models` on `GET /app/api/config`. See `get_current_user_info()` in `chat/routes/user.py`. Response type: `UserInfo` in `frontend/src/api/types.ts`. The FE re-reads this endpoint on every fresh new-chat composer mount and on every private<->public context switch for cross-tab default-model correctness (see [Frontend](../architecture/frontend.md), ConversationContext `refreshDefaultModel`).
+`GET /app/api/me` -- Returns user email, display name, connection status, admin flag, `default_model` (the per-user "last-used" default web/composer model for private conversations, raw from `users.settings.default_model`) and `public_default_model` (the same for public-project conversations, raw from `users.settings.public_default_model`); either may be `null` -- the FE owns the fallback per visibility: Opus 4.8 when allowed + credentialed, else the admin's first top-level pick, else the first offerable model per `available_models` on `GET /app/api/config`. See `get_current_user_info()` in `chat/routes/user.py`. Response type: `UserInfo` in `frontend/src/api/types.ts`. The FE re-reads this endpoint on every fresh new-chat composer mount and on every private<->public context switch for cross-tab default-model correctness (see [Frontend](../architecture/frontend.md), ConversationModelsContext `refreshDefaultModel`).
 
 The `has_any_service_connected` flag drives auto-opening the settings panel to Data Connections for new users. The `is_admin` flag (from `admin_emails` in `server_config.json`) controls visibility of the `AdminOpsMenu` component.
 
@@ -467,7 +467,7 @@ Guides are named system prompt presets, **deprecated in favor of skills**: new g
 
 ## Model and Mode Configuration
 
-Available models are defined in the model registry in `chat/llm/config.py`. Deprecated model IDs are silently remapped. The model is passed via the WebSocket message payload and persisted on the `conversations.model` column. After the first message, the provider (Gemini or Anthropic) is locked per-conversation. Provider locking is in `frontend/src/contexts/ConversationContext.tsx`. API keys are from `server_credentials.json` (Gemini) or ADC credentials (Anthropic Vertex AI).
+Available models are defined in the model registry in `chat/llm/config.py`. Deprecated model IDs are silently remapped. The model is passed via the WebSocket message payload and persisted on the `conversations.model` column. After the first message, the provider (Gemini or Anthropic) is locked per-conversation. Provider locking is in `frontend/src/contexts/ConversationModelsContext.tsx`. API keys are from `server_credentials.json` (Gemini) or ADC credentials (Anthropic Vertex AI).
 
 All runs use direct Python SDK integration via `run_conversation_turn()` in `chat/gemini_api/conversation.py`, run by `chat/realtime/socket.py:_run_send_message` from the persistent WS. (The former Docker-based Gemini CLI chat mode and its `gemini.chat_mode` config knob were removed when gemini-cli was deprecated.)
 

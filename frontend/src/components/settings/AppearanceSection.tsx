@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useConversationContext } from '../../contexts/ConversationContext';
+import { useAppearance } from '../../contexts/AppearanceContext';
 import { THEME_OPTIONS, type ThemePreference } from '../../utils/theme';
 import { COLOR_THEMES, type ColorThemeId, type ColorThemeSpec } from '../../utils/colorTheme';
 import './AppearanceSection.css';
@@ -83,12 +83,12 @@ function ColorThemeSwatch({ spec }: { spec: ColorThemeSpec }) {
 /**
  * Settings > Appearance: light / dark / auto colour-scheme selector plus the
  * colour-theme (palette) picker. Both choices apply instantly
- * (ConversationContext.setTheme / setColorTheme set the <html data-theme> /
+ * (AppearanceContext.setTheme / setColorTheme set the <html data-theme> /
  * <html data-color-theme> attributes and cache them) and are persisted
  * server-side via PUT /settings so they follow the user across devices.
  */
 export function AppearanceSection() {
-  const { theme, setTheme, colorTheme, setColorTheme } = useConversationContext();
+  const { theme, setTheme, colorTheme, setColorTheme } = useAppearance();
   const [error, setError] = useState<string | null>(null);
 
   const choose = async (next: ThemePreference) => {

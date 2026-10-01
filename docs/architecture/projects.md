@@ -140,7 +140,7 @@ A back button at the top of the drill-down view calls `handleDrillDownBack()`, w
 
 When drilled into a project, the "Routines" section is always visible above the "Conversations" section (similar to how the "Projects" section is always visible in the main sidebar). When no routines exist, a "Create Routine" button is shown. When routines exist, a "+" button in the section header opens the `NewRoutineModal`. Each routine entry shows the routine name, a settings gear icon (opens `RoutineSettingsModal`), and a play button. If a routine has an active schedule, a clock icon indicator appears next to the routine name.
 
-Clicking the play button creates a new conversation in the project (linked to the routine via `routine_id`), optionally sets the guide override, and auto-sends the routine's prompt as the first message via the `pendingRoutineMessage` mechanism in `ConversationContext`.
+Clicking the play button creates a new conversation in the project (linked to the routine via `routine_id`), optionally sets the guide override, and auto-sends the routine's prompt as the first message via the `pendingRoutineMessage` mechanism in `NavigationContext`.
 
 In the Conversations section, conversations created by routines are grouped under collapsible entries per routine (showing the routine name, conversation count badge, and chevron toggle), while standalone conversations are listed individually. Groups and standalone conversations are interleaved by recency. See [Routines Architecture](routines.md) for the full run flow, conversation grouping details, and [Scheduling Architecture](scheduling.md) for the automatic scheduling system.
 

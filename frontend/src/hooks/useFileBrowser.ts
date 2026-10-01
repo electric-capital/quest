@@ -6,7 +6,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import type { FileEntry, ListFilesResponse, UploadResponse } from '../api/types';
 import { listFiles, uploadFiles as apiUploadFiles, uploadFilesWithPaths as apiUploadFilesWithPaths, downloadFile as apiDownloadFile, downloadFolder as apiDownloadFolder, deleteFile as apiDeleteFile, createFolder as apiCreateFolder, FileApiError } from '../api/fileApi';
 import type { FileWithPath } from '../utils/directoryTraversal';
-import { useConversationContext } from '../contexts/ConversationContext';
+import { useFileBrowserState } from '../contexts/FileBrowserStateContext';
 
 /**
  * Build a user-facing summary when an upload response contains partial errors.
@@ -68,7 +68,7 @@ interface UseFileBrowserResult {
  * Hook for managing file browser state and operations
  */
 export function useFileBrowser(conversationId: string | null): UseFileBrowserResult {
-  const { getFileBrowserState, setFileBrowserState } = useConversationContext();
+  const { getFileBrowserState, setFileBrowserState } = useFileBrowserState();
 
   // Get state from context (conversation-specific)
   const browserState = conversationId ? getFileBrowserState(conversationId) : { path: '/', history: ['/'], historyIndex: 0 };

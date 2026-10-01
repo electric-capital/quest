@@ -4,7 +4,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { createProject, ApiClientError } from '../api/client';
-import { useConversationContext } from '../contexts/ConversationContext';
+import { useAuth } from '../contexts/AuthContext';
 import { ModalShell } from './ModalShell';
 import './NewProjectModal.css';
 
@@ -26,7 +26,7 @@ export function NewProjectModal({ isOpen, onClose, onProjectCreated }: NewProjec
   const inputRef = useRef<HTMLInputElement>(null);
   // The public-project option is offered only while an admin has the
   // server-global public_projects feature gate open.
-  const { enabledFeatures } = useConversationContext();
+  const { enabledFeatures } = useAuth();
   const publicProjectsEnabled = enabledFeatures.includes(PUBLIC_PROJECTS_FEATURE);
 
   // Focus input when modal opens

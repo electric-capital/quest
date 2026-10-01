@@ -576,7 +576,7 @@ The `_DEPRECATED_MODELS` dict in `chat/gemini_api/constants.py` maps retired mod
 
 The frontend performs equivalent remapping via `DEPRECATED_MODEL_MAP` in `frontend/src/constants/models.ts`:
 
-- `ConversationContext.tsx` -- remaps the per-user default model (fetched from `GET /app/api/me`, no longer localStorage) and per-conversation models
+- `ConversationModelsContext.tsx` -- remaps the per-user default model (fetched from `GET /app/api/me`, no longer localStorage) and per-conversation models
 - `Sidebar.tsx` -- remaps routine model when executing a routine via `handleRunRoutine()`
 - `RoutineSettingsModal.tsx` -- remaps routine model when loading routine settings for editing
 

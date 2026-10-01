@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import './SignInScreen.css';
-import { useConversationContext } from '../contexts/ConversationContext';
+import { useAppConfig } from '../contexts/AppConfigContext';
 import { fetchPasswordLinkInfo, setPasswordWithLink } from '../api/client';
 import type { PasswordLinkInfo } from '../api/types';
 
@@ -19,7 +19,7 @@ function readToken(): string {
  * creating the account when needed, and signs the user in.
  */
 export function SetPasswordScreen() {
-  const { appName } = useConversationContext();
+  const { appName } = useAppConfig();
   const [token] = useState(readToken);
   const [info, setInfo] = useState<PasswordLinkInfo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);

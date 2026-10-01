@@ -7,7 +7,8 @@
  * clipboard-image paste/attachment queue, the model selector, the Skill
  * button + SkillSelectorModal, the Flags popover, and the ContextIndicator),
  * reading per-conversation model/skills/flags from
- * ``useConversationContext()`` keyed by the passed ``conversationId``.
+ * ``useConversationModels()`` / ``useConversationSkills()`` keyed by the
+ * passed ``conversationId``.
  *
  * The host (ChatPanel for live chat, HomeComposer for the root screen) decides
  * the actual send behavior by passing an ``onSend`` callback and a set of
@@ -34,7 +35,10 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { ArrowUp, Flag, Globe, LoaderCircle, Mic, Paperclip, Sparkles, Square } from 'lucide-react';
-import { useConversationContext } from '../contexts/ConversationContext';
+import { useAppConfig } from '../contexts/AppConfigContext';
+import { useAuth } from '../contexts/AuthContext';
+import { useConversationModels } from '../contexts/ConversationModelsContext';
+import { useConversationSkills } from '../contexts/ConversationSkillsContext';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { isVoiceInputSupported, useVoiceRecorder } from '../hooks/useVoiceRecorder';
 import type { VoiceRecording } from '../hooks/useVoiceRecorder';
@@ -310,12 +314,14 @@ export function Composer({
   const {
     getModelForConversation, setModelForConversation,
     getLockedProvider, lockConversationProvider, isProviderLocked,
+  } = useConversationModels();
+  const {
     getQueuedSkillsForConversation, setQueuedSkillsForConversation,
     getLoadedSkillsForConversation,
     markSkillsAsLoaded,
-    availableModelIds,
-    enabledFeatures,
-  } = useConversationContext();
+  } = useConversationSkills();
+  const { availableModelIds } = useAppConfig();
+  const { enabledFeatures } = useAuth();
 
   // Models whose backend credentials are configured server-side. null means
   // the config fetch hasn't resolved yet -- treat as "all available".

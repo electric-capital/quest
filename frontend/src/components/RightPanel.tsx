@@ -22,7 +22,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { FileBrowser } from './FileBrowser';
 import { ProjectTables } from './ProjectTables';
-import { useConversationContext } from '../contexts/ConversationContext';
+import { useProjects } from '../contexts/ProjectsContext';
 import { fetchProjectConversations } from '../api/client';
 import './RightPanel.css';
 
@@ -86,7 +86,7 @@ function useProjectWorkspaceProxy(projectId: string | null): string | null {
 }
 
 export function RightPanel({ conversationId, projectId: urlProjectId }: RightPanelProps) {
-  const { drilledProjectId } = useConversationContext();
+  const { drilledProjectId } = useProjects();
 
   // With a live conversation the URL decides (a standalone chat viewed while
   // the Sidebar happens to be drilled must NOT show project cards). Without

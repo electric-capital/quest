@@ -246,7 +246,7 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 
 #### App Integration
 - App layout with two-column + file browser layout, conditional rendering of RequestsView vs chat panel, global Cmd/Ctrl+K keyboard shortcut for search
-- Chat state management (conversationStore, WebSocketManager, ConversationContext) with direct event subscriptions for component refresh
+- Chat state management (conversationStore, WebSocketManager, the per-responsibility contexts under `frontend/src/contexts/`) with direct event subscriptions for component refresh
 - Model selector (Gemini 3.1 Flash-Lite, Gemini 3 Flash, Gemini 3.5 Flash, Claude Haiku 4.5, Claude Sonnet 4.6, Claude Opus 4.6, Claude Opus 4.7, Claude Opus 4.8; deprecated models such as Gemini 3.1 Pro are hidden but stay usable on conversations that already have them) with provider locking after first message (filters dropdown to same-provider models) and context usage indicator
 - Authentication integration (session cookie, inline sign-in, dev email login when `QUEST_ENV=dev`)
 - Static file serving and production deployment (single-port)
@@ -379,6 +379,15 @@ quest/
 │   │   │   └── models.ts   # AVAILABLE_MODELS array with model IDs, display names, provider tags, maxInputTokens, and an optional deprecated flag per model; SELECTABLE_MODELS filtered view (excludes deprecated models, e.g. Gemini 3.1 Pro) used by all pickers; getProviderForModel() helper; getModelDisplayName() helper for resolving model IDs to human-readable names; isDeprecatedModel() helper; DEPRECATED_MODEL_MAP for silent remapping of retired models
 │   │   ├── components/     # React UI components
 │   │   │   ├── Sidebar.tsx        # Sidebar with Requests section (badge counter with event-driven refresh via requestEvents.ts and 30-second polling fallback), Search section with magnifier icon (opens SearchModal), projects section (drill-down navigation with conversation auto-selection and top-level conversation restore), always-visible routines section, and conversations list (includes UserInfoBar); subscribes directly to `webSocketManager.onStreamComplete` for conversation list refresh using stale-while-revalidate (`silentLoadConversations`); subscribes to `webSocketManager.onConversationRenamed` for real-time sidebar name updates when the model sets a name via `set_conversation_name`; routine conversation grouping with collapsible entries; model propagation when running routines; conversation archive and rename with meatball menu and optimistic UI updates; per-section filter popover (filter icon with "Show Archived" and "Show Slack Conversations" checkboxes, both unchecked by default, no persistence); inline rename UI (text input, Enter to save, Escape to cancel); 30-second project conversation polling for server-created conversations (with visibility-aware scheduling and in-flight guard)
+│   │   │   ├── sidebar/           # Sidebar section components (Sidebar.tsx is the shell; data lives in the hooks above)
+│   │   │   │   ├── ConversationsSection.tsx  # Top-level Conversations header + paged list + auto-paging Load more row
+│   │   │   │   ├── ProjectPanel.tsx          # Drilled project: header, Routines section, grouped conversation list
+│   │   │   │   ├── ProjectsSection.tsx       # Projects list / Create Project call-to-action
+│   │   │   │   ├── RoutinesSection.tsx       # Routine rows (schedule indicator, settings, run)
+│   │   │   │   ├── ConversationRow.tsx       # One conversation row (origin badge, title / inline rename, options menu); shared by all three lists
+│   │   │   │   ├── ConversationFilterMenu.tsx  # Section-header filter popover (Show Archived / Slack / Inference)
+│   │   │   │   ├── RequestsBadge.tsx         # Open-request count badge on the brand-bar inbox button
+│   │   │   │   └── icons.tsx                 # The sidebar's inline SVG glyphs
 │   │   │   ├── SearchModal.tsx    # Search modal with debounced typeahead, keyboard navigation, highlighted result snippets, click-to-navigate
 │   │   │   ├── SearchModal.css    # SearchModal styles
 │   │   │   ├── ChatPanel.tsx      # Main chat interface (uses useConversation, "+ Skill" button for conversation skill loading, model selector hydrated from server with provider locking after first message and PATCH-back on change, context usage indicator via ContextIndicator component with system prompt viewer, data-message-index attributes, scroll-to-message with highlight animation)
@@ -417,13 +426,13 @@ quest/
 │   │   │   │   ├── SkillsSection.css          # Skills section styles (tabs, skill cards, visibility badges, sharing UI, auto-load toggle)
 │   │   │   │   ├── SignOutSection.tsx          # Logout, disconnect, delete account
 │   │   │   │   └── SignOutSection.css          # Sign out section styles
-│   │   │   ├── SignInScreen.tsx   # Inline sign-in screen for unauthenticated users (heading uses appName from ConversationContext); in dev mode (isDevMode), shows email input + "Dev Login" button for email-based login via POST /auth/dev-login
+│   │   │   ├── SignInScreen.tsx   # Inline sign-in screen for unauthenticated users (heading uses appName from AppConfigContext); in dev mode (isDevMode), shows email input + "Dev Login" button for email-based login via POST /auth/dev-login
 │   │   │   ├── SignInScreen.css   # SignInScreen styles (includes dev login section: divider, form, input, button, note)
 │   │   │   ├── ActionRequestMessage.tsx  # Inline action request UI with Approve / Revise / Stop buttons (non-blocking, database-persisted); renders server-provided preview_fields generically; falls back to fetching preview from API for older messages; approve button label from server-provided approve_label; calendar invites collapse to a Created summary; emits request count change events after resolution
 │   │   │   ├── ActionRequestMessage.css  # ActionRequestMessage styles
 │   │   │   ├── RequestsView.tsx         # Full-pane Requests view with filter tabs (Open default, Executed, Denied, Stopped, All), request cards, Approve / Revise / Stop, routine/project context, live updates via WebSocket + 30s polling, "N new requests" banner
 │   │   │   ├── RequestsView.css         # RequestsView styles
-│   │   │   ├── AdminOpsMenu.tsx         # Admin operations menu (wrench icon, visible to admins only); inline variant rendered in UserInfoBar next to the settings gear, floating bottom-right variant on the sidebar-less System Reports page; server shutdown with two-step confirmation; reads isAdmin from ConversationContext
+│   │   │   ├── AdminOpsMenu.tsx         # Admin operations menu (wrench icon, visible to admins only); inline variant rendered in UserInfoBar next to the settings gear, floating bottom-right variant on the sidebar-less System Reports page; server shutdown with two-step confirmation; reads isAdmin from AuthContext
 │   │   │   ├── AdminOpsMenu.css         # AdminOpsMenu styles (dark/light theme support)
 │   │   │   ├── NewProjectModal.tsx       # Modal for creating a new project (name input)
 │   │   │   ├── NewProjectModal.css       # NewProjectModal styles
@@ -435,16 +444,30 @@ quest/
 │   │   │   ├── RoutineSettingsModal.tsx  # Dedicated modal (720px) with left nav sidebar (Prompt, Schedule, Delete sections), auto-growing prompt textarea
 │   │   │   └── RoutineSettingsModal.css  # RoutineSettingsModal styles (left nav layout, section content, disabled schedule fields)
 │   │   ├── contexts/       # React contexts
-│   │   │   └── ConversationContext.tsx  # Active conversation and session auth context (includes the guide list for Settings/routine dropdowns, provider locking state via lockedProviders persisted to localStorage, per-conversation queued/loaded skill state for conversation skill loader, pendingRoutineMessage for routine auto-send, showRequestsView/setShowRequestsView for Requests pane toggle, appName derived from /app/api/config for dev mode branding, isDevMode boolean (true when QUEST_ENV=dev) for conditional dev login UI, scrollToMessageIndex/setScrollToMessageIndex for search result navigation, isAdmin boolean from /app/api/me response for admin UI visibility; provider value memoized with useMemo). Note: refresh triggers (`refreshTrigger`, `fileBrowserRefreshTrigger`) were removed to eliminate UI flicker; Sidebar subscribes directly to `WebSocketManager.onStreamComplete` and FileBrowser subscribes to `persistentWebSocket.onGlobalEvent` for `file_list_changed`
+│   │   │   ├── AppProviders.tsx             # Composes the per-responsibility contexts below; App.tsx wraps the routes in it
+│   │   │   ├── AppConfigContext.tsx         # Unauthenticated GET /app/api/config state (appName, isDevMode, sign-in method, model catalog + available_models, refreshModelCatalog) and the GET /app/api/version redeploy poll (updateAvailable)
+│   │   │   ├── AuthContext.tsx              # Session check on mount (GET /app/api/me): isAuthenticated/isCheckingAuth, user identity, isAdmin, enabledFeatures, impersonation, connection flags, hasPassword, the one-shot `sessionSnapshot` other contexts hydrate from; opens/closes the persistent WebSocket with the session
+│   │   │   ├── AppearanceContext.tsx        # Settings > Appearance colour scheme + colour theme (localStorage boot, /me hydration, PUT /settings)
+│   │   │   ├── NavigationContext.tsx        # activeConversationId (URL mirror), showRequestsView, scrollToMessageIndex, settings modal state, pendingRoutineMessage / pendingFirstMessage hand-offs
+│   │   │   ├── ProjectsContext.tsx          # Project list, URL-mirrored activeProjectId, Sidebar drilledProjectId
+│   │   │   ├── GuidesContext.tsx            # Deprecated guide list for the Settings Guides section and routine guide-override dropdowns (fetched only while the guides gate is open)
+│   │   │   ├── ConversationModelsContext.tsx  # Per-user default models (hydrated from /me, refreshDefaultModel / persistDefaultModel), per-conversation model overrides, provider locks persisted to localStorage
+│   │   │   ├── ConversationSkillsContext.tsx  # Per-conversation queued/loaded skill state for the conversation skill loader
+│   │   │   └── FileBrowserStateContext.tsx    # Per-conversation file-browser path/history
 │   │   ├── hooks/          # React hooks
 │   │   │   ├── useConversation.ts   # Per-conversation state subscription (exposes subAgentToolCalls map and context usage, hydrates sub-agent data, context usage, and loaded skills from persisted data on load)
-│   │   │   └── useFileBrowser.ts    # File browser state management (includes `uploadFilesWithPaths` for folder uploads, `buildUploadErrorMessage` for partial error display, `downloadFolder` for folder zip download, and `silentRefresh` for stale-while-revalidate file list updates)
+│   │   │   ├── useFileBrowser.ts    # File browser state management (includes `uploadFilesWithPaths` for folder uploads, `buildUploadErrorMessage` for partial error display, `downloadFolder` for folder zip download, and `silentRefresh` for stale-while-revalidate file list updates)
+│   │   │   ├── useTopLevelConversations.ts  # Sidebar data hook: paged standalone conversation list (filters, keyset paging, stale-while-revalidate refresh on WS events, optimistic edits)
+│   │   │   ├── useProjectConversations.ts   # Sidebar data hook: per-project conversation lists (on-demand load, 30s visibility-aware poll while drilled, WS refresh, optimistic edits)
+│   │   │   ├── useProjectRoutines.ts        # Sidebar data hook: per-project routine lists + routine_list_changed refresh
+│   │   │   └── useConversationListActions.ts  # Per-list row UI state (open menu, inline rename) and optimistic archive/unarchive/rename for one Sidebar list
 │   │   ├── services/       # Service singletons
 │   │   │   ├── requestEvents.ts     # Lightweight pub/sub event emitter for request count change signals
 │   │   │   └── WebSocketManager.ts  # Routes WebSocket messages to store (sendMessage accepts optional guideId and skillIds); emits request count change events on `action_request` messages; routes `sub_agent_tool_use` and `sub_agent_tool_result` events to conversationStore; handles `conversation_updated` events via `onConversationRenamed` callback mechanism for real-time sidebar name updates; hydrates context usage from stats events via setContextUsage(); exposes `onStreamComplete` and `onConversationRenamed` callback subscriptions (Sidebar, ProjectTables). The earlier `onToolResult` / `publishToolResult` plumbing was removed when FileBrowser migrated to subscribing for `file_list_changed` directly via `persistentWebSocket.onGlobalEvent`
 │   │   ├── store/          # State management
 │   │   │   └── conversationStore.ts # Observable per-conversation state (includes getConversationSnapshot for per-conversation change detection, subAgentToolCalls Map for sub-agent tool call tree display, contextTokens/maxContextTokens for context usage indicator)
 │   │   ├── utils/          # Utility functions
+│   │   │   ├── sidebarItems.ts      # Pure Sidebar list derivation: filter toggles, routine-run grouping, most-recent-first interleaving, run timestamps
 │   │   │   ├── auth.ts          # Session check utility (checkSession(), return type includes is_admin)
 │   │   │   ├── directoryTraversal.ts # Recursive directory traversal for folder drag-and-drop uploads via `webkitGetAsEntry()` API; exports `FileWithPath` and `extractFilesFromDataTransfer()`
 │   │   │   ├── formatters.ts    # Formatting utilities (formatTimestamp, parseUTCTimestamp, formatNumber)

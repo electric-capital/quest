@@ -2,7 +2,9 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Menu, Folder, SquarePen } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import './MobileShell.css'
-import { useConversationContext } from '../contexts/ConversationContext'
+import { useAppConfig } from '../contexts/AppConfigContext'
+import { useNavigationState } from '../contexts/NavigationContext'
+import { useProjects } from '../contexts/ProjectsContext'
 import { Sidebar } from './Sidebar'
 import { ChatPanel } from './ChatPanel'
 import { HomeComposer } from './HomeComposer'
@@ -36,15 +38,14 @@ export function MobileShell({
   onNewConversation,
   onProjectIdLoaded,
 }: MobileShellProps) {
+  const { appName } = useAppConfig()
   const {
-    appName,
     isSettingsOpen,
     setSettingsOpen,
     showRequestsView,
     setShowRequestsView,
-    drilledProjectId,
-    projects,
-  } = useConversationContext()
+  } = useNavigationState()
+  const { drilledProjectId, projects } = useProjects()
   const navigate = useNavigate()
 
   // While the sidebar is drilled into a project, the top bar names that
