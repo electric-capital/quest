@@ -169,7 +169,7 @@ Parameters:
 - `ref` (optional): Branch or tag to run on (not a commit SHA). Defaults to the repository's default branch.
 - `inputs` (optional): Object of workflow input values, e.g. `{"environment": "staging", "dry_run": true}`. Max 25 inputs; values are sent as strings (booleans as `true`/`false`). Omitted inputs take the workflow's defaults.
 
-Before proposing a run with inputs, read the workflow file (`/repos/{owner}/{repo}/contents/.github/workflows/{file}`) and use exactly the input names declared under `on.workflow_dispatch.inputs` (respecting `required`, `type` and `options`) -- GitHub rejects unknown or missing required inputs when the user approves. Only workflows with a `workflow_dispatch` trigger can be run.
+`inputs` is checked against the inputs the workflow file declares under `on.workflow_dispatch.inputs` on the chosen ref: unknown names, missing required inputs (those without a default), values outside a `choice` input's `options`, and non-`true`/`false` or non-numeric values for `boolean` / `number` inputs are rejected immediately, and the error lists the declared inputs so you can correct the request. Input names are matched exactly. You can read the workflow file up front (`/repos/{owner}/{repo}/contents/.github/workflows/{file}`) to pick values. Only workflows with a `workflow_dispatch` trigger can be run.
 
 The result carries the new run's `run_id` and `url` when GitHub returns them; follow the run with `/repos/{owner}/{repo}/actions/runs/{run_id}` and its jobs.
 

@@ -31,6 +31,9 @@ dependencies = [
     # Encryption at rest (config/encryption.py): AES-256-GCM + Argon2id
     "cryptography>=42.0.0",
     "markdownify>=1.2.3",
+    # Parsing GitHub workflow files to validate workflow_dispatch inputs
+    # (plugins/github/handlers.py)
+    "pyyaml>=6.0",
 ]
 
 [build-system]

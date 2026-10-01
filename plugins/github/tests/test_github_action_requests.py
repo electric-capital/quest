@@ -43,7 +43,28 @@ _WORKFLOW = {
     "state": "active",
 }
 
-_WORKFLOW_FILE = "name: Deploy to production\non:\n  workflow_dispatch:\n    inputs:\n      environment:\n"
+_WORKFLOW_FILE = """\
+name: Deploy to production
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Where to deploy
+        type: choice
+        options: [staging, production]
+        default: staging
+      dry_run:
+        type: boolean
+        default: false
+      replicas:
+        type: number
+      note:
+jobs: {}
+"""
+
+_FILE_ROUTE = ("GET", "/repos/acme/site/contents/.github/workflows/deploy.yml")
 
 
 class _Response:
@@ -228,6 +249,94 @@ class TestTriggerWorkflowProposal:
         assert "workflow_name" not in params
         # The card falls back to the identifier the model supplied.
         assert _preview(GitHubTriggerWorkflowHandler(), params)["Workflow"] == "deploy.yml"
+
+
+class TestTriggerWorkflowInputValidation:
+    """Inputs are checked against the workflow file's declared inputs
+    (GitHub has no dry-run endpoint for a dispatch)."""
+
+    def _propose(self, monkeypatch, inputs=None, *, file_text=_WORKFLOW_FILE):
+        _FakeGitHub(monkeypatch, _workflow_routes({_FILE_ROUTE: _Response(text=file_text)}))
+        handler = GitHubTriggerWorkflowHandler()
+        raw = {**_REPO, "workflow": "deploy.yml", "ref": "main"}
+        if inputs is not None:
+            raw["inputs"] = inputs
+        return _run(handler.validate_against_upstream(handler.validate_params(raw), _USER))
+
+    def test_declared_inputs_accepted(self, monkeypatch):
+        params = self._propose(monkeypatch, {
+            "environment": "production", "dry_run": True, "replicas": 3, "note": "hi",
+        })
+        assert params["inputs"] == {
+            "environment": "production", "dry_run": "true", "replicas": "3", "note": "hi",
+        }
+        # Nothing is required here, so no inputs at all is fine too.
+        assert "inputs" not in self._propose(monkeypatch)
+
+    def test_unknown_input_lists_the_declared_ones(self, monkeypatch):
+        with pytest.raises(ValueError) as exc:
+            self._propose(monkeypatch, {"env": "production"})
+        message = str(exc.value)
+        assert "Unknown workflow input(s) ['env']" in message
+        assert ".github/workflows/deploy.yml on ref 'main'" in message
+        assert "environment (choice: staging | production, default staging)" in message
+        assert "dry_run (boolean, default false)" in message
+        assert "replicas (number)" in message
+        assert "note (string)" in message
+
+    @pytest.mark.parametrize("inputs,match", [
+        ({"environment": "prod"}, r"must be one of \['staging', 'production'\]"),
+        ({"dry_run": "yes"}, "boolean input"),
+        ({"replicas": "three"}, "number input"),
+        # Input names are matched exactly.
+        ({"Environment": "staging"}, "Unknown workflow input"),
+    ])
+    def test_value_type_rejections(self, monkeypatch, inputs, match):
+        with pytest.raises(ValueError, match=match):
+            self._propose(monkeypatch, inputs)
+
+    def test_missing_required_input(self, monkeypatch):
+        text = (
+            "on:\n  workflow_dispatch:\n    inputs:\n"
+            "      version:\n        required: true\n"
+            "      channel:\n        required: true\n        default: stable\n"
+        )
+        with pytest.raises(ValueError) as exc:
+            self._propose(monkeypatch, {"channel": "beta"}, file_text=text)
+        assert "Missing required workflow input(s) ['version']" in str(exc.value)
+        assert "version (string, required)" in str(exc.value)
+        # A required input with a default may be left out.
+        self._propose(monkeypatch, {"version": "1.2.3"}, file_text=text)
+
+    @pytest.mark.parametrize("file_text", [
+        "on: workflow_dispatch\n",
+        "on: [push, workflow_dispatch]\n",
+        "on:\n  workflow_dispatch:\n",
+        "on:\n  workflow_dispatch: {}\n",
+        '"on":\n  workflow_dispatch:\n    inputs: {}\n',
+    ])
+    def test_trigger_without_inputs(self, monkeypatch, file_text):
+        self._propose(monkeypatch, file_text=file_text)
+        with pytest.raises(ValueError, match="declares no inputs"):
+            self._propose(monkeypatch, {"environment": "staging"}, file_text=file_text)
+
+    @pytest.mark.parametrize("file_text", [
+        "on: push\n",
+        "on: [push, pull_request]\n",
+        # The trigger name only appears in a comment / a step.
+        "# workflow_dispatch was removed\non:\n  push:\njobs: {}\n",
+    ])
+    def test_no_dispatch_trigger(self, monkeypatch, file_text):
+        with pytest.raises(ValueError, match="no 'workflow_dispatch' trigger"):
+            self._propose(monkeypatch, file_text=file_text)
+
+    def test_unparseable_file_leaves_inputs_to_github(self, monkeypatch):
+        broken = "on:\n  workflow_dispatch:\n\tinputs: [unclosed\n"
+        params = self._propose(monkeypatch, {"anything": "goes"}, file_text=broken)
+        assert params["inputs"] == {"anything": "goes"}
+        # ...but a file that never mentions the trigger is still rejected.
+        with pytest.raises(ValueError, match="no 'workflow_dispatch' trigger"):
+            self._propose(monkeypatch, file_text="on:\n\tpush: [unclosed\n")
 
 
 class TestTriggerWorkflowExecute:

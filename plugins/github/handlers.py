@@ -25,11 +25,13 @@ authoritative error surfaces at Approve time.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from urllib.parse import quote
 
 import httpx
+import yaml
 
 from chat.action_request_types.base import ActionRequestHandler
 from chat.action_request_types._param_validation import reject_unknown_params
@@ -58,6 +60,10 @@ _MAX_REF_LENGTH = 255
 # GitHub's documented cap on workflow_dispatch input properties.
 _MAX_WORKFLOW_INPUTS = 25
 _MAX_INPUT_VALUE_LENGTH = 4000
+
+# Workflow files larger than this are not parsed (inputs go unchecked).
+_MAX_WORKFLOW_FILE_CHARS = 512 * 1024
+_MAX_DECLARED_SUMMARY_CHARS = 1500
 
 # GitHub's issue-comment body limit.
 _MAX_COMMENT_LENGTH = 65536
@@ -249,6 +255,147 @@ def _validate_workflow_inputs(inputs) -> dict:
     return normalized
 
 
+# Sentinel: the workflow file could not be interpreted, so nothing can be
+# concluded from it.
+_UNPARSED = object()
+
+
+def _parse_dispatch_inputs(text: str):
+    """The ``workflow_dispatch`` inputs a workflow file declares.
+
+    GitHub has no endpoint that validates a dispatch without running it,
+    so the handler reads the workflow file and checks the inputs itself.
+    Returns ``{input name: spec dict}`` (empty when the trigger declares
+    no inputs), ``None`` when the file has no ``workflow_dispatch``
+    trigger, or ``_UNPARSED`` when the file cannot be interpreted.
+    """
+    if len(text) > _MAX_WORKFLOW_FILE_CHARS:
+        return _UNPARSED
+    try:
+        doc = yaml.safe_load(text)
+    except Exception:
+        return _UNPARSED
+    if not isinstance(doc, dict):
+        return _UNPARSED
+    # YAML 1.1 reads the bare key `on` as the boolean true.
+    if "on" in doc:
+        triggers = doc["on"]
+    elif True in doc:
+        triggers = doc[True]
+    else:
+        return _UNPARSED
+
+    if isinstance(triggers, str):
+        return {} if triggers == "workflow_dispatch" else None
+    if isinstance(triggers, list):
+        return {} if "workflow_dispatch" in triggers else None
+    if not isinstance(triggers, dict):
+        return _UNPARSED
+    if "workflow_dispatch" not in triggers:
+        return None
+    config = triggers["workflow_dispatch"]
+    inputs = config.get("inputs") if isinstance(config, dict) else None
+    if inputs is None:
+        return {}
+    if not isinstance(inputs, dict):
+        return _UNPARSED
+    return {
+        str(name): spec if isinstance(spec, dict) else {}
+        for name, spec in inputs.items()
+    }
+
+
+def _yaml_scalar(value) -> str:
+    """A YAML scalar as the string GitHub passes to the workflow."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _input_type(spec: dict) -> str:
+    return str(spec.get("type") or "string").lower()
+
+
+def _input_options(spec: dict) -> list[str]:
+    options = spec.get("options")
+    return [_yaml_scalar(o) for o in options] if isinstance(options, list) else []
+
+
+def _input_is_required(spec: dict) -> bool:
+    """Required with nothing to fall back on: GitHub refuses the dispatch
+    when such an input is left out."""
+    return spec.get("required") is True and spec.get("default") in (None, "")
+
+
+def _declared_inputs_summary(declared: dict) -> str:
+    """The workflow's declared inputs, for the model to correct against."""
+    if not declared:
+        return "The workflow declares no inputs."
+    parts = []
+    for name, spec in declared.items():
+        kind = _input_type(spec)
+        details = [kind]
+        options = _input_options(spec)
+        if kind == "choice" and options:
+            details = ["choice: " + " | ".join(options)]
+        if _input_is_required(spec):
+            details.append("required")
+        elif spec.get("default") not in (None, ""):
+            details.append(f"default {_yaml_scalar(spec['default'])}")
+        parts.append(f"{name} ({', '.join(details)})")
+    summary = "Declared inputs: " + "; ".join(parts)
+    if len(summary) > _MAX_DECLARED_SUMMARY_CHARS:
+        summary = summary[:_MAX_DECLARED_SUMMARY_CHARS] + "..."
+    return summary + "."
+
+
+def _check_inputs_against_declared(inputs: dict, declared: dict, where: str) -> None:
+    """Raise ``ValueError`` when ``inputs`` would be refused by GitHub.
+
+    Strict on purpose: every rule here has an exact form that is always
+    accepted (the declared name, ``true`` / ``false``, a listed option),
+    so a rejection costs the model one correction, never a valid run.
+    """
+    summary = _declared_inputs_summary(declared)
+
+    unknown = sorted(name for name in inputs if name not in declared)
+    if unknown:
+        raise ValueError(
+            f"Unknown workflow input(s) {unknown} for {where}. {summary}"
+        )
+    missing = [
+        name for name, spec in declared.items()
+        if _input_is_required(spec) and name not in inputs
+    ]
+    if missing:
+        raise ValueError(
+            f"Missing required workflow input(s) {missing} for {where}. {summary}"
+        )
+
+    for name, value in inputs.items():
+        spec = declared[name]
+        kind = _input_type(spec)
+        options = _input_options(spec)
+        if kind == "choice" and options and value not in options:
+            raise ValueError(
+                f"inputs[{name!r}] must be one of {options} for {where}; got "
+                f"{_truncate_for_error(value)!r}"
+            )
+        if kind == "boolean" and value not in ("true", "false"):
+            raise ValueError(
+                f"inputs[{name!r}] is a boolean input of {where}: pass true "
+                f"or false; got {_truncate_for_error(value)!r}"
+            )
+        if kind == "number":
+            try:
+                float(value)
+            except ValueError:
+                raise ValueError(
+                    f"inputs[{name!r}] is a number input of {where}; got "
+                    f"{_truncate_for_error(value)!r}"
+                ) from None
+
+
 def _workflow_label(params: dict) -> str:
     """The workflow as the card names it: its GitHub name plus file.
 
@@ -359,10 +506,13 @@ class GitHubTriggerWorkflowHandler(ActionRequestHandler):
         """Resolve the workflow (and the default branch) at proposal time.
 
         Rejects same-turn when the workflow does not exist, is disabled,
-        its file is missing on the chosen ref, or the file has no
-        ``workflow_dispatch`` trigger; injects the workflow's GitHub name
-        and path so the card names the workflow rather than echoing the
-        raw file name / id. A ``ref`` left out by the model is filled in
+        its file is missing on the chosen ref, the file has no
+        ``workflow_dispatch`` trigger, or ``inputs`` does not fit the
+        inputs the file declares (unknown names, missing required inputs,
+        values outside a choice / boolean / number type); injects the
+        workflow's GitHub name and path so the card names the workflow
+        rather than echoing the raw file name / id. A ``ref`` left out by
+        the model is filled in
         with the repository's default branch -- or the proposal is
         rejected when that cannot be determined, so a card never goes out
         without the ref it will run on.
@@ -419,8 +569,9 @@ class GitHubTriggerWorkflowHandler(ActionRequestHandler):
 
         if path.startswith(_WORKFLOWS_DIR):
             # A dispatch runs the workflow file as it exists on the ref, so
-            # read that copy: missing file or no workflow_dispatch trigger
-            # both mean GitHub would refuse the run.
+            # read that copy: a missing file, no workflow_dispatch trigger
+            # or inputs it does not declare all mean GitHub would refuse
+            # the run.
             file_resp = await _proposal_read(
                 self.type_name, user,
                 f"{repo_path}/contents/{quote(path, safe='/')}",
@@ -432,12 +583,26 @@ class GitHubTriggerWorkflowHandler(ActionRequestHandler):
                     "not exist). Pick a branch or tag that contains it."
                 ),
             )
-            if file_resp is not None and "workflow_dispatch" not in file_resp.text:
-                raise ValueError(
-                    f"Workflow {path} on ref {params['ref']!r} has no "
-                    "'workflow_dispatch' trigger, so it cannot be run "
-                    "manually."
-                )
+            if file_resp is not None:
+                where = f"{path} on ref {params['ref']!r}"
+                text = file_resp.text
+                declared = await asyncio.to_thread(_parse_dispatch_inputs, text)
+                if declared is _UNPARSED:
+                    # Unreadable file: only reject what a substring check
+                    # can prove, and leave the inputs to GitHub.
+                    declared = {} if "workflow_dispatch" in text else None
+                    check_inputs = False
+                else:
+                    check_inputs = True
+                if declared is None:
+                    raise ValueError(
+                        f"Workflow {where} has no 'workflow_dispatch' "
+                        "trigger, so it cannot be run manually."
+                    )
+                if check_inputs:
+                    _check_inputs_against_declared(
+                        params.get("inputs") or {}, declared, where,
+                    )
         return params
 
     async def execute(
