@@ -2,7 +2,7 @@
 
 ## Overview
 
-Quest integrates with GitHub using the OAuth web flow. Each user connects individually via OAuth to obtain an access token for read-only API operations (repos, issues, pull requests, commits, search, file contents, stargazers).
+Quest integrates with GitHub using the OAuth web flow. Each user connects individually via OAuth to obtain an access token for read API operations (repos, issues, pull requests, commits, search, file contents, stargazers) and the three approval-gated writes (run a workflow, comment on an issue or pull request, close / reopen an issue -- see [GitHub API](github-api.md#write-operations-action-requests)).
 
 The admin may register either a classic **OAuth App** or a **GitHub App**; both use the same authorize/callback URLs. OAuth App tokens never expire. GitHub App user tokens expire after 8 hours (unless "Expire user authorization tokens" is turned off in the app's settings), and Quest refreshes them automatically with the accompanying refresh token -- see Token Architecture.
 
@@ -27,6 +27,7 @@ The integration is packaged as the in-tree `plugins/github` plugin (see [Plugins
 Create either an OAuth App (GitHub Developer Settings > OAuth Apps) or a GitHub App (Developer Settings > GitHub Apps; with a GitHub App, repo/org access comes from the app's permissions and installations rather than OAuth scopes). The app requires:
 - A callback URL: `http://localhost:8000/auth/github/callback` (dev) or `https://your-domain.com/auth/github/callback` (production)
 - An admin enters the resulting `client_id` and `client_secret` in Settings > Service Credentials (or, legacy, in the `github` section of `server_credentials.json`)
+- **GitHub App only:** for the write action requests, set the app's repository permissions **Actions**, **Issues** and **Pull requests** to read-and-write (Contents and Metadata read cover the reads). Existing installations must accept the changed permissions. An OAuth App needs nothing extra -- the `repo` scope already covers the writes
 
 Users connect individually via the Data Connections section in Settings, which opens an OAuth popup flow. See [OAuth Popup Flow](../../../docs/architecture/oauth-popup.md).
 
@@ -34,7 +35,7 @@ Users connect individually via the Data Connections section in Settings, which o
 
 Scopes are defined in `GITHUB_SCOPES` in `plugins/github/upstream.py`: `repo` (full repo access -- GitHub has no read-only repo scope) and `read:org` (read-only organization membership). The callback stores the scopes GitHub actually granted; when the granted set no longer covers `GITHUB_SCOPES`, the connector row shows the "Update Available" re-authorize badge (the plugin's `needs_reauth` hook).
 
-Despite `repo` granting write permissions at the OAuth level, Quest exposes only read-only GitHub API paths through the `allowed_endpoints` regex list on the plugin's `api.github.com` service entry (`plugins/github/manifest.py`). No write operations are reachable.
+Despite `repo` granting write permissions at the OAuth level, Quest exposes only read-only GitHub API paths through the `allowed_endpoints` regex list on the plugin's `api.github.com` service entry (`plugins/github/manifest.py`). The only writes are the three action request types in `plugins/github/handlers.py`, each executed after the user approves its card.
 
 ## Token Architecture
 
@@ -61,8 +62,8 @@ OAuth Apps are simpler -- tokens do not expire and any user can authorize withou
 **Why refresh on use instead of a background job?**
 Routines and chats reach GitHub only through the credential loader, so refreshing there covers every caller without a daemon. Each refresh issues a new 6-month refresh token, so any connection used at least twice a year stays alive.
 
-**Why read-only endpoints only?**
-Write operations carry higher risk and require more careful permission management. Read-only access provides immediate value for querying repository data while minimizing risk.
+**Why so few writes?**
+Write operations carry higher risk, so each one is an explicit, approval-gated action request rather than a general write proxy. See the design decisions in [GitHub API](github-api.md#design-decisions).
 
 **Why `repo` scope?**
 GitHub's OAuth scope model does not offer a read-only scope for repository access. `repo` is the only way to access private repository data.

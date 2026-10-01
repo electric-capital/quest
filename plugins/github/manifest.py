@@ -15,6 +15,10 @@ old ``users.github_oauth`` column into ``user_service_credentials``
 
 The core ``get_github_job_log`` tool is renamed ``github_get_job_log`` to
 satisfy the ``<id>_`` prefix rule (tool names have no persistence).
+
+Writes exist only as approval-gated action requests
+(plugins/github/handlers.py): running a workflow, commenting on an issue
+or pull request, and closing / reopening an issue.
 """
 
 from pathlib import Path
@@ -22,6 +26,7 @@ from pathlib import Path
 from chat.system_skills import SystemSkill
 from config.plugin_types import CredentialField, QuestPlugin, UserConnectionSpec
 
+from plugins.github.handlers import ALL_HANDLERS
 from plugins.github.oauth import router as github_oauth_router
 from plugins.github.tools import ALL_TOOLS
 from plugins.github.upstream import (
@@ -44,9 +49,11 @@ def _github_skill_content(_base_url: str, _api_key: str) -> str:
 
 # authed_get service entry for the GitHub REST API. Read-only by
 # construction: only these GET paths are reachable, and the entry defines
-# no allowed_post_endpoints. GitHub App user tokens expire after 8 hours,
-# so the loader proactively refreshes them (plugins/github/upstream.py)
-# and retry_on_401 re-runs it -- re-reading the stored row -- as a
+# no allowed_post_endpoints (the plugin's writes are action requests that
+# call GitHub directly, never through this entry). GitHub App user tokens
+# expire after 8 hours, so the loader proactively refreshes them
+# (plugins/github/upstream.py) and retry_on_401 re-runs it -- re-reading
+# the stored row -- as a
 # backstop; classic OAuth App tokens never expire and pass straight through.
 _GITHUB_SERVICE = {
     "key": "api.github.com",
@@ -131,15 +138,17 @@ def get_plugin() -> QuestPlugin:
                 name="GitHub",
                 description=(
                     "Read repos/issues/PRs/commits/Actions via authed_get; "
-                    "github_get_job_log tool."
+                    "job logs; run workflows, comment, close/reopen issues."
                 ),
                 when_to_load=(
                     "Load when the user asks about GitHub repos, issues, "
-                    "PRs, commits, or CI runs."
+                    "PRs, commits, or CI runs, or wants to run a workflow, "
+                    "comment on an issue/PR, or close/reopen an issue."
                 ),
                 requires="github",
                 content_builder=_github_skill_content,
             ),
         ),
+        action_request_handlers=ALL_HANDLERS,
         tools=ALL_TOOLS,
     )

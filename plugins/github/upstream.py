@@ -312,3 +312,95 @@ async def load_github_credentials(user: dict):
 def inject_github_bearer_auth(token: str, headers: dict) -> None:
     """authed_get auth injector: Bearer token header."""
     headers["Authorization"] = f"Bearer {token}"
+
+
+# ---------------------------------------------------------------------------
+# Direct REST access for the action-request handlers
+# ---------------------------------------------------------------------------
+
+GITHUB_API_BASE = "https://api.github.com"
+
+# Same defaults the authed_get service entry sends (GitHub rejects requests
+# without a User-Agent).
+GITHUB_DEFAULT_HEADERS = {
+    "User-Agent": "Quest/1.0",
+    "Accept": "application/vnd.github+json",
+}
+
+
+class GitHubAuthError(Exception):
+    """The user has no usable GitHub connection (not connected, or an
+    expired token that could not be refreshed)."""
+
+
+async def github_request(
+    user: dict,
+    method: str,
+    path: str,
+    *,
+    params: dict | None = None,
+    json_body: dict | None = None,
+    headers: dict | None = None,
+    timeout: float = _HTTP_TIMEOUT,
+) -> httpx.Response:
+    """Make an authenticated GitHub REST request for the action-request
+    handlers (plugins/github/handlers.py).
+
+    ``path`` is the absolute API path (``/repos/...``); callers quote the
+    segments. The writes deliberately do NOT ride on the authed_get
+    allow-list, which stays GET-only -- they are reachable only through
+    the approval-gated handlers. Injects a valid (proactively refreshed)
+    Bearer token and retries once on 401 after re-running the loader,
+    which re-reads the stored row and so picks up a token another turn
+    refreshed in the meantime. Raises :class:`GitHubAuthError` when the
+    user is not connected; upstream HTTP errors are returned as the
+    response for the caller to classify.
+    """
+    token = await get_github_token(user)
+    if not token:
+        raise GitHubAuthError(MISSING_CREDENTIALS_ERROR["message"])
+
+    url = f"{GITHUB_API_BASE}{path}"
+    request_headers = {**GITHUB_DEFAULT_HEADERS, **(headers or {})}
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        request_headers["Authorization"] = f"Bearer {token}"
+        response = await client.request(
+            method, url, params=params, json=json_body, headers=request_headers,
+        )
+        if response.status_code == 401:
+            retry_token = await get_github_token(user)
+            if retry_token and retry_token != token:
+                request_headers["Authorization"] = f"Bearer {retry_token}"
+                response = await client.request(
+                    method, url, params=params, json=json_body, headers=request_headers,
+                )
+    return response
+
+
+def github_error_message(response: httpx.Response) -> str:
+    """A short human-readable error from a GitHub error response.
+
+    GitHub error bodies are ``{"message": ..., "errors": [...]}`` where
+    each entry of ``errors`` is a string or a ``{resource, field, code,
+    message}`` dict; falls back to the raw text for anything else.
+    """
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if not isinstance(payload, dict):
+        return f"HTTP {response.status_code}: {response.text[:300]}"
+
+    parts = [str(payload.get("message") or "").strip()]
+    for err in payload.get("errors") or []:
+        if isinstance(err, dict):
+            detail = err.get("message") or ", ".join(
+                str(err[k]) for k in ("resource", "field", "code") if err.get(k)
+            )
+        else:
+            detail = str(err)
+        if detail:
+            parts.append(detail)
+    message = "; ".join(p for p in parts if p)
+    return f"HTTP {response.status_code}: {message[:500] or response.text[:300]}"

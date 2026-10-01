@@ -16,6 +16,9 @@ PER_SERVICE_TYPE_NAMES = [
     "send_slack_dm",
     "send_telegram_message",
     "send_twitter_dm",
+    "github_trigger_workflow",
+    "github_comment_on_issue",
+    "github_set_issue_state",
     "create_calendar_invite",
     "edit_calendar_event",
     "upload_to_drive",
@@ -87,7 +90,9 @@ def test_description_calls_out_top_level_only_restriction():
     )
 
 
-def test_enum_still_lists_all_action_request_types(example_plugin, slack_plugin, twitter_plugin, telegram_plugin):
+def test_enum_still_lists_all_action_request_types(
+    example_plugin, slack_plugin, twitter_plugin, telegram_plugin, github_plugin,
+):
     # The enum is still the source of truth for valid request_type values;
     # it must not be trimmed even though the prose listing moved out.
     # Plugin-registered types (example_echo here; each real plugin's types

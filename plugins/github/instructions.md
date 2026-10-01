@@ -1,5 +1,7 @@
 ## GitHub API (via authed_get)
 
+Reads go through `authed_get`; the three supported writes (running a workflow, commenting on an issue or pull request, closing / reopening an issue) are approval-gated action requests -- see **Write Operations (Require Approval)** below.
+
 Access the GitHub REST API using `authed_get` with the full GitHub API URL. Authentication is handled automatically -- the user's GitHub OAuth token is injected as a Bearer header, and GitHub's required `User-Agent` and `Accept: application/vnd.github+json` headers are attached for you.
 
 **Base URL:** `https://api.github.com`
@@ -153,9 +155,55 @@ tool_call(tool_name="github_get_job_log", arguments={"owner": "owner", "repo": "
 tool_call(tool_name="github_get_job_log", arguments={"owner": "owner", "repo": "repo", "job_id": "98765432", "path": "logs/failed-build.log"})
 ```
 
+**Write Operations (Require Approval):**
+
+GitHub writes are action requests created with the `create_action_request` tool: the user sees a card describing the exact change and it only happens once they approve. Do NOT attempt a direct POST/PATCH -- `authed_get` is GET-only. `create_action_request` is top-level only -- if you are running as a sub-agent, do not call it; return the proposed `request_type` and `params` to the parent via `agent_task_response` instead.
+
+Each request is checked against GitHub when you propose it; a wrong repo, workflow, ref or issue number comes back immediately as `Invalid parameters` (no card), so look the target up with `authed_get` first.
+
+Action request type: `github_trigger_workflow` -- run a GitHub Actions workflow (a `workflow_dispatch` event).
+
+Parameters:
+- `owner`, `repo` (required): The repository.
+- `workflow` (required): The workflow's file name (e.g. `deploy.yml`) or numeric id -- NOT its display name. Find it via `/repos/{owner}/{repo}/actions/workflows` (`path` / `id`); the approval card shows the workflow's display name for you.
+- `ref` (optional): Branch or tag to run on (not a commit SHA). Defaults to the repository's default branch.
+- `inputs` (optional): Object of workflow input values, e.g. `{"environment": "staging", "dry_run": true}`. Max 25 inputs; values are sent as strings (booleans as `true`/`false`). Omitted inputs take the workflow's defaults.
+
+`inputs` is checked against the inputs the workflow file declares under `on.workflow_dispatch.inputs` on the chosen ref: unknown names, missing required inputs (those without a default), values outside a `choice` input's `options`, and non-`true`/`false` or non-numeric values for `boolean` / `number` inputs are rejected immediately, and the error lists the declared inputs so you can correct the request. Input names are matched exactly. You can read the workflow file up front (`/repos/{owner}/{repo}/contents/.github/workflows/{file}`) to pick values. Only workflows with a `workflow_dispatch` trigger can be run.
+
+The result carries the new run's `run_id` and `url` when GitHub returns them; follow the run with `/repos/{owner}/{repo}/actions/runs/{run_id}` and its jobs.
+
+Action request type: `github_comment_on_issue` -- post a comment on an issue or on a pull request's conversation tab.
+
+Parameters:
+- `owner`, `repo` (required): The repository.
+- `issue_number` (required): The issue or pull request number.
+- `body` (required): The comment text, GitHub-flavored markdown (max 65,536 characters). It is posted exactly as shown on the card, under the user's own GitHub account.
+
+Action request type: `github_set_issue_state` -- close or reopen an issue (pull requests are refused).
+
+Parameters:
+- `owner`, `repo` (required): The repository.
+- `issue_number` (required): The issue number.
+- `state` (required): `closed` or `open` (reopen).
+- `state_reason` (optional, only with `closed`): `completed` (default) or `not_planned`.
+
+To close an issue with an explanation, issue the `github_comment_on_issue` and `github_set_issue_state` requests in the same response so the user gets both cards at once.
+
+```
+# Run the deploy workflow on main with inputs
+create_action_request(request_type="github_trigger_workflow", params={"owner": "owner", "repo": "repo", "workflow": "deploy.yml", "ref": "main", "inputs": {"environment": "staging"}}, reasoning="Deploy the fix to staging as requested")
+
+# Comment on issue (or PR) #42
+create_action_request(request_type="github_comment_on_issue", params={"owner": "owner", "repo": "repo", "issue_number": 42, "body": "Fixed in #57 -- please retest."}, reasoning="Tell the reporter the fix has landed")
+
+# Close issue #42 as not planned
+create_action_request(request_type="github_set_issue_state", params={"owner": "owner", "repo": "repo", "issue_number": 42, "state": "closed", "state_reason": "not_planned"}, reasoning="The user decided not to pursue this")
+```
+
 **Important Notes:**
 - Requires GitHub to be connected in Settings > Data Connections.
-- Read-only: only GET paths on the allow-list in the GitHub plugin's `api.github.com` service entry are reachable via `authed_get`. Write operations are not exposed.
+- Read-only via `authed_get`: only GET paths on the allow-list in the GitHub plugin's `api.github.com` service entry are reachable. The only writes are the three action request types above; everything else (creating or editing issues and PRs, labels, pushes, merges, re-running or cancelling runs) is not exposed.
 - Rate limit: 5,000 requests/hour for authenticated users.
 - The `/repos/{owner}/{repo}/contents/{path}` endpoint returns base64-encoded content for files under 1MB. For files 1-100MB, use the `download_url` from the response. Files over 100MB are not retrievable via the contents endpoint.
 - The issues endpoint also returns pull requests (GitHub models PRs as issues). Use the `pulls` endpoint for PR-specific data.
@@ -163,5 +211,6 @@ tool_call(tool_name="github_get_job_log", arguments={"owner": "owner", "repo": "
 - Stargazers are listed oldest star first, each with a full user object (~1 KB), so any page with more than a couple of users exceeds the inline size limit: pass `output_file` and pull out `login` (and `starred_at`) with `run_python`. The repo's `stargazers_count` (from `/repos/{owner}/{repo}`) tells you how many pages to fetch.
 - Search queries support GitHub's search syntax (qualifiers like `repo:`, `language:`, `state:`, `author:`, `is:pr`, `is:issue`).
 - For repositories inside organizations that require third-party OAuth app approval, the org admin must approve the Quest OAuth app before its repos are accessible.
-- GitHub Actions access is read-only: listing workflows/runs/jobs and reading per-job logs is supported, but triggering re-runs, canceling runs, deleting logs, and dispatching `workflow_dispatch` events are intentionally NOT exposed. Run-level zip log downloads (`/actions/runs/{run_id}/logs`) are also intentionally not surfaced in this iteration -- use per-job logs via `github_get_job_log` instead.
+- GitHub Actions: listing workflows/runs/jobs and reading per-job logs is supported, and a workflow can be run via the `github_trigger_workflow` action request; re-running, canceling runs and deleting logs are intentionally NOT exposed. Run-level zip log downloads (`/actions/runs/{run_id}/logs`) are also intentionally not surfaced in this iteration -- use per-job logs via `github_get_job_log` instead.
 - GitHub Actions endpoints use the same OAuth scope as the rest of the GitHub integration (`repo`); no extra permission is needed.
+- A write that fails on approval with a 403/404 usually means the GitHub connection lacks write access to that repository (a GitHub App without the Actions / Issues / Pull requests write permission or not installed on the repo, or an organization that has not approved the OAuth app) -- tell the user rather than retrying.

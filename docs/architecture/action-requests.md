@@ -19,6 +19,7 @@ When a new request arrives while the browser tab is hidden and notification perm
 - Slack writes in `system:slack`
 - Telegram writes in `system:telegram`
 - Twitter DMs in `system:twitter`
+- GitHub writes (`github_trigger_workflow`, `github_comment_on_issue`, `github_set_issue_state`) in `system:github`
 - calendar invites in `system:calendar`
 - Drive uploads and folder creation (`upload_to_drive`, `create_drive_folder`) in `system:drive`
 - Sheets cell edits (`edit_google_spreadsheet`) in `system:sheets`
@@ -41,6 +42,8 @@ The supported request types are:
   - `dialog_id` is format-validated at `validate_params()` time (must be a Python `int` or a digit string with optional leading `-`; `bool`/`float`/`list`/`dict` and shapes like `@username`, `t.me/...`, `+E.164`, or Slack-style `C.../U...` ids are rejected; `0`, the bare `-100` supergroup marker, and `|id| > 10**15` are also rejected) so malformed values are short-circuited up front with the offending value echoed (truncated) in the error rather than failing inside `execute()` with an opaque Telethon `PeerIdInvalid`.
   - The regex and magnitude bound live at module scope in `plugins/telegram/handlers.py` (the handler is plugin-registered, with the pre-plugin type name grandfathered via `unprefixed_action_types`).
   - Dialog names are resolved server-side by the handler's `enrich_params_for_preview()` hook for preview display. Messages are HTML-escaped for safety and include an italic attribution footer.
+- **`github_trigger_workflow`** / **`github_comment_on_issue`** / **`github_set_issue_state`** (GitHub plugin -- handlers in `plugins/github/handlers.py`): run a GitHub Actions workflow with inputs, comment on an issue or pull request, close or reopen an issue.
+  - Each reads its target from GitHub in `validate_against_upstream()` (404 rejects same-turn) and injects the workflow's display name / the issue's title and state for the card. See [GitHub API -- Write Operations](../../plugins/github/docs/github-api.md#write-operations-action-requests).
 - **`create_calendar_invite`**: Creates a Google Calendar event on behalf of the authenticated user.
   - It accepts `summary`, `start`, and `end` as required parameters, plus optional `calendar_id`, `attendees`, `location`, `description`, and `time_zone` fields. The handler renders a preview with the event title, calendar target, start/end time, and any optional attendees or notes, then creates the event only after approval.
   - This flow requires Google Services with writable Calendar scope (`calendar.events`) in addition to the existing Google Services connection. Created requests collapse to a one-line `Created` summary in the chat UI, and the event description is passed through unchanged.
