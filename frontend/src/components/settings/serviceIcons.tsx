@@ -91,6 +91,7 @@ function MicrosoftIcon() {
 const SERVICE_ICONS: Record<string, () => ReactElement> = {
   google_services: GoogleIcon,
   google_oauth: GoogleIcon,
+  google_admin: GoogleIcon,
   m365: MicrosoftIcon,
   smtp: () => <Mail size={28} className="service-icon-mono" aria-hidden="true" />,
   unifi: () => <Wifi size={28} className="service-icon-mono" aria-hidden="true" />,

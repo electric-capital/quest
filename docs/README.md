@@ -293,7 +293,7 @@ quest/
 ├── plugins/                 # Filesystem-discovered integration plugins (see architecture/plugins.md)
 │   ├── README.md           # Plugin authoring guide (layout, rules, gitignore note)
 │   ├── _example/           # Single-file smoke-test fixture (loaded only by tests)
-│   └── github/, m365/, slack/, twitter/, twilio/, unifi/, iru/, telegram/  # In-tree plugins (see architecture/plugins.md)
+│   └── github/, m365/, slack/, twitter/, twilio/, unifi/, iru/, telegram/, google_admin/  # In-tree plugins (see architecture/plugins.md)
 ├── config/                  # Configuration modules
 │   └── paths.py            # Centralized data-directory path constants (PROJECT_ROOT, DATA_DIR, DATABASE_PATH, CHATS_DIR, PROJECTS_DIR, SECRET_KEY_FILE, LOG_DIR); reads optional data_dir from server_config.json
 ├── db/                      # Database layer (user data, memories, guides, projects, routines, routine schedules, conversation metadata, action requests, skills, skill shares, skill auto-loads, API call usage)
