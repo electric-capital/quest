@@ -100,7 +100,7 @@ plugins/
 
 ## Reference plugin
 
-Nine in-tree implementations (proprietary integrations can live in
+Ten in-tree implementations (proprietary integrations can live in
 external repos and load via `QUEST_PLUGIN_PATH`):
 
 - `plugins/github/` — the GitHub integration (plugin id `github`) with a
@@ -187,6 +187,15 @@ external repos and load via `QUEST_PLUGIN_PATH`):
   `google_oauth` client, so the admin card is a single `enabled` switch
   and `is_configured` also requires that client. Its router lives under
   `/auth/google-admin` (see the namespace rule below).
+- `plugins/tailscale/` — the Tailscale integration (plugin id `tailscale`):
+  the services-only shape on the generic **api_key-kind** connection with
+  **no admin card** at all (`api.tailscale.com` is a fixed public host and
+  every credential is the user's own, so there is nothing to configure
+  server-side). The pasted value may be a personal API access token
+  (`tskey-api-...`, used verbatim) or a read-scoped OAuth client secret
+  (`tskey-client-...`, exchanged for a cached short-lived access token by
+  the credential loader); one GET-only `authed_get` entry and the
+  `system:tailscale` skill. Read side only.
 
 Each `plugin.py` is a thin re-export of `manifest.py` so tests import
 the real modules through the normal `plugins.<id>.*` package path.
@@ -245,7 +254,7 @@ their `tests/` directories too (repo-root `conftest.py`). See
 Upstream gitignores `plugins/*` except this README, `.gitkeep`,
 `_example/`, and the in-tree `github/`,
 `m365/`, `slack/`, `twitter/`, `twilio/`, `unifi/`, `iru/`, `telegram/`,
-and `google_admin/` plugins. A fork
+`google_admin/`, and `tailscale/` plugins. A fork
 that ships proprietary plugins should remove or override those ignore
 lines in the fork and commit its plugin directories as ordinary files —
 there is no upstream merge surface either way.

@@ -28,6 +28,7 @@ plugins/*
 !plugins/iru/
 !plugins/telegram/
 !plugins/google_admin/
+!plugins/tailscale/
 
 # Python
 __pycache__/
