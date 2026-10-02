@@ -1,44 +1,72 @@
+/* Context usage ring: a fixed-size circular meter in the composer controls
+   row. Only the fill colour changes with usage, never the footprint. */
 .context-indicator-container {
   margin-left: auto;
   position: relative;
+  display: inline-flex;
+  align-items: center;
   cursor: default;
+  /* Fill colour per usage level; the ring strokes read it. */
+  --context-ring-fill: var(--accent);
+  --context-ring-track: rgba(255, 255, 255, 0.14);
 }
 
-.context-indicator-badge {
-  font-size: 0.7rem;
-  color: rgba(255, 255, 255, 0.45);
-  letter-spacing: 0.02em;
+.context-indicator-container.context-warning {
+  --context-ring-fill: #f0ad4e;
 }
 
-/* Color levels */
-.context-indicator-badge.context-normal {
-  color: rgba(255, 255, 255, 0.45);
+.context-indicator-container.context-danger {
+  --context-ring-fill: #ff6b6b;
 }
 
-.context-indicator-badge.context-warning {
-  color: #f0ad4e;
-}
-
-.context-indicator-badge.context-danger {
-  color: #ff6b6b;
-}
-
-/* Info button */
-.context-indicator-info-button {
-  background: none;
-  border: none;
-  padding: 0 2px;
-  cursor: pointer;
-  color: rgba(255, 255, 255, 0.45);
+/* Square click target around the ring (same height as the round send
+   button's visual weight, but compact). Doubles as the non-interactive
+   wrapper when no click handler is given. */
+.context-indicator-button {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: color 0.15s;
-  vertical-align: middle;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: inherit;
+  transition: background-color 0.15s;
 }
 
-.context-indicator-info-button:hover {
-  color: rgba(255, 255, 255, 0.7);
+button.context-indicator-button {
+  cursor: pointer;
+}
+
+button.context-indicator-button:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+button.context-indicator-button:focus {
+  outline: none;
+}
+
+button.context-indicator-button:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.context-ring {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.context-ring-track {
+  stroke: var(--context-ring-track);
+}
+
+.context-ring-fill {
+  stroke: var(--context-ring-fill);
+  transition: stroke-dashoffset 0.3s ease-out, stroke 0.15s;
 }
 
 /* Tooltip on hover */
@@ -60,36 +88,48 @@
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.context-indicator-container:hover .context-indicator-tooltip {
+.context-indicator-tooltip-hint {
+  display: block;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.context-indicator-container:hover .context-indicator-tooltip,
+.context-indicator-container:focus-within .context-indicator-tooltip {
   visibility: visible;
   opacity: 1;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .context-ring-fill {
+    transition: none;
+  }
+}
+
 /* Light mode support */
 @media (prefers-color-scheme: light) {
-  .context-indicator-badge.context-normal {
-    color: rgba(0, 0, 0, 0.45);
+  .context-indicator-container {
+    --context-ring-track: rgba(0, 0, 0, 0.12);
   }
 
-  .context-indicator-badge.context-warning {
-    color: #b8860b;
+  .context-indicator-container.context-warning {
+    --context-ring-fill: #b8860b;
   }
 
-  .context-indicator-badge.context-danger {
-    color: #d32f2f;
+  .context-indicator-container.context-danger {
+    --context-ring-fill: #d32f2f;
   }
 
-  .context-indicator-info-button {
-    color: rgba(0, 0, 0, 0.45);
-  }
-
-  .context-indicator-info-button:hover {
-    color: rgba(0, 0, 0, 0.7);
+  button.context-indicator-button:hover {
+    background-color: rgba(0, 0, 0, 0.06);
   }
 
   .context-indicator-tooltip {
     background-color: rgba(240, 240, 240, 0.97);
     color: rgba(0, 0, 0, 0.75);
     border: 1px solid rgba(0, 0, 0, 0.1);
+  }
+
+  .context-indicator-tooltip-hint {
+    color: rgba(0, 0, 0, 0.5);
   }
 }

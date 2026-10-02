@@ -476,6 +476,12 @@
 .model-menu-container {
   position: relative;
   display: inline-flex;
+  /* The ONLY shrinkable item in the composer controls row (every button,
+     badge and the context ring is flex-shrink: 0): when a phone-width row
+     runs out of room the model name ellipsizes down to nothing before any
+     control -- the send button above all -- can be pushed out of the bubble. */
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .model-menu-trigger {
@@ -484,6 +490,8 @@
   gap: 0.35rem;
   height: 30px;
   box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
   padding: 0 0.6rem;
   border: 1px solid transparent;
   border-radius: 15px;
@@ -512,8 +520,12 @@
   border-color: var(--accent);
 }
 
-/* Long model names ellipsize so the row never overflows the bubble. */
+/* Long model names ellipsize so the row never overflows the bubble: the
+   desktop cap keeps a verbose name from crowding the row, and the flex
+   shrink lets the label collapse further whenever the row is narrower. */
 .model-menu-trigger-label {
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -886,16 +898,20 @@
   box-sizing: border-box;
 }
 
-/* Icon-only controls row (second line of the bubble). */
+/* Icon-only controls row (second line of the bubble). Every item except the
+   model pill is fixed-width (flex-shrink: 0) so the row degrades by
+   truncating the model name, never by pushing the send button out. */
 .composer-controls {
   display: flex;
   align-items: center;
   gap: 0.25rem;
   min-width: 0;
+  max-width: 100%;
 }
 
 .composer-spacer {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .composer-icon-btn {
@@ -1050,6 +1066,7 @@
   color: rgba(255, 255, 255, 0.6);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1066,6 +1083,7 @@
   color: #f0ad4e;
   white-space: nowrap;
   cursor: help;
+  flex-shrink: 0;
 }
 
 /* Round send / stop button (ChatGPT-style arrow). */
@@ -1103,11 +1121,11 @@
 }
 
 /* The ContextIndicator's own margin-left: auto is redundant next to the
-   spacer and would fight the gap; neutralize it inside the row. */
+   spacer and would fight the gap; neutralize it inside the row. The ring is
+   a fixed 28px square whatever the percentage. */
 .composer-controls .context-indicator-container {
   margin-left: 0;
   flex-shrink: 0;
-  white-space: nowrap;
 }
 
 @media (prefers-color-scheme: light) {
@@ -1224,6 +1242,9 @@
     display: none;
   }
 
+  /* Phone rows have far less room: cap the model name lower so the icon
+     buttons keep their spacing; the flex shrink above still lets it
+     collapse further on very narrow screens. */
   .composer .model-menu-trigger-label {
     max-width: 30vw;
   }
@@ -1237,6 +1258,13 @@
   .composer .model-menu-container,
   .composer .model-submenu-anchor {
     position: static;
+  }
+
+  /* Static positioning above drops nothing from the row rules; restate the
+     shrink so a long self-hosted model name can't widen the phone row. */
+  .composer .model-menu-container {
+    flex: 0 1 auto;
+    min-width: 0;
   }
 
   .composer .flags-popover,

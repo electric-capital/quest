@@ -1,9 +1,13 @@
 /**
  * Context usage indicator component.
  *
- * Shows a compact percentage badge below the model selector row indicating
- * how much of the model's context window has been consumed. A hover tooltip
- * shows the detailed breakdown (e.g., "70K / 200K max").
+ * Renders a small circular meter in the composer controls row that fills
+ * clockwise as the model's context window is consumed (the same idiom as
+ * Claude Code's context ring). The ring has a FIXED footprint whatever the
+ * percentage, so it never changes the row's layout -- a variable-width
+ * "NN% context" label used to push the send button out of a narrow phone
+ * row. The exact figures ("14% · 28K / 200K max") live in the hover tooltip,
+ * and clicking the ring opens the system prompt view when a handler is given.
  */
 
 import React from 'react';
@@ -16,6 +20,12 @@ interface ContextIndicatorProps {
   modelId: string;
   onInfoClick?: () => void;
 }
+
+/** Ring geometry (viewBox units; the SVG is scaled by CSS). */
+const RING_SIZE = 20;
+const RING_STROKE = 2.5;
+const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 /**
  * Format a token count into a human-readable string.
@@ -60,7 +70,7 @@ export const ContextIndicator = React.memo(function ContextIndicator({
 
   const percentage = Math.round((contextTokens / effectiveMax) * 100);
   // Clamp to 100% in case of slight overcount
-  const displayPercentage = Math.min(percentage, 100);
+  const displayPercentage = Math.max(0, Math.min(percentage, 100));
 
   // Color based on usage level
   let colorClass = 'context-normal';
@@ -70,23 +80,62 @@ export const ContextIndicator = React.memo(function ContextIndicator({
     colorClass = 'context-warning';
   }
 
-  const tooltipText = `${formatTokenCount(contextTokens)} / ${formatTokenCount(effectiveMax)} max`;
+  const usageText = `${displayPercentage}% of context used`;
+  const tooltipText = `${usageText} · ${formatTokenCount(contextTokens)} / ${formatTokenCount(effectiveMax)} max`;
+  // Dash offset shrinks the gap as usage grows: 0% = empty ring, 100% = full.
+  const dashOffset = RING_CIRCUMFERENCE * (1 - displayPercentage / 100);
+
+  const ring = (
+    <svg
+      className="context-ring"
+      viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
+      aria-hidden="true"
+      focusable="false"
+    >
+      <circle
+        className="context-ring-track"
+        cx={RING_SIZE / 2}
+        cy={RING_SIZE / 2}
+        r={RING_RADIUS}
+        fill="none"
+        strokeWidth={RING_STROKE}
+      />
+      <circle
+        className="context-ring-fill"
+        cx={RING_SIZE / 2}
+        cy={RING_SIZE / 2}
+        r={RING_RADIUS}
+        fill="none"
+        strokeWidth={RING_STROKE}
+        strokeLinecap={displayPercentage > 0 && displayPercentage < 100 ? 'round' : 'butt'}
+        strokeDasharray={RING_CIRCUMFERENCE}
+        strokeDashoffset={dashOffset}
+        // Start the arc at 12 o'clock and fill clockwise.
+        transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
+      />
+    </svg>
+  );
 
   return (
-    <div className="context-indicator-container">
-      <span className={`context-indicator-badge ${colorClass}`}>
-        {displayPercentage}% context
-      </span>
-      {onInfoClick && (
-        <button className="context-indicator-info-button" onClick={onInfoClick} title="View system prompt">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="16" x2="12" y2="12" />
-            <line x1="12" y1="8" x2="12.01" y2="8" />
-          </svg>
+    <div className={`context-indicator-container ${colorClass}`}>
+      {onInfoClick ? (
+        <button
+          type="button"
+          className="context-indicator-button"
+          onClick={onInfoClick}
+          aria-label={`${usageText}. View system prompt`}
+        >
+          {ring}
         </button>
+      ) : (
+        <span className="context-indicator-button" role="img" aria-label={usageText}>
+          {ring}
+        </span>
       )}
-      <span className="context-indicator-tooltip">{tooltipText}</span>
+      <span className="context-indicator-tooltip">
+        {tooltipText}
+        {onInfoClick && <span className="context-indicator-tooltip-hint">Click to view the system prompt</span>}
+      </span>
     </div>
   );
 });
