@@ -40,6 +40,9 @@ _SCOPE_PREFIX = "https://www.googleapis.com/auth/"
 
 # Every scope is a read-only variant: the token itself cannot change the
 # directory, on top of the GET-only authed_get allow-list in manifest.py.
+# The two Reports scopes cover every application's audit log and usage
+# report; the allow-list and the Meet tools confine reads to the ``meet``
+# and ``meet_hardware`` audit logs and the customer usage report.
 #
 # Deliberately absent:
 # - ``admin.directory.user.security`` (third-party app grants, app
@@ -61,7 +64,16 @@ GOOGLE_ADMIN_SCOPES = tuple(_SCOPE_PREFIX + name for name in (
     "admin.directory.userschema.readonly",       # custom user attribute schemas
     "admin.directory.device.chromeos.readonly",  # ChromeOS devices
     "admin.directory.device.mobile.readonly",    # mobile devices
+    "admin.directory.resource.calendar.readonly",  # rooms, buildings, room features
+    "admin.reports.audit.readonly",              # Meet + Meet hardware audit logs
+    "admin.reports.usage.readonly",              # Meet usage statistics
 ))
+
+# The scope behind the Meet and Meet hardware audit logs, checked by the
+# Meet tools before calling so a connection made before it was added gets
+# a reconnect hint instead of Google's ACCESS_TOKEN_SCOPE_INSUFFICIENT.
+REPORTS_AUDIT_SCOPE = _SCOPE_PREFIX + "admin.reports.audit.readonly"
+REPORTS_USAGE_SCOPE = _SCOPE_PREFIX + "admin.reports.usage.readonly"
 
 # Identity scopes requested alongside the admin scopes so the callback can
 # record WHICH Google account was connected (it may be a dedicated admin
@@ -170,6 +182,19 @@ def get_user_google_admin_oauth(user: dict) -> Optional[dict]:
     """The user's stored OAuth blob, or None when not connected."""
     rows = user.get("service_credentials") or {}
     return (rows.get(SERVICE_ID) or {}).get("oauth_blob")
+
+
+def has_granted_scope(user: dict, scope: str) -> bool:
+    """Whether the user's stored grant includes ``scope``.
+
+    A blob without a recorded scope list (never written by the current
+    callback) reads as granted, leaving the verdict to Google.
+    """
+    blob = get_user_google_admin_oauth(user) or {}
+    granted = blob.get("scopes")
+    if not granted:
+        return True
+    return scope in granted
 
 
 def google_admin_connected(row: dict) -> bool:
