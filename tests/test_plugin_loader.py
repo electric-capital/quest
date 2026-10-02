@@ -350,6 +350,29 @@ class TestValidation:
                 _plugin(oauth_router=_router("/auth/tpx")), set(),
             )
 
+        # An id's underscores are written as hyphens in the URL namespace
+        # (/auth/two-words, like the core /auth/google-services); the
+        # underscore spelling is outside it.
+        def _underscore_plugin(*paths):
+            return QuestPlugin(
+                id="two_words", label="X",
+                user_connection=UserConnectionSpec(
+                    kind="oauth", connected=lambda row: True,
+                    oauth_router=_router(*paths),
+                ),
+            )
+
+        assert plugins_mod.plugin_auth_prefix("two_words") == "/auth/two-words"
+        assert plugins_mod.plugin_auth_prefix("tp") == "/auth/tp"
+        plugins_mod.validate_plugin(
+            _underscore_plugin("/auth/two-words", "/auth/two-words/callback"),
+            set(),
+        )
+        with pytest.raises(ValueError, match="outside the plugin's"):
+            plugins_mod.validate_plugin(
+                _underscore_plugin("/auth/two_words"), set(),
+            )
+
         # api_key-only fields rejected on an oauth spec.
         with pytest.raises(ValueError, match="validate_key"):
             plugins_mod.validate_plugin(

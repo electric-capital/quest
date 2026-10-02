@@ -40,7 +40,7 @@ def _client(*routers) -> TestClient:
         (github_oauth.router, "/auth/github/callback"),
         (twitter_oauth.router, "/auth/twitter/callback"),
         (m365_oauth.router, "/auth/m365/callback"),
-        (google_admin_oauth.router, "/auth/google_admin/callback"),
+        (google_admin_oauth.router, "/auth/google-admin/callback"),
     ],
 )
 def test_callback_error_param_is_html_escaped(router, path):

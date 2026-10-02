@@ -1,7 +1,7 @@
 """Google Workspace Admin upstream access helpers.
 
 Server-side configuration and per-user OAuth tokens both resolve here, so
-the OAuth router and the authed_get service entries share one
+the OAuth router and the authed_get service entry share one
 implementation.
 
 The plugin has no OAuth client of its own: it reuses the deployment's
@@ -9,7 +9,7 @@ core Google OAuth client (the ``google_oauth`` credential-store entry
 that already serves sign-in and the Google Services connector). Its admin
 card is a single ``enabled`` switch, because the connection only works
 once the admin has added the plugin's callback URL to that client and
-enabled the Admin SDK / Cloud Identity APIs in its GCP project.
+enabled the Admin SDK API in its GCP project.
 
 Per-user tokens are a SEPARATE grant from the user's Google Services
 connection (a ``user_service_credentials`` row with token JSON in
@@ -39,10 +39,19 @@ GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 _SCOPE_PREFIX = "https://www.googleapis.com/auth/"
 
 # Every scope is a read-only variant: the token itself cannot change the
-# directory, on top of the GET-only authed_get allow-lists in manifest.py.
-# ``admin.directory.user.security`` (third-party app grants, app passwords,
-# backup verification codes) is deliberately absent -- Google offers no
-# read-only variant of it.
+# directory, on top of the GET-only authed_get allow-list in manifest.py.
+#
+# Deliberately absent:
+# - ``admin.directory.user.security`` (third-party app grants, app
+#   passwords, backup verification codes): Google offers no read-only
+#   variant of it.
+# - ``cloud-identity.devices.readonly`` (the Cloud Identity Devices API,
+#   which holds the Endpoint Verification laptops/desktops): Google refuses
+#   to put it on a user consent screen ("Some requested scopes cannot be
+#   shown", Error 400 invalid_scope) and one unshowable scope fails the
+#   WHOLE authorize request. That API is only reachable through a service
+#   account with domain-wide delegation, which this per-user plugin does
+#   not use.
 GOOGLE_ADMIN_SCOPES = tuple(_SCOPE_PREFIX + name for name in (
     "admin.directory.user.readonly",             # users, aliases
     "admin.directory.group.readonly",            # groups, aliases, members
@@ -52,7 +61,6 @@ GOOGLE_ADMIN_SCOPES = tuple(_SCOPE_PREFIX + name for name in (
     "admin.directory.userschema.readonly",       # custom user attribute schemas
     "admin.directory.device.chromeos.readonly",  # ChromeOS devices
     "admin.directory.device.mobile.readonly",    # mobile devices
-    "cloud-identity.devices.readonly",           # endpoints (laptops/desktops) + device users
 ))
 
 # Identity scopes requested alongside the admin scopes so the callback can

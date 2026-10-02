@@ -485,7 +485,11 @@ async def get_connectors(user: dict = Depends(get_current_user_cookie_or_apikey_
     # /auth/<id> router via the connect-URL convention. The row is hidden
     # (available: false) while the plugin's server-level config is
     # missing/disabled, mirroring the Ramp behavior above.
-    from config.plugins import get_loaded_plugins, plugin_server_available
+    from config.plugins import (
+        get_loaded_plugins,
+        plugin_auth_prefix,
+        plugin_server_available,
+    )
 
     stored_rows = user.get("service_credentials") or {}
     for plugin in get_loaded_plugins():
@@ -523,7 +527,7 @@ async def get_connectors(user: dict = Depends(get_current_user_cookie_or_apikey_
                 except Exception:
                     needs_reauth = False
             plugin_row.update({
-                "connect_url": f"/auth/{plugin.id}?popup=1",
+                "connect_url": f"{plugin_auth_prefix(plugin.id)}?popup=1",
                 "needs_reauth": needs_reauth,
             })
         connectors.append(plugin_row)

@@ -1,12 +1,12 @@
 # Google Workspace Admin
 
-Read the organization's Google Workspace directory (users, groups, org units, domains) and device inventory (ChromeOS, mobile, laptops/desktops) with `authed_get` against the Admin SDK Directory API and the Cloud Identity Devices API. Authentication is automatic: the token of the Google account the user connected under Settings > Data Connections > Google Workspace Admin is injected and refreshed as needed.
+Read the organization's Google Workspace directory (users, groups, org units, domains) and device inventory (ChromeOS and mobile devices) with `authed_get` against the Admin SDK Directory API. Authentication is automatic: the token of the Google account the user connected under Settings > Data Connections > Google Workspace Admin is injected and refreshed as needed.
 
-**Strictly read-only.** Only the GET paths listed below are reachable, and the token holds read-only scopes. You cannot create, suspend, move, or delete users, change group membership, or act on devices (wipe, disable, deprovision); if the user asks for that, say it is not supported and point them to the Admin console (admin.google.com). Also not available: third-party app grants, app passwords, backup codes, admin role assignments, licenses, and audit / login reports.
+**Strictly read-only.** Only the GET paths listed below are reachable, and the token holds read-only scopes. You cannot create, suspend, move, or delete users, change group membership, or act on devices (wipe, disable, deprovision); if the user asks for that, say it is not supported and point them to the Admin console (admin.google.com). Also not available: laptops and desktops reporting through Endpoint Verification (macOS, Windows, Linux -- only ChromeOS and mobile devices are covered), third-party app grants, app passwords, backup codes, admin role assignments, licenses, and audit / login reports.
 
 Identity notes:
 - This is a separate connection from Google Services (Gmail, Drive, ...). The connected account can be a dedicated admin account that differs from the user's Quest login email.
-- Results reflect what that account may see. A `403` with `Not Authorized to access this resource/api` means the account lacks the admin privilege for that resource (a delegated admin may read users but not devices, for example); `403 ... API has not been used in project` / `SERVICE_DISABLED` means the Admin SDK or Cloud Identity API is not enabled for this deployment's Google Cloud project; `ACCESS_TOKEN_SCOPE_INSUFFICIENT` means the user should reconnect. Report these to the user instead of retrying.
+- Results reflect what that account may see. A `403` with `Not Authorized to access this resource/api` means the account lacks the admin privilege for that resource (a delegated admin may read users but not devices, for example); `403 ... API has not been used in project` / `SERVICE_DISABLED` means the Admin SDK API is not enabled for this deployment's Google Cloud project; `ACCESS_TOKEN_SCOPE_INSUFFICIENT` means the user should reconnect. Report these to the user instead of retrying.
 
 ## Directory API
 
@@ -66,25 +66,7 @@ Groups are searched the same way with `query` on `/groups`: `email`, `name` (`=`
 
 ChromeOS (`/devices/chromeos`): space-separated `operator:value` terms, e.g. `user:jane` (annotated user), `recent_user:jane@example.com`, `status:provisioned` (also `disabled`, `deprovisioned`), `id:<serial number>` (3+ characters), `asset_id:`, `location:`, `note:"loaned"`, `public_model_name:"Google Pixelbook Go"`, `sync:2026-01-01..2026-03-31` (last policy sync), `register:` (enrollment date), `last_user_activity:2026-06-01..2026-06-30`, `aue:` (auto-update expiration range), `chrome_version:`, `wifi_mac:`, `ethernet_mac:`.
 
-Mobile (`/devices/mobile`) and Cloud Identity (below): `field:value` terms with no space after the colon, space-separated, e.g. `email:jane@example.com`, `name:jane`, `serial:<serial>`, `os:ios`, `type:android`, `model:"pixel 8"`, `status:approved` (also `pending`, `blocked`), `owner:company` / `owner:byod`, `management_type:advanced`, `compromised_status:compromised`, `encryption_status:encrypted`, `imei:`, `sync:2026-01-01..` and `register:..2026-01-01` (date ranges: `d`, `d..d`, `d..`, `..d`).
-
-## Cloud Identity Devices API
-
-The inventory behind the Admin console's Devices > Mobile & endpoints list. It covers what the Directory API does not: **laptops and desktops** (macOS, Windows, Linux, ChromeOS reporting through Endpoint Verification or Drive for desktop) alongside mobile devices, plus which users are signed in on each device.
-
-**Base URL:** `https://cloudidentity.googleapis.com/v1`
-
-Pass `customer=customers/my_customer` on every call.
-
-| Path | Description | Query parameters |
-|------|-------------|------------------|
-| `/devices` | List / search devices | `customer`, `filter` (mobile search syntax above), `pageSize` (default 20, max 100), `pageToken`, `orderBy` (`create_time`, `last_sync_time`, `model`, `os_version`, `device_type`, `serial_number`; append ` desc`), `view` (`COMPANY_INVENTORY` = company-owned, `USER_ASSIGNED_DEVICES` = devices with a signed-in user) |
-| `/devices/{device}` | Get one device | `customer` |
-| `/devices/{device}/deviceUsers` | Users on a device. **Use `-` as the device to list across all devices**, e.g. with `filter=email:jane@example.com` | `customer`, `filter`, `pageSize` (default 5, max 20), `pageToken`, `orderBy` |
-| `/devices/{device}/deviceUsers/{deviceUser}` | One device user (management / compromised / password state, first and last sync) | `customer` |
-| `/devices/{device}/deviceUsers/{deviceUser}/clientStates` | Client-reported state (e.g. Endpoint Verification posture) | `customer`, `filter`, `pageToken` |
-
-Resource names in responses look like `devices/{device}` and `devices/{device}/deviceUsers/{deviceUser}`; append them to the base URL as-is. A device record holds `deviceType` (`ANDROID`, `IOS`, `MAC_OS`, `WINDOWS`, `LINUX`, `CHROME_OS`, ...), `model`, `osVersion`, `serialNumber`, `ownerType` (`COMPANY` / `BYOD`), `managementState`, `compromisedState`, `encryptionState`, `createTime`, `lastSyncTime`.
+Mobile (`/devices/mobile`): `field:value` terms with no space after the colon, space-separated, e.g. `email:jane@example.com`, `name:jane`, `serial:<serial>`, `os:ios`, `type:android`, `model:"pixel 8"`, `status:approved` (also `pending`, `blocked`), `owner:company` / `owner:byod`, `management_type:advanced`, `compromised_status:compromised`, `encryption_status:encrypted`, `imei:`, `sync:2026-01-01..` and `register:..2026-01-01` (date ranges: `d`, `d..d`, `d..`, `..d`).
 
 ## Finding everything about one user
 
@@ -102,9 +84,6 @@ tool_call(tool_name="authed_get", arguments={"url": "https://admin.googleapis.co
 
 # ChromeOS devices the user recently signed in to
 tool_call(tool_name="authed_get", arguments={"url": "https://admin.googleapis.com/admin/directory/v1/customer/my_customer/devices/chromeos?query=recent_user:jane@example.com&projection=BASIC"})
-
-# Laptops / desktops and any other endpoint the user is signed in on
-tool_call(tool_name="authed_get", arguments={"url": "https://cloudidentity.googleapis.com/v1/devices/-/deviceUsers?customer=customers/my_customer&filter=email:jane@example.com&pageSize=20"})
 ```
 
 ## More examples
@@ -131,8 +110,8 @@ tool_call(tool_name="authed_get", arguments={"url": "https://admin.googleapis.co
 # How many ChromeOS devices are provisioned
 tool_call(tool_name="authed_get", arguments={"url": "https://admin.googleapis.com/admin/directory/v1/customer/my_customer/devices/chromeos:countChromeOsDevices?filter=status:provisioned"})
 
-# Company-owned endpoints, most recently synced first
-tool_call(tool_name="authed_get", arguments={"url": "https://cloudidentity.googleapis.com/v1/devices?customer=customers/my_customer&view=COMPANY_INVENTORY&orderBy=last_sync_time%20desc&pageSize=100"})
+# Mobile devices, most recently synced first
+tool_call(tool_name="authed_get", arguments={"url": "https://admin.googleapis.com/admin/directory/v1/customer/my_customer/devices/mobile?orderBy=lastSync&sortOrder=DESCENDING&maxResults=100&fields=mobiledevices(resourceId,email,model,os,type,status,lastSync),nextPageToken"})
 
 # Export the full user list to the workspace for analysis (repeat with pageToken until no nextPageToken)
 tool_call(tool_name="authed_get", arguments={"url": "https://admin.googleapis.com/admin/directory/v1/users?customer=my_customer&maxResults=500&projection=full", "output_file": "google-admin/users-page-1.json"})
@@ -142,7 +121,7 @@ tool_call(tool_name="authed_get", arguments={"url": "https://admin.googleapis.co
 
 - **Always trim with `fields=`.** User and device records are large and a page of them exceeds the response size limit. `fields` uses Google's partial-response syntax: `users(primaryEmail,name/fullName),nextPageToken`. Keep `nextPageToken` in the list or you cannot page.
 - **Bulk questions** (counts across the whole directory, stale accounts, device fleet breakdowns): page through with `maxResults` at its maximum and `output_file`, then aggregate the saved files with `run_python`. Do not paste whole pages into the conversation.
-- **Paging:** Directory API responses carry `nextPageToken`; pass it back as `pageToken` with the same other parameters. An absent `nextPageToken` means the last page. Cloud Identity works the same way.
+- **Paging:** Directory API responses carry `nextPageToken`; pass it back as `pageToken` with the same other parameters. An absent `nextPageToken` means the last page.
 - **URL-encode the query string:** spaces as `%20`. Single quotes, `=`, `:` and `*` inside `query` values may be left as-is.
 - Directory API timestamps are RFC 3339 UTC. To find stale accounts, list users with `lastLoginTime` in `fields` and compare client-side; `lastLoginTime` is not searchable.
 - `showDeleted=true` returns ONLY deleted users (recoverable for 20 days), not a mix.

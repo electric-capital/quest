@@ -63,6 +63,11 @@ class TestAdminConfig:
         assert GOOGLE_ADMIN_SCOPES
         assert all(scope.endswith(".readonly") for scope in GOOGLE_ADMIN_SCOPES)
 
+    def test_no_scope_google_refuses_to_show_on_a_consent_screen(self):
+        # One such scope fails the whole authorize request with
+        # "Some requested scopes cannot be shown" (Error 400 invalid_scope).
+        assert not any("cloud-identity" in scope for scope in GOOGLE_ADMIN_SCOPES)
+
     def test_configured_needs_the_switch_and_the_google_client(self):
         with _patch_google_client(_CLIENT):
             assert google_admin_is_configured({"enabled": True})

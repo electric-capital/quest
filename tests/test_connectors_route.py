@@ -248,6 +248,19 @@ def test_oauth_kind_plugin_row_appended_generically():
     assert rows["acme"]["needs_reauth"] is True
 
 
+def test_oauth_kind_plugin_connect_url_hyphenates_the_id():
+    """An underscore in the plugin id is a hyphen in its /auth namespace."""
+    from config.plugin_types import QuestPlugin, UserConnectionSpec
+    plugin = QuestPlugin(
+        id="acme_admin", label="Acme Admin",
+        user_connection=UserConnectionSpec(
+            kind="oauth", connected=lambda row: True,
+        ),
+    )
+    rows = _get_connectors_with_plugin({"email": "u@example.com"}, plugin, None)
+    assert rows["acme_admin"]["connect_url"] == "/auth/acme-admin?popup=1"
+
+
 def test_github_plugin_oauth_row(github_plugin):
     """The in-tree github plugin's row: same URLs as the old core row."""
     user = {

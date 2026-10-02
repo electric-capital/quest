@@ -56,7 +56,8 @@ class UserConnectionSpec:
     returns whether the user counts as connected. The ``api_key`` kind gets
     generic key-entry routes (the key lands in the row's ``secret``); the
     ``oauth`` kind supplies an ``oauth_router`` whose routes all live under
-    ``/auth/<plugin id>`` (enforced at load), mounted by quest.py after
+    ``/auth/<plugin id>`` (underscores in the id written as hyphens, e.g.
+    ``/auth/google-admin``; enforced at load), mounted by quest.py after
     plugin load -- the router's callback stores token JSON in the row's
     ``oauth_blob`` via db/user_service_credential_store.upsert_credential.
     Both kinds get a generically rendered /connectors row (oauth rows use

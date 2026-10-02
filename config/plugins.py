@@ -41,7 +41,8 @@ Plugins do NOT mount ``/api/*`` HTTP routes (see config/plugin_types.py)
 -- bespoke behavior lives in ``tools`` handlers instead. The one
 exception: an oauth-kind user connection supplies a browser-facing
 ``oauth_router`` whose routes must all live under the plugin's
-``/auth/<id>`` namespace (validated here, mounted by quest.py via
+``/auth/<id>`` namespace (:func:`plugin_auth_prefix`: underscores in the
+id are written as hyphens; validated here, mounted by quest.py via
 :func:`mount_plugin_oauth_routers` after load).
 
 Two lifecycle hooks bracket a plugin's life: ``post_load`` runs once
@@ -100,6 +101,17 @@ def get_loaded_plugin(plugin_id: str) -> QuestPlugin | None:
         if plugin.id == plugin_id:
             return plugin
     return None
+
+
+def plugin_auth_prefix(plugin_id: str) -> str:
+    """The URL namespace of a plugin's oauth-kind connection router.
+
+    ``/auth/<id>`` with the id's underscores written as hyphens
+    (``google_admin`` -> ``/auth/google-admin``), matching the core
+    ``/auth/google-services`` style. Plugin ids cannot contain hyphens, so
+    two ids never map to the same namespace.
+    """
+    return "/auth/" + plugin_id.replace("_", "-")
 
 
 def plugin_server_available(plugin: QuestPlugin) -> bool:
@@ -314,7 +326,7 @@ def validate_plugin(plugin: QuestPlugin, existing_ids: set[str]) -> None:
             # Confine the router to the plugin's /auth/<id> namespace so an
             # oauth plugin can never claim core or other plugins' routes.
             # route.path includes the router's own prefix.
-            auth_prefix = f"/auth/{pid}"
+            auth_prefix = plugin_auth_prefix(pid)
             for route in routes:
                 route_path = getattr(route, "path", "")
                 if route_path != auth_prefix \

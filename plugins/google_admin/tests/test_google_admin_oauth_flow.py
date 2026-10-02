@@ -122,7 +122,7 @@ def test_start_redirects_to_google_with_read_only_scopes_and_state_cookie():
     params = parse_qs(url.query)
     assert params["client_id"] == ["cid"]
     assert params["response_type"] == ["code"]
-    assert params["redirect_uri"] == ["https://quest.example/auth/google_admin/callback"]
+    assert params["redirect_uri"] == ["https://quest.example/auth/google-admin/callback"]
     assert params["access_type"] == ["offline"]
     assert "consent" in params["prompt"][0].split()
     # Never an incremental grant: the token must not inherit the scopes of
@@ -188,7 +188,7 @@ def test_callback_stores_blob_with_granted_scopes_and_account():
         "client_secret": "csec",
         "grant_type": "authorization_code",
         "code": "c0de",
-        "redirect_uri": "https://quest.example/auth/google_admin/callback",
+        "redirect_uri": "https://quest.example/auth/google-admin/callback",
     }
 
     upsert.assert_awaited_once()
@@ -343,6 +343,6 @@ def test_mount_plugin_oauth_routers_mounts_the_routes(google_admin_plugin):
         plugins_mod.mount_plugin_oauth_routers(app)
 
     paths = {route.path for route in app.routes}
-    assert "/auth/google_admin" in paths
-    assert "/auth/google_admin/callback" in paths
-    assert "/auth/google_admin/disconnect" in paths
+    assert "/auth/google-admin" in paths
+    assert "/auth/google-admin/callback" in paths
+    assert "/auth/google-admin/disconnect" in paths
