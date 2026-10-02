@@ -29,7 +29,7 @@ import uuid
 from typing import Any, AsyncIterator
 
 from chat.llm.base import StreamEvent
-from chat.llm.openrouter_provider import OpenRouterProvider
+from chat.llm.openrouter_provider import OpenRouterProvider, parse_tool_arguments
 
 logger = logging.getLogger(__name__)
 
@@ -70,15 +70,8 @@ def _content_text(content: Any) -> str:
 
 
 def _parse_arguments(raw: Any) -> dict:
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str) and raw.strip():
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
+    """Arguments as a dict for the request boundary (malformed -> ``{}``)."""
+    return parse_tool_arguments(raw)[0]
 
 
 def to_ollama_messages(system_prompt: str, messages: list[dict]) -> list[dict]:
@@ -302,10 +295,17 @@ class OllamaProvider(OpenRouterProvider):
                         if not isinstance(tc, dict):
                             continue
                         function = tc.get("function") or {}
+                        # Ollama normally sends arguments as an object; a
+                        # string is parsed, and malformed text surfaces as
+                        # tool_args_error like the chat-completions path.
+                        arguments, args_error = parse_tool_arguments(
+                            function.get("arguments"),
+                        )
                         tool_calls.append({
                             "id": tc.get("id") or f"call_{uuid.uuid4().hex[:24]}",
                             "name": function.get("name") or "",
-                            "arguments": _parse_arguments(function.get("arguments")),
+                            "arguments": arguments,
+                            "error": args_error,
                         })
                     if chunk.get("done"):
                         self._capture_ollama_usage(session, chunk)
@@ -321,6 +321,7 @@ class OllamaProvider(OpenRouterProvider):
                 tool_name=call["name"],
                 tool_args=call["arguments"],
                 tool_id=call["id"],
+                tool_args_error=call["error"],
             )
 
     @staticmethod

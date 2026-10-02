@@ -177,6 +177,52 @@ def test_stream_text_and_tool_call(provider, session):
     assert json.loads(assistant["tool_calls"][0]["function"]["arguments"]) == {"a": 1}
 
 
+def test_stream_malformed_arguments_surface_as_tool_args_error(provider, session):
+    """A weaker model emitting non-JSON ``function.arguments`` must not
+    poison the conversation: the event carries the parse error (so the
+    loop returns it to the model instead of dispatching), and the stored
+    history replays ``{}`` -- the raw text would 400 every later request."""
+    chunks = [
+        _chunk(_tool_delta(0, id="call_1", name="get_time", arguments='{"a": ')),
+        _chunk(_tool_delta(0, arguments='oops')),
+        _chunk(usage=_USAGE),
+    ]
+    _client, events = _stream_all(provider, session, "hi", chunks)
+
+    tool_events = [e for e in events if e.type == "tool_call"]
+    assert len(tool_events) == 1
+    assert tool_events[0].tool_name == "get_time"
+    assert tool_events[0].tool_args == {}
+    assert "not valid JSON" in tool_events[0].tool_args_error
+    assert '{"a": oops' in tool_events[0].tool_args_error
+
+    stored = session.messages[1]["tool_calls"][0]["function"]["arguments"]
+    assert json.loads(stored) == {}
+
+
+def test_stream_non_object_arguments_surface_as_tool_args_error(provider, session):
+    chunks = [
+        _chunk(_tool_delta(0, id="call_1", name="get_time", arguments='[1, 2]')),
+        _chunk(usage=_USAGE),
+    ]
+    _client, events = _stream_all(provider, session, "hi", chunks)
+    tool_events = [e for e in events if e.type == "tool_call"]
+    assert tool_events[0].tool_args == {}
+    assert "must be a JSON object" in tool_events[0].tool_args_error
+    assert json.loads(session.messages[1]["tool_calls"][0]["function"]["arguments"]) == {}
+
+
+def test_stream_valid_arguments_have_no_error(provider, session):
+    chunks = [
+        _chunk(_tool_delta(0, id="call_1", name="get_time", arguments='{"a": 1}')),
+        _chunk(usage=_USAGE),
+    ]
+    _client, events = _stream_all(provider, session, "hi", chunks)
+    tool_events = [e for e in events if e.type == "tool_call"]
+    assert tool_events[0].tool_args == {"a": 1}
+    assert tool_events[0].tool_args_error == ""
+
+
 def test_stream_generates_fallback_tool_id(provider, session):
     chunks = [
         _chunk(_tool_delta(0, name="get_time", arguments="{}")),
@@ -329,6 +375,25 @@ def test_repair_leaves_final_dangling_tool_call_alone(provider, session):
     ])
     assert provider.repair_session_history(session) == 0
     assert len(session.messages) == 2
+
+
+def test_repair_replaces_malformed_arguments_in_history(provider, session):
+    """Histories persisted before the stream-time guard existed carry the
+    raw malformed text; repair rewrites it so the next request is accepted."""
+    session.messages.extend([
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": None, "tool_calls": [{
+            "id": "call_1", "type": "function",
+            "function": {"name": "t", "arguments": '{"a": oops'},
+        }]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "err"},
+        {"role": "assistant", "content": "done"},
+    ])
+    repaired = provider.repair_session_history(session)
+    assert repaired == 1
+    assert session.messages[1]["tool_calls"][0]["function"]["arguments"] == "{}"
+    # Pairing is intact, so nothing else was touched.
+    assert len(session.messages) == 4
 
 
 def test_repair_valid_history_is_noop(provider, session):

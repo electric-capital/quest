@@ -163,6 +163,22 @@ def _split_result(out: ToolResult) -> tuple[str, list]:
     return out, []
 
 
+def invalid_tool_arguments_result(tool_name: str, error: str) -> str:
+    """Structured error result for a tool call whose arguments the provider
+    could not parse (``StreamEvent.tool_args_error``).
+
+    The call is never dispatched -- the loops hand this back to the model
+    as the tool result so it can re-issue the call with valid arguments,
+    instead of the malformed call killing the run.
+    """
+    return json.dumps({
+        "error": (
+            f"Tool '{tool_name}' was not executed: {error} "
+            "Re-issue the call with the arguments as a valid JSON object."
+        ),
+    })
+
+
 async def _tool_get_current_time(ctx: ToolContext, args: dict) -> str:
     return _handle_get_current_time(ctx.timezone)
 

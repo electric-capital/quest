@@ -53,6 +53,55 @@ def _as_float(value: Any) -> float | None:
             return None
     return None
 
+
+# Replayed in place of malformed ``function.arguments`` so the stored
+# history stays valid for the next request (chat-completions servers reject
+# the WHOLE request when any historical tool call carries non-JSON
+# arguments, which would otherwise poison the conversation permanently).
+EMPTY_ARGUMENTS_JSON = "{}"
+
+# How much of the malformed argument text is echoed back to the model.
+_RAW_ARGUMENTS_PREVIEW_CHARS = 2000
+
+
+def parse_tool_arguments(raw: Any) -> tuple[dict, str]:
+    """Parse a tool call's ``function.arguments`` into a dict.
+
+    Returns ``(arguments, error)``: ``error`` is empty on success and
+    otherwise a model-facing explanation (parse error position or wrong
+    JSON type) with a preview of the raw text, in which case ``arguments``
+    is ``{}``. An empty/absent value is a valid no-argument call.
+    """
+    if isinstance(raw, dict):
+        return raw, ""
+    if raw is None:
+        return {}, ""
+    if not isinstance(raw, str):
+        raw = str(raw)
+    if not raw.strip():
+        return {}, ""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return {}, (
+            f"Tool call arguments were not valid JSON ({exc.msg} at "
+            f"line {exc.lineno} column {exc.colno}). Received: "
+            f"{_preview(raw)}"
+        )
+    if not isinstance(parsed, dict):
+        return {}, (
+            "Tool call arguments must be a JSON object, got "
+            f"{type(parsed).__name__}. Received: {_preview(raw)}"
+        )
+    return parsed, ""
+
+
+def _preview(raw: str) -> str:
+    if len(raw) <= _RAW_ARGUMENTS_PREVIEW_CHARS:
+        return raw
+    return raw[:_RAW_ARGUMENTS_PREVIEW_CHARS] + "... (truncated)"
+
+
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # Optional attribution headers OpenRouter uses for its app rankings; harmless
@@ -255,15 +304,23 @@ class OpenRouterProvider(LLMProvider):
         tool_calls_by_index: dict[int, dict] = {}
 
         def _finalized_tool_calls() -> list[dict]:
+            # Malformed arguments are replayed as ``{}``: the raw text would
+            # 400 every later request for this conversation, and the model
+            # learns what went wrong from the error tool result the
+            # conversation loop returns for the call.
             calls = []
             for index in sorted(tool_calls_by_index):
                 partial = tool_calls_by_index[index]
+                raw_arguments = partial["arguments"] or EMPTY_ARGUMENTS_JSON
+                _args, error = parse_tool_arguments(raw_arguments)
                 calls.append({
                     "id": partial["id"],
                     "type": "function",
                     "function": {
                         "name": partial["name"],
-                        "arguments": partial["arguments"] or "{}",
+                        "arguments": (
+                            EMPTY_ARGUMENTS_JSON if error else raw_arguments
+                        ),
                     },
                 })
             return calls
@@ -326,19 +383,20 @@ class OpenRouterProvider(LLMProvider):
 
         for index in sorted(tool_calls_by_index):
             partial = tool_calls_by_index[index]
-            try:
-                tool_args = (
-                    json.loads(partial["arguments"]) if partial["arguments"] else {}
+            tool_args, error = parse_tool_arguments(partial["arguments"])
+            if error:
+                logger.warning(
+                    "Model %s streamed malformed arguments for tool call %s "
+                    "(%s): %s",
+                    session.model, partial["name"], partial["id"],
+                    partial["arguments"][:200],
                 )
-            except json.JSONDecodeError:
-                tool_args = {}
-            if not isinstance(tool_args, dict):
-                tool_args = {}
             yield StreamEvent(
                 type="tool_call",
                 tool_name=partial["name"],
                 tool_args=tool_args,
                 tool_id=partial["id"],
+                tool_args_error=error,
             )
 
     @staticmethod
@@ -520,11 +578,18 @@ class OpenRouterProvider(LLMProvider):
         reference a tool call from the preceding assistant message. A
         dangling tool call on the FINAL message is left alone -- that is the
         legitimate suspend shape the resume bucket closes.
+
+        Also replaces malformed ``function.arguments`` (non-JSON text a
+        weaker model streamed before this guard existed) with ``{}``: the
+        server rejects the whole request over any such historical call, so
+        without this the conversation could never take another turn.
         """
         messages = getattr(session, "messages", None)
-        if not isinstance(messages, list) or len(messages) < 2:
+        if not isinstance(messages, list):
             return 0
-        repaired = 0
+        repaired = self._repair_malformed_arguments(messages)
+        if len(messages) < 2:
+            return repaired
 
         def _tool_call_ids(msg: Any) -> set[str]:
             if not isinstance(msg, dict) or msg.get("role") != "assistant":
@@ -590,6 +655,31 @@ class OpenRouterProvider(LLMProvider):
                 answered = set()
             idx += 1
 
+        return repaired
+
+    @staticmethod
+    def _repair_malformed_arguments(messages: list) -> int:
+        """Replace non-JSON-object ``function.arguments`` with ``{}`` in place.
+
+        Returns the number of tool calls rewritten.
+        """
+        repaired = 0
+        for msg in messages:
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                continue
+            for tool_call in msg.get("tool_calls") or []:
+                if not isinstance(tool_call, dict):
+                    continue
+                function = tool_call.get("function")
+                if not isinstance(function, dict):
+                    continue
+                raw = function.get("arguments")
+                if raw is None:
+                    continue
+                _args, error = parse_tool_arguments(raw)
+                if error:
+                    function["arguments"] = EMPTY_ARGUMENTS_JSON
+                    repaired += 1
         return repaired
 
     async def upload_file(

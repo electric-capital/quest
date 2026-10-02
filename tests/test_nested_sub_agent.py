@@ -265,6 +265,7 @@ def _make_provider_with_nested_call(nested_model):
     fc.type = "tool_call"
     fc.tool_name = "agent_task_nested"
     fc.tool_id = "fc-1"
+    fc.tool_args_error = ""  # a bare MagicMock attribute would read as an error
     fc.tool_args = {
         "name": "Leaf",
         "prompt": "count",

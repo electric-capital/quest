@@ -30,7 +30,11 @@ from chat.gemini_api.history import (
     _load_sdk_history,
 )
 from chat.gemini_api.system_prompt import get_system_prompt
-from chat.gemini_api.tool_dispatch import _dispatch_tool_call, _log_large_tool_result
+from chat.gemini_api.tool_dispatch import (
+    _dispatch_tool_call,
+    _log_large_tool_result,
+    invalid_tool_arguments_result,
+)
 from chat.gemini_api.run_context import RunContext
 from chat.gemini_api.turn_tools import (
     _PUBLIC_BLOCKED_LOOP_TOOLS,
@@ -808,7 +812,7 @@ async def run_conversation_turn(
         repaired_blocks = provider.repair_session_history(chat)
         if repaired_blocks:
             logger.warning(
-                "Repaired %d orphaned tool block(s) in conversation %s "
+                "Repaired %d orphaned tool block(s) / malformed tool argument(s) in conversation %s "
                 "history before running",
                 repaired_blocks, conversation_id,
             )
@@ -1216,7 +1220,20 @@ async def run_conversation_turn(
                 registry_key = registry_key_for(fc_event.tool_name, args)
                 arm_handler = TURN_TOOL_HANDLERS.get(registry_key)
 
-                if ctx.is_public and registry_key in _PUBLIC_BLOCKED_LOOP_TOOLS:
+                if fc_event.tool_args_error:
+                    # The provider could not parse the model's arguments
+                    # (malformed JSON from a weaker model). Nothing to
+                    # dispatch: hand the parse error back as the tool
+                    # result so the model can retry, rather than letting
+                    # the call run on empty arguments.
+                    result = invalid_tool_arguments_result(
+                        fc_event.tool_name, fc_event.tool_args_error,
+                    )
+                    _log_large_tool_result(
+                        fc_event.tool_name, args, result, model, False,
+                        user_email=user.get("email"), conversation_id=conversation_id,
+                    )
+                elif ctx.is_public and registry_key in _PUBLIC_BLOCKED_LOOP_TOOLS:
                     # Public-project hard reject for the loop-handled arms.
                     # PUBLIC_TOOLS never advertises these, but prompt/schema
                     # trimming is not a security boundary -- this is. Logged
