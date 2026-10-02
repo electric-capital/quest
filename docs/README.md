@@ -66,6 +66,7 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 - [Twitter/X App Setup](../plugins/twitter/docs/twitter-x-setup.md) - Creating and configuring Twitter/X OAuth 2.0 integration
 - [Ramp App Setup](setup/ramp-setup.md) - Creating and configuring Ramp OAuth integration
 - [Telegram Setup](../plugins/telegram/docs/telegram-setup.md) - Configuring the Telegram integration (served by the plugins/telegram plugin)
+- [Tailscale Setup](../plugins/tailscale/docs/tailscale-setup.md) - Connecting a tailnet with a read-scoped OAuth client or an API access token (served by the plugins/tailscale plugin)
 
 ### API Reference
 - [Chat API](api/chat-api.md) - REST endpoints for conversation CRUD plus the persistent multiplexed WebSocket (`WS /app/api/stream`) carrying chat traffic and live updates
@@ -88,6 +89,7 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 - [Federal Register API](api/federal-register-api.md) - Federal Register read-only access via `authed_get` (documents, agencies, public-inspection docs); free public US government API with no authentication, surfaced via the ungated `system:federal_register` skill
 - [SEC EDGAR API](api/sec-edgar-api.md) - SEC EDGAR read-only access via `authed_get` (company submissions and XBRL financial facts on `data.sec.gov`, plus the two `www.sec.gov` ticker→CIK map files); free public US government API with no authentication and a required SEC `User-Agent` header, surfaced via the ungated `system:sec_edgar` skill
 - [Twitter/X API](../plugins/twitter/docs/twitter-api.md) - Twitter/X DM, bookmarks, and tweet lookup endpoints, plus action-request-based DM sending
+- [Tailscale API](../plugins/tailscale/docs/tailscale-api.md) - Tailscale tailnet configuration read-only via `authed_get` (devices, routes, policy file, DNS, users, keys, settings, webhooks, flow logs) over a per-user API access token or OAuth client secret, surfaced via the gated `system:tailscale` skill
 - [Ramp API](api/ramp-api.md) - Ramp spend-management read-only access via `authed_get` (transactions, cards, bills, reimbursements, vendors, statements, accounting, audit logs) over per-user OAuth, surfaced via the gated `system:ramp` skill
 - [Frontend API Client Usage](api/api-client-usage.md) - How to use the TypeScript API client
 
@@ -293,7 +295,7 @@ quest/
 ├── plugins/                 # Filesystem-discovered integration plugins (see architecture/plugins.md)
 │   ├── README.md           # Plugin authoring guide (layout, rules, gitignore note)
 │   ├── _example/           # Single-file smoke-test fixture (loaded only by tests)
-│   └── github/, m365/, slack/, twitter/, twilio/, unifi/, iru/, telegram/, google_admin/  # In-tree plugins (see architecture/plugins.md)
+│   └── github/, m365/, slack/, twitter/, twilio/, unifi/, iru/, telegram/, google_admin/, tailscale/  # In-tree plugins (see architecture/plugins.md)
 ├── config/                  # Configuration modules
 │   └── paths.py            # Centralized data-directory path constants (PROJECT_ROOT, DATA_DIR, DATABASE_PATH, CHATS_DIR, PROJECTS_DIR, SECRET_KEY_FILE, LOG_DIR); reads optional data_dir from server_config.json
 ├── db/                      # Database layer (user data, memories, guides, projects, routines, routine schedules, conversation metadata, action requests, skills, skill shares, skill auto-loads, API call usage)

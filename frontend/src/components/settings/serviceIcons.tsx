@@ -88,6 +88,23 @@ function MicrosoftIcon() {
   );
 }
 
+function TailscaleIcon() {
+  // The Tailscale mark: a 3x3 dot grid with the middle row and the bottom
+  // centre dot solid, the rest faded. Monochrome via currentColor.
+  const dots: Array<[number, number, number]> = [
+    [4, 4, 0.3], [12, 4, 0.3], [20, 4, 0.3],
+    [4, 12, 1], [12, 12, 1], [20, 12, 1],
+    [4, 20, 0.3], [12, 20, 1], [20, 20, 0.3],
+  ];
+  return (
+    <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" className="service-icon-mono">
+      {dots.map(([cx, cy, opacity]) => (
+        <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="3.2" fill="currentColor" opacity={opacity} />
+      ))}
+    </svg>
+  );
+}
+
 const SERVICE_ICONS: Record<string, () => ReactElement> = {
   google_services: GoogleIcon,
   google_oauth: GoogleIcon,
@@ -96,6 +113,7 @@ const SERVICE_ICONS: Record<string, () => ReactElement> = {
   smtp: () => <Mail size={28} className="service-icon-mono" aria-hidden="true" />,
   unifi: () => <Wifi size={28} className="service-icon-mono" aria-hidden="true" />,
   iru: () => <Laptop size={28} className="service-icon-mono" aria-hidden="true" />,
+  tailscale: TailscaleIcon,
   coingecko: () => <Coins size={28} className="service-icon-mono" aria-hidden="true" />,
   slack: SlackIcon,
   telegram: TelegramIcon,
