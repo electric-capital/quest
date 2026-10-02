@@ -250,10 +250,10 @@ This architecture enables seamless conversation switching during streaming - mes
 - Styling: `frontend/src/components/Message.css` (`.stats-message` class)
 
 **Context Usage Indicator**:
-- Displays context window utilization as a percentage badge on the model selector row (e.g., "14% context"), right-aligned with the textarea
-- Hover tooltip shows raw values (e.g., "28K / 200K max")
-- Color-coded thresholds: normal (under 70%), amber warning (70-90%), red danger (90%+)
-- Info icon (ⓘ) next to the badge opens a `SystemPromptModal` showing the full system prompt used for the current conversation
+- Displays context window utilization as a small circular meter (Claude Code-style ring) on the composer controls row, right-aligned beside the Send button; the ring fills clockwise from 12 o'clock as the context is consumed and has a FIXED footprint whatever the percentage (a variable-width "NN% context" label used to push the Send button out of narrow phone rows)
+- Hover tooltip shows the figures (e.g., "14% of context used · 28K / 200K max"); the ring carries an `aria-label` with the same percentage
+- Color-coded thresholds on the ring fill: accent colour (under 70%), amber warning (70-90%), red danger (90%+)
+- Clicking the ring (it renders as a button when `onInfoClick` is given) opens a `SystemPromptModal` showing the full system prompt used for the current conversation; there is no separate info icon anymore
 - Backend emits `context_tokens` and `max_context_tokens` in the stats event via `compute_total_context_tokens()` in `chat/llm/base.py` (provider-specific: Anthropic sums input + cache tokens; Gemini uses raw input tokens)
 - Frontend: `ContextIndicator` component in `frontend/src/components/ContextIndicator.tsx` (with `onInfoClick` callback for system prompt viewer), hydrated from stats events during streaming (via `WebSocketManager`) and from historical messages on conversation load (via `useConversation` hook)
 - State: `contextTokens` and `maxContextTokens` fields in `conversationStore`, updated via `setContextUsage()`

@@ -822,9 +822,11 @@ Styling reuses `ChatPanel.css` (`.input-area.composer`, `.composer-bubble`, `.co
 - flags (flag; first message only)
 - the borderless pill-shaped model trigger
 - the read-only "N flags enabled" label / no-credentials warning
-- then the `ContextIndicator` and a round arrow Send (or square Stop) button pushed to the right.
+- then the `ContextIndicator` (a fixed-size circular context meter, see overview.md) and a round arrow Send (or square Stop) button pushed to the right.
 
-No text labels; every icon button carries a `title` tooltip. Read-only conversations show the disabled model trigger + context gauge in the row and no send button. On desktop the bubble sits in the flex column below the messages, centered and capped at the 720px messages-list width, and the controls row is ALWAYS visible.
+No text labels; every icon button carries a `title` tooltip.
+
+**Overflow rule:** the model pill (`.model-menu-container` / `.model-menu-trigger`, `flex: 0 1 auto; min-width: 0`) is the ONLY shrinkable item in the row; every icon button, the mic timer, the no-credentials warning, the context ring and the Send button are `flex-shrink: 0`. When the row runs out of room (phone widths, long self-hosted model names, mic + flags buttons present) the model name ellipsizes down to just its chevron and the Send button never leaves the bubble. Read-only conversations show the disabled model trigger + context gauge in the row and no send button. On desktop the bubble sits in the flex column below the messages, centered and capped at the 720px messages-list width, and the controls row is ALWAYS visible.
 
 On phone widths (`useIsMobile`, the same 768px breakpoint as `MobileShell`):
 
