@@ -4,12 +4,13 @@ Four read-only tools over the Admin SDK Reports API (client in
 plugins/google_admin/reports.py, shaping in plugins/google_admin/meet.py):
 
 - ``google_admin_meet_calls``: conferences in a window, grouped from the
-  per-endpoint ``call_ended`` records, with a quality rollup each;
-- ``google_admin_meet_call_quality``: per-participant-session quality
-  rows (worst first) plus an aggregate summary;
+  per-endpoint ``call_ended`` records, with metric medians / maxima each;
+- ``google_admin_meet_call_quality``: per-participant-session rows carrying
+  Google's quality metrics unchanged (optionally sorted by one metric)
+  plus an aggregate summary;
 - ``google_admin_meet_hardware``: a Meet hardware device roster with
   health signals derived from the ``meet_hardware`` audit log, joined
-  with each device's call quality, and optionally one device's events;
+  with each device's call metrics, and optionally one device's events;
 - ``google_admin_meet_usage``: daily Meet usage statistics.
 
 They exist because the raw records do not fit through ``authed_get``: one
@@ -77,6 +78,10 @@ MEET_HARDWARE = "meet_hardware"
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _MEETING_URL_RE = re.compile(r"meet\.google\.com/(?:lookup/)?([A-Za-z0-9-]+)")
 _USAGE_PARAM_RE = re.compile(r"^[a-z0-9_]+$")
+_METRIC_NAME_RE = _USAGE_PARAM_RE
+
+# Non-metric call_ended values google_admin_meet_call_quality can sort by.
+_SORTABLE_FIELDS = ("duration_seconds", "end_of_call_rating")
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +105,10 @@ def _arg_bool(value: Any, default: bool) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in ("true", "1", "yes")
     return bool(value)
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _arg_int(args: dict, name: str, default: int, minimum: int, maximum: int) -> int:
@@ -314,12 +323,28 @@ async def _tool_meet_calls(ctx, args: dict) -> str:
     return json.dumps(out)
 
 
+def _sort_metric(args: dict) -> tuple[Optional[str], bool]:
+    """``(metric, descending)`` from ``sort_by`` / ``sort_order``."""
+    sort_by = _arg_str(args.get("sort_by"))
+    order = (_arg_str(args.get("sort_order")) or "desc").lower()
+    if order not in ("asc", "desc"):
+        raise ValueError("'sort_order' must be 'asc' or 'desc'")
+    if sort_by is None:
+        return None, True
+    if not _METRIC_NAME_RE.match(sort_by) or not (
+        meet.is_metric(sort_by) or sort_by in _SORTABLE_FIELDS
+    ):
+        raise ValueError(
+            "'sort_by' must be a call_ended metric name (audio_*, video_*, "
+            "screencast_*, network_*) or one of: " + ", ".join(_SORTABLE_FIELDS)
+        )
+    return sort_by, order == "desc"
+
+
 async def _tool_meet_call_quality(ctx, args: dict) -> str:
     try:
         limit = _arg_int(args, "limit", DEFAULT_ENDPOINT_LIMIT, 1, MAX_ENDPOINT_LIMIT)
-        min_quality = (_arg_str(args.get("min_quality")) or "any").lower()
-        if min_quality not in ("any", "fair", "poor"):
-            raise ValueError("'min_quality' must be one of: any, fair, poor")
+        sort_by, descending = _sort_metric(args)
         include_all = _arg_bool(args.get("include_all_metrics"), False)
         start, end = resolve_window(args, default_days=7)
         token = await require_token(ctx.user, REPORTS_AUDIT_SCOPE)
@@ -329,24 +354,32 @@ async def _tool_meet_call_quality(ctx, args: dict) -> str:
     except GoogleAdminError as exc:
         return json.dumps(exc.to_dict())
 
-    rows = _endpoint_rows(page, include_all_metrics=include_all)
-    summary = meet.summarize_quality(rows)
-    selected = rows
-    if min_quality == "fair":
-        selected = [r for r in rows if r.get("quality") in ("fair", "poor")]
-    elif min_quality == "poor":
-        selected = [r for r in rows if r.get("quality") == "poor"]
-    selected = meet.sort_worst_first(selected)
+    # Newest first (the API order) unless sorted by a metric; endpoints
+    # without that metric go last.
+    events = list(meet.iter_events(page.items, "call_ended"))
+    if sort_by:
+        valued = [e for e in events if _is_number(e["params"].get(sort_by))]
+        missing = [e for e in events if not _is_number(e["params"].get(sort_by))]
+        valued.sort(key=lambda e: e["params"][sort_by], reverse=descending)
+        events = valued + missing
+    extra = (sort_by,) if sort_by and meet.is_metric(sort_by) else ()
+    rows = [
+        meet.endpoint_row(e, include_all_metrics=include_all, extra_metrics=extra)
+        for e in events
+    ]
 
     out: dict[str, Any] = {
         "window": _window_view(start, end, page, "left_at", rows),
         "filters": _applied_filters(args, code_used),
-        "summary": summary,
-        "endpoints": [meet.public_row(row) for row in selected[:limit]],
-        "thresholds": meet.thresholds_view(),
+        "summary": meet.summarize_quality(rows),
+        "endpoints": rows[:limit],
     }
-    if len(selected) > limit:
-        out["endpoints_omitted"] = len(selected) - limit
+    if sort_by:
+        out["sorted_by"] = f"{sort_by} {'desc' if descending else 'asc'}"
+        if events and not valued:
+            out["note"] = f"No endpoint in the scan carried {sort_by}."
+    if len(rows) > limit:
+        out["endpoints_omitted"] = len(rows) - limit
     return json.dumps(out)
 
 
@@ -598,7 +631,8 @@ GOOGLE_ADMIN_TOOLS = (
         "List Google Meet calls (conferences) across the Workspace organization "
         "from the Meet audit log, most recently ended first: meeting code, "
         "organizer, start/end, participant and external counts, device types, "
-        "Meet hardware rooms, and a good/fair/poor quality count per call. "
+        "Meet hardware rooms, end-call reasons, and the median / max of the key "
+        "quality metrics (round-trip time, jitter, congestion, packet loss) per call. "
         "Filters are ANDed. Requires the 'Reports' admin privilege.",
         {
             **_WINDOW_PROPERTIES,
@@ -613,20 +647,32 @@ GOOGLE_ADMIN_TOOLS = (
     _tool(
         "google_admin_meet_call_quality",
         "Google Meet call quality per participant session (one row per time "
-        "someone joined a call): packet loss, jitter, round-trip time, "
-        "congestion, bandwidth, video resolution/frame rate, transport, "
-        "location, drop reason, rating, and a good/fair/poor verdict with the "
-        "reasons. Rows are worst first; the summary aggregates every scanned "
-        "row (verdicts, by device type and transport, metric median/p90, most "
-        "common issues). Narrow with a meeting code, conference, participant, "
-        "organizer or device type. Requires the 'Reports' admin privilege.",
+        "someone joined a call), as Google's raw metric values: packet loss "
+        "(%), jitter and round-trip time (ms), congestion (%), estimated "
+        "bandwidth (kbps), video resolution / frame rate, plus transport, "
+        "location, end-call reason and rating. Rows are newest first, or "
+        "sorted by one metric; the summary covers every scanned row (median / "
+        "p90 / max of the key metrics, medians by device type and transport, "
+        "end-call reason and rating counts). Narrow with a meeting code, "
+        "conference, participant, organizer or device type. Requires the "
+        "'Reports' admin privilege.",
         {
             **_WINDOW_PROPERTIES,
             **_CALL_FILTER_PROPERTIES,
-            "min_quality": {
+            "sort_by": {
                 "type": "string",
-                "enum": ["any", "fair", "poor"],
-                "description": "Only return rows at least this bad (default any). The summary still covers all rows.",
+                "description": (
+                    "Order rows by this call_ended metric instead of newest first, "
+                    "e.g. audio_recv_packet_loss_mean, network_rtt_msec_mean, "
+                    "network_recv_jitter_msec_max, network_estimated_download_kbps_mean, "
+                    "or duration_seconds / end_of_call_rating. Rows without the "
+                    "value go last; the metric is added to every row."
+                ),
+            },
+            "sort_order": {
+                "type": "string",
+                "enum": ["desc", "asc"],
+                "description": "Sort direction for sort_by (default desc, highest first).",
             },
             "include_all_metrics": {
                 "type": "boolean",
@@ -649,7 +695,7 @@ GOOGLE_ADMIN_TOOLS = (
         "peripheral attach/detach state, missing/found, calls joined per "
         "platform (Meet, Zoom, Teams, Webex, SIP), restarts, software "
         "updates, app load errors, feedback, plus each device's Meet call "
-        "quality. Devices with concerns come first. There is no API listing "
+        "metrics (median / p90 / max). Devices with concerns come first. There is no API listing "
         "Meet hardware: a device idle for the whole window does not appear. "
         "Requires the 'Reports' admin privilege.",
         {
@@ -668,7 +714,7 @@ GOOGLE_ADMIN_TOOLS = (
             },
             "include_call_quality": {
                 "type": "boolean",
-                "description": "Join each device's Meet call quality from the call log (default true).",
+                "description": "Join each device's Meet call metrics from the call log (default true).",
             },
             "limit": {
                 "type": "integer",

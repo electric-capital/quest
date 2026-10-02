@@ -78,17 +78,18 @@ Meet data comes from the Admin SDK Reports API: the **Meet audit log** (one `cal
 
 | Tool | Answers |
 |------|---------|
-| `google_admin_meet_calls` | Which meetings happened: conferences newest first with meeting code, organizer, start/end, participant / external counts, device types, Meet hardware rooms present, and a good/fair/poor count plus the worst endpoints per call |
-| `google_admin_meet_call_quality` | How good the calls were: one row per participant session (worst first) with packet loss, jitter, round-trip time, congestion, bandwidth, video resolution / frame rate, transport, location, drop reason, rating, a verdict and the reasons; plus a summary over every scanned row (verdict counts, splits by device type and transport, median / p90 / max of the key metrics, most common issues) |
-| `google_admin_meet_hardware` | How the room devices are doing: every Meet hardware device that logged activity in the window, with peripherals currently detached, missing / found, calls joined per platform (Meet, Zoom, Teams, Webex, SIP), restarts, software updates, app load errors, feedback, the device's Meet call quality, and `concerns` (devices with concerns first); `device=` narrows to one device and adds its event timeline |
+| `google_admin_meet_calls` | Which meetings happened: conferences newest first with meeting code, organizer, start/end, participant / external counts, device types, Meet hardware rooms present, end-call reason counts, and the median / max of the key quality metrics per call |
+| `google_admin_meet_call_quality` | How the calls went: one row per participant session with Google's raw metric values -- packet loss, jitter, round-trip time, congestion, bandwidth, video resolution / frame rate -- plus transport, location, `end_call_reason` and rating; newest first, or ordered by one metric with `sort_by` (+ `sort_order`); plus a summary over every scanned row (median / p90 / max of the key metrics, medians by device type and by transport, end-call reason and rating counts) |
+| `google_admin_meet_hardware` | How the room devices are doing: every Meet hardware device that logged activity in the window, with peripherals currently detached, missing / found, calls joined per platform (Meet, Zoom, Teams, Webex, SIP), restarts, software updates, app load errors, feedback, the device's Meet call metrics (median / p90 / max), and `concerns` (devices with concerns first); `device=` narrows to one device and adds its event timeline |
 | `google_admin_meet_usage` | How much Meet is used: daily meetings, calls, call minutes, average meeting length, external and room-device calls, active users, totals over the range |
 
 Shared arguments: the window is `days` (lookback, default 7, max 180) or `start_time` / `end_time` (a UTC date `YYYY-MM-DD` or RFC 3339). Call filters are ANDed: `meeting_code` (code or meet.google.com link), `conference_id`, `organizer_email`, `participant` (email, phone number, or Meet hardware device id), `device_type` (`web`, `android`, `ios`, `chromebox`, `chromebase`, `pstn_in`, ..., or `meet_hardware` for every room device).
 
 How to read the results:
 - **Meeting code vs conference:** a meeting code (`abc-defg-hij`) is reused by every occurrence of a recurring meeting; `conference_id` is one occurrence. Find the conference with `google_admin_meet_calls`, then drill in with `google_admin_meet_call_quality(conference_id=...)`.
-- **Endpoints, not people:** someone who rejoins, or joins from a laptop and a phone, has several rows. Phone dial-ins and very short joins carry no network metrics, hence verdict `unknown`.
-- **Verdicts are Quest heuristics, not Google ratings.** Every quality result carries the `thresholds` used (fair / poor at: audio packet loss 1 / 5 %, video packet loss 2 / 8 %, jitter 30 / 50 ms, round-trip time 150 / 300 ms, congestion 5 / 20 %); a `network_error` / `system_error` disconnect makes an endpoint poor and a 1-2 star rating makes it fair. Say so when presenting a verdict, and quote the metric behind it.
+- **Endpoints, not people:** someone who rejoins, or joins from a laptop and a phone, has several rows. Phone dial-ins and very short joins carry no network metrics.
+- **Raw values, no grading:** the tools pass Google's numbers through unchanged and do not rate them; judge them yourself and quote the metric when you do. Units: `*_packet_loss_*` and `network_congestion` (share of time without enough upload bandwidth) are percent; `*_jitter_msec_*` and `network_rtt_msec_mean` milliseconds; `*_kbps_*` kilobits per second; `*_pixels` the long / short side of the video in pixels; `*_fps_*` frames per second; `*_seconds` how long that stream ran. `end_call_reason` is `normal`, `network_error`, `system_error` or `unknown`; `rating` is the participant's 1-5 end-of-call rating, when given.
+- **Finding the worst sessions:** rows are capped by `limit`, so to find outliers among many sessions sort by the metric in question (`sort_by="audio_recv_packet_loss_mean"`, `"network_recv_jitter_msec_max"`, `"network_rtt_msec_mean"`; `sort_order="asc"` for lower-is-worse values such as `network_estimated_download_kbps_mean` or `video_recv_fps_mean`). The sort metric is added to every row even when it is not in the default set; `include_all_metrics=true` returns every metric.
 - **Direction matters:** `*_recv_*` loss is what the participant received (their downlink, or someone else's bad uplink); `*_send_*` loss and `network_congestion` point at the participant's own uplink. Many participants of one call with receive loss, but none with send loss, suggests a single sender's network.
 - **Truncation:** scans stop after the newest 5000 call records (10000 hardware events) and say `truncated` with `covered_from`; narrow the window or add filters when that happens.
 - **Masking:** Google shows email, location and IP for the organization's own users; external participants may appear only by display name, and phone numbers are partially hidden.
@@ -110,11 +111,13 @@ tool_call(tool_name="google_admin_meet_hardware", arguments={"days": 14})
 tool_call(tool_name="google_admin_meet_hardware", arguments={"device": "Boardroom", "days": 2})
 
 # "Why does Sam keep dropping off calls?"
-tool_call(tool_name="google_admin_meet_call_quality", arguments={"participant": "sam@example.com", "days": 30, "min_quality": "fair"})
+tool_call(tool_name="google_admin_meet_call_quality", arguments={"participant": "sam@example.com", "days": 30, "sort_by": "audio_recv_packet_loss_mean"})
 
-# "Is call quality worse on room devices than on laptops this week?"
-tool_call(tool_name="google_admin_meet_call_quality", arguments={"device_type": "meet_hardware", "limit": 10})
-tool_call(tool_name="google_admin_meet_call_quality", arguments={"device_type": "web", "limit": 10})
+# "Is call quality worse on room devices than on laptops this week?" (compare summary.by_device_type medians)
+tool_call(tool_name="google_admin_meet_call_quality", arguments={"days": 7, "limit": 10})
+
+# "Which sessions had the worst round-trip time today?"
+tool_call(tool_name="google_admin_meet_call_quality", arguments={"days": 1, "sort_by": "network_rtt_msec_mean", "limit": 20})
 
 # "How much did we use Meet last month?"
 tool_call(tool_name="google_admin_meet_usage", arguments={"start_date": "2026-09-01", "end_date": "2026-09-30"})
@@ -124,7 +127,7 @@ For bulk analysis across many windows (for example quality per week over six mon
 
 ### Raw Reports API access
 
-The tools cover the common questions. For anything else (other Meet events such as `presentation_started`, `recording_activity` or `room_check_in`; a metric the tools drop), `authed_get` reaches the raw Reports API -- **write the response to the workspace with `output_file`** and read it with `run_python`, since even one record exceeds the inline limit.
+The tools cover the common questions. For anything else (other Meet events such as `presentation_started`, `recording_activity` or `room_check_in`), `authed_get` reaches the raw Reports API -- **write the response to the workspace with `output_file`** and read it with `run_python`, since even one record exceeds the inline limit.
 
 **Base URL:** `https://admin.googleapis.com/admin/reports/v1`
 

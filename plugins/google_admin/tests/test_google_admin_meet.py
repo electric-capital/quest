@@ -1,15 +1,16 @@
 """Tests for the Google Workspace Admin plugin's Google Meet support.
 
 Covers:
-* ``meet.py`` shaping: Reports API parameter flattening, the good / fair
-  / poor quality verdict, endpoint rows, conference and quality summaries,
-  the Meet hardware roster and its call-quality merge, usage totals.
+* ``meet.py`` shaping: Reports API parameter flattening, endpoint rows
+  carrying Google's raw metric values (no grading), conference and metric
+  summaries, the Meet hardware roster and its call-metric merge, usage
+  totals.
 * ``tools.py`` argument handling: time windows, meeting-code spellings,
   ``filters`` clauses.
 * The four tool handlers against a faked Reports API: request shape
   (eventName, filters, window, partial-response fields, bearer token),
-  paging and truncation, meeting-code retry, min_quality selection, the
-  hardware roster + call-quality join, daily usage, and error mapping
+  paging and truncation, meeting-code retry, sorting by a metric, the
+  hardware roster + call-metric join, daily usage, and error mapping
   (not connected, pre-Meet grant, missing privilege, API disabled).
 
 All HTTP calls are faked -- no real network traffic.
@@ -198,59 +199,6 @@ class TestFlattenParameters:
 
 
 # ---------------------------------------------------------------------------
-# Quality verdict
-# ---------------------------------------------------------------------------
-
-class TestAssessQuality:
-    def test_clean_metrics_are_good(self):
-        verdict, issues = meet.assess_quality({"network_rtt_msec_mean": 40, "audio_recv_packet_loss_mean": 0})
-        assert verdict == "good" and issues == []
-
-    @pytest.mark.parametrize("metric,value,expected", [
-        ("audio_recv_packet_loss_mean", 1, "fair"),
-        ("audio_recv_packet_loss_mean", 4, "fair"),
-        ("audio_recv_packet_loss_mean", 5, "poor"),
-        ("video_recv_packet_loss_mean", 1, "good"),
-        ("video_recv_packet_loss_mean", 8, "poor"),
-        ("network_recv_jitter_msec_mean", 30, "fair"),
-        ("network_recv_jitter_msec_mean", 50, "poor"),
-        ("network_rtt_msec_mean", 149, "good"),
-        ("network_rtt_msec_mean", 150, "fair"),
-        ("network_rtt_msec_mean", 300, "poor"),
-        ("network_congestion", 20, "poor"),
-    ])
-    def test_thresholds(self, metric, value, expected):
-        verdict, _ = meet.assess_quality({metric: value})
-        assert verdict == expected
-
-    def test_worst_issue_wins_and_every_issue_is_listed(self):
-        verdict, issues = meet.assess_quality({
-            "network_recv_jitter_msec_mean": 35, "audio_send_packet_loss_mean": 9,
-        })
-        assert verdict == "poor"
-        assert {i["level"] for i in issues} == {"fair", "poor"}
-        assert "audio send packet loss 9%" in [i["text"] for i in issues]
-
-    @pytest.mark.parametrize("reason", ["network_error", "system_error"])
-    def test_dropped_endpoint_is_poor(self, reason):
-        verdict, issues = meet.assess_quality({"network_rtt_msec_mean": 20, "end_call_reason": reason})
-        assert verdict == "poor"
-        assert issues[0]["label"] == f"dropped ({reason})"
-
-    def test_low_rating_is_fair(self):
-        assert meet.assess_quality({"network_rtt_msec_mean": 20, "end_of_call_rating": 2})[0] == "fair"
-        assert meet.assess_quality({"network_rtt_msec_mean": 20, "end_of_call_rating": 4})[0] == "good"
-
-    def test_no_metrics_is_unknown(self):
-        assert meet.assess_quality({"device_type": "pstn_in", "end_call_reason": "normal"}) == ("unknown", [])
-
-    def test_thresholds_view_matches_table(self):
-        view = meet.thresholds_view()
-        assert len(view) == len(meet.QUALITY_THRESHOLDS)
-        assert {"metric": "network_rtt_msec_mean", "fair_at": 150, "poor_at": 300, "unit": "ms"} in view
-
-
-# ---------------------------------------------------------------------------
 # Endpoint rows and summaries
 # ---------------------------------------------------------------------------
 
@@ -264,17 +212,30 @@ def _rows(*items, include_all_metrics=False):
 class TestEndpointRow:
     def test_compact_row(self):
         (row,) = _rows(_good_web())
-        public = meet.public_row(row)
-        assert public["participant"] == "jane@example.com"
-        assert public["joined_at"] == "2026-10-01T10:00:00Z"
-        assert public["left_at"] == "2026-10-01T10:30:00Z"
-        assert public["location"] == "New York, US"
-        assert public["transport"] == "udp"
-        assert public["quality"] == "good"
-        # Defaults stay quiet: normal end, internal participant, no IP.
-        for key in ("end_call_reason", "is_external", "issues", "ip_address", "_issue_labels"):
-            assert key not in public
-        assert set(public["metrics"]) <= set(meet.CORE_METRICS)
+        assert row["participant"] == "jane@example.com"
+        assert row["joined_at"] == "2026-10-01T10:00:00Z"
+        assert row["left_at"] == "2026-10-01T10:30:00Z"
+        assert row["location"] == "New York, US"
+        assert row["transport"] == "udp"
+        assert row["end_call_reason"] == "normal"
+        # Defaults stay quiet: internal participant, no IP.
+        for key in ("is_external", "ip_address"):
+            assert key not in row
+        assert set(row["metrics"]) <= set(meet.CORE_METRICS)
+
+    def test_metric_values_pass_through_unchanged(self):
+        (row,) = _rows(_poor_room(end_of_call_rating=2))
+        assert row["metrics"] == {
+            "network_rtt_msec_mean": 320,
+            "network_recv_jitter_msec_mean": 12,
+            "audio_recv_packet_loss_mean": 7,
+        }
+        assert row["end_call_reason"] == "network_error"
+        assert row["rating"] == 2
+        # No grading of any kind.
+        for key in ("quality", "issues", "verdict"):
+            assert key not in row
+        assert meet.is_hardware_row(row)
 
     def test_all_metrics_adds_every_metric_and_ip(self):
         (row,) = _rows(_good_web(screencast_send_seconds=30), include_all_metrics=True)
@@ -282,12 +243,12 @@ class TestEndpointRow:
         assert row["metrics"]["screencast_send_seconds"] == 30
         assert "network_transport_protocol" not in row["metrics"]
 
-    def test_poor_row_lists_reasons(self):
-        (row,) = _rows(_poor_room())
-        assert row["quality"] == "poor"
-        assert row["end_call_reason"] == "network_error"
-        assert "round-trip time 320 ms" in row["issues"]
-        assert meet.is_hardware_row(row)
+    def test_extra_metrics_are_added(self):
+        row = meet.endpoint_row(
+            next(meet.iter_events([_good_web(audio_recv_seconds=1790)], "call_ended")),
+            extra_metrics=("audio_recv_seconds",),
+        )
+        assert row["metrics"]["audio_recv_seconds"] == 1790
 
     def test_participant_falls_back_to_actor(self):
         item = _good_web()
@@ -295,15 +256,6 @@ class TestEndpointRow:
         item["events"][0]["parameters"] = [p for p in params if p["name"] != "identifier"]
         (row,) = _rows(item)
         assert row["participant"] == "jane@example.com"
-
-    def test_sort_worst_first(self):
-        rows = _rows(
-            _good_web(time="2026-10-01T11:00:00Z"),
-            _good_web(time="2026-10-01T10:00:00Z", network_recv_jitter_msec_mean=40),
-            _poor_room(),
-            _call_ended("2026-10-01T09:00:00Z", conference_id="c2", device_type="pstn_in"),
-        )
-        assert [r["quality"] for r in meet.sort_worst_first(rows)] == ["poor", "fair", "good", "unknown"]
 
 
 class TestSummaries:
@@ -323,23 +275,39 @@ class TestSummaries:
         assert first["ended_at"] == "2026-10-01T10:30:00Z"
         assert first["device_types"] == {"web": 1, "chromebox": 1}
         assert first["meet_hardware"] == ["Boardroom"]
-        assert first["quality"] == {"poor": 1, "good": 1}
-        assert first["worst_endpoints"][0].startswith("Boardroom: ")
+        assert first["metrics"]["network_rtt_msec_mean"] == {"median": 190.0, "max": 320}
+        assert first["metrics"]["audio_recv_packet_loss_mean"] == {"median": 3.5, "max": 7}
+        assert first["end_call_reasons"] == {"normal": 1, "network_error": 1}
+        assert "quality" not in first and "worst_endpoints" not in first
         assert conferences[1]["external_participants"] == 1
 
-    def test_quality_summary(self):
-        rows = _rows(_good_web(), _poor_room(), _good_web(identifier="b@example.com", network_rtt_msec_mean=100))
+    def test_metric_summary(self):
+        rows = _rows(
+            _good_web(),
+            _poor_room(end_of_call_rating=2),
+            _good_web(identifier="b@example.com", network_rtt_msec_mean=100),
+        )
         summary = meet.summarize_quality(rows)
         assert summary["endpoints"] == 3
         assert summary["conferences"] == 1
         assert summary["participants"] == 3
-        assert summary["by_quality"] == {"poor": 1, "good": 2}
-        assert summary["by_device_type"]["chromebox"] == {"endpoints": 1, "poor": 1}
+        assert summary["metrics"]["network_rtt_msec_mean"] == {
+            "median": 100, "p90": 320, "max": 320, "endpoints": 3,
+        }
+        assert summary["by_device_type"]["chromebox"] == {
+            "endpoints": 1,
+            "median": {
+                "network_rtt_msec_mean": 320,
+                "network_recv_jitter_msec_mean": 12,
+                "audio_recv_packet_loss_mean": 7,
+            },
+        }
+        assert summary["by_device_type"]["web"]["median"]["network_rtt_msec_mean"] == 80
         assert summary["by_transport"]["udp"]["endpoints"] == 2
-        rtt = summary["metrics"]["network_rtt_msec_mean"]
-        assert rtt == {"median": 100, "p90": 320, "max": 320, "endpoints": 3}
-        issues = {i["issue"] for i in summary["most_common_issues"]}
-        assert {"round-trip time", "audio receive packet loss", "dropped (network_error)"} <= issues
+        assert summary["end_call_reasons"] == {"normal": 2, "network_error": 1}
+        assert summary["ratings"] == {2: 1}
+        for key in ("by_quality", "most_common_issues"):
+            assert key not in summary
 
     def test_empty_summary(self):
         assert meet.summarize_quality([]) == {"endpoints": 0, "conferences": 0, "participants": 0}
@@ -424,11 +392,14 @@ class TestHardwareRoster:
         ))
         assert set(quality) == {"dev-1", "other-id-9", "dev-3"}
 
+        assert quality["dev-1"]["metrics"]["network_rtt_msec_mean"]["max"] == 320
+        assert quality["dev-1"]["end_call_reasons"] == {"network_error": 1}
+
+        concerns_before = list(devices["dev-1"]["concerns"])
         meet.merge_hardware_call_quality(devices, quality)
-        assert devices["dev-1"]["call_quality"]["quality"] == {"poor": 1}
-        assert any("poor quality" in c for c in devices["dev-1"]["concerns"])
-        assert devices["hw-9"]["call_quality"]["quality"] == {"good": 1}
-        assert not any("poor quality" in c for c in devices["hw-9"]["concerns"])
+        assert devices["dev-1"]["call_quality"] is quality["dev-1"]
+        assert devices["dev-1"]["concerns"] == concerns_before  # call metrics are never graded
+        assert devices["hw-9"]["call_quality"]["metrics"]["network_rtt_msec_mean"]["max"] == 50
         assert devices["dev-3"]["display_name"] == "Lobby"
         assert devices["dev-3"]["device_id"] == "dev-3"
         assert "no meet_hardware log events" in devices["dev-3"]["note"]
@@ -611,27 +582,50 @@ class TestMeetCallsTool:
 class TestCallQualityTool:
     def _fake(self):
         items = [
-            _good_web(),
+            _good_web(time="2026-10-01T10:40:00Z"),
             _good_web(identifier="b@example.com", network_recv_jitter_msec_mean=40),
             _poor_room(),
+            _call_ended("2026-10-01T09:00:00Z", conference_id="conf-1", identifier="+1555",
+                        identifier_type="phone_number", device_type="pstn_in", duration_seconds=60),
         ]
         return FakeGoogle(lambda url, params: (200, {"items": items}))
 
-    def test_rows_worst_first_with_summary_and_thresholds(self, fixed_now):
+    def test_rows_newest_first_with_summary(self, fixed_now):
         out = _call_tool(tools._tool_meet_call_quality, {"conference_id": "conf-1"}, self._fake())
-        assert [r["quality"] for r in out["endpoints"]] == ["poor", "fair", "good"]
-        assert all("_issue_labels" not in r for r in out["endpoints"])
-        assert out["summary"]["by_quality"] == {"poor": 1, "fair": 1, "good": 1}
-        assert out["thresholds"] == meet.thresholds_view()
+        assert [r["participant"] for r in out["endpoints"]] == [
+            "jane@example.com", "b@example.com", "dev-1", "+1555",
+        ]
+        assert out["endpoints"][2]["metrics"]["audio_recv_packet_loss_mean"] == 7
+        assert out["summary"]["endpoints"] == 4
         assert out["filters"] == {"conference_id": "conf-1"}
+        for key in ("thresholds", "sorted_by"):
+            assert key not in out
+        assert not any("quality" in r for r in out["endpoints"])
 
-    def test_min_quality_keeps_summary_over_all_rows(self, fixed_now):
-        out = _call_tool(tools._tool_meet_call_quality, {"min_quality": "poor"}, self._fake())
-        assert [r["participant"] for r in out["endpoints"]] == ["dev-1"]
-        assert out["summary"]["endpoints"] == 3
+    def test_sort_by_metric_descending_puts_missing_last(self, fixed_now):
+        out = _call_tool(tools._tool_meet_call_quality,
+                         {"sort_by": "network_recv_jitter_msec_mean"}, self._fake())
+        assert [r["participant"] for r in out["endpoints"]] == [
+            "b@example.com", "dev-1", "jane@example.com", "+1555",
+        ]
+        assert out["sorted_by"] == "network_recv_jitter_msec_mean desc"
 
-        out = _call_tool(tools._tool_meet_call_quality, {"min_quality": "fair"}, self._fake())
-        assert len(out["endpoints"]) == 2
+    def test_sort_ascending_and_metric_is_added_to_rows(self, fixed_now):
+        out = _call_tool(tools._tool_meet_call_quality,
+                         {"sort_by": "duration_seconds", "sort_order": "asc", "limit": 2}, self._fake())
+        assert [r["participant"] for r in out["endpoints"]] == ["+1555", "dev-1"]
+        assert out["endpoints_omitted"] == 2
+
+        out = _call_tool(tools._tool_meet_call_quality, {"sort_by": "audio_recv_seconds"}, FakeGoogle(
+            lambda url, params: (200, {"items": [_good_web(audio_recv_seconds=10),
+                                                 _good_web(identifier="b@x", audio_recv_seconds=99)]}),
+        ))
+        assert [r["metrics"]["audio_recv_seconds"] for r in out["endpoints"]] == [99, 10]
+
+    def test_sort_by_a_metric_no_row_has(self, fixed_now):
+        out = _call_tool(tools._tool_meet_call_quality, {"sort_by": "screencast_recv_fps_mean"}, self._fake())
+        assert "No endpoint in the scan carried screencast_recv_fps_mean" in out["note"]
+        assert len(out["endpoints"]) == 4
 
     def test_participant_and_device_filters(self, fixed_now):
         fake = self._fake()
@@ -643,9 +637,16 @@ class TestCallQualityTool:
         out = _call_tool(tools._tool_meet_call_quality, {"include_all_metrics": True}, self._fake())
         assert any(r.get("ip_address") for r in out["endpoints"])
 
-    def test_bad_min_quality(self, fixed_now):
-        out = _call_tool(tools._tool_meet_call_quality, {"min_quality": "awful"})
+    @pytest.mark.parametrize("args", [
+        {"sort_by": "organizer_email"},
+        {"sort_by": "network_rtt_msec_mean; drop"},
+        {"sort_by": "network_rtt_msec_mean", "sort_order": "sideways"},
+    ])
+    def test_bad_sort_arguments(self, fixed_now, args):
+        fake = FakeGoogle(lambda url, params: (200, {}))
+        out = _call_tool(tools._tool_meet_call_quality, args, fake)
         assert out["error"] == "invalid_arguments"
+        assert fake.calls == []
 
 
 class TestHardwareTool:
@@ -677,8 +678,9 @@ class TestHardwareTool:
         boardroom, huddle = out["devices"]
         assert boardroom["display_name"] == "Boardroom"
         assert any("CAMERA detached" in c for c in boardroom["concerns"])
-        assert boardroom["call_quality"]["quality"] == {"poor": 1}
-        assert huddle["call_quality"]["quality"] == {"good": 1}
+        assert boardroom["call_quality"]["metrics"]["audio_recv_packet_loss_mean"]["max"] == 7
+        assert boardroom["call_quality"]["end_call_reasons"] == {"network_error": 1}
+        assert huddle["call_quality"]["metrics"]["network_rtt_msec_mean"]["max"] == 40
         assert "concerns" not in huddle
         assert "events" not in out
 

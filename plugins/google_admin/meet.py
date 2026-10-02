@@ -4,9 +4,10 @@ Pure functions over Reports API ``activities.list`` items (no I/O), used by
 plugins/google_admin/tools.py:
 
 - ``call_ended`` records of the ``meet`` audit log become one endpoint row
-  per participant session, with a curated metric subset and a
-  good / fair / poor quality verdict (:data:`QUALITY_THRESHOLDS`);
-- endpoint rows roll up into conferences and into a quality summary;
+  per participant session carrying Google's metric values unchanged (a
+  curated subset by default) -- no quality grading;
+- endpoint rows roll up into conferences and into a metric summary
+  (median / p90 / max, splits by device type and transport);
 - ``meet_hardware`` audit records become event rows and a per-device
   health roster (there is no Meet hardware inventory API, so the roster
   is whatever the log saw in the window).
@@ -116,29 +117,6 @@ def drop_empty(row: dict) -> dict:
 # Call quality
 # ---------------------------------------------------------------------------
 
-# Quest heuristics, not Google figures (Google publishes no per-call
-# thresholds): common VoIP rules of thumb. Each row: metric, label, unit,
-# fair-at, poor-at. A value at or above ``poor_at`` makes the endpoint
-# poor, at or above ``fair_at`` fair.
-QUALITY_THRESHOLDS = (
-    ("audio_recv_packet_loss_mean", "audio receive packet loss", "%", 1, 5),
-    ("audio_send_packet_loss_mean", "audio send packet loss", "%", 1, 5),
-    ("video_recv_packet_loss_mean", "video receive packet loss", "%", 2, 8),
-    ("video_send_packet_loss_mean", "video send packet loss", "%", 2, 8),
-    ("network_recv_jitter_msec_mean", "receive jitter", " ms", 30, 50),
-    ("network_send_jitter_msec_mean", "send jitter", " ms", 30, 50),
-    ("network_rtt_msec_mean", "round-trip time", " ms", 150, 300),
-    ("network_congestion", "network congestion", "%", 5, 20),
-)
-
-# ``end_call_reason`` values meaning the endpoint was dropped.
-_DROP_REASONS = ("network_error", "system_error")
-
-# An end-of-call rating at or below this counts against the endpoint.
-_LOW_RATING = 2
-
-QUALITY_RANK = {"poor": 0, "fair": 1, "good": 2, "unknown": 3}
-
 # ``device_type`` values Google labels as Meet hardware. Android-based
 # room kits may report another value; ``identifier_type == device_id`` is
 # the reliable Meet hardware marker.
@@ -171,7 +149,7 @@ CORE_METRICS = (
     "video_send_long_side_median_pixels",
 )
 
-_METRIC_PREFIXES = ("audio_", "video_", "screencast_", "network_")
+METRIC_PREFIXES = ("audio_", "video_", "screencast_", "network_")
 
 # Metrics summarized (median / p90 / max) across endpoints.
 SUMMARY_METRICS = (
@@ -184,66 +162,18 @@ SUMMARY_METRICS = (
 )
 
 
-def thresholds_view() -> list[dict]:
-    """:data:`QUALITY_THRESHOLDS` as JSON-friendly rows for tool output."""
-    return [
-        {"metric": metric, "fair_at": fair, "poor_at": poor, "unit": unit.strip()}
-        for metric, _label, unit, fair, poor in QUALITY_THRESHOLDS
-    ]
+def is_metric(name: str) -> bool:
+    """Whether ``name`` is a numeric ``call_ended`` quality metric."""
+    return name.startswith(METRIC_PREFIXES) and name != "network_transport_protocol"
 
 
-def assess_quality(params: dict) -> tuple[str, list[dict]]:
-    """``(verdict, issues)`` for one ``call_ended`` record.
-
-    ``issues`` entries are ``{label, level, text}``. The verdict is
-    ``unknown`` when the record carries none of the threshold metrics
-    (dial-in phones, very short joins).
-    """
-    issues: list[dict] = []
-    measured = False
-    for metric, label, unit, fair_at, poor_at in QUALITY_THRESHOLDS:
-        value = params.get(metric)
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
-            continue
-        measured = True
-        if value >= poor_at:
-            level = "poor"
-        elif value >= fair_at:
-            level = "fair"
-        else:
-            continue
-        issues.append({"label": label, "level": level, "text": f"{label} {value}{unit}"})
-
-    reason = params.get("end_call_reason")
-    if reason in _DROP_REASONS:
-        issues.append({
-            "label": f"dropped ({reason})", "level": "poor",
-            "text": f"left the call with end_call_reason={reason}",
-        })
-    rating = params.get("end_of_call_rating")
-    if isinstance(rating, int) and not isinstance(rating, bool) and 0 < rating <= _LOW_RATING:
-        issues.append({
-            "label": "low call rating", "level": "fair",
-            "text": f"participant rated the call {rating}/5",
-        })
-
-    levels = {issue["level"] for issue in issues}
-    if "poor" in levels:
-        verdict = "poor"
-    elif "fair" in levels:
-        verdict = "fair"
-    elif measured:
-        verdict = "good"
-    else:
-        verdict = "unknown"
-    return verdict, issues
-
-
-def endpoint_row(event: dict, *, include_all_metrics: bool = False) -> dict:
+def endpoint_row(
+    event: dict, *, include_all_metrics: bool = False, extra_metrics: Iterable[str] = (),
+) -> dict:
     """One ``call_ended`` event as a compact participant-session row.
 
-    Carries the private key ``_issue_labels`` (for summaries); strip it
-    with :func:`public_row` before output.
+    Metric values are Google's, unchanged: :data:`CORE_METRICS` by default
+    (plus ``extra_metrics``), every metric with ``include_all_metrics``.
     """
     params = event["params"]
     left_at = parse_time(event.get("time"))
@@ -258,16 +188,11 @@ def endpoint_row(event: dict, *, include_all_metrics: bool = False) -> dict:
     ) or None
 
     if include_all_metrics:
-        metrics = {
-            name: value for name, value in sorted(params.items())
-            if name.startswith(_METRIC_PREFIXES)
-            and name != "network_transport_protocol"
-        }
+        metrics = {name: value for name, value in sorted(params.items()) if is_metric(name)}
     else:
-        metrics = {name: params[name] for name in CORE_METRICS if name in params}
+        names = list(CORE_METRICS) + [m for m in extra_metrics if m not in CORE_METRICS]
+        metrics = {name: params[name] for name in names if name in params}
 
-    verdict, issues = assess_quality(params)
-    reason = params.get("end_call_reason")
     row = {
         "conference_id": params.get("conference_id"),
         "meeting_code": params.get("meeting_code"),
@@ -282,10 +207,8 @@ def endpoint_row(event: dict, *, include_all_metrics: bool = False) -> dict:
         "duration_seconds": duration,
         "location": location,
         "transport": params.get("network_transport_protocol"),
-        "end_call_reason": reason if reason and reason != "normal" else None,
+        "end_call_reason": params.get("end_call_reason"),
         "rating": params.get("end_of_call_rating"),
-        "quality": verdict,
-        "issues": [issue["text"] for issue in issues],
         "metrics": metrics,
     }
     if include_all_metrics:
@@ -293,13 +216,7 @@ def endpoint_row(event: dict, *, include_all_metrics: bool = False) -> dict:
         row["ip_address"] = params.get("ip_address")
         row["encryption_type"] = params.get("encryption_type")
         row["product_type"] = params.get("product_type")
-    row = drop_empty(row)
-    row["_issue_labels"] = [issue["label"] for issue in issues]
-    return row
-
-
-def public_row(row: dict) -> dict:
-    return {k: v for k, v in row.items() if not k.startswith("_")}
+    return drop_empty(row)
 
 
 def is_hardware_row(row: dict) -> bool:
@@ -309,18 +226,8 @@ def is_hardware_row(row: dict) -> bool:
     )
 
 
-def sort_worst_first(rows: list[dict]) -> list[dict]:
-    """Poor first, then fair, good, unknown; more issues first; newest first."""
-    rows = sorted(rows, key=lambda r: r.get("left_at") or "", reverse=True)
-    return sorted(
-        rows,
-        key=lambda r: (QUALITY_RANK.get(r.get("quality"), 9), -len(r.get("issues") or [])),
-    )
-
-
-def _quality_counts(rows: list[dict]) -> dict:
-    counts = Counter(row.get("quality", "unknown") for row in rows)
-    return {verdict: counts[verdict] for verdict in QUALITY_RANK if counts[verdict]}
+def _number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _percentile(values: list[float], fraction: float) -> float:
@@ -329,53 +236,64 @@ def _percentile(values: list[float], fraction: float) -> float:
     return ordered[index]
 
 
+def _metric_values(rows: list[dict], metric: str) -> list:
+    return [
+        row["metrics"][metric] for row in rows
+        if _number((row.get("metrics") or {}).get(metric))
+    ]
+
+
 def _metric_stats(rows: list[dict]) -> dict:
+    """Median / p90 / max of each :data:`SUMMARY_METRICS` across ``rows``."""
     out = {}
     for metric in SUMMARY_METRICS:
-        values = [
-            row["metrics"][metric] for row in rows
-            if isinstance((row.get("metrics") or {}).get(metric), (int, float))
-        ]
-        if not values:
-            continue
-        out[metric] = {
-            "median": statistics.median(values),
-            "p90": _percentile(values, 0.9),
-            "max": max(values),
-            "endpoints": len(values),
-        }
+        values = _metric_values(rows, metric)
+        if values:
+            out[metric] = {
+                "median": statistics.median(values),
+                "p90": _percentile(values, 0.9),
+                "max": max(values),
+                "endpoints": len(values),
+            }
     return out
 
 
-def summarize_quality(rows: list[dict]) -> dict:
-    """Aggregate view of endpoint rows: verdicts, splits, metric spread."""
-    by_device: dict[str, list[dict]] = {}
-    by_transport: dict[str, list[dict]] = {}
-    for row in rows:
-        by_device.setdefault(row.get("device_type") or "unknown", []).append(row)
-        by_transport.setdefault(row.get("transport") or "unknown", []).append(row)
+def _metric_medians(rows: list[dict]) -> dict:
+    out = {}
+    for metric in SUMMARY_METRICS:
+        values = _metric_values(rows, metric)
+        if values:
+            out[metric] = statistics.median(values)
+    return out
 
-    issue_counts = Counter(label for row in rows for label in row.get("_issue_labels") or [])
+
+def _value_counts(rows: list[dict], key: str) -> dict:
+    return dict(Counter(row[key] for row in rows if row.get(key) is not None).most_common())
+
+
+def _split(rows: list[dict], key: str) -> dict:
+    groups: dict[str, list[dict]] = {}
+    for row in rows:
+        groups.setdefault(row.get(key) or "unknown", []).append(row)
+    return {
+        name: drop_empty({"endpoints": len(group), "median": _metric_medians(group)})
+        for name, group in sorted(groups.items(), key=lambda kv: -len(kv[1]))
+    }
+
+
+def summarize_quality(rows: list[dict]) -> dict:
+    """Aggregate view of endpoint rows: counts, splits, metric spread."""
     conferences = {row.get("conference_id") or row.get("meeting_code") for row in rows}
     participants = {row.get("participant") for row in rows if row.get("participant")}
     return drop_empty({
         "endpoints": len(rows),
         "conferences": len(conferences - {None}),
         "participants": len(participants),
-        "by_quality": _quality_counts(rows),
-        "by_device_type": {
-            key: {"endpoints": len(group), **_quality_counts(group)}
-            for key, group in sorted(by_device.items(), key=lambda kv: -len(kv[1]))
-        },
-        "by_transport": {
-            key: {"endpoints": len(group), **_quality_counts(group)}
-            for key, group in sorted(by_transport.items(), key=lambda kv: -len(kv[1]))
-        },
         "metrics": _metric_stats(rows),
-        "most_common_issues": [
-            {"issue": label, "endpoints": count}
-            for label, count in issue_counts.most_common(6)
-        ],
+        "by_device_type": _split(rows, "device_type"),
+        "by_transport": _split(rows, "transport"),
+        "end_call_reasons": _value_counts(rows, "end_call_reason"),
+        "ratings": _value_counts(rows, "rating"),
     })
 
 
@@ -400,12 +318,10 @@ def summarize_conferences(rows: list[dict]) -> list[dict]:
             row.get("display_name") or row.get("participant") or "unnamed device"
             for row in group if is_hardware_row(row)
         })
-        worst = [
-            f"{row.get('display_name') or row.get('participant') or 'unknown'}: "
-            + "; ".join(row["issues"])
-            for row in sort_worst_first(group)
-            if row.get("quality") in ("poor", "fair") and row.get("issues")
-        ][:3]
+        metrics = {
+            metric: {"median": stats["median"], "max": stats["max"]}
+            for metric, stats in _metric_stats(group).items()
+        }
         conferences.append(drop_empty({
             "conference_id": first.get("conference_id"),
             "meeting_code": first.get("meeting_code"),
@@ -419,8 +335,8 @@ def summarize_conferences(rows: list[dict]) -> list[dict]:
             "external_participants": len(external - {None}) or None,
             "device_types": dict(Counter(row.get("device_type") or "unknown" for row in group)),
             "meet_hardware": hardware,
-            "quality": _quality_counts(group),
-            "worst_endpoints": worst,
+            "metrics": metrics,
+            "end_call_reasons": _value_counts(group, "end_call_reason"),
         }))
     conferences.sort(key=lambda c: c.get("ended_at") or "", reverse=True)
     return conferences
@@ -574,7 +490,7 @@ def _hardware_concerns(device: dict) -> list[str]:
 
 
 def hardware_call_quality(rows: list[dict]) -> dict[str, dict]:
-    """Per-device call quality from Meet hardware endpoint rows.
+    """Per-device call metrics from Meet hardware endpoint rows.
 
     Keyed by the device id (the ``identifier`` of a ``device_id``
     endpoint), or the display name when the record carries no id.
@@ -593,14 +509,8 @@ def hardware_call_quality(rows: list[dict]) -> dict[str, dict]:
             "display_name": next((r["display_name"] for r in group if r.get("display_name")), None),
             "device_type": next((r["device_type"] for r in group if r.get("device_type")), None),
             "endpoints": len(group),
-            "quality": _quality_counts(group),
             "metrics": _metric_stats(group),
-            "most_common_issues": [
-                {"issue": label, "endpoints": count}
-                for label, count in Counter(
-                    label for row in group for label in row.get("_issue_labels") or []
-                ).most_common(3)
-            ],
+            "end_call_reasons": _value_counts(group, "end_call_reason"),
             "last_call_at": max((r["left_at"] for r in group if r.get("left_at")), default=None),
         })
     return out
@@ -611,7 +521,7 @@ def merge_hardware_call_quality(devices: dict[str, dict], quality: dict[str, dic
 
     Matches on the device id first, then on the display name (the call log
     and the hardware log name devices independently). A device seen only
-    in calls is added to the roster. Poor calls become a concern.
+    in calls is added to the roster.
     """
     by_name = {
         (device.get("display_name") or "").lower(): key
@@ -628,13 +538,7 @@ def merge_hardware_call_quality(devices: dict[str, dict], quality: dict[str, dic
                 "note": "seen in Meet calls but no meet_hardware log events in the window",
             }
             target = key
-        device = devices[target]
-        device["call_quality"] = stats
-        poor = (stats.get("quality") or {}).get("poor", 0)
-        if poor:
-            device["concerns"] = list(device.get("concerns") or []) + [
-                f"{poor} of {stats['endpoints']} Meet call endpoint(s) had poor quality"
-            ]
+        devices[target]["call_quality"] = stats
 
 
 # ---------------------------------------------------------------------------
