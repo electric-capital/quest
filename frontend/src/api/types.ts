@@ -713,6 +713,16 @@ export interface ConnectorRow {
   key_placeholder?: string;
   key_hint?: string;
   disconnect_url?: string;
+  // api_key rows, optional: guidance shown above the key form in the
+  // add-connection key-entry step -- a short text plus links to the
+  // upstream pages where the credential is created.
+  key_help?: string;
+  key_help_links?: ConnectorHelpLink[];
+}
+
+export interface ConnectorHelpLink {
+  label: string;
+  url: string;
 }
 
 export interface ConnectorsResponse {

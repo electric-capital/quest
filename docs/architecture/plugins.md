@@ -66,7 +66,7 @@ Validation enforces:
 - tool names absent from the public-project allowlist (except the core-owned `_PUBLIC_ALLOWLIST_MIGRATED_TOOLS` per-plugin exemptions in `config/plugins.py`), and
 - well-formed `user_connection`/`services` entries.
 
-For an oauth-kind `user_connection` it additionally requires an `oauth_router` whose every route path lives under the plugin's `/auth/<id>` namespace (`plugin_auth_prefix()`: the id's underscores are written as hyphens, so `google_admin` owns `/auth/google-admin`), rejects the api_key-only fields (`validate_key`, `key_placeholder`), and checks `scopes`/`needs_reauth` shapes; an api_key-kind spec must not set `oauth_router`.
+For an oauth-kind `user_connection` it additionally requires an `oauth_router` whose every route path lives under the plugin's `/auth/<id>` namespace (`plugin_auth_prefix()`: the id's underscores are written as hyphens, so `google_admin` owns `/auth/google-admin`), rejects the api_key-only fields (`validate_key`, `key_placeholder`, `key_help`, `key_help_links`), and checks `scopes`/`needs_reauth` shapes; an api_key-kind spec must not set `oauth_router`.
 
 ## Manifest fan-out
 

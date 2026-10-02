@@ -27,7 +27,7 @@ additionally holds a token that cannot write at all.
 from pathlib import Path
 
 from chat.system_skills import SystemSkill
-from config.plugin_types import QuestPlugin, UserConnectionSpec
+from config.plugin_types import HelpLink, QuestPlugin, UserConnectionSpec
 
 from plugins.tailscale.upstream import (
     API_HOST,
@@ -128,6 +128,31 @@ def get_plugin() -> QuestPlugin:
             key_placeholder=(
                 "Paste an API access token (tskey-api-...) or OAuth client "
                 "secret (tskey-client-...)"
+            ),
+            key_help=(
+                "Create the credential in the Tailscale admin console (Owner, "
+                "Admin, IT admin or Network admin role). An OAuth client with "
+                "read-only scopes is recommended: it never expires and cannot "
+                "change anything. An API access token also works but carries "
+                "your full rights and expires within 90 days."
+            ),
+            key_help_links=(
+                HelpLink(
+                    "Generate an OAuth client",
+                    "https://login.tailscale.com/admin/settings/oauth",
+                ),
+                HelpLink(
+                    "Generate an API access token",
+                    "https://login.tailscale.com/admin/settings/keys",
+                ),
+                HelpLink(
+                    "OAuth clients and scopes (docs)",
+                    "https://tailscale.com/kb/1215/oauth-clients",
+                ),
+                HelpLink(
+                    "API access tokens (docs)",
+                    "https://tailscale.com/kb/1101/api",
+                ),
             ),
         ),
         services=(_TAILSCALE_SERVICE,),

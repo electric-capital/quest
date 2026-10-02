@@ -60,7 +60,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from config.plugin_types import QuestPlugin
+from config.plugin_types import HelpLink, QuestPlugin
 
 logger = logging.getLogger(__name__)
 
@@ -309,8 +309,29 @@ def validate_plugin(plugin: QuestPlugin, existing_ids: set[str]) -> None:
                     f"Plugin {pid!r} api_key user_connection must not set "
                     "oauth_router"
                 )
+            for link in user_connection.key_help_links:
+                if not isinstance(link, HelpLink):
+                    raise ValueError(
+                        f"Plugin {pid!r} user_connection.key_help_links entries "
+                        "must be HelpLink instances"
+                    )
+                if not (isinstance(link.label, str) and link.label.strip()):
+                    raise ValueError(
+                        f"Plugin {pid!r} user_connection.key_help_links entry "
+                        "has an empty label"
+                    )
+                if not (isinstance(link.url, str) and link.url.startswith("https://")):
+                    raise ValueError(
+                        f"Plugin {pid!r} user_connection.key_help_links entry "
+                        f"{link.label!r} must be an https:// URL"
+                    )
         else:  # oauth
-            for field in ("validate_key", "key_placeholder"):
+            if user_connection.key_help_links:
+                raise ValueError(
+                    f"Plugin {pid!r} oauth user_connection must not set "
+                    "key_help_links (api_key-only field)"
+                )
+            for field in ("validate_key", "key_placeholder", "key_help"):
                 if getattr(user_connection, field) is not None:
                     raise ValueError(
                         f"Plugin {pid!r} oauth user_connection must not set "

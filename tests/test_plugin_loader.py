@@ -15,7 +15,7 @@ from unittest.mock import patch
 import pytest
 
 from config import plugins as plugins_mod
-from config.plugin_types import CredentialField, PluginTool, QuestPlugin
+from config.plugin_types import CredentialField, HelpLink, PluginTool, QuestPlugin
 
 
 def _run(coro):
@@ -388,6 +388,51 @@ class TestValidation:
                     oauth_router=_router("/auth/tp"),
                     key_placeholder="Paste key",
                 ),
+                set(),
+            )
+
+        with pytest.raises(ValueError, match="key_help"):
+            plugins_mod.validate_plugin(
+                _plugin(
+                    oauth_router=_router("/auth/tp"),
+                    key_help="Where to get the key",
+                ),
+                set(),
+            )
+        with pytest.raises(ValueError, match="key_help_links"):
+            plugins_mod.validate_plugin(
+                _plugin(
+                    oauth_router=_router("/auth/tp"),
+                    key_help_links=(HelpLink("Keys", "https://x.example/keys"),),
+                ),
+                set(),
+            )
+
+        # api_key help links must be https URLs with labels.
+        def _api_key_plugin(**uc_kwargs):
+            return QuestPlugin(
+                id="tp", label="X",
+                user_connection=UserConnectionSpec(
+                    kind="api_key", connected=lambda row: True, **uc_kwargs,
+                ),
+            )
+        plugins_mod.validate_plugin(
+            _api_key_plugin(key_help_links=(HelpLink("Keys", "https://x.example/keys"),)),
+            set(),
+        )
+        with pytest.raises(ValueError, match="https://"):
+            plugins_mod.validate_plugin(
+                _api_key_plugin(key_help_links=(HelpLink("Keys", "http://x.example/keys"),)),
+                set(),
+            )
+        with pytest.raises(ValueError, match="empty label"):
+            plugins_mod.validate_plugin(
+                _api_key_plugin(key_help_links=(HelpLink("  ", "https://x.example/keys"),)),
+                set(),
+            )
+        with pytest.raises(ValueError, match="HelpLink instances"):
+            plugins_mod.validate_plugin(
+                _api_key_plugin(key_help_links=(("Keys", "https://x.example/keys"),)),
                 set(),
             )
 

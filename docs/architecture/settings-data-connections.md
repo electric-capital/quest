@@ -23,7 +23,7 @@ Each `/connectors` row carries:
 
   Airtable carries no flag -- the user supplies their own PAT, so there is nothing server-side to configure.
 - oauth rows: `connect_url` (the popup URL, `?popup=1` included) -- the frontend never builds auth URLs itself, which also removed the old popup-blocked-link URL special cases
-- api_key rows: `key_url` + `key_field` (the save form POSTs `{[key_field]: key}` to `key_url`), `key_placeholder`, optional `key_hint` (last characters of the stored key), and `disconnect_url`
+- api_key rows: `key_url` + `key_field` (the save form POSTs `{[key_field]: key}` to `key_url`), `key_placeholder`, optional `key_hint` (last characters of the stored key), and `disconnect_url`; optional `key_help` (a short plain-text sentence or two) and `key_help_links` (`{label, url}` list, https only) rendered above the key form in the add-connection key-entry step to tell the user which credential to create and where (the Tailscale plugin links the admin console's OAuth-client and API-token pages plus the two KB articles)
 
 Types are defined in `frontend/src/api/types.ts` (`ConnectorRow`, `ConnectorsResponse`).
 
@@ -63,7 +63,7 @@ Below the connected list, an "+ Add Connection" button (hidden when every suppor
 Icons come from `serviceIcons.tsx` (`ServiceIcon`, keyed by the row's `service` id): inline brand SVGs for the known services plus a generic plug fallback for unknown ones, so the picker stays data-driven -- an icon entry is optional polish, not a requirement for a new connector. Connected rows reuse the same icon at a smaller size. Picking a tile triggers that service's flow:
 
 - **oauth**: the picker closes and the OAuth popup opens at the row's `connect_url` (same `handleOAuthConnect` path as Reconnect). When the flow completes, the status refresh makes the new connection appear in the list.
-- **api_key**: the panel advances to a key-entry step ("Connect <label>", with a Back control) rendering the `ApiKeyForm` (placeholder from `key_placeholder`); Save posts the key to `key_url` as `{[key_field]: key}` via `saveConnectorKey()` in `frontend/src/api/client.ts`, then closes the panel and refreshes. The key-entry step re-resolves the picked service against the freshest connector list, so a background refresh (or the service getting connected in another tab) drops it back to the picker instead of acting on stale row data.
+- **api_key**: the panel advances to a key-entry step ("Connect <label>", with a Back control) rendering an optional help paragraph (`key_help` text + `key_help_links` opened in a new tab) above the `ApiKeyForm` (placeholder from `key_placeholder`); Save posts the key to `key_url` as `{[key_field]: key}` via `saveConnectorKey()` in `frontend/src/api/client.ts`, then closes the panel and refreshes. The key-entry step re-resolves the picked service against the freshest connector list, so a background refresh (or the service getting connected in another tab) drops it back to the picker instead of acting on stale row data.
 
 The add flow is state-machine simple: `closed` -> `pick` -> (`enter_key` for api_key picks). There is no persisted "added but not connected" state -- a connection exists exactly when its credential does, so an abandoned OAuth popup or key form leaves nothing behind.
 
@@ -81,7 +81,7 @@ After the core rows, `get_connectors()` appends one `api_key` row per loaded plu
 - `key_hint` (last 4 of the key) unless the spec sets `key_hint: False`, and
 - `available` from the plugin's server-level configuration (`plugin_server_available()` in `config/plugins.py`) so an unconfigured plugin's row is hidden exactly like Ramp's.
 
-A plugin can supply a custom key placeholder via `UserConnectionSpec.key_placeholder`.
+A plugin can supply a custom key placeholder via `UserConnectionSpec.key_placeholder`, and key-entry guidance via `UserConnectionSpec.key_help` / `key_help_links` (`HelpLink(label, url)` tuples; the loader requires `https://` URLs and rejects both fields on oauth-kind specs).
 
 Plugins with an `oauth`-kind connection get an `oauth` row instead:
 
