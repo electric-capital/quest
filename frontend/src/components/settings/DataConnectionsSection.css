@@ -277,6 +277,34 @@
   color: var(--text-secondary);
 }
 
+/* Key-entry step guidance: where to create the credential (api_key rows
+   that supply key_help / key_help_links) */
+.add-connection-help {
+  margin: 0 0 0.625rem;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.add-connection-help-links {
+  display: block;
+  margin-top: 0.25rem;
+}
+
+.add-connection-help-links a {
+  color: var(--accent-text);
+  text-decoration: none;
+}
+
+.add-connection-help-links a:hover {
+  text-decoration: underline;
+}
+
+.add-connection-help-sep {
+  margin: 0 0.4rem;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
 /* Key-entry step: inline form laid out as a row inside the panel */
 .add-connection-keystep {
   display: flex;

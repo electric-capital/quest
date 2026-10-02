@@ -34,7 +34,7 @@ validates each manifest, and fans it out into the core registries:
 | `services` | `authed_get`/`authed_post` service registry |
 | `script_tool_allowlist` | sandbox-script tool bridge (`POST /api/tool-call`) |
 | `credential_schema` + `is_configured` (+ optional `credential_validate` normalization hook) | admin Settings > Service Credentials card (schema-rendered) + `data/service_credentials/<id>.json` store file + the generic `PUT /admin/service-credentials/<id>` endpoint |
-| `user_connection` | per-user Data Connections row + a `connected_services` gate keyed by the plugin id; `api_key` kind: generic `POST /auth/service-key/<id>` key routes (placeholder overridable via `key_placeholder`); `oauth` kind: the plugin's `oauth_router` mounted under `/auth/<id>` at startup |
+| `user_connection` | per-user Data Connections row + a `connected_services` gate keyed by the plugin id; `api_key` kind: generic `POST /auth/service-key/<id>` key routes (placeholder overridable via `key_placeholder`; optional `key_help` text + `key_help_links` `HelpLink`s shown above the key form, pointing at the upstream pages where the credential is created); `oauth` kind: the plugin's `oauth_router` mounted under `/auth/<id>` at startup |
 | `post_load` | optional zero-arg startup hook, run by `load_plugins()` right after registration — plugin-owned one-time work such as migrating a legacy credential location; failures are logged, the plugin stays loaded |
 | `on_shutdown` | optional zero-arg shutdown hook (sync or `async`), run by `shutdown_plugins()` from the app lifespan's shutdown phase in reverse load order — plugin-owned teardown such as closing long-lived upstream client connections; failures are logged, the remaining hooks still run |
 

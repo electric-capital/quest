@@ -180,6 +180,39 @@ def test_plugin_api_key_row_appended_generically():
     assert row["disconnect_url"] == "/auth/service-key/acme/remove"
 
 
+def test_plugin_api_key_row_carries_key_help_when_declared():
+    """key_help / key_help_links ride on the row for the key-entry step."""
+    from config.plugin_types import HelpLink, QuestPlugin, UserConnectionSpec
+    plugin = QuestPlugin(
+        id="acme",
+        label="Acme",
+        user_connection=UserConnectionSpec(
+            kind="api_key",
+            connected=lambda row: bool(row.get("secret")),
+            key_help="Create a read-only token in the Acme console.",
+            key_help_links=(
+                HelpLink("Generate a token", "https://acme.example/settings/tokens"),
+                HelpLink("Token docs", "https://acme.example/docs/tokens"),
+            ),
+        ),
+    )
+    rows = _get_connectors_with_plugin({"email": "u@example.com"}, plugin, None)
+    row = rows["acme"]
+    assert row["key_help"] == "Create a read-only token in the Acme console."
+    assert row["key_help_links"] == [
+        {"label": "Generate a token", "url": "https://acme.example/settings/tokens"},
+        {"label": "Token docs", "url": "https://acme.example/docs/tokens"},
+    ]
+
+
+def test_plugin_api_key_row_omits_key_help_when_not_declared():
+    rows = _get_connectors_with_plugin(
+        {"email": "u@example.com"}, _api_key_plugin(), {"enabled": True},
+    )
+    assert "key_help" not in rows["acme"]
+    assert "key_help_links" not in rows["acme"]
+
+
 def test_plugin_row_unavailable_and_disconnected_states():
     # Server config disabled -> row hidden via available: false.
     rows = _get_connectors_with_plugin(

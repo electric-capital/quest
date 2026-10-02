@@ -519,6 +519,15 @@ async def get_connectors(user: dict = Depends(get_current_user_cookie_or_apikey_
                 ),
                 "disconnect_url": f"/auth/service-key/{plugin.id}/remove",
             })
+            # Optional guidance for the key-entry step: where to create
+            # the credential. Omitted entirely when the spec sets neither.
+            if spec.key_help:
+                plugin_row["key_help"] = spec.key_help
+            if spec.key_help_links:
+                plugin_row["key_help_links"] = [
+                    {"label": link.label, "url": link.url}
+                    for link in spec.key_help_links
+                ]
         else:  # oauth
             needs_reauth = False
             if row and spec.needs_reauth is not None:

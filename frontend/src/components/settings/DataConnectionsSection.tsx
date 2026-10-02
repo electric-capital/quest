@@ -242,6 +242,23 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
               Back
             </button>
           </div>
+          {(connector.key_help || (connector.key_help_links && connector.key_help_links.length > 0)) && (
+            <p className="add-connection-help">
+              {connector.key_help && <span>{connector.key_help}</span>}
+              {connector.key_help_links && connector.key_help_links.length > 0 && (
+                <span className="add-connection-help-links">
+                  {connector.key_help_links.map((link, index) => (
+                    <span key={link.url}>
+                      {index > 0 && <span className="add-connection-help-sep" aria-hidden="true">·</span>}
+                      <a href={link.url} target="_blank" rel="noopener noreferrer">
+                        {link.label}
+                      </a>
+                    </span>
+                  ))}
+                </span>
+              )}
+            </p>
+          )}
           <div className="add-connection-keystep">
             <ApiKeyForm
               placeholder={connector.key_placeholder || 'Paste API key'}

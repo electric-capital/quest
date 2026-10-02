@@ -49,6 +49,19 @@ class CredentialField:
 
 
 @dataclass(frozen=True)
+class HelpLink:
+    """One link shown in a connector's key-entry step (api_key kind).
+
+    Points the user at the upstream page where the credential is created,
+    e.g. ``HelpLink("Generate an API token", "https://.../settings/keys")``.
+    Must be an ``https://`` URL; enforced at load.
+    """
+
+    label: str
+    url: str
+
+
+@dataclass(frozen=True)
 class UserConnectionSpec:
     """Per-user connection surface for a plugin (Data Connections row).
 
@@ -73,6 +86,13 @@ class UserConnectionSpec:
     # Optional key-entry placeholder for the Data Connections row (e.g.
     # "Paste API key (64-char hex)"); None -> "Paste <label> API key".
     key_placeholder: Optional[str] = None
+    # Optional guidance rendered above the key form in the Data Connections
+    # key-entry step: one or two plain-text sentences (which credential to
+    # create, which role can create it) plus links to the upstream pages
+    # where it is minted. Both land on the /connectors row as ``key_help``
+    # and ``key_help_links``; None / () render nothing.
+    key_help: Optional[str] = None
+    key_help_links: tuple[HelpLink, ...] = ()
     # oauth kind:
     oauth_router: Any = None  # fastapi.APIRouter; every route under /auth/<id>
     scopes: tuple[str, ...] = ()  # OAuth scopes the flow requests (informational)
