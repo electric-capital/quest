@@ -98,7 +98,7 @@ plugins/
 
 ## Reference plugin
 
-Eight in-tree implementations (proprietary integrations can live in
+Nine in-tree implementations (proprietary integrations can live in
 external repos and load via `QUEST_PLUGIN_PATH`):
 
 - `plugins/github/` — the GitHub integration (plugin id `github`) with a
@@ -174,6 +174,17 @@ external repos and load via `QUEST_PLUGIN_PATH`):
   (closing the per-user Telethon clients its `TelegramClientManager`
   keeps connected for the life of the process).
 
+- `plugins/google_admin/` — the Google Workspace Admin integration
+  (plugin id `google_admin`): read-only directory (users, groups, org
+  units) and device inventory access for Workspace administrators. The
+  **services-only** shape — two GET-only `authed_get` service entries
+  (`admin.googleapis.com`, `cloudidentity.googleapis.com`) and the
+  `system:google_admin` skill, no tools or action requests — and the
+  first plugin that **borrows a core credential**: its oauth-kind router
+  runs a separate, read-only-scoped Google grant against the core
+  `google_oauth` client, so the admin card is a single `enabled` switch
+  and `is_configured` also requires that client.
+
 Each `plugin.py` is a thin re-export of `manifest.py` so tests import
 the real modules through the normal `plugins.<id>.*` package path.
 
@@ -230,8 +241,8 @@ their `tests/` directories too (repo-root `conftest.py`). See
 
 Upstream gitignores `plugins/*` except this README, `.gitkeep`,
 `_example/`, and the in-tree `github/`,
-`m365/`, `slack/`, `twitter/`, `twilio/`, `unifi/`, `iru/`, and `telegram/`
-plugins. A fork
+`m365/`, `slack/`, `twitter/`, `twilio/`, `unifi/`, `iru/`, `telegram/`,
+and `google_admin/` plugins. A fork
 that ships proprietary plugins should remove or override those ignore
 lines in the fork and commit its plugin directories as ordinary files —
 there is no upstream merge surface either way.

@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from auth import google_login, google_services, popup_helpers, ramp
 from plugins.github import oauth as github_oauth
+from plugins.google_admin import oauth as google_admin_oauth
 from plugins.m365 import oauth as m365_oauth
 from plugins.slack import oauth as slack_oauth
 from plugins.twitter import oauth as twitter_oauth
@@ -39,6 +40,7 @@ def _client(*routers) -> TestClient:
         (github_oauth.router, "/auth/github/callback"),
         (twitter_oauth.router, "/auth/twitter/callback"),
         (m365_oauth.router, "/auth/m365/callback"),
+        (google_admin_oauth.router, "/auth/google_admin/callback"),
     ],
 )
 def test_callback_error_param_is_html_escaped(router, path):

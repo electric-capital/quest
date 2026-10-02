@@ -12,7 +12,7 @@ devplans/
 
 # Plugins: upstream ships only the README, .gitkeep, the _example test
 # fixture, and the in-tree reference plugins (github,
-# m365, slack, twitter, twilio, unifi, iru, telegram). A
+# m365, slack, twitter, twilio, unifi, iru, telegram, google_admin). A
 # fork commits its proprietary plugins by removing/overriding these
 # ignore lines in the fork.
 plugins/*
@@ -27,6 +27,7 @@ plugins/*
 !plugins/unifi/
 !plugins/iru/
 !plugins/telegram/
+!plugins/google_admin/
 
 # Python
 __pycache__/
