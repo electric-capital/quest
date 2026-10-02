@@ -23,6 +23,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from chat.llm.base import StreamEvent
+
 from chat.llm.base import UsageStats
 
 
@@ -75,7 +77,7 @@ def _patched_conversation(monkeypatch):
 
 
 def _tool_call(name, tool_id, args=None):
-    return SimpleNamespace(
+    return StreamEvent(
         type="tool_call", tool_name=name, tool_id=tool_id, tool_args=args or {},
     )
 

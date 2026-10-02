@@ -44,6 +44,12 @@ class StreamEvent:
         tool_name: Tool name (for type="tool_call").
         tool_args: Tool arguments dict (for type="tool_call").
         tool_id: Provider-assigned tool call ID (for type="tool_call").
+        tool_args_error: Non-empty when the provider could not parse the
+            model's tool-call arguments (for type="tool_call"; e.g. a
+            chat-completions model emitting malformed ``function.arguments``
+            JSON). ``tool_args`` is then empty and the conversation loop
+            returns this message to the model as the tool result instead of
+            dispatching the call.
         usage: Usage statistics (for type="usage").
         data: Auxiliary payload for event types with no dedicated fields.
             For type="model_fallback" (the Anthropic refusal-fallback seam):
@@ -54,6 +60,7 @@ class StreamEvent:
     tool_name: str = ""
     tool_args: dict = field(default_factory=dict)
     tool_id: str = ""
+    tool_args_error: str = ""
     usage: dict = field(default_factory=dict)
     data: dict = field(default_factory=dict)
 

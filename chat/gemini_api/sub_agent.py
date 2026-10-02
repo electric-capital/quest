@@ -34,7 +34,10 @@ from chat.llm.config import (
 )
 from chat.llm.tool_schemas import SUB_AGENT_TOOLS, SUB_AGENT_TOOLS_NESTED
 from chat.gemini_api.system_prompt import get_sub_agent_system_prompt
-from chat.gemini_api.tool_dispatch import _dispatch_tool_call
+from chat.gemini_api.tool_dispatch import (
+    _dispatch_tool_call,
+    invalid_tool_arguments_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +294,54 @@ async def _run_sub_agent(
 
             # Extract intent_message before dispatch (it's not a tool parameter)
             intent_message = args.pop("intent_message", "")
+
+            if fc_event.tool_args_error:
+                # Malformed arguments from the model: nothing to dispatch
+                # (not even agent_task_response -- its response text is
+                # inside the unparseable payload). Return the parse error
+                # so the sub-agent can re-issue the call.
+                logger.info(
+                    "[sub-agent:%s] Malformed arguments for tool call %s "
+                    "(conversation=%s, user=%s)",
+                    agent_name, fc_event.tool_name, conversation_id, user["email"],
+                )
+                result = invalid_tool_arguments_result(
+                    fc_event.tool_name, fc_event.tool_args_error,
+                )
+                # Same FE event pair as a dispatched call so the failed
+                # attempt shows in the sub-agent tree.
+                sub_tool_id = f"sub_{fc_event.tool_id or uuid.uuid4().hex[:8]}"
+                if on_event and parent_tool_id:
+                    try:
+                        for event in (
+                            {
+                                "type": "sub_agent_tool_use",
+                                "tool_name": fc_event.tool_name,
+                                "tool_input": args,
+                                "intent_message": intent_message,
+                            },
+                            {"type": "sub_agent_tool_result", "tool_output": result},
+                        ):
+                            event.update({
+                                "parent_tool_id": parent_tool_id,
+                                "agent_name": agent_name,
+                                "tool_id": sub_tool_id,
+                            })
+                            if nested_parent_id:
+                                event["nested_parent_id"] = nested_parent_id
+                            await on_event(event)
+                    except Exception:
+                        logger.debug(
+                            "Failed to emit malformed-arguments sub-agent events",
+                            exc_info=True,
+                        )
+                tool_results.append({
+                    "name": fc_event.tool_name,
+                    "result": result,
+                    "tool_id": fc_event.tool_id,
+                    "extra_parts": [],
+                })
+                continue
 
             # Check for agent_task_response -- this terminates the sub-agent
             if fc_event.tool_name == "agent_task_response":
