@@ -1,17 +1,18 @@
-"""Tests for the Google Workspace Admin plugin's ``authed_get`` service entries.
+"""Tests for the Google Workspace Admin plugin's ``authed_get`` service entry.
 
-``admin.googleapis.com`` (Directory API) and
-``cloudidentity.googleapis.com`` (Cloud Identity Devices API) are
-registered by the plugin, so every test here runs with it registered via
-the autouse fixture below.
+``admin.googleapis.com`` (Admin SDK Directory API) is registered by the
+plugin, so every test here runs with it registered via the autouse
+fixture below.
 
 Covers:
 * Registry shape: per-user, the plugin's own loader/injector (NOT the
   core Google Services credentials), its own missing-credentials error,
   and no POST allow-list.
-* The GET allow-lists: every directory / device read is reachable; the
+* The GET allow-list: every directory / device read is reachable; the
   credential-bearing user sub-resources, write-shaped paths, custom
-  methods, and the other APIs on the same hosts are not.
+  methods, and the other Admin SDK APIs on the host are not.
+* The Cloud Identity host is NOT registered (its scope cannot be granted
+  through a user consent screen).
 * ``_make_authed_request`` injects the stored admin token, refuses POSTs
   and disallowed paths without an HTTP call, and reports the reconnect
   error for a user without the connection -- even one who has Google
@@ -38,7 +39,6 @@ from plugins.google_admin.upstream import (
 )
 
 _DIRECTORY_KEY = "admin.googleapis.com"
-_DEVICES_KEY = "cloudidentity.googleapis.com"
 
 _DIR = "/admin/directory/v1"
 
@@ -108,28 +108,29 @@ def _matches(key: str, path: str) -> bool:
 # ---------------------------------------------------------------------------
 
 class TestRegistryEntries:
-    @pytest.mark.parametrize("key", [_DIRECTORY_KEY, _DEVICES_KEY])
-    def test_entry_is_per_user_with_the_plugins_own_credentials(self, key):
-        entry = _SERVICE_REGISTRY[key]
+    def test_entry_is_per_user_with_the_plugins_own_credentials(self):
+        entry = _SERVICE_REGISTRY[_DIRECTORY_KEY]
         assert entry["requires_user"] is True
         # A separate grant from Google Services: the core Google loader
-        # must never feed these hosts.
+        # must never feed this host.
         assert entry["load_credentials"] is load_google_admin_credentials
         assert entry["inject_auth"] is inject_google_admin_bearer_auth
         assert entry["missing_credentials_error"]["error"] == "google_admin_oauth_required"
         assert "path_prefix" not in entry
 
-    @pytest.mark.parametrize("key", [_DIRECTORY_KEY, _DEVICES_KEY])
-    def test_entry_has_no_post_allow_list(self, key):
-        entry = _SERVICE_REGISTRY[key]
+    def test_entry_has_no_post_allow_list(self):
+        entry = _SERVICE_REGISTRY[_DIRECTORY_KEY]
         assert "allowed_post_endpoints" not in entry
         assert "_allowed_post_endpoints" not in entry
 
-    def test_hosts_resolve_to_the_plugin_services(self):
+    def test_host_resolves_to_the_plugin_service(self):
         assert _find_service(_DIRECTORY_KEY, f"{_DIR}/users")["name"] \
             == "Google Workspace Admin (Directory)"
-        assert _find_service(_DEVICES_KEY, "/v1/devices")["name"] \
-            == "Google Workspace Admin (Cloud Identity devices)"
+
+    def test_cloud_identity_host_is_not_registered(self):
+        """Its scope cannot be granted by user consent, so no entry exists."""
+        assert "cloudidentity.googleapis.com" not in _SERVICE_REGISTRY
+        assert _find_service("cloudidentity.googleapis.com", "/v1/devices") is None
 
 
 # ---------------------------------------------------------------------------
@@ -222,44 +223,6 @@ class TestDirectoryAllowList:
 
 
 # ---------------------------------------------------------------------------
-# Cloud Identity Devices API allow-list
-# ---------------------------------------------------------------------------
-
-class TestDevicesAllowList:
-    @pytest.mark.parametrize("path", [
-        "/v1/devices",
-        "/v1/devices/abc123",
-        "/v1/devices/abc123/deviceUsers",
-        "/v1/devices/-/deviceUsers",
-        "/v1/devices/abc123/deviceUsers/def456",
-        "/v1/devices/abc123/deviceUsers/def456/clientStates",
-        "/v1/devices/abc123/deviceUsers/def456/clientStates/C01abc-partner",
-    ])
-    def test_device_read_paths_are_allowed(self, path):
-        assert _matches(_DEVICES_KEY, path), path
-
-    @pytest.mark.parametrize("path", [
-        # Custom methods (':'-encoded): device actions and the lookup verb.
-        "/v1/devices/abc123:wipe",
-        "/v1/devices/abc123:cancelWipe",
-        "/v1/devices/abc123/deviceUsers:lookup",
-        "/v1/devices/abc123/deviceUsers/def456:approve",
-        "/v1/devices/abc123/deviceUsers/def456:block",
-        "/v1/devices/abc123/deviceUsers/def456:wipe",
-        # The other Cloud Identity APIs on the same host.
-        "/v1/groups",
-        "/v1/groups/abc/memberships",
-        "/v1/groups:search",
-        "/v1/customers/C01abc/userinvitations",
-        "/v1/inboundSamlSsoProfiles",
-        "/v1/policies",
-        "/v1beta1/devices",
-    ])
-    def test_everything_else_is_rejected(self, path):
-        assert not _matches(_DEVICES_KEY, path), path
-
-
-# ---------------------------------------------------------------------------
 # _make_authed_request behavior
 # ---------------------------------------------------------------------------
 
@@ -281,17 +244,6 @@ class TestMakeAuthedRequest:
         assert "query=isAdmin=true" in url
         assert headers["Authorization"] == "Bearer ya29.admin-token"
 
-    def test_cloud_identity_request_injects_the_admin_token(self):
-        calls: list = []
-        with _mock_httpx_client(calls):
-            _run(_make_authed_request(
-                "https://cloudidentity.googleapis.com/v1/devices/-/deviceUsers"
-                "?customer=customers/my_customer&filter=email:jane@example.com",
-                user=_connected_user(),
-            ))
-        assert len(calls) == 1
-        assert calls[0][2]["Authorization"] == "Bearer ya29.admin-token"
-
     def test_disallowed_path_is_refused_without_http_call(self):
         calls: list = []
         with _mock_httpx_client(calls):
@@ -307,7 +259,7 @@ class TestMakeAuthedRequest:
     @pytest.mark.parametrize("url", [
         "https://admin.googleapis.com/admin/directory/v1/users",
         "https://admin.googleapis.com/admin/directory/v1/users/jane@example.com/makeAdmin",
-        "https://cloudidentity.googleapis.com/v1/devices/abc123:wipe",
+        "https://admin.googleapis.com/admin/directory/v1/customer/my_customer/devices/chromeos/abc/action",
     ])
     def test_every_post_is_refused_without_http_call(self, url):
         calls: list = []
@@ -347,4 +299,4 @@ class TestSkill:
         assert skill.requires == "google_admin"
         content = skill.content_builder("http://localhost", "key")
         assert "https://admin.googleapis.com/admin/directory/v1" in content
-        assert "https://cloudidentity.googleapis.com/v1" in content
+        assert "cloudidentity.googleapis.com" not in content

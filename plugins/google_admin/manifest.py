@@ -1,24 +1,24 @@
 """The Google Workspace Admin plugin manifest.
 
 Read-only access to a Google Workspace account's directory (users,
-groups, org units, domains) and device inventory (ChromeOS, mobile,
-endpoints) for Workspace administrators.
+groups, org units, domains) and device inventory (ChromeOS, mobile) for
+Workspace administrators.
 
 The plugin id is ``google_admin``: the ``connected_services`` key, the
 ``system:google_admin`` skill gate, the admin credential store file
-(``google_admin.json``: just the ``enabled`` switch), and the OAuth
-namespace (``/auth/google_admin``).
+(``google_admin.json``: just the ``enabled`` switch). The OAuth namespace
+writes the underscore as a hyphen: ``/auth/google-admin``.
 
 Shape: an oauth-kind user connection (the Microsoft 365 expiring-token
 pattern) that borrows the core Google OAuth client instead of carrying
-its own, plus two GET-only ``authed_get`` service entries. There are no
+its own, plus one GET-only ``authed_get`` service entry. There are no
 tools and no action requests: every read is a plain Google API GET the
 model composes from the ``system:google_admin`` skill.
 
 Read-only is enforced twice: the OAuth grant holds only ``*.readonly``
-scopes (see plugins/google_admin/upstream.py), and the service entries
-allow-list GET paths only (no ``allowed_post_endpoints``, so authed_post
-rejects every POST to these hosts).
+scopes (see plugins/google_admin/upstream.py), and the service entry
+allow-lists GET paths only (no ``allowed_post_endpoints``, so authed_post
+rejects every POST to the host).
 """
 
 from pathlib import Path
@@ -104,32 +104,6 @@ _DIRECTORY_SERVICE = {
     },
 }
 
-# Cloud Identity Devices API: the endpoint inventory behind the Admin
-# console's "Mobile & endpoints" list (laptops/desktops reporting through
-# Endpoint Verification, which the Directory API does not cover) and the
-# device <-> user bindings. Only ``/v1/devices`` is reachable -- the host
-# also serves the Cloud Identity groups / policies / invitations APIs,
-# and ``deviceUsers:lookup`` is excluded by the ':' rule.
-_DEVICES_SERVICE = {
-    "key": "cloudidentity.googleapis.com",
-    "entry": {
-        "name": "Google Workspace Admin (Cloud Identity devices)",
-        "load_credentials": load_google_admin_credentials,
-        "inject_auth": inject_google_admin_bearer_auth,
-        "requires_user": True,
-        "missing_credentials_error": MISSING_CREDENTIALS_ERROR,
-        "allowed_endpoints": [
-            r"^/v1/devices$",                                              # list/search devices
-            r"^/v1/devices/[^/:]+$",                                       # get a device
-            r"^/v1/devices/[^/:]+/deviceUsers$",                           # a device's users ('-' = all devices)
-            r"^/v1/devices/[^/:]+/deviceUsers/[^/:]+$",                    # get one device user
-            r"^/v1/devices/[^/:]+/deviceUsers/[^/:]+/clientStates$",       # client states (e.g. Endpoint Verification)
-            r"^/v1/devices/[^/:]+/deviceUsers/[^/:]+/clientStates/[^/:]+$",  # get one client state
-        ],
-    },
-}
-
-
 def get_plugin() -> QuestPlugin:
     return QuestPlugin(
         id="google_admin",
@@ -137,8 +111,8 @@ def get_plugin() -> QuestPlugin:
         credential_schema=(
             # No credentials of its own: the flow reuses the core Google
             # OAuth client. The switch is the admin's confirmation that the
-            # client has the /auth/google_admin/callback redirect URI and
-            # that the Admin SDK + Cloud Identity APIs are enabled (see
+            # client has the /auth/google-admin/callback redirect URI and
+            # that the Admin SDK API is enabled (see
             # docs/google-admin-setup.md).
             CredentialField(key="enabled", label="Enabled", type="bool"),
         ),
@@ -151,14 +125,14 @@ def get_plugin() -> QuestPlugin:
             scopes=GOOGLE_ADMIN_SCOPES,
             needs_reauth=google_admin_needs_reauth,
         ),
-        services=(_DIRECTORY_SERVICE, _DEVICES_SERVICE),
+        services=(_DIRECTORY_SERVICE,),
         system_skills=(
             SystemSkill(
                 id="system:google_admin",
                 name="Google Workspace Admin",
                 description=(
                     "Read-only Workspace directory (users, groups, org "
-                    "units) and device inventory via authed_get."
+                    "units) and ChromeOS/mobile devices via authed_get."
                 ),
                 when_to_load=(
                     "Load when the user asks about their organization's "

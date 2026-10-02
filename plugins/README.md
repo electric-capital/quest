@@ -70,7 +70,9 @@ hidden from Data Connections while the server side is unconfigured.
 
 A `user_connection` of kind `oauth` supplies an `oauth_router`
 (FastAPI `APIRouter`) whose every route lives under `/auth/<plugin id>`
-(enforced at load); quest.py mounts it after plugin load. The Data
+(enforced at load; an underscore in the id is written as a hyphen in the
+URL, so plugin `google_admin` owns `/auth/google-admin`); quest.py mounts
+it after plugin load. The Data
 Connections row renders a Connect popup pointing at the
 `/auth/<id>?popup=1` convention URL, the callback stores the granted
 token JSON via `upsert_credential(user_id, "<id>", oauth_blob={...})`,
@@ -177,13 +179,14 @@ external repos and load via `QUEST_PLUGIN_PATH`):
 - `plugins/google_admin/` — the Google Workspace Admin integration
   (plugin id `google_admin`): read-only directory (users, groups, org
   units) and device inventory access for Workspace administrators. The
-  **services-only** shape — two GET-only `authed_get` service entries
-  (`admin.googleapis.com`, `cloudidentity.googleapis.com`) and the
-  `system:google_admin` skill, no tools or action requests — and the
+  **services-only** shape — one GET-only `authed_get` service entry
+  (`admin.googleapis.com`) and the `system:google_admin` skill, no tools
+  or action requests — and the
   first plugin that **borrows a core credential**: its oauth-kind router
   runs a separate, read-only-scoped Google grant against the core
   `google_oauth` client, so the admin card is a single `enabled` switch
-  and `is_configured` also requires that client.
+  and `is_configured` also requires that client. Its router lives under
+  `/auth/google-admin` (see the namespace rule below).
 
 Each `plugin.py` is a thin re-export of `manifest.py` so tests import
 the real modules through the normal `plugins.<id>.*` package path.

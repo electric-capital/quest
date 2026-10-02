@@ -8,8 +8,8 @@ The Google Workspace Admin plugin (`plugins/google_admin`) has no credentials of
 
 In the Google Cloud project that owns the OAuth client (Google Cloud console):
 
-- **APIs & Services > Library:** enable **Admin SDK API** and **Cloud Identity API**. Without them Google answers every call with 403 `SERVICE_DISABLED`.
-- **APIs & Services > Credentials > the OAuth client > Authorized redirect URIs:** add `<app base URL>/auth/google_admin/callback`. The base URL is resolved by `oauth_base_url()` in `auth/config.py` (the `app_base_url` key, else the request host with the `oauth_hostname` override), the same as the existing `/auth/google-services/callback` entry.
+- **APIs & Services > Library:** enable the **Admin SDK API**. Without it Google answers every call with 403 `SERVICE_DISABLED`.
+- **APIs & Services > Credentials > the OAuth client > Authorized redirect URIs:** add `<app base URL>/auth/google-admin/callback` (a hyphen, like `/auth/google-services/callback`). The base URL is resolved by `oauth_base_url()` in `auth/config.py` (the `app_base_url` key, else the request host with the `oauth_hostname` override), the same as the existing `/auth/google-services/callback` entry.
 - **OAuth consent screen > Data access:** add the scopes listed in `GOOGLE_ADMIN_SCOPES` (`plugins/google_admin/upstream.py`). For an Internal consent screen this is bookkeeping; an External one must list them to pass verification, since the admin scopes are sensitive.
 
 ## Quest Configuration
@@ -31,5 +31,6 @@ Which data is readable follows the connected account's admin role in the Google 
 - **`redirect_uri_mismatch` in the popup:** the callback URL above is missing from the OAuth client, or the app is being browsed through a different origin than the registered one.
 - **"Update Available" badge right after connecting:** a scope was unticked on Google's consent screen. Reconnect and leave every box ticked.
 - **403 `Not Authorized to access this resource/api`:** the connected account lacks the admin privilege for that resource.
-- **403 `SERVICE_DISABLED`:** the Admin SDK API or the Cloud Identity API is not enabled in the OAuth client's project.
+- **403 `SERVICE_DISABLED`:** the Admin SDK API is not enabled in the OAuth client's project.
+- **`Error 400: invalid_scope`, "Some requested scopes cannot be shown":** a scope in `GOOGLE_ADMIN_SCOPES` is one Google will not put on a user consent screen (this is why the Cloud Identity devices scope is not requested). The error names the scope; it appears only after an account is chosen.
 - **The row disappeared:** the admin switch was turned off, or the Google OAuth client was removed.

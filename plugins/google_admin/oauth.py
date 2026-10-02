@@ -1,7 +1,7 @@
 """Google Workspace Admin OAuth flow endpoints (plugin-provided router).
 
 The oauth-kind user connection's router, mounted by quest.py under the
-plugin's ``/auth/google_admin`` namespace after plugin load. A standard
+plugin's ``/auth/google-admin`` namespace after plugin load. A standard
 Google authorization-code flow against the deployment's core Google OAuth
 client, requesting ONLY the read-only admin scopes (plus the email
 identity scope) with offline access so a refresh token lands in the
@@ -45,6 +45,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth")
 
+# The plugin's URL namespace: the id with its underscore as a hyphen (see
+# config.plugins.plugin_auth_prefix), matching /auth/google-services.
+_AUTH_PATH = "/auth/google-admin"
+
 _STATE_COOKIE = "google_admin_oauth_state"
 
 _LABEL = "Google Workspace Admin"
@@ -54,7 +58,7 @@ _HTTP_TIMEOUT = 30.0
 
 def _error_page(title: str, message: str, retry_link: bool = False) -> HTMLResponse:
     retry = (
-        f'<p><a href="/auth/{SERVICE_ID}">Retry {_LABEL} authentication</a></p>'
+        f'<p><a href="{_AUTH_PATH}">Retry {_LABEL} authentication</a></p>'
         if retry_link else '<p><a href="/">Back to home</a></p>'
     )
     return HTMLResponse(f"""
@@ -70,7 +74,7 @@ def _error_page(title: str, message: str, retry_link: bool = False) -> HTMLRespo
     """)
 
 
-@router.get("/google_admin")
+@router.get("/google-admin")
 async def auth_google_admin(request: Request, popup: str = None):
     """Initiate the Google Workspace Admin OAuth flow."""
     signed_cookie = request.cookies.get(COOKIE_NAME)
@@ -81,7 +85,7 @@ async def auth_google_admin(request: Request, popup: str = None):
     if not user:
         return RedirectResponse("/auth/")
 
-    redirect_uri = f"{oauth_base_url(request)}/auth/{SERVICE_ID}/callback"
+    redirect_uri = f"{oauth_base_url(request)}{_AUTH_PATH}/callback"
 
     try:
         config = load_google_admin_client_config()
@@ -114,7 +118,7 @@ async def auth_google_admin(request: Request, popup: str = None):
         return _error_page("Configuration Error", str(e))
 
 
-@router.get("/google_admin/callback")
+@router.get("/google-admin/callback")
 async def auth_google_admin_callback(
     request: Request,
     code: str = None,
@@ -152,7 +156,7 @@ async def auth_google_admin_callback(
 
     try:
         config = load_google_admin_client_config()
-        redirect_uri = f"{oauth_base_url(request)}/auth/{SERVICE_ID}/callback"
+        redirect_uri = f"{oauth_base_url(request)}{_AUTH_PATH}/callback"
 
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
             token_response = await client.post(GOOGLE_TOKEN_URL, data={
@@ -223,11 +227,11 @@ async def auth_google_admin_callback(
         return clear_oauth_state(response, _STATE_COOKIE)
 
 
-@router.post("/google_admin/disconnect")
+@router.post("/google-admin/disconnect")
 async def disconnect_google_admin(request: Request):
     """Remove the Google Workspace Admin OAuth connection.
 
-    POST /auth/google_admin/disconnect
+    POST /auth/google-admin/disconnect
     """
     signed_cookie = request.cookies.get(COOKIE_NAME)
     if not signed_cookie:
