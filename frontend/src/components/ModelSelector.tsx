@@ -18,15 +18,25 @@
  * credentials)" -- so the user can see and switch away from it, matching
  * the old <select> behavior.
  *
- * Interaction mirrors the Flags popover (opens upward, outside-click close)
- * plus Escape-to-close and hover-or-click to open the submenu.
+ * Desktop interaction mirrors the Flags popover (opens upward, outside-click
+ * close) plus Escape-to-close and hover-or-click to open the submenu.
+ *
+ * Phone widths (useIsMobile) get a full-screen sheet instead of the popover:
+ * a header with a close button over ONE scrolling list -- the top-level
+ * picks, then every model under an "All models" heading (no drill-in). A
+ * popover anchored above the composer cannot fit a long model list in the
+ * strip left above the on-screen keyboard, so the sheet also dismisses the
+ * keyboard while it is open and hands focus back to the composer on close.
  */
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, type Ref } from 'react';
+import { createPortal } from 'react-dom';
+import { X } from 'lucide-react';
 import {
   getModelDisplayName, getModelInfo, getTopLevelModels, isDeprecatedModel, isModelAllowedFor,
 } from '../constants/models';
 import type { ModelInfo, ModelVisibility } from '../constants/models';
+import { useIsMobile } from '../hooks/useIsMobile';
 
 export interface ModelSelectorProps {
   /** Currently selected model id ('' allowed in the read-only case). */
@@ -49,6 +59,12 @@ export interface ModelSelectorProps {
    * selection is not in `models` ("(not allowed here)").
    */
   visibility?: ModelVisibility;
+  /**
+   * Reports the menu opening and closing. The phone composer keeps its
+   * controls row (and with it this component) mounted while the sheet is
+   * open even though the sheet takes focus away from the textarea.
+   */
+  onOpenChange?: (open: boolean) => void;
 }
 
 export function ModelSelector({
@@ -58,23 +74,56 @@ export function ModelSelector({
   disabled = false,
   labelOverride,
   visibility = 'private',
+  onOpenChange,
 }: ModelSelectorProps) {
+  const isMobile = useIsMobile();
   const [isOpen, setIsOpen] = useState(false);
   const [isSubmenuOpen, setIsSubmenuOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  // Element that had focus when the phone sheet opened (the composer
+  // textarea, i.e. the keyboard was up); focus returns there on close.
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  // Row the phone sheet scrolls to when it opens (see selectionIsTopLevel).
+  const sheetScrollTargetRef = useRef<HTMLButtonElement>(null);
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+
+  const open = useCallback(() => {
+    const active = document.activeElement;
+    restoreFocusRef.current = isMobile && active instanceof HTMLElement && active !== document.body
+      ? active
+      : null;
+    // Notified in the same batch as the open (not from an effect): the host
+    // must already know by the time the sheet effect below blurs the
+    // textarea, or the phone composer would collapse and unmount this menu.
+    onOpenChangeRef.current?.(true);
+    setIsOpen(true);
+  }, [isMobile]);
 
   const close = useCallback(() => {
+    // Synchronous, so that on a phone it still runs inside the tap that
+    // closed the sheet -- iOS only raises the keyboard for a focus() made
+    // during a user gesture.
+    restoreFocusRef.current?.focus();
+    restoreFocusRef.current = null;
     setIsOpen(false);
     setIsSubmenuOpen(false);
+    onOpenChangeRef.current?.(false);
   }, []);
 
-  // Outside-click close (Flags popover pattern).
+  // An unmount while open (conversation switch, composer going read-only)
+  // must not leave the host believing the menu is still up.
+  useEffect(() => () => onOpenChangeRef.current?.(false), []);
+
+  // Outside-click close (Flags popover pattern). The phone sheet is portaled
+  // out of the container, so a tap inside it is not an outside click.
   useEffect(() => {
     if (!isOpen) return;
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        close();
-      }
+      const target = event.target as Node;
+      if (containerRef.current?.contains(target) || sheetRef.current?.contains(target)) return;
+      close();
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -89,6 +138,19 @@ export function ModelSelector({
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, close]);
+
+  // Phone sheet: move focus from the composer textarea into the sheet, which
+  // drops the on-screen keyboard so the list gets the whole screen, and
+  // bring the current selection into view. Once per open, from an effect: a
+  // ref callback would re-run on every host re-render and yank the list
+  // back while the user scrolls it.
+  useEffect(() => {
+    if (!isOpen || !isMobile) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body) active.blur();
+    sheetRef.current?.focus({ preventScroll: true });
+    sheetScrollTargetRef.current?.scrollIntoView({ block: 'center' });
+  }, [isOpen, isMobile]);
 
   const handlePick = useCallback((modelId: string) => {
     onSelect(modelId);
@@ -115,15 +177,76 @@ export function ModelSelector({
   const triggerLabel = labelOverride
     ?? (getModelDisplayName(selectedModel) + (selectionMissing ? missingSuffix : ''));
 
+  // The current selection when it isn't offered, heading the full list.
+  const missingSelectionItem = selectionMissing && (
+    <ModelMenuItem
+      label={getModelDisplayName(selectedModel) + missingSuffix}
+      selected
+      onClick={() => handlePick(selectedModel)}
+    />
+  );
+
+  // In the phone sheet the top-level picks sit at the top of the list, so a
+  // slotted selection is already on screen; only a selection that appears
+  // solely under "All models" needs scrolling to.
+  const selectionIsTopLevel = topLevel.some((t) => t.id === selectedModel);
+
+  const sheet = (
+    <div
+      className="model-sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Choose a model"
+      tabIndex={-1}
+      ref={sheetRef}
+      // React bubbles a portal's events to its React parents. Keep the
+      // sheet's focus changes away from the composer's focus-within
+      // tracking, which would otherwise read them as focus in the composer.
+      onFocus={(e) => e.stopPropagation()}
+      onBlur={(e) => e.stopPropagation()}
+    >
+      <div className="model-sheet-header">
+        <h2>Model</h2>
+        <button type="button" className="model-sheet-close" onClick={close} aria-label="Close">
+          <X size={22} />
+        </button>
+      </div>
+      <div className="model-sheet-list">
+        {topLevel.map((pick) => (
+          <ModelMenuItem
+            key={pick.id}
+            label={pick.descriptor || pick.name}
+            sub={pick.descriptor ? pick.name : undefined}
+            selected={pick.id === selectedModel}
+            onClick={() => handlePick(pick.id)}
+          />
+        ))}
+        {topLevel.length > 0 && <div className="model-sheet-heading">All models</div>}
+        {missingSelectionItem}
+        {models.map((model) => (
+          <ModelMenuItem
+            key={model.id}
+            label={model.name}
+            selected={model.id === selectedModel}
+            itemRef={model.id === selectedModel && !selectionIsTopLevel
+              ? sheetScrollTargetRef
+              : undefined}
+            onClick={() => handlePick(model.id)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <div className="model-menu-container" ref={containerRef}>
       <button
         type="button"
         id="model-select"
         className="model-menu-trigger"
-        onClick={() => setIsOpen((o) => !o)}
+        onClick={() => (isOpen ? close() : open())}
         disabled={disabled}
-        aria-haspopup="menu"
+        aria-haspopup={isMobile ? 'dialog' : 'menu'}
         aria-expanded={isOpen}
         title="Choose the model for this conversation"
       >
@@ -132,26 +255,25 @@ export function ModelSelector({
           <polyline points="18 15 12 9 6 15"></polyline>
         </svg>
       </button>
-      {isOpen && (
+      {/* The sheet mounts inside the phone shell, which MobileShell keeps
+          sized to the visual viewport, so it covers exactly the visible area
+          even while the keyboard is still sliding away. */}
+      {isOpen && isMobile && createPortal(
+        sheet,
+        document.querySelector('.mobile-shell') ?? document.body,
+      )}
+      {isOpen && !isMobile && (
         <div className="model-menu" role="menu">
           {topLevel.map((pick) => (
-            <button
-              type="button"
+            <ModelMenuItem
               key={pick.id}
               role="menuitem"
-              className={
-                'model-menu-item'
-                + (pick.id === selectedModel ? ' model-menu-item-selected' : '')
-              }
+              label={pick.descriptor || pick.name}
+              sub={pick.descriptor ? pick.name : undefined}
+              selected={pick.id === selectedModel}
               onClick={() => handlePick(pick.id)}
               onMouseEnter={() => setIsSubmenuOpen(false)}
-            >
-              <span className="model-menu-item-text">
-                <span className="model-menu-item-label">{pick.descriptor || pick.name}</span>
-                {pick.descriptor && <span className="model-menu-item-sub">{pick.name}</span>}
-              </span>
-              {pick.id === selectedModel && <CheckIcon />}
-            </button>
+            />
           ))}
           {topLevel.length > 0 && <div className="model-menu-divider" />}
           <div
@@ -178,43 +300,21 @@ export function ModelSelector({
             </button>
             {isSubmenuOpen && (
               <div className="model-submenu" role="menu">
-                {selectionMissing && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="model-menu-item model-menu-item-selected"
-                    onClick={() => handlePick(selectedModel)}
-                  >
-                    <span className="model-menu-item-text">
-                      <span className="model-menu-item-label">
-                        {getModelDisplayName(selectedModel) + missingSuffix}
-                      </span>
-                    </span>
-                    <CheckIcon />
-                  </button>
-                )}
+                {missingSelectionItem}
                 {models.map((model) => (
-                  <button
-                    type="button"
+                  <ModelMenuItem
                     key={model.id}
                     role="menuitem"
-                    className={
-                      'model-menu-item'
-                      + (model.id === selectedModel ? ' model-menu-item-selected' : '')
-                    }
+                    label={model.name}
+                    selected={model.id === selectedModel}
                     // The submenu scrolls when the model list outgrows its
                     // max-height; bring the current selection into view on
                     // open so it isn't hidden below the fold.
-                    ref={model.id === selectedModel
+                    itemRef={model.id === selectedModel
                       ? (el) => el?.scrollIntoView({ block: 'nearest' })
                       : undefined}
                     onClick={() => handlePick(model.id)}
-                  >
-                    <span className="model-menu-item-text">
-                      <span className="model-menu-item-label">{model.name}</span>
-                    </span>
-                    {model.id === selectedModel && <CheckIcon />}
-                  </button>
+                  />
                 ))}
               </div>
             )}
@@ -222,6 +322,40 @@ export function ModelSelector({
         </div>
       )}
     </div>
+  );
+}
+
+interface ModelMenuItemProps {
+  label: string;
+  /** Concrete model name under a descriptor label. */
+  sub?: string;
+  selected: boolean;
+  onClick: () => void;
+  onMouseEnter?: () => void;
+  role?: string;
+  itemRef?: Ref<HTMLButtonElement>;
+}
+
+/** One pickable model row, shared by the desktop menus and the phone sheet. */
+function ModelMenuItem({
+  label, sub, selected, onClick, onMouseEnter, role, itemRef,
+}: ModelMenuItemProps) {
+  return (
+    <button
+      type="button"
+      role={role}
+      aria-current={selected ? 'true' : undefined}
+      className={'model-menu-item' + (selected ? ' model-menu-item-selected' : '')}
+      ref={itemRef}
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+    >
+      <span className="model-menu-item-text">
+        <span className="model-menu-item-label">{label}</span>
+        {sub && <span className="model-menu-item-sub">{sub}</span>}
+      </span>
+      {selected && <CheckIcon />}
+    </button>
   );
 }
 

@@ -48,7 +48,7 @@ Frontend client: `fetchModelSelection` / `updateModelSelection` in `frontend/src
 - `chat/gemini_api/conversation.py` -- turn-level usage check
 - `chat/routes/admin.py` -- `/admin/model-selection` endpoints, `_model_selection_view()`
 - `frontend/src/constants/models.ts` -- `ModelInfo` selection fields, `getTopLevelModels()`, `getSelectableModels(visibility)`, `isModelAllowedFor()`
-- `frontend/src/components/ModelSelector.tsx` -- top level from `getTopLevelModels()`, `visibility` prop
+- `frontend/src/components/ModelSelector.tsx` -- top level from `getTopLevelModels()`, `visibility` prop; desktop popover + flyout, full-screen sheet on phone widths
 - `frontend/src/components/Composer.tsx`, `HomeComposer.tsx` -- visibility filtering, Send gating, `isPublicProject` plumbing
 - `frontend/src/components/settings/ModelSelectionSection.tsx` / `.css` -- the table (single-menu vs public-mode column sets), per-menu slot swapping, the menu previews (reuse the `.model-menu*` classes from `ChatPanel.css`; side panel in single-menu mode, a row above the table in public mode)
 - `frontend/src/contexts/AppConfigContext.tsx` -- `refreshModelCatalog()`

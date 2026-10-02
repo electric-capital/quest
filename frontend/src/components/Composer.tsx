@@ -302,6 +302,10 @@ export function Composer({
   // Focus-within tracking for the mobile floating bar: focused (or holding a
   // draft) = expanded two-line bubble, otherwise the collapsed pill.
   const [isFocusWithin, setIsFocusWithin] = useState(false);
+  // True while the model menu is open. Its phone form is a full-screen sheet
+  // that takes focus (dropping the keyboard), which must not collapse the
+  // bubble: the controls row hosts the menu.
+  const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -923,7 +927,8 @@ export function Composer({
   // input pill until focus is inside the composer OR any draft state exists
   // (text, attachments, queued skills/flags), so the controls -- and their
   // badges -- never hide while something is pending. A read-only phone
-  // composer stays collapsed (nothing to control).
+  // composer stays collapsed (nothing to control). The open model sheet also
+  // holds the bubble expanded, since it moves focus out of the composer.
   const hasDraftState = inputValue.length > 0
     || pendingAttachments.length > 0
     || pendingFiles.length > 0
@@ -932,7 +937,7 @@ export function Composer({
     || isRecording
     || isTranscribing;
   const expanded = isMobile
-    ? (!isReadOnly && (isFocusWithin || hasDraftState))
+    ? (!isReadOnly && (isFocusWithin || hasDraftState || isModelMenuOpen))
     : true;
 
   const handleRootFocus = useCallback(() => setIsFocusWithin(true), []);
@@ -1251,6 +1256,7 @@ export function Composer({
         onSelect={handleModelSelect}
         disabled={inputDisabled}
         visibility={modelVisibility}
+        onOpenChange={setIsModelMenuOpen}
       />
       {noModelsAvailable && (
         <span
