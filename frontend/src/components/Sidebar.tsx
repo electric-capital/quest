@@ -105,7 +105,7 @@ export const Sidebar = React.memo(function Sidebar({ activeConversationId, onCon
 
   const topLevel = useTopLevelConversations();
   const projectConversations = useProjectConversations(drilledProjectId, showArchivedProject);
-  const projectRoutines = useProjectRoutines();
+  const projectRoutines = useProjectRoutines(drilledProjectId);
   // The sidebar's one error banner: list load errors and action errors share it.
   const { error, setError } = topLevel;
 
@@ -166,10 +166,7 @@ export const Sidebar = React.memo(function Sidebar({ activeConversationId, onCon
     if (!drilledProjectId) {
       previousTopLevelConversationId.current = activeConversationId || null;
     }
-    // Load routines if not already loaded
-    if (!projectRoutines.byProject[projectId]) {
-      void projectRoutines.load(projectId);
-    }
+    // Routines load from useProjectRoutines once drilledProjectId changes.
     setSlideDirection('left');
     setDrilledProjectId(projectId);
     setActiveProjectId(projectId);
