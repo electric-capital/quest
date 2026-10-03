@@ -178,10 +178,14 @@ external repos and load via `QUEST_PLUGIN_PATH`):
 
 - `plugins/google_admin/` — the Google Workspace Admin integration
   (plugin id `google_admin`): read-only directory (users, groups, org
-  units) and device inventory access for Workspace administrators. The
-  **services-only** shape — one GET-only `authed_get` service entry
-  (`admin.googleapis.com`) and the `system:google_admin` skill, no tools
-  or action requests — and the
+  units, rooms), device inventory and Google Meet access (calls,
+  per-participant call quality, Meet hardware, usage) for Workspace
+  administrators. Two GET-only `authed_get` service entries on one host
+  (`admin.googleapis.com` for the Directory API, plus a `path_prefix`
+  entry for the Reports API confined to the Meet audit logs and usage),
+  four read-only `google_admin_meet_*` tools that page and aggregate
+  Reports records too large for the inline size gate, and the
+  `system:google_admin` skill; no action requests. The
   first plugin that **borrows a core credential**: its oauth-kind router
   runs a separate, read-only-scoped Google grant against the core
   `google_oauth` client, so the admin card is a single `enabled` switch

@@ -1,16 +1,20 @@
-"""Tests for the Google Workspace Admin plugin's ``authed_get`` service entry.
+"""Tests for the Google Workspace Admin plugin's ``authed_get`` service entries.
 
-``admin.googleapis.com`` (Admin SDK Directory API) is registered by the
-plugin, so every test here runs with it registered via the autouse
-fixture below.
+``admin.googleapis.com`` (Admin SDK Directory API) and
+``admin.googleapis.com/admin/reports/v1`` (Reports API, by path prefix)
+are registered by the plugin, so every test here runs with them
+registered via the autouse fixture below.
 
 Covers:
 * Registry shape: per-user, the plugin's own loader/injector (NOT the
   core Google Services credentials), its own missing-credentials error,
-  and no POST allow-list.
-* The GET allow-list: every directory / device read is reachable; the
-  credential-bearing user sub-resources, write-shaped paths, custom
-  methods, and the other Admin SDK APIs on the host are not.
+  and no POST allow-list -- for both entries.
+* The Directory GET allow-list: every directory / device / room read is
+  reachable; the credential-bearing user sub-resources, write-shaped
+  paths, custom methods, and the other Admin SDK APIs on the host are not.
+* The Reports GET allow-list: only the Meet and Meet hardware audit logs
+  and the daily customer usage report; every other application's audit
+  log, user / entity usage, and the watch channel are not.
 * The Cloud Identity host is NOT registered (its scope cannot be granted
   through a user consent screen).
 * ``_make_authed_request`` injects the stored admin token, refuses POSTs
@@ -39,8 +43,10 @@ from plugins.google_admin.upstream import (
 )
 
 _DIRECTORY_KEY = "admin.googleapis.com"
+_REPORTS_KEY = "admin.googleapis.com/admin/reports/v1"
 
 _DIR = "/admin/directory/v1"
+_REP = "/admin/reports/v1"
 
 
 def _run(coro):
@@ -108,24 +114,31 @@ def _matches(key: str, path: str) -> bool:
 # ---------------------------------------------------------------------------
 
 class TestRegistryEntries:
-    def test_entry_is_per_user_with_the_plugins_own_credentials(self):
-        entry = _SERVICE_REGISTRY[_DIRECTORY_KEY]
+    @pytest.mark.parametrize("key", [_DIRECTORY_KEY, _REPORTS_KEY])
+    def test_entry_is_per_user_with_the_plugins_own_credentials(self, key):
+        entry = _SERVICE_REGISTRY[key]
         assert entry["requires_user"] is True
         # A separate grant from Google Services: the core Google loader
         # must never feed this host.
         assert entry["load_credentials"] is load_google_admin_credentials
         assert entry["inject_auth"] is inject_google_admin_bearer_auth
         assert entry["missing_credentials_error"]["error"] == "google_admin_oauth_required"
-        assert "path_prefix" not in entry
 
-    def test_entry_has_no_post_allow_list(self):
-        entry = _SERVICE_REGISTRY[_DIRECTORY_KEY]
+    def test_path_prefixes(self):
+        assert "path_prefix" not in _SERVICE_REGISTRY[_DIRECTORY_KEY]
+        assert _SERVICE_REGISTRY[_REPORTS_KEY]["path_prefix"] == _REP
+
+    @pytest.mark.parametrize("key", [_DIRECTORY_KEY, _REPORTS_KEY])
+    def test_entry_has_no_post_allow_list(self, key):
+        entry = _SERVICE_REGISTRY[key]
         assert "allowed_post_endpoints" not in entry
         assert "_allowed_post_endpoints" not in entry
 
     def test_host_resolves_to_the_plugin_service(self):
         assert _find_service(_DIRECTORY_KEY, f"{_DIR}/users")["name"] \
             == "Google Workspace Admin (Directory)"
+        assert _find_service(_DIRECTORY_KEY, f"{_REP}/activity/users/all/applications/meet")["name"] \
+            == "Google Workspace Admin (Reports)"
 
     def test_cloud_identity_host_is_not_registered(self):
         """Its scope cannot be granted by user consent, so no entry exists."""
@@ -166,6 +179,12 @@ class TestDirectoryAllowList:
         f"{_DIR}/customer/my_customer/devices/chromeos/5a3c1e7f-0000-1111-2222-333344445555",
         f"{_DIR}/customer/my_customer/devices/mobile",
         f"{_DIR}/customer/my_customer/devices/mobile/AFiQxQ8Qgd-rouSmcd2UnuvhYV__WXdacTgJhPEA1QoQJrK1hYbKJXm-8JFlhZOjBF4aVbhleS2FVQk5lI069K2GULpteTlLVpKLJFSLSL",
+        f"{_DIR}/customer/my_customer/resources/calendars",
+        f"{_DIR}/customer/my_customer/resources/calendars/12345678901",
+        f"{_DIR}/customer/my_customer/resources/buildings",
+        f"{_DIR}/customer/my_customer/resources/buildings/HQ",
+        f"{_DIR}/customer/my_customer/resources/features",
+        f"{_DIR}/customer/my_customer/resources/features/Meet%20hardware",
     ])
     def test_read_paths_are_allowed(self, path):
         assert _matches(_DIRECTORY_KEY, path), path
@@ -188,10 +207,11 @@ class TestDirectoryAllowList:
         f"{_DIR}/customer/my_customer/devices/chromeos/abc/commands/1",
         f"{_DIR}/customer/my_customer/devices/chromeos:batchChangeStatus",
         f"{_DIR}/customer/my_customer/devices/mobile/abc/action",
+        f"{_DIR}/customer/my_customer/resources/features/Old/rename",
+        f"{_DIR}/customer/my_customer/resources/calendars/123/extra",
         # Resources outside the directory + devices scope of the plugin.
         f"{_DIR}/customer/my_customer/roles",
         f"{_DIR}/customer/my_customer/roleassignments",
-        f"{_DIR}/customer/my_customer/resources/calendars",
         f"{_DIR}/customers/my_customer/chrome/printers",
         # Shape errors.
         f"{_DIR}/users/",
@@ -223,6 +243,46 @@ class TestDirectoryAllowList:
 
 
 # ---------------------------------------------------------------------------
+# Reports API allow-list
+# ---------------------------------------------------------------------------
+
+class TestReportsAllowList:
+    @pytest.mark.parametrize("path", [
+        f"{_REP}/activity/users/all/applications/meet",
+        f"{_REP}/activity/users/all/applications/meet_hardware",
+        f"{_REP}/activity/users/jane@example.com/applications/meet",
+        f"{_REP}/usage/dates/2026-09-30",
+    ])
+    def test_meet_reads_are_allowed(self, path):
+        assert _matches(_REPORTS_KEY, path), path
+
+    @pytest.mark.parametrize("path", [
+        # Every other application's audit log stays out of reach.
+        f"{_REP}/activity/users/all/applications/login",
+        f"{_REP}/activity/users/all/applications/admin",
+        f"{_REP}/activity/users/all/applications/token",
+        f"{_REP}/activity/users/all/applications/drive",
+        f"{_REP}/activity/users/all/applications/saml",
+        f"{_REP}/activity/users/all/applications/meetx",
+        f"{_REP}/activity/users/all/applications/meet/watch",
+        f"{_REP}/activity/users/all/applications/meet_hardware/watch",
+        f"{_REP}/activity/users/all/applications/meet:watch",
+        # Other usage reports and shapes.
+        f"{_REP}/usage/users/all/dates/2026-09-30",
+        f"{_REP}/usage/gplus_communities/all/dates/2026-09-30",
+        f"{_REP}/usage/dates/yesterday",
+        f"{_REP}/usage/dates/2026-09-30/extra",
+        f"{_REP}/activity/users/all/applications/",
+        "/admin/reports_v1/channels/stop",
+    ])
+    def test_everything_else_is_rejected(self, path):
+        assert not _matches(_REPORTS_KEY, path), path
+
+    def test_directory_paths_never_match_the_reports_entry(self):
+        assert not _matches(_REPORTS_KEY, f"{_DIR}/users")
+
+
+# ---------------------------------------------------------------------------
 # _make_authed_request behavior
 # ---------------------------------------------------------------------------
 
@@ -244,6 +304,30 @@ class TestMakeAuthedRequest:
         assert "query=isAdmin=true" in url
         assert headers["Authorization"] == "Bearer ya29.admin-token"
 
+    def test_reports_request_keeps_encoded_filter_operators(self):
+        calls: list = []
+        with _mock_httpx_client(calls, body={"items": []}):
+            result = _run(_make_authed_request(
+                "https://admin.googleapis.com/admin/reports/v1/activity/users/all/"
+                "applications/meet?eventName=call_ended&filters=network_rtt_msec_mean%3E300",
+                user=_connected_user(),
+            ))
+        assert json.loads(result) == {"items": []}
+        (method, url, headers), = calls
+        assert method == "GET"
+        assert "filters=network_rtt_msec_mean%3E300" in url
+        assert headers["Authorization"] == "Bearer ya29.admin-token"
+
+    def test_other_audit_logs_are_refused_without_http_call(self):
+        calls: list = []
+        with _mock_httpx_client(calls):
+            result = _run(_make_authed_request(
+                "https://admin.googleapis.com/admin/reports/v1/activity/users/all/applications/login",
+                user=_connected_user(),
+            ))
+        assert "not allowed" in json.loads(result)["error"]
+        assert calls == []
+
     def test_disallowed_path_is_refused_without_http_call(self):
         calls: list = []
         with _mock_httpx_client(calls):
@@ -260,6 +344,8 @@ class TestMakeAuthedRequest:
         "https://admin.googleapis.com/admin/directory/v1/users",
         "https://admin.googleapis.com/admin/directory/v1/users/jane@example.com/makeAdmin",
         "https://admin.googleapis.com/admin/directory/v1/customer/my_customer/devices/chromeos/abc/action",
+        "https://admin.googleapis.com/admin/reports/v1/activity/users/all/applications/meet",
+        "https://admin.googleapis.com/admin/reports/v1/activity/users/all/applications/meet/watch",
     ])
     def test_every_post_is_refused_without_http_call(self, url):
         calls: list = []
@@ -299,4 +385,13 @@ class TestSkill:
         assert skill.requires == "google_admin"
         content = skill.content_builder("http://localhost", "key")
         assert "https://admin.googleapis.com/admin/directory/v1" in content
+        assert "https://admin.googleapis.com/admin/reports/v1" in content
         assert "cloudidentity.googleapis.com" not in content
+
+    def test_skill_documents_every_meet_tool(self):
+        from chat.system_skills import CATALOG
+        from plugins.google_admin.tools import GOOGLE_ADMIN_TOOL_NAMES
+
+        content = CATALOG["system:google_admin"].content_builder("http://localhost", "key")
+        for name in GOOGLE_ADMIN_TOOL_NAMES:
+            assert name in content, name

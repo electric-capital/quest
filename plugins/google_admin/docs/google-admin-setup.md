@@ -24,13 +24,17 @@ Local mode can pre-bake the switch through the `service_credentials` mapping of 
 
 A Workspace administrator opens **Settings > Data Connections > Add Connection > Google Workspace Admin**. The popup shows Google's account picker, so a dedicated admin account can be chosen even when it differs from the Quest login, then the consent screen listing the read-only scopes. See [OAuth Popup Flow](../../../docs/architecture/oauth-popup.md).
 
-Which data is readable follows the connected account's admin role in the Google Admin console: a super admin reads everything, while a delegated admin reads only the resources its role grants (user, group and org unit privileges for the directory; mobile and Chrome device management privileges for devices) and gets 403 on the rest.
+Which data is readable follows the connected account's admin role in the Google Admin console: a super admin reads everything, while a delegated admin reads only the resources its role grants (user, group and org unit privileges for the directory; mobile and Chrome device management privileges for devices; the **Reports** privilege for the Google Meet tools -- Meet calls, call quality, Meet hardware and usage; a calendar-resources privilege for rooms and buildings) and gets 403 on the rest. The Reports privilege cannot be limited to organizational units: an account holding it reads the Meet records of the whole organization.
+
+Connections made before the Meet support was added lack the Reports and calendar-resource scopes: their row shows "Update Available", and the Meet tools answer `google_admin_reconnect_required` until the user reconnects.
 
 ## Troubleshooting
 
 - **`redirect_uri_mismatch` in the popup:** the callback URL above is missing from the OAuth client, or the app is being browsed through a different origin than the registered one.
 - **"Update Available" badge right after connecting:** a scope was unticked on Google's consent screen. Reconnect and leave every box ticked.
-- **403 `Not Authorized to access this resource/api`:** the connected account lacks the admin privilege for that resource.
+- **403 `Not Authorized to access this resource/api`:** the connected account lacks the admin privilege for that resource (`google_admin_forbidden` from the Meet tools: the Reports privilege is missing).
+- **`google_admin_reconnect_required` from a Meet tool:** the connection predates the Meet scopes; reconnect.
+- **Meet tools return nothing:** Meet records appear a few minutes after each participant leaves (calls in progress are invisible) and are kept for 6 months; usage reports lag 1-3 days. Meet hardware that logged no event in the window does not appear at all.
 - **403 `SERVICE_DISABLED`:** the Admin SDK API is not enabled in the OAuth client's project.
 - **`Error 400: invalid_scope`, "Some requested scopes cannot be shown":** a scope in `GOOGLE_ADMIN_SCOPES` is one Google will not put on a user consent screen (this is why the Cloud Identity devices scope is not requested). The error names the scope; it appears only after an account is chosen.
 - **The row disappeared:** the admin switch was turned off, or the Google OAuth client was removed.

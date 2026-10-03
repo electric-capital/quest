@@ -1,7 +1,8 @@
 """The Google Workspace Admin plugin manifest.
 
 Read-only access to a Google Workspace account's directory (users,
-groups, org units, domains) and device inventory (ChromeOS, mobile) for
+groups, org units, domains, rooms), device inventory (ChromeOS, mobile),
+and Google Meet activity (calls, call quality, Meet hardware, usage) for
 Workspace administrators.
 
 The plugin id is ``google_admin``: the ``connected_services`` key, the
@@ -11,13 +12,15 @@ writes the underscore as a hyphen: ``/auth/google-admin``.
 
 Shape: an oauth-kind user connection (the Microsoft 365 expiring-token
 pattern) that borrows the core Google OAuth client instead of carrying
-its own, plus one GET-only ``authed_get`` service entry. There are no
-tools and no action requests: every read is a plain Google API GET the
-model composes from the ``system:google_admin`` skill.
+its own, two GET-only ``authed_get`` service entries on
+``admin.googleapis.com`` (the Directory API, and the Reports API scoped by
+path prefix), and four read-only Meet tools (plugins/google_admin/tools.py)
+that page, flatten and aggregate Reports API records too large for the
+``authed_get`` size gate. No action requests.
 
 Read-only is enforced twice: the OAuth grant holds only ``*.readonly``
-scopes (see plugins/google_admin/upstream.py), and the service entry
-allow-lists GET paths only (no ``allowed_post_endpoints``, so authed_post
+scopes (see plugins/google_admin/upstream.py), and the service entries
+allow-list GET paths only (no ``allowed_post_endpoints``, so authed_post
 rejects every POST to the host).
 """
 
@@ -27,6 +30,7 @@ from chat.system_skills import SystemSkill
 from config.plugin_types import CredentialField, QuestPlugin, UserConnectionSpec
 
 from plugins.google_admin.oauth import router as google_admin_oauth_router
+from plugins.google_admin.tools import GOOGLE_ADMIN_TOOL_NAMES, GOOGLE_ADMIN_TOOLS
 from plugins.google_admin.upstream import (
     GOOGLE_ADMIN_SCOPES,
     MISSING_CREDENTIALS_ERROR,
@@ -63,7 +67,7 @@ _OU_SEGMENT = r"(?!(?:\.|%2[eE]){1,2}(?:/|$))[^/]+"
 # Deliberately NOT listed, although they are GETs: ``users/{key}/tokens``,
 # ``/asps`` and ``/verificationCodes`` (third-party grants, app passwords,
 # backup codes -- the latter are live credentials), user photos, admin
-# roles, calendar resources, and printers.
+# roles, and printers.
 _DIRECTORY_SERVICE = {
     "key": "admin.googleapis.com",
     "entry": {
@@ -100,9 +104,42 @@ _DIRECTORY_SERVICE = {
             _CUSTOMER + r"/devices/chromeos/[^/:]+$",                 # get a ChromeOS device
             _CUSTOMER + r"/devices/mobile$",                          # list/search mobile devices
             _CUSTOMER + r"/devices/mobile/[^/:]+$",                   # get a mobile device
+            # -- rooms (calendar resources: where Meet hardware lives)
+            _CUSTOMER + r"/resources/calendars$",                     # list rooms / resources
+            _CUSTOMER + r"/resources/calendars/[^/:]+$",              # get one
+            _CUSTOMER + r"/resources/buildings$",                     # list buildings
+            _CUSTOMER + r"/resources/buildings/[^/:]+$",              # get one
+            _CUSTOMER + r"/resources/features$",                      # list room features
+            _CUSTOMER + r"/resources/features/[^/:]+$",               # get one
         ],
     },
 }
+
+_REPORTS = r"^/admin/reports/v1"
+
+# Admin SDK Reports API, a separate entry on the same host selected by
+# path prefix. The token's Reports scopes cover every application's audit
+# log; the allow-list confines reads to the Meet and Meet hardware logs
+# (``users/all`` or one user) and the daily customer usage report.
+# Deliberately NOT listed: the other applications' audit logs (login,
+# admin, token, drive, ...), user / entity usage reports, and the
+# ``.../watch`` push-channel endpoint (a POST anyway).
+_REPORTS_SERVICE = {
+    "key": "admin.googleapis.com/admin/reports/v1",
+    "entry": {
+        "name": "Google Workspace Admin (Reports)",
+        "path_prefix": "/admin/reports/v1",
+        "load_credentials": load_google_admin_credentials,
+        "inject_auth": inject_google_admin_bearer_auth,
+        "requires_user": True,
+        "missing_credentials_error": MISSING_CREDENTIALS_ERROR,
+        "allowed_endpoints": [
+            _REPORTS + r"/activity/users/[^/:]+/applications/(?:meet|meet_hardware)$",  # audit records
+            _REPORTS + r"/usage/dates/\d{4}-\d{2}-\d{2}$",  # customer usage (parameters=meet:...)
+        ],
+    },
+}
+
 
 def get_plugin() -> QuestPlugin:
     return QuestPlugin(
@@ -125,19 +162,23 @@ def get_plugin() -> QuestPlugin:
             scopes=GOOGLE_ADMIN_SCOPES,
             needs_reauth=google_admin_needs_reauth,
         ),
-        services=(_DIRECTORY_SERVICE,),
+        services=(_DIRECTORY_SERVICE, _REPORTS_SERVICE),
+        tools=GOOGLE_ADMIN_TOOLS,
+        # Read-only: sandbox scripts may aggregate across many calls.
+        script_tool_allowlist=frozenset(GOOGLE_ADMIN_TOOL_NAMES),
         system_skills=(
             SystemSkill(
                 id="system:google_admin",
                 name="Google Workspace Admin",
                 description=(
-                    "Read-only Workspace directory (users, groups, org "
-                    "units) and ChromeOS/mobile devices via authed_get."
+                    "Read-only Workspace directory, rooms, ChromeOS/mobile "
+                    "devices, and Google Meet calls, call quality, hardware."
                 ),
                 when_to_load=(
                     "Load when the user asks about their organization's "
-                    "Google Workspace users, groups, org units, or managed "
-                    "devices."
+                    "Google Workspace users, groups, org units, rooms, "
+                    "managed devices, or Google Meet calls, call quality, "
+                    "Meet hardware (room devices) or Meet usage."
                 ),
                 requires="google_admin",
                 content_builder=_google_admin_skill_content,
