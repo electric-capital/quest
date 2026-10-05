@@ -68,6 +68,15 @@ from chat.gemini_api.tool_handlers.project_db import (
     _handle_project_db_query,
 )
 from chat.gemini_api.tool_handlers.response_blobs import _handle_get_response_content
+from chat.gemini_api.tool_handlers.docs import (
+    _handle_list_docs,
+    _handle_search_docs,
+    _handle_read_doc,
+    _handle_create_doc,
+    _handle_edit_doc,
+    _handle_append_to_doc,
+    _handle_add_doc_image,
+)
 
 __all__ = [
     "_get_workspace_dir",
@@ -108,4 +117,11 @@ __all__ = [
     "_execute_project_db_query",
     "_handle_project_db_query",
     "_handle_get_response_content",
+    "_handle_list_docs",
+    "_handle_search_docs",
+    "_handle_read_doc",
+    "_handle_create_doc",
+    "_handle_edit_doc",
+    "_handle_append_to_doc",
+    "_handle_add_doc_image",
 ]

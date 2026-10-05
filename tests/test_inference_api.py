@@ -375,10 +375,13 @@ _CORE_READ_OR_WORKSPACE_TOOLS = {
     "authed_get", "authed_post", "get_response_content",
     "telegram_get_me", "telegram_list_dialogs", "telegram_get_messages",
     "telegram_list_contacts",
+    "list_docs", "search_docs", "read_doc",  # Quest Docs reads
 }
 _CORE_MUTATING_TOOLS = {
     "archive_gmail_message", "modify_gmail_labels",
     "create_gmail_draft", "send_gmail_to_self",
+    # Quest Docs writes (no card when free; inference runs are read-only)
+    "create_doc", "edit_doc", "append_to_doc", "add_doc_image",
 }
 
 

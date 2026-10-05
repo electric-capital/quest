@@ -60,6 +60,13 @@ SCRIPT_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     # Memory reads (user-scoped)
     "memory_search",
     "memory_list",
+    # Quest Docs reads. Scripts run with run_kind="script" (is_script below):
+    # no conversation context, so only user docs are visible (project docs
+    # are reachable only from their project's conversations), and every doc
+    # write is refused by the access rule -- the write tools are not listed.
+    "list_docs",
+    "search_docs",
+    "read_doc",
 })
 
 
@@ -142,6 +149,7 @@ async def script_tool_call_endpoint(
         timezone="UTC",
         tool_name="tool_call",
         args={"tool_name": body.tool_name, "arguments": dict(body.arguments)},
+        is_script=True,
     )
     if extra_parts:
         # Allow-listed tools never produce provider parts; log if one appears

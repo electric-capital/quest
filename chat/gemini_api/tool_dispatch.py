@@ -56,6 +56,13 @@ from chat.gemini_api.tool_handlers import (
     _handle_run_python,
     _handle_project_db_query,
     _handle_get_response_content,
+    _handle_list_docs,
+    _handle_search_docs,
+    _handle_read_doc,
+    _handle_create_doc,
+    _handle_edit_doc,
+    _handle_append_to_doc,
+    _handle_add_doc_image,
 )
 
 # Threshold in bytes: tool results larger than this are logged to the
@@ -146,6 +153,35 @@ class ToolContext:
     # approval-free mutating tools are refused -- see
     # chat.llm.tool_schemas.mutating_tool_call_tools().
     is_inference_api: bool = False
+    # Cross-user subagent run (origin="user_subagent").
+    is_user_subagent: bool = False
+    # Slack-driven conversation (origin="slack"): cannot open action
+    # requests, so an approval-gated doc write is refused there.
+    is_slack: bool = False
+    # Sandbox script calling through the POST /api/tool-call bridge
+    # (chat/gemini_api/script_tool_call.py): no conversation context.
+    is_script: bool = False
+
+    @property
+    def run_kind(self) -> str:
+        """The ``chat.docs.access.RUN_KINDS`` value for this call.
+
+        First match wins: script, sub_agent, inference_api, user_subagent,
+        slack, else top_level (routine runs included: they are ordinary
+        conversations). Whether the conversation is public is the separate
+        ``is_public`` field.
+        """
+        if self.is_script:
+            return "script"
+        if self.is_sub_agent:
+            return "sub_agent"
+        if self.is_inference_api:
+            return "inference_api"
+        if self.is_user_subagent:
+            return "user_subagent"
+        if self.is_slack:
+            return "slack"
+        return "top_level"
 
 
 ToolResult = Union[str, tuple[str, list]]
@@ -417,6 +453,54 @@ async def _tool_run_python(ctx: ToolContext, args: dict) -> str:
     )
 
 
+def _doc_caller(ctx: ToolContext):
+    """The Quest Docs service caller for this dispatch context.
+
+    Sandbox scripts have no conversation context: no project (so project
+    docs stay hidden from them) and never public (the public sandbox has no
+    tool bridge).
+    """
+    from chat.docs.service import Caller
+    run_kind = ctx.run_kind
+    if run_kind == "script":
+        return Caller(
+            user=ctx.user, conversation_id=None, project_id=None,
+            is_public=False, run_kind=run_kind,
+        )
+    return Caller(
+        user=ctx.user, conversation_id=ctx.conversation_id,
+        project_id=ctx.project_id, is_public=ctx.is_public, run_kind=run_kind,
+    )
+
+
+async def _tool_list_docs(ctx: ToolContext, args: dict) -> str:
+    return await _handle_list_docs(_doc_caller(ctx), args)
+
+
+async def _tool_search_docs(ctx: ToolContext, args: dict) -> str:
+    return await _handle_search_docs(_doc_caller(ctx), args)
+
+
+async def _tool_read_doc(ctx: ToolContext, args: dict) -> str:
+    return await _handle_read_doc(_doc_caller(ctx), args)
+
+
+async def _tool_create_doc(ctx: ToolContext, args: dict) -> str:
+    return await _handle_create_doc(_doc_caller(ctx), args)
+
+
+async def _tool_edit_doc(ctx: ToolContext, args: dict) -> str:
+    return await _handle_edit_doc(_doc_caller(ctx), args)
+
+
+async def _tool_append_to_doc(ctx: ToolContext, args: dict) -> str:
+    return await _handle_append_to_doc(_doc_caller(ctx), args)
+
+
+async def _tool_add_doc_image(ctx: ToolContext, args: dict) -> str:
+    return await _handle_add_doc_image(_doc_caller(ctx), args)
+
+
 # Dynamic tools invoked through the tool_call meta tool. Keys must stay in
 # sync with chat.llm.tool_schemas.TOOL_CALL_REGISTRY (asserted by
 # tests/test_tool_dispatch_table.py); plugin tools are added to both via
@@ -447,6 +531,15 @@ TOOL_CALL_HANDLERS: dict[str, ToolHandler] = {
     "authed_get": _tool_authed_get,
     "authed_post": _tool_authed_post,
     "get_response_content": _tool_get_response_content,
+    # Quest Docs (chat/docs/service.py; gated per user by the docs feature
+    # gate inside the handlers).
+    "list_docs": _tool_list_docs,
+    "search_docs": _tool_search_docs,
+    "read_doc": _tool_read_doc,
+    "create_doc": _tool_create_doc,
+    "edit_doc": _tool_edit_doc,
+    "append_to_doc": _tool_append_to_doc,
+    "add_doc_image": _tool_add_doc_image,
 }
 
 # Tools the model calls by their own (top-level) name. Anything not in this
@@ -549,6 +642,9 @@ async def _dispatch_tool_call(
     agent_name: str | None = None,
     is_public: bool = False,
     is_inference_api: bool = False,
+    is_user_subagent: bool = False,
+    is_slack: bool = False,
+    is_script: bool = False,
 ) -> tuple[str, list]:
     """Dispatch a tool call to the appropriate handler.
 
@@ -588,6 +684,13 @@ async def _dispatch_tool_call(
             mutating dynamic tools (``mutating_tool_call_tools()``) and the
             mutating internal proxy paths are hard-rejected, and sandbox
             containers get a lease that refuses them on the bridge too.
+        is_user_subagent: Whether the conversation is a cross-user
+            subagent run (origin="user_subagent").
+        is_slack: Whether the conversation is Slack-driven (origin="slack").
+        is_script: Whether the call comes from a sandbox script through the
+            POST /api/tool-call bridge. Together with is_sub_agent and
+            is_inference_api these derive ``ToolContext.run_kind``, which
+            the Quest Docs access rule consumes.
 
     Returns:
         Tuple of (result_string, extra_parts) where extra_parts is a
@@ -599,6 +702,8 @@ async def _dispatch_tool_call(
             tool_name, args, project_id=project_id, model=model,
             is_sub_agent=is_sub_agent, agent_name=agent_name,
             is_public=is_public, is_inference_api=is_inference_api,
+            is_user_subagent=is_user_subagent, is_slack=is_slack,
+            is_script=is_script,
         )
     except Exception as exc:
         label = tool_name
@@ -625,6 +730,9 @@ async def _dispatch_tool_call_inner(
     agent_name: str | None = None,
     is_public: bool = False,
     is_inference_api: bool = False,
+    is_user_subagent: bool = False,
+    is_slack: bool = False,
+    is_script: bool = False,
 ) -> tuple[str, list]:
     """Un-guarded dispatch body; see ``_dispatch_tool_call``."""
     extra_parts = []
@@ -642,6 +750,9 @@ async def _dispatch_tool_call_inner(
         agent_name=agent_name,
         is_public=is_public,
         is_inference_api=is_inference_api,
+        is_user_subagent=is_user_subagent,
+        is_slack=is_slack,
+        is_script=is_script,
     )
 
     # Public-project enforcement. This is the security boundary, not the

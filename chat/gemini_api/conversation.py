@@ -1280,6 +1280,8 @@ async def run_conversation_turn(
                         fc_event.tool_name, args, project_id=project_id,
                         model=model, is_sub_agent=False, is_public=is_public,
                         is_inference_api=ctx.is_inference_api,
+                        is_user_subagent=ctx.is_user_subagent,
+                        is_slack=ctx.is_slack_origin,
                     )
 
                     # Emit conversation_updated event when the name was set
