@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Optional
 
-from config.paths import CHATS_DIR, PROJECTS_DIR
+from config.paths import CHATS_DIR, DOCS_DIR, PROJECTS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -112,12 +112,12 @@ def _publish_appended_to_bus(
 
 
 class InvalidStorageIdError(ValueError):
-    """A conversation or project id cannot be turned into an on-disk path.
+    """A conversation, project or doc id cannot be turned into an on-disk path.
 
     Raised by the central path resolvers on ``ChatStorage`` for ids that are
     not a single canonical path segment (empty, ``.``, ``..``, containing a
     separator, absolute) or whose resolved directory would not live under
-    ``CHATS_DIR`` / ``PROJECTS_DIR`` (e.g. a planted symlink). Subclasses
+    ``CHATS_DIR`` / ``PROJECTS_DIR`` / ``DOCS_DIR`` (e.g. a planted symlink). Subclasses
     ``ValueError`` so callers that already treat a bad id as a cache miss or
     a 4xx keep working.
     """
@@ -162,11 +162,12 @@ class ChatStorage:
     (data/chats/{conversation_id}/) makes the user dimension unnecessary.
     Ownership is authoritative in the conversations SQLite table.
 
-    ``get_conversation_dir`` / ``get_project_dir`` (and the helpers built on
-    them) are the ONLY places that turn an id into a filesystem path. They
-    validate the id and containment-check the result, so every caller is
-    safe by construction; production code must not join ``CHATS_DIR`` /
-    ``PROJECTS_DIR`` with an id itself. Ownership is deliberately NOT
+    ``get_conversation_dir`` / ``get_project_dir`` / ``get_doc_dir`` (and the
+    helpers built on them) are the ONLY places that turn an id into a
+    filesystem path. They validate the id and containment-check the result,
+    so every caller is safe by construction; production code must not join
+    ``CHATS_DIR`` / ``PROJECTS_DIR`` / ``DOCS_DIR`` with an id itself.
+    Ownership is deliberately NOT
     checked here -- schedulers, migrations and cross-user subagents resolve
     paths without a "current user"; HTTP routes go through
     ``chat.conversation_access`` which adds the DB ownership lookup.
@@ -206,6 +207,20 @@ class ChatStorage:
     def get_project_db_path(project_id: str) -> Path:
         """Return the per-project SQLite database file path."""
         return ChatStorage.get_project_dir(project_id) / "project.db"
+
+    @staticmethod
+    def get_doc_dir(doc_id: str) -> Path:
+        """Return ``DOCS_DIR / doc_id`` for a canonical, contained id.
+
+        The sole id-to-path resolver for Quest Docs (``doc.md``, ``assets/``
+        and ``revisions/`` live under it; see chat/docs/files.py). The
+        directory is NOT created here.
+
+        Raises:
+            InvalidStorageIdError: non-canonical id or path outside DOCS_DIR.
+        """
+        _validate_id_segment(doc_id, "doc")
+        return _resolve_contained_dir(DOCS_DIR, doc_id)
 
     @staticmethod
     def _get_chat_history_file(conversation_id: str) -> Path:
@@ -1145,6 +1160,74 @@ class ChatStorage:
         reads_file = ChatStorage._get_workspace_reads_file(conversation_id)
         with open(reads_file, "w") as f:
             json.dump({"paths": merged}, f, indent=2)
+
+    # ------------------------------------------------------------------
+    # Doc reads (per-conversation Quest Docs whose body the model has
+    # read or authored; gates edit_doc, tool and action request alike)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_doc_reads_file(conversation_id: str) -> Path:
+        """Return the path to doc_reads.json for a conversation."""
+        return ChatStorage._get_conversation_dir(conversation_id) / "doc_reads.json"
+
+    @staticmethod
+    def get_doc_read_ids(conversation_id: str) -> list[str]:
+        """Read the list of doc IDs whose body the model has seen.
+
+        Populated by ``read_doc`` and ``create_doc`` (the model authored the
+        content); ``search_docs`` snippets do not count. Returns an empty
+        list if the file does not exist (nothing read yet).
+
+        Args:
+            conversation_id: Conversation UUID.
+
+        Returns:
+            List of doc ID strings.
+        """
+        reads_file = ChatStorage._get_doc_reads_file(conversation_id)
+        if not reads_file.exists():
+            return []
+
+        try:
+            with open(reads_file, "r") as f:
+                data = json.load(f)
+            return data.get("doc_ids", [])
+        except (json.JSONDecodeError, KeyError, AttributeError):
+            return []
+
+    @staticmethod
+    def add_doc_read_ids(conversation_id: str, doc_ids: list[str]) -> None:
+        """Append doc IDs to the doc reads file, deduplicating.
+
+        Creates the file if it does not exist. Existing IDs are preserved;
+        new IDs are appended (order-preserving dedup). Skips the write
+        entirely when every ID is already recorded.
+
+        Concurrency note: same single-event-loop guarantee as
+        ``add_workspace_read_paths`` above -- this method must stay fully
+        synchronous.
+
+        Args:
+            conversation_id: Conversation UUID.
+            doc_ids: List of doc ID strings to add.
+        """
+        if not doc_ids:
+            return
+
+        existing = ChatStorage.get_doc_read_ids(conversation_id)
+        existing_set = set(existing)
+        new_ids: list[str] = []
+        for did in doc_ids:
+            if did not in existing_set:
+                existing_set.add(did)
+                new_ids.append(did)
+        if not new_ids:
+            return
+
+        reads_file = ChatStorage._get_doc_reads_file(conversation_id)
+        with open(reads_file, "w") as f:
+            json.dump({"doc_ids": existing + new_ids}, f, indent=2)
 
     # ------------------------------------------------------------------
     # System prompt (persisted per-conversation)

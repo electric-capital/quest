@@ -83,6 +83,33 @@ def make_routine_list_changed(project_id: str) -> dict[str, Any]:
     }
 
 
+def make_doc_list_changed() -> dict[str, Any]:
+    """Envelope for ``doc_list_changed``.
+
+    Per-user global published after any Quest Docs mutation that can change
+    a list view (create, rename, mode switch, delete, and every body/asset
+    write, which bumps ``updated_at`` and so the sort order). Carries no
+    ids: the sidebar and the All Docs view simply re-fetch their loaded
+    window. Published through chat/docs/events.py only.
+    """
+    return {"type": "doc_list_changed"}
+
+
+def make_doc_changed(doc_id: str, updated_at: Optional[str]) -> dict[str, Any]:
+    """Envelope for ``doc_changed``.
+
+    Per-user global published after every Quest Docs body or asset write so
+    an open viewer of ``doc_id`` re-fetches. ``updated_at`` is the row's new
+    ISO timestamp (the optimistic-concurrency token), letting a tab skip a
+    re-fetch when it already shows that version.
+    """
+    return {
+        "type": "doc_changed",
+        "doc_id": doc_id,
+        "updated_at": updated_at,
+    }
+
+
 def make_wait_handle_resolved(
     conversation_id: str,
     handle_id: str,

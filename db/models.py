@@ -74,6 +74,7 @@ class ActionRequestType(StrEnum):
     RESET_GCP_INSTANCE = "reset_gcp_instance"
     RUN_USER_SUBAGENT = "run_user_subagent"
     SUBAGENT_RETURN = "subagent_return"
+    WRITE_DOC = "write_doc"
 
 
 class ActionRequestStatus(StrEnum):
@@ -1351,6 +1352,118 @@ class SkillShare(Base):
     )
 
     # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class Doc(Base):
+    """A Quest Doc: metadata row for a markdown document on disk.
+
+    The body, embedded images and revision snapshots live under
+    ``<data_dir>/docs/<id>/`` (resolved only via ``ChatStorage.get_doc_dir``;
+    see chat/docs/files.py). Rows are read and written through
+    db/doc_store.py, which also enforces case-insensitive title uniqueness
+    per ``(owner_id, project_id)`` -- a plain unique index cannot, because
+    the NULL ``project_id`` (user doc) case never collides in SQLite.
+    """
+
+    __tablename__ = "docs"
+    __table_args__ = (
+        sa.Index("ix_docs_owner_id", "owner_id"),
+        sa.Index("ix_docs_project_id", "project_id"),
+        sa.Index("ix_docs_updated_at", "updated_at"),
+    )
+
+    # UUID string primary key
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+
+    # Owner (project docs are owned by the project owner)
+    owner_id: Mapped[int] = mapped_column(
+        sa.Integer,
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # NULL = user doc; non-NULL = project doc (deleted with the project)
+    project_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        sa.ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=True,
+        default=None,
+    )
+
+    # 1..200 chars, 0..500 chars (enforced in db/doc_store.py)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
+
+    # "private" | "public" (chat/docs/constants.py DOC_MODES). Project docs
+    # copy the project's immutable ``public`` flag at creation.
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    # Cached bytes of doc.md and file count of assets/, for list views.
+    content_size: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    asset_count: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+
+    # "conversation:<id>" | "ui" | "action_request:<id>"
+    last_write_source: Mapped[Optional[str]] = mapped_column(
+        String(80), nullable=True, default=None
+    )
+
+    # Timestamps; updated_at doubles as the optimistic-concurrency token.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class DocShare(Base):
+    """A read or write grant on a doc to one user, or to everyone.
+
+    ``user_id`` NULL means everyone on the install. SQLite treats NULLs as
+    distinct in the unique ``(doc_id, user_id)`` index, so db/doc_store.py
+    enforces "at most one everyone row per doc" itself. Cascade-deletes
+    with the doc or the recipient user.
+    """
+
+    __tablename__ = "doc_shares"
+    __table_args__ = (
+        sa.Index("ix_doc_shares_doc_id_user_id", "doc_id", "user_id", unique=True),
+        sa.Index("ix_doc_shares_user_id", "user_id"),
+        # At most one "everyone" (user_id IS NULL) row per doc; SQLite treats
+        # NULLs as distinct in the composite unique index above.
+        sa.Index(
+            "ix_doc_shares_everyone", "doc_id", unique=True,
+            sqlite_where=sa.text("user_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    doc_id: Mapped[str] = mapped_column(
+        String(36),
+        sa.ForeignKey("docs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # NULL = everyone on the install
+    user_id: Mapped[Optional[int]] = mapped_column(
+        sa.Integer,
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+
+    # "read" | "write" (chat/docs/constants.py DOC_SHARE_PERMISSIONS)
+    permission: Mapped[str] = mapped_column(String(8), nullable=False)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
