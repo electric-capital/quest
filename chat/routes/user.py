@@ -176,12 +176,18 @@ async def get_current_user_info(user: dict = Depends(get_current_user_cookie_or_
         Dictionary with email, name, google_services_connected, and has_any_service_connected flags
     """
     from config.feature_gates import enabled_features
-    from api.instructions import get_user_connected_services
+    from api.instructions import PSEUDO_SERVICE_KEYS, get_user_connected_services
 
     # One roster for every service -- core and plugin alike -- so the
     # aggregate can't drift out of sync with new services (the old
-    # hand-written OR silently missed twitter and airtable).
+    # hand-written OR silently missed twitter and airtable). Capability
+    # pseudo-keys (e.g. "docs", the Quest Docs feature gate) gate tools
+    # like a service but are not connections, so they never count.
     connected_services = get_user_connected_services(user)
+    has_any_service_connected = any(
+        connected for key, connected in connected_services.items()
+        if key not in PSEUDO_SERVICE_KEYS
+    )
 
     is_impersonating = "_impersonator_uid" in user
     impersonator_email = user.get("_impersonator_email")
@@ -191,7 +197,7 @@ async def get_current_user_info(user: dict = Depends(get_current_user_cookie_or_
         "email": user["email"],
         "name": user.get("name", ""),
         "google_services_connected": connected_services["google_services"],
-        "has_any_service_connected": any(connected_services.values()),
+        "has_any_service_connected": has_any_service_connected,
         "is_admin": is_admin(user["email"]),
         "is_impersonating": is_impersonating,
         "impersonator_email": impersonator_email,
@@ -658,6 +664,11 @@ async def delete_account(
     from chat.storage import ChatStorage
     conversations_meta = await list_conversations_meta(user_id)
     user_projects = await list_projects(user_id)
+    # Quest Docs the user owns, user and project docs alike. Collected
+    # before ANY row delete: the project delete below already cascades the
+    # project docs' rows, and delete_user() cascades the rest.
+    from db import doc_store
+    doc_ids = await doc_store.list_doc_ids_for_user(user_id)
 
     # Delete projects (DB rows -- CASCADE deletes linked conversation rows)
     await delete_all_user_projects(user_id)
@@ -676,6 +687,25 @@ async def delete_account(
         proj_dir = ChatStorage.get_project_dir(proj["id"])
         if proj_dir.exists():
             shutil.rmtree(proj_dir)
+
+    # Delete each doc's directory (doc.md, assets/, revisions/). Best-effort
+    # per id: the rows are already gone, so one bad directory must not stop
+    # the sweep or fail the account delete.
+    if doc_ids:
+        import asyncio
+        from chat.docs import files as doc_files
+
+        def _sweep_doc_dirs() -> None:
+            for doc_id in doc_ids:
+                try:
+                    doc_files.delete_doc_dir(doc_id)
+                except Exception:
+                    logger.exception(
+                        "Account delete: failed to remove doc directory %s "
+                        "(user %s)", doc_id, user_id,
+                    )
+
+        await asyncio.to_thread(_sweep_doc_dirs)
 
     # Invalidate cached chat sessions
     from chat.gemini_api import invalidate_user_sessions

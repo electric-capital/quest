@@ -8,9 +8,40 @@ here. Instead, the prompt enumerates available "system skills" via
 the relevant skill(s) on demand through the existing ``load_skills`` tool.
 """
 
+from chat.docs.constants import DOCS_SERVICE_KEY
 from chat.gemini_api.constants import MAX_PARALLEL_TASKS, MAX_PARALLEL_TEMPLATE_TASKS
-from chat.llm.tool_schemas import TOOL_CALL_REGISTRY
+from chat.llm.tool_schemas import TOOL_CALL_REGISTRY, mutating_tool_call_tools
 from chat.system_skills import build_system_skills_enumeration
+
+
+def _doc_tool_names() -> frozenset[str]:
+    """The seven Quest Docs tools: the registry specs gated on the ``docs``
+    connected-services pseudo-key (``requires_service == DOCS_SERVICE_KEY``)."""
+    return frozenset(
+        name for name, spec in TOOL_CALL_REGISTRY.items()
+        if spec.get("requires_service") == DOCS_SERVICE_KEY
+    )
+
+
+def _doc_write_tool_names() -> frozenset[str]:
+    """The Quest Docs write tools (create_doc / edit_doc / append_to_doc /
+    add_doc_image): the doc tools flagged ``mutating`` in the registry.
+
+    Hidden from the read-only tiers' prompts (sub-agents, cross-user
+    subagents; inference runs already drop every mutating tool), where
+    the access rule (chat/docs/access.py) refuses them anyway.
+    """
+    return _doc_tool_names() & mutating_tool_call_tools()
+
+
+# Public-project prompt paragraph shown while Quest Docs is enabled for the
+# user. The public prompt carries no skills, so this replaces
+# system:quest_docs there; the tool descriptions carry the details. Must not
+# name internal-only tools or skills (tests/test_public_projects.py).
+_PUBLIC_DOCS_SECTION = """
+**Quest Docs:** Docs are persistent markdown documents kept inside Quest; they outlive this conversation and later conversations can find them again. This conversation sees only PUBLIC docs and creates only public docs. Find docs with `list_docs` / `search_docs`, read them with `read_doc` (required before `edit_doc`), create one with `create_doc`, change it with `edit_doc` (exact string replacement) or `append_to_doc`, and embed a workspace image with `add_doc_image`.
+Public docs the user owns or was given write access to are written directly, with no approval step. Use a doc for content meant to last (notes, reports, running logs appended under a dated heading) and the workspace for scratch files.
+"""
 
 
 def _build_dynamic_tools_section(
@@ -518,8 +549,13 @@ def get_user_subagent_system_prompt(
 
 """
 
+    # Cross-user subagent runs are read-only for Quest Docs (access rule
+    # run_kind "user_subagent"): the doc reads stay, the writes are hidden.
     dynamic_tools = _build_dynamic_tools_section(
-        exclude={"wait_for_handles", "set_conversation_name", "project_db_query"},
+        exclude=(
+            {"wait_for_handles", "set_conversation_name", "project_db_query"}
+            | _doc_write_tool_names()
+        ),
         connected_services=connected_services,
     )
     system_skills_block = build_system_skills_enumeration(
@@ -614,8 +650,7 @@ def get_inference_api_system_prompt(
 
     # Mutating dynamic tools are hidden here AND hard-rejected at dispatch
     # (chat/gemini_api/tool_dispatch.py, is_inference_api): inference runs
-    # must not change anything.
-    from chat.llm.tool_schemas import mutating_tool_call_tools
+    # must not change anything. That covers the Quest Docs writes too.
     dynamic_tools = _build_dynamic_tools_section(
         exclude=(
             {"wait_for_handles", "set_conversation_name", "project_db_query"}
@@ -676,6 +711,7 @@ def get_public_project_system_prompt(
     user_email: str = "",
     project_guide: str = "",
     is_routine: bool = False,
+    docs_enabled: bool = False,
 ) -> str:
     """Build the system prompt for a conversation in a PUBLIC project.
 
@@ -696,6 +732,15 @@ def get_public_project_system_prompt(
     while the ``public_project_routines`` feature gate is open): as in
     get_system_prompt(), the conversation is already named after its routine,
     so the first-reply naming instruction and its tool are left out.
+
+    ``docs_enabled`` is whether the Quest Docs feature gate is open for the
+    user (``config.feature_gates.docs_enabled_for``). This prompt is built
+    without a connected-services map, so the ``requires_service`` gating
+    of the other builders does not apply here: while False (the default)
+    the seven doc tools are excluded from the Dynamic Tools section and the
+    "Quest Docs" paragraph is omitted; while True the tools are listed and
+    the paragraph follows the Boundaries block (it stands in for the
+    ``system:quest_docs`` skill, since this prompt carries no skills).
     """
     from chat.llm.tool_schemas import (
         TOOL_CALL_REGISTRY, PUBLIC_TOOL_CALL_ALLOWLIST,
@@ -737,7 +782,10 @@ def get_public_project_system_prompt(
     public_exclude = set(TOOL_CALL_REGISTRY) - set(PUBLIC_TOOL_CALL_ALLOWLIST)
     if is_routine:
         public_exclude.add("set_conversation_name")
+    if not docs_enabled:
+        public_exclude |= _doc_tool_names()
     dynamic_tools_section = _build_dynamic_tools_section(exclude=public_exclude)
+    docs_section = _PUBLIC_DOCS_SECTION if docs_enabled else ""
 
     if is_routine:
         naming_section = _ROUTINE_NAMING_SECTION
@@ -789,7 +837,7 @@ You have three tools available:
 - You cannot propose write actions (`create_action_request` is unavailable) and cannot spawn sub-agents (`agent_task*` is unavailable).
 - If the user asks for something that needs internal data or a connected service, tell them plainly that it requires a regular (private) conversation outside this public project -- do not attempt workarounds.
 - Files the user uploads to this project's workspace are fair game: the user chose to bring them into a public project.
-
+{docs_section}
 {naming_section}
 
 **Example usage:**
@@ -913,8 +961,11 @@ def get_sub_agent_system_prompt(
 """
 
     # Build dynamic tools section excluding top-level-only tools and
-    # project_db_query when not in a project conversation
+    # project_db_query when not in a project conversation. Sub-agents are
+    # read-only for Quest Docs (access rule run_kind "sub_agent": "only the
+    # top-level agent writes docs"), so the doc write tools are hidden too.
     sub_agent_exclude = {"wait_for_handles", "set_conversation_name"}
+    sub_agent_exclude |= _doc_write_tool_names()
     if not has_project:
         sub_agent_exclude.add("project_db_query")
     sub_agent_dynamic_tools = _build_dynamic_tools_section(

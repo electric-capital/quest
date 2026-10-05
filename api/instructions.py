@@ -17,8 +17,17 @@ from api.slides import get_instructions as slides_instructions
 from api.tasks import get_instructions as tasks_instructions
 from api.airtable import get_instructions as airtable_instructions
 from api.ramp import get_instructions as ramp_instructions
+from chat.docs.constants import DOCS_SERVICE_KEY
+from config.feature_gates import docs_enabled_for
 
 logger = logging.getLogger(__name__)
+
+# Keys of get_user_connected_services() that are capabilities, not
+# connectors: they gate tools (``requires_service``) and system skills
+# (``SystemSkill.requires``) like a connected service does, but nothing is
+# "connected" -- so aggregates such as GET /me's has_any_service_connected
+# must skip them.
+PSEUDO_SERVICE_KEYS = frozenset({DOCS_SERVICE_KEY})
 
 
 def get_user_connected_services(user: dict) -> dict[str, bool]:
@@ -33,6 +42,10 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
     satisfy the plugin's ``connected`` predicate. Both must hold, so a
     user-side credential can't keep a plugin's ``system:<id>`` skill
     visible after an admin disables the plugin's service server-side.
+
+    The map also carries capability pseudo-keys (:data:`PSEUDO_SERVICE_KEYS`,
+    today only ``"docs"`` for the Quest Docs feature gate) that gate tools
+    and skills the same way but are not connections.
 
     Args:
         user: User dict from the database (via db/user_store.py).
@@ -65,6 +78,13 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
                 )
                 connected = False
         services[plugin.id] = connected and plugin_server_available(plugin)
+
+    # Capability pseudo-key (PSEUDO_SERVICE_KEYS), not a connector: mirrors
+    # the per-user Quest Docs feature gate so the doc tools (registry specs
+    # with ``requires_service: "docs"``) and the ``system:quest_docs``
+    # skill are hidden from prompts while the gate is closed for this user.
+    # Set after the plugin loop so the gate always decides this key.
+    services[DOCS_SERVICE_KEY] = docs_enabled_for(user.get("email") or "")
     return services
 
 
