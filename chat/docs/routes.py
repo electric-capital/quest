@@ -435,7 +435,12 @@ async def set_ui_doc_mode(
         )
     if doc["mode"] == body.mode:
         return _doc_row(user, doc, access)
-    updated = await doc_store.set_doc_mode(doc["id"], body.mode)
+    try:
+        updated = await doc_store.set_doc_mode(doc["id"], body.mode)
+    except doc_store.DuplicateDocTitleError as exc:
+        # Titles are unique per (owner, project, mode): the target mode
+        # already has a doc with this title.
+        raise _http_error(409, "duplicate_title", str(exc))
     if updated is None:
         raise _doc_not_found(doc_id)
     doc_events.publish_doc_list_changed(updated["owner_id"])

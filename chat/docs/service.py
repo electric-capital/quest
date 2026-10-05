@@ -45,6 +45,7 @@ import re
 import stat
 import sys
 import uuid
+import weakref
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -239,7 +240,9 @@ def _check_scope(scope) -> str:
 
 
 def _check_body_size(body: str, *, creating: bool = False) -> None:
-    size = len(body.encode("utf-8"))
+    # surrogatepass: a lone surrogate (valid in JSON) must not raise here;
+    # files._encode_body refuses it with a clean DocFileError on write.
+    size = len(body.encode("utf-8", "surrogatepass"))
     if size > constants.DOC_MAX_CONTENT_SIZE:
         if creating:
             raise DocError(
@@ -308,7 +311,11 @@ def _write_source_or_default(write_source: Optional[str], caller: Caller) -> str
 # Per-doc asyncio locks around read-modify-write sequences (files.doc_lock
 # is a threading.Lock taken per file call, so it cannot span the read and
 # the write of one edit/append). Single event loop per process.
-_write_locks: dict[str, asyncio.Lock] = {}
+# Weak values: holders and waiters keep a strong reference, so the table
+# does not grow with every doc id ever written.
+_write_locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = (
+    weakref.WeakValueDictionary()
+)
 
 
 def _write_lock(doc_id: str) -> asyncio.Lock:
@@ -317,6 +324,30 @@ def _write_lock(doc_id: str) -> asyncio.Lock:
         lock = asyncio.Lock()
         _write_locks[doc_id] = lock
     return lock
+
+
+async def _shielded(coro):
+    """Run ``coro`` to completion even if the awaiting task is cancelled.
+
+    A write is file op -> DB bump -> events; cancelling between the first
+    two (the Stop button mid-turn) would leave content_size / asset_count /
+    updated_at stale and no event sent. The inner task keeps running; the
+    cancellation still propagates to the caller.
+    """
+    task = asyncio.ensure_future(coro)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # Retrieve the eventual outcome so a late failure is logged, not
+        # reported as "exception was never retrieved".
+        def _log_done(t: "asyncio.Future") -> None:
+            if not t.cancelled() and t.exception() is not None:
+                logger.warning(
+                    "[docs] write finished with an error after the caller "
+                    "was cancelled: %s", t.exception(),
+                )
+        task.add_done_callback(_log_done)
+        raise
 
 
 def _events():
@@ -1014,7 +1045,7 @@ def _append_text(body: str, content: str, ensure_blank_line: bool) -> str:
 def _image_markdown(alt: str, asset_name: str) -> str:
     stem = asset_name.rsplit(".", 1)[0]
     text = (alt or stem).replace("\r", " ").replace("\n", " ")
-    text = text.replace("[", "\\[").replace("]", "\\]")
+    text = text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
     return f"![{text}](assets/{asset_name})"
 
 
@@ -1075,6 +1106,10 @@ async def _load_workspace_image(caller: Caller, workspace_path: str) -> tuple[by
         )
     except RuntimeError as exc:
         raise DocError(str(exc)) from None
+    except (ValueError, OSError):
+        # NUL bytes, over-long names, ... -- never echo the resolved
+        # server-side path back to the model.
+        raise DocError(f"File not found in workspace: {workspace_path}") from None
     data = await asyncio.to_thread(_read_image_file, path, workspace_path)
     _check_image(data)
     return data, PurePosixPath(workspace_path.replace("\\", "/")).name
@@ -1083,9 +1118,11 @@ async def _load_workspace_image(caller: Caller, workspace_path: str) -> tuple[by
 # ---------------------------------------------------------------------------
 # Writes: appliers
 #
-# Each applier holds the per-doc asyncio lock around the WHOLE write (file
-# op in a thread -> doc_store.update_after_write -> events), so DB counters
-# and updated_at land in write order. Body changes go through
+# apply_write_operation holds the per-doc asyncio lock around the WHOLE
+# write (re-resolved access -> file op in a thread ->
+# doc_store.update_after_write -> events) and shields it from cancellation,
+# so DB counters and updated_at land in write order; the appliers below
+# run with that lock held. Body changes go through
 # files.modify_body, which reads, transforms and writes doc.md in one
 # critical section of the per-doc threading lock (a separate read_body +
 # write_body pair would let concurrent writers clobber each other).
@@ -1101,9 +1138,8 @@ async def _write_edit(caller: Caller, doc: dict, clean: dict, write_source: str)
         replaced.append(count)
         return new_body
 
-    async with _write_lock(doc_id):
-        new_body, size = await _files(doc_files.modify_body, doc_id, transform)
-        updated = await _finish_write(doc_id, content_size=size, write_source=write_source)
+    new_body, size = await _files(doc_files.modify_body, doc_id, transform)
+    updated = await _finish_write(doc_id, content_size=size, write_source=write_source)
     return {
         "replaced": replaced[0],
         "total_lines": _total_lines(new_body),
@@ -1119,9 +1155,8 @@ async def _write_append(caller: Caller, doc: dict, clean: dict, write_source: st
         _check_body_size(new_body)
         return new_body
 
-    async with _write_lock(doc_id):
-        new_body, size = await _files(doc_files.modify_body, doc_id, transform)
-        updated = await _finish_write(doc_id, content_size=size, write_source=write_source)
+    new_body, size = await _files(doc_files.modify_body, doc_id, transform)
+    updated = await _finish_write(doc_id, content_size=size, write_source=write_source)
     return {
         "appended_lines": _total_lines(clean["content"]),
         "total_lines": _total_lines(new_body),
@@ -1134,45 +1169,44 @@ async def _write_add_image(caller: Caller, doc: dict, clean: dict, write_source:
     data, name_hint = await _load_workspace_image(caller, clean["workspace_path"])
     append = clean["placement"] == "append"
     new_body: Optional[str] = None
-    async with _write_lock(doc_id):
-        if append:
-            # Pre-check with the provisional name so an over-cap body never
-            # leaves a freshly stored asset behind (other service writers
-            # are held off by the lock, so the body cannot grow meanwhile).
-            provisional = (
-                f"{doc_files.sanitize_asset_name(name_hint)}.{_check_image(data)}"
-            )
-            body = await _files(doc_files.read_body, doc_id)
-            _check_body_size(
-                _append_text(body, _image_markdown(clean["alt"], provisional), True)
-            )
-        info = await _files(doc_files.add_asset, doc_id, name_hint, data)
-        markdown = _image_markdown(clean["alt"], info.name)
-        if append:
-
-            def transform(current: str) -> str:
-                appended = _append_text(current, markdown, True)
-                _check_body_size(appended)
-                return appended
-
-            try:
-                new_body, size = await _files(doc_files.modify_body, doc_id, transform)
-            except DocError:
-                # The asset landed (assets are additive); keep the counter
-                # honest, then report the body failure.
-                await _record_asset_only(doc_id, info.asset_count, write_source)
-                raise
-        else:
-            fresh = await doc_store.get_doc(doc_id, with_shares=False)
-            if fresh is None:
-                raise DocError(doc_not_found_message(doc_id))
-            size = fresh["content_size"]
-        updated = await _finish_write(
-            doc_id,
-            content_size=size,
-            asset_count=info.asset_count,
-            write_source=write_source,
+    if append:
+        # Pre-check with the provisional name so an over-cap body never
+        # leaves a freshly stored asset behind (other service writers
+        # are held off by the lock, so the body cannot grow meanwhile).
+        provisional = (
+            f"{doc_files.sanitize_asset_name(name_hint)}.{_check_image(data)}"
         )
+        body = await _files(doc_files.read_body, doc_id)
+        _check_body_size(
+            _append_text(body, _image_markdown(clean["alt"], provisional), True)
+        )
+    info = await _files(doc_files.add_asset, doc_id, name_hint, data)
+    markdown = _image_markdown(clean["alt"], info.name)
+    if append:
+
+        def transform(current: str) -> str:
+            appended = _append_text(current, markdown, True)
+            _check_body_size(appended)
+            return appended
+
+        try:
+            new_body, size = await _files(doc_files.modify_body, doc_id, transform)
+        except DocError:
+            # The asset landed (assets are additive); keep the counter
+            # honest, then report the body failure.
+            await _record_asset_only(doc_id, info.asset_count, write_source)
+            raise
+    else:
+        fresh = await doc_store.get_doc(doc_id, with_shares=False)
+        if fresh is None:
+            raise DocError(doc_not_found_message(doc_id))
+        size = fresh["content_size"]
+    updated = await _finish_write(
+        doc_id,
+        content_size=size,
+        asset_count=info.asset_count,
+        write_source=write_source,
+    )
     result = {
         "asset": info.name,
         "markdown": markdown,
@@ -1230,6 +1264,8 @@ async def apply_write_operation(
     Raises:
         DocDisabled, DocApprovalRequired (unless bypass_approval), DocError.
     """
+    # First pass outside the lock: hidden / missing / denied / unread docs
+    # never take (or create) a per-doc lock.
     doc, access, clean = await _resolve_write(caller, doc_id, operation, params)
     if access.write == "approval" and not bypass_approval:
         # Dry-run first so a stale old_string, a bad image or an over-cap
@@ -1240,7 +1276,23 @@ async def apply_write_operation(
             _suggested_request(operation, doc["id"], clean),
         )
     source = _write_source_or_default(write_source, caller)
-    return await _WRITERS[operation](caller, doc, clean, source)
+
+    async def _locked() -> dict:
+        async with _write_lock(doc["id"]):
+            # Re-resolve under the lock: a share added or a mode flipped
+            # while this write queued must change the verdict (the
+            # approval card / the public-doc denial are decided here).
+            fresh_doc, fresh_access, fresh_clean = await _resolve_write(
+                caller, doc_id, operation, params,
+            )
+            if fresh_access.write == "approval" and not bypass_approval:
+                raise DocApprovalRequired(
+                    APPROVAL_REQUIRED_MESSAGE,
+                    _suggested_request(operation, fresh_doc["id"], fresh_clean),
+                )
+            return await _WRITERS[operation](caller, fresh_doc, fresh_clean, source)
+
+    return await _shielded(_locked())
 
 
 async def preview_write_operation(

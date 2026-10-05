@@ -1338,7 +1338,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "other conversation private ones). target 'user' (default) "
             "creates one of the user's own docs; target 'project' creates a "
             "doc of this conversation's project, visible only from that "
-            "project's conversations. Titles are unique per user (per "
+            "project's conversations. Titles are unique per user and mode (per "
             "project for project docs), case-insensitively. Content is "
             "markdown, max 1 MB; reference images with add_doc_image rather "
             "than external URLs. The new doc counts as read, so edit_doc "

@@ -170,10 +170,18 @@ async def _title_taken(
     db,
     owner_id: int,
     project_id: Optional[str],
+    mode: str,
     title: str,
     exclude_doc_id: Optional[str] = None,
 ) -> bool:
-    """True when another doc in ``(owner_id, project_id)`` uses ``title``.
+    """True when another doc in ``(owner_id, project_id, mode)`` uses ``title``.
+
+    Uniqueness is scoped per MODE on purpose (invariant 2 of the spec):
+    if private and public user docs shared one title namespace, a public
+    conversation could probe ``create_doc(title=...)`` and learn from the
+    collision error whether a private doc of that title exists. Project
+    docs all carry their project's mode, so for them the extra key is a
+    no-op.
 
     Check-then-insert: two simultaneous creates (or renames) with the same
     title can both pass, exactly like the skills store. The UI and the
@@ -185,7 +193,9 @@ async def _title_taken(
     ``"über"`` (or even two identical non-ASCII titles, depending on the
     side that gets folded) slip past the check.
     """
-    stmt = select(Doc.id, Doc.title).where(Doc.owner_id == owner_id)
+    stmt = select(Doc.id, Doc.title).where(
+        Doc.owner_id == owner_id, Doc.mode == mode,
+    )
     if project_id is None:
         stmt = stmt.where(Doc.project_id.is_(None))
     else:
@@ -238,7 +248,7 @@ async def create_doc(
     Args:
         owner_id: Owning user (the project owner for project docs).
         title: 1..200 chars after stripping; unique case-insensitively per
-            ``(owner_id, project_id)``.
+            ``(owner_id, project_id, mode)``.
         description: 0..500 chars after stripping.
         mode: ``"private"`` or ``"public"`` (project docs: the caller passes
             the project's mode).
@@ -261,7 +271,7 @@ async def create_doc(
     _validate_count(content_size, "content_size")
 
     async with AsyncSessionLocal() as db:
-        if await _title_taken(db, owner_id, project_id, clean_title):
+        if await _title_taken(db, owner_id, project_id, mode, clean_title):
             raise DuplicateDocTitleError(
                 f"A doc titled '{clean_title}' already exists"
                 + (" in this project." if project_id else ".")
@@ -290,11 +300,15 @@ async def get_doc(doc_id: str, *, with_shares: bool = True) -> Optional[dict]:
     """Return the doc dict (with ``shares`` unless ``with_shares=False``), or None."""
     async with AsyncSessionLocal() as db:
         doc = await db.get(Doc, doc_id)
+        if not with_shares:
+            return _doc_to_dict(doc) if doc is not None else None
+        # The shares query runs for a missing id too, so a hidden doc and a
+        # nonexistent one cost the same two queries (invariant 2: same
+        # error text, same timing class).
+        shares = await _load_shares(db, [doc_id])
         if doc is None:
             return None
-        if not with_shares:
-            return _doc_to_dict(doc)
-        return await _doc_dict_with_shares(db, doc)
+        return _doc_to_dict(doc, shares.get(doc_id, []))
 
 
 async def list_accessible_docs(
@@ -415,7 +429,8 @@ async def update_doc_metadata(
         changed = False
         if clean_title is not None and clean_title != doc.title:
             if await _title_taken(
-                db, doc.owner_id, doc.project_id, clean_title, exclude_doc_id=doc.id,
+                db, doc.owner_id, doc.project_id, doc.mode, clean_title,
+                exclude_doc_id=doc.id,
             ):
                 raise DuplicateDocTitleError(
                     f"A doc titled '{clean_title}' already exists"
@@ -443,6 +458,10 @@ async def set_doc_mode(doc_id: str, mode: str) -> Optional[dict]:
 
     Returns:
         The doc dict with shares, or None when the doc does not exist.
+
+    Raises:
+        DuplicateDocTitleError: a doc with this title already exists in
+            the target mode (titles are unique per mode, see _title_taken).
     """
     _validate_mode(mode)
     async with AsyncSessionLocal() as db:
@@ -450,6 +469,14 @@ async def set_doc_mode(doc_id: str, mode: str) -> Optional[dict]:
         if doc is None:
             return None
         if doc.mode != mode:
+            if await _title_taken(
+                db, doc.owner_id, doc.project_id, mode, doc.title,
+                exclude_doc_id=doc.id,
+            ):
+                raise DuplicateDocTitleError(
+                    f"A {mode} doc titled '{doc.title}' already exists; "
+                    "rename one of them first."
+                )
             doc.mode = mode
             doc.updated_at = datetime.now(timezone.utc)
             await db.commit()

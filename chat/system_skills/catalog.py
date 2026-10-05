@@ -900,8 +900,8 @@ Writes:
 
 - **create_doc(title, content, description?, target?)** -- a new doc.
   `target`: `user` (default) or `project` (project conversations only).
-  Titles are 1-200 characters and unique per owner (per project for project
-  docs), case-insensitively. The new doc counts as read.
+  Titles are 1-200 characters and unique per owner and mode (per project for
+  project docs), case-insensitively. The new doc counts as read.
 - **edit_doc(doc_id, old_string, new_string, replace_all?)** -- exact string
   replacement (whitespace included); `old_string` must be unique unless
   `replace_all` is true; an empty `new_string` deletes the match.
