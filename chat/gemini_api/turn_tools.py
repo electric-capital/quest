@@ -1126,6 +1126,20 @@ async def _handle_create_action_request(
             await routine_precard_check(
                 req_type, validated_params, ctx.user, ctx.project_id,
             )
+        # Quest Docs write_doc pre-card check: the doc access rule must say
+        # "approval" (a directly writable doc is refused -- call the tool;
+        # hidden / denied / unread docs get the tool's own error), and the
+        # operation is dry-run against the live body, plus preview
+        # enrichment (title, mode, scope, share summary, content_diff,
+        # image preview). Same contract as the skill pre-card check above.
+        if req_type == "write_doc":
+            from chat.action_request_types.doc_precard import (
+                doc_precard_check,
+            )
+            await doc_precard_check(
+                validated_params, ctx.user, ctx.project_id,
+                ctx.conversation_id,
+            )
     except ValueError as e:
         return json.dumps({
             "error": f"Invalid parameters: {e}",
