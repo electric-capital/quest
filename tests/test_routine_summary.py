@@ -62,8 +62,9 @@ class TestRoutineSummaryIncludesAllFields:
         result = _routine_summary(routine)
         expected_keys = {
             "id", "project_id", "user_id", "name", "prompt", "guide_id", "model",
-            # Joined project / owner fields for the public-project routines gate.
-            "project_public", "user_email",
+            # Joined project / owner fields for the public-project routines
+            # gate and the archived-project pause.
+            "project_public", "project_archived", "user_email",
         }
         assert set(result.keys()) == expected_keys
         assert result["id"] == "routine-123"

@@ -827,6 +827,9 @@ export interface Project {
   // Public mode: internet-enabled sandbox, no internal data access.
   // Set at creation time only; immutable afterwards.
   public: boolean;
+  // Soft-hide flag (twin of Conversation.archived): hidden from the default
+  // list, scheduled routines paused, everything kept.
+  archived: boolean;
   created_at: string;
   updated_at: string | null;
   conversation_count: number;

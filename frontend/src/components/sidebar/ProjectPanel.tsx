@@ -7,6 +7,7 @@
  */
 
 import { useMemo, useState } from 'react';
+import { Archive } from 'lucide-react';
 import type { Conversation, Project, Routine } from '../../api/types';
 import { useConversationListActions } from '../../hooks/useConversationListActions';
 import { useFlipListAnimation } from '../../hooks/useFlipListAnimation';
@@ -107,6 +108,15 @@ export function ProjectPanel({
           <span className="drill-down-public-badge" title="Public project — internet access, no internal data">
             <GlobeIcon />
             Public
+          </span>
+        )}
+        {project.archived && (
+          <span
+            className="drill-down-archived-badge"
+            title="Archived project — hidden from the projects list, scheduled routines paused"
+          >
+            <Archive size={12} />
+            Archived
           </span>
         )}
         <button

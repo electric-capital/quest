@@ -49,6 +49,16 @@ Files move before the DB pointer flips so workspace resolution never lands on an
 
 In the frontend, the option appears as "Create Project from Chat" in the top-level conversation entry's dropdown menu in `Sidebar.tsx` (hidden for Slack conversations). It opens `ConvertToProjectModal` (`frontend/src/components/ConvertToProjectModal.tsx`, reusing the `NewProjectModal` styles), which prefills the project name from the conversation title and explains that the workspace files move and the chat becomes the project's first conversation. On success the sidebar refetches projects, drops the conversation from the top-level list, and drills into the new project, auto-selecting the moved conversation.
 
+## Archiving a Project
+
+A project can be archived (`projects.archived`, migration `c9e1f4a7b2d8`) -- the project-level twin of archiving a conversation. Archiving is a soft hide, not a delete:
+
+- **GET `/app/api/projects`** leaves archived projects out unless `include_archived=true`; by-id endpoints keep working, so a drilled-into archived project still resolves and its conversations stay usable.
+- The scheduler **pauses every schedule of the project's routines**: `list_enabled_schedules()` / `list_interrupted_runs()` in `db/schedule_store.py` carry `project_archived` on the routine summary, and `_schedule_paused_reason()` in `chat/scheduler.py` routes archived-project schedules (and gated public-project ones) through the shared `_skip_paused_schedule()` path -- no run, no ledger row, an anchored `next_due_at` moved past the skipped occurrence, interrupted runs not retried. Unarchiving resumes at the next regular occurrence (see [Scheduling Architecture](scheduling.md)).
+- Rows, workspace, conversations, skills and routines are all kept; `set_project_archived()` in `db/project_store.py` leaves `updated_at` alone so unarchiving restores the old list position. The default of `list_projects()` includes archived projects so account deletion still collects every workspace directory.
+
+The flag is flipped via **PUT `/app/api/projects/{project_id}/archive`** and **`/unarchive`** (see [Projects API](../api/projects-api.md)). In the UI the controls live in the Project Settings modal's Danger Zone (an Archive / Unarchive block above Delete), the sidebar Projects header has an options menu with "Show Archived" (reusing `ConversationFilterMenu`), archived rows render dimmed, and the drill-down header shows an "Archived" chip.
+
 ## Storage Layout
 
 ```
@@ -121,7 +131,7 @@ The `delete_account()` handler in `chat/routes/user.py` cleans up projects, rout
 The frontend provides UI components for project management:
 
 - `NewProjectModal` (`frontend/src/components/NewProjectModal.tsx`) -- Modal for creating a new project (name input)
-- `ProjectSettingsModal` (`frontend/src/components/ProjectSettingsModal.tsx`) -- Modal for editing project settings with sidebar navigation containing three sections: General (project name, project instructions -- the `guide` field's UI label), Skills, and Danger Zone (delete project). The modal is widened with a row layout to accommodate the sidebar.
+- `ProjectSettingsModal` (`frontend/src/components/ProjectSettingsModal.tsx`) -- Modal for editing project settings with sidebar navigation containing three sections: General (project name, project instructions -- the `guide` field's UI label), Skills, and Danger Zone (an Archive / Unarchive Project block -- one click, reversible, neutral styling -- above the two-step Delete Project). The modal is widened with a row layout to accommodate the sidebar.
 
   On mobile (keyed on the `useIsMobile` hook, mirroring `SettingsModal`) it renders as a full-screen two-tier takeover: the first screen is the section list, tapping a section slides its content over the list, and a header back button (or Escape) returns to the list; mobile styling is scoped by a `project-settings-modal-mobile` class.
 
@@ -130,7 +140,7 @@ The frontend provides UI components for project management:
 
 **Sidebar Project Navigation** (in `frontend/src/components/Sidebar.tsx`):
 
-The Projects section is always visible in the sidebar. When no projects exist, a dotted-border "Create Project" button is shown. When projects exist, a "+" button appears in the Projects section header for creating new projects. Each project entry displays a folder icon and a right-pointing navigation chevron. The Requests and Search nav items are positioned above the sliding panels container (`.sidebar-panels`) inside `.sidebar-content`, so they remain visible when the user drills into a project.
+The Projects section (`components/sidebar/ProjectsSection.tsx`) is always visible in the sidebar. When no projects exist, a dotted-border "Create Project" button is shown. When projects exist, a "+" button appears in the Projects section header for creating new projects, next to an options (vertical-dots) menu -- the same `ConversationFilterMenu` the conversation sections use -- with a "Show Archived" checkbox. `ProjectsContext` always fetches the full list (`fetchProjects({ includeArchived: true })`) so by-id lookups (the drilled project, `HomeComposer`, `MobileShell`) resolve archived projects too; the section filters archived rows client-side behind the toggle (state in `Sidebar.tsx`, reset on page load like the conversation filters) and renders them dimmed via the `archived` class. Each project entry displays a folder icon and a right-pointing navigation chevron. The Requests and Search nav items are positioned above the sliding panels container (`.sidebar-panels`) inside `.sidebar-content`, so they remain visible when the user drills into a project.
 
 Clicking a project triggers a slide-left animation that reveals the project's conversations as a drill-down view. The drill-down saves the currently selected top-level conversation ID to a ref (`previousTopLevelConversationId`) before entering the project. `handleProjectDrillDown` is async: it calls `loadProjectConversations()` (which returns `Promise<Conversation[]>`) and then auto-selects the latest conversation in the project. If the project has no conversations, the main panel shows an empty state. When `activeProjectId` is set from URL params (e.g., navigating to `/projects/<pid>/<id>`), a `useEffect` auto-drills into the corresponding project.
 

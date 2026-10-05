@@ -10,6 +10,10 @@ import type { Project } from '../api/types';
 import { useAuth } from './AuthContext';
 
 export interface ProjectsContextValue {
+  // EVERY project incl. archived ones: by-id lookups (the drilled project,
+  // the home composer, the phone top bar) must resolve an archived project
+  // too. The Projects section hides archived rows client-side behind its
+  // "Show Archived" toggle.
   projects: Project[];
   projectsLoaded: boolean;
   loadProjects: () => Promise<void>;
@@ -36,7 +40,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
 
   const loadProjects = useCallback(async () => {
     try {
-      const response = await fetchProjects();
+      const response = await fetchProjects({ includeArchived: true });
       setProjects(response.projects);
       setProjectsLoaded(true);
     } catch (err) {

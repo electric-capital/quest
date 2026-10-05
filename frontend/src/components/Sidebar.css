@@ -808,7 +808,8 @@
   opacity: 0.65;
 }
 
-.drill-down-public-badge {
+.drill-down-public-badge,
+.drill-down-archived-badge {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
@@ -819,4 +820,10 @@
   border-radius: 999px;
   border: 1px solid currentColor;
   opacity: 0.7;
+}
+
+/* Archived project (dimmed like an archived conversation row) */
+.project-header.archived .project-name {
+  opacity: 0.5;
+  font-style: italic;
 }

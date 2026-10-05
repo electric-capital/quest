@@ -46,7 +46,7 @@ Each poll cycle in `_poll_and_execute()`:
 1. Clears stale `is_running` flags older than `STALE_THRESHOLD_HOURS` (2 hours) via `clear_stale_running_flags()` (guards a run stuck inside a live process; restarts clear every flag at boot)
 2. Retries eligible interrupted runs (`_retry_interrupted_runs()`)
 3. Queries `list_enabled_schedules()` to get all enabled schedules with their routine data
-4. Checks each schedule: `_check_anchored()` for daily / weekly / hourly, `_check_interval()` for every_n_minutes. A schedule whose routine lives in a public project is passed over instead while the `public_project_routines` [feature gate](feature-gates.md) is closed for the routine's owner (`_public_routine_gated()` / `_skip_gated_schedule()`: no run, no ledger row, an anchored `next_due_at` moves to the next occurrence so nothing is caught up when the gate reopens)
+4. Checks each schedule: `_check_anchored()` for daily / weekly / hourly, `_check_interval()` for every_n_minutes. A schedule whose routine is paused is passed over instead -- a routine in a public project while the `public_project_routines` [feature gate](feature-gates.md) is closed for its owner (`_public_routine_gated()`), or any routine in an archived project (`project_archived` on the routine summary, see [Projects](projects.md)); both share `_schedule_paused_reason()` / `_skip_paused_schedule()`: no run, no ledger row, an anchored `next_due_at` moves to the next occurrence so nothing is caught up when the pause lifts, and interrupted runs are not retried meanwhile
 5. A due occurrence is first **claimed** (`claim_occurrence()` in `db/schedule_store.py`: one transaction inserts the `running` ledger row, sets `is_running` + `last_run_started_at`, and advances `next_due_at`), then `_execute_scheduled_run()` is spawned as an independent asyncio task (tracked in `_active_execution_tasks` so it can be cancelled during shutdown)
 
 ### Due-Checking Logic
@@ -204,6 +204,7 @@ Daily, weekly and hourly schedules have natural non-overlap (they fire at most o
 - Schedule checking granularity is approximately 30 seconds (configurable via `POLL_INTERVAL_SECONDS`)
 - The skip-if-running mechanism applies only to `every_n_minutes` schedules
 - Routines in public projects run on a schedule only while the `public_project_routines` feature gate is open for their owner
+- Routines in an archived project do not run on a schedule until the project is unarchived; the pause uses the same skip path as the public-project gate
 - Daily and weekly schedules require a valid IANA timezone string from the frontend; weekly schedules require at least one weekday
 - Catch-up grace: hourly 45 minutes, daily 6 hours, weekly 24 hours (`CATCH_UP_GRACE` in `db/schedule_timing.py`); an interrupted anchored run is started at most twice (`MAX_RUN_ATTEMPTS`)
 - Editing a schedule's timing or re-enabling it recomputes `next_due_at` from now (paused-time occurrences are not caught up) and cancels the retry of an interrupted run

@@ -513,6 +513,14 @@ class Project(Base):
         sa.Boolean, nullable=False, default=False, server_default=sa.false()
     )
 
+    # Soft-hide flag (the project-level twin of ``conversations.archived``):
+    # an archived project is dropped from the default project list and its
+    # scheduled routines are passed over, but rows, workspace and
+    # conversations are all kept. Unarchiving restores it exactly.
+    archived: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)

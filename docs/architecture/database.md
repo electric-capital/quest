@@ -138,6 +138,7 @@ The `Project` model in `db/models.py` maps to the `projects` table. Projects gro
 | `name` | `String(255)` | Not null | Project display name (max 100 chars enforced at application layer in `db/project_store.py`) |
 | `guide` | `Text` | Not null, default `""` | Project-specific custom instructions (max 16KB enforced at application layer in `db/project_store.py`) |
 | `public` | `Boolean` | Not null, server default `false` | Public mode: internet-enabled sandbox, no internal data access. Set at creation only; immutable afterwards (`update_project()` never reads it). See [Public Projects Architecture](public-projects.md) |
+| `archived` | `Boolean` | Not null, server default `false` | Soft-hide flag, the twin of `conversations.archived`: dropped from the default project list, scheduled routines paused, everything kept. Flipped by `set_project_archived()`; migration `c9e1f4a7b2d8`. See [Projects Architecture](projects.md#archiving-a-project) |
 | `created_at` | `DateTime` | Default `utcnow` | Creation timestamp |
 | `updated_at` | `DateTime` | Nullable, default `None` | Last modification timestamp (set on name or guide update) |
 
