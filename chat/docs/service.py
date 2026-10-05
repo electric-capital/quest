@@ -77,10 +77,12 @@ __all__ = [
     "DocApprovalRequired",
     "DocDisabled",
     "DocError",
+    "DocRequestError",
     "add_doc_image",
     "append_to_doc",
     "apply_write_operation",
     "create_doc",
+    "create_doc_from_ui",
     "edit_doc",
     "get_visible_doc",
     "list_docs",
@@ -88,6 +90,7 @@ __all__ = [
     "read_doc",
     "require_enabled",
     "search_docs",
+    "validate_doc_metadata",
 ]
 
 DOC_SCOPES = ("user", "project", "all")
@@ -140,6 +143,21 @@ class DocApprovalRequired(DocError):
 
 class DocDisabled(DocError):
     """The ``docs`` feature gate is closed for the user."""
+
+
+class DocRequestError(DocError):
+    """A UI request (chat/docs/routes.py) was refused.
+
+    ``code`` is the stable machine-readable error code the HTTP routes
+    return: ``invalid_title``, ``invalid_description``, ``invalid_mode``,
+    ``project_not_found``, ``project_doc_mode_inherited``,
+    ``duplicate_title`` or ``invalid_request``. ``str(e)`` is the
+    user-facing message.
+    """
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -716,6 +734,135 @@ async def create_doc(
         "content_size": doc["content_size"],
         "updated_at": doc["updated_at"],
     }
+
+
+# ---------------------------------------------------------------------------
+# UI (HTTP routes): metadata validation + creating an empty doc
+# ---------------------------------------------------------------------------
+
+
+def validate_doc_metadata(
+    title: Optional[str] = None, description: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """Validate UI-supplied doc metadata field by field.
+
+    Applies the store's own rules (db/doc_store.py) one field at a time so
+    the caller learns WHICH field is bad. None means "not supplied" and is
+    passed through.
+
+    Returns:
+        ``(clean_title, clean_description)`` (stripped; None when not supplied).
+
+    Raises:
+        DocRequestError: ``invalid_title`` / ``invalid_description``.
+    """
+    clean_title = clean_description = None
+    if title is not None:
+        try:
+            clean_title = doc_store._validate_title(title)
+        except doc_store.DocValidationError as exc:
+            raise DocRequestError("invalid_title", str(exc)) from None
+    if description is not None:
+        try:
+            clean_description = doc_store._validate_description(description)
+        except doc_store.DocValidationError as exc:
+            raise DocRequestError("invalid_description", str(exc)) from None
+    return clean_title, clean_description
+
+
+async def create_doc_from_ui(
+    user: dict,
+    title: str,
+    description: Optional[str] = "",
+    mode: Optional[str] = None,
+    project_id: Optional[str] = None,
+) -> dict:
+    """Create an EMPTY doc from the UI (``POST /app/api/docs``), owned by ``user``.
+
+    :func:`create_doc` serves conversations only (it derives the mode from
+    the conversation); a UI create has no conversation, so the mode comes
+    from the request: a user doc takes ``mode`` (default ``"private"``), a
+    project doc always takes its project's mode (``projects.public``) and a
+    supplied ``mode`` that disagrees is refused. The project must be owned
+    by ``user`` (project docs are owned by the project owner). Content is
+    empty, so creating a public doc here cannot move internal data across
+    the taint boundary.
+
+    Same order and cleanup as :func:`create_doc`: lay out the directory
+    under a fresh id, insert the row with ``last_write_source="ui"``,
+    remove the directory again if the insert fails. Publishes
+    doc_list_changed + doc_changed. Records no read (no conversation).
+
+    Returns:
+        The store's doc dict (with ``shares: []``).
+
+    Raises:
+        DocDisabled: gate closed.
+        DocRequestError: ``invalid_title`` / ``invalid_description`` /
+            ``invalid_mode`` / ``project_not_found`` /
+            ``project_doc_mode_inherited`` / ``duplicate_title`` /
+            ``invalid_request``.
+        DocError: a storage failure laying out the directory.
+    """
+    require_enabled(
+        Caller(user=user, conversation_id=None, project_id=None,
+               is_public=False, run_kind="ui")
+    )
+    clean_title, clean_description = validate_doc_metadata(
+        title if title is not None else "", description or "",
+    )
+    if mode is not None and mode not in constants.DOC_MODES:
+        raise DocRequestError(
+            "invalid_mode",
+            f"mode must be one of: {', '.join(constants.DOC_MODES)}.",
+        )
+
+    user_id = user["id"]
+    if project_id is not None:
+        from db import project_store
+
+        project = await project_store.get_project(user_id, project_id)
+        if project is None:
+            raise DocRequestError("project_not_found", "Project not found.")
+        project_mode = "public" if project.get("public") else "private"
+        if mode is not None and mode != project_mode:
+            raise DocRequestError(
+                "project_doc_mode_inherited",
+                f"Project docs take their project's mode ({project_mode}); "
+                "it cannot be chosen separately.",
+            )
+        mode = project_mode
+    elif mode is None:
+        mode = "private"
+
+    doc_id = str(uuid.uuid4())
+    try:
+        size = await _files(doc_files.init_doc, doc_id, "")
+        doc = await doc_store.create_doc(
+            user_id,
+            clean_title,
+            clean_description,
+            mode=mode,
+            project_id=project_id,
+            content_size=size,
+            last_write_source="ui",
+            doc_id=doc_id,
+        )
+    except BaseException as exc:
+        try:
+            await asyncio.to_thread(doc_files.delete_doc_dir, doc_id)
+        except Exception:
+            logger.warning("[docs] cleanup of %s failed", doc_id, exc_info=True)
+        if isinstance(exc, doc_store.DuplicateDocTitleError):
+            raise DocRequestError("duplicate_title", str(exc)) from None
+        if isinstance(exc, doc_store.DocValidationError):
+            raise DocRequestError("invalid_request", str(exc)) from None
+        raise
+
+    events = _events()
+    events.publish_doc_list_changed(doc["owner_id"])
+    events.publish_doc_changed(doc["owner_id"], doc["id"], doc["updated_at"])
+    return doc
 
 
 # ---------------------------------------------------------------------------

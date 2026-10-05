@@ -468,6 +468,7 @@ from chat.skill_routes import router as skill_router
 from chat.project_skill_routes import router as project_skill_router
 from chat.project_db_routes import router as project_db_router
 from chat.wait_handle_routes import router as wait_handle_router
+from chat.docs.routes import router as docs_router
 from chat.realtime import realtime_router
 
 app.include_router(chat_router)
@@ -482,6 +483,7 @@ app.include_router(skill_router)
 app.include_router(project_skill_router)
 app.include_router(project_db_router)
 app.include_router(wait_handle_router)
+app.include_router(docs_router)
 app.include_router(realtime_router)
 
 # Discover and register filesystem plugins (plugins/*/plugin.py) AFTER the
