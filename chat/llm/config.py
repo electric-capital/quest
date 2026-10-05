@@ -18,6 +18,7 @@ resolve too.
 
 import logging
 from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,14 @@ logger = logging.getLogger(__name__)
 # conversations, routines, and stored defaults keep working) but is excluded
 # from get_available_models() so it disappears from the new-conversation
 # picker. The FE mirrors the flag in frontend/src/constants/models.ts.
+#
+# ``discontinued_on`` ("YYYY-MM-DD") is the shutdown date from the
+# provider's deprecation notice. From that date on (UTC) the model counts as
+# ``deprecated`` -- see :func:`is_discontinued` -- so it drops out of every
+# picker, the admin tables and the health sweep on the day with no code
+# change. Until then it stays selectable and the admin Inference Providers
+# card shows the upcoming date. Unlike a hand-set ``deprecated`` flag, runs
+# on the model fail at the provider after the date: it no longer exists.
 #
 # ``thinking_effort`` (Anthropic only) turns on adaptive thinking for the
 # model and sets the ``output_config.effort`` level sent with every request
@@ -104,6 +113,7 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "vertex_model_id": "gemini-3.6-flash",
         "max_input_tokens": 1_000_000,
         "max_output_tokens": 65_000,
+        "discontinued_on": "2026-11-19",
     },
     "gemini-3.7-flash": {
         "provider": "gemini",
@@ -112,6 +122,7 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "vertex_model_id": "gemini-3.7-flash",
         "max_input_tokens": 1_000_000,
         "max_output_tokens": 65_000,
+        "discontinued_on": "2027-01-28",
     },
     # Released 2026-09-02 (1,048,576-token input window, 65,536 output,
     # thinking low/medium/high -- ``minimal`` is rejected). Limits kept in
@@ -242,6 +253,19 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
 }
 
 
+def _today_utc() -> date:
+    """Today's UTC date (a seam so tests can move the clock)."""
+    return datetime.now(timezone.utc).date()
+
+
+def is_discontinued(entry: dict[str, Any], today: date | None = None) -> bool:
+    """Whether a registry entry's ``discontinued_on`` date has arrived."""
+    discontinued_on = entry.get("discontinued_on")
+    if not discontinued_on:
+        return False
+    return (today or _today_utc()) >= date.fromisoformat(discontinued_on)
+
+
 # ---------------------------------------------------------------------------
 # Model resolution
 # ---------------------------------------------------------------------------
@@ -275,6 +299,7 @@ class ModelSpec:
     max_output_tokens: int
     instance_id: str | None = None
     deprecated: bool = False
+    discontinued_on: str | None = None
     enabled: bool = True
     listed: bool = True
     vertex_region: str | None = None
@@ -300,7 +325,8 @@ def _vertex_spec(model_id: str, entry: dict, disabled: set[str]) -> ModelSpec:
         provider_label=VERTEX_FAMILIES[provider]["label"],
         max_input_tokens=entry.get("max_input_tokens", 0),
         max_output_tokens=entry.get("max_output_tokens", 8192),
-        deprecated=bool(entry.get("deprecated")),
+        deprecated=bool(entry.get("deprecated")) or is_discontinued(entry),
+        discontinued_on=entry.get("discontinued_on"),
         enabled=model_id not in disabled,
         vertex_region=entry.get("vertex_region"),
         thinking_effort=entry.get("thinking_effort"),
@@ -457,7 +483,8 @@ def get_configured_models() -> list[str]:
 
     Deprecated Vertex models are excluded regardless: they are still
     runnable (existing conversations/routines keep working) but must not
-    be offered for new selection.
+    be offered for new selection. That includes models whose
+    ``discontinued_on`` date has passed (no longer runnable at all).
 
     This is the universe the health sweeps check (``run_startup_checks``);
     the picker goes through :func:`get_available_models`, which additionally

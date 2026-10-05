@@ -92,6 +92,15 @@ type ModelCheckState =
 
 const IDLE_CHECK: ModelCheckState = { status: 'idle' };
 
+/** A registry "YYYY-MM-DD" date as a local calendar date ("Nov 19, 2026"). */
+function formatCalendarDate(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+  });
+}
+
 /** The stored server verdict for a model, as row state. */
 function storedState(model: InferenceModelInfo): ModelCheckState {
   if (!model.status) return IDLE_CHECK;
@@ -334,6 +343,14 @@ function ModelRow({
       </div>
       {showLiveness && state.status === 'error' && (
         <p className="inf-prov-model-error">{state.error}</p>
+      )}
+      {model.discontinued_on && (
+        <p
+          className="inf-prov-model-retire-note"
+          title="Announced provider shutdown date. From that date the model is removed from every model picker and no longer health-checked."
+        >
+          Discontinued on {formatCalendarDate(model.discontinued_on)} &mdash; then hidden from pickers
+        </p>
       )}
       {onEdit && (
         <ModelEditFields
