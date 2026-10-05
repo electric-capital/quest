@@ -1143,6 +1143,9 @@ def _model_view(spec, statuses: dict) -> dict:
     API -- the UI shows ``wire_id`` as the primary label. ``status`` is the
     latest model-health verdict from the store (populated by the startup
     sweep and admin rechecks), or None when the model was never checked.
+    ``discontinued_on`` is the provider's announced shutdown date (registry
+    metadata, Vertex only); past that date the model is deprecated and
+    no longer listed here at all.
     """
     return {
         "id": spec.id,
@@ -1151,6 +1154,7 @@ def _model_view(spec, statuses: dict) -> dict:
         "family": spec.family,
         "enabled": spec.enabled,
         "max_input_tokens": spec.max_input_tokens,
+        "discontinued_on": spec.discontinued_on,
         "status": statuses.get(spec.id),
     }
 

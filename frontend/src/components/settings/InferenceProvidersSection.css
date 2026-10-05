@@ -463,6 +463,13 @@
   white-space: pre-wrap;
 }
 
+/* Upcoming provider shutdown (registry discontinued_on) */
+.inf-prov-model-retire-note {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin: 0.125rem 0 0.25rem 1.375rem;
+}
+
 /* Light mode: only the literal semantic status colours need a darker,
    higher-contrast variant on light grounds. Everything else follows the
    tokens. */

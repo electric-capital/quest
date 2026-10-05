@@ -445,12 +445,12 @@ def test_provider_instances_keyed_by_instance(store, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def _vertex_ids(provider=None, include_deprecated=False):
-    from chat.llm.config import MODEL_REGISTRY
+    from chat.llm.config import MODEL_REGISTRY, is_discontinued
 
     return [
         m for m, e in MODEL_REGISTRY.items()
         if (provider is None or e["provider"] == provider)
-        and (include_deprecated or not e.get("deprecated"))
+        and (include_deprecated or not (e.get("deprecated") or is_discontinued(e)))
     ]
 
 
@@ -735,6 +735,30 @@ def test_admin_list_shape(admin_routes, health_store):
     assert [m["id"] for m in inst["models"]] == [f"openrouter:{DEEPSEEK}", f"openrouter:{QWEN}"]
     assert inst["models"][0]["wire_id"] == DEEPSEEK
     assert inst["models"][0]["family"] is None
+
+
+def test_admin_list_reports_discontinuation_date(admin_routes, health_store, monkeypatch):
+    """A Vertex row carries the registry's discontinued_on date until the
+    date arrives; from then on the model is deprecated and not listed."""
+    from datetime import date
+
+    import chat.llm.config as llm_config
+
+    monkeypatch.setattr(llm_config, "_today_utc", lambda: date(2026, 11, 18))
+    rows = {
+        m["id"]: m
+        for m in _run(admin_routes.admin_list_inference_providers(user=ADMIN_USER))["vertex"]["models"]
+    }
+    assert rows["gemini-3.6-flash"]["discontinued_on"] == "2026-11-19"
+    assert rows["gemini-3.8-flash"]["discontinued_on"] is None
+
+    monkeypatch.setattr(llm_config, "_today_utc", lambda: date(2026, 11, 19))
+    rows = {
+        m["id"]: m
+        for m in _run(admin_routes.admin_list_inference_providers(user=ADMIN_USER))["vertex"]["models"]
+    }
+    assert "gemini-3.6-flash" not in rows
+    assert rows["gemini-3.7-flash"]["discontinued_on"] == "2027-01-28"
 
 
 def test_admin_put_vertex_disabled_models(admin_routes, scheduled):

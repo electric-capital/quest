@@ -12,7 +12,9 @@ export interface ModelInfo {
    * keep resolving display names, providers, and context sizes, but they are
    * excluded from getSelectableModels() (and from the server's
    * available_models) so they cannot be picked for new work. Mirrors the
-   * `deprecated` flag in MODEL_REGISTRY (chat/llm/config.py).
+   * `deprecated` flag in MODEL_REGISTRY (chat/llm/config.py); the server
+   * also reports a model deprecated once its `discontinued_on` date has
+   * passed, so BUILTIN_MODELS below only carries the hand-set flags.
    */
   deprecated?: boolean;
   /**

@@ -1319,6 +1319,9 @@ export interface InferenceModelInfo {
   // Context window (tokens) the app assumes for the model; for Ollama
   // models this is also the num_ctx requested per call
   max_input_tokens: number;
+  // Provider-announced shutdown date ("YYYY-MM-DD", Vertex models only);
+  // the server stops listing the model on that date
+  discontinued_on: string | null;
   // null when the model has never been health-checked
   status: InferenceModelStatus | null;
 }

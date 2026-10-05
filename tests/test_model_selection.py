@@ -305,14 +305,14 @@ def test_admin_endpoints_require_admin(admin_routes):
 
 
 def test_admin_get_rows_and_availability(admin_routes, health_store):
-    from chat.llm.config import MODEL_REGISTRY
+    from chat.llm.config import resolve_model
 
     # Gemini-only Vertex project (the anthropic->gemini project fallback runs
     # the other way, so Claude stays unconfigured here)
     scfg.SERVER_CONFIG_FILE.write_text(json.dumps({"gemini_vertex": {"vertex_project_id": "p"}}))
     ip.set_vertex_disabled_models(["claude-opus-4-6"])
     ip.write_inference_credentials("openrouter", {"api_key": "sk"})
-    _run(health_store.record("gemini-3.7-flash", False, "boom"))
+    _run(health_store.record("gemini-3.5-flash-lite", False, "boom"))
 
     result = _run(admin_routes.admin_get_model_selection(user=ADMIN_USER))
     assert result["max_slots"] == ms.MAX_TOP_LEVEL_SLOTS
@@ -320,7 +320,7 @@ def test_admin_get_rows_and_availability(admin_routes, health_store):
     assert result["public_mode_enabled"] is False
     rows = {m["id"]: m for m in result["models"]}
     # Deprecated and admin-disabled models are not curatable rows
-    assert not any(MODEL_REGISTRY[m].get("deprecated") for m in rows if m in MODEL_REGISTRY)
+    assert not any(resolve_model(m).deprecated for m in rows)
     assert "claude-opus-4-6" not in rows
     # Instance models are rows too (the legacy openrouter instance is synthesized)
     assert f"openrouter:{DEEPSEEK}" in rows
@@ -332,8 +332,8 @@ def test_admin_get_rows_and_availability(admin_routes, health_store):
     assert rows["gemini-3.8-flash"]["unavailable_reason"] is None
     assert rows["claude-opus-4-8"]["available"] is False
     assert rows["claude-opus-4-8"]["unavailable_reason"] == "not_configured"
-    assert rows["gemini-3.7-flash"]["available"] is False
-    assert rows["gemini-3.7-flash"]["unavailable_reason"] == "failing"
+    assert rows["gemini-3.5-flash-lite"]["available"] is False
+    assert rows["gemini-3.5-flash-lite"]["unavailable_reason"] == "failing"
     # Selection fields come from the (default) store, unmasked even with
     # public mode off (the UI just hides the columns)
     assert rows["claude-opus-4-8"]["slot"] == 1
