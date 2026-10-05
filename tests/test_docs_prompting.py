@@ -437,3 +437,15 @@ class TestDeleteAccountSweep:
         assert (docs_dir / ids["alice_user_doc"]).exists()
         assert not (docs_dir / ids["alice_project_doc"]).exists()
         assert (docs_dir / ids["bob_doc"]).exists()
+
+
+def test_loading_quest_docs_skill_with_gate_closed_names_the_feature_gate():
+    """A closed docs gate is a feature gate, not a missing connector."""
+    from chat.docs.constants import docs_disabled_message
+    from chat.system_skills import load_system_skills
+
+    [result] = load_system_skills(
+        ["system:quest_docs"], {"docs": False}, "http://x", "key",
+    )
+    assert result["error"] == docs_disabled_message()
+    assert "Data Connections" not in result["error"]
