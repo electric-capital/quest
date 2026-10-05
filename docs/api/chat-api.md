@@ -353,7 +353,8 @@ Defined in the model loop in `chat/gemini_api/conversation.py`, the realtime pub
   - **`conversation_list_changed`** (`conversation_id`, `action: "created" | "archived" | "unarchived" | "renamed" | "model_changed"`),
   - **`file_list_changed`** (`conversation_id`, `project_id`, `scope: "project" | "conversation"`; emitted from each workspace-mutating tool handler and REST route on success so file browsers can silent-refresh mid-turn; project-scoped writes fan out across sibling-conversation tabs),
   - **`wait_handle_resolved`** (`conversation_id`, `handle_id`, `kind`, `status`, optional `request_id`, optional `response`),
-  - **`routine_list_changed`** (`project_id`; emitted when a `create_routine`/`edit_routine` action request executes so the sidebar refreshes its cached per-project routine list).
+  - **`routine_list_changed`** (`project_id`; emitted when a `create_routine`/`edit_routine` action request executes so the sidebar refreshes its cached per-project routine list),
+  - **`doc_list_changed`** (no payload) and **`doc_changed`** (`doc_id`, `updated_at`): Quest Docs list/viewer refresh signals sent to the doc's owner; see [Quest Docs API](quest-docs-api.md#realtime-events).
 - Liveness / errors: **`ping`** / **`pong`**, **`error`** (carries `code` and `error`/`message`; codes include 4400 invalid op, 4401 auth, 4404 not found, 4503 queue overflow, 4500 internal).
 
 The durable-event set persisted to `chat_history.json` is `FLUSH_EVENT_TYPES` in `chat/_flush_helper.py` (`tool_use`, `tool_result`, `action_request`, `stats`); these events advance `seq` and trigger `message_appended`. Streaming text is bundled into a synthetic `text` message at the next flush boundary by both the backend (the model loop) and the frontend (`WebSocketManager`'s text-delta buffer).
