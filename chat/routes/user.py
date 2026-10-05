@@ -676,21 +676,9 @@ async def delete_account(
     # Delete user record from database (cascades to remaining conversations rows)
     await delete_user(email)
 
-    # Delete each conversation's filesystem directory individually
-    for conv in conversations_meta:
-        conv_dir = ChatStorage.get_conversation_dir(conv["id"])
-        if conv_dir.exists():
-            shutil.rmtree(conv_dir)
-
-    # Delete each project's filesystem directory (workspace)
-    for proj in user_projects:
-        proj_dir = ChatStorage.get_project_dir(proj["id"])
-        if proj_dir.exists():
-            shutil.rmtree(proj_dir)
-
     # Delete each doc's directory (doc.md, assets/, revisions/). Best-effort
-    # per id: the rows are already gone, so one bad directory must not stop
-    # the sweep or fail the account delete.
+    # per id and never raises, so it runs BEFORE the unguarded rmtree loops
+    # below (a failure there must not leave doc files behind).
     if doc_ids:
         import asyncio
         from chat.docs import files as doc_files
@@ -706,6 +694,18 @@ async def delete_account(
                     )
 
         await asyncio.to_thread(_sweep_doc_dirs)
+
+    # Delete each conversation's filesystem directory individually
+    for conv in conversations_meta:
+        conv_dir = ChatStorage.get_conversation_dir(conv["id"])
+        if conv_dir.exists():
+            shutil.rmtree(conv_dir)
+
+    # Delete each project's filesystem directory (workspace)
+    for proj in user_projects:
+        proj_dir = ChatStorage.get_project_dir(proj["id"])
+        if proj_dir.exists():
+            shutil.rmtree(proj_dir)
 
     # Invalidate cached chat sessions
     from chat.gemini_api import invalidate_user_sessions

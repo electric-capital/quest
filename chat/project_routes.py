@@ -389,6 +389,14 @@ async def delete_user_project(
             detail={"error": "not_found", "message": "Project not found"},
         )
 
+    # Delete filesystem: each project doc's directory (best-effort, never
+    # raises) -- first, so a failure in the rmtree loops below cannot skip it
+    if doc_ids:
+        await asyncio.to_thread(_delete_doc_dirs, doc_ids)
+        from chat.docs import events as doc_events
+
+        doc_events.publish_doc_list_changed(user_id)
+
     # Delete filesystem: project workspace
     ChatStorage.delete_project_workspace(project_id)
 
@@ -397,13 +405,6 @@ async def delete_user_project(
         conv_dir = ChatStorage.get_conversation_dir(conv["id"])
         if conv_dir.exists():
             shutil.rmtree(conv_dir)
-
-    # Delete filesystem: each project doc's directory (best-effort)
-    if doc_ids:
-        await asyncio.to_thread(_delete_doc_dirs, doc_ids)
-        from chat.docs import events as doc_events
-
-        doc_events.publish_doc_list_changed(user_id)
 
     return {"success": True}
 

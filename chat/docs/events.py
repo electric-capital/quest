@@ -5,10 +5,13 @@ chat/realtime/events.py: ``doc_list_changed`` (list views re-fetch) and
 ``doc_changed`` (an open viewer of that doc re-fetches). Both go to the
 doc's owner; share-recipient fan-out arrives with the sharing UI.
 
-Only chat/docs/service.py (and the doc routes' metadata paths through it)
-should call these -- never tools or routes directly -- so every write path
-emits exactly once. Publishing is best-effort: a failure is logged at debug
-and never undoes the write.
+chat/docs/service.py publishes for every body/asset write and for the UI
+mutations it owns (create, mode switch, delete); the doc routes publish
+for the metadata-only rename, and the project-delete route once after its
+directory sweep. Tools never publish. Publishing is best-effort: a failure
+is logged at debug and never undoes the write. Event-loop thread only
+(``bus.publish_to_user`` is not thread-safe) -- never call from
+``asyncio.to_thread`` blocks.
 """
 
 import logging

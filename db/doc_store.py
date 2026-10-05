@@ -45,7 +45,7 @@ class DocValidationError(ValueError):
 class DuplicateDocTitleError(ValueError):
     """Another doc of the same owner and scope already uses this title.
 
-    Titles are unique case-insensitively per ``(owner_id, project_id)``,
+    Titles are unique case-insensitively per ``(owner_id, project_id, mode)``,
     where a NULL ``project_id`` (user doc) is its own scope.
     """
 

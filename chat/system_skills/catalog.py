@@ -887,7 +887,8 @@ Reads:
   newest updated first. `scope`: `user` | `project` | `all` (default);
   `limit` 1-200 (default 50). Each row: `id`, `title`, `description`,
   `mode`, `scope`, `project_id`, `content_size`, `asset_count`,
-  `updated_at`, `writable`, `write_note`.
+  `updated_at`, `shared` (true when the doc has share recipients),
+  `writable`, `write_note`.
 - **search_docs(query, scope?, limit?)** -- case-insensitive substring match
   over title, description and body; `limit` 1-50 (default 20). Returns
   `{{results: [{{id, title, mode, scope, matches: [{{line, snippet}}]}}],
@@ -917,10 +918,11 @@ mode of a doc: the user does that in the UI. The body is capped at
 
 ### Modes and who may write
 
-Every doc is `private` or `public`, fixed by the conversation that creates
-it: private conversations (standalone chats, private projects, routines,
-Slack) create private docs; public-project conversations create public docs.
-Project docs take their project's mode.
+Every doc is `private` or `public`. A conversation creates docs in its own
+mode: private conversations (standalone chats, private projects and their
+routines, Slack) create private docs; public-project conversations (and
+their routines) create public docs. Project docs take their project's mode
+for good; the user can switch a user doc's mode in the UI.
 
 `list_docs` and `read_doc` report the verdict for each doc in `writable`:
 `free` (the write tools work directly), `approval` (a shared private doc:
@@ -981,11 +983,13 @@ returned rather than rebuilding it):
 {{"operation": "add_image", "doc_id": "<id>", "workspace_path": "chart.png", "alt": "Q3 revenue", "placement": "append"}}
 ```
 
-The card shows the user the doc, who it is shared with, and a line diff
-(or the image). Like every action request the call blocks until the user
-resolves it and returns the verdict (shapes in `system:action_requests`).
-At Approve the change is re-applied to the doc as it is then: if the text
-changed meanwhile the approve fails cleanly -- re-read and propose again.
+The card shows the user the doc, how many people it is shared with, and a
+line diff (or the image). Like every action request the call blocks until
+the user resolves it and returns the verdict (shapes in
+`system:action_requests`). At Approve the change is re-applied to the doc
+as it is then: if the text (or the image file) changed meanwhile the
+approve fails with the reason and the card stays open for the user to
+retry or stop -- when you get the verdict back, re-read and propose again.
 Do not propose `write_doc` for a doc whose `writable` is `free` (it is
 rejected: call the tool directly) or `denied`. In `list_docs` /
 `read_doc` output the `write_note` for these docs is

@@ -119,7 +119,11 @@ async def project_is_public(user: dict, project_id: str | None) -> bool:
     from db import project_store
 
     project = await project_store.get_project(user["id"], project_id)
-    return bool(project and project.get("public"))
+    if project is None:
+        # Fail closed: a conversation whose project row is gone (or not the
+        # user's) must not be treated as a private conversation.
+        raise RuntimeError("The conversation's project was not found.")
+    return bool(project.get("public"))
 
 
 def _require_str(params: dict, key: str) -> str:
@@ -368,11 +372,19 @@ class WriteDocHandler(ActionRequestHandler):
             # bypass_approval: the user just approved. Hidden / denied
             # verdicts (e.g. the doc went public meanwhile), a closed gate,
             # an unread doc and a stale old_string still refuse.
+            op_params = operation_params(params)
+            if operation == "add_image":
+                # Server-injected at pre-card time (model copies are
+                # stripped by validate_params): the stored asset must be
+                # the file the card showed.
+                preview = params.get("image_preview")
+                if isinstance(preview, dict) and preview.get("sha256"):
+                    op_params["expected_sha256"] = preview["sha256"]
             result = await doc_service.apply_write_operation(
                 caller,
                 doc_id,
                 operation,
-                operation_params(params),
+                op_params,
                 write_source=write_source,
                 bypass_approval=True,
             )

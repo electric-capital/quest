@@ -1364,8 +1364,10 @@ class Doc(Base):
     ``<data_dir>/docs/<id>/`` (resolved only via ``ChatStorage.get_doc_dir``;
     see chat/docs/files.py). Rows are read and written through
     db/doc_store.py, which also enforces case-insensitive title uniqueness
-    per ``(owner_id, project_id)`` -- a plain unique index cannot, because
-    the NULL ``project_id`` (user doc) case never collides in SQLite.
+    per ``(owner_id, project_id, mode)`` -- a plain unique index cannot,
+    because the NULL ``project_id`` (user doc) case never collides in
+    SQLite; the per-mode scope keeps a public conversation's create_doc
+    from revealing private titles through the collision error.
     """
 
     __tablename__ = "docs"

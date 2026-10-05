@@ -449,3 +449,13 @@ def test_loading_quest_docs_skill_with_gate_closed_names_the_feature_gate():
     )
     assert result["error"] == docs_disabled_message()
     assert "Data Connections" not in result["error"]
+
+
+def test_plugin_id_docs_is_reserved():
+    """A plugin named after the connected-services pseudo-key is refused."""
+    from config.plugins import validate_plugin
+    from config.plugin_types import QuestPlugin
+
+    plugin = QuestPlugin(id="docs", label="Docs plugin")
+    with pytest.raises(ValueError, match="reserved"):
+        validate_plugin(plugin, set())

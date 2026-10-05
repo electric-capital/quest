@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import hashlib
 import logging
 import os
 import re
@@ -960,14 +961,22 @@ def _normalize_write_params(operation: str, params: dict) -> dict:
     placement = _str_param(params, "placement", default="append") or "append"
     if placement not in IMAGE_PLACEMENTS:
         raise DocError('placement must be "append" or "none".')
-    return {
+    clean = {
         "workspace_path": workspace_path,
         "alt": _str_param(params, "alt", default=""),
         "placement": placement,
     }
+    # Server-only pin set by the write_doc action request at approve time:
+    # the stored asset must be the file the card showed (a project
+    # workspace is shared by sibling conversations, which could swap it).
+    expected = params.get("expected_sha256")
+    if expected:
+        clean["expected_sha256"] = str(expected)
+    return clean
 
 
 def _suggested_request(operation: str, doc_id: str, params: dict) -> dict:
+    params = {k: v for k, v in params.items() if k != "expected_sha256"}
     return {
         "request_type": "write_doc",
         "params": {"operation": operation, "doc_id": doc_id, **params},
@@ -1090,6 +1099,18 @@ def _read_image_file(path: Path, display: str) -> bytes:
     return data
 
 
+def _check_expected_sha256(data: bytes, clean: dict) -> str:
+    """The image's sha256; raises when ``clean`` pins a different one."""
+    digest = hashlib.sha256(data).hexdigest()
+    expected = clean.get("expected_sha256")
+    if expected and expected != digest:
+        raise DocError(
+            f"The workspace file {clean['workspace_path']} changed since the "
+            "change was proposed; propose it again with the current file."
+        )
+    return digest
+
+
 async def _load_workspace_image(caller: Caller, workspace_path: str) -> tuple[bytes, str]:
     """Bytes + name hint of a workspace image, validated by magic bytes."""
     from chat.action_request_types._io_attachments import resolve_workspace_file
@@ -1167,6 +1188,7 @@ async def _write_append(caller: Caller, doc: dict, clean: dict, write_source: st
 async def _write_add_image(caller: Caller, doc: dict, clean: dict, write_source: str) -> dict:
     doc_id = doc["id"]
     data, name_hint = await _load_workspace_image(caller, clean["workspace_path"])
+    _check_expected_sha256(data, clean)
     append = clean["placement"] == "append"
     new_body: Optional[str] = None
     if append:
@@ -1355,6 +1377,7 @@ async def _compute_preview(
         result.update({
             "asset_name_preview": name,
             "image_bytes_size": len(data),
+            "image_sha256": _check_expected_sha256(data, clean),
             "markdown": markdown,
         })
     result["new_body"] = new_body
@@ -1435,3 +1458,83 @@ async def add_doc_image(
         {"workspace_path": workspace_path, "alt": alt, "placement": placement},
         write_source=write_source,
     )
+
+
+# ---------------------------------------------------------------------------
+# UI mutations that must serialize with model writes
+# ---------------------------------------------------------------------------
+
+
+async def switch_doc_mode(user: dict, doc_id: str, mode: str) -> dict:
+    """Owner-only private <-> public switch for a USER doc, under the doc lock.
+
+    The lock matters for taint: a model write that passed its access check
+    before the flip must not land after the doc became public, so the
+    switch waits for in-flight writes (and later writers re-resolve access
+    under the same lock and see the new mode). Returns the doc dict with
+    shares (unchanged when ``mode`` is already set).
+
+    Raises:
+        DocDisabled, DocError (hidden/missing), DocRequestError with code
+        ``forbidden`` / ``invalid_mode`` / ``project_doc_mode_inherited`` /
+        ``duplicate_title``.
+    """
+    caller = Caller(user=user, conversation_id=None, project_id=None,
+                    is_public=False, run_kind="ui")
+    doc, _access = await get_visible_doc(caller, doc_id)
+    if doc["owner_id"] != user["id"]:
+        raise DocRequestError("forbidden", "Only the doc's owner can change its mode.")
+    if mode not in constants.DOC_MODES:
+        raise DocRequestError(
+            "invalid_mode", f"mode must be one of: {', '.join(constants.DOC_MODES)}.",
+        )
+    if doc["project_id"] is not None:
+        raise DocRequestError(
+            "project_doc_mode_inherited",
+            "Project docs take their project's mode; it cannot be switched.",
+        )
+    if doc["mode"] == mode:
+        return doc
+
+    async def _locked() -> dict:
+        async with _write_lock(doc["id"]):
+            try:
+                updated = await doc_store.set_doc_mode(doc["id"], mode)
+            except doc_store.DuplicateDocTitleError as exc:
+                raise DocRequestError("duplicate_title", str(exc)) from None
+            if updated is None:
+                raise DocError(doc_not_found_message(doc_id))
+            _publish_write(updated)
+            return updated
+
+    return await _shielded(_locked())
+
+
+async def delete_doc_from_ui(user: dict, doc_id: str) -> dict:
+    """Owner-only delete, under the doc lock: the row (shares cascade), then
+    the directory (best-effort, logged), then ``doc_list_changed``.
+
+    Raises:
+        DocDisabled, DocError (hidden/missing), DocRequestError ``forbidden``.
+    """
+    caller = Caller(user=user, conversation_id=None, project_id=None,
+                    is_public=False, run_kind="ui")
+    doc, _access = await get_visible_doc(caller, doc_id)
+    if doc["owner_id"] != user["id"]:
+        raise DocRequestError("forbidden", "Only the doc's owner can delete it.")
+
+    async def _locked() -> dict:
+        async with _write_lock(doc["id"]):
+            if not await doc_store.delete_doc(doc["id"]):
+                raise DocError(doc_not_found_message(doc_id))
+            try:
+                await asyncio.to_thread(doc_files.delete_doc_dir, doc["id"])
+            except Exception:
+                logger.warning(
+                    "[docs] could not remove the directory of deleted doc %s",
+                    doc["id"], exc_info=True,
+                )
+            _events().publish_doc_list_changed(doc["owner_id"])
+            return doc
+
+    return await _shielded(_locked())

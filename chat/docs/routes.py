@@ -48,7 +48,7 @@ from chat.docs.constants import (
     docs_disabled_message,
 )
 from chat.file_routes import _INLINE_IMAGE_MIMES
-from chat.project_routes import _get_visible_project
+from chat.project_routes import _get_visible_project, _public_projects_enabled_for
 from config.feature_gates import docs_enabled_for
 from db import doc_store
 
@@ -135,6 +135,9 @@ def _doc_row(user: dict, doc: dict, access: DocAccess) -> dict:
     row["shared"] = bool(shares)
     if is_owner:
         row["shares"] = list(shares)
+    else:
+        # The owner's conversation ids are not the recipient's business.
+        row["last_write_source"] = None
     row["access"] = {
         "can_rename": is_owner,
         "can_switch_mode": is_owner and doc.get("project_id") is None,
@@ -145,13 +148,36 @@ def _doc_row(user: dict, doc: dict, access: DocAccess) -> dict:
 
 
 async def _get_doc_for_ui(user: dict, doc_id: str) -> tuple[dict, DocAccess]:
-    """``(doc, access)`` for a doc the user may see, else 404 doc_not_found."""
+    """``(doc, access)`` for a doc the user may see, else 404 doc_not_found.
+
+    Docs of a public project are hidden (same 404) while the
+    ``public_projects`` gate is closed for the user, matching the project
+    routes' "hidden public projects 404 on every by-id endpoint" rule. A
+    project doc's mode mirrors its project's ``public`` flag, so no project
+    lookup is needed.
+    """
     try:
-        return await doc_service.get_visible_doc(_ui_caller(user), doc_id)
+        doc, access = await doc_service.get_visible_doc(_ui_caller(user), doc_id)
     except doc_service.DocDisabled:
         raise _http_error(403, "docs_disabled", docs_disabled_message())
     except doc_service.DocError:
         raise _doc_not_found(doc_id)
+    if (
+        doc.get("project_id") is not None
+        and doc.get("mode") == "public"
+        and not _public_projects_enabled_for(user)
+    ):
+        raise _doc_not_found(doc_id)
+    return doc, access
+
+
+def _raise_request_error(exc: "doc_service.DocRequestError", doc_id: str):
+    status = {
+        "forbidden": 403,
+        "duplicate_title": 409,
+        "project_not_found": 404,
+    }.get(exc.code, 400)
+    raise _http_error(status, exc.code, str(exc))
 
 
 def _require_owner(user: dict, doc: dict, action: str) -> None:
@@ -422,31 +448,18 @@ async def set_ui_doc_mode(
     change (and no events) when the doc already has that mode.
     """
     _require_docs_enabled(user)
-    doc, access = await _get_doc_for_ui(user, doc_id)
-    _require_owner(user, doc, "change its mode")
-    if body.mode not in DOC_MODES:
-        raise _http_error(
-            400, "invalid_mode", f"mode must be one of: {', '.join(DOC_MODES)}.",
-        )
-    if doc["project_id"] is not None:
-        raise _http_error(
-            400, "project_doc_mode_inherited",
-            "Project docs take their project's mode; it cannot be switched.",
-        )
-    if doc["mode"] == body.mode:
-        return _doc_row(user, doc, access)
+    # Hidden-project / missing docs 404 here before the service runs its
+    # own checks (same text either way).
+    await _get_doc_for_ui(user, doc_id)
+    mode = body.mode if isinstance(body.mode, str) else ""
     try:
-        updated = await doc_store.set_doc_mode(doc["id"], body.mode)
-    except doc_store.DuplicateDocTitleError as exc:
-        # Titles are unique per (owner, project, mode): the target mode
-        # already has a doc with this title.
-        raise _http_error(409, "duplicate_title", str(exc))
-    if updated is None:
+        updated = await doc_service.switch_doc_mode(user, doc_id, mode)
+    except doc_service.DocRequestError as exc:
+        _raise_request_error(exc, doc_id)
+    except doc_service.DocDisabled:
+        raise _http_error(403, "docs_disabled", docs_disabled_message())
+    except doc_service.DocError:
         raise _doc_not_found(doc_id)
-    doc_events.publish_doc_list_changed(updated["owner_id"])
-    doc_events.publish_doc_changed(
-        updated["owner_id"], updated["id"], updated["updated_at"],
-    )
     return _doc_row(user, updated, _ui_access(user, updated))
 
 
@@ -467,18 +480,19 @@ async def get_ui_doc_asset(
     _require_docs_enabled(user)
     doc, _access = await _get_doc_for_ui(user, doc_id)
     try:
-        path = await asyncio.to_thread(doc_files.asset_path, doc["id"], name)
+        # read_asset re-validates the name and opens the leaf O_NOFOLLOW +
+        # S_ISREG (FileResponse would follow a symlink at open time).
+        data = await asyncio.to_thread(doc_files.read_asset, doc["id"], name)
     except (doc_files.DocFileError, OSError):
         raise _http_error(404, "asset_not_found", f"Image not found: {name}")
     media_type = _INLINE_IMAGE_MIMES.get(
-        os.path.splitext(path.name)[1].lower(), "application/octet-stream",
+        os.path.splitext(name)[1].lower(), "application/octet-stream",
     )
-    return FileResponse(
-        path=path,
-        filename=path.name,
+    return Response(
+        content=data,
         media_type=media_type,
-        content_disposition_type="inline",
         headers={
+            "Content-Disposition": f'inline; filename="{name}"',
             "Cache-Control": "private",
             "X-Content-Type-Options": "nosniff",
         },
@@ -533,16 +547,13 @@ async def delete_ui_doc(
     """Delete a doc (owner only): the row (shares go with it), then the
     directory (best-effort, logged). 403 ``forbidden`` for a non-owner."""
     _require_docs_enabled(user)
-    doc, _access = await _get_doc_for_ui(user, doc_id)
-    _require_owner(user, doc, "delete it")
-    if not await doc_store.delete_doc(doc["id"]):
-        raise _doc_not_found(doc_id)
+    await _get_doc_for_ui(user, doc_id)
     try:
-        await asyncio.to_thread(doc_files.delete_doc_dir, doc["id"])
-    except Exception:
-        logger.warning(
-            "[docs] could not remove the directory of deleted doc %s",
-            doc["id"], exc_info=True,
-        )
-    doc_events.publish_doc_list_changed(doc["owner_id"])
+        await doc_service.delete_doc_from_ui(user, doc_id)
+    except doc_service.DocRequestError as exc:
+        _raise_request_error(exc, doc_id)
+    except doc_service.DocDisabled:
+        raise _http_error(403, "docs_disabled", docs_disabled_message())
+    except doc_service.DocError:
+        raise _doc_not_found(doc_id)
     return {"deleted": True}

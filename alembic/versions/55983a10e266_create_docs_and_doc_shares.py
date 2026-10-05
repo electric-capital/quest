@@ -12,7 +12,7 @@ Quest Docs (phase 1). A doc is a ``docs`` row plus a directory
 owner, optional project (NULL = a user doc), title/description, the
 ``private``/``public`` mode, the cached body size and asset count, and the
 source of the last write. Title uniqueness is case-insensitive per
-``(owner_id, project_id)`` and enforced in db/doc_store.py, because the
+``(owner_id, project_id, mode)`` and enforced in db/doc_store.py, because the
 NULL ``project_id`` case defeats a plain unique index.
 
 ``doc_shares`` grants ``read`` or ``write`` to one user, or to everyone on

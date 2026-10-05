@@ -24,7 +24,9 @@ parameters`` early return -- same turn, no card. ``WriteDocHandler.execute``
 re-runs the whole check at approve time (TOCTOU close).
 """
 
-from chat.action_request_types._skill_content_edit import build_content_diff
+import asyncio
+
+from chat.action_request_types._skill_content_edit import build_bounded_content_diff
 from chat.action_request_types.write_doc import (
     OPERATION_TOOLS,
     operation_params,
@@ -102,11 +104,18 @@ async def doc_precard_check(
     current_body = preview["current_body"]
     new_body = preview["new_body"]
     if operation != "add_image" or new_body != current_body:
-        validated_params["content_diff"] = build_content_diff(current_body, new_body)
+        # Bounded (prefix/suffix-trimmed, line-capped) and off the event
+        # loop: a doc body is up to 1 MB, and the full-body SequenceMatcher
+        # diff edit_skill uses is quadratic on it.
+        validated_params["content_diff"] = await asyncio.to_thread(
+            build_bounded_content_diff, current_body, new_body,
+        )
     if operation == "add_image":
         validated_params["image_preview"] = {
             "workspace_path": validated_params["workspace_path"],
             "asset_name": preview["asset_name_preview"],
             "markdown": preview["markdown"],
             "size_bytes": preview["image_bytes_size"],
+            # Pins the file the card showed: execute refuses a swapped file.
+            "sha256": preview["image_sha256"],
         }

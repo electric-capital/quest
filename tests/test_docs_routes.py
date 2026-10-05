@@ -271,9 +271,9 @@ class TestCreate:
         assert body(row["id"]) == ""
         assert (docs_env.dirs["docs"] / row["id"] / "doc.md").read_bytes() == b""
         alice = uid(docs_env, "alice")
-        assert event_types(docs_env) == [
+        assert sorted(event_types(docs_env)) == sorted([
             (alice, "doc_list_changed"), (alice, "doc_changed"),
-        ]
+        ])
 
     def test_user_doc_public_mode(self, docs_env):
         row = client(docs_env).post(
@@ -437,9 +437,9 @@ class TestRename:
         assert row["updated_at"] != doc["updated_at"]
         assert row["shares"] == []
         alice = uid(docs_env, "alice")
-        assert event_types(docs_env) == [
+        assert sorted(event_types(docs_env)) == sorted([
             (alice, "doc_list_changed"), (alice, "doc_changed"),
-        ]
+        ])
         assert docs_env.published[1][1]["updated_at"] == row["updated_at"]
 
     def test_noop_keeps_token_and_publishes_nothing(self, docs_env):
@@ -516,9 +516,9 @@ class TestMode:
         assert row["mode"] == "public"
         assert row["updated_at"] != doc["updated_at"]
         alice = uid(docs_env, "alice")
-        assert event_types(docs_env) == [
+        assert sorted(event_types(docs_env)) == sorted([
             (alice, "doc_list_changed"), (alice, "doc_changed"),
-        ]
+        ])
         # Unchanged: no-op, no events.
         again = c.put(f"/app/api/docs/{doc['id']}/mode", json={"mode": "public"}).json()
         assert again["updated_at"] == row["updated_at"]

@@ -215,6 +215,12 @@ def validate_plugin(plugin: QuestPlugin, existing_ids: set[str]) -> None:
     from config.service_credentials import KNOWN_SERVICES
     if pid in KNOWN_SERVICES:
         raise ValueError(f"Plugin id {pid!r} collides with a core service name")
+    from api.instructions import PSEUDO_SERVICE_KEYS
+    if pid in PSEUDO_SERVICE_KEYS:
+        # The connected-services map carries feature-gate pseudo-keys (e.g.
+        # "docs"); a plugin of that id would have its connected state
+        # overwritten by the gate.
+        raise ValueError(f"Plugin id {pid!r} is reserved (connected-services pseudo-key)")
     if not (plugin.label or "").strip():
         raise ValueError(f"Plugin {pid!r} must have a non-empty label")
 

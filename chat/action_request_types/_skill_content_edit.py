@@ -152,3 +152,119 @@ def build_content_diff(old_content: str, new_content: str) -> dict:
             })
 
     return {"added": added, "removed": removed, "lines": lines}
+
+
+def build_bounded_content_diff(
+    old_content: str,
+    new_content: str,
+    *,
+    context: int = 3,
+    max_lines: int = 400,
+    max_middle_lines: int = 5000,
+) -> dict:
+    """A size- and time-bounded variant of :func:`build_content_diff`.
+
+    ``build_content_diff`` diffs the whole body with ``SequenceMatcher`` and
+    emits every line; fine for 64 KB skills, quadratic and multi-megabyte
+    for 1 MB Quest Docs. This version:
+
+    - trims the common prefix and suffix lines first (O(n)), so an append
+      or a one-line edit costs linear time whatever the body size;
+    - runs ``SequenceMatcher`` only on the differing middle, and falls back
+      to a plain removed-then-added listing when that middle exceeds
+      ``max_middle_lines``;
+    - emits ``context`` lines around the changed region and caps the total
+      at ``max_lines`` (``truncated: true`` when the cap cut lines; the
+      ``added`` / ``removed`` counts stay exact).
+
+    Lines carry the same ``{type, old_line, new_line, text}`` shape as
+    :func:`build_content_diff` plus ``total_old_lines`` / ``total_new_lines``
+    so a renderer can show the elided stretches from the line numbers. Split
+    on ``"\\n"`` so numbers match ``read_doc``'s 1-based lines.
+    """
+    old_lines = old_content.split("\n")
+    new_lines = new_content.split("\n")
+    if old_lines and old_lines[-1] == "":
+        old_lines.pop()
+    if new_lines and new_lines[-1] == "":
+        new_lines.pop()
+
+    # Common prefix / suffix.
+    prefix = 0
+    limit = min(len(old_lines), len(new_lines))
+    while prefix < limit and old_lines[prefix] == new_lines[prefix]:
+        prefix += 1
+    suffix = 0
+    while (
+        suffix < limit - prefix
+        and old_lines[-1 - suffix] == new_lines[-1 - suffix]
+    ):
+        suffix += 1
+
+    old_mid = old_lines[prefix:len(old_lines) - suffix]
+    new_mid = new_lines[prefix:len(new_lines) - suffix]
+
+    lines: list[dict] = []
+    added = removed = 0
+
+    def _context(start: int, end: int) -> None:
+        # Context lines are shared by both sides: index i (0-based, in the
+        # common prefix/suffix) is line i+1 on the old side and i+1 plus the
+        # offset between the two bodies on the new side.
+        for i in range(start, end):
+            new_index = i if i < prefix else i + (len(new_lines) - len(old_lines))
+            lines.append({
+                "type": "context",
+                "old_line": i + 1,
+                "new_line": new_index + 1,
+                "text": old_lines[i],
+            })
+
+    _context(max(0, prefix - context), prefix)
+
+    if len(old_mid) + len(new_mid) > max_middle_lines:
+        opcodes = [("replace", 0, len(old_mid), 0, len(new_mid))]
+    else:
+        opcodes = SequenceMatcher(a=old_mid, b=new_mid, autojunk=False).get_opcodes()
+
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag == "equal":
+            for offset in range(i2 - i1):
+                lines.append({
+                    "type": "context",
+                    "old_line": prefix + i1 + offset + 1,
+                    "new_line": prefix + j1 + offset + 1,
+                    "text": old_mid[i1 + offset],
+                })
+            continue
+        for i in range(i1, i2):
+            removed += 1
+            lines.append({
+                "type": "del",
+                "old_line": prefix + i + 1,
+                "new_line": None,
+                "text": old_mid[i],
+            })
+        for j in range(j1, j2):
+            added += 1
+            lines.append({
+                "type": "add",
+                "old_line": None,
+                "new_line": prefix + j + 1,
+                "text": new_mid[j],
+            })
+
+    suffix_start = len(old_lines) - suffix
+    _context(suffix_start, min(len(old_lines), suffix_start + context))
+
+    truncated = len(lines) > max_lines
+    if truncated:
+        lines = lines[:max_lines]
+    return {
+        "added": added,
+        "removed": removed,
+        "lines": lines,
+        "truncated": truncated,
+        "total_old_lines": len(old_lines),
+        "total_new_lines": len(new_lines),
+    }

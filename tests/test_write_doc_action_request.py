@@ -256,7 +256,7 @@ class TestToolPayloadRoundTrip:
         return request["params"]
 
     def test_edit(self, docs_env):
-        from chat.action_request_types._skill_content_edit import build_content_diff
+        from chat.action_request_types._skill_content_edit import build_bounded_content_diff as build_content_diff
 
         doc = shared_doc(docs_env)
         caller = make_caller(docs_env)
@@ -303,11 +303,13 @@ class TestToolPayloadRoundTrip:
         validated = handler().validate_params(params)
         assert validated == params
         precard(validated, caller)
+        import hashlib
         assert validated["image_preview"] == {
             "workspace_path": "c.png",
             "asset_name": "c.png",
             "markdown": "![Chart](assets/c.png)",
             "size_bytes": len(PNG),
+            "sha256": hashlib.sha256(PNG).hexdigest(),
         }
         last = validated["content_diff"]["lines"][-1]
         assert last == {
