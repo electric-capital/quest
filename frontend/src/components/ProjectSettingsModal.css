@@ -225,6 +225,42 @@
   line-height: 1.5;
 }
 
+/* One block per action (archive, delete), separated by a hairline. */
+.project-settings-danger-action + .project-settings-danger-action {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.project-settings-danger-action h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* Archive is reversible, so it gets the neutral outline treatment rather
+   than the red delete styling. */
+.project-settings-archive-button {
+  padding: 0.5rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: none;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.project-settings-archive-button:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.project-settings-archive-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .project-settings-delete-button {
   padding: 0.5rem 1rem;
   border: 1px solid #ff6b6b;
@@ -443,6 +479,23 @@
 
   .project-settings-danger-zone p {
     color: rgba(0, 0, 0, 0.6);
+  }
+
+  .project-settings-danger-action + .project-settings-danger-action {
+    border-top-color: rgba(0, 0, 0, 0.1);
+  }
+
+  .project-settings-danger-action h4 {
+    color: rgba(0, 0, 0, 0.85);
+  }
+
+  .project-settings-archive-button {
+    border-color: rgba(0, 0, 0, 0.2);
+    color: rgba(0, 0, 0, 0.8);
+  }
+
+  .project-settings-archive-button:hover:not(:disabled) {
+    background-color: rgba(0, 0, 0, 0.03);
   }
 
   .project-settings-delete-button {

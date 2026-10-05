@@ -102,6 +102,9 @@ export const Sidebar = React.memo(function Sidebar({ activeConversationId, onCon
   // the top-level section's filters (which live in its data hook).
   const [showArchivedProject, setShowArchivedProject] = useState(false);
   const [showSlackProject, setShowSlackProject] = useState(false);
+  // The Projects section's own "Show Archived" (archived PROJECTS, as
+  // opposed to archived conversations inside a project). Same lifetime.
+  const [showArchivedProjects, setShowArchivedProjects] = useState(false);
 
   const topLevel = useTopLevelConversations();
   const projectConversations = useProjectConversations(drilledProjectId, showArchivedProject);
@@ -437,6 +440,8 @@ export const Sidebar = React.memo(function Sidebar({ activeConversationId, onCon
             {projectsLoaded && (
               <ProjectsSection
                 projects={projects}
+                showArchived={showArchivedProjects}
+                onShowArchivedChange={setShowArchivedProjects}
                 onOpenProject={handleProjectDrillDown}
                 onCreateProject={() => setShowNewProjectModal(true)}
               />

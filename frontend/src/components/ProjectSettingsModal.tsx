@@ -1,7 +1,8 @@
 /**
  * Modal for editing project settings.
  *
- * Sidebar navigation with three sections: General, Skills, and Danger Zone.
+ * Sidebar navigation with three sections: General, Skills, and Danger Zone
+ * (archive / unarchive, then the two-step delete).
  * Follows the same pattern as SettingsModal.tsx, including the mobile
  * full-screen two-tier takeover (section list first, content slides over).
  */
@@ -11,6 +12,8 @@ import {
   fetchProject,
   updateProject,
   deleteProject,
+  archiveProject,
+  unarchiveProject,
   ApiClientError,
 } from '../api/client';
 import type { Project } from '../api/types';
@@ -73,6 +76,7 @@ export function ProjectSettingsModal({
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const saveTimeoutRef = useRef<number | null>(null);
 
@@ -154,6 +158,30 @@ export function ProjectSettingsModal({
       setIsSaving(false);
     }
   }, [projectId, name, guide, isSaving, onProjectUpdated]);
+
+  const handleToggleArchived = useCallback(async () => {
+    if (!projectId || !project || isArchiving) return;
+
+    setIsArchiving(true);
+    setError(null);
+
+    try {
+      const updated = project.archived
+        ? await unarchiveProject(projectId)
+        : await archiveProject(projectId);
+      // The archive endpoints return the bare row; keep the list-only count.
+      setProject({ ...updated, conversation_count: project.conversation_count });
+      onProjectUpdated();
+    } catch (err) {
+      if (err instanceof ApiClientError) {
+        setError(err.message);
+      } else {
+        setError(project.archived ? 'Failed to unarchive project' : 'Failed to archive project');
+      }
+    } finally {
+      setIsArchiving(false);
+    }
+  }, [projectId, project, isArchiving, onProjectUpdated]);
 
   const handleDelete = useCallback(async () => {
     if (!projectId || isDeleting) return;
@@ -250,39 +278,61 @@ export function ProjectSettingsModal({
         return (
           <div className="project-settings-danger-zone">
             <h3>Danger Zone</h3>
-            <p>
-              Deleting this project will permanently remove all conversations and files in this project.
-              {project && project.conversation_count > 0 && (
-                <strong> This project has {project.conversation_count} conversation{project.conversation_count !== 1 ? 's' : ''}.</strong>
-              )}
-            </p>
             {error && <div className="project-settings-error">{error}</div>}
-            {showDeleteConfirm ? (
-              <div className="project-settings-delete-confirm">
-                <span>Are you sure? This cannot be undone.</span>
-                <button
-                  className="project-settings-delete-confirm-button"
-                  onClick={handleDelete}
-                  disabled={isDeleting}
-                >
-                  {isDeleting ? 'Deleting...' : 'Yes, Delete Project'}
-                </button>
-                <button
-                  className="project-settings-delete-cancel-button"
-                  onClick={() => setShowDeleteConfirm(false)}
-                  disabled={isDeleting}
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
+
+            <div className="project-settings-danger-action">
+              <h4>{project?.archived ? 'Unarchive Project' : 'Archive Project'}</h4>
+              <p>
+                {project?.archived
+                  ? 'This project is archived: hidden from the projects list and its scheduled routines are paused. Unarchiving puts it back and resumes its schedules.'
+                  : 'Hides the project from the projects list and pauses its scheduled routines. Nothing is deleted; use "Show Archived" in the projects list to find it again.'}
+              </p>
               <button
-                className="project-settings-delete-button"
-                onClick={() => setShowDeleteConfirm(true)}
+                className="project-settings-archive-button"
+                onClick={handleToggleArchived}
+                disabled={isArchiving || !project}
               >
-                Delete Project
+                {isArchiving
+                  ? (project?.archived ? 'Unarchiving...' : 'Archiving...')
+                  : (project?.archived ? 'Unarchive Project' : 'Archive Project')}
               </button>
-            )}
+            </div>
+
+            <div className="project-settings-danger-action">
+              <h4>Delete Project</h4>
+              <p>
+                Deleting this project will permanently remove all conversations and files in this project.
+                {project && project.conversation_count > 0 && (
+                  <strong> This project has {project.conversation_count} conversation{project.conversation_count !== 1 ? 's' : ''}.</strong>
+                )}
+              </p>
+              {showDeleteConfirm ? (
+                <div className="project-settings-delete-confirm">
+                  <span>Are you sure? This cannot be undone.</span>
+                  <button
+                    className="project-settings-delete-confirm-button"
+                    onClick={handleDelete}
+                    disabled={isDeleting}
+                  >
+                    {isDeleting ? 'Deleting...' : 'Yes, Delete Project'}
+                  </button>
+                  <button
+                    className="project-settings-delete-cancel-button"
+                    onClick={() => setShowDeleteConfirm(false)}
+                    disabled={isDeleting}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="project-settings-delete-button"
+                  onClick={() => setShowDeleteConfirm(true)}
+                >
+                  Delete Project
+                </button>
+              )}
+            </div>
           </div>
         );
 

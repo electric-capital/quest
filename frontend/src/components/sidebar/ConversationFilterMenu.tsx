@@ -1,7 +1,8 @@
 /**
- * The "Conversation options" popover on a Sidebar conversation section
- * header: a vertical-dots button toggling a checkbox list of visibility
- * filters. Closes on any outside click.
+ * The options popover on a Sidebar section header: a vertical-dots button
+ * toggling a checkbox list of visibility filters. Closes on any outside
+ * click. Used by the conversation sections ("Conversation options") and the
+ * Projects section ("Project options").
  *
  * Controlled: the owning section holds `open`, because toggling a filter
  * triggers a (non-silent) reload that swaps the header for the loading
@@ -22,9 +23,16 @@ interface ConversationFilterMenuProps {
   options: ConversationFilterOption[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Button title / aria-label; defaults to "Conversation options". */
+  label?: string;
 }
 
-export function ConversationFilterMenu({ options, open, onOpenChange }: ConversationFilterMenuProps) {
+export function ConversationFilterMenu({
+  options,
+  open,
+  onOpenChange,
+  label = 'Conversation options',
+}: ConversationFilterMenuProps) {
   // Close the popover on click outside
   useEffect(() => {
     if (!open) return;
@@ -41,8 +49,8 @@ export function ConversationFilterMenu({ options, open, onOpenChange }: Conversa
           e.stopPropagation();
           onOpenChange(!open);
         }}
-        title="Conversation options"
-        aria-label="Conversation options"
+        title={label}
+        aria-label={label}
       >
         <MoreVertical size={14} />
       </button>

@@ -421,8 +421,17 @@ export async function disconnectConnector(disconnectUrl: string): Promise<void> 
 
 // Project API functions
 
-export function fetchProjects(): Promise<ProjectsListResponse> {
-  return apiGet(endpoints.projects());
+/**
+ * Fetch the user's projects. Archived projects are left out unless
+ * `includeArchived` is set (the sidebar fetches everything and filters
+ * client-side so a drilled-into archived project still resolves).
+ */
+export function fetchProjects(
+  options: { includeArchived?: boolean } = {},
+): Promise<ProjectsListResponse> {
+  return apiGet(endpoints.projects(), {
+    query: { include_archived: options.includeArchived || undefined },
+  });
 }
 
 export function createProject(name: string, isPublic: boolean = false): Promise<Project> {
@@ -456,6 +465,21 @@ export function updateProject(
 
 export function deleteProject(projectId: string): Promise<{ success: boolean }> {
   return apiDelete(endpoints.project(projectId));
+}
+
+/**
+ * Archive a project: hidden from the default sidebar list, its scheduled
+ * routines paused, nothing deleted.
+ */
+export function archiveProject(projectId: string): Promise<Project> {
+  return apiPut(`${endpoints.project(projectId)}/archive`);
+}
+
+/**
+ * Restore an archived project.
+ */
+export function unarchiveProject(projectId: string): Promise<Project> {
+  return apiPut(`${endpoints.project(projectId)}/unarchive`);
 }
 
 export function fetchProjectConversations(

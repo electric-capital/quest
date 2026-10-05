@@ -15,6 +15,7 @@ from db.project_store import (
     get_project,
     list_projects,
     update_project,
+    set_project_archived,
     delete_project,
 )
 from db.conversation_store import (
@@ -238,10 +239,15 @@ async def create_project_from_conversation(
 
 @router.get("/projects")
 async def list_user_projects(
+    include_archived: bool = False,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """List all projects for the authenticated user."""
-    projects = await list_projects(user["id"])
+    """List the authenticated user's projects.
+
+    Archived projects are left out unless ``include_archived=true`` (the
+    sidebar's "Show Archived" toggle), mirroring ``GET /conversations``.
+    """
+    projects = await list_projects(user["id"], include_archived=include_archived)
     # Hide public projects while the gate is closed for this user (the
     # rows persist; restoring access brings them back).
     if not _public_projects_enabled_for(user):
@@ -314,6 +320,41 @@ async def update_user_project(
         invalidate_user_sessions(user_id)
 
     return project
+
+
+async def _set_archived_checked(user: dict, project_id: str, archived: bool) -> dict:
+    """Flip the archived flag on a visible project, 404 otherwise."""
+    if await _get_visible_project(user, project_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": "Project not found"},
+        )
+    project = await set_project_archived(user["id"], project_id, archived)
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": "Project not found"},
+        )
+    return project
+
+
+@router.put("/projects/{project_id}/archive")
+async def archive_user_project(
+    project_id: str,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Archive a project: hidden from the default list, scheduled routines
+    paused, everything kept. The twin of ``PUT /conversations/{id}/archive``."""
+    return await _set_archived_checked(user, project_id, True)
+
+
+@router.put("/projects/{project_id}/unarchive")
+async def unarchive_user_project(
+    project_id: str,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Restore an archived project."""
+    return await _set_archived_checked(user, project_id, False)
 
 
 @router.delete("/projects/{project_id}")

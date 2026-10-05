@@ -83,8 +83,15 @@ async def get_project(user_id: int, project_id: str) -> Optional[dict]:
         return None
 
 
-async def list_projects(user_id: int) -> list[dict]:
-    """List all projects for a user, ordered by updated_at DESC then created_at DESC.
+async def list_projects(user_id: int, include_archived: bool = True) -> list[dict]:
+    """List a user's projects, ordered by updated_at DESC then created_at DESC.
+
+    Args:
+        user_id: User's integer ID.
+        include_archived: When False, archived projects are left out. The
+            default includes them so lifecycle callers (account deletion,
+            which collects every project's workspace directory) see the
+            whole set; the list endpoint passes the user's choice.
 
     Returns:
         List of project dicts with an added 'conversation_count' field.
@@ -101,7 +108,11 @@ async def list_projects(user_id: int) -> list[dict]:
         stmt = (
             select(Project, conv_count.label("conversation_count"))
             .where(Project.user_id == user_id)
-            .order_by(
+        )
+        if not include_archived:
+            stmt = stmt.where(Project.archived == False)  # noqa: E712
+        stmt = (
+            stmt.order_by(
                 case(
                     (Project.updated_at.isnot(None), Project.updated_at),
                     else_=Project.created_at,
@@ -201,6 +212,28 @@ async def update_project(
         return _project_to_dict(project)
 
 
+async def set_project_archived(
+    user_id: int, project_id: str, archived: bool
+) -> Optional[dict]:
+    """Archive (``True``) or unarchive (``False``) a project, scoped to user.
+
+    Only the flag changes: ``updated_at`` is left alone so unarchiving
+    puts the project back where it was in the recency-ordered list rather
+    than at the top.
+
+    Returns:
+        Updated project dict, or None if not found / wrong user.
+    """
+    async with AsyncSessionLocal() as db:
+        project = await db.get(Project, project_id)
+        if not project or project.user_id != user_id:
+            return None
+        project.archived = archived
+        await db.commit()
+        await db.refresh(project)
+        return _project_to_dict(project)
+
+
 async def delete_project(user_id: int, project_id: str) -> bool:
     """Delete a project by ID, scoped to user.
 
@@ -262,6 +295,7 @@ def _project_to_dict(project: Project) -> dict:
         "name": project.name,
         "guide": project.guide,
         "public": bool(project.public),
+        "archived": bool(project.archived),
         "created_at": project.created_at.isoformat() if project.created_at else None,
         "updated_at": project.updated_at.isoformat() if project.updated_at else None,
     }
