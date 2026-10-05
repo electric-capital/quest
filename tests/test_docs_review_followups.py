@@ -215,3 +215,13 @@ class TestProjectLookupFailsClosed:
             _run(project_is_public(docs_env.users["alice"], str(uuid.uuid4())))
         assert _run(project_is_public(docs_env.users["alice"], None)) is False
         assert _run(project_is_public(docs_env.users["alice"], docs_env.public_project)) is True
+
+
+def test_precard_missing_project_is_a_same_turn_rejection(docs_env):
+    from chat.action_request_types.doc_precard import doc_precard_check
+
+    doc = shared_doc(docs_env)
+    caller = make_caller(docs_env, project=str(uuid.uuid4()))
+    params = {**append_params(doc["id"]), "ensure_blank_line": True}
+    with pytest.raises(ValueError, match="project was not found"):
+        _run(doc_precard_check(params, caller.user, caller.project_id, caller.conversation_id))

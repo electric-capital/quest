@@ -68,11 +68,16 @@ async def doc_precard_check(
     """
     operation = validated_params["operation"]
     doc_id = validated_params["doc_id"]
+    try:
+        is_public = await project_is_public(user, project_id)
+    except RuntimeError as e:
+        # Missing / foreign project row: refuse same-turn, not run-fatal.
+        raise ValueError(str(e)) from None
     caller = doc_service.Caller(
         user=user,
         conversation_id=conversation_id,
         project_id=project_id,
-        is_public=await project_is_public(user, project_id),
+        is_public=is_public,
         run_kind="top_level",
     )
     try:
