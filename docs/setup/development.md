@@ -141,6 +141,7 @@ For manual backend startup (e.g., debugging): `QUEST_ENV=local uv run uvicorn qu
 Access points:
 - App: `http://localhost:9000/` (local) or `http://localhost:8000/` (staging/prod)
 - API: `http://localhost:9000/app/api/` (local) or `http://localhost:8000/app/api/`
+- Interactive API docs: `/api-docs` (Swagger UI) and `/api-redoc` (ReDoc), set in the `FastAPI(...)` constructor in `quest.py`; `/docs` is the frontend's Quest Docs route, not Swagger
 
 ## Static File Serving
 

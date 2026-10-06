@@ -399,6 +399,8 @@ Each conversation has a unique URL, enabling deep linking, page reload, and brow
 - `/` -- Default view, no conversation selected (renders the `HomeComposer` home screen, see ChatPanel / Composer section)
 - `/chats/<uuid>` -- Standalone conversation
 - `/projects/<project_id>/<convo_uuid>` -- Project conversation
+- `/inbox` -- Requests inbox (`RequestsView`; mirrored into the legacy `showRequestsView` context flag)
+- `/docs`, `/docs?project=<id>`, `/docs/<id>` -- Quest Docs All Docs view (optionally filtered to one project) and doc viewer; URL-only state parsed by `parseDocsRoute()` in `frontend/src/utils/docsRoute.ts` (see [Quest Docs UI](#quest-docs-ui))
 
 ### Key Files
 
@@ -411,7 +413,8 @@ Each conversation has a unique URL, enabling deep linking, page reload, and brow
 | `frontend/src/components/ChatPanel.tsx` | Accepts `onProjectIdLoaded` callback; when conversation detail reveals a `project_id`, reports it back so App can redirect the URL |
 | `frontend/src/hooks/useConversation.ts` | Reads `project_id` from conversation detail API response and fires the `onProjectIdLoaded` callback |
 | `chat/routes/conversations.py` | Includes `project_id` in conversation detail responses so the frontend can detect project membership |
-| `quest.py` | SPA catch-all routes for `/chats/{rest:path}`, `/projects/{rest:path}`, and `/admin/{rest:path}` that serve `index.html` so deep links work on page reload |
+| `frontend/src/utils/docsRoute.ts` | `parseDocsRoute()` / `docsListPath()` / `docViewerPath()` for the Quest Docs routes (no context state) |
+| `quest.py` | SPA catch-all routes for `/chats/{rest:path}`, `/projects/{rest:path}`, and `/admin/{rest:path}`, plus `/inbox`, `/set-password`, and `/docs` + `/docs/{rest:path}` (`serve_spa_docs`), that serve `index.html` so deep links work on page reload |
 
 ### Navigation Flow
 
@@ -434,7 +437,7 @@ When a user navigates directly to `/chats/<id>` but the conversation actually be
 
 ### Backend SPA Support
 
-Since the frontend is a single-page application, direct navigation to `/chats/<uuid>`, `/projects/<pid>/<uuid>`, or `/admin/system-monitor` would return a 404 without server-side support. `quest.py` registers three catch-all routes -- `/chats/{rest:path}`, `/projects/{rest:path}`, and `/admin/{rest:path}` -- (before the `/{filename}` static file fallback) that serve `frontend/dist/index.html` for these URL patterns, allowing React Router to handle the route client-side. The `/admin` catch-all cannot shadow admin API routes because those all live under `/app/api/admin/...`.
+Since the frontend is a single-page application, direct navigation to `/chats/<uuid>`, `/projects/<pid>/<uuid>`, or `/admin/system-monitor` would return a 404 without server-side support. `quest.py` registers three catch-all routes -- `/chats/{rest:path}`, `/projects/{rest:path}`, and `/admin/{rest:path}` -- (before the `/{filename}` static file fallback) that serve `frontend/dist/index.html` for these URL patterns, allowing React Router to handle the route client-side. The `/admin` catch-all cannot shadow admin API routes because those all live under `/app/api/admin/...`. The Quest Docs routes `/docs` and `/docs/{rest:path}` (`serve_spa_docs`) required moving FastAPI's interactive docs off their defaults, which FastAPI registers in its constructor ahead of every app route: Swagger UI is at `/api-docs` (OAuth2 redirect `/api-docs/oauth2-redirect`), ReDoc at `/api-redoc`, `/openapi.json` unchanged (pinned by `tests/test_spa_docs_routes.py`).
 
 ### Design Decisions
 
@@ -446,10 +449,10 @@ Since the frontend is a single-page application, direct navigation to `/chats/<u
 
 **Structure.** `Sidebar.tsx` is a shell: the brand bar, the two sliding panels, the update banner, the user bar, the modals, and the cross-list flows (drilling in and out of a project, New Chat, Run Routine, project/routine CRUD follow-ups). Everything else is delegated:
 
-- Data: `hooks/useTopLevelConversations.ts` (paged standalone list -- filters, keyset `loadMore`, stale-while-revalidate `refreshSilently` on `stream complete` / `conversation_list_changed`, in-place renames, optimistic `updateConversations`), `hooks/useProjectConversations.ts` (per-project lists -- on-demand `load`, the 30s visibility-aware poll while drilled, WS refresh of the drilled list, `update` / `seedEmpty`) and `hooks/useProjectRoutines.ts` (per-project routines + `routine_list_changed`). Each hook owns its own realtime subscriptions, so the Sidebar has none.
+- Data: `hooks/useTopLevelConversations.ts` (paged standalone list -- filters, keyset `loadMore`, stale-while-revalidate `refreshSilently` on `stream complete` / `conversation_list_changed`, in-place renames, optimistic `updateConversations`), `hooks/useProjectConversations.ts` (per-project lists -- on-demand `load`, the 30s visibility-aware poll while drilled, WS refresh of the drilled list, `update` / `seedEmpty`), `hooks/useProjectRoutines.ts` (per-project routines + `routine_list_changed`) and two `hooks/useDocs.ts` instances (the user's and the drilled project's latest Quest Docs, limit 5, `doc_list_changed`; disabled while the `docs` gate is closed). Each hook owns its own realtime subscriptions, so the Sidebar has none.
 - Row UI state and mutations: `hooks/useConversationListActions.ts` -- one instance per list (open options menu, inline rename, optimistic archive / unarchive / rename against the list's `update`).
-- Pure list derivation: `utils/sidebarItems.ts` (`applyConversationFilters`, `groupConversationsByRoutine`, `buildSortedSidebarItems`, `deriveProjectSidebarItems`, `formatRoutineTimestamp`), unit-tested without React.
-- Rendering: `components/sidebar/` -- `ProjectsSection`, `ConversationsSection` (header + list + the auto-paging Load more row, whose IntersectionObserver re-observes whenever `loadMore` changes identity), `ProjectPanel` (drill-down header, `RoutinesSection`, grouped list), the shared `ConversationRow` (one component for the top-level, project and routine-run rows; the routine-run `variant` shows the run timestamp and has no FLIP id), `ConversationFilterMenu`, `RequestsBadge` and `icons.tsx`. The section components render fragments where the stylesheet uses child selectors (`.sidebar-panel-main > .section-header`, `.drill-down-conversations > .section-header`), so the DOM shape is unchanged.
+- Pure list derivation: `utils/sidebarItems.ts` (`applyConversationFilters`, `groupConversationsByRoutine`, `buildSortedSidebarItems`, `deriveProjectSidebarItems`, `formatRoutineTimestamp`) and `utils/sidebarDocs.ts` (doc row order, "5+" count label, compact row time), unit-tested without React.
+- Rendering: `components/sidebar/` -- `ProjectsSection`, `DocsSection` (the Docs block, see [Quest Docs UI](#quest-docs-ui)), `ConversationsSection` (header + list + the auto-paging Load more row, whose IntersectionObserver re-observes whenever `loadMore` changes identity), `ProjectPanel` (drill-down header, the project's `DocsSection`, `RoutinesSection`, grouped list), the shared `ConversationRow` (one component for the top-level, project and routine-run rows; the routine-run `variant` shows the run timestamp and has no FLIP id), `ConversationFilterMenu`, `RequestsBadge` and `icons.tsx`. The section components render fragments where the stylesheet uses child selectors (`.sidebar-panel-main > .section-header`, `.drill-down-conversations > .section-header`), so the DOM shape is unchanged.
 
 Behavior checks for the hooks and helpers live beside them (`*.test.ts(x)`, run with `npm test`).
 
@@ -490,6 +493,7 @@ A sidebar component that displays projects, conversations, a Requests section, a
 - `activeConversationId`: Currently selected conversation (string or null)
 - `onConversationSelect`: Callback when a conversation is clicked
 - `onNewConversation`: Callback when a new conversation is created
+- `onNavigateAway` (optional): called after the Sidebar navigates to a non-conversation view (a doc, All Docs); `MobileShell` passes a drawer-closing callback, the desktop layout passes nothing
 
 **Features**:
 - Automatic conversation and project list fetching on mount
@@ -660,6 +664,7 @@ app-container
 ├── SearchModal (overlay, toggled by Cmd/Ctrl+K or sidebar Search click)
 └── main-content (flex-grow fills remaining space)
     ├── RequestsView (if showRequestsView is true)
+    ├── Quest Docs view (if a /docs route and showRequestsView is false; no file browser)
     ├── Chat panel + File browser (if conversation selected and showRequestsView is false)
     └── HomeComposer (if no conversation and showRequestsView is false)
 ```
@@ -889,6 +894,22 @@ There is no live conversation yet, so the composer is bound to a stable in-memor
 The uploaded filenames are stashed onto `pendingFirstMessage.attachedFilenames` so the auto-send forwards them as `attached_filenames`. A hard upload failure surfaces an error and aborts the send; a partial-error response proceeds with a notice.
 
 This is the only way to attach files alongside the first message on the home screen, which has no file-browser panel. `ChatPanel.handleComposerSend` (live chat, where the workspace already exists) uploads immediately then sends in one step. See [Gemini API -- Message Metadata Wrapping](gemini-api.md#message-metadata-wrapping) for how the model is told about the just-attached files.
+
+## Quest Docs UI
+
+The view-only Quest Docs UI; the authoritative description (files, flows, design decisions) is [Quest Docs -- Frontend](quest-docs.md#frontend).
+
+**Routes.** `/docs` (All Docs), `/docs?project=<id>` (filtered to one project) and `/docs/<id>` (viewer) are URL-only state like `/inbox`: `parseDocsRoute()` in `frontend/src/utils/docsRoute.ts` is read on every render by `App.tsx` and the Sidebar, with no `NavigationContext` field. A docs route is a full main-pane takeover like `RequestsView` (`.main-content.docs-main`, no RightPanel, `activeConversationId` null). `showRequestsView` still wins the render, so the Sidebar clears it before navigating. While the `docs` gate is closed (`enabled_features` on GET /me, `DOCS_FEATURE`), a docs URL renders `DocsGateClosed`.
+
+**Sidebar.** `DocsSection` (`components/sidebar/DocsSection.tsx`) renders the user's five latest docs between Projects and Conversations, with a header button that opens `/docs`. `ProjectPanel` renders the drilled project's docs above Routines, with a header that opens `/docs?project=<id>`. Both are fed by Sidebar-owned `useDocs` instances and hidden while the gate is closed. The Sidebar's `onNavigateAway` prop lets `MobileShell` close the phone drawer after a doc or All Docs click.
+
+**All Docs.** `components/docs/DocsListView.tsx` takes over the main pane: "Your docs" from `useDocs({limit: 50})`, plus one group per project, archived ones included, from `hooks/useProjectDocsIndex.ts` (one `fetchDocs` per project, because the backend has no cross-project list; `doc_list_changed` refreshes behind a 600 ms debounce). It adds client-side search, grouping via `utils/allDocsGrouping.ts`, and `NewDocModal`.
+
+**Viewer.** `components/docs/DocViewer.tsx` (`hooks/useDoc.ts`) renders the body with the chat's shared `markdownComponents` under `MarkdownWorkspaceContext.assetBase` (see Message Component above), with a Show source toggle and a "Last written by ... / Updated ..." footer. `DocHeader.tsx` is modeled on `ConversationHeader.tsx`: a title + chevron dropdown with R / P / D key hints, offering Rename (inline, `expected_updated_at`, 409 `stale_update` reloads the row), Switch to public / private (via `DocModeSwitchDialog`), the md / zip downloads and Delete, each gated by the row's `access` flags. `DocModeBadge` (`components/docs/DocModeBadge.tsx`, the Private lock / Public globe pill) appears on sidebar rows, All Docs rows and the viewer header.
+
+**write_doc card.** `ActionRequestPreviewFields` renders the `doc_image` preview field with `DocImagePreview.tsx` (a workspace thumbnail via the card conversation's `files/download` route, click opens `FileViewerModal`). `SkillContentDiffPreview.tsx` renders a bounded `skill_content_diff` window, recognized by `total_old_lines` / `total_new_lines`, with "lines above / below not shown" edge separators, a "Show context lines" toggle and a truncation note. Whole-body skill and routine diffs are unchanged.
+
+**Phone.** `MobileShell` receives `docsRoute` / `docsEnabled` from `App.tsx` and renders the same views (or `DocsGateClosed`) in `.mobile-main`. It closes both drawers when the docs route changes and hides the workspace button on docs routes.
 
 ## ChatPanel Component
 
@@ -1348,6 +1369,8 @@ Only workspace-relative srcs render as images: percent-decode, strip leading `./
 The conversation id and a click-to-enlarge callback arrive via `MarkdownWorkspaceContext` -- a context rather than a components-factory so `markdownComponents` stays a stable module constant and the `React.memo` on `MessageContentRenderer` keeps holding. `ChatPanel` provides the context (memoized) around its message list; clicking an image opens the existing `FileViewerModal` (the viewer state is a plain `{workspace_path, filename}` shared with composer-attachment thumbnails).
 
 `FileViewerModal` also provides the context (id only, no click handler) around its `.md` preview so markdown files referencing workspace images render them.
+
+The Quest Docs viewer provides the context with `assetBase` (`docAssetBase(docId)` from `frontend/src/api/docsApi.ts`) instead of a conversation id. With `assetBase` set, only an `assets/<name>` src resolves (one segment, no leading dot, after the same decode/normalize) to `<assetBase>/<name>`, the doc's cookie-authed asset route; every other relative src is a missing ref, `conversationId` is ignored, and external srcs still degrade to links. See [Quest Docs -- Viewer](quest-docs.md#viewer).
 
 A src that fails to load (or renders with no conversation id) falls back to an italic `<code class="markdown-image-missing">` chip showing the alt text/path; the failure is tracked per-URL so a truncated src during streaming recovers once the full destination arrives. Note the renderer stack has no `rehype-raw`, so only markdown `![...](...)` syntax renders -- raw `<img>` HTML in model output is dropped.
 
@@ -1946,7 +1969,7 @@ The main application component that orchestrates all UI components, manages glob
 The App component uses `AuthContext` for session-based auth state (`isAuthenticated`, `isCheckingAuth`) and conversation management. URL params (`useParams`) are the source of truth for the active conversation and project; a `useEffect` syncs them into context state.
 
 **Features**:
-- URL-based routing via `react-router-dom` with three route patterns: `/`, `/chats/:conversationId`, `/projects/:projectId/:conversationId`
+- URL-based routing via `react-router-dom` with the conversation route patterns `/`, `/chats/:conversationId`, `/projects/:projectId/:conversationId`, plus `/inbox` and the Quest Docs routes `/docs` and `/docs/:docId` (see [Quest Docs UI](#quest-docs-ui))
 - Two-column layout with Sidebar and ChatPanel (or RequestsView)
 - Session-based authentication via cookie (shows inline `SignInScreen` if not authenticated)
 - Navigation via `useNavigate()` instead of direct state setting -- conversation selection, creation, and project navigation all update the URL
@@ -1975,6 +1998,7 @@ app-container (flex row, 100vh)
 │   │           └── Conversation entries (compact, title only)
 └── main-content (flex: 1)
     ├── RequestsView (if showRequestsView)
+    ├── DocsListView / DocViewer / DocsGateClosed (if a /docs route and not showRequestsView; no RightPanel)
     ├── ChatPanel + RightPanel (if activeConversationId and not showRequestsView)
     └── HomeComposer (if no conversation and not showRequestsView)
 ```
