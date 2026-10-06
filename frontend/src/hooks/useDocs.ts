@@ -1,17 +1,23 @@
 /**
- * Data layer for a Quest Docs list: the user's docs (no `projectId`) or one
- * project's docs. Keyset-paged like the sidebar conversation list -- first
+ * Data layer for a Quest Docs list: the user's own user docs (no
+ * `projectId`), one project's docs, or the docs other people shared with the
+ * user (`shared: true`, its own keyset stream; All Docs' "Shared with you").
+ * Keyset-paged like the sidebar conversation list -- first
  * page on mount / whenever the arguments change, `loadMore` appends the next
  * page, `refresh` silently re-fetches the loaded window -- and kept current by
  * the `doc_list_changed` realtime global.
  *
- * Cheap by design: the Sidebar mounts two instances (limit 5) beside the All
- * Docs view's one, so a closed gate (`enabled: false`) fetches nothing and
- * every superseded response is dropped instead of re-rendering.
+ * Cheap by design: the Sidebar mounts two instances (limit 5) and the All
+ * Docs view two more (its own list + the shared one), so a closed gate
+ * (`enabled: false`) fetches nothing, every superseded response is dropped
+ * instead of re-rendering, and realtime refreshes are coalesced: a burst of
+ * `doc_list_changed` events (e.g. a conversation writing a doc shared with
+ * everyone, which reaches every connected user) costs one re-fetch per list,
+ * DOCS_REFRESH_DEBOUNCE_MS after the last event.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { DOCS_MAX_PAGE_SIZE, fetchDocs } from '../api/docsApi';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { DOCS_MAX_PAGE_SIZE, fetchDocs, type FetchDocsOptions } from '../api/docsApi';
 import { ApiClientError } from '../api/request';
 import type { Doc } from '../api/types';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
@@ -19,9 +25,17 @@ import { persistentWebSocket } from '../services/PersistentWebSocket';
 /** Page size when the caller passes no `limit`. */
 export const DOCS_DEFAULT_PAGE_SIZE = 50;
 
+/** Quiet period after the last `doc_list_changed` before the re-fetch. */
+export const DOCS_REFRESH_DEBOUNCE_MS = 300;
+
 export interface UseDocsOptions {
-  /** A project's docs; omitted / null = the user's own + shared docs. */
+  /** A project's docs; omitted / null = the user's own user docs. */
   projectId?: string | null;
+  /**
+   * The docs other people shared with the user (user and project docs).
+   * Takes precedence: `projectId` is ignored while this is set.
+   */
+  shared?: boolean;
   /** Page size (clamped to 1..200). */
   limit?: number;
   /** False (gate closed, nothing to show) = no fetch and an empty list. */
@@ -54,13 +68,20 @@ const EMPTY: ListState = { key: null, docs: [], nextCursor: null, error: null };
 
 export function useDocs({
   projectId = null,
+  shared = false,
   limit = DOCS_DEFAULT_PAGE_SIZE,
   enabled = true,
 }: UseDocsOptions = {}): DocsList {
   const pageSize = Math.min(DOCS_MAX_PAGE_SIZE, Math.max(1, Math.floor(limit)));
-  const project = projectId || null;
-  // Identity of the list being shown; null while disabled.
-  const key = enabled ? `${project ?? ''}|${pageSize}` : null;
+  const project = shared ? null : projectId || null;
+  // Identity of the list being shown; null while disabled. The stream tag
+  // keeps the shared list apart from every project id.
+  const key = enabled ? `${shared ? 'shared' : `project:${project ?? ''}`}|${pageSize}` : null;
+  // The list selector sent with every page request of this stream.
+  const streamOpts = useMemo<FetchDocsOptions>(
+    () => (shared ? { shared: true } : { projectId: project }),
+    [shared, project],
+  );
 
   const [state, setState] = useState<ListState>(EMPTY);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -85,7 +106,7 @@ export function useDocs({
       if (key === null) return;
       const seq = ++requestSeqRef.current;
       try {
-        const response = await fetchDocs({ projectId: project, limit: count });
+        const response = await fetchDocs({ ...streamOpts, limit: count });
         if (seq !== requestSeqRef.current) return;
         commit({
           key,
@@ -106,7 +127,7 @@ export function useDocs({
         });
       }
     },
-    [key, project, commit],
+    [key, streamOpts, commit],
   );
 
   // First page on mount and whenever the arguments change: drop the old
@@ -133,7 +154,7 @@ export function useDocs({
     setLoadingMore(true);
     void (async () => {
       try {
-        const response = await fetchDocs({ projectId: project, limit: pageSize, cursor });
+        const response = await fetchDocs({ ...streamOpts, limit: pageSize, cursor });
         // A refresh or argument change since the request started owns the
         // list now; appending onto it could skip or repeat rows.
         if (seq !== requestSeqRef.current) return;
@@ -156,15 +177,26 @@ export function useDocs({
         if (token === loadMoreSeqRef.current) setLoadingMore(false);
       }
     })();
-  }, [key, project, pageSize, loadingMore, commit]);
+  }, [key, streamOpts, pageSize, loadingMore, commit]);
 
-  // Realtime: any create / rename / delete / model write.
+  // Realtime: any create / rename / delete / write / share change, trailing-
+  // debounced so a burst costs one re-fetch (the first page on mount above
+  // stays immediate).
   useEffect(() => {
     if (key === null) return;
-    return persistentWebSocket.onGlobalEvent((event) => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = persistentWebSocket.onGlobalEvent((event) => {
       if (event.type !== 'doc_list_changed') return;
-      void refresh();
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        void refresh();
+      }, DOCS_REFRESH_DEBOUNCE_MS);
     });
+    return () => {
+      unsubscribe();
+      if (timer !== null) clearTimeout(timer);
+    };
   }, [key, refresh]);
 
   const current = key !== null && state.key === key ? state : EMPTY;

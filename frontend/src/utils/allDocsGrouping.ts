@@ -1,14 +1,18 @@
 /**
  * Pure list derivation for the All Docs view (components/docs/DocsListView):
- * client-side search, the "Your docs" + per-project grouping, and the
- * human-readable size column. Kept free of React so it is unit-tested in
- * allDocsGrouping.test.ts like utils/sidebarItems.ts.
+ * client-side search, the "Your docs" + "Shared with you" + per-project
+ * grouping, and the human-readable size column. Kept free of React so it is
+ * unit-tested in allDocsGrouping.test.ts like utils/sidebarItems.ts.
  */
 
 import type { Doc, Project } from '../api/types';
+import { sharedByLabel, sharedByTitle, sharedOwnerSearchText } from './docSharing';
 
 /** Key of the always-present "Your docs" group. */
 export const USER_DOCS_GROUP_KEY = 'user';
+
+/** Key of the "Shared with you" group (docs other people shared). */
+export const SHARED_DOCS_GROUP_KEY = 'shared';
 
 /** Group key of one project's docs. */
 export function projectGroupKey(projectId: string): string {
@@ -18,17 +22,19 @@ export function projectGroupKey(projectId: string): string {
 export type DocGroup = {
   key: string;
   label: string;
-  // The project a project group belongs to; null for "Your docs" and for a
-  // project id the loaded project list does not know.
+  // The project a project group belongs to; null for "Your docs", "Shared
+  // with you" and for a project id the loaded project list does not know.
   project: Project | null;
-  // Null for "Your docs"; set for every project group (known or not).
+  // Null for "Your docs" and "Shared with you"; set for every project group
+  // (known or not).
   projectId: string | null;
   docs: Doc[];
 };
 
 /**
- * Docs whose title or description contains `query` (trimmed,
- * case-insensitive substring). An empty / whitespace query keeps them all.
+ * Docs whose title or description -- or, for a doc shared with the viewer,
+ * its owner's name or email -- contains `query` (trimmed, case-insensitive
+ * substring). An empty / whitespace query keeps them all.
  */
 export function filterDocs(docs: Doc[], query: string): Doc[] {
   const needle = query.trim().toLowerCase();
@@ -36,14 +42,17 @@ export function filterDocs(docs: Doc[], query: string): Doc[] {
   return docs.filter(
     (doc) =>
       doc.title.toLowerCase().includes(needle) ||
-      (doc.description ?? '').toLowerCase().includes(needle),
+      (doc.description ?? '').toLowerCase().includes(needle) ||
+      sharedOwnerSearchText(doc).toLowerCase().includes(needle),
   );
 }
 
 /**
- * "Your docs" first (always present, even when empty), then one group per
- * project id in `byProject` that has at least one doc, ordered by project
- * name (case-insensitive, id as the tiebreak). A project id missing from
+ * "Your docs" first (always present, even when empty), then -- when
+ * `sharedDocs` is passed -- "Shared with you" (present even when empty; the
+ * view decides whether an empty one shows), then one group per project id
+ * in `byProject` that has at least one doc, ordered by project name
+ * (case-insensitive, id as the tiebreak). A project id missing from
  * `projects` is labelled "Project". Docs keep the order they arrived in
  * (the server's newest-updated first).
  */
@@ -51,6 +60,7 @@ export function groupDocs(
   userDocs: Doc[],
   byProject: Record<string, Doc[]>,
   projects: Project[],
+  sharedDocs?: Doc[],
 ): DocGroup[] {
   const projectsById = new Map(projects.map((p) => [p.id, p]));
   const projectGroups: DocGroup[] = Object.entries(byProject)
@@ -70,21 +80,39 @@ export function groupDocs(
     if (byName !== 0) return byName;
     return (a.projectId ?? '') < (b.projectId ?? '') ? -1 : 1;
   });
-  return [
+  const groups: DocGroup[] = [
     { key: USER_DOCS_GROUP_KEY, label: 'Your docs', project: null, projectId: null, docs: userDocs },
-    ...projectGroups,
   ];
+  if (sharedDocs) {
+    groups.push({
+      key: SHARED_DOCS_GROUP_KEY,
+      label: 'Shared with you',
+      project: null,
+      projectId: null,
+      docs: sharedDocs,
+    });
+  }
+  return [...groups, ...projectGroups];
 }
 
 /**
- * The scope column: the project's name for a project doc ("Project" when the
- * project is unknown), "Your doc" for a user doc the viewer owns, and
- * "Shared with you" for someone else's user doc (only the owner may delete,
- * so `access.can_delete` doubles as the ownership bit).
+ * The scope column: "Shared by <owner>" for a doc someone shared with the
+ * viewer (user or project doc alike: the viewer cannot open the owner's
+ * project), else the project's name for a project doc ("Project" when the
+ * project is unknown) and "Your doc" for the viewer's own user doc.
  */
 export function docScopeLabel(doc: Doc, project: Project | null): string {
+  if (doc.shared_with_me) return sharedByLabel(doc);
   if (doc.project_id) return project?.name ?? 'Project';
-  return doc.access?.can_delete === false ? 'Shared with you' : 'Your doc';
+  return 'Your doc';
+}
+
+/**
+ * The scope cell's tooltip: "Shared by <owner> · can edit / can view" for a
+ * shared doc, none otherwise.
+ */
+export function docScopeTitle(doc: Doc): string | undefined {
+  return doc.shared_with_me ? sharedByTitle(doc) : undefined;
 }
 
 const KB = 1024;

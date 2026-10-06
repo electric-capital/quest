@@ -50,6 +50,12 @@ class DuplicateDocTitleError(ValueError):
     """
 
 
+class ShareTargetGoneError(DocValidationError):
+    """:func:`add_share` lost a race: the doc or the recipient user was
+    deleted between the caller's checks and the insert (the foreign key
+    refused the row). The caller re-checks which one is gone."""
+
+
 class StaleDocError(ValueError):
     """``expected_updated_at`` did not match the row (concurrent write).
 
@@ -228,6 +234,31 @@ async def _doc_dict_with_shares(db, doc: Doc) -> dict:
     return _doc_to_dict(doc, shares)
 
 
+def _keyset_page(stmt, *, limit: Optional[int], before: Optional[tuple[datetime, str]]):
+    """Apply the docs list order ``(updated_at DESC, id DESC)``, the keyset
+    cursor (rows strictly after ``before``) and the optional ``limit``."""
+    if before is not None:
+        before_ts, before_id = before
+        stmt = stmt.where(
+            or_(
+                Doc.updated_at < before_ts,
+                and_(Doc.updated_at == before_ts, Doc.id < before_id),
+            )
+        )
+    stmt = stmt.order_by(Doc.updated_at.desc(), Doc.id.desc())
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return stmt
+
+
+async def _docs_with_shares(db, stmt) -> list[dict]:
+    docs = (await db.execute(stmt)).scalars().all()
+    if not docs:
+        return []
+    shares = await _load_shares(db, [d.id for d in docs])
+    return [_doc_to_dict(d, shares.get(d.id, [])) for d in docs]
+
+
 # ---------------------------------------------------------------------------
 # Docs
 # ---------------------------------------------------------------------------
@@ -324,14 +355,17 @@ async def list_accessible_docs(
     include_user_docs: bool = True,
     include_project_docs: bool = False,
     mode: Optional[str] = None,
+    owned_only: bool = False,
     limit: Optional[int] = None,
     before: Optional[tuple[datetime, str]] = None,
 ) -> list[dict]:
     """Docs the user owns or holds a share on, newest first, with shares.
 
     Candidates are docs where ``owner_id == user_id`` or a ``doc_shares``
-    row exists for the user or for everyone (``user_id IS NULL``). This is
-    the candidate set only: the caller still runs every row through
+    row exists for the user or for everyone (``user_id IS NULL``) -- only
+    the first with ``owned_only`` (the UI's "Your docs" list; docs shared
+    with the user are :func:`list_docs_shared_with`). This is the candidate
+    set only: the caller still runs every row through
     ``chat.docs.access.resolve_doc_access`` (which hides, e.g., private
     docs from public conversations).
 
@@ -348,6 +382,7 @@ async def list_accessible_docs(
         mode: Optional ``"private"`` / ``"public"`` filter. Public-project
             callers pass ``"public"`` so the SQL ``LIMIT`` applies to the
             set they can actually see instead of being eaten by hidden rows.
+        owned_only: Only docs ``user_id`` owns (no share-based candidates).
         limit: Optional row cap (callers fetch ``limit + 1`` for has_more).
         before: Optional keyset cursor ``(updated_at, id)``: only rows
             strictly after this pair under the ``(updated_at DESC, id DESC)``
@@ -366,35 +401,57 @@ async def list_accessible_docs(
     if mode is not None:
         _validate_mode(mode)
 
+    if owned_only:
+        relationship = Doc.owner_id == user_id
+    else:
+        share_exists = exists().where(
+            DocShare.doc_id == Doc.id,
+            or_(DocShare.user_id == user_id, DocShare.user_id.is_(None)),
+        )
+        relationship = or_(Doc.owner_id == user_id, share_exists)
+
+    async with AsyncSessionLocal() as db:
+        stmt = select(Doc).where(relationship, or_(*scope_conds))
+        if mode is not None:
+            stmt = stmt.where(Doc.mode == mode)
+        stmt = _keyset_page(stmt, limit=limit, before=before)
+        return await _docs_with_shares(db, stmt)
+
+
+async def list_docs_shared_with(
+    user_id: int,
+    *,
+    limit: Optional[int] = None,
+    before: Optional[tuple[datetime, str]] = None,
+    include_public_project_docs: bool = True,
+) -> list[dict]:
+    """Docs shared WITH the user that they do not own, newest first.
+
+    Candidates: ``owner_id != user_id`` and a ``doc_shares`` row for the
+    user or for everyone (``user_id IS NULL``); user AND project docs (the
+    UI may list a shared project doc; conversations still never reach one
+    from outside its project -- that is the access rule's business). Same
+    order and keyset cursor as :func:`list_accessible_docs`; the caller
+    still runs every row through the access rule and its own UI filters.
+
+    ``include_public_project_docs=False`` leaves out docs of public
+    projects (``project_id`` set and ``mode="public"``) in SQL -- the
+    caller passes it while the user's ``public_projects`` gate is closed,
+    so hidden rows never eat the ``LIMIT``.
+
+    Returns:
+        Doc dicts, each with ``shares``.
+    """
     share_exists = exists().where(
         DocShare.doc_id == Doc.id,
         or_(DocShare.user_id == user_id, DocShare.user_id.is_(None)),
     )
-
     async with AsyncSessionLocal() as db:
-        stmt = select(Doc).where(
-            or_(Doc.owner_id == user_id, share_exists),
-            or_(*scope_conds),
-        )
-        if mode is not None:
-            stmt = stmt.where(Doc.mode == mode)
-        if before is not None:
-            before_ts, before_id = before
-            stmt = stmt.where(
-                or_(
-                    Doc.updated_at < before_ts,
-                    and_(Doc.updated_at == before_ts, Doc.id < before_id),
-                )
-            )
-        stmt = stmt.order_by(Doc.updated_at.desc(), Doc.id.desc())
-        if limit is not None:
-            stmt = stmt.limit(limit)
-        result = await db.execute(stmt)
-        docs = result.scalars().all()
-        if not docs:
-            return []
-        shares = await _load_shares(db, [d.id for d in docs])
-        return [_doc_to_dict(d, shares.get(d.id, [])) for d in docs]
+        stmt = select(Doc).where(Doc.owner_id != user_id, share_exists)
+        if not include_public_project_docs:
+            stmt = stmt.where(or_(Doc.project_id.is_(None), Doc.mode != "public"))
+        stmt = _keyset_page(stmt, limit=limit, before=before)
+        return await _docs_with_shares(db, stmt)
 
 
 async def update_doc_metadata(
@@ -518,6 +575,15 @@ async def list_doc_ids_for_project(project_id: str) -> list[str]:
         return list(result.scalars().all())
 
 
+async def list_docs_for_project(project_id: str) -> list[dict]:
+    """Every doc of a project as doc dicts WITH shares (collect BEFORE
+    deleting the project: the ids drive the directory sweep, the shares the
+    realtime audience -- both rows go with the project's CASCADE)."""
+    async with AsyncSessionLocal() as db:
+        stmt = select(Doc).where(Doc.project_id == project_id).order_by(Doc.id)
+        return await _docs_with_shares(db, stmt)
+
+
 async def list_doc_ids_for_user(user_id: int) -> list[str]:
     """Ids of every doc the user owns, user and project docs alike (collect
     BEFORE deleting the account, then sweep the directories)."""
@@ -552,6 +618,8 @@ async def add_share(doc_id: str, user_id: Optional[int], permission: str) -> dic
 
     Raises:
         DocValidationError: bad permission, unknown doc, or owner recipient.
+        ShareTargetGoneError: (a DocValidationError) the doc or the
+            recipient was deleted while the row was being inserted.
     """
     _validate_permission(permission)
     if user_id is not None and (isinstance(user_id, bool) or not isinstance(user_id, int)):
@@ -587,13 +655,17 @@ async def add_share(doc_id: str, user_id: Optional[int], permission: str) -> dic
         db.add(share)
         try:
             await db.commit()
-        except IntegrityError:
+        except IntegrityError as exc:
             # A concurrent add_share won the unique index (per-user row or
             # the partial "everyone" index): fall back to updating that row.
             await db.rollback()
             existing = (await db.execute(stmt.order_by(DocShare.id))).scalars().first()
             if existing is None:
-                raise
+                # No competing row, so a foreign key refused the insert:
+                # the doc or the recipient was deleted meanwhile.
+                raise ShareTargetGoneError(
+                    "The doc or the share recipient no longer exists."
+                ) from exc
             if existing.permission != permission:
                 existing.permission = permission
                 await db.commit()
@@ -604,7 +676,9 @@ async def add_share(doc_id: str, user_id: Optional[int], permission: str) -> dic
 
 
 async def remove_share(doc_id: str, share_id: int) -> bool:
-    """Delete one share row of a doc. False when no such row on that doc."""
+    """Delete one share row of a doc. False when no such row on that doc.
+
+    Like :func:`add_share`, does not bump the doc's ``updated_at``."""
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             delete(DocShare).where(

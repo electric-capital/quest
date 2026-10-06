@@ -1,0 +1,97 @@
+/* A read-only unsaved draft the viewer can no longer hand to the editor
+ * (DocDraftRecovery): a raised card with the reason, the Copy / Download /
+ * Discard actions and the draft text, scrolling inside a capped box. */
+
+.doc-draft-recovery {
+  width: 100%;
+  max-width: 820px;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background-color: var(--surface-raised);
+  color: var(--text);
+  text-align: left;
+}
+
+.doc-draft-recovery-message {
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.doc-draft-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.doc-draft-recovery-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 1.875rem;
+  padding: 0 0.75rem;
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.doc-draft-recovery-button:hover {
+  background-color: var(--hover);
+}
+
+.doc-draft-recovery-button:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.doc-draft-recovery-button:focus-visible,
+.doc-draft-recovery-content:focus-visible {
+  outline: 2px solid rgb(var(--accent-rgb) / 0.6);
+  outline-offset: 1px;
+}
+
+.doc-draft-recovery-button--danger:hover {
+  color: #ff6b6b;
+}
+
+.doc-draft-recovery-status {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.doc-draft-recovery-status:empty {
+  margin: 0;
+}
+
+.doc-draft-recovery-content {
+  max-height: 20rem;
+  margin: 0.75rem 0 0;
+  padding: 0.75rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background-color: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-color-scheme: light) {
+  .doc-draft-recovery-button--danger:hover {
+    color: #d32f2f;
+  }
+}

@@ -36,6 +36,11 @@ interface ModalShellProps {
   onEscape?: (() => void) | null;
   /** Extra keyboard handling on the overlay (e.g. arrow-key navigation). */
   onKeyDown?: React.KeyboardEventHandler<HTMLDivElement>;
+  /**
+   * Id of the element that names the dialog (usually its heading), set as
+   * `aria-labelledby` on the role="dialog" element. Optional.
+   */
+  ariaLabelledBy?: string;
   children: ReactNode;
 }
 
@@ -47,6 +52,7 @@ export function ModalShell({
   modalRef,
   onEscape,
   onKeyDown,
+  ariaLabelledBy,
   children,
 }: ModalShellProps) {
   const escapeHandler = onEscape === undefined ? onClose : onEscape;
@@ -79,6 +85,7 @@ export function ModalShell({
       onKeyDown={onKeyDown}
       role="dialog"
       aria-modal="true"
+      aria-labelledby={ariaLabelledBy}
     >
       {modalClassName ? <div ref={modalRef} className={modalClassName}>{children}</div> : children}
     </div>,

@@ -8,7 +8,9 @@
  * gutter, card 0.75rem from the top, sticky while the doc scrolls, the list
  * scrolling inside the card. <= 1024px: one track, the aside drops below the
  * body (above the footer). <= 768px (phone): the aside holds the collapsed
- * "Assets (N)" <details> instead of the card (DocViewer picks the variant). */
+ * "Assets (N)" <details> instead of the card (DocViewer picks the variant).
+ * Edit mode (`.doc-viewer--edit`, at the end of the file) drops the aside
+ * and gives the editor the pane's width and height. */
 
 .doc-viewer {
   --doc-viewer-aside-gutter: 0.75rem;
@@ -88,6 +90,55 @@
   /* Wrap instead of scrolling sideways: long lines stay readable on phones. */
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* "You have unsaved changes from <time>. [Resume editing]" above the body. */
+.doc-viewer-draft-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin-top: 1rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid rgb(var(--accent-rgb) / 0.35);
+  border-radius: 8px;
+  background-color: var(--accent-soft);
+  color: var(--text);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.doc-viewer-draft-notice > span {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.doc-viewer-draft-resume {
+  flex-shrink: 0;
+  height: 1.75rem;
+  padding: 0 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background-color: var(--accent);
+  color: var(--accent-contrast);
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.doc-viewer-draft-resume:hover {
+  background-color: var(--accent-hover);
+}
+
+.doc-viewer-draft-resume:focus-visible {
+  outline: 2px solid rgb(var(--accent-rgb) / 0.6);
+  outline-offset: 1px;
+}
+
+.doc-viewer-draft-recovery {
+  margin-top: 1rem;
 }
 
 .doc-viewer-empty {
@@ -207,5 +258,47 @@
 
   .doc-viewer-aside {
     margin-top: 2rem;
+  }
+}
+
+/* Edit mode (DocEditor): the textarea and its preview need room, so the
+ * Assets aside steps out (images are added from the editor's toolbar;
+ * deleting one is a view-mode action) and the column takes the pane's width
+ * up to 1440px. The viewer also takes the pane's height (at least 30rem --
+ * a shorter window scrolls the pane instead of squashing the editor), so
+ * the editor fills the column under the header and its panes scroll inside
+ * themselves; the footer stays under it. After the breakpoint blocks above,
+ * which these rules override. */
+.doc-viewer.doc-viewer--edit {
+  flex: 1 0 0;
+  min-height: 30rem;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  padding: 1rem 2rem 1.25rem;
+}
+
+.doc-viewer--edit .doc-viewer-aside {
+  display: none;
+}
+
+.doc-viewer--edit .doc-viewer-column {
+  max-width: 1440px;
+  min-height: 0;
+}
+
+.doc-viewer--edit .doc-viewer-footer {
+  grid-row: 2;
+  max-width: 1440px;
+  margin-top: 1rem;
+}
+
+@media (max-width: 768px) {
+  .doc-viewer.doc-viewer--edit {
+    min-height: 24rem;
+    padding: 0.75rem 16px 1rem;
+  }
+
+  .doc-viewer--edit .doc-viewer-footer {
+    margin-top: 0.75rem;
   }
 }

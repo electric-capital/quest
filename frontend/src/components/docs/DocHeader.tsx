@@ -4,17 +4,24 @@
  * Same interaction model as ConversationHeader: the title plus a chevron
  * open a small dropdown, single-key hints act while it is open, and Rename
  * swaps the title for an inline input. Items follow the viewer's access
- * flags: Rename (can_rename), the two downloads (always), Delete
- * (can_delete, behind a confirm). A non-owner gets only the downloads. There
- * is no mode switch: user docs are always private and a project doc takes
- * its project's mode (`access.can_switch_mode` is always false in v1).
- * Beside the title sit the mode badge (a public doc only, see utils/docMode)
- * and, for a project doc, a folder chip linking to that project's docs; on
- * the right, the Show source / Show rendered toggle.
+ * flags: Rename (can_rename), Edit (can_edit, view mode only), History
+ * (can_edit, view mode only: earlier versions may hold text the owner
+ * removed before sharing), Share (can_share), the two downloads
+ * (always), Delete (can_delete, behind a confirm). There is no mode switch:
+ * user docs are always private and a project doc takes its project's mode
+ * (`access.can_switch_mode` is always false).
+ *
+ * Beside the title sit the mode badge (a public doc only, see utils/docMode),
+ * a folder chip for a project doc (a link to that project's docs when the
+ * project is the viewer's own, plain text for a doc shared from someone
+ * else's project), and a share chip: for the owner of a shared doc, "Shared
+ * with N people" / "Shared with everyone" opening the Share dialog; for a
+ * recipient, who shared it and whether they can edit. On the right, the
+ * Show source / Show rendered toggle (view mode only).
  *
  * Writes report the returned row through `onRowApplied` (useDoc.applyRow)
- * rather than waiting for the realtime re-fetch. View-only: no content
- * editing anywhere here.
+ * rather than waiting for the realtime re-fetch. The body editor, History
+ * and the Share dialog are separate components the viewer swaps in.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -25,9 +32,12 @@ import {
   Eye,
   FileArchive,
   FileDown,
+  FilePen,
   Folder,
+  History,
   Pencil,
   Trash2,
+  Users,
 } from 'lucide-react';
 import {
   deleteDoc,
@@ -40,6 +50,7 @@ import { ApiClientError } from '../../api/request';
 import type { Doc, DocDetail } from '../../api/types';
 import { useProjects } from '../../contexts/ProjectsContext';
 import { shouldShowDocModeBadge } from '../../utils/docMode';
+import { ownerShareSummary, recipientShareSummary, shareChipTitle } from '../../utils/docSharing';
 import { docsListPath } from '../../utils/docsRoute';
 import { DocConfirmDialog } from './DocConfirmDialog';
 import { DocModeBadge } from './DocModeBadge';
@@ -56,19 +67,47 @@ function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
 }
 
+/** What the viewer body shows: the doc, the editor, or History. */
+export type DocViewerMode = 'view' | 'edit' | 'history';
+
 export interface DocHeaderProps {
   doc: DocDetail;
+  /** Defaults to 'view'. Edit and History hide the Show source toggle. */
+  mode?: DocViewerMode;
   showSource: boolean;
   onToggleSource: () => void;
   /** A row returned by the rename endpoint (or a stale_update's `current`). */
   onRowApplied: (row: Doc) => void;
   onDeleted: () => void;
+  /** Open the body editor (offered when `access.can_edit`). */
+  onEdit?: () => void;
+  /** Open History. */
+  onShowHistory?: () => void;
+  /** Open the Share dialog (offered when `access.can_share`). */
+  onShare?: () => void;
 }
 
-export function DocHeader({ doc, showSource, onToggleSource, onRowApplied, onDeleted }: DocHeaderProps) {
+export function DocHeader({
+  doc,
+  mode = 'view',
+  showSource,
+  onToggleSource,
+  onRowApplied,
+  onDeleted,
+  onEdit,
+  onShowHistory,
+  onShare,
+}: DocHeaderProps) {
   const { projects } = useProjects();
   const showModeBadge = shouldShowDocModeBadge(doc.mode);
   const { can_rename: canRename, can_delete: canDelete } = doc.access;
+  const canEdit = Boolean(onEdit) && doc.access.can_edit && mode === 'view';
+  // History is for people who can edit (owner, write share): earlier
+  // versions may hold text the owner removed before sharing.
+  const canShowHistory = Boolean(onShowHistory) && doc.access.can_edit && mode === 'view';
+  const canShare = Boolean(onShare) && doc.access.can_share;
+  const hasPrimaryItems = canRename || canEdit || canShowHistory || canShare;
+  const shareSummary = ownerShareSummary(doc) ?? recipientShareSummary(doc);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -94,9 +133,10 @@ export function DocHeader({ doc, showSource, onToggleSource, onRowApplied, onDel
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  const projectName = doc.project_id
-    ? projects.find((p) => p.id === doc.project_id)?.name || 'Project'
-    : null;
+  // A doc shared from someone else's project: that project is not in the
+  // viewer's list, so the chip is plain text (its docs list would 404).
+  const project = doc.project_id ? projects.find((p) => p.id === doc.project_id) : undefined;
+  const projectName = doc.project_id ? project?.name || 'Project' : null;
 
   useEffect(() => {
     if (!notice) return;
@@ -209,6 +249,20 @@ export function DocHeader({ doc, showSource, onToggleSource, onRowApplied, onDel
     }
   }, [doc.id, onDeleted]);
 
+  // Menu actions handed to the viewer: close the menu first.
+  const runEdit = useCallback(() => {
+    setMenuOpen(false);
+    onEdit?.();
+  }, [onEdit]);
+  const runHistory = useCallback(() => {
+    setMenuOpen(false);
+    onShowHistory?.();
+  }, [onShowHistory]);
+  const runShare = useCallback(() => {
+    setMenuOpen(false);
+    onShare?.();
+  }, [onShare]);
+
   // Single-key shortcuts while the menu is open (mirror the hint letters).
   useEffect(() => {
     if (!menuOpen) return;
@@ -216,12 +270,18 @@ export function DocHeader({ doc, showSource, onToggleSource, onRowApplied, onDel
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key.toLowerCase();
       if (key === 'r' && canRename) { e.preventDefault(); startRename(); }
+      else if (key === 'e' && canEdit) { e.preventDefault(); runEdit(); }
+      else if (key === 'h' && canShowHistory) { e.preventDefault(); runHistory(); }
+      else if (key === 's' && canShare) { e.preventDefault(); runShare(); }
       else if (key === 'd' && canDelete) { e.preventDefault(); openDelete(); }
       else if (key === 'escape') { setMenuOpen(false); }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [menuOpen, canRename, canDelete, startRename, openDelete]);
+  }, [
+    menuOpen, canRename, canEdit, canShowHistory, canShare, canDelete,
+    startRename, runEdit, runHistory, runShare, openDelete,
+  ]);
 
   const closeMenu = () => setMenuOpen(false);
 
@@ -275,8 +335,28 @@ export function DocHeader({ doc, showSource, onToggleSource, onRowApplied, onDel
                     <span className="doc-header-menu-key">R</span>
                   </button>
                 )}
-                {/* Phase 3 (not built): Share, History, Edit menu items go here. */}
-                {canRename && <div className="doc-header-menu-separator" role="separator" />}
+                {canEdit && (
+                  <button type="button" className="doc-header-menu-item" role="menuitem" onClick={runEdit}>
+                    <FilePen size={16} className="doc-header-menu-icon" />
+                    <span>Edit</span>
+                    <span className="doc-header-menu-key">E</span>
+                  </button>
+                )}
+                {canShowHistory && (
+                  <button type="button" className="doc-header-menu-item" role="menuitem" onClick={runHistory}>
+                    <History size={16} className="doc-header-menu-icon" />
+                    <span>History</span>
+                    <span className="doc-header-menu-key">H</span>
+                  </button>
+                )}
+                {canShare && (
+                  <button type="button" className="doc-header-menu-item" role="menuitem" onClick={runShare}>
+                    <Users size={16} className="doc-header-menu-icon" />
+                    <span>Share</span>
+                    <span className="doc-header-menu-key">S</span>
+                  </button>
+                )}
+                {hasPrimaryItems && <div className="doc-header-menu-separator" role="separator" />}
                 <a
                   className="doc-header-menu-item"
                   role="menuitem"
@@ -316,10 +396,10 @@ export function DocHeader({ doc, showSource, onToggleSource, onRowApplied, onDel
             )}
           </div>
 
-          {(showModeBadge || doc.project_id) && (
+          {(showModeBadge || doc.project_id || shareSummary) && (
             <div className="doc-header-meta">
               {showModeBadge && <DocModeBadge mode={doc.mode} />}
-              {doc.project_id && (
+              {doc.project_id && project && (
                 <Link
                   to={docsListPath(doc.project_id)}
                   className="doc-header-project-chip"
@@ -329,21 +409,51 @@ export function DocHeader({ doc, showSource, onToggleSource, onRowApplied, onDel
                   <span className="doc-header-project-name">{projectName}</span>
                 </Link>
               )}
+              {doc.project_id && !project && (
+                <span className="doc-header-project-chip doc-header-chip--static" title="A doc from a project">
+                  <Folder size={12} strokeWidth={2.25} aria-hidden="true" />
+                  <span className="doc-header-project-name">
+                    {doc.shared_with_me ? 'Project doc' : projectName}
+                  </span>
+                </span>
+              )}
+              {shareSummary && canShare && (
+                <button
+                  type="button"
+                  className="doc-header-project-chip doc-header-share-chip"
+                  onClick={runShare}
+                  title={shareChipTitle(doc)}
+                >
+                  <Users size={12} strokeWidth={2.25} aria-hidden="true" />
+                  <span className="doc-header-project-name">{shareSummary}</span>
+                </button>
+              )}
+              {shareSummary && !canShare && (
+                <span
+                  className="doc-header-project-chip doc-header-chip--static"
+                  title={doc.owner?.email ? `Shared by ${doc.owner.email}` : undefined}
+                >
+                  <Users size={12} strokeWidth={2.25} aria-hidden="true" />
+                  <span className="doc-header-project-name">{shareSummary}</span>
+                </span>
+              )}
             </div>
           )}
         </div>
 
-        <div className="doc-header-actions">
-          <button
-            type="button"
-            className="doc-header-source-toggle"
-            onClick={onToggleSource}
-            title={showSource ? 'Show the rendered doc' : 'Show the raw markdown'}
-          >
-            {showSource ? <Eye size={16} aria-hidden="true" /> : <Code size={16} aria-hidden="true" />}
-            <span>{showSource ? 'Show rendered' : 'Show source'}</span>
-          </button>
-        </div>
+        {mode === 'view' && (
+          <div className="doc-header-actions">
+            <button
+              type="button"
+              className="doc-header-source-toggle"
+              onClick={onToggleSource}
+              title={showSource ? 'Show the rendered doc' : 'Show the raw markdown'}
+            >
+              {showSource ? <Eye size={16} aria-hidden="true" /> : <Code size={16} aria-hidden="true" />}
+              <span>{showSource ? 'Show rendered' : 'Show source'}</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {notice && (

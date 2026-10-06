@@ -282,6 +282,13 @@
   color: var(--text-muted);
 }
 
+/* "Shared with you" whose first page failed: the group stays to say so. */
+.docs-group-error {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  color: #ff6464;
+}
+
 .docs-group-footer {
   display: flex;
   align-items: center;
@@ -505,6 +512,7 @@
 
   .docs-group-heading,
   .docs-group-empty,
+  .docs-group-error,
   .docs-group-footer,
   .docs-list-warning {
     padding-left: 0.5rem;
@@ -551,6 +559,10 @@
   .docs-list-error {
     border-color: rgba(211, 47, 47, 0.2);
     background-color: rgba(211, 47, 47, 0.06);
+    color: #cc3333;
+  }
+
+  .docs-group-error {
     color: #cc3333;
   }
 }

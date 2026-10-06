@@ -95,6 +95,44 @@ async def get_conversation_meta(user_id: int, conversation_id: str) -> Optional[
         return None
 
 
+# Chunk size for ``IN (...)`` lookups, well under SQLite's bound-parameter cap.
+_IN_CHUNK = 500
+
+
+async def get_conversations_meta(user_id: int, conversation_ids) -> dict[str, dict]:
+    """Batch :func:`get_conversation_meta`: ``{conversation_id: meta}`` for
+    the ids among ``conversation_ids`` that exist AND belong to ``user_id``.
+
+    Missing ids and other users' conversations are simply absent (same
+    ownership rule as the single lookup). Non-string ids are ignored and
+    duplicates collapse. One session, one ``WHERE user_id = ? AND id IN
+    (...)`` query per 500 ids.
+
+    Args:
+        user_id: The requesting user's integer ID.
+        conversation_ids: Any iterable of conversation UUID strings.
+
+    Returns:
+        Dict of conversation id -> the same metadata dict
+        :func:`get_conversation_meta` returns.
+    """
+    ids = sorted({cid for cid in conversation_ids if isinstance(cid, str) and cid})
+    found: dict[str, dict] = {}
+    if not ids:
+        return found
+    async with AsyncSessionLocal() as db:
+        for i in range(0, len(ids), _IN_CHUNK):
+            result = await db.execute(
+                select(Conversation).where(
+                    Conversation.user_id == user_id,
+                    Conversation.id.in_(ids[i:i + _IN_CHUNK]),
+                )
+            )
+            for conv in result.scalars().all():
+                found[conv.id] = _conversation_to_dict(conv)
+    return found
+
+
 async def list_conversations_meta(
     user_id: int,
     include_archived: bool = False,

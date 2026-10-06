@@ -40,6 +40,32 @@ async def get_action_request(user_id: int, request_id: int) -> Optional[dict]:
         return None
 
 
+async def get_action_request_owners(request_ids) -> dict[int, int]:
+    """``{request_id: user_id}`` for each existing request id, ANY user.
+
+    Not user-scoped on purpose: Quest Docs attributes a write recorded as
+    ``action_request:<id>`` to whoever proposed and approved that card (the
+    doc owner, or a write-share recipient). Returns ids only, never request
+    content. One query per 500 ids; unknown ids are simply absent.
+    """
+    ids = sorted({
+        rid for rid in request_ids
+        if isinstance(rid, int) and not isinstance(rid, bool)
+    })
+    owners: dict[int, int] = {}
+    if not ids:
+        return owners
+    async with AsyncSessionLocal() as db:
+        for i in range(0, len(ids), 500):
+            result = await db.execute(
+                select(ActionRequest.id, ActionRequest.user_id)
+                .where(ActionRequest.id.in_(ids[i:i + 500]))
+            )
+            for rid, uid in result.all():
+                owners[rid] = uid
+    return owners
+
+
 async def list_action_requests(
     user_id: int,
     status: Optional[str] = None,

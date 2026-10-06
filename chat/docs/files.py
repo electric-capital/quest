@@ -7,6 +7,8 @@ Layout (spec section 4.1)::
       doc.meta.json                who wrote doc.md and when: {"written_at",
                                    "source", "size"} (see _write_doc_meta)
       assets/<name>.<ext>          raster images only: png, jpg, gif, webp
+                                   (added by add_asset, removed by
+                                   delete_asset -- neither snapshots)
       revisions/<YYYYMMDDTHHMMSSZ>-<n>.md
                                    snapshot of doc.md taken before each write
       revisions/<YYYYMMDDTHHMMSSZ>-<n>.json
@@ -897,12 +899,69 @@ def read_asset(doc_id: str, name: str) -> bytes:
     return _read_regular_bytes(path, missing_message=f"Image not found: {name}")
 
 
+def delete_asset(doc_id: str, name: str) -> int:
+    """Remove one asset file and return the doc's new asset count.
+
+    ``name`` must pass :func:`_validate_asset_name` (one path segment with a
+    raster image extension, not hidden). Under the doc lock, ``assets/`` is
+    opened as a directory with ``O_NOFOLLOW`` (a symlinked ``assets/`` is
+    refused) and the leaf is ``lstat``-ed and unlinked relative to that
+    descriptor, so nothing outside ``assets/`` can be reached. Only a
+    regular file is removed: a symlink planted at the name is refused (never
+    followed; its target is untouched, and so is the link), as are
+    directories and special files. ``unlink`` itself never follows a leaf
+    symlink, so a swap between the check and the unlink cannot reach a
+    target either.
+
+    Returns:
+        The number of regular, non-hidden files left in ``assets/`` (the
+        :func:`asset_stats` count).
+
+    Raises:
+        DocFileError: ``Image not found: <name>`` for a bad name, a missing
+            or non-regular leaf, or an unusable ``assets/`` directory.
+        OSError: any other failure of the unlink itself (permissions, ...).
+    """
+    not_found = f"Image not found: {name}"
+    try:
+        _validate_asset_name(name)
+    except DocFileError:
+        raise DocFileError(not_found) from None
+    paths = doc_paths(doc_id)
+    with doc_lock(doc_id):
+        try:
+            dir_fd = os.open(
+                paths.assets, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+        except OSError:
+            # Missing, a symlink (ELOOP) or not a directory (ENOTDIR).
+            raise DocFileError(not_found) from None
+        try:
+            try:
+                st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+            except OSError:
+                raise DocFileError(not_found) from None
+            if not stat.S_ISREG(st.st_mode):
+                raise DocFileError(not_found)
+            try:
+                os.unlink(name, dir_fd=dir_fd)
+            except FileNotFoundError:
+                raise DocFileError(not_found) from None
+        finally:
+            os.close(dir_fd)
+        return len(_regular_assets(paths.assets))
+
+
 # ---------------------------------------------------------------------------
 # Download / delete
 # ---------------------------------------------------------------------------
 
 
-def build_zip(doc_id: str, title: str) -> Path:
+def build_zip(
+    doc_id: str,
+    title: str,
+    asset_filter: Optional[Callable[[str, str], bool]] = None,
+) -> Path:
     """Build a temp zip of ``doc.md`` + ``assets/*`` and return its path.
 
     Archive layout matches the doc directory (``doc.md``, ``assets/<name>``)
@@ -911,6 +970,14 @@ def build_zip(doc_id: str, title: str) -> Path:
     the whole archive (like ``create_folder_zip``); the partial zip is
     unlinked on any failure. ``title`` only seeds the temp file name -- the
     route chooses the download name. The caller deletes the returned file.
+
+    ``asset_filter`` (None = every asset): ``asset_filter(body_text, name)``
+    decides whether ``assets/<name>`` goes into the archive, evaluated
+    against the very body archived as ``doc.md`` (read under the same doc
+    lock), so a concurrent edit can never yield a zip whose images do not
+    match its body. Excluded entries are still checked (a symlink or
+    special file anywhere under ``assets/`` refuses the archive) but never
+    read.
 
     Raises:
         DocFileError: missing/unsafe body, symlinks or special files.
@@ -933,6 +1000,11 @@ def build_zip(doc_id: str, title: str) -> Path:
                     raise DocFileError(
                         "Cannot archive a doc containing special files."
                     )
+            if asset_filter is not None:
+                body_text = body.decode("utf-8", errors="replace")
+                entries = [
+                    (name, st) for name, st in entries if asset_filter(body_text, name)
+                ]
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr(BODY_NAME, body)
                 for name, _st in entries:

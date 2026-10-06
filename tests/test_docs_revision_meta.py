@@ -552,7 +552,8 @@ class TestServiceSource:
             "size": len(b"hello\n"),
         }
         ui = _run(svc().create_doc_from_ui(docs_env.users["alice"], "From UI"))
-        assert files.read_doc_meta(ui["id"])["source"] == "ui"
+        # Phase 3: UI writes record the writer (``ui:<user_id>``).
+        assert files.read_doc_meta(ui["id"])["source"] == f"ui:{docs_env.users['alice']['id']}"
         assert files.read_doc_meta(ui["id"])["size"] == 0
 
     def test_ui_created_doc_then_image_append(self, docs_env):
@@ -561,6 +562,9 @@ class TestServiceSource:
         _run(svc().append_to_doc(caller, doc["id"], "# Report"))
         (workspace_dir(docs_env, caller) / "chart.png").write_bytes(PNG)
         _run(svc().add_doc_image(caller, doc["id"], "chart.png", alt="Chart"))
-        # Creating took no snapshot; the append replaced the "ui" body, the
-        # image append (a body change) replaced the conversation's.
-        assert _sources(doc["id"]) == ["ui", f"conversation:{caller.conversation_id}"]
+        # Creating took no snapshot; the append replaced the "ui:<id>" body,
+        # the image append (a body change) replaced the conversation's.
+        assert _sources(doc["id"]) == [
+            f"ui:{docs_env.users['alice']['id']}",
+            f"conversation:{caller.conversation_id}",
+        ]

@@ -8,7 +8,9 @@ Two channel namespaces:
   (Phase 3).
 * per-user -- routed to every connection authenticated as that user. Carries
   ``request_count_changed``, ``conversation_list_changed``,
-  ``routine_list_changed``, and ``wait_handle_resolved``.
+  ``routine_list_changed``, ``doc_list_changed``, ``doc_changed`` and
+  ``wait_handle_resolved``. :meth:`Bus.connected_user_ids` lets a publisher
+  fan a per-user event out to every connected user.
 
 The bus is a module-level singleton because the FastAPI deploy is
 intentionally single-process; see :doc:`/architecture/slack-socket-mode`.
@@ -143,6 +145,15 @@ class Bus:
 
     def user_subscriber_count(self, user_id: int) -> int:
         return len(self._user_subs.get(user_id, ()))
+
+    def connected_user_ids(self) -> list[int]:
+        """Ids of every user with at least one live connection right now.
+
+        A snapshot (empty channels are dropped on unsubscribe), so the
+        caller may publish while iterating. Used for install-wide fan-out,
+        e.g. a Quest Docs write to a doc shared with everyone.
+        """
+        return list(self._user_subs)
 
 
 # Module-level singleton. Imported by routes, the flush callback, and tests.

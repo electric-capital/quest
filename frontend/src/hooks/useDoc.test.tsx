@@ -40,7 +40,11 @@ function row(id: string, overrides: Partial<Doc> = {}): Doc {
     updated_at: '2026-10-01T00:00:00',
     scope: 'user',
     shared: false,
-    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free' },
+    shared_with_me: false,
+    permission: null,
+    owner: null,
+    last_write_user: null,
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true },
     ...overrides,
   };
 }
@@ -143,14 +147,22 @@ describe('useDoc', () => {
     expect(result.current.loading).toBe(false);
   });
 
-  it('turns a delete into notFound through doc_list_changed', async () => {
+  it('ignores doc_list_changed (install-wide list event)', async () => {
+    mocks.fetchDoc.mockResolvedValueOnce(detail('d1'));
+    const { result } = renderHook(() => useDoc('d1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => emit({ type: 'doc_list_changed' }));
+    expect(mocks.fetchDoc).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns a delete / revoked share into notFound through doc_changed with a null updated_at', async () => {
     mocks.fetchDoc.mockResolvedValueOnce(detail('d1'));
     const { result } = renderHook(() => useDoc('d1'));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     mocks.fetchDoc.mockRejectedValueOnce(notFoundError());
     await act(async () => {
-      emit({ type: 'doc_list_changed' });
+      emit({ type: 'doc_changed', doc_id: 'd1', updated_at: null });
     });
     await waitFor(() => expect(result.current.notFound).toBe(true));
     expect(result.current.doc).toBeNull();
@@ -169,11 +181,14 @@ describe('useDoc', () => {
     expect(result.current.error).toBeNull();
   });
 
-  it('applyRow merges a rename / mode row and keeps the content', async () => {
+  it('applyRow merges a rename row, keeps the content and re-fetches for the newer token', async () => {
     mocks.fetchDoc.mockResolvedValueOnce(detail('d1'));
     const { result } = renderHook(() => useDoc('d1'));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
+    mocks.fetchDoc.mockResolvedValueOnce(
+      detail('d1', { title: 'Renamed', updated_at: '2026-10-03T00:00:00' }),
+    );
     act(() =>
       result.current.applyRow(
         row('d1', { title: 'Renamed', mode: 'public', updated_at: '2026-10-03T00:00:00' }),
@@ -182,14 +197,55 @@ describe('useDoc', () => {
     expect(result.current.doc?.title).toBe('Renamed');
     expect(result.current.doc?.mode).toBe('public');
     expect(result.current.doc?.content).toBe('# Body of d1');
-    // No fetch in flight, so nothing to re-fetch.
-    expect(mocks.fetchDoc).toHaveBeenCalledTimes(1);
+    // A newer updated_at may come with a body this tab has not seen.
+    await waitFor(() => expect(mocks.fetchDoc).toHaveBeenCalledTimes(2));
 
     // The rename's own doc_changed echo is skipped; a row for another doc is ignored.
     act(() => emit({ type: 'doc_changed', doc_id: 'd1', updated_at: '2026-10-03T00:00:00' }));
     act(() => result.current.applyRow(row('d2', { title: 'Elsewhere' })));
-    expect(mocks.fetchDoc).toHaveBeenCalledTimes(1);
+    expect(mocks.fetchDoc).toHaveBeenCalledTimes(2);
     expect(result.current.doc?.title).toBe('Renamed');
+  });
+
+  it('applyContent replaces the body from a save / restore response and ignores older rows', async () => {
+    mocks.fetchDoc.mockResolvedValueOnce(
+      detail('d1', { updated_at: '2026-10-02T00:00:00', last_write_source: 'ui:1' }),
+    );
+    const { result } = renderHook(() => useDoc('d1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() =>
+      result.current.applyContent({
+        ...row('d1', { updated_at: '2026-10-03T00:00:00', last_write_source: 'ui:1' }),
+        content: 'saved body',
+      }),
+    );
+    expect(result.current.doc?.content).toBe('saved body');
+    expect(result.current.doc?.updated_at).toBe('2026-10-03T00:00:00');
+    // Same writer, nothing in flight: the response is the truth, no re-fetch.
+    expect(mocks.fetchDoc).toHaveBeenCalledTimes(1);
+
+    act(() =>
+      result.current.applyContent({
+        ...row('d1', { updated_at: '2026-10-01T00:00:00' }),
+        content: 'older body',
+      }),
+    );
+    expect(result.current.doc?.content).toBe('saved body');
+  });
+
+  it('applyRow does not re-fetch for a row with the same updated_at (a share change)', async () => {
+    mocks.fetchDoc.mockResolvedValueOnce(detail('d1', { updated_at: '2026-10-02T00:00:00' }));
+    const { result } = renderHook(() => useDoc('d1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() =>
+      result.current.applyRow(
+        row('d1', { shared: true, updated_at: '2026-10-02T00:00:00' }),
+      ),
+    );
+    expect(result.current.doc?.shared).toBe(true);
+    expect(mocks.fetchDoc).toHaveBeenCalledTimes(1);
   });
 
   it('applyRow ignores a row older than the one shown and re-fetches when the body changed', async () => {
@@ -221,7 +277,7 @@ describe('useDoc', () => {
 
     const stale = deferred<DocDetail>();
     mocks.fetchDoc.mockReturnValueOnce(stale.promise);
-    act(() => emit({ type: 'doc_list_changed' }));
+    act(() => emit({ type: 'doc_changed', doc_id: 'd1', updated_at: null }));
 
     mocks.fetchDoc.mockResolvedValueOnce(
       detail('d1', { title: 'Renamed', updated_at: '2026-10-03T00:00:00', content: 'fresh' }),

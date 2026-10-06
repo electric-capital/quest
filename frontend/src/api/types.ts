@@ -893,14 +893,33 @@ export interface DocAccess {
   can_delete: boolean;
   // The UI write verdict: 'free' for the owner or a write share.
   write: 'free' | 'approval' | 'denied';
+  // Edit the body, upload images, restore a revision (owner or write share).
+  can_edit: boolean;
+  // Manage the share roster (owner only).
+  can_share: boolean;
+  // Delete images from assets/ (owner only).
+  can_delete_assets: boolean;
 }
 
-/** One share-roster entry; `user_id` null means everyone. Owner only. */
+/**
+ * Safe identity fields of another Quest user (share rosters, attribution).
+ * `name` / `email` are null when the account is gone.
+ */
+export interface DocUserRef {
+  id: number;
+  name: string | null;
+  email: string | null;
+}
+
+export type DocSharePermission = 'read' | 'write';
+
+/** One share-roster entry; `user_id` / `user` null means everyone. Owner only. */
 export interface DocShare {
   id: number;
   user_id: number | null;
-  permission: 'read' | 'write';
+  permission: DocSharePermission;
   created_at: string;
+  user: DocUserRef | null;
 }
 
 /** Doc row as returned by the list / create / rename endpoints. */
@@ -921,10 +940,21 @@ export interface Doc {
   created_at: string;
   updated_at: string;
   scope: DocScope;
+  // The doc has at least one share (always true for a recipient).
   shared: boolean;
   access: DocAccess;
   // Present for the owner only.
   shares?: DocShare[];
+  // True when the viewer is not the owner (the doc reached them by a share).
+  shared_with_me: boolean;
+  // The viewer's effective share; null for the owner.
+  permission: DocSharePermission | null;
+  // The owner, for share recipients; null for the owner.
+  owner: DocUserRef | null;
+  // Owner only: the person behind a `ui:<user_id>` last_write_source, or
+  // behind an `action_request:<id>` one when the approved card was a share
+  // recipient's (name / email null when that user was deleted).
+  last_write_user: DocUserRef | null;
 }
 
 /** GET /docs/{id}: the row plus the whole markdown body. */
@@ -961,6 +991,89 @@ export interface ListDocsResponse {
   docs: Doc[];
   has_more: boolean;
   next_cursor: string | null;
+}
+
+/** POST /docs/{id}/shares: exactly one of `user_email` / `everyone: true`. */
+export interface ShareDocRequest {
+  user_email?: string;
+  everyone?: boolean;
+  permission: DocSharePermission;
+}
+
+/** PUT /docs/{id}/content (both fields required). */
+export interface UpdateDocContentRequest {
+  content: string;
+  expected_updated_at: string;
+}
+
+/**
+ * The row plus the body as stored, returned by a content save or a restore.
+ * `changed` is false when the body was identical (nothing written, the
+ * token unchanged).
+ */
+export interface DocContentResponse extends Doc {
+  content: string;
+  changed: boolean;
+}
+
+/**
+ * POST /docs/{id}/assets (201). An editor holding `previous_updated_at` as
+ * its token adopts `updated_at` (its own upload bumped the row).
+ */
+export interface DocAssetUploadResponse {
+  asset: DocAsset;
+  markdown: string;
+  asset_count: number;
+  updated_at: string;
+  previous_updated_at: string;
+}
+
+/** DELETE /docs/{id}/assets/{name}. */
+export interface DocAssetDeleteResponse {
+  deleted: boolean;
+  asset_count: number;
+  updated_at: string;
+  previous_updated_at: string;
+}
+
+export type DocVersionSourceKind = 'conversation' | 'action_request' | 'ui' | 'unknown';
+
+/**
+ * One version of a doc's body in History: the current body (`id` null) or a
+ * revision snapshot (`id` = "<YYYYMMDDTHHMMSSZ>-<n>"). `written_at` is when
+ * that body was written, `replaced_at` when a later write replaced it
+ * (ISO with 'Z'). `source_label` is ready to show ("you", a person's name, a
+ * conversation title, ...); `source` and `conversation` are owner-only.
+ */
+export interface DocVersion {
+  id: string | null;
+  written_at: string;
+  replaced_at: string | null;
+  size: number;
+  source: string | null;
+  source_kind: DocVersionSourceKind;
+  source_label: string;
+  conversation: DocWriteConversation | null;
+}
+
+/** GET /docs/{id}/revisions (revisions newest first). */
+export interface DocRevisionsResponse {
+  current: DocVersion;
+  revisions: DocVersion[];
+}
+
+/** GET /docs/{id}/revisions/{rev_id}; `diff` (revision -> current) with ?diff=current. */
+export interface DocRevisionDetail extends DocVersion {
+  content: string;
+  diff?: SkillContentDiff;
+}
+
+export interface RestoreDocRevisionRequest {
+  expected_updated_at: string;
+}
+
+export interface CopyDocRevisionRequest {
+  title?: string;
 }
 
 export interface CreateDocRequest {

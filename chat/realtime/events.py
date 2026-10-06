@@ -101,7 +101,9 @@ def make_doc_changed(doc_id: str, updated_at: Optional[str]) -> dict[str, Any]:
     Per-user global published after every Quest Docs body or asset write so
     an open viewer of ``doc_id`` re-fetches. ``updated_at`` is the row's new
     ISO timestamp (the optimistic-concurrency token), letting a tab skip a
-    re-fetch when it already shows that version.
+    re-fetch when it already shows that version; ``None`` (sent on delete,
+    project delete and share changes) means the doc's existence or the
+    receiver's access changed -- always re-fetch.
     """
     return {
         "type": "doc_changed",
