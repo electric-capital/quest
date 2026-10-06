@@ -14,7 +14,7 @@ import { Copy, Check } from 'lucide-react';
 import { formatTimestamp, formatNumber } from '../utils/formatters';
 import { getModelDisplayName } from '../constants/models';
 import { API_BASE_URL } from '../api/config';
-import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, StatsMessage as StatsMessageType, ErrorMessage as ErrorMessageType, InterruptedMessage as InterruptedMessageType, ActionRequestMessage as ActionRequestMessageType, CompactionMessage as CompactionMessageType, ModelFallbackMessage as ModelFallbackMessageType, ComposerAttachmentRef } from '../api/types';
+import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, StatsMessage as StatsMessageType, ErrorMessage as ErrorMessageType, InterruptedMessage as InterruptedMessageType, ActionRequestMessage as ActionRequestMessageType, CompactionMessage as CompactionMessageType, ModelFallbackMessage as ModelFallbackMessageType, RoutineNudgeMessage as RoutineNudgeMessageType, ComposerAttachmentRef } from '../api/types';
 import { ToolUseMessage } from './ToolUseMessage';
 import { ActionRequestMessage } from './ActionRequestMessage';
 import { webSocketManager } from '../services/WebSocketManager';
@@ -601,6 +601,25 @@ export const MessageContentRenderer = React.memo(function MessageContentRenderer
         </span>
         <span className="model-fallback-timestamp">
           {fallbackMsg.timestamp ? formatTimestamp(fallbackMsg.timestamp) : ''}
+        </span>
+      </div>
+    );
+  }
+
+  // Handle routine-nudge notices - a routine run ended without calling
+  // routine_completed and the server ran one follow-up turn asking the
+  // model to verify its work and finish (see chat/routine_runs.py). The
+  // exact text the model received is in the tooltip.
+  if (message.type === 'routine_nudge') {
+    const nudgeMsg = message as RoutineNudgeMessageType;
+    return (
+      <div className="message-routine-nudge" title={nudgeMsg.content || undefined}>
+        <span className="routine-nudge-icon" aria-hidden="true">&#8635;</span>
+        <span className="routine-nudge-text">
+          Routine run ended without calling routine_completed — asked the model to check its work and finish
+        </span>
+        <span className="routine-nudge-timestamp">
+          {nudgeMsg.timestamp ? formatTimestamp(nudgeMsg.timestamp) : ''}
         </span>
       </div>
     );

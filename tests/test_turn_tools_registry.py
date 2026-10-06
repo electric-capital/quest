@@ -15,6 +15,7 @@ from chat.gemini_api.constants import MAX_AGENT_TASKS_PER_TURN
 from chat.gemini_api.run_context import RunContext
 from chat.gemini_api.turn_tools import (
     _PUBLIC_BLOCKED_LOOP_TOOLS,
+    ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY,
     TURN_TOOL_HANDLERS,
     WAIT_FOR_HANDLES_KEY,
     FinishInferenceResponse,
@@ -101,6 +102,8 @@ class TestRegistryRouting:
             "send_slack_reply_and_get_response",
             "return_to_caller",
             "return_final_response",
+            "routine_completed",
+            ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY,
             "create_action_request",
             WAIT_FOR_HANDLES_KEY,
         }
@@ -127,8 +130,19 @@ class TestRegistryRouting:
     def test_public_blocklist_covers_every_registry_key(self):
         # Public-project conversations must never reach a loop-handled
         # arm; if a new handler is registered it must be blocked too (or
-        # this coupling consciously revisited).
-        assert set(TURN_TOOL_HANDLERS) <= _PUBLIC_BLOCKED_LOOP_TOOLS
+        # this coupling consciously revisited). routine_completed is the
+        # one deliberate exception: a pure completion signal with no reads
+        # or writes, needed by routine runs in public projects.
+        completion_keys = {"routine_completed", ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY}
+        assert set(TURN_TOOL_HANDLERS) - completion_keys <= _PUBLIC_BLOCKED_LOOP_TOOLS
+        assert not (completion_keys & _PUBLIC_BLOCKED_LOOP_TOOLS)
+
+    def test_routine_completed_rides_on_tool_call_too(self):
+        key = registry_key_for(
+            "tool_call", {"tool_name": "routine_completed", "arguments": {}},
+        )
+        assert key == ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY
+        assert TURN_TOOL_HANDLERS[key] is TURN_TOOL_HANDLERS["routine_completed"]
 
     def test_public_blocked_result_names_the_inner_tool(self):
         payload = json.loads(public_blocked_result(WAIT_FOR_HANDLES_KEY))

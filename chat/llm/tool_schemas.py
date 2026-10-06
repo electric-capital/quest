@@ -2533,6 +2533,42 @@ _RETURN_FINAL_RESPONSE: ToolSpec = {
 }
 
 # ---------------------------------------------------------------------------
+# Routine runs
+# ---------------------------------------------------------------------------
+
+# Completion marker for routine runs (scheduled or one-click). Weaker models
+# sometimes end their stream before the routine's work is done; the run
+# drivers (chat/routine_runs.py) treat a run that ends WITHOUT this call as
+# unfinished and send one follow-up turn asking the model to check its work
+# and call it. The tool itself changes nothing -- it is a signal.
+_ROUTINE_COMPLETED: ToolSpec = {
+    "name": "routine_completed",
+    "description": (
+        "Signal that this routine run is finished. You are running a "
+        "routine (an unattended, pre-written prompt); call this tool "
+        "EXACTLY ONCE, as your LAST tool call, after every piece of work "
+        "the routine prompt asked for has been completed and you have "
+        "written your final summary. If a run ends without this call it "
+        "is treated as unfinished and you will be asked to continue. If "
+        "you could not complete part of the task, still call this tool "
+        "and say so in `summary`."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "summary": {
+                "type": "string",
+                "description": (
+                    "One or two sentences on what was done, and anything "
+                    "that could not be completed."
+                ),
+            },
+        },
+        "required": [],
+    },
+}
+
+# ---------------------------------------------------------------------------
 # Slack-driven conversations
 # ---------------------------------------------------------------------------
 
@@ -2586,6 +2622,13 @@ TOP_LEVEL_TOOLS: list[ToolSpec] = BASE_TOOLS + [
 ]
 
 SLACK_TOP_LEVEL_TOOLS: list[ToolSpec] = TOP_LEVEL_TOOLS + [_SEND_SLACK_REPLY]
+
+# Routine conversations (a ``routine_id`` on the conversation row): the full
+# top-level tier plus the routine_completed completion marker the run
+# drivers wait for (see chat/routine_runs.py). Every turn in a routine
+# conversation carries the routine_id, so a manual follow-up by the user
+# sees the tool too -- calling it there is a harmless no-op.
+ROUTINE_TOP_LEVEL_TOOLS: list[ToolSpec] = TOP_LEVEL_TOOLS + [_ROUTINE_COMPLETED]
 
 # Cross-user subagent conversations (origin="user_subagent"): the base
 # read/workspace/skill tools plus return_to_caller -- deliberately NO
@@ -2641,6 +2684,12 @@ _PUBLIC_BASE_TOOL_NAMES = {"tool_call", "run_script", "run_python"}
 PUBLIC_TOOLS: list[ToolSpec] = [
     t for t in BASE_TOOLS if t["name"] in _PUBLIC_BASE_TOOL_NAMES
 ]
+
+# Routine runs inside a public project (only while the
+# public_project_routines gate is open): the public subset plus the
+# completion marker. routine_completed reads nothing and writes nothing, so
+# it is the one loop-handled arm NOT in _PUBLIC_BLOCKED_LOOP_TOOLS.
+PUBLIC_ROUTINE_TOOLS: list[ToolSpec] = PUBLIC_TOOLS + [_ROUTINE_COMPLETED]
 
 # Dynamic (tool_call-routed) tools available in public-project
 # conversations: time, workspace files, conversation naming, large-response

@@ -409,6 +409,7 @@ async def _execute_scheduled_run(app, schedule: dict, routine: dict, run_id: str
     from db.user_store import get_user_by_id
     from chat.storage import ChatStorage
     from chat.gemini_api import run_conversation_turn
+    from chat.routine_runs import drive_routine_run
 
     schedule_id = schedule["id"]
     routine_id = routine["id"]
@@ -461,19 +462,32 @@ async def _execute_scheduled_run(app, schedule: dict, routine: dict, run_id: str
         # Determine the user's timezone for the Gemini call
         user_tz = schedule.get("timezone") or "UTC"
 
-        # Run the Gemini API conversation to completion
-        await run_conversation_turn(
-            app=app,
-            user=user,
-            message=prompt,
-            conversation_id=conversation_id,
-            timezone=user_tz,
-            model=routine_model,
-            on_event=noop_event,
+        # Run the conversation to completion. The routine driver re-runs
+        # one follow-up turn when the model ends without calling
+        # routine_completed (chat/routine_runs.py); every turn appends to
+        # messages_out, which is persisted below in order.
+        async def run_turn(message: str) -> None:
+            await run_conversation_turn(
+                app=app,
+                user=user,
+                message=message,
+                conversation_id=conversation_id,
+                timezone=user_tz,
+                model=routine_model,
+                on_event=noop_event,
+                messages_out=messages_out,
+                guide_id=guide_id,
+                project_id=project_id,
+                routine_id=routine_id,
+            )
+
+        await drive_routine_run(
+            run_turn,
+            prompt=prompt,
             messages_out=messages_out,
-            guide_id=guide_id,
-            project_id=project_id,
-            routine_id=routine_id,
+            on_event=noop_event,
+            conversation_id=conversation_id,
+            log_prefix="[scheduler]",
         )
 
         # Persist the response messages

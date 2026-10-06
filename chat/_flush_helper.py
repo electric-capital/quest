@@ -38,6 +38,11 @@ FLUSH_EVENT_TYPES: frozenset[str] = frozenset({
     # the pre-switch partial text plus the notice row before emitting
     # this, so flushing persists both in order.
     "model_fallback",
+    # A routine run ended without calling routine_completed and the driver
+    # (chat/routine_runs.py) is about to run a follow-up turn; the notice
+    # row is appended to messages_out before this is emitted so it lands in
+    # the transcript ahead of the nudge turn's messages.
+    "routine_nudge",
 })
 
 

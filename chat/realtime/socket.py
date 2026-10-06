@@ -853,6 +853,13 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
             # (magic ``%%flags`` line + out-of-band composer selection).
             flags=(meta.get("flags") or merged_flags) or None,
             attached_filenames=attached_filenames or None,
+            # The first message of a routine conversation is the routine
+            # prompt auto-sent by the one-click run (ChatPanel's
+            # pendingRoutineMessage effect): drive it like the scheduler
+            # does, nudging the model once if it ends without calling
+            # routine_completed. Later messages are the user's own
+            # follow-ups and run as ordinary turns.
+            routine_run=bool(routine_id) and is_first_message,
         )
     )
     _active_send_runs[conv_id] = task
@@ -930,6 +937,7 @@ async def _run_send_message(
     attachments: Optional[list[dict]] = None,
     flags: Optional[list[str]] = None,
     attached_filenames: Optional[list[str]] = None,
+    routine_run: bool = False,
 ) -> None:
     """Background task that drives ``run_conversation_turn`` for a persistent-WS
     send. Kept symmetrical with ``_handle_api_mode`` so the regression
@@ -937,6 +945,13 @@ async def _run_send_message(
     boundary save hook, cancellations save an interrupted SDK history
     plus cancel pending wait handles, and a final flush captures any
     trailing messages.
+
+    ``routine_run`` marks the one-click routine run (the routine prompt as
+    the conversation's first message): the turn is driven through
+    ``chat.routine_runs.drive_routine_run`` so a run that ends without the
+    ``routine_completed`` call gets one follow-up turn, exactly like a
+    scheduled run. ``send_message_finished`` is published only after the
+    whole run, so the composer stays locked across the nudge turn.
     """
     user_id = user["id"]
     shared_messages: list[dict] = []
@@ -964,11 +979,18 @@ async def _run_send_message(
                 exc_info=True,
             )
 
-    try:
+    turns_started = 0
+
+    async def run_turn(message: str) -> None:
+        nonlocal turns_started
+        # Attachments ride on the user's own message (always the first
+        # turn); a routine nudge turn carries none.
+        first_turn = turns_started == 0
+        turns_started += 1
         await run_conversation_turn(
             app=app,
             user=user,
-            message=user_message,
+            message=message,
             conversation_id=conversation_id,
             timezone=timezone_str,
             model=selected_model,
@@ -978,10 +1000,24 @@ async def _run_send_message(
             project_id=project_id,
             routine_id=routine_id,
             skill_ids=skill_ids,
-            attachments=attachments,
+            attachments=attachments if first_turn else None,
             flags=flags,
-            attached_filenames=attached_filenames,
+            attached_filenames=attached_filenames if first_turn else None,
         )
+
+    try:
+        if routine_run:
+            from chat.routine_runs import drive_routine_run
+            await drive_routine_run(
+                run_turn,
+                prompt=user_message,
+                messages_out=shared_messages,
+                on_event=on_event,
+                conversation_id=conversation_id,
+                log_prefix="[realtime]",
+            )
+        else:
+            await run_turn(user_message)
     except asyncio.CancelledError:
         stop_requested_event.set()
         logger.info(
