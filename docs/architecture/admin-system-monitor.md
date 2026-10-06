@@ -1,6 +1,6 @@
 # Admin System Reports
 
-Admin-only operator dashboard at `/admin/system-reports` (titled "System Reports"; the pre-rename `/admin/system-monitor` URL redirects, and the API prefix keeps the historical `system-monitor` name). A left-hand nav switches between report sections; ships with "Latest Conversations", "Cost Analysis", "Users", "Models", and "Guides".
+Admin-only operator dashboard at `/admin/system-reports` (titled "System Reports"; the pre-rename `/admin/system-monitor` URL redirects, and the API prefix keeps the historical `system-monitor` name). A left-hand nav switches between report sections; ships with "Latest Conversations", "Total Usage", "Cost Analysis", "Users", "Models", and "Guides".
 
 ## Overview
 
@@ -11,9 +11,11 @@ Admin gating is enforced on the backend via the inline `is_admin(user["email"])`
 ## Key Files
 
 **Backend:**
-- `chat/routes/admin.py` -- `admin_latest_active_conversations`, `admin_most_expensive_conversations`, `admin_user_report`, `admin_model_report`, and `admin_guides_report` handlers (admin check, limit clamping, date-range parsing via the shared `_resolve_range_window`, title resolution) sharing the `_admin_conversation_view` row assembler
-- `db/conversation_store.py` -- `list_latest_active_conversations()` (joins `Conversation` to `User`, orders by `last_message_at DESC`) and the batch companion `get_conversations_with_users()`, sharing `_admin_conversation_row`; plus `list_conversation_activity_rows()`, the narrow all-conversation owner/routine/activity projection behind the user report
-- `db/llm_call_store.py` -- `_collect_usage_buckets()` grouped `GROUP BY (conversation_id, model, long_context_flag)` aggregation over the per-provider `llm_calls_gemini` / `llm_calls_anthropic` raw tables (one query per table, optional conversation-id and `created_at`-window filters, optional `by_call_type` split adding the rows' `call_type` to the key), behind `get_usage_by_model_for_conversations()` (batch), `get_most_expensive_conversations()` (date-range top-N ranking), `get_usage_by_user()` (date-range per-user fold with the routine cost split), and `get_usage_by_model()` (date-range per-model fold with audience counts, routine + sub-agent cost shares and top users); plus `get_latest_context_tokens_for_conversations()` (batched latest top-level call context size)
+- `chat/routes/admin.py` -- `admin_latest_active_conversations`, `admin_usage_report`, `admin_most_expensive_conversations`, `admin_user_report`, `admin_model_report`, and `admin_guides_report` handlers (admin check, limit clamping, date-range parsing via the shared `_resolve_range_window`, title resolution) sharing the `_admin_conversation_view` row assembler
+- `chat/usage_report.py` -- `build_usage_report()`, the pure fold of per-day usage buckets into the Total Usage response (rolling windows with their previous periods, lifetime total, daily / weekly / monthly series; metric definitions in the module docstring)
+- `db/conversation_store.py` -- `list_latest_active_conversations()` (joins `Conversation` to `User`, orders by `last_message_at DESC`) and the batch companion `get_conversations_with_users()`, sharing `_admin_conversation_row`; plus `list_conversation_activity_rows()`, the narrow all-conversation owner/routine/activity projection behind the user and Total Usage reports
+- `db/llm_call_store.py` -- `_collect_usage_buckets()` grouped `GROUP BY (conversation_id, model, long_context_flag)` aggregation over the per-provider `llm_calls_gemini` / `llm_calls_anthropic` raw tables (one query per table, optional conversation-id and `created_at`-window filters, optional `by_call_type` split adding the rows' `call_type` to the key, optional `by_day` split adding the UTC calendar day), behind `get_usage_by_model_for_conversations()` (batch), `get_most_expensive_conversations()` (date-range top-N ranking), `get_usage_by_user()` (date-range per-user fold with the routine cost split), `get_usage_by_model()` (date-range per-model fold with audience counts, routine + sub-agent cost shares and top users), and `get_daily_usage_buckets()` (the per-day (conversation, model) buckets behind Total Usage); plus `get_latest_context_tokens_for_conversations()` (batched latest top-level call context size)
+- `db/user_store.py` -- `list_user_signup_dates()` (user id -> `created_at`, the new-user counts of Total Usage)
 - `db/llm_pricing.py` -- static per-model USD list-price table and `estimate_cost_usd()` (cache read/write rates incl. the Anthropic 5m/1h TTL split; Gemini long-context tier >200K), consulted only for calls without a provider-reported amount
 - `db/guide_store.py` / `db/project_store.py` -- `list_all_guides()` (every user guide joined to its owner plus a per-guide routine reference count) and `list_all_project_guides()` (projects with non-empty `projects.guide` instructions) behind the guides report
 - `chat/storage.py` -- `ChatStorage.count_user_message_active_days()` (distinct UTC days with user messages, from chat_history.json) and the range-clipped day-set variant `user_message_active_days()`
@@ -21,6 +23,7 @@ Admin gating is enforced on the backend via the inline `is_admin(user["email"])`
 **Frontend:**
 - `frontend/src/pages/AdminSystemReportsPage.tsx` / `.css` -- Shell page (admin guard, header, left nav, section container, `AdminOpsMenu` overlay)
 - `frontend/src/components/LatestActiveConversationsTable.tsx` / `.css` -- "Latest Conversations" polling section
+- `frontend/src/components/TotalUsageReport.tsx` / `.css` -- "Total Usage" section (period-comparison matrix + trend charts, fetch-on-demand), with `UsageBarChart.tsx` (the dependency-free SVG bar chart) and the pure helpers in `frontend/src/utils/usageReport.ts` (period labels, period-over-period deltas, axis math)
 - `frontend/src/components/CostAnalysisTable.tsx` / `.css` -- "Cost Analysis" section (date-range selector + ranked table, fetch-on-demand)
 - `frontend/src/components/UsersReportTable.tsx` / `.css` -- "Users" section (date-range selector + per-user activity/cost table, fetch-on-demand)
 - `frontend/src/components/ModelsReportTable.tsx` / `.css` -- "Models" section (date-range selector + per-model cost/audience table, fetch-on-demand)
@@ -30,10 +33,10 @@ Admin gating is enforced on the backend via the inline `is_admin(user["email"])`
 - `frontend/src/components/AdminOpsMenu.tsx` -- "System Reports" menu item (admin-only, hidden during impersonation; sibling to "Impersonate user" and the shutdown button)
 - `frontend/src/App.tsx` -- `AdminSystemReportsRoute` at `/admin/system-reports`, plus a legacy `/admin/system-monitor` redirect
 - `quest.py` -- `serve_spa_admin` SPA catch-all for `/admin/{rest:path}` so direct browser loads serve `index.html` instead of 404 (safe because all admin API routes live under `/app/api/admin/...`; see [Frontend -- Backend SPA Support](frontend.md#backend-spa-support))
-- `frontend/src/api/client.ts` -- `fetchLatestActiveConversations()`, `fetchMostExpensiveConversations()`, `fetchAdminUserReport()`, `fetchAdminModelReport()`, `fetchAdminGuidesReport()`
-- `frontend/src/api/config.ts` -- `adminLatestActiveConversations`, `adminMostExpensiveConversations`, `adminUserReport`, `adminModelReport`, `adminGuidesReport` URL builders
-- `frontend/src/api/types.ts` -- `AdminActiveConversation`, `AdminConversationModelUsage`, `AdminConversationUsageTotal`, `AdminUserReportRow`, `AdminModelReportRow`, `AdminGuideReportRow`, response types
-- `frontend/src/utils/formatters.ts` -- `formatRelativeTimestamp` shared by both tables' last-active columns
+- `frontend/src/api/client.ts` -- `fetchLatestActiveConversations()`, `fetchAdminUsageReport()`, `fetchMostExpensiveConversations()`, `fetchAdminUserReport()`, `fetchAdminModelReport()`, `fetchAdminGuidesReport()`
+- `frontend/src/api/config.ts` -- `adminLatestActiveConversations`, `adminUsageReport`, `adminMostExpensiveConversations`, `adminUserReport`, `adminModelReport`, `adminGuidesReport` URL builders
+- `frontend/src/api/types.ts` -- `AdminActiveConversation`, `AdminConversationModelUsage`, `AdminConversationUsageTotal`, `AdminUsageReport` / `AdminUsageWindow` / `AdminUsageBucket`, `AdminUserReportRow`, `AdminModelReportRow`, `AdminGuideReportRow`, response types
+- `frontend/src/utils/formatters.ts` -- `formatRelativeTimestamp` shared by both tables' last-active columns, `formatCompactNumber` ("12.3K" / "4M") for the Total Usage cells and chart axes
 
 See [Admin System Reports API](../api/admin-system-monitor-api.md) for the endpoint contracts.
 
@@ -69,6 +72,18 @@ Renders the global top-N most-recently-active conversations across all users. Ea
 **Freshness indicator and manual refresh.** The header shows a live seconds-granularity elapsed label ("Updated 5s ago" / "2m ago" / "1h ago") driven by a 1s ticker (`formatElapsed`, distinct from the minute-granularity `formatRelativeTimestamp` used for the last-active column). The anchor is set only on a *successful* fetch, so during failed polls the label keeps growing while the error strip shows what went wrong. A manual refresh button (lucide-react `RefreshCw`) re-fetches immediately and resets the timer; it bypasses the hidden-tab guard (the click implies a visible tab) and is disabled with a spinning icon while a fetch is in flight.
 
 A future iteration may replace polling with an admin-scoped per-user global on the [persistent WebSocket](realtime.md); for v1 polling is fine because the section is admin-only and the row count is small.
+
+## Total Usage Section
+
+The instance-wide overview: how much Quest is being used, by how many people, at what cost, and whether that is going up or down. One parameter-less fetch of `GET /admin/system-monitor/usage-report` (on mount and via the refresh button; no date picker -- the periods are fixed) renders two things.
+
+**Comparison matrix.** One row per rolling window -- Today, Last 7 / 30 / 90 days, Last 12 months (each with its UTC date range under the label), plus an "All time" reference row -- and one column per metric: **Conversations** (distinct conversations with at least one model call in the period, routine runs included; the routine-run count rides in a detail line), **Active users** (distinct users with a call in a *non-routine* conversation), **New users** (accounts created in the period), **Calls**, **Tokens** (compact "1.07M" magnitudes, exact figure in the tooltip) and **Cost**. Every window cell carries the change against the preceding period of the same length ("▲ +331 (+1034%)", "▼ -$0.13 (-11%)", "no change", "+4 (from 0)" when the previous period was empty; the tooltip names the previous period's dates and figure). Deltas are coloured by whether the direction is welcome -- growth in activity is green and decline amber, while for cost it is the other way round (`good` on each `METRIC_COLUMNS` entry in `TotalUsageReport.tsx`). The lifetime row has no previous period, so no deltas.
+
+Costs follow the dashboard-wide provenance rules (`~` marks a figure that includes list-price estimates, dropped only for fully provider-reported spend) with one deliberate departure from the null-on-unpriced convention: a window containing calls on a model without a pricing entry shows its priceable portion as a lower bound (`≥ ~$6.03`, toned down, tooltip explains) instead of `n/a`, because a single unpriced model would otherwise blank the lifetime figure for good; the delta of such a cell stays `n/a`.
+
+**Trend charts.** Four bar charts -- Conversations, Active users, Cost, Tokens -- over one of three gap-free series picked by a granularity dropdown: daily for the last 90 days, weekly (Monday-start ISO weeks) for the last 52 weeks, or monthly for the last 24 months, each ending with the in-progress period that contains today. `UsageBarChart` is a dependency-free SVG: one bar per period on a "nice" axis ceiling (even ceilings for whole-number metrics so the mid gridline is an integer -- `niceCeil` / `niceCeilEven` in `utils/usageReport.ts`), sparse x-axis ticks, and a hover readout in the chart header (the hovered period and its figure, defaulting to the latest period) rather than a positioned tooltip; each bar also carries a native `<title>`. The in-progress last bar is drawn lighter and labelled "in progress"; on the Cost chart, a period that also contains unpriced calls plots its priceable portion as a hatched bar labelled "excludes unpriced calls" (the series points carry both the null-on-unpriced `cost_usd` and the never-null `known_cost_usd`).
+
+Distinct counts are computed per period from per-day (conversation, model) buckets (`get_daily_usage_buckets()` folded by `build_usage_report()` in `chat/usage_report.py`), so a week's conversations or users are not the sum of its days. See [Admin System Reports API](../api/admin-system-monitor-api.md) for the exact response contract.
 
 ## Cost Analysis Section
 
@@ -150,6 +165,15 @@ User-message days are not derivable from the `llm_calls_*` tables (a call's `cre
 
 **Why do the report handlers build their rows in `asyncio.to_thread`?**
 Every chat_history.json read (active days on all three conversation/user reports, the legacy title fallback in `_resolve_list_title`) is a synchronous parse of a file that can run to many megabytes for a long tool-call conversation, and the user report reads one per non-routine conversation in range. Done on the event loop, that would freeze the persistent WebSocket for the duration: no heartbeats, no streaming events for every live run on the instance, and a stall past the socket's 60s deadlines closes the connection and drops the run's transient lifecycle envelopes (see [Realtime -- Run-State Reconcile on Subscribe](realtime.md#run-state-reconcile-on-subscribe)). The row-building loops therefore run in a worker thread; the async DB lookups they depend on are resolved on the loop first.
+
+**Why do Total Usage's active users exclude routine runs?**
+A scheduled routine running overnight on someone's behalf produces call rows under their user id, but it is not that person using Quest. Counting it would make the active-user figure read as engagement it is not; the routine runs still count as conversations (with their own sub-count) so the activity is not hidden, just attributed honestly. Deleted conversations lose their routine link, so their calls count as organic -- the same convention as the Users report.
+
+**Why does Total Usage show a cost lower bound instead of `n/a`?**
+The other sections null out a figure as soon as one model in it is unpriced, which is right for a per-conversation or per-user figure the admin can drill into. The Total Usage matrix aggregates everything, so one unpriced model used once would blank the lifetime cost permanently and every window it falls in. Showing the priceable portion marked `≥` keeps the information while still flagging it as incomplete; the chart does the same with hatched bars.
+
+**Why hand-rolled SVG charts instead of a chart library?**
+Four bar charts with gridlines, ticks and a hover readout are ~150 lines of SVG; a charting dependency would add hundreds of kilobytes to the bundle for an admin-only page, and the frontend already prefers dependency-free utilities (the CSV parser, the markdown renderers) where the need is this bounded.
 
 **Why does the guides report ship content length instead of the guide text?**
 The report exists to find owners, not to read prompts: an admin needs "who still has non-empty guides, and are any still wired to routines" to reach out before deprecation. Shipping every user's system-prompt text to a dashboard would be a needless disclosure for that purpose, and the length alone separates the empty auto-created default rows from real ones.

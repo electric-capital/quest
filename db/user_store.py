@@ -4,6 +4,7 @@ Provides the same function signatures as the original load_users/save_users/
 get_user_by_api_key/get_user_by_email functions, but backed by async SQLite.
 """
 
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import func, select, or_
@@ -199,6 +200,18 @@ async def list_all_users() -> list[dict]:
             {"id": u.id, "email": u.email, "name": u.name}
             for u in users
         ]
+
+
+async def list_user_signup_dates() -> dict[int, datetime]:
+    """Return every user's ``created_at`` keyed by user id.
+
+    Feeds the admin Total Usage report's new-user counts; a narrow
+    projection so the roster lookup stays cheap next to ``list_all_users``.
+    Timestamps come back as stored (naive UTC).
+    """
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(User.id, User.created_at))
+        return {user_id: created_at for user_id, created_at in result.all()}
 
 
 async def search_users(
