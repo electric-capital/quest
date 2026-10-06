@@ -34,7 +34,6 @@ function renderSection(docs: Doc[]) {
   return render(
     <DocsSection
       docs={docs}
-      hasMore={false}
       loading={false}
       activeDocId={null}
       onOpenDoc={vi.fn()}

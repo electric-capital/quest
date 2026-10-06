@@ -502,7 +502,6 @@ export const Sidebar = React.memo(function Sidebar({
             {docsEnabled && (
               <DocsSection
                 docs={userDocs.docs}
-                hasMore={userDocs.hasMore}
                 loading={userDocs.loading}
                 error={userDocs.error}
                 activeDocId={activeDocId}
@@ -555,7 +554,6 @@ export const Sidebar = React.memo(function Sidebar({
                 onArchived={handleArchived}
                 showDocs={docsEnabled}
                 docs={projectDocs.docs}
-                docsHasMore={projectDocs.hasMore}
                 docsLoading={projectDocs.loading}
                 docsError={projectDocs.error}
                 activeDocId={activeDocId}

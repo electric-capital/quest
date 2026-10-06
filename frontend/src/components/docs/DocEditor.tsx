@@ -3,7 +3,10 @@
  * owner and to write-share recipients: `access.can_edit`).
  *
  * A toolbar (Image upload, the preview control, Cancel and Save -- also
- * Ctrl/Cmd+S while focus is in the editor or on the bare page) over a
+ * Ctrl/Cmd+S while focus is in the editor or on the bare page) and a
+ * formatting bar (headings, bold / italic / strikethrough / code, link,
+ * bulleted / numbered list, quote -- pure toggling edits from
+ * utils/markdownFormatting, also Ctrl/Cmd+B, I and K) over a
  * monospace textarea and a live preview rendered exactly like DocViewer's
  * body (same remark / rehype plugins, the chat's `markdownComponents`,
  * `assets/<name>` resolved through MarkdownWorkspaceContext.assetBase).
@@ -79,7 +82,25 @@ import remarkBreaks from 'remark-breaks';
 import remarkMath from 'remark-math';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
-import { Eye, EyeOff, ImagePlus, RefreshCw, TriangleAlert, X } from 'lucide-react';
+import {
+  Bold,
+  Code,
+  Eye,
+  EyeOff,
+  Heading1,
+  Heading2,
+  Heading3,
+  ImagePlus,
+  Italic,
+  Link,
+  List,
+  ListOrdered,
+  RefreshCw,
+  Strikethrough,
+  TextQuote,
+  TriangleAlert,
+  X,
+} from 'lucide-react';
 import {
   docAssetBase,
   fetchDoc,
@@ -102,6 +123,12 @@ import {
   type DocDraftBackup,
 } from '../../utils/docDraftBackup';
 import { formatTimestamp } from '../../utils/formatters';
+import {
+  markdownFormatEdit,
+  selectedLines,
+  type MarkdownFormat,
+  type TextEdit,
+} from '../../utils/markdownFormatting';
 import remarkMathCurrencyGuard from '../../utils/remarkMathCurrencyGuard';
 import { MarkdownWorkspaceContext, markdownComponents } from '../Message';
 import { DocConfirmDialog } from './DocConfirmDialog';
@@ -132,10 +159,36 @@ const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta']);
 const REMARK_PLUGINS = [remarkGfm, remarkBreaks, remarkMath, remarkMathCurrencyGuard];
 const REHYPE_PLUGINS = [rehypeHighlight, rehypeKatex];
 
-const SAVE_SHORTCUT =
-  typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent)
-    ? '⌘S'
-    : 'Ctrl+S';
+const IS_APPLE =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
+const SAVE_SHORTCUT = IS_APPLE ? '⌘S' : 'Ctrl+S';
+/** Ctrl/Cmd + letter for the formatting bar's shortcuts (titles only). */
+const shortcutLabel = (letter: string) => (IS_APPLE ? `⌘${letter}` : `Ctrl+${letter}`);
+
+/** The formatting bar, in order; `group` separates clusters, `key` is the shortcut letter. */
+interface FormatButton {
+  format: MarkdownFormat;
+  label: string;
+  icon: typeof Bold;
+  key?: string;
+  group: number;
+}
+
+const FORMAT_BUTTONS: FormatButton[] = [
+  { format: 'h1', label: 'Heading 1', icon: Heading1, group: 0 },
+  { format: 'h2', label: 'Heading 2', icon: Heading2, group: 0 },
+  { format: 'h3', label: 'Heading 3', icon: Heading3, group: 0 },
+  { format: 'bold', label: 'Bold', icon: Bold, key: 'B', group: 1 },
+  { format: 'italic', label: 'Italic', icon: Italic, key: 'I', group: 1 },
+  { format: 'strikethrough', label: 'Strikethrough', icon: Strikethrough, group: 1 },
+  { format: 'code', label: 'Inline code', icon: Code, group: 1 },
+  { format: 'link', label: 'Link', icon: Link, key: 'K', group: 2 },
+  { format: 'bullet', label: 'Bulleted list', icon: List, group: 3 },
+  { format: 'numbered', label: 'Numbered list', icon: ListOrdered, group: 3 },
+  { format: 'quote', label: 'Quote', icon: TextQuote, group: 3 },
+];
+
+const FORMAT_SHORTCUTS: Record<string, MarkdownFormat> = { b: 'bold', i: 'italic', k: 'link' };
 
 const FORBIDDEN_MESSAGE = 'You no longer have edit access to this doc.';
 const CHANGED_MESSAGE = 'This doc changed since you started editing.';
@@ -178,27 +231,8 @@ function uploadPlaceholder(name: string): string {
 }
 
 // --- Text edits --------------------------------------------------------------
-
-/** Replace value[start, end) with `text`, then select [selStart, selEnd). */
-interface TextEdit {
-  start: number;
-  end: number;
-  text: string;
-  selStart: number;
-  selEnd: number;
-}
-
-/**
- * The whole lines a selection touches, as [lineStart, blockEnd) (blockEnd
- * excludes the last line's newline). A selection ending right after a
- * newline does not touch the next line.
- */
-function selectedLines(value: string, start: number, end: number) {
-  const lineStart = start === 0 ? 0 : value.lastIndexOf('\n', start - 1) + 1;
-  const last = end > start && value[end - 1] === '\n' ? end - 1 : end;
-  const newline = value.indexOf('\n', last);
-  return { lineStart, blockEnd: newline === -1 ? value.length : newline };
-}
+// (TextEdit and selectedLines come from utils/markdownFormatting, which the
+// formatting bar's edits share with the Tab / image edits below.)
 
 /**
  * Tab: two spaces at a bare cursor; with a selection (one line or many),
@@ -856,6 +890,20 @@ export function DocEditor({ doc, onSaved, onCancel, onStale }: DocEditorProps) {
     uploadImages(files);
   };
 
+  // --- Formatting ------------------------------------------------------------------
+
+  /** A formatting-bar button or its shortcut: toggle `format` on the selection. */
+  const applyFormat = useCallback(
+    (format: MarkdownFormat) => {
+      const textarea = textareaRef.current;
+      if (!textarea || finishedRef.current) return;
+      const { value, selectionStart, selectionEnd } = textarea;
+      const edit = markdownFormatEdit(value, selectionStart, selectionEnd, format);
+      setDraft(applyEdit(textarea, edit, mayFocusTextarea()));
+    },
+    [mayFocusTextarea],
+  );
+
   // --- Textarea keys -------------------------------------------------------------
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -863,6 +911,16 @@ export function DocEditor({ doc, onSaved, onCancel, onStale }: DocEditorProps) {
     if (event.key === 'Escape') {
       tabReleasedRef.current = true;
       return;
+    }
+    // Ctrl/Cmd+B / I / K: the formatting bar's shortcuts (Ctrl+S is handled
+    // document-wide above).
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) {
+      const format = FORMAT_SHORTCUTS[event.key.toLowerCase()];
+      if (format) {
+        event.preventDefault();
+        if (editable) applyFormat(format);
+        return;
+      }
     }
     if (event.key !== 'Tab' || event.ctrlKey || event.altKey || event.metaKey) {
       if (!MODIFIER_KEYS.has(event.key)) tabReleasedRef.current = false;
@@ -1150,6 +1208,32 @@ export function DocEditor({ doc, onSaved, onCancel, onStale }: DocEditorProps) {
           >
             <X size={14} aria-hidden="true" />
           </button>
+        </div>
+      )}
+
+      {showInput && (
+        <div className="doc-editor-format-bar" role="toolbar" aria-label="Formatting">
+          {FORMAT_BUTTONS.map((button, index) => {
+            const Icon = button.icon;
+            const title = button.key
+              ? `${button.label} (${shortcutLabel(button.key)})`
+              : button.label;
+            const newGroup = index > 0 && FORMAT_BUTTONS[index - 1].group !== button.group;
+            return (
+              <button
+                key={button.format}
+                type="button"
+                className={`doc-editor-format-button${newGroup ? ' doc-editor-format-button--group' : ''}`}
+                onClick={() => applyFormat(button.format)}
+                disabled={!editable}
+                title={title}
+                aria-label={button.label}
+                aria-keyshortcuts={button.key ? `Control+${button.key} Meta+${button.key}` : undefined}
+              >
+                <Icon size={16} aria-hidden="true" />
+              </button>
+            );
+          })}
         </div>
       )}
 

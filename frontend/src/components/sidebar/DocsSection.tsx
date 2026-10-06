@@ -14,7 +14,6 @@ import { DocModeBadge } from '../docs/DocModeBadge';
 import { shouldShowDocModeBadge } from '../../utils/docMode';
 import {
   deriveSidebarDocItems,
-  docCountLabel,
   formatSidebarDocTime,
   formatSidebarDocTimeTitle,
 } from '../../utils/sidebarDocs';
@@ -22,8 +21,6 @@ import { ChevronRightIcon } from './icons';
 
 export interface DocsSectionProps {
   docs: Doc[];
-  // The server has more docs than `docs` holds (count shows as "5+").
-  hasMore: boolean;
   // The first page has not landed yet.
   loading: boolean;
   // useDocs().error: the first page failed to load (no docs to show).
@@ -38,7 +35,6 @@ export interface DocsSectionProps {
 
 export function DocsSection({
   docs,
-  hasMore,
   loading,
   error = null,
   activeDocId,
@@ -47,7 +43,7 @@ export function DocsSection({
   headerActive = false,
 }: DocsSectionProps) {
   const items = useMemo(() => deriveSidebarDocItems(docs), [docs]);
-  // A failed load is not "no docs": no "0" count and no create hint.
+  // A failed load is not "no docs": no create hint.
   const failed = !loading && Boolean(error) && docs.length === 0;
 
   return (
@@ -61,10 +57,6 @@ export function DocsSection({
           aria-current={headerActive ? 'page' : undefined}
         >
           <span className="section-label">Docs</span>
-          {/* No count until the first page lands, so it never flashes "0". */}
-          {!loading && !failed && (
-            <span className="docs-count">{docCountLabel(docs.length, hasMore)}</span>
-          )}
           <ChevronRightIcon className="docs-section-chevron" />
         </button>
       </div>

@@ -3,7 +3,6 @@ import type { Doc } from '../api/types';
 import {
   SIDEBAR_DOC_LIMIT,
   deriveSidebarDocItems,
-  docCountLabel,
   formatSidebarDocTime,
   formatSidebarDocTimeTitle,
 } from './sidebarDocs';
@@ -79,18 +78,6 @@ describe('deriveSidebarDocItems', () => {
     ];
     deriveSidebarDocItems(rows);
     expect(rows.map((d) => d.id)).toEqual(['old', 'new']);
-  });
-});
-
-describe('docCountLabel', () => {
-  it('shows the loaded count', () => {
-    expect(docCountLabel(0, false)).toBe('0');
-    expect(docCountLabel(3, false)).toBe('3');
-    expect(docCountLabel(5, false)).toBe('5');
-  });
-
-  it('appends "+" when the server has more', () => {
-    expect(docCountLabel(5, true)).toBe('5+');
   });
 });
 
