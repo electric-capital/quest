@@ -242,6 +242,7 @@ export function MobileShell({
           activeConversationId={activeConversationId}
           onConversationSelect={handleConversationSelect}
           onNewConversation={handleNewConversation}
+          onNavigateAway={closeOverlays}
         />
       </div>
       <div className={`mobile-workspace-drawer${workspaceOpen ? ' open' : ''}`}>
