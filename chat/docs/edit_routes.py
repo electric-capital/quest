@@ -208,7 +208,8 @@ async def replace_doc_content(
     403 ``docs_disabled``, 404 ``doc_not_found``, 403 ``forbidden`` (no
     write access), 400s, then the flat 409 ``stale_update`` (with
     ``current``) when ``expected_updated_at`` is not the row's token --
-    re-checked under the per-doc write lock.
+    re-checked under the per-doc write lock. 400 ``invalid_doc_files`` when
+    ``doc.md`` is missing, a symlink or a special file (as restore).
 
     A body identical to the stored one writes nothing (no revision, no
     ``updated_at`` bump, no event). Otherwise the replaced body is
@@ -334,8 +335,9 @@ async def upload_doc_asset(
     collision.
 
     The body is not changed (the editor inserts ``markdown`` itself) and no
-    revision is taken; the row's ``asset_count``, ``last_write_source`` and
-    ``updated_at`` are bumped and the realtime events sent.
+    revision is taken; the row's ``asset_count`` and ``updated_at`` are
+    bumped (``last_write_source`` keeps naming the body's writer) and the
+    realtime events sent.
 
     Returns (201):
         ``{"asset": {"name", "size", "mime"}, "markdown":
@@ -369,8 +371,9 @@ async def delete_doc_asset(
     references ``assets/<name>``, also percent-, entity- or
     backslash-escaped (``ui_writes.asset_referenced``); older revisions may
     still reference it (restoring one then shows a broken image). No
-    revision is taken; the row's ``asset_count``, ``last_write_source`` and
-    ``updated_at`` are bumped and the realtime events sent.
+    revision is taken; the row's ``asset_count`` and ``updated_at`` are
+    bumped (``last_write_source`` keeps naming the body's writer) and the
+    realtime events sent.
 
     Returns:
         ``{"deleted": true, "asset_count", "updated_at",

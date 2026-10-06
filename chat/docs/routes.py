@@ -32,8 +32,11 @@ doc dict plus
 - ``last_write_user {id, name, email}`` -- owner only: the user of a
   ``ui:<user_id>`` source, or of an ``action_request:<id>`` source whose
   approved card belonged to someone other than the owner (a write-share
-  recipient); null otherwise or when that user is gone.
+  recipient; a proposer whose account is gone keeps ``{id, name: null,
+  email: null}``); null otherwise, or for a ``ui:<id>`` user who is gone.
   ``last_write_source`` stays raw for the owner and is null for non-owners.
+  Image-only writes (upload / asset delete) keep ``last_write_source``: it
+  names the writer of the current body.
 
 ``GET /docs`` serves three keyset-paged streams: the caller's own user
 docs (default), one project's docs (``project_id``), and docs shared WITH
@@ -71,6 +74,7 @@ import logging
 import os
 import re
 import unicodedata
+from collections import OrderedDict
 from datetime import datetime
 from typing import Optional
 from urllib.parse import quote
@@ -273,9 +277,16 @@ def _doc_row(
             for share in shares
         ]
         writer = _last_writer_id(doc, card_owners or {})
-        row["last_write_user"] = (
-            _user_ref(users, writer) if writer is not None and writer in users else None
-        )
+        if writer is None:
+            row["last_write_user"] = None
+        elif writer in users or _ui_source_user_id(doc.get("last_write_source")) is None:
+            # Known user; or a recipient's approved card whose proposer is
+            # gone -- keep the id with null name/email, like shares do.
+            row["last_write_user"] = _user_ref(users, writer)
+        else:
+            # A ``ui:<id>`` writer who no longer exists: the raw source
+            # already carries the id.
+            row["last_write_user"] = None
     else:
         row["owner"] = _user_ref(users, doc["owner_id"])
         # The owner's conversation ids (and who else edits) are not the
@@ -390,11 +401,65 @@ def _sees_all_assets(access: DocAccess) -> bool:
     return access.write == "free"
 
 
-def _referenced_asset_rows(body: str, rows: list[dict]) -> list[dict]:
-    """The asset rows ``body`` references (``ui_writes.asset_referenced``:
-    the one reference matcher, escaped spellings included). Sync and
-    CPU-bound on a large body: call it in a thread."""
-    return [row for row in rows if ui_writes.asset_referenced(body, row["name"])]
+def _referenced_asset_rows(names: frozenset, rows: list[dict]) -> list[dict]:
+    """The asset rows whose name is in ``names``
+    (``ui_writes.referenced_asset_names`` of the body: the one reference
+    matcher, escaped spellings included, computed once per body)."""
+    return [row for row in rows if row["name"] in names]
+
+
+def _referenced_asset_filter():
+    """A ``files.build_zip`` ``asset_filter`` keeping only the images the
+    archived body references: the name set is computed once per body
+    (memoized on the body object build_zip passes for every asset), so the
+    filter costs one :func:`ui_writes.referenced_asset_names` pass inside
+    build_zip's file lock, not one per asset."""
+    memo: dict = {}
+
+    def _keep(body: str, name: str) -> bool:
+        if memo.get("body") is not body:
+            memo["body"] = body
+            memo["names"] = ui_writes.referenced_asset_names(body)
+        return name in memo["names"]
+
+    return _keep
+
+
+# The referenced-image set of a doc's body for the read-only asset route,
+# keyed (doc_id, updated_at): every body write bumps updated_at, so a key
+# never outlives its body (a viewer's page loads N images; one body pass
+# serves them all). Event-loop access only; the set is computed in a thread.
+_REFERENCED_NAMES_CACHE: "OrderedDict[tuple[str, str], frozenset]" = OrderedDict()
+_REFERENCED_NAMES_CACHE_SIZE = 64
+
+
+def _remember_referenced_names(doc: dict, names: frozenset) -> None:
+    key = (doc["id"], doc["updated_at"])
+    _REFERENCED_NAMES_CACHE[key] = names
+    _REFERENCED_NAMES_CACHE.move_to_end(key)
+    while len(_REFERENCED_NAMES_CACHE) > _REFERENCED_NAMES_CACHE_SIZE:
+        _REFERENCED_NAMES_CACHE.popitem(last=False)
+
+
+def _referenced_names_from_disk(doc_id: str) -> frozenset:
+    return ui_writes.referenced_asset_names(doc_files.read_body(doc_id))
+
+
+async def _referenced_names(doc: dict) -> frozenset:
+    """The names ``doc``'s current body references, cached per
+    ``(doc_id, updated_at)`` (raises DocFileError / OSError when the body
+    cannot be read). A write landing between the row read and the body
+    read can only make the cached set newer than its key, never staler
+    than the key's body (the file is written before the row is bumped; the
+    window where the file is new and the row old is the write lock's)."""
+    key = (doc["id"], doc["updated_at"])
+    names = _REFERENCED_NAMES_CACHE.get(key)
+    if names is not None:
+        _REFERENCED_NAMES_CACHE.move_to_end(key)
+        return names
+    names = await asyncio.to_thread(_referenced_names_from_disk, doc["id"])
+    _remember_referenced_names(doc, names)
+    return names
 
 
 def _asset_not_found(name: str) -> HTTPException:
@@ -709,7 +774,7 @@ async def get_ui_doc(
     At most ``DOC_MAX_ASSETS`` entries, so it rides on this payload rather
     than a separate endpoint; the list route does not carry it. A read-only
     viewer (UI verdict not ``free``: a read or everyone-read share) gets
-    only the images ``content`` references (``ui_writes.asset_referenced``,
+    only the images ``content`` references (``ui_writes.referenced_asset_names``,
     escaped spellings included); owners and write shares get all of them.
 
     404 ``doc_not_found`` for a missing or hidden doc (identical bodies).
@@ -720,8 +785,11 @@ async def get_ui_doc(
     assets = await _doc_files_call(doc_files.list_assets, doc["id"])
     asset_rows = _asset_rows(assets)
     if not _sees_all_assets(access):
-        # Read-only viewers: only the images this very body references.
-        asset_rows = await asyncio.to_thread(_referenced_asset_rows, content, asset_rows)
+        # Read-only viewers: only the images this very body references (one
+        # pass over the body; it also primes the asset route's cache).
+        names = await asyncio.to_thread(ui_writes.referenced_asset_names, content)
+        _remember_referenced_names(doc, names)
+        asset_rows = _referenced_asset_rows(names, asset_rows)
     row = await _ui_row(user, doc, access)
     row["content"] = content
     row["assets"] = asset_rows
@@ -847,10 +915,10 @@ async def get_ui_doc_asset(
     doc, access = await _get_doc_for_ui(user, doc_id)
     if not _sees_all_assets(access):
         try:
-            body = await asyncio.to_thread(doc_files.read_body, doc["id"])
+            referenced = await _referenced_names(doc)
         except (doc_files.DocFileError, OSError):
             raise _asset_not_found(name)
-        if not await asyncio.to_thread(ui_writes.asset_referenced, body, name):
+        if name not in referenced:
             raise _asset_not_found(name)
     try:
         # read_asset re-validates the name and opens the leaf O_NOFOLLOW +
@@ -907,7 +975,7 @@ async def download_ui_doc(
         )
     zip_path = await _doc_files_call(
         doc_files.build_zip, doc["id"], doc["title"],
-        None if _sees_all_assets(access) else ui_writes.asset_referenced,
+        None if _sees_all_assets(access) else _referenced_asset_filter(),
     )
     return FileResponse(
         path=zip_path,

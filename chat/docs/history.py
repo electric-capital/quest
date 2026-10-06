@@ -136,13 +136,6 @@ _REVISION_STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 # runs are not ids SQLite could bind.
 _INT_ID_RE = re.compile(r"[0-9]{1,18}")
 
-# Every position where ``assets/<name>`` starts (a lookahead, so overlapping
-# occurrences such as ``assets/xassets/y.png`` are all found). The captured
-# run is maximal, so "the body references assets/<name>" is exactly the
-# in-use rule of the asset delete route: ``assets/<name>`` not followed by
-# another name character.
-_ASSET_REF_RE = re.compile(r"(?=assets/([A-Za-z0-9._-]+))")
-
 # Default copy titles: how often to recompute the free "(copy N)" title
 # after losing a race to a concurrent create of the same title.
 _COPY_TITLE_ATTEMPTS = 5
@@ -389,18 +382,16 @@ def referenced_asset_names(body: str) -> list[str]:
     raster image extension, no leading dot). Whether the file exists is not
     checked here.
     """
-    names: set[str] = set()
-    # The same decoded spellings the asset-delete in-use rule accepts
-    # (ui_writes.asset_referenced): an image the body shows through an
-    # escaped reference is copied too.
-    for text in ui_writes._reference_variants(body):
-        for match in _ASSET_REF_RE.finditer(text):
-            name = match.group(1)
-            try:
-                doc_files._validate_asset_name(name)
-            except doc_files.DocFileError:
-                continue
-            names.add(name)
+    # The one reference matcher (ui_writes.referenced_asset_names), so the
+    # same decoded spellings the asset-delete in-use rule and the read-only
+    # image filter accept are copied too.
+    names = []
+    for name in ui_writes.referenced_asset_names(body):
+        try:
+            doc_files._validate_asset_name(name)
+        except doc_files.DocFileError:
+            continue
+        names.append(name)
     return sorted(names)
 
 

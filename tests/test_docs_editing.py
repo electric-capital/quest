@@ -785,7 +785,9 @@ class TestUploadAsset:
         assert after["updated_at"] == data["updated_at"]
         assert after["asset_count"] == 1
         assert after["content_size"] == before["content_size"]
-        assert after["last_write_source"] == f"ui:{alice}"
+        # The body's writer stays recorded (an image upload is not a body
+        # write); seed_doc leaves it unset.
+        assert after["last_write_source"] == before["last_write_source"] is None
         assert_write_events(env, alice, doc["id"], data["updated_at"])
 
         # The base router serves it.
@@ -943,9 +945,11 @@ class TestUploadAsset:
         assert files.list_assets(doc["id"]) == []
 
         share(env, doc, "bob", "write")
+        source_before = row(env, doc["id"])["last_write_source"]
         resp = upload(client(env, "bob"), doc["id"], PNG, "bobs.png")
         assert resp.status_code == 201
-        assert row(env, doc["id"])["last_write_source"] == f"ui:{uid(env, 'bob')}"
+        # Asset-only: the body's writer is unchanged.
+        assert row(env, doc["id"])["last_write_source"] == source_before
 
     def test_malformed_forms(self, env):
         doc = seed_doc(env)
@@ -1114,7 +1118,8 @@ class TestDeleteAsset:
         assert after["asset_count"] == 1
         assert after["content_size"] == before["content_size"]
         assert after["updated_at"] == data["updated_at"]
-        assert after["last_write_source"] == f"ui:{alice}"
+        # Asset-only: the body's writer stays recorded.
+        assert after["last_write_source"] == before["last_write_source"]
         assert_write_events(env, alice, doc["id"], data["updated_at"])
 
         again = client(env).delete(f"/app/api/docs/{doc['id']}/assets/chart.png")

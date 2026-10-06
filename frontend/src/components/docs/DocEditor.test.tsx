@@ -354,6 +354,58 @@ describe('DocEditor', () => {
       expect(screen.queryByRole('alert')).toBeNull();
     });
 
+    it('does not re-save silently over an added image that was deleted meanwhile', async () => {
+      const row = savedRow();
+      mocks.updateDocContent
+        .mockRejectedValueOnce(staleError(T2))
+        .mockRejectedValueOnce(staleError(T2))
+        .mockResolvedValueOnce(row);
+      // The owner deleted chart.png (the saved body never used it): same
+      // body, new token, the asset gone.
+      mocks.fetchDoc.mockResolvedValue(doc({ updated_at: T2, assets: [] }));
+      const { onSaved, onStale } = renderEditor();
+
+      type(`Original body\n${CHART}`);
+      fireEvent.click(saveButton());
+      const alert = await screen.findByRole('alert');
+      expect(alert.textContent).toBe(
+        'An image you added was deleted meanwhile: chart.png. Re-upload it or remove the reference, then save.',
+      );
+      expect(mocks.updateDocContent).toHaveBeenCalledTimes(1);
+      expect(onStale).toHaveBeenCalledTimes(1);
+      expect(onSaved).not.toHaveBeenCalled();
+      expect(textarea().value).toBe(`Original body\n${CHART}`);
+      expect(screen.queryByText(/Someone changed this doc/)).toBeNull();
+
+      // Reference removed: the next save goes through the same check and
+      // then re-saves with the fresh token.
+      type('Original body\nNo image after all');
+      fireEvent.click(saveButton());
+      await waitFor(() => expect(onSaved).toHaveBeenCalledWith(row));
+      expect(mocks.updateDocContent).toHaveBeenLastCalledWith('d1', {
+        content: 'Original body\nNo image after all',
+        expected_updated_at: T2,
+      });
+    });
+
+    it('still re-saves silently when the added image is there (someone else\'s upload bumped the token)', async () => {
+      const row = savedRow();
+      mocks.updateDocContent.mockRejectedValueOnce(staleError(T2)).mockResolvedValueOnce(row);
+      mocks.fetchDoc.mockResolvedValue(doc({
+        updated_at: T2,
+        assets: [
+          { name: 'chart.png', size: 10, mime: 'image/png' },
+          { name: 'theirs.png', size: 10, mime: 'image/png' },
+        ],
+      }));
+      const { onSaved } = renderEditor();
+      // A prose mention with trailing punctuation reads as the same name.
+      type(`Original body\n${CHART}\nSee assets/chart.png.`);
+      fireEvent.click(saveButton());
+      await waitFor(() => expect(onSaved).toHaveBeenCalledWith(row));
+      expect(mocks.updateDocContent).toHaveBeenCalledTimes(2);
+    });
+
     it('shows the conflict banner for a real body change and overwrites with the current token', async () => {
       const row = savedRow({ content: 'Mine' });
       mocks.updateDocContent.mockRejectedValueOnce(staleError(T2)).mockResolvedValueOnce(row);

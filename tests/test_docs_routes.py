@@ -977,11 +977,17 @@ class TestDelete:
         assert _run(docs_env.doc_store.list_shares(doc["id"])) == []
         assert not (docs_env.dirs["docs"] / doc["id"]).exists()
         # Phase 3: the owner and the (captured) share recipients; nobody is
-        # connected in the test, so the everyone row adds no one.
+        # connected in the test, so the everyone row adds no one. Open
+        # viewers get a doc_changed with updated_at null (re-fetch -> 404).
+        alice, bob = uid(docs_env, "alice"), uid(docs_env, "bob")
         assert event_types(docs_env) == [
-            (uid(docs_env, "alice"), "doc_list_changed"),
-            (uid(docs_env, "bob"), "doc_list_changed"),
+            (alice, "doc_changed"), (bob, "doc_changed"),
+            (alice, "doc_list_changed"), (bob, "doc_list_changed"),
         ]
+        assert {
+            (ev["doc_id"], ev["updated_at"])
+            for _u, ev in docs_env.published if ev["type"] == "doc_changed"
+        } == {(doc["id"], None)}
         # Gone for everyone.
         assert client(docs_env).get(f"/app/api/docs/{doc['id']}").status_code == 404
 
@@ -1029,9 +1035,22 @@ class TestProjectDelete:
         for kept in (other, mine):
             assert _run(docs_env.doc_store.get_doc(kept["id"])) is not None
             assert (docs_env.dirs["docs"] / kept["id"]).is_dir()
-        # Phase 3: the owner and the deleted docs' share recipients.
-        assert event_types(docs_env) == [
-            (alice["id"], "doc_list_changed"), (uid(docs_env, "bob"), "doc_list_changed"),
+        # Phase 3: doc_changed (updated_at null) per deleted doc to its own
+        # audience, then doc_list_changed to the owner and the recipients.
+        bob = uid(docs_env, "bob")
+        seen = [
+            (u, ev["type"], ev.get("doc_id"), ev.get("updated_at"))
+            for u, ev in docs_env.published
+        ]
+        # (Docs are visited in id order, so the doc_changed order varies.)
+        assert sorted(seen[:3]) == sorted([
+            (alice["id"], "doc_changed", one["id"], None),
+            (bob, "doc_changed", one["id"], None),
+            (alice["id"], "doc_changed", two["id"], None),
+        ])
+        assert seen[3:] == [
+            (alice["id"], "doc_list_changed", None, None),
+            (bob, "doc_list_changed", None, None),
         ]
 
     def test_project_without_docs_publishes_nothing(self, docs_env):

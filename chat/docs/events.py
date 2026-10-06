@@ -1,9 +1,14 @@
 """Realtime publishing for Quest Docs.
 
 Two per-user globals on the persistent WebSocket, built by
-chat/realtime/events.py: ``doc_list_changed`` (list views and open viewers
-re-fetch) and ``doc_changed {doc_id, updated_at}`` (an open viewer of that
-doc re-fetches unless it already shows that version).
+chat/realtime/events.py: ``doc_list_changed`` (list views re-fetch their
+window) and ``doc_changed {doc_id, updated_at}`` (an open viewer of that
+doc re-fetches unless it already shows that version). ``updated_at: null``
+means "this doc's existence or the receiver's access to it changed":
+always re-fetch (sent on delete, project delete and share changes, which
+do not bump ``updated_at``). Every change an open viewer must notice
+reaches it as a ``doc_changed`` for its doc, so viewers can ignore the
+install-wide ``doc_list_changed`` traffic.
 
 Audience: everyone who can see the doc in the UI -- its owner plus every
 direct share recipient; a doc with an "everyone" share row reaches every
@@ -26,18 +31,23 @@ viewing that very doc may also re-fetch on ``doc_changed`` when its
 Who publishes what:
 
 - chat/docs/service.py: every body/asset write (:func:`publish_doc_write`:
-  ``doc_changed`` then ``doc_list_changed`` to the audience), UI create and
-  delete; the model's ``create_doc`` (a new doc has no shares, so the owner
-  is the whole audience).
+  ``doc_changed`` then ``doc_list_changed`` to the audience) and UI create;
+  the UI delete sends ``doc_changed {updated_at: null}`` then
+  ``doc_list_changed`` to the audience captured before the delete; the
+  model's ``create_doc`` (a new doc has no shares, so the owner is the
+  whole audience).
 - chat/docs/routes.py: the metadata-only rename (audience helpers).
 - chat/docs/share_routes.py: share add / update / remove send
-  ``doc_list_changed`` to the owner and the affected recipient, or to every
-  connected user for the everyone row (:func:`publish_share_changed`). The
-  owner's open viewer and a recipient's open viewer both re-fetch on it
-  (revocation turns into the viewer's 404 state).
-- chat/project_routes.py: one ``doc_list_changed`` after a project
-  delete's directory sweep, to the combined audience of the project's docs
-  captured before the delete (:func:`docs_audience`).
+  ``doc_changed {updated_at: null}`` then ``doc_list_changed`` to the owner
+  and the affected recipient, or to every connected user for the everyone
+  row (:func:`publish_share_changed`). The owner's open viewer re-reads
+  the roster; a recipient's re-reads its permission (revocation turns into
+  the viewer's 404 state).
+- chat/project_routes.py: after a project delete's directory sweep,
+  ``doc_changed {updated_at: null}`` per deleted doc to that doc's
+  audience, then one ``doc_list_changed`` to the combined audience of the
+  project's docs (all captured before the delete: :func:`doc_audience`,
+  :func:`docs_audience`).
 
 Not covered: an account deletion does not notify the recipients of the
 deleted user's docs; their lists refresh on their next event or reload.
@@ -63,6 +73,7 @@ __all__ = [
     "publish_doc_changed",
     "publish_doc_changed_for",
     "publish_doc_changed_to",
+    "publish_doc_gone_or_access_changed_to",
     "publish_doc_list_changed",
     "publish_doc_list_changed_for",
     "publish_doc_list_changed_to",
@@ -204,12 +215,24 @@ def publish_doc_write(doc: Mapping) -> None:
     publish_doc_list_changed_to(audience)
 
 
-def publish_share_changed(owner_id: int, recipient_user_id: Optional[int]) -> None:
-    """After a share row was added, changed or removed: ``doc_list_changed``
-    to the owner and the affected recipient, or to every connected user when
-    the row is the everyone row (``recipient_user_id`` None). Other
-    recipients' view of the doc is unchanged, so they are not notified."""
-    publish_doc_list_changed_to(DocAudience(
+def publish_doc_gone_or_access_changed_to(audience: DocAudience, doc_id: str) -> None:
+    """``doc_changed {doc_id, updated_at: null}`` to a (captured) audience:
+    the doc was deleted or the receivers' access to it changed, so an open
+    viewer of it re-fetches whatever ``updated_at`` it shows."""
+    publish_doc_changed_to(audience, doc_id, None)
+
+
+def publish_share_changed(
+    doc_id: str, owner_id: int, recipient_user_id: Optional[int],
+) -> None:
+    """After a share row was added, changed or removed:
+    ``doc_changed {updated_at: null}`` then ``doc_list_changed`` to the
+    owner and the affected recipient, or to every connected user when the
+    row is the everyone row (``recipient_user_id`` None). Other recipients'
+    view of the doc is unchanged, so they are not notified."""
+    audience = DocAudience(
         user_ids=_dedupe([owner_id, recipient_user_id]),
         everyone=recipient_user_id is None,
-    ))
+    )
+    publish_doc_gone_or_access_changed_to(audience, doc_id)
+    publish_doc_list_changed_to(audience)

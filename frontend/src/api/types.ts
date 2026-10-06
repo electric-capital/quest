@@ -951,7 +951,9 @@ export interface Doc {
   permission: DocSharePermission | null;
   // The owner, for share recipients; null for the owner.
   owner: DocUserRef | null;
-  // Owner only: the person behind a `ui:<user_id>` last_write_source.
+  // Owner only: the person behind a `ui:<user_id>` last_write_source, or
+  // behind an `action_request:<id>` one when the approved card was a share
+  // recipient's (name / email null when that user was deleted).
   last_write_user: DocUserRef | null;
 }
 

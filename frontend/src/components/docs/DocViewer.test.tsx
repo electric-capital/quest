@@ -240,9 +240,16 @@ describe('DocViewer', () => {
       );
     });
 
-    it('offers Quest for a shared user doc (the recipient\'s conversations reach it)', () => {
+    it('offers Quest for a USER doc shared with write permission (the recipient\'s conversations can write it)', () => {
+      const writeShare = { ...base.access, can_rename: false, can_delete: false, can_share: false };
+      expect(emptyText({ shared_with_me: true, permission: 'write', access: writeShare })).toBe(
+        'This doc is empty. Ask Quest to add to it, or choose Edit from the title menu.',
+      );
+    });
+
+    it('never offers Quest on a read share (its conversations can only read the doc)', () => {
       expect(emptyText({ shared_with_me: true, permission: 'read', access: readOnly })).toBe(
-        'This doc is empty. Ask Quest to add to it.',
+        'This doc is empty.',
       );
     });
 
@@ -337,6 +344,17 @@ describe('DocViewer', () => {
       const { container } = renderViewer();
       expect(footerText(container)).toBe(
         'Last written by bob@example.com (approved change) · Updated 5m ago',
+      );
+    });
+
+    it('names a deleted proposer of an approved change', () => {
+      setView({ doc: doc({
+        last_write_source: 'action_request:42',
+        last_write_user: { id: 7, name: null, email: null },
+      }) });
+      const { container } = renderViewer();
+      expect(footerText(container)).toBe(
+        'Last written by a deleted user (approved change) · Updated 5m ago',
       );
     });
 

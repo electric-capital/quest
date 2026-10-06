@@ -25,8 +25,9 @@
  * token stands for (unknown after restoring a backup). On a 409 the editor
  * re-reads the doc and tells the viewer (`onStale`): when the current body
  * is still `baseContent` -- a rename or someone's image upload / delete only
- * bumped the token -- it saves once more with the fresh token and no banner;
- * otherwise a conflict banner offers to overwrite (the replaced version
+ * bumped the token -- it saves once more with the fresh token and no banner
+ * (unless an image the draft added is gone: then it says so and keeps the
+ * draft); otherwise a conflict banner offers to overwrite (the replaced version
  * stays in History) or to discard and leave. An image upload (the Image
  * button, or pasting / dropping an image file into the textarea) puts an
  * `![Uploading <name>…]()` placeholder at the cursor, swaps in the returned
@@ -336,6 +337,30 @@ function carriesFiles(data: DataTransfer | null): boolean {
   return !!data && Array.from(data.types ?? []).includes('Files');
 }
 
+/**
+ * The `assets/<name>` images a body references. Asset names are
+ * `[A-Za-z0-9._-]` and end in an extension, so trailing punctuation of the
+ * surrounding prose is dropped (the server's in-use check reads the same).
+ */
+function assetReferences(body: string): Set<string> {
+  const names = new Set<string>();
+  for (const match of body.matchAll(/assets\/([A-Za-z0-9._-]+)/g)) {
+    const name = match[1].replace(/[._-]+$/, '');
+    if (name) names.add(name);
+  }
+  return names;
+}
+
+/**
+ * Images this draft added (referenced now, not in the body it started from)
+ * that the doc no longer has -- e.g. deleted by the owner meanwhile.
+ */
+function missingAddedAssets(draft: string, baseBody: string, doc: DocDetail): string[] {
+  const before = assetReferences(baseBody);
+  const present = new Set(doc.assets.map((asset) => asset.name));
+  return [...assetReferences(draft)].filter((name) => !before.has(name) && !present.has(name));
+}
+
 /** Ctrl/Cmd+S by `key`, or by `code` on a layout whose key is not a Latin letter. */
 function isSaveShortcut(event: KeyboardEvent): boolean {
   if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return false;
@@ -568,6 +593,18 @@ export function DocEditor({ doc, onSaved, onCancel, onStale }: DocEditorProps) {
           onStaleRef.current?.();
           if (!fetched || baseContent === null || fetched.content !== baseContent) {
             showStale(err, fetched?.updated_at ?? staleUpdateCurrent(err)?.updated_at ?? null);
+            return;
+          }
+          // The bump may have been the deletion of an image this draft adds
+          // (the owner may delete one the saved body does not use yet): never
+          // save that broken reference silently. The token is kept, so the
+          // next save runs this check again.
+          const missing = missingAddedAssets(content, baseContent, fetched);
+          if (missing.length > 0) {
+            setSaveError(
+              `An image you added was deleted meanwhile: ${missing.join(', ')}. `
+              + 'Re-upload it or remove the reference, then save.',
+            );
             return;
           }
           setBase(fetched.updated_at);

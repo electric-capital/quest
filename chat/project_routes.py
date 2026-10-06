@@ -397,8 +397,14 @@ async def delete_user_project(
         await asyncio.to_thread(_delete_doc_dirs, doc_ids)
         from chat.docs import events as doc_events
 
-        # The owner plus every share recipient of the deleted docs
-        # (every connected user if one was shared with everyone).
+        # Open viewers of each deleted doc re-fetch (-> 404): its own
+        # audience. Then list views: the owner plus every share recipient
+        # of the deleted docs (every connected user if one was shared with
+        # everyone).
+        for doc in project_docs:
+            doc_events.publish_doc_gone_or_access_changed_to(
+                doc_events.doc_audience(doc), doc["id"],
+            )
         doc_events.publish_doc_list_changed_to(
             doc_events.docs_audience(project_docs, user_id),
         )

@@ -1,9 +1,13 @@
 /**
  * Data layer for the doc viewer: one doc's row + markdown body, kept current
- * by the realtime globals. `doc_changed` for this doc re-fetches unless the
- * viewer already shows that `updated_at`; `doc_list_changed` always
- * re-fetches, which is how a delete (it sends only that event) turns into
- * `notFound` through the follow-up 404.
+ * by the realtime `doc_changed` global for THIS doc: it re-fetches unless
+ * the viewer already shows that `updated_at`. The server sends
+ * `updated_at: null` when the doc's access or existence changed (a delete,
+ * a share added / changed / revoked, its project deleted), which always
+ * re-fetches -- that is how a delete or a revoked share turns into
+ * `notFound` through the follow-up 404. `doc_list_changed` is ignored here:
+ * it is broadcast install-wide for writes to everyone-shared docs, and the
+ * lists (useDocs) are what it is for.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -137,9 +141,7 @@ export function useDoc(docId: string | null): DocView {
   useEffect(() => {
     if (docId === null) return;
     return persistentWebSocket.onGlobalEvent((event) => {
-      if (event.type === 'doc_list_changed') {
-        void refresh();
-      } else if (event.type === 'doc_changed' && event.doc_id === docId) {
+      if (event.type === 'doc_changed' && event.doc_id === docId) {
         const prev = stateRef.current;
         const shown = prev.id === docId ? prev.doc?.updated_at : undefined;
         if (event.updated_at !== shown) void refresh();

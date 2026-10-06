@@ -1525,9 +1525,10 @@ def mode_switch_refusal(doc: dict) -> DocRequestError:
 
 async def delete_doc_from_ui(user: dict, doc_id: str) -> dict:
     """Owner-only delete, under the doc lock: the row (shares cascade), then
-    the directory (best-effort, logged), then ``doc_list_changed`` to the
-    doc's audience (owner + share recipients, every connected user for an
-    everyone row), captured under the lock BEFORE the rows go.
+    the directory (best-effort, logged), then ``doc_changed {updated_at:
+    null}`` and ``doc_list_changed`` to the doc's audience (owner + share
+    recipients, every connected user for an everyone row), captured under
+    the lock BEFORE the rows go.
 
     Raises:
         DocDisabled, DocError (hidden/missing), DocRequestError ``forbidden``.
@@ -1555,7 +1556,11 @@ async def delete_doc_from_ui(user: dict, doc_id: str) -> dict:
                     "[docs] could not remove the directory of deleted doc %s",
                     doc["id"], exc_info=True,
                 )
-            _events().publish_doc_list_changed_to(audience)
+            events = _events()
+            # Open viewers of this doc re-fetch (and land in their 404
+            # state); list views refresh their window.
+            events.publish_doc_gone_or_access_changed_to(audience, doc["id"])
+            events.publish_doc_list_changed_to(audience)
             return doc
 
     return await _shielded(_locked())

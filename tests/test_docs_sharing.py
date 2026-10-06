@@ -177,6 +177,23 @@ def recipients(env, event_type):
     return [u for u, ev in env.published if ev["type"] == event_type]
 
 
+def published(env):
+    """``(user_id, type, doc_id, updated_at)`` for every captured event."""
+    return [
+        (u, ev["type"], ev.get("doc_id"), ev.get("updated_at"))
+        for u, ev in env.published
+    ]
+
+
+def access_changed(doc_id, *user_ids):
+    """What a share change or a delete publishes: ``doc_changed`` with
+    ``updated_at`` null (open viewers re-fetch), then ``doc_list_changed``,
+    each to ``user_ids`` in order."""
+    return [(u, "doc_changed", doc_id, None) for u in user_ids] + [
+        (u, "doc_list_changed", None, None) for u in user_ids
+    ]
+
+
 OWNER_ONLY_FLAGS = ("can_rename", "can_delete", "can_share", "can_delete_assets")
 
 
@@ -208,10 +225,9 @@ class TestAddShare:
         # Not a content change.
         stored = _run(docs_env.doc_store.get_doc(doc["id"]))
         assert stored["updated_at"] == doc["updated_at"] == row["updated_at"]
-        assert sorted(event_types(docs_env)) == sorted([
-            (uid(docs_env, "alice"), "doc_list_changed"),
-            (uid(docs_env, "bob"), "doc_list_changed"),
-        ])
+        assert published(docs_env) == access_changed(
+            doc["id"], uid(docs_env, "alice"), uid(docs_env, "bob"),
+        )
 
     def test_reshare_updates_the_one_row(self, docs_env):
         doc = seed_doc(docs_env, "Plan")
@@ -222,10 +238,9 @@ class TestAddShare:
         assert [(s["id"], s["permission"]) for s in row["shares"]] == [
             (first["shares"][0]["id"], "write"),
         ]
-        assert sorted(event_types(docs_env)) == sorted([
-            (uid(docs_env, "alice"), "doc_list_changed"),
-            (uid(docs_env, "bob"), "doc_list_changed"),
-        ])
+        assert published(docs_env) == access_changed(
+            doc["id"], uid(docs_env, "alice"), uid(docs_env, "bob"),
+        )
         # Same permission again: nothing changes, nothing is published.
         docs_env.published.clear()
         again = share(c, doc["id"], user_email=email(docs_env, "bob"), permission="write").json()
@@ -243,9 +258,9 @@ class TestAddShare:
             (None, "read", None),
         ]
         # Broadcast: the owner first, then every connected user, deduped.
-        assert recipients(docs_env, "doc_list_changed") == [
-            uid(docs_env, "alice"), uid(docs_env, "carol"), 4242,
-        ]
+        assert published(docs_env) == access_changed(
+            doc["id"], uid(docs_env, "alice"), uid(docs_env, "carol"), 4242,
+        )
         # At most one everyone row: re-sharing updates it.
         row = share(c, doc["id"], everyone=True, user_email="", permission="write").json()
         assert [(s["user_id"], s["permission"]) for s in row["shares"]] == [(None, "write")]
@@ -387,10 +402,11 @@ class TestRemoveShare:
         row = resp.json()
         assert [s["id"] for s in row["shares"]] == [carol_share["id"]]
         assert row["shared"] is True
-        assert sorted(event_types(docs_env)) == sorted([
-            (uid(docs_env, "alice"), "doc_list_changed"),
-            (uid(docs_env, "bob"), "doc_list_changed"),
-        ])
+        # Only the affected recipient (bob) and the owner; carol's view of
+        # the doc is unchanged.
+        assert published(docs_env) == access_changed(
+            doc["id"], uid(docs_env, "alice"), uid(docs_env, "bob"),
+        )
         assert _run(docs_env.doc_store.get_doc(doc["id"]))["updated_at"] == doc["updated_at"]
         # Bob lost access at once.
         assert client(docs_env, "bob").get(f"/app/api/docs/{doc['id']}").status_code == 404
@@ -403,9 +419,9 @@ class TestRemoveShare:
         everyone = _run(docs_env.doc_store.list_shares(doc["id"]))[0]
         connected(monkeypatch, uid(docs_env, "bob"), uid(docs_env, "carol"))
         client(docs_env).delete(f"/app/api/docs/{doc['id']}/shares/{everyone['id']}")
-        assert recipients(docs_env, "doc_list_changed") == [
-            uid(docs_env, "alice"), uid(docs_env, "bob"), uid(docs_env, "carol"),
-        ]
+        assert published(docs_env) == access_changed(
+            doc["id"], uid(docs_env, "alice"), uid(docs_env, "bob"), uid(docs_env, "carol"),
+        )
 
     @pytest.mark.parametrize("bad", ["abc", "-1", "1.5", "0", "99999", "1e3"])
     def test_unknown_or_malformed_share_404(self, docs_env, bad):
@@ -888,34 +904,40 @@ class TestRealtime:
         doc = seed_doc(docs_env, "Plan", shares=[("carol", "write"), (None, "read")])
         connected(monkeypatch, uid(docs_env, "bob"), 555)
         assert client(docs_env).delete(f"/app/api/docs/{doc['id']}").status_code == 200
-        assert event_types(docs_env) == [
-            (uid(docs_env, w), "doc_list_changed") for w in ("alice", "carol", "bob")
-        ] + [(555, "doc_list_changed")]
+        assert published(docs_env) == access_changed(
+            doc["id"], *(uid(docs_env, w) for w in ("alice", "carol", "bob")), 555,
+        )
 
     def test_project_delete_reaches_recipients(self, docs_env, monkeypatch):
         from chat.project_routes import delete_user_project
 
-        seed_doc(docs_env, "One", project_id=docs_env.private_project,
-                 shares=[("carol", "read")])
-        seed_doc(docs_env, "Two", project_id=docs_env.private_project,
-                 shares=[("bob", "write"), ("carol", "write")])
-        seed_doc(docs_env, "Elsewhere", project_id=docs_env.other_project,
-                 shares=[(None, "read")])
-        alice = docs_env.users["alice"]
-        _run(delete_user_project(docs_env.private_project, user=alice))
-        assert sorted(event_types(docs_env)) == sorted([
-            (uid(docs_env, w), "doc_list_changed") for w in ("alice", "bob", "carol")
+        one = seed_doc(docs_env, "One", project_id=docs_env.private_project,
+                       shares=[("carol", "read")])
+        two = seed_doc(docs_env, "Two", project_id=docs_env.private_project,
+                       shares=[("bob", "write"), ("carol", "write")])
+        elsewhere = seed_doc(docs_env, "Elsewhere", project_id=docs_env.other_project,
+                             shares=[(None, "read")])
+        alice, bob, carol = (uid(docs_env, w) for w in ("alice", "bob", "carol"))
+        _run(delete_user_project(docs_env.private_project, user=docs_env.users["alice"]))
+        seen = published(docs_env)
+        # Per deleted doc, its own audience (docs visited in id order) ...
+        assert sorted(seen[:5]) == sorted([
+            (alice, "doc_changed", one["id"], None),
+            (carol, "doc_changed", one["id"], None),
+            (alice, "doc_changed", two["id"], None),
+            (bob, "doc_changed", two["id"], None),
+            (carol, "doc_changed", two["id"], None),
         ])
+        # ... then one list refresh for the combined audience.
+        assert sorted(seen[5:]) == sorted(
+            (u, "doc_list_changed", None, None) for u in (alice, bob, carol)
+        )
 
         # A project doc shared with everyone: every connected user hears.
         docs_env.published.clear()
-        connected(monkeypatch, uid(docs_env, "bob"), 909)
-        _run(delete_user_project(docs_env.other_project, user=alice))
-        assert event_types(docs_env) == [
-            (uid(docs_env, "alice"), "doc_list_changed"),
-            (uid(docs_env, "bob"), "doc_list_changed"),
-            (909, "doc_list_changed"),
-        ]
+        connected(monkeypatch, bob, 909)
+        _run(delete_user_project(docs_env.other_project, user=docs_env.users["alice"]))
+        assert published(docs_env) == access_changed(elsewhere["id"], alice, bob, 909)
 
 
 class TestBusConnectedUsers:
@@ -1424,3 +1446,229 @@ class TestBuildZipFilter:
         os.symlink(outside, docs_env.dirs["docs"] / doc["id"] / "assets" / "link.png")
         with pytest.raises(files.DocFileError):
             files.build_zip(doc["id"], "Pics", lambda body, name: False)
+
+
+# ---------------------------------------------------------------------------
+# Final cross-package review
+# ---------------------------------------------------------------------------
+
+
+def edit_client(env, who="alice"):
+    """The base router + the share router + the editor's routes."""
+    from chat.docs import edit_routes, routes, share_routes
+
+    app = FastAPI()
+    for r in (routes.router, share_routes.router, edit_routes.router):
+        app.include_router(r)
+    user = env.users[who]
+
+    async def _current():
+        return user
+
+    app.dependency_overrides[routes.get_current_user_cookie_or_apikey_checked] = _current
+    return TestClient(app)
+
+
+def ui_writes_mod():
+    from chat.docs import ui_writes
+    return ui_writes
+
+
+class TestReferencedNamesComputedOncePerBody:
+    """200 images + a ~1 MB body full of ``%`` / ``&`` escapes: the
+    reference set is computed a bounded number of times per request."""
+
+    def _big_doc(self, env):
+        from chat.docs import constants
+
+        names = [f"img{i:03d}.png" for i in range(constants.DOC_MAX_ASSETS)]
+        refs = "".join(f"![{n}](assets/{n})\n" for n in names[::2])  # half
+        filler_line = "100% of &amp; costs &#46; and %41%42 here\n"
+        filler = filler_line * ((900_000 - len(refs)) // len(filler_line))
+        doc = seed_doc(env, "Big", refs + filler, shares=[("bob", "read")])
+        for name in names:
+            files.add_asset(doc["id"], name, PNG)
+        assert len(files.list_assets(doc["id"])) == len(names)
+        return doc, names
+
+    def _count_variants(self, monkeypatch):
+        mod = ui_writes_mod()
+        calls = []
+        real = mod._reference_variants
+
+        def _spy(body):
+            calls.append(len(body))
+            return real(body)
+
+        monkeypatch.setattr(mod, "_reference_variants", _spy)
+        return calls
+
+    def test_detail_zip_and_asset_route(self, docs_env, monkeypatch):
+        doc, names = self._big_doc(docs_env)
+        calls = self._count_variants(monkeypatch)
+        bob = client(docs_env, "bob")
+
+        listed = [a["name"] for a in bob.get(f"/app/api/docs/{doc['id']}").json()["assets"]]
+        assert listed == names[::2]
+        assert len(calls) == 1  # one pass for 200 candidates
+
+        # The detail primed the asset route's cache for this updated_at.
+        for name in names[:6]:
+            resp = bob.get(f"/app/api/docs/{doc['id']}/assets/{name}")
+            assert resp.status_code == (200 if name in listed else 404), name
+        assert len(calls) == 1
+
+        resp = bob.get(f"/app/api/docs/{doc['id']}/download?format=zip")
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            assert len(zf.namelist()) == 1 + len(listed)
+        assert len(calls) == 2  # the zip: one pass inside build_zip
+
+    def test_asset_route_cold_cache_computes_once(self, docs_env, monkeypatch):
+        doc, names = self._big_doc(docs_env)
+        calls = self._count_variants(monkeypatch)
+        bob = client(docs_env, "bob")
+        for name in names[:10]:
+            bob.get(f"/app/api/docs/{doc['id']}/assets/{name}")
+        assert len(calls) == 1
+
+    def test_cache_follows_body_writes(self, docs_env):
+        doc = seed_doc(docs_env, "Pics", "![c](assets/chart.png)\n",
+                       shares=[("bob", "read")])
+        files.add_asset(doc["id"], "chart.png", PNG)
+        bob = client(docs_env, "bob")
+        url = f"/app/api/docs/{doc['id']}/assets/chart.png"
+        assert bob.get(url).status_code == 200
+        token = _run(docs_env.doc_store.get_doc(doc["id"]))["updated_at"]
+        _run(ui_writes_mod().replace_body_from_ui(
+            docs_env.users["alice"], doc["id"], "no image\n", expected_updated_at=token,
+        ))
+        assert bob.get(url).status_code == 404
+
+    def test_cache_is_bounded(self, docs_env):
+        from chat.docs import routes
+
+        for i in range(routes._REFERENCED_NAMES_CACHE_SIZE + 5):
+            routes._remember_referenced_names(
+                {"id": f"doc-{i}", "updated_at": "t"}, frozenset(),
+            )
+        assert len(routes._REFERENCED_NAMES_CACHE) == routes._REFERENCED_NAMES_CACHE_SIZE
+        assert ("doc-0", "t") not in routes._REFERENCED_NAMES_CACHE
+
+    def test_delete_in_use_check_runs_off_the_event_loop(self, docs_env, monkeypatch):
+        import asyncio
+
+        mod = ui_writes_mod()
+        on_loop = []
+        real = mod.asset_referenced
+
+        def _spy(body, name):
+            try:
+                asyncio.get_running_loop()
+                on_loop.append(True)
+            except RuntimeError:
+                on_loop.append(False)
+            return real(body, name)
+
+        monkeypatch.setattr(mod, "asset_referenced", _spy)
+        doc = seed_doc(docs_env, "Pics", "no images\n")
+        files.add_asset(doc["id"], "chart.png", PNG)
+        _run(mod.delete_asset_from_ui(docs_env.users["alice"], doc["id"], "chart.png"))
+        assert on_loop == [False]
+
+    def test_set_matches_the_single_name_check(self):
+        mod = ui_writes_mod()
+        body = (
+            "![a](assets/a.png) assets/b.png.png assets%2Fc.png assets/d&#46;png "
+            "assets/e\\.png assets/f.png?v=2 assets/assets/g.png x/assets/h.png"
+        )
+        names = mod.referenced_asset_names(body)
+        for name in ("a.png", "b.png.png", "c.png", "d.png", "e.png", "f.png",
+                     "g.png", "h.png"):
+            assert name in names and mod.asset_referenced(body, name), name
+        for name in ("b.png", "z.png", "f.png?v=2"):
+            assert name not in names and not mod.asset_referenced(body, name), name
+
+
+class TestImageOnlyWritesKeepTheBodyWriter:
+    def test_upload_and_delete_keep_last_write_source(self, docs_env):
+        set_names(docs_env, bob="Bob B")
+        mod = ui_writes_mod()
+        doc = seed_doc(docs_env, "Plan", "x\n", shares=[("bob", "write")])
+        token = _run(docs_env.doc_store.get_doc(doc["id"]))["updated_at"]
+        _run(mod.replace_body_from_ui(
+            docs_env.users["bob"], doc["id"], "bob wrote this\n", expected_updated_at=token,
+        ))
+        bob_source = f"ui:{uid(docs_env, 'bob')}"
+        assert _run(docs_env.doc_store.get_doc(doc["id"]))["last_write_source"] == bob_source
+
+        before = _run(docs_env.doc_store.get_doc(doc["id"]))
+        result = _run(mod.add_asset_from_ui(
+            docs_env.users["alice"], doc["id"], "chart.png", PNG,
+        ))
+        after = _run(docs_env.doc_store.get_doc(doc["id"]))
+        assert after["updated_at"] == result["updated_at"] != before["updated_at"]
+        assert after["asset_count"] == 1
+        assert after["last_write_source"] == bob_source
+        row = client(docs_env).get(f"/app/api/docs/{doc['id']}").json()
+        assert row["last_write_user"] == ref(docs_env, "bob", "Bob B")
+
+        _run(mod.delete_asset_from_ui(docs_env.users["alice"], doc["id"], "chart.png"))
+        after = _run(docs_env.doc_store.get_doc(doc["id"]))
+        assert after["asset_count"] == 0
+        assert after["last_write_source"] == bob_source
+
+
+class TestCardProposerGone:
+    def test_gone_proposer_keeps_the_id(self, ar_env, monkeypatch):
+        from db import user_store
+
+        doc = seed_doc(ar_env, "Plan", shares=[("bob", "write")])
+        card = _run(ar_env.action_request_store.create_action_request(
+            uid(ar_env, "bob"), str(uuid.uuid4()), "write_doc",
+            {"operation": "append", "doc_id": doc["id"]}, "r",
+        ))["id"]
+        _run(ar_env.doc_store.update_after_write(
+            doc["id"], content_size=1, last_write_source=f"action_request:{card}",
+        ))
+        real = user_store.get_users_by_ids
+        bob_id = uid(ar_env, "bob")
+
+        async def _without_bob(ids):
+            return {k: v for k, v in (await real(ids)).items() if k != bob_id}
+
+        # The account vanished between the card lookup and the user lookup
+        # (a deleted user's cards normally cascade away with them).
+        monkeypatch.setattr(user_store, "get_users_by_ids", _without_bob)
+        row = client(ar_env).get(f"/app/api/docs/{doc['id']}").json()
+        assert row["last_write_user"] == {"id": bob_id, "name": None, "email": None}
+
+
+class TestBrokenBodyIs400:
+    @pytest.mark.parametrize("breakage", ["missing", "symlink"])
+    def test_content_put(self, docs_env, breakage):
+        doc = seed_doc(docs_env, "Plan", "x\n")
+        body_path = docs_env.dirs["docs"] / doc["id"] / "doc.md"
+        body_path.unlink()
+        if breakage == "symlink":
+            outside = docs_env.tmp / "outside.md"
+            outside.write_text("secret\n")
+            os.symlink(outside, body_path)
+        token = _run(docs_env.doc_store.get_doc(doc["id"]))["updated_at"]
+        resp = edit_client(docs_env).put(
+            f"/app/api/docs/{doc['id']}/content",
+            json={"content": "new\n", "expected_updated_at": token},
+        )
+        assert resp.status_code == 400
+        assert detail(resp)["error"] == "invalid_doc_files"
+        assert _run(docs_env.doc_store.get_doc(doc["id"]))["updated_at"] == token
+        if breakage == "symlink":
+            assert (docs_env.tmp / "outside.md").read_text() == "secret\n"
+
+    def test_asset_delete(self, docs_env):
+        doc = seed_doc(docs_env, "Plan", "x\n")
+        files.add_asset(doc["id"], "chart.png", PNG)
+        (docs_env.dirs["docs"] / doc["id"] / "doc.md").unlink()
+        resp = edit_client(docs_env).delete(f"/app/api/docs/{doc['id']}/assets/chart.png")
+        assert resp.status_code == 400
+        assert detail(resp)["error"] == "invalid_doc_files"
+        assert [a["name"] for a in files.list_assets(doc["id"])] == ["chart.png"]

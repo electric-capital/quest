@@ -1,5 +1,6 @@
 /**
- * Quest Docs viewer (/docs/<id>): a view-only page for one doc.
+ * Quest Docs viewer (/docs/<id>): one doc's page -- read it, and (by access)
+ * edit, browse History, share, rename or delete it.
  *
  * DocHeader (title menu, mode badge, project chip, Show source toggle) over
  * the body -- the markdown rendered through the chat renderer's shared
@@ -80,7 +81,8 @@ function personName(user: DocUserRef): string {
  * - `ui` (legacy, the owner) -> "you"; `ui:<user id>` -> "you" for the
  *   viewer, else that person (`last_write_user`), "a deleted user" if gone;
  * - `action_request:<id>` -> "<name> (approved change)" when a share
- *   recipient's card made it (`last_write_user`), else "action request #id";
+ *   recipient's card made it (`last_write_user`; "a deleted user" when its
+ *   name and email are null), else "action request #id";
  * - `conversation:<id>` -> a link to the conversation (title and project
  *   from `last_write_conversation`), "a deleted conversation" when gone.
  */
@@ -114,12 +116,12 @@ function lastWriter(doc: DocDetail, viewerEmail: string | null): ReactNode {
 
 /**
  * The empty-doc line: "Ask Quest" only when the viewer's conversations can
- * reach the doc (the owner, or a USER doc shared with them -- a shared
- * project doc stays hidden outside its project), the Edit hint with edit
- * access.
+ * WRITE the doc -- the owner, or a USER doc shared with write permission (a
+ * read share's conversations can only read it, and a shared project doc
+ * stays hidden outside its project) -- and the Edit hint with edit access.
  */
 function emptyDocText(doc: DocDetail): string {
-  const askQuest = !doc.shared_with_me || doc.scope === 'user';
+  const askQuest = !doc.shared_with_me || (doc.scope === 'user' && doc.permission === 'write');
   const canEdit = doc.access.can_edit;
   if (askQuest && canEdit) return 'This doc is empty. Ask Quest to add to it, or choose Edit from the title menu.';
   if (askQuest) return 'This doc is empty. Ask Quest to add to it.';
@@ -350,27 +352,27 @@ export function DocViewer({ docId }: { docId: string }) {
           </div>
         )}
         {body ?? (
-        <div className="doc-viewer-body">
-          {isEmpty ? (
-            <p className="doc-viewer-empty">{emptyDocText(doc)}</p>
-          ) : showSource ? (
-            <pre className="doc-viewer-source">{doc.content}</pre>
-          ) : (
-            // `message-content` = the chat markdown typography; DocViewer.css
-            // strips the bubble chrome so it reads like an assistant reply.
-            <div className="message-content doc-viewer-markdown">
-              <MarkdownWorkspaceContext.Provider value={markdownCtx}>
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkBreaks, remarkMath, remarkMathCurrencyGuard]}
-                  rehypePlugins={[rehypeHighlight, rehypeKatex]}
-                  components={markdownComponents}
-                >
-                  {doc.content}
-                </ReactMarkdown>
-              </MarkdownWorkspaceContext.Provider>
-            </div>
-          )}
-        </div>
+          <div className="doc-viewer-body">
+            {isEmpty ? (
+              <p className="doc-viewer-empty">{emptyDocText(doc)}</p>
+            ) : showSource ? (
+              <pre className="doc-viewer-source">{doc.content}</pre>
+            ) : (
+              // `message-content` = the chat markdown typography; DocViewer.css
+              // strips the bubble chrome so it reads like an assistant reply.
+              <div className="message-content doc-viewer-markdown">
+                <MarkdownWorkspaceContext.Provider value={markdownCtx}>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm, remarkBreaks, remarkMath, remarkMathCurrencyGuard]}
+                    rehypePlugins={[rehypeHighlight, rehypeKatex]}
+                    components={markdownComponents}
+                  >
+                    {doc.content}
+                  </ReactMarkdown>
+                </MarkdownWorkspaceContext.Provider>
+              </div>
+            )}
+          </div>
         )}
       </div>
       {doc.access.can_share && (

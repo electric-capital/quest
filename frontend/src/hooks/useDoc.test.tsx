@@ -147,14 +147,22 @@ describe('useDoc', () => {
     expect(result.current.loading).toBe(false);
   });
 
-  it('turns a delete into notFound through doc_list_changed', async () => {
+  it('ignores doc_list_changed (install-wide list event)', async () => {
+    mocks.fetchDoc.mockResolvedValueOnce(detail('d1'));
+    const { result } = renderHook(() => useDoc('d1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => emit({ type: 'doc_list_changed' }));
+    expect(mocks.fetchDoc).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns a delete / revoked share into notFound through doc_changed with a null updated_at', async () => {
     mocks.fetchDoc.mockResolvedValueOnce(detail('d1'));
     const { result } = renderHook(() => useDoc('d1'));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     mocks.fetchDoc.mockRejectedValueOnce(notFoundError());
     await act(async () => {
-      emit({ type: 'doc_list_changed' });
+      emit({ type: 'doc_changed', doc_id: 'd1', updated_at: null });
     });
     await waitFor(() => expect(result.current.notFound).toBe(true));
     expect(result.current.doc).toBeNull();
@@ -269,7 +277,7 @@ describe('useDoc', () => {
 
     const stale = deferred<DocDetail>();
     mocks.fetchDoc.mockReturnValueOnce(stale.promise);
-    act(() => emit({ type: 'doc_list_changed' }));
+    act(() => emit({ type: 'doc_changed', doc_id: 'd1', updated_at: null }));
 
     mocks.fetchDoc.mockResolvedValueOnce(
       detail('d1', { title: 'Renamed', updated_at: '2026-10-03T00:00:00', content: 'fresh' }),

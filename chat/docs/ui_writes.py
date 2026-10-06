@@ -15,11 +15,12 @@ for the user, as in the routes) -> access -> per-doc asyncio write lock
 (shielded) -> file op in a thread -> DB bump + realtime events
 (``service._finish_write``). A body replace snapshots the replaced body into
 ``revisions/`` and records the writer in ``doc.meta.json``; asset-only
-writes take no snapshot and leave ``doc.meta.json`` alone (assets are not
-part of a body version), but still bump ``updated_at`` and
-``last_write_source``.
+writes (image upload / delete) take no snapshot and leave ``doc.meta.json``
+alone (assets are not part of a body version), bump ``updated_at`` and
+``asset_count``, and keep the row's ``last_write_source`` (it names the
+writer of the current BODY, which an image change does not touch).
 
-Every write records ``ui:<user_id>`` (:func:`ui_write_source`) as its
+A body write records ``ui:<user_id>`` (:func:`ui_write_source`) as its
 source. The UI may write into a public (project) doc: content enters a
 public doc only from public conversations or from a person in the UI, so
 the taint invariant holds.
@@ -62,6 +63,7 @@ __all__ = [
     "delete_asset_from_ui",
     "ALT_MAX_CHARS",
     "image_markdown",
+    "referenced_asset_names",
     "replace_body_from_ui",
     "ui_caller",
     "ui_write_source",
@@ -88,6 +90,10 @@ ALT_MAX_CHARS = 300
 
 # A CommonMark backslash escape: backslash + one ASCII punctuation char.
 _MD_ESCAPE_RE = re.compile(r"\\([!-/:-@\[-`{-~])")
+
+# ``assets/<name>`` with the maximal run of name characters as the name; a
+# lookahead so overlapping candidates (``assets/assets/x.png``) are all seen.
+_ASSET_REF_RE = re.compile(r"(?=assets/([A-Za-z0-9._-]+))")
 
 
 def ui_write_source(user: dict) -> str:
@@ -165,6 +171,23 @@ def _check_content(content) -> str:
     return normalized
 
 
+async def _body_files(fn, *args, **kwargs):
+    """``service._files`` for the ``doc.md`` reads and writes here, except
+    that a refused body (missing, a symlink or special file -- a
+    ``DocFileError``) becomes DocRequestError ``invalid_doc_files`` (400,
+    as History's restore pre-check reports it) instead of a generic
+    storage DocError (500)."""
+    try:
+        return await asyncio.to_thread(fn, *args, **kwargs)
+    except doc_files.DocFileError as exc:
+        raise service.DocRequestError("invalid_doc_files", str(exc)) from None
+    except OSError as exc:
+        logger.warning("[docs] file operation failed", exc_info=True)
+        raise service.DocError(
+            f"Doc storage error: {exc.strerror or exc.__class__.__name__}."
+        ) from None
+
+
 def _require_ui_write(access) -> None:
     if access.write != "free":
         raise service.DocRequestError("forbidden", access.deny_reason or DENY_UI_READ_ONLY)
@@ -208,7 +231,8 @@ async def replace_body_from_ui(
         DocError: ``doc_not_found_message`` (missing or hidden), or a
             storage failure.
         DocRequestError: ``invalid_request`` / ``content_too_large`` /
-            ``forbidden`` (no write access).
+            ``forbidden`` (no write access) / ``invalid_doc_files``
+            (``doc.md`` missing, a symlink or a special file).
         doc_store.StaleDocError: token mismatch (carries the current row).
     """
     caller = ui_caller(user)
@@ -228,10 +252,10 @@ async def replace_body_from_ui(
             _require_ui_write(fresh_access)
             if fresh["updated_at"] != expected_updated_at:
                 raise doc_store.StaleDocError(current=fresh)
-            current_body = await service._files(doc_files.read_body, fresh["id"])
+            current_body = await _body_files(doc_files.read_body, fresh["id"])
             if current_body == normalized:
                 return fresh, current_body, False
-            size = await service._files(
+            size = await _body_files(
                 doc_files.write_body, fresh["id"], normalized, write_source=source,
             )
             updated = await service._finish_write(
@@ -325,9 +349,9 @@ async def add_asset_from_ui(
     ``-2``, ``-3``... on collision. The body is NOT changed (the editor
     inserts the returned ``markdown`` itself and saves it with the next
     content PUT): no revision snapshot, ``doc.meta.json`` untouched. The row
-    gets an asset-only bump (``asset_count``, ``last_write_source =
-    ui:<user_id>``, ``updated_at``; ``content_size`` re-read from the row
-    under the lock) and the usual realtime events.
+    gets an asset-only bump (``asset_count`` and ``updated_at``;
+    ``content_size`` and ``last_write_source`` -- the body's writer -- kept
+    as read from the row under the lock) and the usual realtime events.
 
     Returns:
         ``{"asset": {"name", "size", "mime"}, "markdown", "asset_count",
@@ -346,7 +370,6 @@ async def add_asset_from_ui(
     _require_ui_write(access)
     ext = _check_upload(data)
     data = bytes(data)
-    source = ui_write_source(user)
     name_hint = filename if isinstance(filename, str) else ""
 
     async def _locked() -> tuple[str, dict, doc_files.AssetInfo]:
@@ -374,7 +397,8 @@ async def add_asset_from_ui(
                 fresh["id"],
                 content_size=fresh["content_size"],
                 asset_count=info.asset_count,
-                write_source=source,
+                # Asset-only: the body (and so its writer) is unchanged.
+                write_source=fresh["last_write_source"],
             )
             return fresh["updated_at"], updated, info
 
@@ -402,18 +426,36 @@ def _reference_variants(body: str) -> tuple[str, ...]:
     )
 
 
-def asset_referenced(body: str, name: str) -> bool:
-    """Whether ``body`` references ``assets/<name>``.
+def referenced_asset_names(body: str) -> frozenset[str]:
+    """Every name ``body`` references as ``assets/<name>``, in one pass.
 
-    The name must not continue with a name character, so ``chart.png`` is
-    not "in use" because of ``assets/chart.png.png`` (but is because of
-    ``![x](assets/chart.png)``, ``"assets/chart.png"`` or
-    ``assets/chart.png?v=2``). Escaped spellings count too
-    (:func:`_reference_variants`): ``assets/ch%61rt.png``,
+    A name is the maximal run of name characters (``[A-Za-z0-9._-]``) after
+    ``assets/``, so ``assets/chart.png.png`` references ``chart.png.png``
+    and NOT ``chart.png`` (while ``![x](assets/chart.png)``,
+    ``"assets/chart.png"`` and ``assets/chart.png?v=2`` reference
+    ``chart.png``). Escaped spellings count too, scanned in every decoded
+    copy of :func:`_reference_variants`: ``assets/ch%61rt.png``,
     ``assets%2Fchart.png``, ``assets/chart&#46;png``, ``assets/chart\\.png``.
+
+    Names are NOT validated (callers that build paths from them validate,
+    e.g. History's copy). Costs three full-body decodes plus a scan, so
+    callers compute the set once per body and test membership; CPU-bound on
+    a large body -- run it in a thread from async code.
     """
-    pattern = re.compile(r"assets/" + re.escape(name) + r"(?![A-Za-z0-9._-])")
-    return any(pattern.search(text) for text in _reference_variants(body))
+    names: set[str] = set()
+    for text in _reference_variants(body):
+        names.update(match.group(1) for match in _ASSET_REF_RE.finditer(text))
+    return frozenset(names)
+
+
+def asset_referenced(body: str, name: str) -> bool:
+    """Whether ``body`` references ``assets/<name>``
+    (``name in referenced_asset_names(body)``; see there for the rules).
+
+    One call costs a whole :func:`referenced_asset_names` pass: to test
+    several names against one body, compute the set once instead.
+    """
+    return name in referenced_asset_names(body)
 
 
 def _asset_not_found(name) -> service.DocRequestError:
@@ -432,8 +474,10 @@ async def delete_asset_from_ui(user: dict, doc_id: str, name) -> dict:
     revisions may still reference it -- restoring one shows a broken
     image), then ``files.delete_asset`` (never follows a symlink, touches
     nothing outside ``assets/``). Asset-only write: no revision snapshot,
-    ``doc.meta.json`` untouched, the row's ``asset_count`` /
-    ``last_write_source`` / ``updated_at`` bumped, realtime events sent.
+    ``doc.meta.json`` untouched, the row's ``asset_count`` / ``updated_at``
+    bumped (``last_write_source`` kept: the body's writer), realtime events
+    sent. The in-use check (one :func:`referenced_asset_names` pass over
+    the body) runs in a thread.
 
     Returns:
         ``{"deleted": True, "asset_count", "updated_at",
@@ -443,7 +487,7 @@ async def delete_asset_from_ui(user: dict, doc_id: str, name) -> dict:
     Raises:
         DocDisabled; DocError (missing/hidden, storage failure);
         DocRequestError ``forbidden`` / ``asset_not_found`` /
-        ``asset_in_use``.
+        ``asset_in_use`` / ``invalid_doc_files`` (unreadable ``doc.md``).
     """
     caller = ui_caller(user)
     service.require_enabled(caller)
@@ -453,7 +497,6 @@ async def delete_asset_from_ui(user: dict, doc_id: str, name) -> dict:
         doc_files._validate_asset_name(name)
     except doc_files.DocFileError:
         raise _asset_not_found(name) from None
-    source = ui_write_source(user)
 
     async def _locked() -> tuple[str, dict, int]:
         async with service._write_lock(doc["id"]):
@@ -463,8 +506,8 @@ async def delete_asset_from_ui(user: dict, doc_id: str, name) -> dict:
                 await asyncio.to_thread(doc_files.asset_path, fresh["id"], name)
             except (doc_files.DocFileError, OSError):
                 raise _asset_not_found(name) from None
-            body = await service._files(doc_files.read_body, fresh["id"])
-            if asset_referenced(body, name):
+            body = await _body_files(doc_files.read_body, fresh["id"])
+            if await asyncio.to_thread(asset_referenced, body, name):
                 raise service.DocRequestError(
                     "asset_in_use",
                     f"The doc still shows {name}; remove it from the text "
@@ -483,7 +526,7 @@ async def delete_asset_from_ui(user: dict, doc_id: str, name) -> dict:
                 fresh["id"],
                 content_size=fresh["content_size"],
                 asset_count=count,
-                write_source=source,
+                write_source=fresh["last_write_source"],
             )
             return fresh["updated_at"], updated, count
 

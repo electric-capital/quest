@@ -42,8 +42,10 @@ so an editor's optimistic-concurrency token survives them. They run under
 the per-doc write lock (``service._write_lock``): a model write that queued
 behind a share change re-resolves its verdict with the new roster, and the
 doc delete reads the roster it notifies under the same lock. Each change
-publishes ``doc_list_changed`` to the owner and the affected recipient, or
-to every connected user for the everyone row (``events.publish_share_changed``);
+publishes ``doc_changed {doc_id, updated_at: null}`` (open viewers
+re-fetch: access changed) and ``doc_list_changed`` to the owner and the
+affected recipient, or to every connected user for the everyone row
+(``events.publish_share_changed``);
 re-sharing with the same permission changes nothing and publishes nothing.
 """
 
@@ -171,7 +173,9 @@ async def add_doc_share(
             if current is None:
                 raise doc_routes._doc_not_found(doc_id)
             if previous is None or previous["permission"] != permission:
-                doc_events.publish_share_changed(current["owner_id"], recipient_id)
+                doc_events.publish_share_changed(
+                    current["id"], current["owner_id"], recipient_id,
+                )
             return current
 
     current = await doc_service._shielded(_locked())
@@ -209,7 +213,9 @@ async def remove_doc_share(
             current = await doc_store.get_doc(doc["id"], with_shares=True)
             if current is None:
                 raise doc_routes._doc_not_found(doc_id)
-            doc_events.publish_share_changed(current["owner_id"], target["user_id"])
+            doc_events.publish_share_changed(
+                current["id"], current["owner_id"], target["user_id"],
+            )
             return current
 
     current = await doc_service._shielded(_locked())
