@@ -1,4 +1,5 @@
 import type { PreviewField } from '../api/types';
+import { DocImagePreview } from './DocImagePreview';
 import { SpreadsheetDiffPreview } from './SpreadsheetDiffPreview';
 import { SkillContentDiffPreview } from './SkillContentDiffPreview';
 import { SubagentReturnFilesPreview } from './SubagentReturnFilesPreview';
@@ -46,6 +47,17 @@ export function ActionRequestPreviewFields({
           <div key={i} className={`${classPrefix}-field subagent-files-field`}>
             <span className={`${classPrefix}-key`}>{field.key}: {field.value}</span>
             <SubagentReturnFilesPreview files={field.files} conversationId={conversationId} />
+          </div>
+        ) : field.type === 'doc_image' && field.image ? (
+          <div key={i} className={`${classPrefix}-field doc-image-field`}>
+            <span className={`${classPrefix}-key`}>{field.key}: {field.value}</span>
+            <DocImagePreview
+              image={field.image}
+              conversationId={conversationId}
+              // write_doc add_image: placement "none" stores the asset
+              // without appending the markdown line.
+              placed={params.placement !== 'none'}
+            />
           </div>
         ) : (
           <div key={i} className={`${classPrefix}-field`}>

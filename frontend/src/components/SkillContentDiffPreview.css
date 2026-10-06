@@ -126,6 +126,13 @@
   border-color: #55558a;
 }
 
+/* Bounded-window diffs (write_doc) cut at the server's line cap. */
+.skill-diff-truncated-note {
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
 /* Light mode support (base styles above are dark-first, matching
    ActionRequestMessage.css / RequestsView.css). */
 @media (prefers-color-scheme: light) {
