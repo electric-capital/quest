@@ -1,0 +1,520 @@
+/* DocsListView -- All Docs takeover (/docs, /docs?project=<id>). Lives
+ * inside .docs-main (App.css), which is the scrolling column; the header
+ * sticks to its top. Layout follows RequestsView (header + centered inner
+ * column); rows are pill-shaped, separated by spacing and hover rather than
+ * hairlines. Desktop rows are a 5-column grid under one column-label row;
+ * at the phone breakpoint (768px, same as useIsMobile / MobileShell) they
+ * collapse to a title line plus a meta line. */
+
+.docs-list {
+  flex: 1 0 auto;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+.docs-list-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 1.25rem 2rem 0.75rem;
+  background-color: var(--surface);
+}
+
+.docs-list-header-inner {
+  max-width: 960px;
+  margin: 0 auto;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+}
+
+.docs-list-heading {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.docs-list-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  margin-left: -0.35rem;
+  padding: 0.1rem 0.45rem 0.1rem 0.15rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.docs-list-back:hover {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.docs-list-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.docs-list-title-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.docs-list-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Same outline pill as the sidebar drill-down's public-project badge. */
+.docs-list-public-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
+.docs-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.docs-list-search {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 15rem;
+  height: 2.125rem;
+  padding: 0 0.75rem;
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background-color: var(--surface-raised);
+  color: var(--text-muted);
+  cursor: text;
+  transition: border-color 0.15s;
+}
+
+.docs-list-search:focus-within {
+  border-color: rgb(var(--accent-rgb) / 0.6);
+}
+
+.docs-list-search-icon {
+  flex-shrink: 0;
+}
+
+.docs-list-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.875rem;
+}
+
+.docs-list-search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.docs-list-new-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  height: 2.125rem;
+  padding: 0 0.9rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-color: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.docs-list-new-button:hover {
+  background-color: var(--accent-hover);
+  border-color: transparent;
+}
+
+/* Content column */
+.docs-list-content {
+  padding: 0.5rem 2rem 2.5rem;
+}
+
+.docs-list-inner {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+/* Grid shared by the column-label row and every doc row:
+ * title | mode | scope | updated | size */
+.docs-columns,
+.docs-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 4.75rem minmax(0, 9rem) 7.5rem 8.5rem;
+  column-gap: 1rem;
+  align-items: center;
+}
+
+.docs-columns {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Groups */
+.docs-group {
+  margin-top: 1rem;
+}
+
+.docs-group-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.25rem 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
+.docs-group-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.docs-group-link {
+  margin: -0.15rem -0.45rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  transition: background-color 0.15s;
+}
+
+.docs-group-link:hover {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.docs-group-label-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docs-group-folder {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.docs-group-public {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
+.docs-group-count {
+  flex-shrink: 0;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background-color: var(--hover);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.docs-group-empty {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.docs-group-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem 0;
+}
+
+.docs-load-more {
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: none;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.docs-load-more:hover:not(:disabled) {
+  background-color: var(--hover);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.docs-load-more:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Rows */
+.docs-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.docs-row {
+  padding: 0.55rem 0.75rem;
+  border-radius: 10px;
+  color: var(--text);
+  font-weight: 400;
+  text-decoration: none;
+  transition: background-color 0.12s;
+}
+
+.docs-row:hover {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.docs-row:active {
+  background-color: var(--pressed);
+}
+
+.docs-row:focus-visible {
+  outline: 2px solid rgb(var(--accent-rgb) / 0.6);
+  outline-offset: -2px;
+}
+
+.docs-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  min-width: 0;
+}
+
+.docs-row-title,
+.docs-row-description,
+.docs-row-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docs-row-title {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.docs-row-description {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.docs-row-mode {
+  display: flex;
+  min-width: 0;
+}
+
+.docs-row-meta {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.docs-row-updated,
+.docs-row-size {
+  font-variant-numeric: tabular-nums;
+}
+
+/* States */
+.docs-list-status {
+  display: flex;
+  justify-content: center;
+  padding: 3rem 1rem;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.docs-list-empty {
+  padding: 4rem 1rem;
+  text-align: center;
+}
+
+.docs-list-empty-title {
+  margin: 0 0 0.25rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.docs-list-empty-hint {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.docs-list-no-match {
+  padding: 3rem 1rem;
+  text-align: center;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.docs-list-no-match p {
+  margin: 0;
+}
+
+.docs-list-no-match .docs-group-footer {
+  justify-content: center;
+  flex-wrap: wrap;
+  padding-top: 1rem;
+}
+
+.docs-list-no-match-hint {
+  font-size: 0.8125rem;
+}
+
+.docs-list-error {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 100, 100, 0.2);
+  background-color: rgba(255, 100, 100, 0.1);
+  font-size: 0.85rem;
+  color: #ff6464;
+}
+
+.docs-list-warning {
+  margin-top: 1.25rem;
+  padding: 0 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+/* Phone: 16px gutters, header wraps to a full-width search row, rows stack
+ * into a title line and a meta line (badge, scope, time, size). */
+@media (max-width: 768px) {
+  .docs-list-header {
+    padding: 0.875rem 16px 0.5rem;
+  }
+
+  .docs-list-header-inner {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.625rem;
+  }
+
+  .docs-list-actions {
+    width: 100%;
+  }
+
+  .docs-list-search {
+    flex: 1;
+    width: auto;
+  }
+
+  /* 16px keeps iOS Safari from zooming the page when the field focuses. */
+  .docs-list-search-input {
+    font-size: 16px;
+  }
+
+  .docs-list-content {
+    padding: 0.25rem 16px 2rem;
+  }
+
+  .docs-columns {
+    display: none;
+  }
+
+  .docs-group-heading,
+  .docs-group-empty,
+  .docs-group-footer,
+  .docs-list-warning {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+
+  .docs-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 0.5rem;
+    row-gap: 0.25rem;
+    padding: 0.6rem 0.5rem;
+  }
+
+  .docs-row-main {
+    flex: 1 0 100%;
+  }
+
+  .docs-row-meta {
+    flex: 0 1 auto;
+    font-size: 0.75rem;
+  }
+
+  .docs-row-scope {
+    max-width: 45%;
+  }
+
+  .docs-row-updated::before,
+  .docs-row-size::before {
+    content: '\00b7';
+    margin-right: 0.5rem;
+    color: var(--text-muted);
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  .docs-list-error {
+    border-color: rgba(211, 47, 47, 0.2);
+    background-color: rgba(211, 47, 47, 0.06);
+    color: #cc3333;
+  }
+}

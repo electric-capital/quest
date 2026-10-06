@@ -1,0 +1,275 @@
+/* NewDocModal -- create an empty doc from All Docs. Same skeleton as
+ * NewProjectModal (overlay, header, form body, actions), drawn with the
+ * design tokens so both colour schemes and every theme follow. */
+
+.new-doc-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: new-doc-fade-in 0.15s ease-out;
+}
+
+.new-doc-modal {
+  background-color: var(--surface-raised);
+  color: var(--text);
+  border-radius: 12px;
+  width: 460px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  box-shadow: var(--shadow-card);
+  animation: new-doc-slide-up 0.15s ease-out;
+}
+
+@keyframes new-doc-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes new-doc-slide-up {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* Header */
+.new-doc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.new-doc-header h2 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.new-doc-close-button {
+  background: none;
+  border: none;
+  padding: 0.25rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.new-doc-close-button:hover {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+/* Body */
+.new-doc-body {
+  padding: 1.5rem;
+}
+
+.new-doc-label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+  color: var(--text-secondary);
+}
+
+.new-doc-label-spaced {
+  margin-top: 1rem;
+}
+
+.new-doc-optional {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.new-doc-input {
+  display: block;
+  width: 100%;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: var(--hover);
+  color: var(--text);
+  font-size: 0.9375rem;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+
+.new-doc-input:focus {
+  border-color: var(--accent);
+}
+
+.new-doc-input:disabled {
+  opacity: 0.6;
+}
+
+.new-doc-textarea {
+  resize: vertical;
+  min-height: 4.5rem;
+  line-height: 1.45;
+}
+
+.new-doc-select {
+  cursor: pointer;
+}
+
+/* Native option lists ignore the translucent input fill; give them the
+ * raised ground so they stay readable in both schemes. */
+.new-doc-select option {
+  background-color: var(--surface-raised);
+  color: var(--text);
+}
+
+/* Mode: radio for a user doc, read-only line for a project doc */
+.new-doc-mode {
+  margin: 0;
+  padding: 0;
+  border: none;
+  min-width: 0;
+}
+
+.new-doc-mode legend {
+  padding: 0;
+}
+
+.new-doc-mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  margin: 0 -0.5rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.new-doc-mode-option:hover {
+  background-color: var(--hover);
+}
+
+.new-doc-mode-option input[type="radio"] {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+
+.new-doc-mode:disabled .new-doc-mode-option {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.new-doc-mode-label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.new-doc-mode-hint {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 400;
+  margin-top: 0.15rem;
+  color: var(--text-muted);
+}
+
+.new-doc-mode-inherited {
+  margin: 0.75rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.new-doc-mode-inherited strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.new-doc-error {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background-color: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  border-radius: 6px;
+  color: #ff6b6b;
+  font-size: 0.8125rem;
+}
+
+/* Actions */
+.new-doc-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+.new-doc-cancel-button {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.new-doc-cancel-button:hover:not(:disabled) {
+  background-color: var(--hover);
+  border-color: var(--border-strong);
+}
+
+.new-doc-create-button {
+  padding: 0.5rem 1.25rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background-color: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.new-doc-create-button:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+  border-color: transparent;
+}
+
+.new-doc-create-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Phone: 16px fields keep iOS Safari from zooming on focus. */
+@media (max-width: 768px) {
+  .new-doc-header {
+    padding: 1rem 1.25rem;
+  }
+
+  .new-doc-body {
+    padding: 1.25rem;
+  }
+
+  .new-doc-input {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  .new-doc-error {
+    background-color: rgba(211, 47, 47, 0.05);
+    border-color: rgba(211, 47, 47, 0.3);
+    color: #d32f2f;
+  }
+}
