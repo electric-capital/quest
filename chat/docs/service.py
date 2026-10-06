@@ -733,7 +733,7 @@ async def create_doc(
 
     doc_id = str(uuid.uuid4())
     try:
-        size = await _files(doc_files.init_doc, doc_id, content)
+        size = await _files(doc_files.init_doc, doc_id, content, write_source=write_source)
         doc = await doc_store.create_doc(
             user_id,
             title,
@@ -869,7 +869,7 @@ async def create_doc_from_ui(
 
     doc_id = str(uuid.uuid4())
     try:
-        size = await _files(doc_files.init_doc, doc_id, "")
+        size = await _files(doc_files.init_doc, doc_id, "", write_source="ui")
         doc = await doc_store.create_doc(
             user_id,
             clean_title,
@@ -1147,9 +1147,10 @@ async def _load_workspace_image(caller: Caller, workspace_path: str) -> tuple[by
 # files.modify_body, which reads, transforms and writes doc.md in one
 # critical section of the per-doc threading lock (a separate read_body +
 # write_body pair would let concurrent writers clobber each other). Each
-# passes the doc row's last_write_source (re-read under the lock, so it
-# names the writer of the body being replaced) as snapshot_source for the
-# revision sidecar.
+# passes its own write_source -- the writer of the NEW body -- which
+# files.py records in doc.meta.json; a later snapshot copies that file into
+# its revision sidecar, so attribution follows the body itself, not the
+# row's last_write_source (which asset-only writes also bump).
 # ---------------------------------------------------------------------------
 
 
@@ -1164,7 +1165,7 @@ async def _write_edit(caller: Caller, doc: dict, clean: dict, write_source: str)
 
     new_body, size = await _files(
         doc_files.modify_body, doc_id, transform,
-        snapshot_source=doc.get("last_write_source"),
+        write_source=write_source,
     )
     updated = await _finish_write(doc_id, content_size=size, write_source=write_source)
     return {
@@ -1184,7 +1185,7 @@ async def _write_append(caller: Caller, doc: dict, clean: dict, write_source: st
 
     new_body, size = await _files(
         doc_files.modify_body, doc_id, transform,
-        snapshot_source=doc.get("last_write_source"),
+        write_source=write_source,
     )
     updated = await _finish_write(doc_id, content_size=size, write_source=write_source)
     return {
@@ -1223,7 +1224,7 @@ async def _write_add_image(caller: Caller, doc: dict, clean: dict, write_source:
         try:
             new_body, size = await _files(
                 doc_files.modify_body, doc_id, transform,
-                snapshot_source=doc.get("last_write_source"),
+                write_source=write_source,
             )
         except DocError:
             # The asset landed (assets are additive); keep the counter

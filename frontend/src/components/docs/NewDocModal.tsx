@@ -4,8 +4,10 @@
  * project doc always takes its project's mode, so the radio is replaced by
  * a read-only line and no `mode` is sent (a disagreeing one would 400
  * `project_doc_mode_inherited`). While the `public_projects` gate is closed
- * for the user, public docs are unavailable too: the radio is hidden and a
- * user doc is created with no `mode` (the server makes it private).
+ * for the user, public docs are unavailable too: the radio is hidden, a
+ * user doc is created with no `mode` (the server makes it private), and the
+ * read-only line is left out for a private project (a public project's
+ * line stays: a public state is never hidden).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -13,7 +15,7 @@ import { createDoc } from '../../api/docsApi';
 import { ApiClientError } from '../../api/request';
 import type { CreateDocRequest, Doc, DocMode, Project } from '../../api/types';
 import { useAuth } from '../../contexts/AuthContext';
-import { isPublicProjectsEnabled } from '../../utils/docMode';
+import { isPublicProjectsEnabled, shouldShowDocModeBadge } from '../../utils/docMode';
 import { ModalShell } from '../ModalShell';
 import './NewDocModal.css';
 
@@ -81,6 +83,9 @@ export function NewDocModal({
 
   const selectedProject =
     location === USER_DOCS_LOCATION ? null : (projects.find((p) => p.id === location) ?? null);
+  // A project doc's mode, shown read-only -- and, like every mode badge, not
+  // at all for a private project while public docs are unavailable.
+  const inheritedMode: DocMode = selectedProject?.public ? 'public' : 'private';
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -178,10 +183,12 @@ export function NewDocModal({
         </select>
 
         {location !== USER_DOCS_LOCATION ? (
-          <p className="new-doc-mode-inherited">
-            Mode: <strong>{selectedProject?.public ? 'Public' : 'Private'}</strong> — inherited
-            from the project
-          </p>
+          shouldShowDocModeBadge(inheritedMode, publicDocsAvailable) && (
+            <p className="new-doc-mode-inherited">
+              Mode: <strong>{inheritedMode === 'public' ? 'Public' : 'Private'}</strong> — inherited
+              from the project
+            </p>
+          )
         ) : publicDocsAvailable ? (
           <fieldset className="new-doc-mode" disabled={isCreating}>
             <legend className="new-doc-label new-doc-label-spaced">Mode</legend>

@@ -515,6 +515,17 @@ class TestDetailAssets:
         # The list route does not carry the asset list.
         assert all("assets" not in r for r in c.get("/app/api/docs").json()["docs"])
 
+    def test_names_add_asset_never_writes_are_skipped(self, docs_env):
+        doc = seed_doc(docs_env, "Pics")
+        files.add_asset(doc["id"], "chart.png", PNG)
+        assets_dir = docs_env.dirs["docs"] / doc["id"] / "assets"
+        # Image extensions the asset route would even serve, but names
+        # outside [A-Za-z0-9._-]: planted, so not listed.
+        for odd in ("my chart.png", "naïve.png", "semi;colon.png", "new\nline.png"):
+            (assets_dir / odd).write_bytes(PNG)
+        row = client(docs_env).get(f"/app/api/docs/{doc['id']}").json()
+        assert [a["name"] for a in row["assets"]] == ["chart.png"]
+
     def test_unsafe_assets_dir_400(self, docs_env):
         doc = seed_doc(docs_env, "Pics")
         assets_dir = docs_env.dirs["docs"] / doc["id"] / "assets"

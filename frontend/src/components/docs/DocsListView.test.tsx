@@ -324,5 +324,33 @@ describe('DocsListView', () => {
       });
       expect(mocks.createDoc).toHaveBeenCalledWith({ title: 'Notes' });
     });
+
+    it('New Doc drops the inherited-mode line for a private project, keeps it for a public one', async () => {
+      // A leftover public project (normally hidden while the gate is closed)
+      // still shows its public state.
+      mocks.projects = [project('pa', 'Alpha'), project('pb', 'beta', { public: true })];
+      mocks.fetchDocs.mockResolvedValue(page([]));
+      renderView('pa');
+      await waitFor(() => expect(mocks.fetchDocs).toHaveBeenCalled());
+
+      fireEvent.click(screen.getByRole('button', { name: 'New Doc' }));
+      const select = document.querySelector<HTMLSelectElement>('#new-doc-location-select')!;
+      expect(select.value).toBe('pa');
+      expect(document.querySelector('.new-doc-mode-inherited')).toBeNull();
+      expect(document.querySelector('.new-doc-mode')).toBeNull();
+
+      fireEvent.change(select, { target: { value: 'pb' } });
+      expect(document.querySelector('.new-doc-mode-inherited')?.textContent).toContain('Public');
+
+      fireEvent.change(document.querySelector('#new-doc-title-input')!, {
+        target: { value: 'Plan' },
+      });
+      mocks.createDoc.mockResolvedValue(doc('new2', { project_id: 'pb', mode: 'public' }));
+      fireEvent.change(select, { target: { value: 'pa' } });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Create Doc' }));
+      });
+      expect(mocks.createDoc).toHaveBeenCalledWith({ title: 'Plan', project_id: 'pa' });
+    });
   });
 });

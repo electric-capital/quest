@@ -80,6 +80,10 @@ _REQUEST_ERROR_STATUS = {
 _FILENAME_UNSAFE_RE = re.compile(r'[/\\:*?"<>|]+')
 _FILENAME_MAX_LEN = 120
 
+# Every name files.add_asset can produce (sanitize_asset_name stem + a
+# sniffed extension); the detail payload lists nothing else.
+_LISTED_ASSET_NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
+
 
 class CreateDocRequest(BaseModel):
     title: str
@@ -181,13 +185,17 @@ def _asset_rows(assets: list[dict]) -> list[dict]:
     """``[{"name", "size", "mime"}]`` for the detail payload.
 
     ``assets`` comes from ``files.list_assets`` (regular, non-hidden files
-    directly in ``assets/``, sorted by name). Entries the asset route would
-    404 -- a name ``files`` refuses or an extension outside
-    ``_INLINE_IMAGE_MIMES`` -- are left out.
+    directly in ``assets/``, sorted by name). Left out: names outside
+    ``[A-Za-z0-9._-]`` (``add_asset`` never writes one, so anything else
+    was planted) and entries the asset route would 404 -- a name ``files``
+    refuses or an extension outside ``_INLINE_IMAGE_MIMES``.
     """
     rows = []
     for asset in assets:
         name = asset["name"]
+        # fullmatch: "$" alone would also accept a trailing newline.
+        if not _LISTED_ASSET_NAME_RE.fullmatch(name):
+            continue
         try:
             doc_files._validate_asset_name(name)
         except doc_files.DocFileError:
