@@ -66,6 +66,8 @@ Everything for one doc lives under `DOCS_DIR/<doc_id>/` (layout documented at th
 | `doc.md` | The current body: UTF-8, CRLF normalized to LF, no front matter (all metadata is in the DB, so a download is clean) |
 | `assets/<name>.<ext>` | Embedded raster images (png, jpg, gif, webp). The extension always comes from `sniff_image_type()` (magic bytes), never from the caller's file name. The body references them relatively as `![alt](assets/<name>)` |
 | `revisions/<YYYYMMDDTHHMMSSZ>-<n>.md` | Snapshots of `doc.md` taken before each body write |
+| `doc.meta.json` | Who wrote the current `doc.md` and when: `{written_at, source, size}` (see Revision policy) |
+| `revisions/<YYYYMMDDTHHMMSSZ>-<n>.json` | The snapshot's metadata sidecar: a copy of the replaced body's `doc.meta.json` |
 
 Safety rules applied everywhere in `files.py`: leaves are opened `O_NOFOLLOW`, then re-checked as regular files on the descriptor (`fstat` + `S_ISREG`). Reads also pass `O_NONBLOCK`, so a planted FIFO can never block. Body writes are atomic (`doc.md.tmp` + `os.replace`). Assets are written to a temp file and hard-linked into place (`os.link` fails on an existing name, which drives the `-2`, `-3` suffixing). Only `init_doc()` creates a doc root, so a write racing a delete fails instead of resurrecting a directory whose row is gone. A doc directory is never mounted into a sandbox.
 
@@ -79,7 +81,9 @@ Concurrency uses two locks. `files.doc_lock()` is a per-doc `threading.Lock` hel
 - **Pruning at write time** (`_prune_revisions()`) deletes snapshots older than `DOC_REVISION_RETENTION_DAYS` (30, by file mtime). It also deletes the oldest snapshots beyond `DOC_REVISION_MAX_COUNT` (200). The cap bounds the disk a looping writer can use inside the window, since each snapshot can be up to 1 MB.
 - **The newest snapshot is always kept**, however old. An idle doc keeps one restore point.
 
-Creation (`init_doc`) takes no snapshot. Metadata changes (rename, description, mode) do not touch files. An `add_doc_image` with `placement: "none"` stores the asset without writing the body, so it takes no snapshot either. Revisions are not exposed anywhere yet: `files.list_revisions()` has no production caller.
+- **Every snapshot gets a metadata sidecar.** Each doc keeps `doc.meta.json` = `{"written_at": <ISO UTC, ms, Z>, "source": <the write source of the CURRENT body: "conversation:<id>" | "ui" | "action_request:<id>" | null>, "size": <bytes>}`, written by `init_doc` and after every body write (`doc.meta.json.tmp` created exclusively with O_NOFOLLOW, then `os.replace`; read with O_NOFOLLOW + S_ISREG). `write_body` / `modify_body` / `init_doc` take `write_source`, which the service fills with the current writer's source. Asset-only writes (`add_asset`, incl. `placement: "none"`) never touch it, so it is NOT the row's `last_write_source`: that field names whoever wrote last, including image adds. Before a body write replaces `doc.md`, the snapshot's sidecar `revisions/<ts>-<n>.json` is a copy of `doc.meta.json`, so `written_at` is when that body was written and `source` who wrote it. Fallback when the meta is missing, unreadable or its `size` disagrees with the body (legacy docs, a body edited by hand): `{"written_at": <doc.md mtime, ISO Z>, "source": null, "size": <bytes>}`. A failed meta write is logged, the stale file removed (the next snapshot then falls back to a null source) and the save still succeeds. Name allocation skips leftover `.json` names. Pruning deletes a `.json` together with its `.md` under both rules and sweeps orphan `.json` files (an undeletable one is logged and skipped; a symlink at a sidecar name is unlinked, not followed). A snapshot without a sidecar is tolerated: `files.read_revision_meta(path)` returns the dict or None (missing, malformed, wrong shape, negative size, or not a regular file); `read_doc_meta(doc_id)` reads the current one. `doc.meta.json` is not an asset and not part of the zip download. This is the attribution the later History view reads; no API or UI exposes it yet.
+
+Creation (`init_doc`) takes no snapshot. Metadata changes (rename, description, mode) do not touch files. An `add_doc_image` with `placement: "none"` stores the asset without writing the body, so it takes no snapshot either. Revisions are not exposed anywhere yet: `files.list_revisions()`, `read_revision_meta()` and `read_doc_meta()` have no production caller.
 
 ### Tables
 
@@ -273,7 +277,7 @@ On the server, `serve_spa_docs` in `quest.py` serves `index.html` for `/docs` an
 `Sidebar.tsx` mounts two `useDocs` instances with limit `SIDEBAR_DOC_LIMIT` (5): the user's docs, and the drilled project's docs (enabled only while drilled). Both render through `DocsSection`, only while the gate is open:
 
 - on the main panel, between Projects and Conversations, with a header that opens `/docs`;
-- in `ProjectPanel`'s drill-down, above Routines, with a header that opens `/docs?project=<id>`.
+- in `ProjectPanel`'s drill-down, below Routines (order: Routines, Docs, Conversations), with a header that opens `/docs?project=<id>`.
 
 The whole header is a button with a count ("5+" when the server has more). Rows show the title, a small `DocModeBadge` and a compact time, newest `updated_at` first (`deriveSidebarDocItems`). The doc open in the viewer is highlighted, from the URL. The empty state reads "Ask Quest to create a doc". After navigating, the Sidebar calls its `onNavigateAway` prop, which `MobileShell` sets to close the phone drawer; the desktop layout passes nothing.
 
@@ -297,7 +301,7 @@ The filtered view (`?project=<id>`) uses only `useDocs({projectId, limit: 50})`.
 `DocHeader.tsx` follows `ConversationHeader.tsx`: the title plus a chevron opens a dropdown, single-key hints act while it is open, and Rename swaps in an inline input. The items follow the row's `access` flags:
 
 - **Rename** (R, `can_rename`): sends `expected_updated_at`. A `stale_update` 409 applies the error's `current` row through `useDoc.applyRow()` and shows a notice. `duplicate_title` / `invalid_title` keep the input open.
-- **Switch to public / private** (P, `can_switch_mode`, so user docs only): opens `DocModeSwitchDialog`.
+- **Switch to public / private** (P, `can_switch_mode`, so user docs only, and only while the `public_projects` gate is open for the user or the doc is already public -- see Private-only below): opens `DocModeSwitchDialog`.
 - **Download Markdown** and **Download with images (.zip)**: plain `<a download>` links on `docDownloadUrl`, always offered.
 - **Delete** (D, `can_delete`): behind a confirm, then navigates to the doc's list (`docsListPath(project_id)`).
 
@@ -320,6 +324,14 @@ The footer reads "Last written by X · Updated <relative>", with X from `last_wr
 - `action_request:<n>`: "action request #n";
 - `conversation:<id>`: the conversation's title from the row's `last_write_conversation` (`{id, title, project_id}`, resolved by `GET /docs/{id}` from one conversations-row lookup -- the viewer never fetches the chat history for a title), linked to `/chats/<id>` or `/projects/<pid>/<id>`; null (the conversation is gone) reads "a deleted conversation";
 - null: the writer phrase is left out. That includes every non-owner, since the API blanks the field for them.
+
+### Private-only without public projects
+
+Public docs exist for public-project conversations, so a user for whom the `public_projects` gate is closed (`_public_projects_enabled_for(user)`, the same per-user check the project routes use) gets private docs only: `POST /docs` creates user docs private and refuses an explicit `mode: "public"` with 400 `public_projects_disabled`, `PUT /docs/{id}/mode` refuses a public target with the same 400 (a private target stays allowed, so a public doc left over from before the gate closed still has a way back), and `access.can_switch_mode` is false unless the doc is already public. The frontend follows the same signal (`public_projects` absent from `enabled_features`, `utils/docMode.ts`): no mode radio in New Doc (no `mode` sent; the read-only "inherited from the project" line is also dropped for a private project), no switch item (the server flag drives it), and no mode badge on private docs -- in the sidebar rows, All Docs rows (the "Mode" column label is blank when no visible row shows a badge) and the viewer header. A public doc always keeps its badge, so a public state is never hidden (`shouldShowDocModeBadge(mode, publicProjectsEnabled)` = `mode === "public" || publicProjectsEnabled`).
+
+### Assets panel
+
+`GET /docs/{id}` lists the doc's images as `assets: [{name, size, mime}]` (regular files directly in `assets/`, sorted by name, hidden names / symlinks / directories skipped, names outside `[A-Za-z0-9._-]+` -- all `add_asset` ever produces -- skipped so a hand-planted name can never break the JSON or the asset route's headers, MIME from `_INLINE_IMAGE_MIMES` by extension, built in a thread). It rides on the detail payload rather than a separate endpoint because the per-doc cap is 200 assets (a few KB at most) and the viewer always needs both. `DocAssetsPanel.tsx` renders them as a `.right-panel-card` in a 280px right gutter beside the doc column (the chat RightPanel's footprint): a lazy 40px thumbnail from `GET /docs/{id}/assets/{name}` (an icon when it fails), the filename and size, "No images in this doc." when empty; a click opens `DocImageLightbox.tsx` (ModalShell, the full image, name + size, a Download link). At 1024px and below the card drops under the body; on phones (`useIsMobile`) a collapsed "Assets (N)" `<details>` section replaces it so the document stays first.
 
 ### write_doc card
 
@@ -368,7 +380,7 @@ The last point is safe because public containers get no sandbox token, so they h
 - Caps (`chat/docs/constants.py`): body 1 MB, image 5 MB, 200 images / 100 MB per doc, `read_doc` page 200,000 chars, title 200 / description 500 chars, search scan 50 MB, 3 snippets of ~200 chars per doc, `list_docs` limit 1..200 (default 50), `search_docs` limit 1..50 (default 20).
 - Raster images only (png, jpg/jpeg, gif, webp), sniffed by content. SVG and anything else is refused.
 - The write locks are in-process (one `asyncio.Lock` and one `threading.Lock` per doc id), which is correct for the single-process server.
-- Doc bodies, assets and revisions are plaintext on disk, like workspaces (see [Encryption at Rest](encryption-at-rest.md)).
+- Doc bodies, assets, revisions and the `doc.meta.json` / sidecar attribution files are plaintext on disk, like workspaces (see [Encryption at Rest](encryption-at-rest.md)).
 
 ## Design Decisions
 
