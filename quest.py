@@ -362,9 +362,15 @@ async def lifespan(app: FastAPI):
     from config.plugins import shutdown_plugins
     await shutdown_plugins()
 
+# Swagger UI / ReDoc live at /api-docs and /api-redoc instead of FastAPI's
+# default /docs and /redoc: /docs and /docs/<id> are the SPA's Quest Docs
+# routes (served below), and FastAPI registers its docs routes first, so the
+# defaults would shadow them. /openapi.json is unchanged.
 app = FastAPI(
     title="Quest",
     description="API Proxy with OAuth & Access Control",
+    docs_url="/api-docs",
+    redoc_url="/api-redoc",
     lifespan=lifespan
 )
 
@@ -562,6 +568,14 @@ async def serve_spa_admin(rest: str):
 async def serve_spa_inbox():
     """Serve SPA for the /inbox deep link (the requests inbox view --
     linked from Slack pending-request reminder DMs)."""
+    return FileResponse(FRONTEND_BUILD_DIR / "index.html")
+
+@app.get("/docs")
+@app.get("/docs/{rest:path}")
+async def serve_spa_docs(rest: str = ""):
+    """Serve SPA for the Quest Docs deep links (/docs All Docs view,
+    /docs?project=<id>, /docs/<id> viewer). Swagger UI moved to /api-docs
+    to free this path (see the FastAPI(...) constructor)."""
     return FileResponse(FRONTEND_BUILD_DIR / "index.html")
 
 @app.get("/set-password")

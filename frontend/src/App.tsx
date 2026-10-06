@@ -16,7 +16,12 @@ import { SetPasswordScreen } from './components/SetPasswordScreen'
 import { RequestsView } from './components/RequestsView'
 import { AdminSystemReportsPage } from './pages/AdminSystemReportsPage'
 import { MobileShell } from './components/MobileShell'
+import { DocsListView } from './components/docs/DocsListView'
+import { DocViewer } from './components/docs/DocViewer'
+import { DocsGateClosed } from './components/docs/DocsGateClosed'
+import { DOCS_FEATURE } from './api/docsApi'
 import { useIsMobile } from './hooks/useIsMobile'
+import { parseDocsRoute } from './utils/docsRoute'
 
 function AppContent() {
   const {
@@ -27,7 +32,7 @@ function AppContent() {
     showRequestsView,
     setShowRequestsView,
   } = useNavigationState()
-  const { isAuthenticated, isCheckingAuth, hasAnyServiceConnected } = useAuth()
+  const { isAuthenticated, isCheckingAuth, hasAnyServiceConnected, enabledFeatures } = useAuth()
   const { appName } = useAppConfig()
   const { setActiveProjectId } = useProjects()
 
@@ -35,6 +40,12 @@ function AppContent() {
   const navigate = useNavigate()
   const location = useLocation()
   const isMobile = useIsMobile()
+
+  // Quest Docs views (/docs, /docs?project=<id>, /docs/<id>) take over the
+  // main pane like the requests inbox. The URL is the only state: no
+  // NavigationContext flag, and activeConversationId is null on these routes.
+  const docsRoute = parseDocsRoute(location.pathname, location.search)
+  const docsEnabled = enabledFeatures.includes(DOCS_FEATURE)
 
   // Sync URL -> requests-inbox state. /inbox is the deep-linkable address of
   // the RequestsView (linked from Slack pending-request reminder DMs); any
@@ -128,6 +139,8 @@ function AppContent() {
         onConversationSelect={handleConversationSelect}
         onNewConversation={handleNewConversation}
         onProjectIdLoaded={handleProjectIdLoaded}
+        docsRoute={docsRoute}
+        docsEnabled={docsEnabled}
       />
     )
   }
@@ -141,6 +154,17 @@ function AppContent() {
       />
       {showRequestsView ? (
         <RequestsView />
+      ) : docsRoute ? (
+        // Full takeover like RequestsView: no RightPanel beside a docs view.
+        <div className="main-content docs-main">
+          {!docsEnabled ? (
+            <DocsGateClosed />
+          ) : docsRoute.kind === 'list' ? (
+            <DocsListView projectId={docsRoute.projectId} />
+          ) : (
+            <DocViewer docId={docsRoute.docId} />
+          )}
+        </div>
       ) : (
         <>
           <div className="main-content">
@@ -197,6 +221,9 @@ function App() {
         <Route path="/chats/:conversationId" element={<AppContent />} />
         <Route path="/projects/:projectId/:conversationId" element={<AppContent />} />
         <Route path="/inbox" element={<AppContent />} />
+        {/* Quest Docs: All Docs (?project=<id> filter) and the viewer. */}
+        <Route path="/docs" element={<AppContent />} />
+        <Route path="/docs/:docId" element={<AppContent />} />
         {/* Set-password links (invites, sign-up, resets); works signed out. */}
         <Route path="/set-password" element={<SetPasswordScreen />} />
         <Route path="/admin/system-reports" element={<AdminSystemReportsRoute />} />

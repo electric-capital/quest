@@ -22,6 +22,18 @@
   min-width: 0; /* Allow flex item to shrink below content size */
 }
 
+/* Quest Docs takeover pane (/docs, /docs/<id>): same footprint as the
+ * requests view -- fills the width beside the sidebar, no RightPanel. A
+ * column that scrolls as a whole; a view that should fill the height
+ * (centered notices) takes flex: 1. Also used inside MobileShell's
+ * .mobile-main, where it fills the space under the top bar. */
+.docs-main {
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  background-color: var(--surface);
+}
+
 /* Center content when no conversation is selected */
 .main-content .no-conversation-selected {
   flex: 1;

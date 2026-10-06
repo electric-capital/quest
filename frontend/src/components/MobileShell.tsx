@@ -11,6 +11,10 @@ import { HomeComposer } from './HomeComposer'
 import { RequestsView } from './RequestsView'
 import { RightPanel } from './RightPanel'
 import { SettingsModal } from './SettingsModal'
+import { DocsListView } from './docs/DocsListView'
+import { DocViewer } from './docs/DocViewer'
+import { DocsGateClosed } from './docs/DocsGateClosed'
+import type { DocsRoute } from '../utils/docsRoute'
 
 interface MobileShellProps {
   activeConversationId: string | null
@@ -18,6 +22,10 @@ interface MobileShellProps {
   onConversationSelect: (id: string, projectId?: string | null) => void
   onNewConversation: (id: string, projectId?: string | null) => void
   onProjectIdLoaded: (conversationId: string, projectId: string) => void
+  /** Parsed /docs URL (parseDocsRoute), or null off the docs routes. */
+  docsRoute: DocsRoute | null
+  /** Whether the `docs` feature gate is open for the current user. */
+  docsEnabled: boolean
 }
 
 interface ConversationSelectOpts {
@@ -29,7 +37,8 @@ interface ConversationSelectOpts {
  * Sidebar/ChatPanel/RightPanel row when useIsMobile() matches. Same routes,
  * same data layer — only the layout tree differs: a fixed top bar, a slide-in
  * drawer hosting the existing Sidebar, and a single main pane (chat, home
- * composer, or requests). The desktop-only RightPanel is intentionally absent.
+ * composer, requests, or a Quest Docs view). The desktop-only RightPanel is
+ * intentionally absent.
  */
 export function MobileShell({
   activeConversationId,
@@ -37,6 +46,8 @@ export function MobileShell({
   onConversationSelect,
   onNewConversation,
   onProjectIdLoaded,
+  docsRoute,
+  docsEnabled,
 }: MobileShellProps) {
   const { appName } = useAppConfig()
   const {
@@ -108,6 +119,21 @@ export function MobileShell({
     setDrawerOpen(false)
     setWorkspaceOpen(false)
   }, [showRequestsView, isSettingsOpen])
+
+  // Arriving at a docs view (All Docs, a project filter, or a doc) also closes
+  // both overlays. Keyed on the docs route only -- never on the pathname --
+  // so the implicit project drill-in/out selections above still keep the
+  // drawer open, and leaving a docs route is not a close trigger either.
+  const docsRouteKey = docsRoute
+    ? docsRoute.kind === 'list'
+      ? `list:${docsRoute.projectId ?? ''}`
+      : `viewer:${docsRoute.docId}`
+    : null
+  useEffect(() => {
+    if (docsRouteKey === null) return
+    setDrawerOpen(false)
+    setWorkspaceOpen(false)
+  }, [docsRouteKey])
 
   const closeOverlays = useCallback(() => {
     setDrawerOpen(false)
@@ -187,6 +213,16 @@ export function MobileShell({
       <div className="mobile-main">
         {showRequestsView ? (
           <RequestsView />
+        ) : docsRoute ? (
+          <div className="main-content docs-main">
+            {!docsEnabled ? (
+              <DocsGateClosed />
+            ) : docsRoute.kind === 'list' ? (
+              <DocsListView projectId={docsRoute.projectId} />
+            ) : (
+              <DocViewer docId={docsRoute.docId} />
+            )}
+          </div>
         ) : activeConversationId ? (
           <ChatPanel
             conversationId={activeConversationId}

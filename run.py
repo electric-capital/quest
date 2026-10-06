@@ -813,7 +813,7 @@ def main() -> None:
     print("Access points:")
     print(f"  - Chat app: http://localhost:{port}/")
     print(f"  - Auth:     http://localhost:{port}/auth/")
-    print(f"  - API docs: http://localhost:{port}/docs")
+    print(f"  - API docs: http://localhost:{port}/api-docs")
     print(f"  - Sandbox tool API (script containers): http://127.0.0.1:{sandbox_port}/")
     print()
     print("Press Ctrl+C to stop the server")
