@@ -186,6 +186,28 @@ describe('useDoc', () => {
     expect(result.current.doc?.title).toBe('Renamed');
   });
 
+  it('applyRow ignores a row older than the one shown and re-fetches when the body changed', async () => {
+    mocks.fetchDoc.mockResolvedValueOnce(detail('d1', { updated_at: '2026-10-05T00:00:00' }));
+    const { result } = renderHook(() => useDoc('d1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // An overtaken rename response must not roll the title/token back.
+    act(() => result.current.applyRow(row('d1', { title: 'Older', updated_at: '2026-10-02T00:00:00' })));
+    expect(result.current.doc?.title).toBe('Doc d1');
+    expect(mocks.fetchDoc).toHaveBeenCalledTimes(1);
+
+    // A newer row whose size differs (a model write this tab missed) is
+    // applied AND the body is re-fetched.
+    mocks.fetchDoc.mockResolvedValueOnce(
+      detail('d1', { content_size: 99, updated_at: '2026-10-06T00:00:00', content: 'fresh' }),
+    );
+    await act(async () => {
+      result.current.applyRow(row('d1', { content_size: 99, updated_at: '2026-10-06T00:00:00' }));
+    });
+    await waitFor(() => expect(result.current.doc?.content).toBe('fresh'));
+    expect(mocks.fetchDoc).toHaveBeenCalledTimes(2);
+  });
+
   it('applyRow re-fetches when an older fetch is in flight so it cannot revert the row', async () => {
     mocks.fetchDoc.mockResolvedValueOnce(detail('d1'));
     const { result } = renderHook(() => useDoc('d1'));

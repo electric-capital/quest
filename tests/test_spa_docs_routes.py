@@ -31,6 +31,7 @@ _SCRIPT = (
     "    'docs_url': app.docs_url,\n"
     "    'redoc_url': app.redoc_url,\n"
     "    'openapi_url': app.openapi_url,\n"
+    "    'oauth2_redirect_url': app.swagger_ui_oauth2_redirect_url,\n"
     "}))\n"
 )
 
@@ -75,5 +76,9 @@ def test_default_redoc_path_gone(route_table):
 def test_docs_path_is_only_the_spa_route(route_table):
     """Exactly one route owns /docs: the SPA one, not Swagger UI."""
     assert route_table["paths"].count("/docs") == 1
+    # Swagger's OAuth2 redirect page follows docs_url too, so no non-SPA
+    # route is left anywhere under /docs/.
+    assert route_table["oauth2_redirect_url"] == "/api-docs/oauth2-redirect"
+    assert not [p for p in route_table["paths"] if p and p.startswith("/docs/") and p != "/docs/{rest:path}"]
     assert "/api-docs" in route_table["paths"]
     assert "/api-redoc" in route_table["paths"]

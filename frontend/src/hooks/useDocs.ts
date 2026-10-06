@@ -139,6 +139,11 @@ export function useDocs({
         if (seq !== requestSeqRef.current) return;
         const prev = stateRef.current;
         if (prev.key !== key) return;
+        // A refresh that was already in flight when this page was requested
+        // shares our seq but may have landed meanwhile with a different
+        // boundary; appending a page fetched from the old cursor onto it
+        // could skip a row. The page is only valid for the cursor it extends.
+        if (prev.nextCursor !== cursor) return;
         const seen = new Set(prev.docs.map((d) => d.id));
         commit({
           ...prev,

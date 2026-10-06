@@ -35,8 +35,17 @@ describe('parseDocsRoute', () => {
     expect(parseDocsRoute('/docs/xyz/', '')).toEqual({ kind: 'viewer', docId: 'xyz' })
   })
 
-  it('decodes the doc id', () => {
-    expect(parseDocsRoute('/docs/a%20b', '')).toEqual({ kind: 'viewer', docId: 'a b' })
+  it('accepts uuid-like ids only', () => {
+    expect(parseDocsRoute('/docs/3f2a9c1e-7b4d-4e8a-9c21-0f6d8e5a1b2c', '')).toEqual({
+      kind: 'viewer',
+      docId: '3f2a9c1e-7b4d-4e8a-9c21-0f6d8e5a1b2c',
+    })
+    // A decoded "/" or ".." is not a doc id (it would be spliced into
+    // /app/api/docs/<id>/... URLs otherwise), nor is whitespace.
+    expect(parseDocsRoute('/docs/x%2Fdownload', '')).toBeNull()
+    expect(parseDocsRoute('/docs/..%2Fy', '')).toBeNull()
+    expect(parseDocsRoute('/docs/a%20b', '')).toBeNull()
+    expect(parseDocsRoute('/docs/%E2%9C%93', '')).toBeNull()
   })
 
   it('rejects deeper paths', () => {
@@ -83,6 +92,6 @@ describe('docViewerPath', () => {
   })
 
   it('round-trips through parseDocsRoute', () => {
-    expect(parseDocsRoute(docViewerPath('a/b c'), '')).toEqual({ kind: 'viewer', docId: 'a/b c' })
+    expect(parseDocsRoute(docViewerPath('doc_1-A'), '')).toEqual({ kind: 'viewer', docId: 'doc_1-A' })
   })
 })

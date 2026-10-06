@@ -95,10 +95,21 @@ export function useDoc(docId: string | null): DocView {
     (row: Doc) => {
       const prev = stateRef.current;
       if (docId === null || row.id !== docId || prev.id !== docId || !prev.doc) return;
+      // Timestamps are ISO strings of equal shape, so string order is time
+      // order. A row older than what is shown (a rename response overtaken
+      // by a newer refresh) must not roll the title/token back.
+      if (row.updated_at < prev.doc.updated_at) return;
       commit({ ...prev, doc: { ...prev.doc, ...row } });
+      // Rows carry no body. A changed size / asset count / write source
+      // (e.g. the `current` row of a stale_update 409 after a model write
+      // whose events this tab missed) means the shown content is stale too.
+      const bodyChanged =
+        row.content_size !== prev.doc.content_size
+        || row.asset_count !== prev.doc.asset_count
+        || row.last_write_source !== prev.doc.last_write_source;
       // A fetch that started before this write would land with the old row;
       // re-fetch so the newest response wins instead.
-      if (pendingSeqRef.current !== null) void refresh();
+      if (bodyChanged || pendingSeqRef.current !== null) void refresh();
     },
     [docId, commit, refresh],
   );

@@ -40,8 +40,14 @@ export function parseDocsRoute(pathname: string, search: string): DocsRoute | nu
   } catch {
     return null
   }
-  return docId ? { kind: 'viewer', docId } : null
+  // Doc ids are uuid4 strings (a single canonical path segment on the
+  // server). Anything else -- in particular a decoded "/" or ".." -- is not
+  // a doc id and must never be spliced into an /app/api/docs/<id>/... URL.
+  return DOC_ID_RE.test(docId) ? { kind: 'viewer', docId } : null
 }
+
+/** Shape of a doc id in the URL: uuid-like, nothing that could change a path. */
+const DOC_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
 
 /** URL of the All Docs view, optionally filtered to one project. */
 export function docsListPath(projectId?: string | null): string {

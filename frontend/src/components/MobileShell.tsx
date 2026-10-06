@@ -198,16 +198,22 @@ export function MobileShell({
             <span className="mobile-topbar-title-text">{appName}</span>
           )}
         </div>
-        <button
-          className="mobile-topbar-button mobile-topbar-button-end"
-          onClick={() => {
-            setDrawerOpen(false)
-            setWorkspaceOpen(true)
-          }}
-          aria-label="Open workspace"
-        >
-          <Folder size={20} />
-        </button>
+        {/* No workspace beside a docs view (desktop hides the RightPanel
+            there too); keep the slot so the title stays put. */}
+        {docsRoute ? (
+          <span className="mobile-topbar-button mobile-topbar-button-end" aria-hidden="true" />
+        ) : (
+          <button
+            className="mobile-topbar-button mobile-topbar-button-end"
+            onClick={() => {
+              setDrawerOpen(false)
+              setWorkspaceOpen(true)
+            }}
+            aria-label="Open workspace"
+          >
+            <Folder size={20} />
+          </button>
+        )}
       </header>
 
       <div className="mobile-main">

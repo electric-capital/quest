@@ -262,6 +262,37 @@ describe('useDocs', () => {
     expect(result.current.hasMore).toBe(true);
   });
 
+  it('drops a loadMore page requested while a refresh was already in flight', async () => {
+    mocks.fetchDocs.mockResolvedValueOnce(page(['a'], 'cursor-1'));
+    const { result } = renderHook(() => useDocs({ limit: 1 }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // Refresh starts first (e.g. doc_list_changed), then the user clicks
+    // "Load more" with the old cursor, then the refresh lands with a new
+    // boundary, then the page lands. The page extends a cursor the list no
+    // longer has, so appending it could skip the row at the new boundary.
+    const refreshing = deferred<ListDocsResponse>();
+    mocks.fetchDocs.mockReturnValueOnce(refreshing.promise);
+    let refreshDone: Promise<void> | undefined;
+    act(() => {
+      refreshDone = result.current.refresh();
+    });
+    const more = deferred<ListDocsResponse>();
+    mocks.fetchDocs.mockReturnValueOnce(more.promise);
+    act(() => result.current.loadMore());
+    await act(async () => {
+      refreshing.resolve(page(['z'], 'cursor-z'));
+      await refreshDone;
+    });
+    await act(async () => {
+      more.resolve(page(['b']));
+      await more.promise;
+    });
+    expect(result.current.docs.map((d) => d.id)).toEqual(['z']);
+    expect(result.current.hasMore).toBe(true);
+    expect(result.current.loadingMore).toBe(false);
+  });
+
   it('caps the refresh window at 200 rows', async () => {
     const ids = Array.from({ length: 200 }, (_, i) => `d${i}`);
     mocks.fetchDocs.mockResolvedValueOnce(page(ids, 'cursor-1'));

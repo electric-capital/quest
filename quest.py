@@ -371,6 +371,7 @@ app = FastAPI(
     description="API Proxy with OAuth & Access Control",
     docs_url="/api-docs",
     redoc_url="/api-redoc",
+    swagger_ui_oauth2_redirect_url="/api-docs/oauth2-redirect",
     lifespan=lifespan
 )
 
