@@ -6,6 +6,7 @@ use; the catalog itself is treated as private state.
 
 from typing import Optional
 
+from chat.docs.constants import DOCS_SERVICE_KEY, docs_disabled_message
 from chat.system_skills.catalog import CATALOG, SYSTEM_SKILL_PREFIX, SystemSkill
 
 
@@ -101,15 +102,21 @@ def load_system_skills(
             })
             continue
         if skill.requires is not None and connected_services is not None and not connected_services.get(skill.requires, False):
+            if skill.requires == DOCS_SERVICE_KEY:
+                # A feature-gate pseudo-key, not a connector (see
+                # api/instructions.py PSEUDO_SERVICE_KEYS).
+                error = docs_disabled_message()
+            else:
+                error = (
+                    f"{skill.name} is not connected. Connect it in "
+                    "Settings > Data Connections, then retry."
+                )
             results.append({
                 "id": skill.id,
                 "name": skill.name,
                 "description": skill.description,
                 "visibility": "system",
-                "error": (
-                    f"{skill.name} is not connected. Connect it in "
-                    "Settings > Data Connections, then retry."
-                ),
+                "error": error,
             })
             continue
         try:

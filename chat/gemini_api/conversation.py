@@ -737,11 +737,15 @@ async def run_conversation_turn(
             from chat.gemini_api.system_prompt import (
                 get_public_project_system_prompt,
             )
+            from config.feature_gates import docs_enabled_for
             system_prompt = get_public_project_system_prompt(
                 user_name=user.get("name", ""),
                 user_email=user["email"],
                 project_guide=resolved_project_guide,
                 is_routine=bool(routine_id),
+                # The public prompt has no connected-services gating, so
+                # the Quest Docs gate is passed explicitly.
+                docs_enabled=docs_enabled_for(user["email"]),
             )
         else:
             system_prompt = get_system_prompt(
@@ -1280,6 +1284,8 @@ async def run_conversation_turn(
                         fc_event.tool_name, args, project_id=project_id,
                         model=model, is_sub_agent=False, is_public=is_public,
                         is_inference_api=ctx.is_inference_api,
+                        is_user_subagent=ctx.is_user_subagent,
+                        is_slack=ctx.is_slack_origin,
                     )
 
                     # Emit conversation_updated event when the name was set

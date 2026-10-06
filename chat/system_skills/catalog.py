@@ -25,6 +25,15 @@ from api import (
     tasks as tasks_api,
 )
 from api.gmail import get_instructions as gmail_get_instructions
+from chat.docs import access as doc_access
+from chat.docs.constants import (
+    DOC_MAX_ASSETS,
+    DOC_MAX_ASSETS_TOTAL_BYTES,
+    DOC_MAX_CONTENT_SIZE,
+    DOC_MAX_IMAGE_SIZE,
+    DOC_READ_MAX_CHARS,
+    DOCS_SERVICE_KEY,
+)
 
 
 SYSTEM_SKILL_PREFIX = "system:"
@@ -516,8 +525,9 @@ per-run profile.
   `get_gmail_message_urls`, `create_gmail_draft`, `send_gmail_to_self`,
   `archive_gmail_message`, `list_gmail_quest_labels`, `modify_gmail_labels`),
   the Telegram reads (`telegram_get_me`, `telegram_list_dialogs`,
-  `telegram_get_messages`, `telegram_list_contacts`), and the memory reads
-  (`memory_search`, `memory_list`). JSON results come
+  `telegram_get_messages`, `telegram_list_contacts`), the memory reads
+  (`memory_search`, `memory_list`), and -- when Quest Docs is enabled -- the
+  doc reads (`list_docs`, `search_docs`, `read_doc`). JSON results come
   back as JSON; markdown results (e.g. `get_gmail_messages`) come back as
   plain text. A non-allow-listed tool_name returns a 400 listing what is
   available. Example:
@@ -568,6 +578,7 @@ catalog** — exact `request_type` names and their required / optional
 - GCP VM hard resets (`reset_gcp_instance`) → `system:gcp`
 - User memory writes (`create_memory`) → `system:memory`
 - Cross-user subagent runs (`run_user_subagent`) → `system:user_subagents`
+- Quest Doc changes to shared private docs (`write_doc`) → `system:quest_docs`
 
 Before calling `create_action_request` for a given backend, load that
 backend's system skill (if you haven't already) so you know the correct
@@ -847,6 +858,196 @@ The resolved handle's `response` is one of:
 """
 
 
+def _quest_docs_content(_base_url: str, _api_key: str) -> str:
+    mb = 1024 * 1024
+    body_cap = f"{DOC_MAX_CONTENT_SIZE // mb} MB"
+    image_cap = f"{DOC_MAX_IMAGE_SIZE // mb} MB"
+    assets_cap = f"{DOC_MAX_ASSETS} images / {DOC_MAX_ASSETS_TOTAL_BYTES // mb} MB"
+    read_cap = f"{DOC_READ_MAX_CHARS:,}"
+    return f"""## Quest Docs
+
+A **Quest Doc** is a markdown document kept inside Quest. Unlike a
+workspace file it is not tied to this conversation: it is owned by the user
+(scope `user`) or by a project (scope `project`), survives after the
+conversation ends, is rendered in the Quest UI (and downloadable as `.md` or
+`.zip` with its images), and any later conversation can find it again with
+`list_docs` / `search_docs`.
+
+Put content in a doc when it should outlive this conversation and be found
+again: notes, reference pages, reports, meeting summaries, running logs a
+routine keeps appending to. Keep scratch work, intermediate data, scripts and
+one-off downloads in the workspace. Structured rows belong in the project
+database, short facts about the user in memories.
+
+### Tools (call via `tool_call`)
+
+Reads:
+
+- **list_docs(scope?, limit?)** -- the docs this conversation can see,
+  newest updated first. `scope`: `user` | `project` | `all` (default);
+  `limit` 1-200 (default 50). Each row: `id`, `title`, `description`,
+  `mode`, `scope`, `project_id`, `content_size`, `asset_count`,
+  `updated_at`, `shared` (true when the doc has share recipients),
+  `writable`, `write_note`.
+- **search_docs(query, scope?, limit?)** -- case-insensitive substring match
+  over title, description and body; `limit` 1-50 (default 20). Returns
+  `{{results: [{{id, title, mode, scope, matches: [{{line, snippet}}]}}],
+  truncated}}`. Search hits do NOT count as reading the doc.
+- **read_doc(doc_id, start_line?, end_line?)** -- the markdown body plus
+  `total_lines`, `writable`, `write_note`. Marks the doc as read in this
+  conversation.
+
+Writes:
+
+- **create_doc(title, content, description?, target?)** -- a new doc.
+  `target`: `user` (default) or `project` (project conversations only).
+  Titles are 1-200 characters and unique per owner and mode (per project for
+  project docs), case-insensitively. The new doc counts as read.
+- **edit_doc(doc_id, old_string, new_string, replace_all?)** -- exact string
+  replacement (whitespace included); `old_string` must be unique unless
+  `replace_all` is true; an empty `new_string` deletes the match.
+- **append_to_doc(doc_id, content, ensure_blank_line?)** -- appends to the
+  end; `ensure_blank_line` (default true) separates the new block with a
+  blank line.
+- **add_doc_image(doc_id, workspace_path, alt?, placement?)** -- embeds a
+  workspace image (see Images below).
+
+There is no whole-body replace, and no tool renames, deletes or changes the
+mode of a doc: the user does that in the UI. The body is capped at
+{body_cap}.
+
+### Modes and who may write
+
+Every doc is `private` or `public`. A conversation creates docs in its own
+mode: private conversations (standalone chats, private projects and their
+routines, Slack) create private docs; public-project conversations (and
+their routines) create public docs. Project docs take their project's mode
+for good; the user can switch a user doc's mode in the UI.
+
+`list_docs` and `read_doc` report the verdict for each doc in `writable`:
+`free` (the write tools work directly), `approval` (a shared private doc:
+changes go through a `write_doc` action request) or `denied` (read-only
+here; `write_note` says why). The rules behind it:
+
+- **The user's own private doc that is not shared with anyone**: written
+  freely.
+- **A private doc shared with anyone** (any share, read or write): every
+  change needs the user's approval through a `write_doc` action request --
+  for the owner and for people with write access alike. With a read-only
+  share: "{doc_access.DENY_READ_ONLY_SHARE}"
+- **Public docs** are written freely only from public-project
+  conversations (by the owner and people with write access). Everywhere
+  else they are read-only: "{doc_access.DENY_PUBLIC_DOC_FROM_PRIVATE}"
+- **Private docs are invisible to public-project conversations** -- there
+  they behave exactly like a nonexistent id.
+- **Project docs** are visible only from conversations of that project;
+  standalone chats and other projects never see them.
+- **Read-only runs** never write: sub-agents ("{doc_access.DENY_SUB_AGENT}"),
+  inference API runs, cross-user subagent runs and sandbox scripts. A
+  sub-agent returns the content to the top-level agent, which writes it.
+
+### Read before edit
+
+`edit_doc` works only on a doc this conversation has read with `read_doc`
+(or created with `create_doc`); otherwise it tells you to read it first. A
+`search_docs` snippet is not a read. If `old_string` is not found or is
+ambiguous, re-read the doc and retry with the exact current text (or a
+longer, unique excerpt). `append_to_doc` and `add_doc_image` need no read:
+they overwrite nothing.
+
+### Shared private docs: the approval handoff
+
+When a write tool returns
+
+```
+{{"error": "approval_required", "message": "...",
+ "suggested_request": {{"request_type": "write_doc", "params": {{...}}}}}}
+```
+
+forward the suggested request unchanged:
+
+```
+create_action_request(
+    request_type="write_doc",
+    params=<suggested_request.params>,
+    reasoning="<why this change, in plain English>",
+)
+```
+
+The three `params` shapes, for reference (always forward what the tool
+returned rather than rebuilding it):
+
+```
+{{"operation": "edit", "doc_id": "<id>", "old_string": "...", "new_string": "...", "replace_all": false}}
+{{"operation": "append", "doc_id": "<id>", "content": "...", "ensure_blank_line": true}}
+{{"operation": "add_image", "doc_id": "<id>", "workspace_path": "chart.png", "alt": "Q3 revenue", "placement": "append"}}
+```
+
+The card shows the user the doc, how many people it is shared with, and a
+line diff (or the image). Like every action request the call blocks until
+the user resolves it and returns the verdict (shapes in
+`system:action_requests`). At Approve the change is re-applied to the doc
+as it is then: if the text (or the image file) changed meanwhile the
+approve fails with the reason and the card stays open for the user to
+retry or stop -- when you get the verdict back, re-read and propose again.
+Do not propose `write_doc` for a doc whose `writable` is `free` (it is
+rejected: call the tool directly) or `denied`. In `list_docs` /
+`read_doc` output the `write_note` for these docs is
+"{doc_access.APPROVAL_WRITE_NOTE}".
+
+**Slack-driven conversations cannot open approval cards**, so a write to a
+shared private doc fails there ("{doc_access.DENY_SLACK_NEEDS_APPROVAL}").
+Tell the user; free writes still work in Slack.
+
+### Images
+
+Docs embed raster images (PNG, JPEG, GIF, WebP; max {image_cap} each,
+{assets_cap} per doc; checked by content, SVG refused). Put the image in
+the workspace first (e.g. a matplotlib chart saved to
+`/workspace/chart.png`, or a downloaded file), then call
+`add_doc_image(doc_id, workspace_path="chart.png", alt="...")`. The image is
+copied into the doc's `assets/` (renamed `-2`, `-3`, ... on collision) and
+with the default `placement: "append"` the line `![alt](assets/<name>)` is
+appended in the same call -- one approval for a shared doc, not two. To put
+the image elsewhere, pass `placement: "none"`: the result's `markdown` field
+is the snippet, which you then insert with `edit_doc`. Image references in a
+doc are always relative `assets/<name>` paths; external image URLs are not
+rendered.
+
+### Large docs
+
+`read_doc` without a range returns up to {read_cap} characters (cut at a
+line boundary, with `truncated: true` and a note when the doc is longer).
+Page through the rest with `start_line` / `end_line` (1-based, inclusive)
+using `total_lines`, or jump to the line numbers `search_docs` reports.
+
+### Routine pattern: one doc, appended each run
+
+A routine that collects something on every run (daily digest, weekly
+metrics, a running log) keeps ONE doc and appends to it:
+
+1. Find the doc by its title with `search_docs(query="<doc title>")` (or
+   `list_docs`).
+2. Only if it does not exist yet, create it once:
+   `create_doc(title="<doc title>", content="# <doc title>\\n")` (add
+   `target="project"` for a project-level log).
+3. `append_to_doc(doc_id, content="## YYYY-MM-DD\\n\\n<this run's entry>")`
+   -- one dated `##` heading per run.
+
+Never rewrite the whole doc, and never create a new doc per run. Appending
+needs no read, so each run stays cheap as the doc grows. If the doc is a
+shared private doc, every append becomes an approval card that waits for
+the user, which defeats an unattended routine.
+
+### Sandbox scripts
+
+`run_script` / `run_python` code can call `list_docs`, `search_docs` and
+`read_doc` through the sandbox tool API (`/api/tool-call`, see
+`system:workspace`). Scripts are read-only and have no conversation context,
+so they never see project docs; the agent writes docs with the doc tools.
+"""
+
+
 # ---------------------------------------------------------------------------
 # Catalog
 # ---------------------------------------------------------------------------
@@ -1054,6 +1255,18 @@ _register(SystemSkill(
     when_to_load="Load when the user wants information gathered from another Quest user's account/data.",
     requires=None,
     content_builder=_user_subagents_content,
+))
+
+# Gated on the "docs" connected-services pseudo-key (the per-user Quest Docs
+# feature gate, see api/instructions.py PSEUDO_SERVICE_KEYS) like the seven
+# doc tools. Not "system:docs": that id is the Google Docs skill.
+_register(SystemSkill(
+    id="system:quest_docs",
+    name="Quest Docs",
+    description="Persistent Quest Docs: list/search/read/create/edit/append docs, embed images; shared-doc changes via write_doc.",
+    when_to_load="Load when the user wants something kept as a doc, asks about their docs, or a routine maintains a running log.",
+    requires=DOCS_SERVICE_KEY,
+    content_builder=_quest_docs_content,
 ))
 
 _register(SystemSkill(

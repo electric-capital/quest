@@ -87,6 +87,19 @@ FEATURE_GUIDES = "guides"
 # restricted to specific users (PER_USER_ACCESS_FEATURES).
 FEATURE_VOICE_INPUT = "voice_input"
 
+# Quest Docs (see docs/architecture/quest-docs.md): user- and project-owned
+# markdown documents that conversations read and write only through the
+# dedicated doc tools (list/search/read/create/edit/append/add image), with
+# one access rule (chat/docs/access.py) deciding per conversation whether a
+# write is free, needs a write_doc action request, or is refused. Closed for
+# a user = the doc tools and the system skill are hidden from the prompt
+# (connected-services pseudo-key "docs"), every doc tool returns the
+# structured ``docs_disabled`` error before touching the DB, and the
+# /app/api/docs routes 403. Nothing is deleted: the rows and files are
+# preserved, so reopening the gate restores them. Access can be restricted
+# to specific users (PER_USER_ACCESS_FEATURES).
+FEATURE_DOCS = "docs"
+
 # All admin-gateable features. Extend this tuple (and FEATURE_LABELS) when a
 # new optional feature gets a gate. Every feature is off until an admin
 # enables it.
@@ -96,6 +109,7 @@ KNOWN_FEATURES = (
     FEATURE_PUBLIC_PROJECT_ROUTINES,
     FEATURE_GUIDES,
     FEATURE_VOICE_INPUT,
+    FEATURE_DOCS,
 )
 
 # Features whose gate can be narrowed to specific users via
@@ -107,6 +121,7 @@ PER_USER_ACCESS_FEATURES = frozenset({
     FEATURE_PUBLIC_PROJECT_ROUTINES,
     FEATURE_GUIDES,
     FEATURE_VOICE_INPUT,
+    FEATURE_DOCS,
 })
 
 # Human text for the admin Settings > Features section, keyed by feature.
@@ -167,7 +182,28 @@ FEATURE_LABELS: dict[str, dict[str, str]] = {
             "users or only to specific users."
         ),
     },
+    FEATURE_DOCS: {
+        "label": "Quest Docs",
+        "description": (
+            "Lets users keep markdown documents inside Quest that "
+            "conversations read and write through dedicated doc tools "
+            "(list, search, read, create, search/replace edit, append, add "
+            "image). Access can be granted to all users or only to specific "
+            "users. Turning it off hides the tools and the Docs API; nothing "
+            "is deleted."
+        ),
+    },
 }
+
+
+def docs_enabled_for(user_email: str) -> bool:
+    """Whether Quest Docs is on for this user.
+
+    Convenience wrapper over :func:`is_feature_enabled_for_user` for the
+    doc enforcement points (the doc service behind the tools and routes,
+    the write_doc action request, the connected-services prompt gating).
+    """
+    return is_feature_enabled_for_user(FEATURE_DOCS, user_email)
 
 
 def guides_enabled_for(user_email: str) -> bool:

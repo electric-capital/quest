@@ -556,13 +556,20 @@ async def _resolve_locked(
         if conv:
             project_id = conv.get("project_id")
 
+    # write_doc records last_write_source = "action_request:<id>", so it is
+    # the one handler that receives the request id. (Its doc_changed /
+    # doc_list_changed events are published by the docs service itself.)
+    execute_kwargs: dict = {}
+    if req["request_type"] == "write_doc":
+        execute_kwargs["request_id"] = request_id
+
     try:
         # Pass conversation_id so handlers that need workspace access
         # (e.g. attachment uploads) can resolve the conversation's
         # workspace dir.
         result = await handler.execute(
             req["params"], user, conversation_id=req["conversation_id"],
-            project_id=project_id,
+            project_id=project_id, **execute_kwargs,
         )
     except Exception as e:
         logger.exception("[action_request] Execution failed for request %d (user=%s)", request_id, user_id)

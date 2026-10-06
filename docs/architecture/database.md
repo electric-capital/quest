@@ -340,6 +340,16 @@ The `SkillShare` model in `db/models.py` maps to the `skill_shares` table. This 
 
 A composite unique index `ix_skill_shares_skill_id_user_id` on `(skill_id, user_id)` (declared in `__table_args__` on the model) prevents duplicate shares. Individual indexes on `skill_id` and `user_id` support efficient lookups from both directions. The `skill_id` column has a foreign key to `skills.id` with `ON DELETE CASCADE`, so shares are removed when the skill is deleted. The `user_id` column has a foreign key to `users.id` with `ON DELETE CASCADE`, so shares are removed when the shared-with user is deleted.
 
+## Doc and DocShare Models
+
+`Doc` (`docs`) and `DocShare` (`doc_shares`) in `db/models.py` (Alembic migration `55983a10e266`) hold the metadata of [Quest Docs](quest-docs.md); bodies, assets and revisions live on disk under `DOCS_DIR`.
+
+- `docs.owner_id` cascades with the user and the nullable `docs.project_id` cascades with the project (NULL = a user doc).
+- `doc_shares.user_id` NULL means everyone on the install; the partial unique index `ix_doc_shares_everyone` allows one such row per doc.
+- Title uniqueness (case-insensitive per owner, project and mode) is enforced in `db/doc_store.py`, not by an index.
+
+See [Quest Docs -- Tables](quest-docs.md#tables).
+
 ## UserSkillAutoload Model
 
 The `UserSkillAutoload` model in `db/models.py` maps to the `user_skill_autoloads` table. This is a junction table that tracks which skills a user has auto-loaded (automatically included in every conversation).
@@ -393,7 +403,7 @@ Data access is in `db/tool_wait_handle_store.py`. The table is created by the Al
 
 `db/models.py` defines the following enums:
 
-**`ActionRequestType`** -- Known action request type identifiers, one `StrEnum` member per CORE request type: calendar invites, Drive uploads and folder creation, memory saves, skill and routine create/edit, spreadsheet edits, and the subagent types.
+**`ActionRequestType`** -- Known action request type identifiers, one `StrEnum` member per CORE request type: calendar invites, Drive uploads and folder creation, memory saves, skill and routine create/edit, spreadsheet edits, Quest Doc writes (`write_doc`), and the subagent types.
 
 The enum is deliberately not the full universe: `action_requests.request_type` is a plain string and plugin-registered types (`<plugin id>_`-prefixed names plus the grandfathered `send_twitter_dm`, `send_slack_message` / `send_slack_dm`, and `send_telegram_message`) are equally valid.
 
@@ -507,6 +517,8 @@ The long-context flag (per-call context > 200K tokens; Gemini keys on `prompt_to
 **`db/tool_wait_handle_store.py`** -- Wait-handle CRUD plus the bulk reads (`bulk_get_handles_by_ids`) and bulk writes (`mark_timed_out`, `cancel_pending_for_conversation`) used by the live `wait_for_handles` arm and the resume path. See [Wait Handles Architecture](wait-handles.md).
 
 **`db/skill_store.py`** -- Skill CRUD, sharing management, access checks, and auto-load management. See [Skill Library Architecture](skill-library.md) for the full feature description. Access control follows four visibility levels (private, shared, public, project). `get_user_autoloaded_skills()`, `get_project_autoloaded_skills()`, and `get_routine_autoloaded_skills()` join with their respective auto-load junction tables and apply access control filtering, returning skills ordered by name for deterministic prompt ordering. Routine auto-load list/toggle helpers are `list_routine_autoloaded_skill_ids()` and `set_routine_skill_autoload()`.
+
+**`db/doc_store.py`** -- Quest Docs metadata: CRUD, per-mode title uniqueness (`_title_taken()`), the keyset candidate list `list_accessible_docs()`, `update_doc_metadata()` (raises `StaleDocError` on an `expected_updated_at` mismatch), `set_doc_mode()`, `update_after_write()`, the id collectors used by the project- and account-delete directory sweeps, and the share helpers. Access decisions are NOT made here (see `chat/docs/access.py`); body writes go through `chat/docs/service.py`. See [Quest Docs](quest-docs.md).
 
 ## Engine and Sessions
 

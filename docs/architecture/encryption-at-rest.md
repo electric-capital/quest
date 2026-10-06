@@ -130,8 +130,12 @@ the column with native `DROP COLUMN` (see the batch-mode caveat in
   upstream credential), `<data_dir>/vertex-service-account.json` (read
   directly by the Google SDK via `GOOGLE_APPLICATION_CREDENTIALS`), the
   legacy `server_credentials.json` / `twitter_credentials.json` project-root
-  files (never modified; migrated copies in the store are encrypted), and
-  `users.settings` (no secrets). `inference_api_keys` were already hashed.
+  files (never modified; migrated copies in the store are encrypted),
+  `users.settings` (no secrets), and Quest Docs (`<data_dir>/docs/<id>/`
+  bodies, assets and revisions plus the `docs` / `doc_shares` rows: user
+  content, not secrets, so they stay plaintext like conversation workspaces
+  and chat histories -- see [Quest Docs](quest-docs.md)).
+  `inference_api_keys` were already hashed.
 - **Password loss = data loss** for the encrypted values only; the key file
   is useless without it. Back up `encryption_key.json` with the database.
 - **Rotation**: `uv run python -m config.encryption rotate-password` re-wraps

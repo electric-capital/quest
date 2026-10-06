@@ -12,6 +12,7 @@ Tool tiers:
 
 import copy
 
+from chat.docs.constants import DOCS_SERVICE_KEY
 from chat.llm.base import ToolSpec
 from db.models import ActionRequestType
 
@@ -139,12 +140,19 @@ _GMAIL_ATTACHMENTS_SCHEMA = {
 #
 # A spec may carry ``"mutating": True``: the tool changes state outside the
 # conversation's own workspace WITHOUT an approval card (Gmail drafts/sends/
-# label changes; plugin self-DM / self-SMS / mailbox tools). Everything
-# else is a read or a workspace-local write. The classification feeds
-# mutating_tool_call_tools(), which one-shot inference API runs
-# (origin="inference_api") are refused at dispatch time -- see
+# label changes; plugin self-DM / self-SMS / mailbox tools; the Quest Docs
+# writes create_doc / edit_doc / append_to_doc / add_doc_image, whose
+# approval-gated cases refuse with approval_required instead of opening a
+# card). Everything else is a read or a workspace-local write. The
+# classification feeds mutating_tool_call_tools(), which one-shot inference
+# API runs (origin="inference_api") are refused at dispatch time -- see
 # INFERENCE_API_TOOLS below. Every new tool must be classified: the roster
 # is pinned by tests/test_inference_api.py.
+#
+# A spec may also carry ``"requires_service": "<key>"``: the tool is left
+# out of the prompt's Dynamic Tools section unless that connected-services
+# key is truthy (plugin services, and the "docs" pseudo-key that mirrors
+# the per-user Quest Docs feature gate).
 TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
     "get_current_time": {
         "name": "get_current_time",
@@ -1170,6 +1178,358 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "required": ["hash", "offset", "length"],
         },
     },
+    # -- Quest Docs (chat/docs/service.py). All seven carry
+    # requires_service=DOCS_SERVICE_KEY: the "docs" connected-services
+    # pseudo-key mirrors the per-user docs feature gate, so the tools are
+    # left out of prompts while the gate is closed (the handlers also
+    # refuse with docs_disabled). The four writes are "mutating": the
+    # access rule already denies them in read-only runs, and the flag
+    # keeps inference API runs and their sandbox leases refusing them at
+    # dispatch like every other approval-free write.
+    "list_docs": {
+        "name": "list_docs",
+        "requires_service": DOCS_SERVICE_KEY,
+        "description": (
+            "List the Quest Docs this conversation can see -- markdown "
+            "documents kept inside Quest, owned by the user (scope 'user') "
+            "or by this conversation's project (scope 'project') -- newest "
+            "updated first. Each row: id, title, description, mode "
+            "('private' or 'public'), scope, project_id, content_size "
+            "(bytes), asset_count (embedded images), updated_at, writable "
+            "and write_note. writable is 'free' (the write tools work "
+            "directly), 'approval' (a shared private doc: changes go "
+            "through a write_doc action request) or 'denied' (read-only "
+            "here; write_note says why). Find docs by content with "
+            "search_docs; read one with read_doc."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "enum": ["user", "project", "all"],
+                    "default": "all",
+                    "description": (
+                        "'user' = the user's own docs, 'project' = this "
+                        "project's docs (empty outside a project), 'all' "
+                        "(default) = both."
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "default": 50,
+                    "description": "Maximum number of docs to return (1-200, default 50).",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'List my docs'."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+    "search_docs": {
+        "name": "search_docs",
+        "requires_service": DOCS_SERVICE_KEY,
+        "description": (
+            "Search the Quest Docs this conversation can see: a "
+            "case-insensitive substring match over title, description and "
+            "body. Returns {results: [{id, title, mode, scope, matches: "
+            "[{line, snippet}]}], truncated}, newest-updated docs first, "
+            "with up to 3 snippets of about 200 characters per doc and their "
+            "1-based line numbers (page to them with read_doc start_line / "
+            "end_line). A doc that matched only on its title or description "
+            "has matches: []. truncated: true means the bounded body scan "
+            "stopped early -- narrow the scope or the query. Search results "
+            "do not count as reading a doc for edit_doc."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Text to find (case-insensitive substring, not a pattern).",
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["user", "project", "all"],
+                    "default": "all",
+                    "description": (
+                        "'user', 'project' (this project's docs) or 'all' "
+                        "(default)."
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 20,
+                    "description": "Maximum number of matching docs (1-50, default 20).",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'Search docs for Q3'."
+                    ),
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    "read_doc": {
+        "name": "read_doc",
+        "requires_service": DOCS_SERVICE_KEY,
+        "description": (
+            "Read a Quest Doc's markdown body. Without a range it returns up "
+            "to 200,000 characters (cut at a line boundary; truncated: true "
+            "and a note when the doc is longer -- page with start_line / "
+            "end_line); with start_line / end_line it returns that 1-based, "
+            "inclusive line range. Returns {id, title, mode, scope, "
+            "total_lines, content, writable, write_note, start_line, "
+            "end_line, truncated}. Reading a doc here is required before "
+            "edit_doc can change it in this conversation. Images in the "
+            "body are referenced relatively as ![alt](assets/<name>)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "doc_id": {
+                    "type": "string",
+                    "description": "The doc id from list_docs, search_docs or create_doc.",
+                },
+                "start_line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "First line to return (1-based, inclusive). Defaults to 1.",
+                },
+                "end_line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Last line to return (1-based, inclusive). Defaults to the last line.",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'Read meeting notes'."
+                    ),
+                },
+            },
+            "required": ["doc_id"],
+        },
+    },
+    "create_doc": {
+        "name": "create_doc",
+        "requires_service": DOCS_SERVICE_KEY,
+        "mutating": True,
+        "description": (
+            "Create a new Quest Doc: a markdown document kept inside Quest "
+            "that later conversations can find with list_docs / search_docs "
+            "and read with read_doc. Use it for content meant to outlive "
+            "this conversation (notes, reports, running logs); keep scratch "
+            "files in the workspace. The doc takes this conversation's mode "
+            "(a public-project conversation creates public docs, every "
+            "other conversation private ones). target 'user' (default) "
+            "creates one of the user's own docs; target 'project' creates a "
+            "doc of this conversation's project, visible only from that "
+            "project's conversations. Titles are unique per user and mode (per "
+            "project for project docs), case-insensitively. Content is "
+            "markdown, max 1 MB; reference images with add_doc_image rather "
+            "than external URLs. The new doc counts as read, so edit_doc "
+            "works on it right away. Returns {id, title, mode, scope, "
+            "project_id, content_size, updated_at}."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Doc title, 1-200 characters, unique in its scope.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The initial markdown body (may be empty; max 1 MB).",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Optional one-line summary shown in doc lists (max 500 characters).",
+                },
+                "target": {
+                    "type": "string",
+                    "enum": ["user", "project"],
+                    "default": "user",
+                    "description": (
+                        "'user' (default) for one of the user's docs, "
+                        "'project' for a doc of this conversation's project "
+                        "(project conversations only)."
+                    ),
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'Create research doc'."
+                    ),
+                },
+            },
+            "required": ["title", "content"],
+        },
+    },
+    "edit_doc": {
+        "name": "edit_doc",
+        "requires_service": DOCS_SERVICE_KEY,
+        "mutating": True,
+        "description": (
+            "Change a Quest Doc with an exact string replacement: old_string "
+            "must match the current body exactly (whitespace included) and "
+            "appear exactly once unless replace_all is true. The doc must "
+            "have been read with read_doc (or created) earlier in this "
+            "conversation. There is no whole-body replace: make targeted "
+            "edits, or add content with append_to_doc. Returns {replaced, "
+            "total_lines, updated_at}. If the result is "
+            "{\"error\": \"approval_required\", ...} the doc is shared: "
+            "propose the same change as a write_doc action request by "
+            "forwarding the returned suggested_request (its request_type "
+            "and params) unchanged through create_action_request. Any other "
+            "error explains why the doc cannot be changed here."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "doc_id": {
+                    "type": "string",
+                    "description": "The doc id.",
+                },
+                "old_string": {
+                    "type": "string",
+                    "description": "The exact text to replace, as it appears in the doc.",
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "The replacement text. Must differ from old_string. May be empty to delete the match.",
+                },
+                "replace_all": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Replace every occurrence instead of requiring a unique match. Defaults to false.",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'Fix doc typo'."
+                    ),
+                },
+            },
+            "required": ["doc_id", "old_string", "new_string"],
+        },
+    },
+    "append_to_doc": {
+        "name": "append_to_doc",
+        "requires_service": DOCS_SERVICE_KEY,
+        "mutating": True,
+        "description": (
+            "Append markdown to the end of a Quest Doc. Needs no prior read "
+            "(nothing existing is overwritten), so it is the way to grow "
+            "running logs and recurring reports -- e.g. a dated "
+            "'## YYYY-MM-DD' heading followed by the new entry. "
+            "ensure_blank_line (default true) separates the new block from "
+            "the existing text with a blank line. The whole body stays "
+            "capped at 1 MB. Returns {appended_lines, total_lines, "
+            "updated_at}. An approval_required result is handled exactly "
+            "as for edit_doc: forward suggested_request unchanged as a "
+            "write_doc action request."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "doc_id": {
+                    "type": "string",
+                    "description": "The doc id.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Markdown to append (non-empty).",
+                },
+                "ensure_blank_line": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": (
+                        "Separate the appended block from the existing text "
+                        "with a blank line (default true); false only starts "
+                        "it on a new line."
+                    ),
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'Log daily summary'."
+                    ),
+                },
+            },
+            "required": ["doc_id", "content"],
+        },
+    },
+    "add_doc_image": {
+        "name": "add_doc_image",
+        "requires_service": DOCS_SERVICE_KEY,
+        "mutating": True,
+        "description": (
+            "Embed an image from this conversation's workspace in a Quest "
+            "Doc: the file (PNG, JPEG, GIF or WebP, max 5 MB, checked by its "
+            "content -- SVG is refused) is copied into the doc's assets "
+            "under a sanitized name (-2, -3 ... on collision; max 200 images "
+            "/ 100 MB per doc). placement 'append' (default) also appends "
+            "![alt](assets/<name>) to the end of the doc; 'none' only stores "
+            "the image and returns the markdown snippet for you to place "
+            "with edit_doc. Returns {asset, markdown, appended, asset_count, "
+            "updated_at, total_lines (when appended)}. An approval_required "
+            "result is handled exactly as for edit_doc: forward "
+            "suggested_request unchanged as a write_doc action request."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "doc_id": {
+                    "type": "string",
+                    "description": "The doc id.",
+                },
+                "workspace_path": {
+                    "type": "string",
+                    "description": "Workspace-relative path of the image (same paths as list_workspace_files).",
+                },
+                "alt": {
+                    "type": "string",
+                    "description": "Alt text for the image; defaults to the stored file name.",
+                },
+                "placement": {
+                    "type": "string",
+                    "enum": ["append", "none"],
+                    "default": "append",
+                    "description": (
+                        "'append' (default) appends the image markdown to the "
+                        "doc; 'none' only stores the image and returns the "
+                        "snippet."
+                    ),
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'Add chart to doc'."
+                    ),
+                },
+            },
+            "required": ["doc_id", "workspace_path"],
+        },
+    },
 }
 
 
@@ -1922,7 +2282,8 @@ _CREATE_ACTION_REQUEST: ToolSpec = {
         "routine create/edit (`create_routine` / `edit_routine`) in "
         "`system:routines`, "
         "cross-user subagent runs (`request_type=\"run_user_subagent\"`) in "
-        "`system:user_subagents`. "
+        "`system:user_subagents`, shared Quest Doc changes (`write_doc`) in "
+        "`system:quest_docs`. "
         "Before calling this tool for a given backend, "
         "load that backend's `system:<name>` skill so you have the correct "
         "request_type and parameter names. "
@@ -2185,6 +2546,11 @@ PUBLIC_TOOLS: list[ToolSpec] = [
 # the in-tree Slack plugin; its presence here rides on the core-owned
 # _PUBLIC_ALLOWLIST_MIGRATED_TOOLS exemption in config/plugins.py (the
 # allowlist itself stays core-only -- plugins cannot extend it).
+# The seven Quest Docs tools are allowed too: docs are mode-partitioned,
+# and the access rule (chat/docs/access.py, resolve_doc_access with
+# is_public=True) hides every private doc from a public conversation --
+# it behaves exactly like a nonexistent id -- and lets it create and write
+# only public docs, which hold sandbox-originated content by construction.
 # Everything else in TOOL_CALL_REGISTRY reads internal data (connectors,
 # memories, authed APIs) and is hard-rejected at dispatch time.
 PUBLIC_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
@@ -2197,6 +2563,13 @@ PUBLIC_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     "get_response_content",
     "project_db_query",
     "send_slack_dm_to_self",
+    "list_docs",
+    "search_docs",
+    "read_doc",
+    "create_doc",
+    "edit_doc",
+    "append_to_doc",
+    "add_doc_image",
 })
 
 

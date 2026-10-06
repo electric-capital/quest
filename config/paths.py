@@ -63,6 +63,7 @@ DATA_DIR: Path = _resolve_data_dir()
 DATABASE_PATH: Path = DATA_DIR / "quest.db"
 CHATS_DIR: Path = DATA_DIR / "chats"
 PROJECTS_DIR: Path = DATA_DIR / "projects"
+DOCS_DIR: Path = DATA_DIR / "docs"
 SECRET_KEY_FILE: Path = DATA_DIR / "secret_key"
 LOG_DIR: Path = DATA_DIR / "logs"
 SERVICE_CREDENTIALS_DIR: Path = DATA_DIR / "service_credentials"

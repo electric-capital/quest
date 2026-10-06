@@ -59,7 +59,7 @@ Plugin-specific tests ship inside the plugin (`plugins/<id>/tests/`; out of tree
 
 Validation enforces:
 
-- unique id (not colliding with a core credential-store service name),
+- unique id (not colliding with a core credential-store service name, nor with a connected-services pseudo-key in `PSEUDO_SERVICE_KEYS` from `api/instructions.py` -- today `docs`, the [Quest Docs](quest-docs.md) feature gate, which would otherwise overwrite the plugin's connected state),
 - `<id>_`-prefixed action-request type and tool names (except the `unprefixed_action_types` / `unprefixed_tools` grandfather lists — see below),
 - `system:<id>` skill ids plus the system-skill catalog's static checks (`validate_system_skill_definition` — e.g. the ≤120-char description limit — run at validation time so a bad skill fails manifest validation, not just startup registration; only the duplicate-skill-id check stays registration-only),
 - `script_tool_allowlist` ⊆ own tools,

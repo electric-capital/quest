@@ -1,5 +1,6 @@
 """REST API endpoints for project management."""
 
+import asyncio
 import logging
 import shutil
 from typing import Optional
@@ -8,8 +9,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from chat.auth import get_current_user_cookie_or_apikey_checked
+from chat.docs import files as doc_files
 from chat.realtime import bus, events as realtime_events
 from chat.storage import ChatStorage
+from db import doc_store
 from db.project_store import (
     create_project,
     get_project,
@@ -375,6 +378,9 @@ async def delete_user_project(
 
     # Get conversation list BEFORE deleting (CASCADE will remove rows)
     conversations = await list_project_conversations_meta(project_id)
+    # Same for the project's Quest Docs: the docs.project_id CASCADE removes
+    # the rows (and their shares); the directories are swept below.
+    doc_ids = await doc_store.list_doc_ids_for_project(project_id)
 
     deleted = await delete_project(user_id, project_id)
     if not deleted:
@@ -382,6 +388,14 @@ async def delete_user_project(
             status_code=404,
             detail={"error": "not_found", "message": "Project not found"},
         )
+
+    # Delete filesystem: each project doc's directory (best-effort, never
+    # raises) -- first, so a failure in the rmtree loops below cannot skip it
+    if doc_ids:
+        await asyncio.to_thread(_delete_doc_dirs, doc_ids)
+        from chat.docs import events as doc_events
+
+        doc_events.publish_doc_list_changed(user_id)
 
     # Delete filesystem: project workspace
     ChatStorage.delete_project_workspace(project_id)
@@ -393,6 +407,19 @@ async def delete_user_project(
             shutil.rmtree(conv_dir)
 
     return {"success": True}
+
+
+def _delete_doc_dirs(doc_ids: list[str]) -> None:
+    """Remove deleted docs' directories; a failure is logged, never raised
+    (the rows are already gone, so the project delete has succeeded)."""
+    for doc_id in doc_ids:
+        try:
+            doc_files.delete_doc_dir(doc_id)
+        except Exception:
+            logger.warning(
+                "[docs] could not remove the directory of doc %s", doc_id,
+                exc_info=True,
+            )
 
 
 # --- Project conversation endpoints ---

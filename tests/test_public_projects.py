@@ -223,25 +223,34 @@ class TestPublicBlockedLoopTools:
 # ---------------------------------------------------------------------------
 
 
+_DOC_TOOLS = (
+    "list_docs", "search_docs", "read_doc", "create_doc", "edit_doc",
+    "append_to_doc", "add_doc_image",
+)
+
+
 class TestPublicSystemPrompt:
-    def _prompt(self):
+    def _prompt(self, **kw):
         from chat.gemini_api.system_prompt import get_public_project_system_prompt
         return get_public_project_system_prompt(
             user_name="Ada", user_email="ada@example.com",
-            project_guide="Track BTC prices.",
+            project_guide="Track BTC prices.", **kw,
         )
 
-    def test_no_proxy_preamble_or_api_key(self):
-        p = self._prompt()
+    @pytest.mark.parametrize("docs_enabled", [False, True])
+    def test_no_proxy_preamble_or_api_key(self, docs_enabled):
+        p = self._prompt(docs_enabled=docs_enabled)
         assert "Authorization" not in p
         assert "QUEST" not in p
         assert "curl_proxy" not in p
         assert "localhost" not in p
 
-    def test_no_internal_tool_docs(self):
+    @pytest.mark.parametrize("docs_enabled", [False, True])
+    def test_no_internal_tool_docs(self, docs_enabled):
         # Internal tool NAMES must not be documented as callable. (The
         # Boundaries block legitimately names Slack/email as unavailable.)
-        p = self._prompt()
+        # Holds with the Quest Docs tools and paragraph present too.
+        p = self._prompt(docs_enabled=docs_enabled)
         for term in (
             "memory_search", "authed_get", "authed_post", "load_skills",
             "system:", "create_action_request(", "agent_task(",
@@ -256,13 +265,53 @@ class TestPublicSystemPrompt:
             assert term not in p, term
 
     def test_keeps_identity_project_guide_and_public_tools(self):
-        p = self._prompt()
+        # docs_enabled=True: every allowlisted tool, the doc tools included,
+        # is documented (the doc tools are gated on the Quest Docs gate).
+        p = self._prompt(docs_enabled=True)
         assert "Ada" in p and "ada@example.com" in p
         assert "Track BTC prices." in p
         for name in sorted(PUBLIC_TOOL_CALL_ALLOWLIST):
             assert name in p, name
         assert "run_script" in p and "run_python" in p
         assert "internet" in p.lower()
+
+    def test_doc_tools_hidden_when_docs_gate_closed(self):
+        # Default (gate closed for the user): none of the seven doc tools
+        # and no Quest Docs paragraph; the rest of the allowlist stays.
+        p = self._prompt()
+        for name in _DOC_TOOLS:
+            assert name not in p, name
+        assert "Quest Docs" not in p
+        for name in sorted(PUBLIC_TOOL_CALL_ALLOWLIST - set(_DOC_TOOLS)):
+            assert name in p, name
+
+    def test_doc_tools_shown_when_docs_gate_open(self):
+        p = self._prompt(docs_enabled=True)
+        for name in _DOC_TOOLS:
+            assert f"- **{name}**" in p, name
+        # The paragraph follows the Boundaries block and says this
+        # conversation only sees and creates public docs.
+        boundaries = p.index("**Boundaries (this is a public project):**")
+        docs = p.index("**Quest Docs:**")
+        assert docs > boundaries
+        assert docs < p.index("**Conversation naming")
+        paragraph = p[docs:p.index("**Conversation naming")]
+        assert "PUBLIC docs" in paragraph
+        assert "no approval step" in paragraph
+
+    def test_doc_registry_roster_matches(self):
+        # The prompt derives the doc tools from the registry's
+        # requires_service key; pin that it finds exactly the seven.
+        from chat.gemini_api.system_prompt import _doc_tool_names
+        assert _doc_tool_names() == frozenset(_DOC_TOOLS)
+        assert set(_DOC_TOOLS) <= PUBLIC_TOOL_CALL_ALLOWLIST
+
+    def test_routine_run_with_docs_enabled(self):
+        # is_routine and docs_enabled compose: naming tool out, docs in.
+        p = self._prompt(docs_enabled=True, is_routine=True)
+        assert "- **set_conversation_name**" not in p
+        assert "- **append_to_doc**" in p
+        assert "**Quest Docs:**" in p
 
 
 # ---------------------------------------------------------------------------

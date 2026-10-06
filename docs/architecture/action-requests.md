@@ -1,6 +1,6 @@
 # Action Requests Architecture
 
-This document describes the Action Requests system, which allows the LLM agent to propose write operations to external services (e.g., sending a Slack message, Telegram message, creating a calendar invite, uploading a workspace file to Google Drive, creating a Google Drive folder, or editing a Google Spreadsheet cell range) -- plus internal-store writes (saving a memory, and creating or editing a DB-backed skill) -- that require explicit user approval before execution.
+This document describes the Action Requests system, which allows the LLM agent to propose write operations to external services (e.g., sending a Slack message, Telegram message, creating a calendar invite, uploading a workspace file to Google Drive, creating a Google Drive folder, or editing a Google Spreadsheet cell range) -- plus internal-store writes (saving a memory, creating or editing a DB-backed skill, and changing a shared private Quest Doc) -- that require explicit user approval before execution.
 
 Plugins register additional request types (loaded via `plugins/` or `QUEST_PLUGIN_PATH` -- see [Plugins](plugins.md)); the mechanics below apply to core and plugin handlers alike.
 
@@ -27,6 +27,7 @@ When a new request arrives while the browser tab is hidden and notification perm
 - memory writes (`create_memory`) in `system:memory`
 - skill create/edit (`create_skill` / `edit_skill`) in `system:skill_management`
 - routine create/edit (`create_routine` / `edit_routine`) in `system:routines`
+- shared Quest Doc changes (`write_doc`) in `system:quest_docs`
 - cross-user subagent runs (`run_user_subagent`) in `system:user_subagents` (the companion `subagent_return` type is excluded from the tool enum and mintable only by the `return_to_caller` dispatch arm inside subagent conversations, with bespoke Revise/Deny semantics -- see [Cross-User Subagents](user-subagents.md))
 
 Cross-cutting approval / cancel / retry behavior lives in `system:action_requests`. The model loads the relevant skill before calling `create_action_request` for a given backend. See [Skill Library Architecture -- System Skills](skill-library.md#system-skills) for the catalog.
@@ -100,6 +101,11 @@ The supported request types are:
   - Empty payloads (only `routine_id`) are rejected. The deprecated per-routine guide override is deliberately not editable. Shared validation lives in `chat/action_request_types/_routine_validation.py`; same-turn pre-card checks plus an optimistic-concurrency token capture run in `routine_precard_check` (see [Routine Pre-card Checks](#routine-pre-card-checks)).
   - At execute time the routine must still belong to the conversation's project, and routine-row field updates go through `update_routine()` with the proposal-time `expected_updated_at` token so a routine edited while the card sat open fails with a clean re-propose message instead of clobbering (`StaleRoutineError` -> `RuntimeError`). Daily schedules convert `daily_time_local` + IANA `timezone` to `daily_time_utc` via `_local_time_to_utc` from `chat/schedule_routes.py` (inside the shared `apply_schedule_spec()`).
   - `display_name` is `"Edit Routine"`, `approve_label` is `"Save"`. Returns `{"success": True, "routine_id"}`. Spec'd in the `system:routines` system skill; see [Routines Architecture -- Agent Tools](routines.md#agent-tools).
+- **`write_doc`** (`WriteDocHandler` in `chat/action_request_types/write_doc.py`): the approval form of the Quest Docs write tools, for a shared private doc. When a doc's access verdict is `approval`, `edit_doc` / `append_to_doc` / `add_doc_image` refuse with `approval_required` plus a `suggested_request`, which the model forwards unchanged. One type covers `operation` `edit` / `append` / `add_image`.
+  - The pre-card `doc_precard_check()` (`doc_precard.py`, called next to the skill and routine pre-cards) rejects directly writable, denied, hidden or unread docs same-turn. It dry-runs the change against the live body and injects `current_title` / `doc_mode` / `doc_scope` / `share_summary` / `content_diff` / `image_preview` (incl. the image's `sha256`).
+  - Unlike the skill and routine cards, the `content_diff` comes from `build_bounded_content_diff()` (computed in a thread). It trims the common prefix/suffix, diffs only the changed middle, emits 3 context lines, caps the output at 400 lines (`truncated`) and adds `total_old_lines` / `total_new_lines`, because a doc body can be 1 MB.
+  - `execute()` receives `request_id` (the resolve route passes it to this type only). It calls `apply_write_operation(..., bypass_approval=True)`, which re-resolves access and re-applies against the live body (TOCTOU), and records `last_write_source = "action_request:<id>"`. An `add_image` approve also refuses when the workspace file's sha256 no longer matches the card. A conversation whose project row is missing fails closed with a `RuntimeError`, rather than being treated as private.
+  - `approve_label` is `"Apply"`, `resolved_label` is `"Applied"`. See [Quest Docs](quest-docs.md#the-write_doc-action-request).
 
 ## Tool Declaration
 

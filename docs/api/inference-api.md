@@ -58,7 +58,10 @@ Mirrors the cross-user subagent runtime (`chat/user_subagent.py`), minus approva
    anything outside their own workspace**, so the approval-free mutating tools are refused as
    well. The classification lives on the tool specs: a `TOOL_CALL_REGISTRY` entry (or a
    `PluginTool`) marked `mutating` -- today the four Gmail write tools (`archive_gmail_message`,
-   `modify_gmail_labels`, `create_gmail_draft`, `send_gmail_to_self`) plus the plugin
+   `modify_gmail_labels`, `create_gmail_draft`, `send_gmail_to_self`), the four Quest Docs
+   writes (`create_doc`, `edit_doc`, `append_to_doc`, `add_doc_image` -- also refused by the doc
+   access rule's read-only `inference_api` run kind, see
+   [Quest Docs](../architecture/quest-docs.md)) plus the plugin
    self-send/mailbox tools (`send_slack_dm_to_self`, `twilio_send_self_sms`,
    `m365_create_mail_draft`, `m365_send_mail_to_self`, `m365_archive_mail_message`) -- is
    collected by `mutating_tool_call_tools()`, and `MUTATING_PROXY_PATHS` names the
