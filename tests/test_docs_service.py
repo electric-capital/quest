@@ -98,10 +98,16 @@ def docs_env(tmp_path, monkeypatch):
     import db.doc_store as doc_store
     import db.models as models
     import db.project_store as project_store
+    import db.user_store as user_store
+    import db.action_request_store as action_request_store
     import chat.storage as storage_mod
 
     models.Base.metadata.create_all(sync_engine)
-    for mod in (doc_store, project_store, conversation_store):
+    # user_store / action_request_store: the UI rows resolve owner / share
+    # recipient / last writer (incl. a recipient's approved card) through
+    # get_users_by_ids / get_action_request_owners (never the real data dir).
+    for mod in (doc_store, project_store, conversation_store, user_store,
+                action_request_store):
         monkeypatch.setattr(mod, "AsyncSessionLocal", session_local)
 
     dirs = {name: tmp_path / name for name in ("chats", "projects", "docs")}
@@ -116,6 +122,9 @@ def docs_env(tmp_path, monkeypatch):
     monkeypatch.setattr(
         bus, "publish_to_user", lambda user_id, ev: published.append((user_id, ev)),
     )
+    # Nobody is connected unless a test says so (an "everyone" share fans
+    # out to bus.connected_user_ids(); tests/test_docs_sharing.py overrides).
+    monkeypatch.setattr(bus, "connected_user_ids", lambda: [])
 
     async def _seed():
         async with session_local() as db:

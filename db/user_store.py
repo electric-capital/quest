@@ -6,7 +6,7 @@ get_user_by_api_key/get_user_by_email functions, but backed by async SQLite.
 
 from typing import Optional
 
-from sqlalchemy import select, or_
+from sqlalchemy import func, select, or_
 
 from config.encryption import hash_api_key
 from db.engine import AsyncSessionLocal
@@ -108,6 +108,83 @@ async def get_user_by_slack_user_id(slack_user_id: str) -> Optional[dict]:
             return None
         user = await db.get(User, match.user_id)
         return await _user_dict(db, user) if user else None
+
+
+async def get_users_by_ids(user_ids) -> dict[int, dict]:
+    """Safe fields (``{"id", "email", "name"}``) for each existing user id.
+
+    Returns ``{user_id: {...}}``; ids with no user are simply absent. One
+    query per 500 ids (well under SQLite's bound-parameter cap). Used for
+    share rosters and revision attribution, which must never carry the
+    sensitive user columns.
+    """
+    ids = sorted({
+        uid for uid in user_ids
+        if isinstance(uid, int) and not isinstance(uid, bool)
+    })
+    found: dict[int, dict] = {}
+    if not ids:
+        return found
+    async with AsyncSessionLocal() as db:
+        for i in range(0, len(ids), 500):
+            # Only the three safe columns: loading whole User rows would
+            # also decrypt every encrypted secret column.
+            result = await db.execute(
+                select(User.id, User.email, User.name).where(User.id.in_(ids[i:i + 500]))
+            )
+            for uid, u_email, u_name in result.all():
+                found[uid] = {"id": uid, "email": u_email, "name": u_name}
+    return found
+
+
+class AmbiguousUserEmailError(LookupError):
+    """Several accounts match an email case-insensitively and none exactly
+    (the unique index on ``users.email`` is case-sensitive, so case-variant
+    rows can coexist)."""
+
+
+# ASCII-only lowering, the same folding SQLite's built-in lower() applies:
+# both sides of the comparison fold identically, and non-ASCII letters
+# (e.g. "ß" vs "ss", "É" vs "é") never match a different spelling.
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
+async def find_user_by_email_ci(email: str) -> Optional[dict]:
+    """Safe fields (``{"id", "email", "name"}``) of the user an email names.
+
+    Surrounding whitespace is ignored. An exact match wins; otherwise the
+    email is matched case-insensitively over ASCII letters only (SQL
+    ``lower()``, no Unicode case folding: ``"straße@x"`` never matches
+    ``"strasse@x"``). Returns None when nothing matches.
+
+    Raises:
+        AmbiguousUserEmailError: no exact match and more than one
+            case-insensitive match (the caller asks for the exact spelling
+            rather than guessing an account).
+    """
+    if not isinstance(email, str):
+        return None
+    wanted = email.strip()
+    if not wanted:
+        return None
+    columns = select(User.id, User.email, User.name)
+    async with AsyncSessionLocal() as db:
+        exact = (await db.execute(columns.where(User.email == wanted))).first()
+        if exact is not None:
+            uid, u_email, u_name = exact
+            return {"id": uid, "email": u_email, "name": u_name}
+        rows = (await db.execute(
+            columns
+            .where(func.lower(User.email) == wanted.translate(_ASCII_LOWER))
+            .order_by(User.id)
+            .limit(2)
+        )).all()
+    if len(rows) > 1:
+        raise AmbiguousUserEmailError(wanted)
+    if not rows:
+        return None
+    uid, u_email, u_name = rows[0]
+    return {"id": uid, "email": u_email, "name": u_name}
 
 
 async def list_all_users() -> list[dict]:

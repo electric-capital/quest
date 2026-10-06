@@ -56,6 +56,16 @@ PROJECT_MODE_INHERITED = {
 }
 
 NO_SWITCH_ACCESS = {"can_rename": True, "can_switch_mode": False, "can_delete": True}
+# The owner's full access block (Phase 3 sharing / editing flags).
+OWNER_ACCESS = {
+    **NO_SWITCH_ACCESS, "can_edit": True, "can_share": True,
+    "can_delete_assets": True, "write": "free",
+}
+# The owner-view row fields Phase 3 added (no recipient names to resolve).
+OWNER_ROW_EXTRAS = {
+    "shared_with_me": False, "permission": None, "owner": None,
+    "last_write_user": None,
+}
 
 
 def client(env, who="alice"):
@@ -162,10 +172,11 @@ class TestList:
         row = client(docs_env).get("/app/api/docs").json()["docs"][0]
         assert row == {
             **{k: v for k, v in doc.items()},
+            **OWNER_ROW_EXTRAS,
             "scope": "user",
             "shared": False,
             "shares": [],
-            "access": {**NO_SWITCH_ACCESS, "write": "free"},
+            "access": OWNER_ACCESS,
         }
         assert "content" not in row
 
@@ -229,7 +240,11 @@ class TestList:
         seed_doc(docs_env, "Bob secret", owner="bob")
         seed_doc(docs_env, "Carol shared with bob", owner="carol", shares=[("bob", "write")])
 
-        rows = {r["id"]: r for r in client(docs_env).get("/app/api/docs").json()["docs"]}
+        c = client(docs_env)
+        # Phase 3: the default list is the caller's OWN user docs; docs
+        # shared with them are the separate shared=true stream.
+        assert c.get("/app/api/docs").json()["docs"] == []
+        rows = {r["id"]: r for r in c.get("/app/api/docs?shared=true").json()["docs"]}
         assert set(rows) == {shared["id"], everyone["id"]}
         for row in rows.values():
             assert row["shared"] is True
@@ -280,10 +295,13 @@ class TestCreate:
         assert row["scope"] == "user"
         assert row["project_id"] is None
         assert row["content_size"] == 0
-        assert row["last_write_source"] == "ui"
+        # Phase 3: UI writes record who wrote them.
+        assert row["last_write_source"] == f"ui:{uid(docs_env, 'alice')}"
+        assert row["last_write_user"]["id"] == uid(docs_env, "alice")
+        assert row["last_write_user"]["email"] == "alice@example.com"
         assert row["owner_id"] == uid(docs_env, "alice")
         assert row["shares"] == [] and row["shared"] is False
-        assert row["access"] == {**NO_SWITCH_ACCESS, "write": "free"}
+        assert row["access"] == OWNER_ACCESS
         # An empty body file exists.
         assert body(row["id"]) == ""
         assert (docs_env.dirs["docs"] / row["id"] / "doc.md").read_bytes() == b""
@@ -403,10 +421,12 @@ class TestGet:
         assert row["shared"] is True
         assert row["access"] == {
             "can_rename": False, "can_switch_mode": False,
-            "can_delete": False, "write": "denied",
+            "can_delete": False, "can_edit": False, "can_share": False,
+            "can_delete_assets": False, "write": "denied",
         }
         row = client(docs_env, "carol").get(f"/app/api/docs/{doc['id']}").json()
         assert row["access"]["write"] == "free"
+        assert row["access"]["can_edit"] is True
         assert "shares" not in row
 
     def test_last_write_conversation_resolved_for_the_footer(self, docs_env):
@@ -490,7 +510,9 @@ class TestDetailAssets:
         assert client(docs_env).get(f"/app/api/docs/{created['id']}").json()["assets"] == []
 
     def test_regular_images_sorted_with_size_and_mime(self, docs_env):
-        doc = seed_doc(docs_env, "Pics", shares=[("bob", "read")])
+        # bob holds a WRITE share: editors see every image. Read-only
+        # viewers see only referenced ones (tests/test_docs_sharing.py).
+        doc = seed_doc(docs_env, "Pics", shares=[("bob", "write")])
         files.add_asset(doc["id"], "zeta.png", PNG)
         files.add_asset(doc["id"], "alpha.gif", GIF)
         assets_dir = docs_env.dirs["docs"] / doc["id"] / "assets"
@@ -518,7 +540,7 @@ class TestDetailAssets:
             assert resp.status_code == 200
             assert resp.headers["content-type"] == asset["mime"]
             assert len(resp.content) == asset["size"]
-        # A share recipient sees the same images.
+        # A write-share recipient sees the same images.
         bob_row = client(docs_env, "bob").get(f"/app/api/docs/{doc['id']}").json()
         assert bob_row["assets"] == expected
         # The list route does not carry the asset list.
@@ -805,7 +827,9 @@ class TestAssets:
         assert resp.headers["x-content-type-options"] == "nosniff"
 
     def test_share_recipient_can_fetch(self, docs_env):
-        doc = seed_doc(docs_env, "Pics", shares=[("bob", "read")])
+        # A read share fetches the images the current body references.
+        doc = seed_doc(docs_env, "Pics", "![c](assets/chart.png)\n",
+                       shares=[("bob", "read")])
         name = files.add_asset(doc["id"], "chart.png", PNG).name
         resp = client(docs_env, "bob").get(f"/app/api/docs/{doc['id']}/assets/{name}")
         assert resp.status_code == 200
@@ -896,8 +920,8 @@ class TestDownload:
         built = []
         real_build_zip = files.build_zip
 
-        def spy(doc_id, title):
-            path = real_build_zip(doc_id, title)
+        def spy(doc_id, title, *rest):
+            path = real_build_zip(doc_id, title, *rest)
             built.append(path)
             return path
 
@@ -952,7 +976,12 @@ class TestDelete:
         assert _run(docs_env.doc_store.get_doc(doc["id"])) is None
         assert _run(docs_env.doc_store.list_shares(doc["id"])) == []
         assert not (docs_env.dirs["docs"] / doc["id"]).exists()
-        assert event_types(docs_env) == [(uid(docs_env, "alice"), "doc_list_changed")]
+        # Phase 3: the owner and the (captured) share recipients; nobody is
+        # connected in the test, so the everyone row adds no one.
+        assert event_types(docs_env) == [
+            (uid(docs_env, "alice"), "doc_list_changed"),
+            (uid(docs_env, "bob"), "doc_list_changed"),
+        ]
         # Gone for everyone.
         assert client(docs_env).get(f"/app/api/docs/{doc['id']}").status_code == 404
 
@@ -1000,7 +1029,10 @@ class TestProjectDelete:
         for kept in (other, mine):
             assert _run(docs_env.doc_store.get_doc(kept["id"])) is not None
             assert (docs_env.dirs["docs"] / kept["id"]).is_dir()
-        assert event_types(docs_env) == [(alice["id"], "doc_list_changed")]
+        # Phase 3: the owner and the deleted docs' share recipients.
+        assert event_types(docs_env) == [
+            (alice["id"], "doc_list_changed"), (uid(docs_env, "bob"), "doc_list_changed"),
+        ]
 
     def test_project_without_docs_publishes_nothing(self, docs_env):
         from chat.project_routes import delete_user_project

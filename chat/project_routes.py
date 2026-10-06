@@ -379,8 +379,10 @@ async def delete_user_project(
     # Get conversation list BEFORE deleting (CASCADE will remove rows)
     conversations = await list_project_conversations_meta(project_id)
     # Same for the project's Quest Docs: the docs.project_id CASCADE removes
-    # the rows (and their shares); the directories are swept below.
-    doc_ids = await doc_store.list_doc_ids_for_project(project_id)
+    # the rows (and their shares); the directories are swept below, and
+    # the shares tell who must hear about it (collected now, before they go).
+    project_docs = await doc_store.list_docs_for_project(project_id)
+    doc_ids = [doc["id"] for doc in project_docs]
 
     deleted = await delete_project(user_id, project_id)
     if not deleted:
@@ -395,7 +397,11 @@ async def delete_user_project(
         await asyncio.to_thread(_delete_doc_dirs, doc_ids)
         from chat.docs import events as doc_events
 
-        doc_events.publish_doc_list_changed(user_id)
+        # The owner plus every share recipient of the deleted docs
+        # (every connected user if one was shared with everyone).
+        doc_events.publish_doc_list_changed_to(
+            doc_events.docs_audience(project_docs, user_id),
+        )
 
     # Delete filesystem: project workspace
     ChatStorage.delete_project_workspace(project_id)

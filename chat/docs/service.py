@@ -366,9 +366,10 @@ def _events():
 
 
 def _publish_write(doc: dict) -> None:
-    events = _events()
-    events.publish_doc_changed(doc["owner_id"], doc["id"], doc["updated_at"])
-    events.publish_doc_list_changed(doc["owner_id"])
+    """``doc_changed`` + ``doc_list_changed`` to everyone who can see the
+    doc: its owner, its direct share recipients, and every connected user
+    when it has an everyone row (``doc`` is the bumped row, with shares)."""
+    _events().publish_doc_write(doc)
 
 
 async def _finish_write(
@@ -840,9 +841,12 @@ async def create_doc_from_ui(
     boundary.
 
     Same order and cleanup as :func:`create_doc`: lay out the directory
-    under a fresh id, insert the row with ``last_write_source="ui"``,
-    remove the directory again if the insert fails. Publishes
-    doc_list_changed + doc_changed. Records no read (no conversation).
+    under a fresh id, insert the row with ``last_write_source`` =
+    ``ui:<user_id>`` (the UI write source, also recorded in
+    ``doc.meta.json``; legacy rows hold a plain ``"ui"``), remove the
+    directory again if the insert fails. Publishes doc_list_changed +
+    doc_changed to the doc's audience (a new doc has no shares: the
+    owner). Records no read (no conversation).
 
     Returns:
         The store's doc dict (with ``shares: []``).
@@ -888,9 +892,12 @@ async def create_doc_from_ui(
     else:
         mode = "private"
 
+    # The UI write source (chat/docs/ui_writes.ui_write_source, inlined:
+    # that module imports this one).
+    write_source = f"ui:{user_id}"
     doc_id = str(uuid.uuid4())
     try:
-        size = await _files(doc_files.init_doc, doc_id, "", write_source="ui")
+        size = await _files(doc_files.init_doc, doc_id, "", write_source=write_source)
         doc = await doc_store.create_doc(
             user_id,
             clean_title,
@@ -898,7 +905,7 @@ async def create_doc_from_ui(
             mode=mode,
             project_id=project_id,
             content_size=size,
-            last_write_source="ui",
+            last_write_source=write_source,
             doc_id=doc_id,
         )
     except BaseException as exc:
@@ -913,8 +920,8 @@ async def create_doc_from_ui(
         raise
 
     events = _events()
-    events.publish_doc_list_changed(doc["owner_id"])
-    events.publish_doc_changed(doc["owner_id"], doc["id"], doc["updated_at"])
+    events.publish_doc_list_changed_for(doc)
+    events.publish_doc_changed_for(doc)
     return doc
 
 
@@ -1518,7 +1525,9 @@ def mode_switch_refusal(doc: dict) -> DocRequestError:
 
 async def delete_doc_from_ui(user: dict, doc_id: str) -> dict:
     """Owner-only delete, under the doc lock: the row (shares cascade), then
-    the directory (best-effort, logged), then ``doc_list_changed``.
+    the directory (best-effort, logged), then ``doc_list_changed`` to the
+    doc's audience (owner + share recipients, every connected user for an
+    everyone row), captured under the lock BEFORE the rows go.
 
     Raises:
         DocDisabled, DocError (hidden/missing), DocRequestError ``forbidden``.
@@ -1531,6 +1540,12 @@ async def delete_doc_from_ui(user: dict, doc_id: str) -> dict:
 
     async def _locked() -> dict:
         async with _write_lock(doc["id"]):
+            # The share routes change shares under this same lock, so the
+            # roster read here is the one the delete removes.
+            current = await doc_store.get_doc(doc["id"], with_shares=True)
+            if current is None:
+                raise DocError(doc_not_found_message(doc_id))
+            audience = _events().doc_audience(current)
             if not await doc_store.delete_doc(doc["id"]):
                 raise DocError(doc_not_found_message(doc_id))
             try:
@@ -1540,7 +1555,7 @@ async def delete_doc_from_ui(user: dict, doc_id: str) -> dict:
                     "[docs] could not remove the directory of deleted doc %s",
                     doc["id"], exc_info=True,
                 )
-            _events().publish_doc_list_changed(doc["owner_id"])
+            _events().publish_doc_list_changed_to(audience)
             return doc
 
     return await _shielded(_locked())
