@@ -652,6 +652,30 @@ class TestQueuedRaces:
         assert str(result) == doc_not_found_message(doc["id"])
         assert body(doc["id"]) == "line one\nline two\n"
 
+    def test_owner_gate_closing_while_queued_freezes_recipient(self, env):
+        """The lock-time re-check applies the OWNER's public_projects gate
+        too (ui_writes.public_doc_frozen_for), not only the viewer's."""
+        from chat.docs import service
+
+        fg = env.fg
+        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
+        doc = seed_doc(env, "Open", mode="public", project_id=env.public_project)
+        bob = env.users["bob"]
+        share(env, doc, "bob", "write")
+        start = token(env, doc["id"])
+        result = run_queued(
+            doc["id"],
+            lambda: ui_writes().replace_body_from_ui(
+                bob, doc["id"], "late\n", expected_updated_at=start,
+            ),
+            lambda: fg.set_feature_allowed_users(
+                fg.FEATURE_PUBLIC_PROJECTS, [bob["email"]],
+            ),
+        )
+        assert type(result) is service.DocError
+        assert str(result) == doc_not_found_message(doc["id"])
+        assert body(doc["id"]) == "line one\nline two\n"
+
     def test_previous_updated_at_is_read_under_the_lock(self, env):
         doc = seed_doc(env)
         queued_with = token(env, doc["id"])

@@ -1414,6 +1414,15 @@ class TestCopy:
         )
         assert referenced_asset_names(text) == ["a.png", "c.webp", "f.gif"]
 
+    def test_referenced_asset_names_decode_escaped_spellings(self):
+        from chat.docs.history import referenced_asset_names
+
+        text = (
+            "![a](assets/ch%61rt.png) ![b](assets%2Fmap.png) "
+            "![c](assets/logo&#46;png) ![d](assets/icon\\.gif)"
+        )
+        assert referenced_asset_names(text) == ["chart.png", "icon.gif", "logo.png", "map.png"]
+
     def test_write_share_recipient_copy_is_theirs(self, env):
         doc = seed_doc(env, "Alice notes", "v0\n", shares=[("bob", "write")])
         files.add_asset(doc["id"], "pic.png", PNG)

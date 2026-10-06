@@ -52,7 +52,7 @@ from chat.docs import service
 from chat.docs.access import DENY_UI_READ_ONLY
 from chat.docs.constants import doc_not_found_message
 from config import feature_gates
-from db import doc_store
+from db import doc_store, user_store
 
 logger = logging.getLogger(__name__)
 
@@ -107,22 +107,40 @@ def ui_caller(user: dict) -> service.Caller:
     )
 
 
-async def _get_ui_doc(caller: service.Caller, doc_id: str):
-    """``service.get_visible_doc`` plus the routes' public-projects rule.
+def _public_projects_open(email) -> bool:
+    return feature_gates.is_feature_enabled_for_user(
+        feature_gates.FEATURE_PUBLIC_PROJECTS, email or "",
+    )
 
-    A doc of a public project is hidden (the one not-found text) while the
-    ``public_projects`` gate is closed for the user -- the same rule as
-    ``routes._get_doc_for_ui``, re-checked here so the under-lock re-check
-    sees it too. A project doc's mode mirrors its project's ``public`` flag.
+
+async def public_doc_frozen_for(user: dict, doc: dict) -> bool:
+    """Whether ``doc`` is a public-project doc hidden from ``user`` by the
+    ``public_projects`` gate: closed for the viewer OR for the doc's owner
+    (a project hidden from its owner is frozen for its share recipients
+    too). The same rule as ``routes._get_doc_for_ui``; the lock-time
+    re-checks (here and in chat/docs/history.py) call this so a gate
+    closing while a request queued is honoured. A project doc's mode
+    mirrors its project's ``public`` flag; the owner lookup runs only for a
+    public-project doc seen by a non-owner (a deleted owner fails closed).
     """
+    if doc.get("project_id") is None or doc.get("mode") != "public":
+        return False
+    if not _public_projects_open(user.get("email")):
+        return True
+    if doc["owner_id"] != user["id"]:
+        owners = await user_store.get_users_by_ids([doc["owner_id"]])
+        owner = owners.get(doc["owner_id"])
+        if owner is None or not _public_projects_open(owner.get("email")):
+            return True
+    return False
+
+
+async def _get_ui_doc(caller: service.Caller, doc_id: str):
+    """``service.get_visible_doc`` plus the routes' public-projects rule
+    (:func:`public_doc_frozen_for`), re-checked here so the under-lock
+    re-check sees it too: a frozen doc raises the one not-found text."""
     doc, access = await service.get_visible_doc(caller, doc_id)
-    if (
-        doc.get("project_id") is not None
-        and doc.get("mode") == "public"
-        and not feature_gates.is_feature_enabled_for_user(
-            feature_gates.FEATURE_PUBLIC_PROJECTS, caller.user.get("email") or "",
-        )
-    ):
+    if await public_doc_frozen_for(caller.user, doc):
         raise service.DocError(doc_not_found_message(doc_id))
     return doc, access
 

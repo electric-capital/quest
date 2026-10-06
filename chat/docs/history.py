@@ -80,8 +80,9 @@ Writes:
 
 Callers pass a ``doc`` the user may see in the UI and its ``access`` (the
 routes get both from ``routes._get_doc_for_ui``, which also applies the
-``public_projects`` gates; the fresh re-check covers the access matrix --
-shares -- not a gate flipped mid-request). Sync file IO runs in
+``public_projects`` gates; the fresh re-check repeats both: the access
+matrix -- shares -- and the viewer's / owner's ``public_projects`` gate via
+``ui_writes.public_doc_frozen_for``). Sync file IO runs in
 ``asyncio.to_thread``; :class:`DocFileError` and ``OSError`` from it
 propagate unchanged for the route to map. Doc content is never logged.
 """
@@ -171,6 +172,8 @@ async def _recheck_history_access(user: dict, doc_id: str) -> dict:
     downgraded to read (-> ``forbidden``) while the request ran wins.
     """
     fresh, access = await service.get_visible_doc(ui_writes.ui_caller(user), doc_id)
+    if await ui_writes.public_doc_frozen_for(user, fresh):
+        raise service.DocError(doc_not_found_message(doc_id))
     require_history_access(access)
     return fresh
 
@@ -387,13 +390,17 @@ def referenced_asset_names(body: str) -> list[str]:
     checked here.
     """
     names: set[str] = set()
-    for match in _ASSET_REF_RE.finditer(body):
-        name = match.group(1)
-        try:
-            doc_files._validate_asset_name(name)
-        except doc_files.DocFileError:
-            continue
-        names.add(name)
+    # The same decoded spellings the asset-delete in-use rule accepts
+    # (ui_writes.asset_referenced): an image the body shows through an
+    # escaped reference is copied too.
+    for text in ui_writes._reference_variants(body):
+        for match in _ASSET_REF_RE.finditer(text):
+            name = match.group(1)
+            try:
+                doc_files._validate_asset_name(name)
+            except doc_files.DocFileError:
+                continue
+            names.add(name)
     return sorted(names)
 
 
