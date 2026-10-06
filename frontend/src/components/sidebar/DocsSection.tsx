@@ -11,6 +11,7 @@ import { useMemo } from 'react';
 import { FileText } from 'lucide-react';
 import type { Doc } from '../../api/types';
 import { DocModeBadge } from '../docs/DocModeBadge';
+import { shouldShowDocModeBadge } from '../../utils/docMode';
 import {
   deriveSidebarDocItems,
   docCountLabel,
@@ -33,6 +34,10 @@ export interface DocsSectionProps {
   onOpenAll: () => void;
   // The All Docs view this header opens is the one showing.
   headerActive?: boolean;
+  // Render the "Private" badge on private rows: true while the
+  // public_projects gate is open for the user (public rows always show
+  // theirs; see utils/docMode shouldShowDocModeBadge).
+  showPrivateBadge: boolean;
 }
 
 export function DocsSection({
@@ -44,6 +49,7 @@ export function DocsSection({
   onOpenDoc,
   onOpenAll,
   headerActive = false,
+  showPrivateBadge,
 }: DocsSectionProps) {
   const items = useMemo(() => deriveSidebarDocItems(docs), [docs]);
   // A failed load is not "no docs": no "0" count and no create hint.
@@ -81,7 +87,9 @@ export function DocsSection({
           >
             <FileText size={14} className="doc-row-icon" aria-hidden="true" />
             <span className="doc-row-title">{doc.title}</span>
-            <DocModeBadge mode={doc.mode} size="sm" />
+            {shouldShowDocModeBadge(doc.mode, showPrivateBadge) && (
+              <DocModeBadge mode={doc.mode} size="sm" />
+            )}
             <span className="doc-row-time" title={formatSidebarDocTimeTitle(doc.updated_at)}>
               {formatSidebarDocTime(doc.updated_at)}
             </span>

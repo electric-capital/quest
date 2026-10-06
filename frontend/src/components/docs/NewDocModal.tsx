@@ -3,13 +3,17 @@
  * Mirrors NewProjectModal. A user doc ("Your docs") picks its mode; a
  * project doc always takes its project's mode, so the radio is replaced by
  * a read-only line and no `mode` is sent (a disagreeing one would 400
- * `project_doc_mode_inherited`).
+ * `project_doc_mode_inherited`). While the `public_projects` gate is closed
+ * for the user, public docs are unavailable too: the radio is hidden and a
+ * user doc is created with no `mode` (the server makes it private).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createDoc } from '../../api/docsApi';
 import { ApiClientError } from '../../api/request';
 import type { CreateDocRequest, Doc, DocMode, Project } from '../../api/types';
+import { useAuth } from '../../contexts/AuthContext';
+import { isPublicProjectsEnabled } from '../../utils/docMode';
 import { ModalShell } from '../ModalShell';
 import './NewDocModal.css';
 
@@ -36,6 +40,8 @@ export function NewDocModal({
   initialProjectId,
   onCreated,
 }: NewDocModalProps) {
+  const { enabledFeatures } = useAuth();
+  const publicDocsAvailable = isPublicProjectsEnabled(enabledFeatures);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [location, setLocation] = useState(USER_DOCS_LOCATION);
@@ -85,10 +91,10 @@ export function NewDocModal({
       const body: CreateDocRequest = { title: trimmedTitle };
       const trimmedDescription = description.trim();
       if (trimmedDescription) body.description = trimmedDescription;
-      if (location === USER_DOCS_LOCATION) {
-        body.mode = mode;
-      } else {
+      if (location !== USER_DOCS_LOCATION) {
         body.project_id = location;
+      } else if (publicDocsAvailable) {
+        body.mode = mode;
       }
 
       setIsCreating(true);
@@ -103,7 +109,7 @@ export function NewDocModal({
         setIsCreating(false);
       }
     },
-    [title, description, location, mode, isCreating, onCreated, onClose],
+    [title, description, location, mode, publicDocsAvailable, isCreating, onCreated, onClose],
   );
 
   return (
@@ -176,7 +182,7 @@ export function NewDocModal({
             Mode: <strong>{selectedProject?.public ? 'Public' : 'Private'}</strong> — inherited
             from the project
           </p>
-        ) : (
+        ) : publicDocsAvailable ? (
           <fieldset className="new-doc-mode" disabled={isCreating}>
             <legend className="new-doc-label new-doc-label-spaced">Mode</legend>
             <label className="new-doc-mode-option">
@@ -211,7 +217,7 @@ export function NewDocModal({
               </span>
             </label>
           </fieldset>
-        )}
+        ) : null}
 
         {error && (
           <div className="new-doc-error" role="alert">

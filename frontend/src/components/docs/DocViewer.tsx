@@ -7,6 +7,12 @@
  * doc's asset route via MarkdownWorkspaceContext.assetBase, or the raw
  * markdown in a <pre> -- and a footer naming the last writer and the update
  * time. Data comes from useDoc, which follows the realtime doc events.
+ *
+ * Beside the column, an aside holds the doc's Assets list (DocAssetsPanel,
+ * from the detail's `assets`). DocViewer.css lays it out: a 280px right
+ * gutter card on wide desktops (the chat RightPanel's footprint), below the
+ * body at <= 1024px, and on phones (useIsMobile, <= 768px) a collapsed
+ * "Assets (N)" section so the document stays first.
  */
 
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
@@ -20,10 +26,12 @@ import rehypeKatex from 'rehype-katex';
 import { docAssetBase } from '../../api/docsApi';
 import type { DocDetail } from '../../api/types';
 import { useDoc } from '../../hooks/useDoc';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import { docsListPath } from '../../utils/docsRoute';
 import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatters';
 import remarkMathCurrencyGuard from '../../utils/remarkMathCurrencyGuard';
 import { MarkdownWorkspaceContext, markdownComponents } from '../Message';
+import { DocAssetsPanel } from './DocAssetsPanel';
 import { DocHeader } from './DocHeader';
 import './DocViewer.css';
 
@@ -77,6 +85,7 @@ function DocFooter({ doc }: { doc: DocDetail }) {
 export function DocViewer({ docId }: { docId: string }) {
   const { doc, loading, error, notFound, refresh, applyRow } = useDoc(docId);
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
 
   // Show source is per doc: tagged with the doc it was turned on for, so
   // opening another doc starts rendered again.
@@ -168,8 +177,16 @@ export function DocViewer({ docId }: { docId: string }) {
             </div>
           )}
         </div>
-        <DocFooter doc={doc} />
       </div>
+      <aside className="doc-viewer-aside">
+        <DocAssetsPanel
+          key={doc.id}
+          docId={doc.id}
+          assets={doc.assets}
+          variant={isMobile ? 'details' : 'card'}
+        />
+      </aside>
+      <DocFooter doc={doc} />
     </div>
   );
 }

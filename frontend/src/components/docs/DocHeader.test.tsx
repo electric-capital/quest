@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   updateDoc: vi.fn(),
   setDocMode: vi.fn(),
   deleteDoc: vi.fn(),
+  enabledFeatures: ['docs', 'public_projects'] as string[],
 }));
 
 vi.mock('../../api/docsApi', async (importOriginal) => ({
@@ -25,6 +26,10 @@ vi.mock('../../contexts/ProjectsContext', () => ({
   useProjects: () => ({
     projects: [{ id: 'p1', name: 'Launch Plan' }],
   }),
+}));
+
+vi.mock('../../contexts/AuthContext', () => ({
+  useAuth: () => ({ enabledFeatures: mocks.enabledFeatures }),
 }));
 
 function row(overrides: Partial<Doc> = {}): Doc {
@@ -49,7 +54,7 @@ function row(overrides: Partial<Doc> = {}): Doc {
 }
 
 function detail(overrides: Partial<DocDetail> = {}): DocDetail {
-  return { ...row(), content: '# Roadmap', last_write_conversation: null, ...overrides };
+  return { ...row(), content: '# Roadmap', last_write_conversation: null, assets: [], ...overrides };
 }
 
 const OWNER_USER_DOC = detail();
@@ -96,6 +101,7 @@ describe('DocHeader', () => {
     mocks.updateDoc.mockReset();
     mocks.setDocMode.mockReset();
     mocks.deleteDoc.mockReset();
+    mocks.enabledFeatures = ['docs', 'public_projects'];
   });
 
   afterEach(() => {
@@ -141,6 +147,23 @@ describe('DocHeader', () => {
       expect(md.getAttribute('href')).toBe('/app/api/docs/d1/download?format=md');
       expect(md.hasAttribute('download')).toBe(true);
       expect(zip.getAttribute('href')).toBe('/app/api/docs/d1/download?format=zip');
+    });
+
+    it('a private doc the server will not switch (public projects closed) offers no switch', () => {
+      mocks.enabledFeatures = ['docs'];
+      renderHeader(
+        detail({ access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free' } }),
+      );
+      const menu = openMenu();
+      expect(menuItemLabels(menu)).toEqual([
+        'RenameR',
+        'Download Markdown',
+        'Download with images (.zip)',
+        'DeleteD',
+      ]);
+      expect(within(menu).queryByText(/Switch to/)).toBeNull();
+      fireEvent.keyDown(document, { key: 'p' });
+      expect(screen.queryByRole('dialog')).toBeNull();
     });
 
     it('ignores the hint keys for actions the viewer may not take', () => {
@@ -307,6 +330,28 @@ describe('DocHeader', () => {
       expect(mocks.deleteDoc).toHaveBeenCalledWith('d1');
       expect(onDeleted).toHaveBeenCalledTimes(1);
       expect(screen.queryByRole('dialog')).toBeNull();
+    });
+  });
+
+  describe('mode badge', () => {
+    const badge = (container: HTMLElement) => container.querySelector('.doc-mode-badge');
+
+    it('shows the Private badge while public projects are open', () => {
+      renderHeader(OWNER_USER_DOC);
+      expect(badge(document.body)?.textContent).toBe('Private');
+    });
+
+    it('hides the Private badge while public projects are closed for the user', () => {
+      mocks.enabledFeatures = ['docs'];
+      renderHeader(OWNER_USER_DOC);
+      expect(badge(document.body)).toBeNull();
+      expect(document.querySelector('.doc-header-meta')).toBeNull();
+    });
+
+    it('always shows the Public badge, even with public projects closed', () => {
+      mocks.enabledFeatures = ['docs'];
+      renderHeader(detail({ mode: 'public' }));
+      expect(badge(document.body)?.textContent).toBe('Public');
     });
   });
 

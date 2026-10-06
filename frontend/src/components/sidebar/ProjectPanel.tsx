@@ -1,6 +1,6 @@
 /**
  * The Sidebar's drill-down panel for one project: back/settings header, the
- * project's Docs block (Quest Docs gate open only), the Routines section, and
+ * Routines section, the project's Docs block (Quest Docs gate open only), and
  * the project's conversation list with routine runs folded into expandable
  * groups. Data comes from useProjectConversations / useProjectRoutines /
  * useDocs (owned by the Sidebar); this component renders it and owns only
@@ -57,8 +57,8 @@ interface ProjectPanelProps {
   updateConversations: (updater: (prev: Conversation[]) => Conversation[]) => void;
   // A row was archived (the Sidebar deselects it if it was active).
   onArchived: (conversationId: string) => void;
-  // The project's Docs block, rendered above Routines while `showDocs` (the
-  // Quest Docs feature gate is open for the user).
+  // The project's Docs block, rendered between Routines and Conversations
+  // while `showDocs` (the Quest Docs feature gate is open for the user).
   showDocs?: boolean;
   docs?: Doc[];
   docsHasMore?: boolean;
@@ -72,6 +72,9 @@ interface ProjectPanelProps {
   onOpenAllDocs?: () => void;
   // That filtered All Docs view is the one showing.
   docsHeaderActive?: boolean;
+  // Private doc rows show their "Private" badge (the public_projects gate is
+  // open for the user); public rows always do.
+  docsShowPrivateBadge?: boolean;
 }
 
 const NO_DOCS: Doc[] = [];
@@ -109,6 +112,7 @@ export function ProjectPanel({
   onOpenDoc = noop,
   onOpenAllDocs = noop,
   docsHeaderActive = false,
+  docsShowPrivateBadge = true,
 }: ProjectPanelProps) {
   const listRef = useFlipListAnimation<HTMLDivElement>();
   // Held here, not in the popover: toggling the archive filter reloads the
@@ -162,6 +166,16 @@ export function ProjectPanel({
           <div className="project-loading">Loading...</div>
         ) : (
           <>
+            {showRoutines && (
+              <RoutinesSection
+                routines={routines}
+                running={busy}
+                onNewRoutine={onNewRoutine}
+                onOpenSettings={onRoutineSettings}
+                onRun={onRunRoutine}
+              />
+            )}
+
             {showDocs && (
               <DocsSection
                 docs={docs}
@@ -172,16 +186,7 @@ export function ProjectPanel({
                 onOpenDoc={onOpenDoc}
                 onOpenAll={onOpenAllDocs}
                 headerActive={docsHeaderActive}
-              />
-            )}
-
-            {showRoutines && (
-              <RoutinesSection
-                routines={routines}
-                running={busy}
-                onNewRoutine={onNewRoutine}
-                onOpenSettings={onRoutineSettings}
-                onRun={onRunRoutine}
+                showPrivateBadge={docsShowPrivateBadge}
               />
             )}
 

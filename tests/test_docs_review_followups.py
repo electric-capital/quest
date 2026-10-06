@@ -119,6 +119,7 @@ class TestLockedUiMutations:
         assert detail(resp)["error"] == "doc_not_found"
 
     def test_mode_switch_route_errors(self, docs_env):
+        open_public_projects(docs_env)  # switching to public needs the gate
         private = seed_doc(docs_env, title="Report", mode="private")
         seed_doc(docs_env, title="REPORT", mode="public")
         c = client(docs_env)

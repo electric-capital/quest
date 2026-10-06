@@ -8,9 +8,10 @@ captured). Users: alice (owns the three projects), bob, carol.
 
 Covers: the gate (every route 403 ``docs_disabled``), listing (user vs
 project docs, order, keyset paging, shares), create, get (hidden == missing
-byte for byte), rename (409 ``stale_update`` shape), mode switch, assets,
-downloads (md + zip, symlink refusal), delete, and the project delete route
-removing the project's doc directories.
+byte for byte, the ``assets`` list), rename (409 ``stale_update`` shape),
+mode switch, public user docs under a closed ``public_projects`` gate (the
+fixture's default), assets, downloads (md + zip, symlink refusal), delete,
+and the project delete route removing the project's doc directories.
 """
 
 import io
@@ -23,7 +24,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from chat.docs import files
-from chat.docs.constants import doc_not_found_message, docs_disabled_message
+from chat.docs.constants import (
+    doc_not_found_message,
+    docs_disabled_message,
+    public_docs_disabled_message,
+)
 from tests.test_docs_service import (  # noqa: F401  (docs_env is a fixture)
     _run,
     body,
@@ -33,6 +38,13 @@ from tests.test_docs_service import (  # noqa: F401  (docs_env is a fixture)
 )
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+GIF = b"GIF89a" + b"\x00" * 32
+JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 48
+
+PUBLIC_DISABLED = {
+    "error": "public_projects_disabled",
+    "message": public_docs_disabled_message(),
+}
 
 
 def client(env, who="alice"):
@@ -135,6 +147,7 @@ class TestList:
         ).json()["docs"] == []
 
     def test_owner_row_shape(self, docs_env):
+        open_public_projects(docs_env)  # closed-gate rows: TestPublicProjectsGate
         doc = seed_doc(docs_env, "Mine")
         row = client(docs_env).get("/app/api/docs").json()["docs"][0]
         assert row == {
@@ -249,6 +262,7 @@ class TestList:
 
 class TestCreate:
     def test_user_doc_defaults(self, docs_env):
+        open_public_projects(docs_env)
         resp = client(docs_env).post(
             "/app/api/docs", json={"title": "  Plan  ", "description": "why"},
         )
@@ -276,6 +290,7 @@ class TestCreate:
         ])
 
     def test_user_doc_public_mode(self, docs_env):
+        open_public_projects(docs_env)
         row = client(docs_env).post(
             "/app/api/docs", json={"title": "Open", "mode": "public"},
         ).json()
@@ -456,6 +471,64 @@ class TestGet:
         assert b"outside" not in resp.content
 
 
+class TestDetailAssets:
+    def test_fresh_doc_has_none(self, docs_env):
+        doc = seed_doc(docs_env, "Plain")
+        row = client(docs_env).get(f"/app/api/docs/{doc['id']}").json()
+        assert row["assets"] == []
+        # The created-from-UI path too (empty assets/ directory).
+        created = client(docs_env).post("/app/api/docs", json={"title": "New"}).json()
+        assert client(docs_env).get(f"/app/api/docs/{created['id']}").json()["assets"] == []
+
+    def test_regular_images_sorted_with_size_and_mime(self, docs_env):
+        doc = seed_doc(docs_env, "Pics", shares=[("bob", "read")])
+        files.add_asset(doc["id"], "zeta.png", PNG)
+        files.add_asset(doc["id"], "alpha.gif", GIF)
+        assets_dir = docs_env.dirs["docs"] / doc["id"] / "assets"
+        (assets_dir / "upper.JPG").write_bytes(JPEG)
+        # Skipped: a symlink, a non-image extension, a hidden file, a
+        # directory with an image name, an SVG.
+        outside = docs_env.tmp / "outside.png"
+        outside.write_bytes(PNG)
+        os.symlink(outside, assets_dir / "link.png")
+        (assets_dir / "notes.txt").write_text("not an image")
+        (assets_dir / ".hidden.png").write_bytes(PNG)
+        (assets_dir / "folder.png").mkdir()
+        (assets_dir / "drawing.svg").write_text("<svg/>")
+
+        c = client(docs_env)
+        expected = [
+            {"name": "alpha.gif", "size": len(GIF), "mime": "image/gif"},
+            {"name": "upper.JPG", "size": len(JPEG), "mime": "image/jpeg"},
+            {"name": "zeta.png", "size": len(PNG), "mime": "image/png"},
+        ]
+        assert c.get(f"/app/api/docs/{doc['id']}").json()["assets"] == expected
+        # Every listed entry is one the asset route serves, with that MIME.
+        for asset in expected:
+            resp = c.get(f"/app/api/docs/{doc['id']}/assets/{asset['name']}")
+            assert resp.status_code == 200
+            assert resp.headers["content-type"] == asset["mime"]
+            assert len(resp.content) == asset["size"]
+        # A share recipient sees the same images.
+        bob_row = client(docs_env, "bob").get(f"/app/api/docs/{doc['id']}").json()
+        assert bob_row["assets"] == expected
+        # The list route does not carry the asset list.
+        assert all("assets" not in r for r in c.get("/app/api/docs").json()["docs"])
+
+    def test_unsafe_assets_dir_400(self, docs_env):
+        doc = seed_doc(docs_env, "Pics")
+        assets_dir = docs_env.dirs["docs"] / doc["id"] / "assets"
+        elsewhere = docs_env.tmp / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "secret.png").write_bytes(PNG)
+        assets_dir.rmdir()
+        os.symlink(elsewhere, assets_dir)
+        resp = client(docs_env).get(f"/app/api/docs/{doc['id']}")
+        assert resp.status_code == 400
+        assert detail(resp)["error"] == "invalid_doc_files"
+        assert b"secret.png" not in resp.content
+
+
 # ---------------------------------------------------------------------------
 # Rename
 # ---------------------------------------------------------------------------
@@ -545,6 +618,7 @@ class TestRename:
 
 class TestMode:
     def test_user_doc_switches(self, docs_env):
+        open_public_projects(docs_env)
         doc = seed_doc(docs_env, "Mine")
         c = client(docs_env)
         resp = c.put(f"/app/api/docs/{doc['id']}/mode", json={"mode": "public"})
@@ -564,6 +638,9 @@ class TestMode:
         assert back["mode"] == "private"
 
     def test_project_doc_inherited(self, docs_env):
+        # Gate open: closed, the public-projects 400 comes first (see
+        # TestPublicProjectsGate.test_switch_order).
+        open_public_projects(docs_env)
         doc = seed_doc(docs_env, "Proj", project_id=docs_env.private_project)
         resp = client(docs_env).put(f"/app/api/docs/{doc['id']}/mode", json={"mode": "public"})
         assert resp.status_code == 400
@@ -586,6 +663,137 @@ class TestMode:
         assert resp.status_code == 403
         assert detail(resp)["error"] == "forbidden"
         assert _run(docs_env.doc_store.get_doc(doc["id"]))["mode"] == "private"
+
+
+# ---------------------------------------------------------------------------
+# Public user docs need the public_projects gate (closed in docs_env)
+# ---------------------------------------------------------------------------
+
+
+class TestPublicProjectsGate:
+    def test_create_defaults_to_private(self, docs_env):
+        c = client(docs_env)
+        resp = c.post("/app/api/docs", json={"title": "Plan"})
+        assert resp.status_code == 201
+        row = resp.json()
+        assert row["mode"] == "private"
+        assert row["access"]["can_switch_mode"] is False
+        resp = c.post("/app/api/docs", json={"title": "Plan 2", "mode": "private"})
+        assert resp.status_code == 201
+        assert resp.json()["mode"] == "private"
+
+    def test_create_public_400(self, docs_env):
+        resp = client(docs_env).post(
+            "/app/api/docs", json={"title": "Open", "mode": "public"},
+        )
+        assert resp.status_code == 400
+        assert detail(resp) == PUBLIC_DISABLED
+        assert doc_dirs(docs_env) == []
+        assert docs_env.published == []
+        assert client(docs_env).get("/app/api/docs").json()["docs"] == []
+
+    def test_create_project_docs_unaffected(self, docs_env):
+        c = client(docs_env)
+        resp = c.post("/app/api/docs", json={
+            "title": "Proj", "project_id": docs_env.private_project,
+        })
+        assert resp.status_code == 201
+        assert resp.json()["mode"] == "private"
+        # A disagreeing mode is still the project rule's error.
+        resp = c.post("/app/api/docs", json={
+            "title": "Leak", "project_id": docs_env.private_project, "mode": "public",
+        })
+        assert resp.status_code == 400
+        assert detail(resp)["error"] == "project_doc_mode_inherited"
+
+    def test_gate_is_per_user(self, docs_env):
+        fg = docs_env.fg
+        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
+        fg.set_feature_allowed_users(
+            fg.FEATURE_PUBLIC_PROJECTS, [docs_env.users["bob"]["email"]],
+        )
+        payload = {"title": "Open", "mode": "public"}
+        resp = client(docs_env, "alice").post("/app/api/docs", json=payload)
+        assert resp.status_code == 400
+        assert detail(resp) == PUBLIC_DISABLED
+        resp = client(docs_env, "bob").post("/app/api/docs", json=payload)
+        assert resp.status_code == 201
+        assert resp.json()["mode"] == "public"
+        assert resp.json()["access"]["can_switch_mode"] is True
+
+    def test_switch_to_public_400(self, docs_env):
+        doc = seed_doc(docs_env, "Mine")
+        resp = client(docs_env).put(f"/app/api/docs/{doc['id']}/mode", json={"mode": "public"})
+        assert resp.status_code == 400
+        assert detail(resp) == PUBLIC_DISABLED
+        row = _run(docs_env.doc_store.get_doc(doc["id"]))
+        assert row["mode"] == "private"
+        assert row["updated_at"] == doc["updated_at"]
+        assert docs_env.published == []
+
+    def test_leftover_public_doc_can_go_private(self, docs_env):
+        doc = seed_doc(docs_env, "Open", mode="public")
+        c = client(docs_env)
+        row = c.get(f"/app/api/docs/{doc['id']}").json()
+        assert row["access"]["can_switch_mode"] is True
+        resp = c.put(f"/app/api/docs/{doc['id']}/mode", json={"mode": "private"})
+        assert resp.status_code == 200
+        row = resp.json()
+        assert row["mode"] == "private"
+        assert row["access"]["can_switch_mode"] is False
+        # ...and cannot come back.
+        resp = c.put(f"/app/api/docs/{doc['id']}/mode", json={"mode": "public"})
+        assert resp.status_code == 400
+        assert detail(resp) == PUBLIC_DISABLED
+
+    def test_switch_order(self, docs_env):
+        """404, then 403, then the gate, then the service's own checks."""
+        shared = seed_doc(docs_env, "Shared", shares=[("bob", "write")])
+        resp = client(docs_env, "carol").put(
+            f"/app/api/docs/{shared['id']}/mode", json={"mode": "public"},
+        )
+        assert resp.status_code == 404
+        assert detail(resp)["error"] == "doc_not_found"
+        resp = client(docs_env, "bob").put(
+            f"/app/api/docs/{shared['id']}/mode", json={"mode": "public"},
+        )
+        assert resp.status_code == 403
+        assert detail(resp)["error"] == "forbidden"
+
+        c = client(docs_env)
+        proj = seed_doc(docs_env, "Proj", project_id=docs_env.private_project)
+        resp = c.put(f"/app/api/docs/{proj['id']}/mode", json={"mode": "public"})
+        assert resp.status_code == 400
+        assert detail(resp) == PUBLIC_DISABLED
+        resp = c.put(f"/app/api/docs/{proj['id']}/mode", json={"mode": "private"})
+        assert resp.status_code == 400
+        assert detail(resp)["error"] == "project_doc_mode_inherited"
+        resp = c.put(f"/app/api/docs/{shared['id']}/mode", json={"mode": "secret"})
+        assert resp.status_code == 400
+        assert detail(resp)["error"] == "invalid_mode"
+
+    def test_can_switch_mode_follows_the_gate(self, docs_env):
+        private = seed_doc(docs_env, "Private")
+        public = seed_doc(docs_env, "Public", mode="public")
+        proj = seed_doc(docs_env, "Proj", project_id=docs_env.private_project)
+        c = client(docs_env)
+
+        def flags():
+            listed = {
+                r["id"]: r["access"]["can_switch_mode"]
+                for r in c.get("/app/api/docs").json()["docs"]
+            }
+            listed[proj["id"]] = c.get(
+                f"/app/api/docs?project_id={docs_env.private_project}"
+            ).json()["docs"][0]["access"]["can_switch_mode"]
+            for doc_id, flag in listed.items():
+                detail_flag = c.get(f"/app/api/docs/{doc_id}").json()["access"]["can_switch_mode"]
+                assert detail_flag == flag
+            return listed
+
+        assert flags() == {private["id"]: False, public["id"]: True, proj["id"]: False}
+        open_public_projects(docs_env)
+        assert flags() == {private["id"]: True, public["id"]: True, proj["id"]: False}
 
 
 # ---------------------------------------------------------------------------

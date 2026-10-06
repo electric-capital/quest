@@ -7,9 +7,10 @@
  * flags: Rename (can_rename), Switch to public / private (can_switch_mode,
  * user docs only; opens DocModeSwitchDialog), the two downloads (always),
  * Delete (can_delete, behind a confirm). A non-owner gets only the
- * downloads. Beside the title sit the mode badge and, for a project doc, a
- * folder chip linking to that project's docs; on the right, the Show source
- * / Show rendered toggle.
+ * downloads. Beside the title sit the mode badge (hidden for a private doc
+ * while the public_projects gate is closed for the user, see utils/docMode)
+ * and, for a project doc, a folder chip linking to that project's docs; on
+ * the right, the Show source / Show rendered toggle.
  *
  * Writes report the returned row through `onRowApplied` (useDoc.applyRow)
  * rather than waiting for the realtime re-fetch. View-only: no content
@@ -39,7 +40,9 @@ import {
 } from '../../api/docsApi';
 import { ApiClientError } from '../../api/request';
 import type { Doc, DocDetail } from '../../api/types';
+import { useAuth } from '../../contexts/AuthContext';
 import { useProjects } from '../../contexts/ProjectsContext';
+import { isPublicProjectsEnabled, shouldShowDocModeBadge } from '../../utils/docMode';
 import { docsListPath } from '../../utils/docsRoute';
 import { DocModeBadge } from './DocModeBadge';
 import { DocConfirmDialog, DocModeSwitchDialog } from './DocModeSwitchDialog';
@@ -67,6 +70,8 @@ export interface DocHeaderProps {
 
 export function DocHeader({ doc, showSource, onToggleSource, onRowApplied, onDeleted }: DocHeaderProps) {
   const { projects } = useProjects();
+  const { enabledFeatures } = useAuth();
+  const showModeBadge = shouldShowDocModeBadge(doc.mode, isPublicProjectsEnabled(enabledFeatures));
   const { can_rename: canRename, can_switch_mode: canSwitchMode, can_delete: canDelete } = doc.access;
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -334,19 +339,21 @@ export function DocHeader({ doc, showSource, onToggleSource, onRowApplied, onDel
             )}
           </div>
 
-          <div className="doc-header-meta">
-            <DocModeBadge mode={doc.mode} />
-            {doc.project_id && (
-              <Link
-                to={docsListPath(doc.project_id)}
-                className="doc-header-project-chip"
-                title={`All docs in ${projectName}`}
-              >
-                <Folder size={12} strokeWidth={2.25} aria-hidden="true" />
-                <span className="doc-header-project-name">{projectName}</span>
-              </Link>
-            )}
-          </div>
+          {(showModeBadge || doc.project_id) && (
+            <div className="doc-header-meta">
+              {showModeBadge && <DocModeBadge mode={doc.mode} />}
+              {doc.project_id && (
+                <Link
+                  to={docsListPath(doc.project_id)}
+                  className="doc-header-project-chip"
+                  title={`All docs in ${projectName}`}
+                >
+                  <Folder size={12} strokeWidth={2.25} aria-hidden="true" />
+                  <span className="doc-header-project-name">{projectName}</span>
+                </Link>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="doc-header-actions">

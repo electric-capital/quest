@@ -1,8 +1,9 @@
 // DocViewer: the loading / not-found / error states, the rendered body with
-// doc asset resolution and the Show source toggle, and the footer's
-// "Last written by" subject per `last_write_source`.
+// doc asset resolution and the Show source toggle, the Assets panel (card on
+// desktop, collapsed section on phones), and the footer's "Last written by"
+// subject per `last_write_source`.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ApiClientError } from '../../api/request';
 import type { DocDetail } from '../../api/types';
@@ -11,14 +12,23 @@ import { DocViewer } from './DocViewer';
 
 const mocks = vi.hoisted(() => ({
   view: null as unknown as DocView,
+  isMobile: false,
 }));
 
 vi.mock('../../hooks/useDoc', () => ({
   useDoc: () => mocks.view,
 }));
 
+vi.mock('../../hooks/useIsMobile', () => ({
+  useIsMobile: () => mocks.isMobile,
+}));
+
 vi.mock('../../contexts/ProjectsContext', () => ({
   useProjects: () => ({ projects: [] }),
+}));
+
+vi.mock('../../contexts/AuthContext', () => ({
+  useAuth: () => ({ enabledFeatures: ['docs', 'public_projects'] }),
 }));
 
 // Message.tsx (markdownComponents) reaches pdfjs-dist through its card
@@ -44,6 +54,7 @@ function doc(overrides: Partial<DocDetail> = {}): DocDetail {
     shares: [],
     content: '# Plan\n\n![chart](assets/chart.png)',
     last_write_conversation: null,
+    assets: [{ name: 'chart.png', size: 2048, mime: 'image/png' }],
     ...overrides,
   };
 }
@@ -74,6 +85,7 @@ function footerText(container: HTMLElement): string {
 
 describe('DocViewer', () => {
   beforeEach(() => {
+    mocks.isMobile = false;
   });
 
   afterEach(() => {
@@ -118,6 +130,41 @@ describe('DocViewer', () => {
     expect(screen.queryByRole('img')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Show rendered' }));
     expect(container.querySelector('pre.doc-viewer-source')).toBeNull();
+  });
+
+  it("lists the doc's assets in the aside card", () => {
+    setView({
+      doc: doc({
+        asset_count: 2,
+        assets: [
+          { name: 'chart.png', size: 2048, mime: 'image/png' },
+          { name: 'photo.jpg', size: 300, mime: 'image/jpeg' },
+        ],
+      }),
+    });
+    const { container } = renderViewer();
+
+    const aside = container.querySelector('aside.doc-viewer-aside') as HTMLElement;
+    const card = within(aside).getByRole('region', { name: 'Assets' });
+    expect(card.classList.contains('right-panel-card')).toBe(true);
+    expect(card.querySelector('.doc-assets-count')?.textContent).toBe('2');
+    expect(
+      [...card.querySelectorAll('.doc-asset-name')].map((el) => el.textContent),
+    ).toEqual(['chart.png', 'photo.jpg']);
+    expect(card.querySelector('img')?.getAttribute('src')).toBe('/app/api/docs/d1/assets/chart.png');
+    expect(aside.querySelector('details')).toBeNull();
+  });
+
+  it('collapses the assets into an "Assets (N)" section on phones', () => {
+    mocks.isMobile = true;
+    setView({ doc: doc() });
+    const { container } = renderViewer();
+
+    const details = container.querySelector('aside.doc-viewer-aside details') as HTMLDetailsElement;
+    expect(details).not.toBeNull();
+    expect(details.open).toBe(false);
+    expect(details.querySelector('summary')?.textContent).toBe('Assets (1)');
+    expect(container.querySelector('.right-panel-card')).toBeNull();
   });
 
   it('shows the empty-doc line for blank content', () => {

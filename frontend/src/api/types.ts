@@ -934,6 +934,16 @@ export interface DocWriteConversation {
   project_id: string | null;
 }
 
+/**
+ * One embedded image in the doc's `assets/` directory, as listed by
+ * GET /docs/{id} (regular files with a known image extension only).
+ */
+export interface DocAsset {
+  name: string;
+  size: number;
+  mime: string;
+}
+
 export interface DocDetail extends Doc {
   content: string;
   /**
@@ -942,6 +952,8 @@ export interface DocDetail extends Doc {
    * blanked for non-owners together with `last_write_source`).
    */
   last_write_conversation: DocWriteConversation | null;
+  /** The doc's images, sorted by name (served by GET /docs/{id}/assets/{name}). */
+  assets: DocAsset[];
 }
 
 export interface ListDocsResponse {

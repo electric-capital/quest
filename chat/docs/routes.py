@@ -18,6 +18,12 @@ Rows returned to the UI are the store's doc dict plus ``scope``,
 (``shares``) is included for the owner only. All sync file IO runs in
 ``asyncio.to_thread``. Doc content is never logged.
 
+Public user docs need the ``public_projects`` gate: while it is closed for
+the user, nothing new can become public (POST with ``mode: "public"`` and a
+switch to public are 400 ``public_projects_disabled``) and
+``access.can_switch_mode`` is false except on a leftover public doc, whose
+only switch is back to private.
+
 Errors are ``HTTPException(detail={"error": <code>, "message": ...})``
 except the optimistic-concurrency conflict, which is a flat 409
 ``{"error": "stale_update", "message", "current": row}`` like routines.
@@ -46,6 +52,7 @@ from chat.docs.constants import (
     DOC_MODES,
     doc_not_found_message,
     docs_disabled_message,
+    public_docs_disabled_message,
 )
 from chat.file_routes import _INLINE_IMAGE_MIMES
 from chat.project_routes import _get_visible_project, _public_projects_enabled_for
@@ -126,8 +133,26 @@ def _doc_not_found(doc_id: str) -> HTTPException:
     return _http_error(404, "doc_not_found", doc_not_found_message(doc_id))
 
 
-def _doc_row(user: dict, doc: dict, access: DocAccess) -> dict:
-    """The UI row: doc dict + scope/shared/access; ``shares`` owner-only."""
+def _public_docs_unavailable() -> HTTPException:
+    return _http_error(400, "public_projects_disabled", public_docs_disabled_message())
+
+
+def _doc_row(
+    user: dict,
+    doc: dict,
+    access: DocAccess,
+    *,
+    public_projects_open: Optional[bool] = None,
+) -> dict:
+    """The UI row: doc dict + scope/shared/access; ``shares`` owner-only.
+
+    ``access.can_switch_mode`` = owner AND user doc AND (the
+    ``public_projects`` gate is open for the user OR the doc is already
+    public -- a leftover public doc can still go back to private).
+    ``public_projects_open`` is the caller's gate lookup, passed by list
+    handlers so a page of rows reads the gate file once; None looks it up
+    when it matters.
+    """
     is_owner = doc["owner_id"] == user["id"]
     shares = doc.get("shares") or []
     row = {key: value for key, value in doc.items() if key != "shares"}
@@ -138,13 +163,40 @@ def _doc_row(user: dict, doc: dict, access: DocAccess) -> dict:
     else:
         # The owner's conversation ids are not the recipient's business.
         row["last_write_source"] = None
+    can_switch_mode = is_owner and doc.get("project_id") is None
+    if can_switch_mode and doc.get("mode") != "public":
+        if public_projects_open is None:
+            public_projects_open = _public_projects_enabled_for(user)
+        can_switch_mode = public_projects_open
     row["access"] = {
         "can_rename": is_owner,
-        "can_switch_mode": is_owner and doc.get("project_id") is None,
+        "can_switch_mode": can_switch_mode,
         "can_delete": is_owner,
         "write": access.write,
     }
     return row
+
+
+def _asset_rows(assets: list[dict]) -> list[dict]:
+    """``[{"name", "size", "mime"}]`` for the detail payload.
+
+    ``assets`` comes from ``files.list_assets`` (regular, non-hidden files
+    directly in ``assets/``, sorted by name). Entries the asset route would
+    404 -- a name ``files`` refuses or an extension outside
+    ``_INLINE_IMAGE_MIMES`` -- are left out.
+    """
+    rows = []
+    for asset in assets:
+        name = asset["name"]
+        try:
+            doc_files._validate_asset_name(name)
+        except doc_files.DocFileError:
+            continue
+        mime = _INLINE_IMAGE_MIMES.get(os.path.splitext(name)[1].lower())
+        if mime is None:
+            continue
+        rows.append({"name": name, "size": asset["size"], "mime": mime})
+    return rows
 
 
 async def _get_doc_for_ui(user: dict, doc_id: str) -> tuple[dict, DocAccess]:
@@ -320,7 +372,11 @@ async def list_user_docs(
     before = _parse_cursor(cursor) if cursor else None
 
     page, has_more = await _visible_docs_page(user, project_id, limit, before)
-    rows = [_doc_row(user, doc, access) for doc, access in page]
+    public_open = _public_projects_enabled_for(user)
+    rows = [
+        _doc_row(user, doc, access, public_projects_open=public_open)
+        for doc, access in page
+    ]
     next_cursor = None
     if has_more and rows:
         last = rows[-1]
@@ -337,14 +393,20 @@ async def create_ui_doc(
 
     A user doc takes ``mode`` (default ``private``); a project doc takes
     its project's mode, and a supplied ``mode`` that disagrees is 400
-    ``project_doc_mode_inherited``. Errors: 404 ``project_not_found``, 409
-    ``duplicate_title``, 400 ``invalid_title`` / ``invalid_description`` /
-    ``invalid_mode``. Returns the row (201).
+    ``project_doc_mode_inherited``. While the ``public_projects`` gate is
+    closed for the user, a user doc is always private: an omitted ``mode``
+    gives ``private`` and an explicit ``"public"`` is 400
+    ``public_projects_disabled`` (project docs are unaffected: a public
+    project is hidden by the same gate). Errors: 404 ``project_not_found``,
+    409 ``duplicate_title``, 400 ``invalid_title`` / ``invalid_description``
+    / ``invalid_mode``. Returns the row (201).
     """
     _require_docs_enabled(user)
     project_id = body.project_id or None
     if project_id is not None:
         await _require_visible_project(user, project_id)
+    elif body.mode == "public" and not _public_projects_enabled_for(user):
+        raise _public_docs_unavailable()
     try:
         doc = await doc_service.create_doc_from_ui(
             user, body.title, body.description or "", body.mode, project_id,
@@ -370,15 +432,24 @@ async def get_ui_doc(
     doc_id: str,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """The row plus ``content`` (the whole ``doc.md``).
+    """The row plus ``content`` (the whole ``doc.md``) and ``assets``.
+
+    ``assets`` is ``[{"name", "size", "mime"}]`` for the embedded images
+    the asset route serves: regular files directly in ``assets/`` (symlinks,
+    directories, special and hidden files skipped), sorted by name, ``mime``
+    from the extension, entries without a raster image extension left out.
+    At most ``DOC_MAX_ASSETS`` entries, so it rides on this payload rather
+    than a separate endpoint; the list route does not carry it.
 
     404 ``doc_not_found`` for a missing or hidden doc (identical bodies).
     """
     _require_docs_enabled(user)
     doc, access = await _get_doc_for_ui(user, doc_id)
     content = await _doc_files_call(doc_files.read_body, doc["id"])
+    assets = await _doc_files_call(doc_files.list_assets, doc["id"])
     row = _doc_row(user, doc, access)
     row["content"] = content
+    row["assets"] = _asset_rows(assets)
     row["last_write_conversation"] = await _last_write_conversation(user, row)
     return row
 
@@ -473,15 +544,23 @@ async def set_ui_doc_mode(
 ):
     """Switch a user doc between ``private`` and ``public`` (owner only).
 
-    400 ``invalid_mode``; 400 ``project_doc_mode_inherited`` for a project
-    doc (its mode is the project's); 403 ``forbidden`` for a non-owner. No
-    change (and no events) when the doc already has that mode.
+    Checked in order: 404 ``doc_not_found``; 403 ``forbidden`` for a
+    non-owner; 400 ``public_projects_disabled`` for a target ``public``
+    while the ``public_projects`` gate is closed for the user (a target
+    ``private`` stays allowed, so a leftover public doc can go back); 400
+    ``invalid_mode``; 400 ``project_doc_mode_inherited`` for a project doc
+    (its mode is the project's). No change (and no events) when the doc
+    already has that mode.
     """
     _require_docs_enabled(user)
     # Hidden-project / missing docs 404 here before the service runs its
-    # own checks (same text either way).
-    await _get_doc_for_ui(user, doc_id)
+    # own checks (same text either way); ownership is checked here too so
+    # a non-owner gets 403 before the public-projects 400.
+    doc, _access = await _get_doc_for_ui(user, doc_id)
+    _require_owner(user, doc, "change its mode")
     mode = body.mode if isinstance(body.mode, str) else ""
+    if mode == "public" and not _public_projects_enabled_for(user):
+        raise _public_docs_unavailable()
     try:
         updated = await doc_service.switch_doc_mode(user, doc_id, mode)
     except doc_service.DocRequestError as exc:

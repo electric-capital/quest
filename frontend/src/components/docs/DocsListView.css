@@ -524,6 +524,12 @@
     flex: 1 0 100%;
   }
 
+  /* No badge (a private doc while public projects are closed for the
+     user): drop the slot so the meta line starts at the scope. */
+  .docs-row-mode:empty {
+    display: none;
+  }
+
   .docs-row-meta {
     flex: 0 1 auto;
     font-size: 0.75rem;

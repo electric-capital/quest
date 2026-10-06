@@ -41,6 +41,7 @@ import { useTopLevelConversations } from '../hooks/useTopLevelConversations';
 import { useProjectConversations } from '../hooks/useProjectConversations';
 import { useProjectRoutines } from '../hooks/useProjectRoutines';
 import { useDocs } from '../hooks/useDocs';
+import { isPublicProjectsEnabled } from '../utils/docMode';
 import { docsListPath, docViewerPath, parseDocsRoute } from '../utils/docsRoute';
 import { SIDEBAR_DOC_LIMIT } from '../utils/sidebarDocs';
 import { SearchModal } from './SearchModal';
@@ -117,6 +118,9 @@ export const Sidebar = React.memo(function Sidebar({
   // project's in its panel, both only while the feature gate is open. The URL
   // says which doc / All Docs view is showing (no NavigationContext state).
   const docsEnabled = enabledFeatures.includes(DOCS_FEATURE);
+  // Private doc rows carry a "Private" badge only while public docs are
+  // possible for the user (utils/docMode); public rows always show theirs.
+  const showPrivateDocBadge = isPublicProjectsEnabled(enabledFeatures);
   const userDocs = useDocs({ limit: SIDEBAR_DOC_LIMIT, enabled: docsEnabled });
   const projectDocs = useDocs({
     projectId: drilledProjectId,
@@ -509,6 +513,7 @@ export const Sidebar = React.memo(function Sidebar({
                 onOpenDoc={handleOpenDoc}
                 onOpenAll={() => handleOpenAllDocs(null)}
                 headerActive={docsListProjectId === null}
+                showPrivateBadge={showPrivateDocBadge}
               />
             )}
 
@@ -562,6 +567,7 @@ export const Sidebar = React.memo(function Sidebar({
                 onOpenDoc={handleOpenDoc}
                 onOpenAllDocs={() => handleOpenAllDocs(drilledProject.id)}
                 docsHeaderActive={docsListProjectId === drilledProject.id}
+                docsShowPrivateBadge={showPrivateDocBadge}
               />
             )}
           </div>

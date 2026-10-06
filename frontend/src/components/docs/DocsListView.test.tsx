@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   createDoc: vi.fn<(body: CreateDocRequest) => Promise<Doc>>(),
   projects: [] as Project[],
   projectsLoaded: true,
+  enabledFeatures: ['docs', 'public_projects'] as string[],
   global: new Set<(event: { type: string; [key: string]: unknown }) => void>(),
 }));
 
@@ -32,6 +33,10 @@ vi.mock('../../services/PersistentWebSocket', () => ({
 
 vi.mock('../../contexts/ProjectsContext', () => ({
   useProjects: () => ({ projects: mocks.projects, projectsLoaded: mocks.projectsLoaded }),
+}));
+
+vi.mock('../../contexts/AuthContext', () => ({
+  useAuth: () => ({ enabledFeatures: mocks.enabledFeatures }),
 }));
 
 function doc(id: string, overrides: Partial<Doc> = {}): Doc {
@@ -85,6 +90,14 @@ function groupHeadings(container: HTMLElement): (string | null)[] {
   return [...container.querySelectorAll('.docs-group-heading')].map((h) => h.textContent);
 }
 
+function modeColumnLabel(container: HTMLElement): string | null | undefined {
+  return container.querySelector('.docs-columns')?.children[1]?.textContent;
+}
+
+function badgeLabels(container: HTMLElement): (string | null)[] {
+  return [...container.querySelectorAll('.docs-row .doc-mode-badge')].map((b) => b.textContent);
+}
+
 function search(value: string) {
   fireEvent.change(screen.getByPlaceholderText('Search docs'), { target: { value } });
 }
@@ -95,6 +108,7 @@ beforeEach(() => {
   mocks.global.clear();
   mocks.projects = [];
   mocks.projectsLoaded = true;
+  mocks.enabledFeatures = ['docs', 'public_projects'];
 });
 
 afterEach(() => {
@@ -265,5 +279,50 @@ describe('DocsListView', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Create Doc' }));
     });
     expect(mocks.createDoc).toHaveBeenCalledWith({ title: 'Hi', mode: 'private' });
+  });
+
+  describe('with public projects closed for the user', () => {
+    beforeEach(() => {
+      mocks.enabledFeatures = ['docs'];
+    });
+
+    it('hides Private badges and the Mode column label when every row is private', async () => {
+      mocks.fetchDocs.mockResolvedValue(page([doc('u1'), doc('u2')]));
+      const { container } = renderView(null);
+      await waitFor(() => expect(screen.getByText('Doc u1')).toBeTruthy());
+
+      expect(badgeLabels(container)).toEqual([]);
+      expect(modeColumnLabel(container)).toBe('');
+      // The grid slot stays, so the other columns keep their place.
+      expect(container.querySelectorAll('.docs-row-mode')).toHaveLength(2);
+    });
+
+    it('still badges a leftover public doc, and keeps the Mode label for it', async () => {
+      mocks.fetchDocs.mockResolvedValue(page([doc('u1'), doc('u2', { mode: 'public' })]));
+      const { container } = renderView(null);
+      await waitFor(() => expect(screen.getByText('Doc u1')).toBeTruthy());
+
+      expect(badgeLabels(container)).toEqual(['Public']);
+      expect(modeColumnLabel(container)).toBe('Mode');
+    });
+
+    it('New Doc has no mode radio and sends no mode for a user doc', async () => {
+      mocks.fetchDocs.mockResolvedValue(page([]));
+      renderView(null);
+      await waitFor(() => expect(screen.getByText('No docs yet.')).toBeTruthy());
+
+      fireEvent.click(screen.getByRole('button', { name: 'New Doc' }));
+      expect(document.querySelector('.new-doc-mode')).toBeNull();
+      expect(screen.queryByRole('radio')).toBeNull();
+
+      fireEvent.change(document.querySelector('#new-doc-title-input')!, {
+        target: { value: 'Notes' },
+      });
+      mocks.createDoc.mockResolvedValue(doc('new1'));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Create Doc' }));
+      });
+      expect(mocks.createDoc).toHaveBeenCalledWith({ title: 'Notes' });
+    });
   });
 });

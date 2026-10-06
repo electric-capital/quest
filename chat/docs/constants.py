@@ -53,6 +53,16 @@ def doc_not_found_message(doc_id: str) -> str:
     return f"Doc not found: {doc_id}"
 
 
+def public_docs_disabled_message() -> str:
+    """UI-facing text (400 ``public_projects_disabled``) when a user asks
+    for a public user doc while the ``public_projects`` gate is closed for
+    them: creating one, or switching a private doc to public."""
+    return (
+        "Public docs need public projects, which are not available to your "
+        "account."
+    )
+
+
 def docs_disabled_message() -> str:
     """Model/user-facing text when the ``docs`` feature gate is closed."""
     return (
