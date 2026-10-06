@@ -194,8 +194,14 @@ The name should be a concise summary of the user's request -- aim for under 50 c
 Do not call this tool again after the first reply -- if a name has already been set (by you or by the user), subsequent calls will be ignored."""
 
 # Replacement for routine runs: the conversation was named after its routine
-# when it was created, and ``set_conversation_name`` is not offered.
-_ROUTINE_NAMING_SECTION = """**Conversation naming:** This conversation is a routine run and is already named after its routine. Do not try to set a conversation name -- go straight to the task in the user's message."""
+# when it was created, and ``set_conversation_name`` is not offered. In its
+# place the model is told how a routine run ends: with a ``routine_completed``
+# call. The run drivers (chat/routine_runs.py) treat a run that ends without
+# that call as unfinished and send one follow-up turn asking the model to
+# verify its work and call the tool.
+_ROUTINE_NAMING_SECTION = """**Routine run:** This conversation is a routine run -- an unattended, pre-written prompt -- and is already named after its routine. Do not try to set a conversation name; go straight to the task in the user's message.
+
+**Routine completion (IMPORTANT):** When every piece of work the routine prompt asked for is done and you have written your final summary, call the top-level `routine_completed` tool (it has its own function declaration -- call it directly, not through `tool_call`) EXACTLY ONCE as your LAST tool call. A run that ends without this call is treated as unfinished: you will receive a follow-up message asking you to check that all the requested work was done and to call `routine_completed`. If part of the task could not be completed, still call `routine_completed` and explain what is missing in its `summary`."""
 
 
 def get_system_prompt(

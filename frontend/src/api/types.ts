@@ -174,6 +174,19 @@ export interface ModelFallbackMessage {
   seq?: number;
 }
 
+/** Notice appended to a routine conversation when a routine run ended
+ *  without calling the `routine_completed` tool and the server sent one
+ *  follow-up turn asking the model to verify its work and finish (see
+ *  chat/routine_runs.py). `content` is the exact text the model received. */
+export interface RoutineNudgeMessage {
+  type: 'routine_nudge';
+  role?: string;
+  content?: string;
+  attempt?: number;
+  timestamp?: string;
+  seq?: number;
+}
+
 /** Marker appended to the transcript when the conversation's model-facing
  *  history was compacted (see chat/compaction.py). The summary is exactly
  *  the text the model sees in place of the compacted messages. */
@@ -426,7 +439,7 @@ export interface SubAgentToolCallInfo {
 // Union type for all message content types
 export type MessageContent = Message | ToolUseMessage | ToolResultMessage | StatsMessage
   | ErrorMessage | InterruptedMessage | ActionRequestMessage | CompactionMessage
-  | ModelFallbackMessage;
+  | ModelFallbackMessage | RoutineNudgeMessage;
 
 /** Server verdict that resuming this conversation is expensive (long-idle,
  *  long-context, costly model). Mirrors the dict built by

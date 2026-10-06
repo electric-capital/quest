@@ -799,9 +799,19 @@ async def run_conversation_turn(
         elif is_inference_api:
             from chat.llm.tool_schemas import INFERENCE_API_TOOLS
             session_tools = INFERENCE_API_TOOLS
+        elif is_public and routine_id:
+            # Routine run in a public project: the public subset plus the
+            # routine_completed completion marker (chat/routine_runs.py).
+            from chat.llm.tool_schemas import PUBLIC_ROUTINE_TOOLS
+            session_tools = PUBLIC_ROUTINE_TOOLS
         elif is_public:
             from chat.llm.tool_schemas import PUBLIC_TOOLS
             session_tools = PUBLIC_TOOLS
+        elif routine_id:
+            # Routine conversation: the top-level tier plus
+            # routine_completed, which the run drivers wait for.
+            from chat.llm.tool_schemas import ROUTINE_TOP_LEVEL_TOOLS
+            session_tools = ROUTINE_TOP_LEVEL_TOOLS
 
         chat = get_or_create_chat(
             provider, user["id"], conversation_id, model, system_prompt,

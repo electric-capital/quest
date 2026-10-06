@@ -53,11 +53,20 @@ logger = logging.getLogger(__name__)
 # ``tool_call`` router tool instead of having its own top-level schema.
 WAIT_FOR_HANDLES_KEY = "tool_call:wait_for_handles"
 
+# routine_completed HAS its own top-level schema, but weaker models routed
+# it through ``tool_call(tool_name="routine_completed")`` anyway in live
+# runs (the prompt teaches that form for every dynamic tool). Both spellings
+# are accepted; this is the key for the tool_call-riding one.
+ROUTINE_COMPLETED_KEY = "routine_completed"
+ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY = "tool_call:routine_completed"
+
 # Loop-handled tool arms hard-rejected in public-project conversations
 # (defense in depth beside the trimmed PUBLIC_TOOLS schema): sub-agent
 # spawners, action requests, and the origin-specific finish/reply tools.
 # Keyed by registry key, so the tool_call-riding wait_for_handles arm is
-# listed under WAIT_FOR_HANDLES_KEY.
+# listed under WAIT_FOR_HANDLES_KEY. ``routine_completed`` (both keys) is
+# deliberately absent: it is a pure completion signal (no reads, no writes)
+# and routine runs in public projects need it (PUBLIC_ROUTINE_TOOLS).
 _PUBLIC_BLOCKED_LOOP_TOOLS = frozenset({
     "agent_task",
     "agent_task_parallel",
@@ -242,8 +251,12 @@ def registry_key_for(tool_name: str, args: dict[str, Any]) -> str:
     tool is keyed by its own name. Names without a registry entry fall
     through to the shared ``_dispatch_tool_call``.
     """
-    if tool_name == "tool_call" and args.get("tool_name") == "wait_for_handles":
-        return WAIT_FOR_HANDLES_KEY
+    if tool_name == "tool_call":
+        inner = args.get("tool_name")
+        if inner == "wait_for_handles":
+            return WAIT_FOR_HANDLES_KEY
+        if inner == ROUTINE_COMPLETED_KEY:
+            return ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY
     return tool_name
 
 
@@ -956,6 +969,39 @@ async def _handle_return_final_response(
     raise FinishInferenceResponse(tool_id=call.tool_id)
 
 
+async def _handle_routine_completed(
+    ctx: RunContext, call: ToolCall, turn: TurnState,
+) -> str:
+    """Routine-run completion marker (``routine_completed``).
+
+    A pure signal: the persisted ``tool_use`` is what the run drivers in
+    chat/routine_runs.py look for to decide whether the run finished or
+    needs a follow-up nudge turn. Nothing to execute here beyond
+    acknowledging the call; the model's turn then ends naturally. Only
+    meaningful in routine conversations (a ``routine_id`` on the row).
+
+    Registered under both the top-level name and the ``tool_call``-riding
+    key (see :data:`ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY`); in the latter
+    form the tool's own arguments sit under ``arguments``.
+    """
+    if not ctx.routine_id:
+        return json.dumps({
+            "error": (
+                "routine_completed is only available inside routine "
+                "conversations."
+            ),
+        })
+    args = call.args
+    if call.key == ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY:
+        inner = args.get("arguments")
+        args = inner if isinstance(inner, dict) else {}
+    summary = args.get("summary")
+    result: dict[str, Any] = {"status": "completed"}
+    if isinstance(summary, str) and summary.strip():
+        result["summary"] = summary.strip()
+    return json.dumps(result)
+
+
 async def _enrich_params_for_preview(
     req_type: str, validated_params: dict, user: dict,
 ) -> None:
@@ -1202,6 +1248,8 @@ TURN_TOOL_HANDLERS: dict[str, TurnToolHandler] = {
     "send_slack_reply_and_get_response": _handle_send_slack_reply,
     "return_to_caller": _handle_return_to_caller,
     "return_final_response": _handle_return_final_response,
+    ROUTINE_COMPLETED_KEY: _handle_routine_completed,
+    ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY: _handle_routine_completed,
     "create_action_request": _handle_create_action_request,
     WAIT_FOR_HANDLES_KEY: _handle_wait_for_handles,
 }
