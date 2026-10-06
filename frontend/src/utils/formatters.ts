@@ -50,6 +50,29 @@ export function formatNumber(n: number): string {
 }
 
 /**
+ * Compact magnitude for dense cells and chart axes: 950 -> "950",
+ * 12,345 -> "12.3K", 4,000,000 -> "4M", 1,250,000,000 -> "1.25B".
+ * One significant decimal, trailing zeros dropped.
+ */
+export function formatCompactNumber(n: number): string {
+  const abs = Math.abs(n);
+  if (abs < 1000) return formatNumber(Math.round(n));
+  const units: [number, string][] = [
+    [1e9, 'B'],
+    [1e6, 'M'],
+    [1e3, 'K'],
+  ];
+  for (const [size, suffix] of units) {
+    if (abs >= size) {
+      const scaled = n / size;
+      const digits = Math.abs(scaled) >= 100 ? 0 : Math.abs(scaled) >= 10 ? 1 : 2;
+      return `${parseFloat(scaled.toFixed(digits))}${suffix}`;
+    }
+  }
+  return formatNumber(n);
+}
+
+/**
  * Relative "last active" label for admin tables: minute granularity up to an
  * hour, then hours/days, then an absolute date for anything older than a week.
  */

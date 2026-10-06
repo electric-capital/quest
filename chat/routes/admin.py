@@ -19,6 +19,7 @@ from db.conversation_store import (
     list_latest_active_conversations,
 )
 from db.llm_call_store import (
+    get_daily_usage_buckets,
     get_latest_context_tokens_for_conversations,
     get_most_expensive_conversations,
     get_usage_by_model,
@@ -28,7 +29,8 @@ from db.llm_call_store import (
 from db.guide_store import list_all_guides
 from db.project_store import list_all_project_guides
 from db.routine_store import get_routine_labels
-from db.user_store import get_user_by_id, list_all_users
+from db.user_store import get_user_by_id, list_all_users, list_user_signup_dates
+from chat.usage_report import build_usage_report
 
 from chat.routes import router
 
@@ -653,6 +655,42 @@ async def admin_model_report(
         for entry in usage_by_model
     ]
     return {"models": rows}
+
+
+@router.get("/admin/system-monitor/usage-report")
+async def admin_usage_report(
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Return instance-wide usage totals, period comparisons and time series.
+
+    No parameters: the report always covers the fixed rolling windows
+    (today, last 7 / 30 / 90 / 365 days -- each next to the preceding
+    period of the same length), the lifetime total, and the daily / weekly
+    / monthly series behind the charts. Metric definitions and the
+    response shape are documented on ``build_usage_report`` in
+    chat/usage_report.py; the per-day buckets come from
+    ``get_daily_usage_buckets()`` over every recorded call.
+    """
+    if not is_admin(user["email"]):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "forbidden",
+                "message": "Admin access required.",
+            }
+        )
+
+    buckets = await get_daily_usage_buckets()
+    conv_rows = await list_conversation_activity_rows()
+    routine_conversation_ids = {row["id"] for row in conv_rows if row["routine_id"]}
+    signup_dates = await list_user_signup_dates()
+
+    # Pure Python over one bucket per (day, conversation, model) -- small
+    # per row, but unbounded in rows on a busy install, so keep the fold
+    # off the event loop like the other report handlers.
+    return await asyncio.to_thread(
+        build_usage_report, buckets, routine_conversation_ids, signup_dates
+    )
 
 
 @router.get("/admin/system-monitor/guides-report")

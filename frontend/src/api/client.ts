@@ -44,6 +44,7 @@ import type {
   AdminUserReportResponse,
   AdminModelReportResponse,
   AdminGuidesReportResponse,
+  AdminUsageReport,
   AdminSignInStatus,
   FeatureGate,
   FeatureGatesListResponse,
@@ -720,6 +721,10 @@ export function fetchAdminModelReport(
 
 export function fetchAdminGuidesReport(): Promise<AdminGuidesReportResponse> {
   return apiGet(endpoints.adminGuidesReport());
+}
+
+export function fetchAdminUsageReport(): Promise<AdminUsageReport> {
+  return apiGet(endpoints.adminUsageReport());
 }
 
 export function fetchAdminSignIn(): Promise<AdminSignInStatus> {

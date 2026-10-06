@@ -171,7 +171,7 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 - Unauthenticated version endpoint (`GET /app/api/version`) returning the git commit hash and the release version derived from the nearest `v<semver>` git tag, captured at process startup (see `config/version.py`; shown in Settings > About)
 - Connector status, user info (includes `is_admin` flag), settings, and account management endpoints
 - Admin operations endpoint (`POST /app/api/admin/shutdown`) for graceful server shutdown (requires admin auth)
-- Admin System Reports endpoints (`GET /app/api/admin/system-monitor/latest-active-conversations` and `.../most-expensive-conversations`) listing the most recently active and the most expensive conversations across all users; see [Admin System Reports API](api/admin-system-monitor-api.md)
+- Admin System Reports endpoints (`GET /app/api/admin/system-monitor/latest-active-conversations`, `.../usage-report` and `.../most-expensive-conversations`) listing the most recently active conversations, instance-wide usage totals with previous-period comparisons and time series, and the most expensive conversations across all users; see [Admin System Reports API](api/admin-system-monitor-api.md)
 
 ### LLM Integration
 
@@ -245,7 +245,7 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 - Stop/Interrupt: Stop button during streaming, partial response recovery
 - Admin Ops Menu: Wrench icon button in the sidebar's user info bar next to the settings gear (inline variant; the System Reports page, which has no sidebar, keeps the floating fixed bottom-right variant), only visible to admin users (emails in `server_config.json` `admin_emails`), upward dropdown with "System Reports" (navigates to `/admin/system-reports`, hidden during impersonation), "Impersonate user", and "Shut down server" with two-step confirmation
 - Admin System Reports: Admin-only operator dashboard at `/admin/system-reports` (legacy `/admin/system-monitor` redirects; deep links served by the `/admin/{rest:path}` SPA catch-all in `quest.py`) -- shell page with a left-hand section nav.
-  - "Latest Conversations" polls the latest active conversations across all users every 60s with tab-visibility pause, in-flight dedupe, a live "Updated Xs ago" header timer, and a manual refresh button; "Cost Analysis" shows the top-30 most-expensive conversations for a selectable date range.
+  - "Latest Conversations" polls the latest active conversations across all users every 60s with tab-visibility pause, in-flight dedupe, a live "Updated Xs ago" header timer, and a manual refresh button; "Total Usage" is a period-comparison matrix (today / 7 / 30 / 90 / 365 days / all time against conversations, active users, new users, calls, tokens and cost, each with its change vs the previous period) over daily / weekly / monthly trend charts; "Cost Analysis" shows the top-30 most-expensive conversations for a selectable date range.
   - Both show per-conversation token usage, estimated cost, latest context size, and active user-message days. See [Admin System Reports Architecture](architecture/admin-system-monitor.md)
 
 #### App Integration

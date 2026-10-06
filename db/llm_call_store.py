@@ -795,6 +795,51 @@ async def get_usage_by_model(
     return result
 
 
+async def get_daily_usage_buckets(
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+) -> list[dict]:
+    """Return per-(UTC day, conversation, model) usage buckets for a window.
+
+    The time-series feed of the admin Total Usage report: the same
+    tier-bucketed grouped queries as the other aggregation entry points,
+    additionally split on the calendar day (UTC, the timezone the rows are
+    stamped in) each call was made. The caller folds the buckets into
+    whatever periods it needs (days, weeks, months, rolling windows) --
+    distinct-user/conversation counts per period require the per-day
+    conversation granularity, which is why this does not pre-sum per day.
+
+    Returns:
+        Unordered list of
+        ``{"day": "YYYY-MM-DD", "conversation_id", "user_id", "model",
+        "provider", "call_count", "total_tokens", "cost_usd",
+        "cost_source"}`` dicts; ``user_id`` is the owner recorded on the
+        call rows (so deleted conversations keep their attribution) and
+        ``cost_usd``/``cost_source`` follow the usual null-on-unpriced
+        convention per bucket.
+    """
+    by_key, user_ids = await _collect_usage_buckets(
+        start=start, end=end, by_day=True
+    )
+    return [
+        {
+            "day": day,
+            "conversation_id": conv_id,
+            "user_id": user_ids[conv_id],
+            "model": model,
+            "provider": entry["provider"],
+            "call_count": entry["call_count"],
+            "total_tokens": entry["total_tokens"],
+            "cost_usd": (
+                None if entry["estimated_cost_usd"] is None
+                else round(entry["estimated_cost_usd"], 6)
+            ),
+            "cost_source": entry["cost_source"],
+        }
+        for (conv_id, model, day), entry in by_key.items()
+    ]
+
+
 async def get_latest_context_tokens_for_conversations(
     conversation_ids: list[str],
 ) -> dict[str, int]:
@@ -979,6 +1024,7 @@ async def _collect_usage_buckets(
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
     by_call_type: bool = False,
+    by_day: bool = False,
 ) -> tuple[dict[tuple, dict], dict[str, int]]:
     """Run the grouped per-provider queries and merge the tier buckets.
 
@@ -996,10 +1042,14 @@ async def _collect_usage_buckets(
     ``call_type`` (top-level vs sub-agent), for callers that need to tell
     sub-agent spend apart (the models report); the key then gains the
     call type as a third element and each entry carries a ``call_type``.
+    ``by_day`` splits them on the UTC calendar day of ``created_at`` (the
+    time-series feed of the Total Usage report); the key then gains the
+    ``YYYY-MM-DD`` day string as its last element and each entry carries a
+    ``day``. The two flags compose (call type before day in the key).
 
     Returns:
         ``(by_key, user_ids)``: ``by_key`` maps (conversation_id, model) --
-        or (conversation_id, model, call_type) -- to a merged model entry;
+        plus call_type and/or day in that order -- to a merged model entry;
         ``user_ids`` maps conversation_id -> owner user_id as recorded on
         the call rows (available even when the conversation row itself has
         been deleted).
@@ -1036,6 +1086,13 @@ async def _collect_usage_buckets(
                 call_type_col = row_cls.call_type
             else:
                 call_type_col = literal(None)
+            if by_day:
+                # SQLite stores the naive-UTC DateTime as
+                # "YYYY-MM-DD HH:MM:SS[.ffffff]"; date() keeps the day part.
+                day_col = func.date(row_cls.created_at)
+                group_cols.append(day_col)
+            else:
+                day_col = literal(None)
             stmt = (
                 select(
                     row_cls.conversation_id,
@@ -1043,6 +1100,7 @@ async def _collect_usage_buckets(
                     long_context,
                     has_reported,
                     call_type_col,
+                    day_col,
                     func.count(row_cls.id),
                     # A conversation has exactly one owner; MAX picks it
                     # without widening the GROUP BY.
@@ -1067,8 +1125,8 @@ async def _collect_usage_buckets(
                 stmt = stmt.where(row_cls.created_at < end)
             result = await db.execute(stmt)
             for (
-                conv_id, model, is_long, is_reported, call_type, call_count,
-                user_id, reported, *sums
+                conv_id, model, is_long, is_reported, call_type, day,
+                call_count, user_id, reported, *sums
             ) in result.all():
                 metrics = {
                     field: int(value)
@@ -1084,7 +1142,11 @@ async def _collect_usage_buckets(
                     )
                     source = COST_SOURCE_ESTIMATED if cost is not None else None
                 user_ids[conv_id] = int(user_id)
-                key = (conv_id, model, call_type) if by_call_type else (conv_id, model)
+                key: tuple = (conv_id, model)
+                if by_call_type:
+                    key += (call_type,)
+                if by_day:
+                    key += (day,)
                 entry = by_key.get(key)
                 if entry is None:
                     entry = {
@@ -1098,6 +1160,8 @@ async def _collect_usage_buckets(
                     }
                     if by_call_type:
                         entry["call_type"] = call_type
+                    if by_day:
+                        entry["day"] = day
                     by_key[key] = entry
                     continue
                 entry["call_count"] += int(call_count)

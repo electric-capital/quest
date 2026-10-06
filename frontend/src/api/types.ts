@@ -1163,6 +1163,53 @@ export interface AdminModelReportResponse {
   models: AdminModelReportRow[];
 }
 
+// --- Total Usage (GET /admin/system-monitor/usage-report) ---
+// Instance-wide aggregates for one period. Every figure keys on the UTC
+// calendar day of each recorded LLM call; see chat/usage_report.py for
+// the metric definitions.
+export interface AdminUsageBucket {
+  // Inclusive UTC dates the bucket covers.
+  start: string;
+  end: string;
+  // Distinct conversations with at least one call in the period (routine
+  // runs included; routine_conversations is that subset).
+  conversations: number;
+  routine_conversations: number;
+  // Distinct users with a call in a NON-routine conversation.
+  active_users: number;
+  // Accounts created in the period.
+  new_users: number;
+  call_count: number;
+  total_tokens: number;
+  // null when any model in the period is unpriced (partial-sum rule).
+  cost_usd: number | null;
+  cost_source: AdminCostSource | null;
+  // The priceable portion, never null -- what the charts plot.
+  known_cost_usd: number;
+}
+
+export interface AdminUsageWindow {
+  // 1 = today (vs yesterday), else "last N days" incl. today.
+  days: number;
+  current: AdminUsageBucket;
+  // The N days right before `current`.
+  previous: AdminUsageBucket;
+}
+
+export type AdminUsageGranularity = 'daily' | 'weekly' | 'monthly';
+
+export interface AdminUsageReport {
+  generated_at: string;
+  // The UTC date the windows and series end on.
+  today: string;
+  windows: AdminUsageWindow[];
+  // Every recorded call (start = the earliest call or signup day).
+  lifetime: AdminUsageBucket;
+  // Gap-free, oldest first, each ending with the in-progress period that
+  // contains `today`: 90 days / 52 Monday-start weeks / 24 calendar months.
+  series: Record<AdminUsageGranularity, AdminUsageBucket[]>;
+}
+
 // One row of the admin Guides report (System Reports > Guides). A deprecation
 // tracker: every user guide (guides table, incl. empty auto-created default
 // rows) plus every project with non-empty project instructions
