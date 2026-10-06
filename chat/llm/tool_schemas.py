@@ -498,6 +498,108 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "required": ["document_id", "format"],
         },
     },
+    "google_export_sheet": {
+        "name": "google_export_sheet",
+        "description": (
+            "Export a native Google Sheet (spreadsheet) to the conversation workspace "
+            "in any format Google Sheets supports: xlsx (Excel), ods, pdf, csv, tsv, "
+            "or zip (zipped HTML, one page per tab). Google Sheets have no raw bytes, "
+            "so download_drive_file cannot fetch them -- use this tool instead. csv and "
+            "tsv carry the FIRST tab only; for one specific tab read it through the "
+            "Sheets API with authed_get, or export xlsx and open it with openpyxl. "
+            "After exporting, use get_workspace_file (csv/tsv) or run_python "
+            "(xlsx/ods) to read it. Only Google Sheets are supported; regular Drive "
+            "files go through download_drive_file. Requires Google Services to be "
+            "connected."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "spreadsheet_id": {
+                    "type": "string",
+                    "description": (
+                        "The Google Sheet id -- the segment after /spreadsheets/d/ in a "
+                        "Sheets URL, or the file id from a Drive files list."
+                    ),
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["xlsx", "ods", "pdf", "csv", "tsv", "zip"],
+                    "description": (
+                        "Export format. One of: xlsx (Excel), ods (OpenDocument), pdf, "
+                        "csv (first tab only), tsv (first tab only), zip (zipped HTML)."
+                    ),
+                },
+                "filename": {
+                    "type": "string",
+                    "description": (
+                        "Optional filename to save the export as in the workspace. "
+                        "If not provided, the spreadsheet title plus the format's "
+                        "extension is used (e.g. 'Budget 2026.xlsx')."
+                    ),
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'Export sheet as xlsx'."
+                    ),
+                },
+            },
+            "required": ["spreadsheet_id", "format"],
+        },
+    },
+    "google_export_slides": {
+        "name": "google_export_slides",
+        "description": (
+            "Export a native Google Slides presentation to the conversation workspace "
+            "in any format Google Slides supports: pptx (PowerPoint), odp, pdf, txt "
+            "(all slide text), or png / jpeg / svg (an image of the FIRST slide only). "
+            "Google Slides have no raw bytes, so download_drive_file cannot fetch "
+            "them -- use this tool instead. After exporting, use get_workspace_file "
+            "(txt, pdf, images) or run_python with python-pptx (pptx) to read it; txt "
+            "is the cheapest format to read back. Only Google Slides are supported; "
+            "regular Drive files go through download_drive_file. Requires Google "
+            "Services to be connected."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "presentation_id": {
+                    "type": "string",
+                    "description": (
+                        "The Google Slides id -- the segment after /presentation/d/ in a "
+                        "Slides URL, or the file id from a Drive files list."
+                    ),
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["pptx", "odp", "pdf", "txt", "png", "jpeg", "svg"],
+                    "description": (
+                        "Export format. One of: pptx (PowerPoint), odp (OpenDocument), "
+                        "pdf, txt (plain text of every slide), png / jpeg / svg (first "
+                        "slide only)."
+                    ),
+                },
+                "filename": {
+                    "type": "string",
+                    "description": (
+                        "Optional filename to save the export as in the workspace. "
+                        "If not provided, the presentation title plus the format's "
+                        "extension is used (e.g. 'Q3 Review.pptx')."
+                    ),
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'Export deck as PDF'."
+                    ),
+                },
+            },
+            "required": ["presentation_id", "format"],
+        },
+    },
     "archive_gmail_message": {
         "name": "archive_gmail_message",
         "mutating": True,

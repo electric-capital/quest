@@ -1,4 +1,5 @@
-"""Google Drive handlers: download_drive_file and google_export_doc.
+"""Google Drive handlers: download_drive_file and the three Google Workspace
+export tools (google_export_doc / google_export_sheet / google_export_slides).
 """
 
 import json
@@ -122,10 +123,12 @@ async def _handle_download_drive_file(
 
 
 # ---------------------------------------------------------------------------
-# Google Doc export handler
+# Google Workspace export handlers (Docs / Sheets / Slides)
 # ---------------------------------------------------------------------------
 
 _GOOGLE_DOC_MIME = "application/vnd.google-apps.document"
+_GOOGLE_SHEET_MIME = "application/vnd.google-apps.spreadsheet"
+_GOOGLE_SLIDES_MIME = "application/vnd.google-apps.presentation"
 
 # Every export format Google Drive supports for native Google Docs
 # (Drive API "Export MIME types for Google Workspace documents").
@@ -147,96 +150,203 @@ GOOGLE_DOC_EXPORT_FORMATS: dict[str, tuple[str, str]] = {
     "zip": ("application/zip", ".zip"),
 }
 
-# Reverse map so the model may also pass the exact export MIME type.
-_GOOGLE_DOC_EXPORT_BY_MIME: dict[str, str] = {
-    mime: name for name, (mime, _ext) in GOOGLE_DOC_EXPORT_FORMATS.items()
+# Every export format for native Google Sheets. ``csv`` and ``tsv`` export
+# the FIRST sheet (tab) only -- Drive ``files.export`` takes no tab
+# selector; per-tab values come from the Sheets API via authed_get.
+GOOGLE_SHEET_EXPORT_FORMATS: dict[str, tuple[str, str]] = {
+    "xlsx": (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xlsx",
+    ),
+    "ods": ("application/vnd.oasis.opendocument.spreadsheet", ".ods"),
+    "pdf": ("application/pdf", ".pdf"),
+    "csv": ("text/csv", ".csv"),
+    "tsv": ("text/tab-separated-values", ".tsv"),
+    # Zipped HTML (one HTML file per sheet).
+    "zip": ("application/zip", ".zip"),
+}
+
+# Every export format for native Google Slides. The three image formats
+# render the FIRST slide only (Drive ``files.export`` takes no page
+# selector).
+GOOGLE_SLIDES_EXPORT_FORMATS: dict[str, tuple[str, str]] = {
+    "pptx": (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".pptx",
+    ),
+    "odp": ("application/vnd.oasis.opendocument.presentation", ".odp"),
+    "pdf": ("application/pdf", ".pdf"),
+    "txt": ("text/plain", ".txt"),
+    "png": ("image/png", ".png"),
+    "jpeg": ("image/jpeg", ".jpg"),
+    "svg": ("image/svg+xml", ".svg"),
+}
+
+# Short-name aliases the model may plausibly pass, per format table.
+_EXPORT_FORMAT_ALIASES: dict[str, str] = {
+    "markdown": "md",
+    "text": "txt",
+    "plain": "txt",
+    "htm": "html",
+    "jpg": "jpeg",
+    "excel": "xlsx",
+    "powerpoint": "pptx",
 }
 
 
-def _resolve_doc_export_format(fmt: str | None) -> tuple[str, str, str] | None:
-    """Resolve a model-supplied format to ``(name, mime, ext)``.
+def _resolve_export_format(
+    fmt: str | None, formats: dict[str, tuple[str, str]],
+) -> tuple[str, str, str] | None:
+    """Resolve a model-supplied format against *formats* to ``(name, mime, ext)``.
 
     Accepts the short name (``"pdf"``), the same with a leading dot or in
-    any case (``".PDF"``), or the exact export MIME type. Returns None when
-    the value is not a supported Google Docs export format.
+    any case (``".PDF"``), a known alias (``"markdown"``, ``"jpg"``), or the
+    exact export MIME type. Returns None when the value is not a supported
+    export format for that table.
     """
     if not fmt or not isinstance(fmt, str):
         return None
     key = fmt.strip()
-    if key in _GOOGLE_DOC_EXPORT_BY_MIME:
-        key = _GOOGLE_DOC_EXPORT_BY_MIME[key]
+    by_mime = {mime: name for name, (mime, _ext) in formats.items()}
+    if key in by_mime:
+        key = by_mime[key]
     key = key.lower().lstrip(".")
-    if key == "markdown":
-        key = "md"
-    elif key in ("text", "plain"):
-        key = "txt"
-    elif key == "htm":
-        key = "html"
-    entry = GOOGLE_DOC_EXPORT_FORMATS.get(key)
+    key = _EXPORT_FORMAT_ALIASES.get(key, key)
+    entry = formats.get(key)
     if entry is None:
         return None
     return key, entry[0], entry[1]
 
 
-async def _handle_google_export_doc(
+def _resolve_doc_export_format(fmt: str | None) -> tuple[str, str, str] | None:
+    """Resolve a Google Docs export format (see ``_resolve_export_format``)."""
+    return _resolve_export_format(fmt, GOOGLE_DOC_EXPORT_FORMATS)
+
+
+def _resolve_sheet_export_format(fmt: str | None) -> tuple[str, str, str] | None:
+    """Resolve a Google Sheets export format (see ``_resolve_export_format``)."""
+    return _resolve_export_format(fmt, GOOGLE_SHEET_EXPORT_FORMATS)
+
+
+def _resolve_slides_export_format(fmt: str | None) -> tuple[str, str, str] | None:
+    """Resolve a Google Slides export format (see ``_resolve_export_format``)."""
+    return _resolve_export_format(fmt, GOOGLE_SLIDES_EXPORT_FORMATS)
+
+
+# Per-kind wording for the shared export routine: the source MIME type the
+# tool accepts, the format table, the human label used in messages, the
+# id parameter name, the tool's own name, and the sibling export tools a
+# wrong-kind Workspace file should be pointed at.
+_EXPORT_KINDS: dict[str, dict] = {
+    "doc": {
+        "mime": _GOOGLE_DOC_MIME,
+        "formats": GOOGLE_DOC_EXPORT_FORMATS,
+        "label": "Google Doc",
+        "id_param": "document_id",
+        "tool": "google_export_doc",
+        "default_stem": "google_doc",
+    },
+    "sheet": {
+        "mime": _GOOGLE_SHEET_MIME,
+        "formats": GOOGLE_SHEET_EXPORT_FORMATS,
+        "label": "Google Sheet",
+        "id_param": "spreadsheet_id",
+        "tool": "google_export_sheet",
+        "default_stem": "google_sheet",
+    },
+    "slides": {
+        "mime": _GOOGLE_SLIDES_MIME,
+        "formats": GOOGLE_SLIDES_EXPORT_FORMATS,
+        "label": "Google Slides presentation",
+        "id_param": "presentation_id",
+        "tool": "google_export_slides",
+        "default_stem": "google_slides",
+    },
+}
+
+# Source MIME type -> the export tool that handles it (for cross-pointers).
+_EXPORT_TOOL_BY_MIME: dict[str, str] = {
+    spec["mime"]: spec["tool"] for spec in _EXPORT_KINDS.values()
+}
+
+
+def _wrong_kind_hint(kind: str, source_mime: str, file_id: str) -> str:
+    """Hint for a file whose MIME type does not match the export *kind*."""
+    spec = _EXPORT_KINDS[kind]
+    sibling = _EXPORT_TOOL_BY_MIME.get(source_mime)
+    if sibling is not None:
+        sibling_param = next(
+            s["id_param"] for s in _EXPORT_KINDS.values() if s["tool"] == sibling
+        )
+        return (
+            f"This tool only exports native {spec['label']}s. Use {sibling} "
+            f"instead: tool_call(tool_name=\"{sibling}\", arguments={{\"{sibling_param}\": "
+            f"\"{file_id}\", \"format\": \"pdf\"}})."
+        )
+    if source_mime.startswith("application/vnd.google-apps."):
+        return (
+            f"This tool only exports native {spec['label']}s. Other Google "
+            "Workspace file types are not supported by it."
+        )
+    return (
+        "This is a regular (non-Google-Workspace) file with its own bytes; "
+        "use download_drive_file instead: "
+        'tool_call(tool_name="download_drive_file", arguments={"file_id": "'
+        + file_id + '"}).'
+    )
+
+
+async def _export_workspace_file(
+    kind: str,
     user: dict,
     conversation_id: str,
-    document_id: str,
+    file_id: str,
     format: str,
     filename: str | None = None,
     project_id: str | None = None,
 ) -> str:
-    """Export a native Google Doc to the workspace in a chosen format.
+    """Shared body of the three Google Workspace export tools.
 
-    Google Docs have no downloadable bytes of their own (``alt=media`` on
-    ``files/{id}`` fails for Google Workspace files), so the content has to
-    be converted through the Drive ``files.export`` endpoint. This handler
-    validates the requested format against ``GOOGLE_DOC_EXPORT_FORMATS``,
-    fetches the file's metadata to confirm it really is a Google Doc (and
-    to derive the default filename), runs the export, and writes the bytes
-    to the conversation / project workspace. Read the result back with
-    ``get_workspace_file``.
+    Google Docs / Sheets / Slides have no downloadable bytes of their own
+    (``alt=media`` on ``files/{id}`` fails for Google Workspace files), so
+    the content has to be converted through the Drive ``files.export``
+    endpoint. This routine validates the requested format against the
+    kind's format table, fetches the file's metadata to confirm it really
+    is that kind of Workspace file (and to derive the default filename),
+    runs the export, and writes the bytes to the conversation / project
+    workspace. Read the result back with ``get_workspace_file``.
 
-    Args:
-        user: Authenticated user dict (for Google credentials).
-        conversation_id: Conversation UUID.
-        document_id: Google Doc id (the ``/document/d/<id>/`` URL segment).
-        format: Short export format name (``pdf``, ``docx``, ``odt``,
-            ``rtf``, ``txt``, ``md``, ``html``, ``epub``, ``zip``) or the
-            exact export MIME type.
-        filename: Optional workspace filename override. When None, the
-            Doc's title plus the format's extension is used.
-        project_id: Optional project UUID for workspace resolution.
-
-    Returns:
-        JSON string: success receipt (filename, size, format, mime) or an
-        ``error`` object.
+    Returns a JSON string: success receipt (filename, size, format, mime)
+    or an ``error`` object.
     """
     from chat.gemini_api.authed_get import _make_authed_request
 
     DRIVE_API_BASE = "https://www.googleapis.com/drive/v3"
+    spec = _EXPORT_KINDS[kind]
+    formats: dict[str, tuple[str, str]] = spec["formats"]
+    label: str = spec["label"]
 
-    document_id = (document_id or "").strip()
-    if not document_id:
-        return json.dumps({"error": "document_id is required."})
+    file_id = (file_id or "").strip()
+    if not file_id:
+        return json.dumps({"error": f"{spec['id_param']} is required."})
 
-    resolved = _resolve_doc_export_format(format)
+    resolved = _resolve_export_format(format, formats)
     if resolved is None:
         return json.dumps({
             "error": (
                 f"Unsupported export format {format!r}. Supported formats: "
-                + ", ".join(sorted(GOOGLE_DOC_EXPORT_FORMATS))
+                + ", ".join(sorted(formats))
                 + "."
             ),
             "supported_formats": {
-                name: mime for name, (mime, _ext) in GOOGLE_DOC_EXPORT_FORMATS.items()
+                name: mime for name, (mime, _ext) in formats.items()
             },
         })
     format_name, export_mime, ext = resolved
 
-    # --- Step 1: Metadata -- confirm it's a Google Doc, get the title ------
+    # --- Step 1: Metadata -- confirm the kind, get the title --------------
     metadata_url = (
-        f"{DRIVE_API_BASE}/files/{document_id}"
+        f"{DRIVE_API_BASE}/files/{file_id}"
         "?fields=name,mimeType&supportsAllDrives=true"
     )
     metadata_result = await _make_authed_request(
@@ -249,34 +359,23 @@ async def _handle_google_export_doc(
     if not isinstance(metadata, dict):
         return json.dumps({"error": f"Unexpected Drive metadata response: {metadata_result}"})
     if "error" in metadata:
-        return json.dumps({"error": f"Failed to get document metadata: {metadata.get('error')}"})
+        return json.dumps({"error": f"Failed to get {label} metadata: {metadata.get('error')}"})
 
     source_mime = metadata.get("mimeType", "")
-    if source_mime != _GOOGLE_DOC_MIME:
-        if source_mime.startswith("application/vnd.google-apps."):
-            hint = (
-                "This tool only exports native Google Docs. Google Sheets / "
-                "Slides / other Workspace files are not supported by it."
-            )
-        else:
-            hint = (
-                "This is a regular (non-Google-Docs) file with its own bytes; "
-                "use download_drive_file instead: "
-                'tool_call(tool_name="download_drive_file", arguments={"file_id": "'
-                + document_id + '"}).'
-            )
+    if source_mime != spec["mime"]:
+        hint = _wrong_kind_hint(kind, source_mime, file_id)
         return json.dumps({
             "error": (
-                f"File '{metadata.get('name', document_id)}' is not a Google Doc "
+                f"File '{metadata.get('name', file_id)}' is not a {label} "
                 f"(mimeType {source_mime or 'unknown'}). {hint}"
             )
         })
 
-    doc_title = metadata.get("name") or f"google_doc_{document_id}"
+    title = metadata.get("name") or f"{spec['default_stem']}_{file_id}"
 
     # --- Step 2: Export via files.export ---------------------------------
     export_url = (
-        f"{DRIVE_API_BASE}/files/{document_id}/export"
+        f"{DRIVE_API_BASE}/files/{file_id}/export"
         f"?mimeType={urllib.parse.quote(export_mime, safe='')}"
     )
     export_result = await _make_authed_request(
@@ -288,10 +387,11 @@ async def _handle_google_export_doc(
         except (json.JSONDecodeError, TypeError):
             err = export_result
         return json.dumps({
-            "error": f"Failed to export document as {format_name}: {err}",
+            "error": f"Failed to export {label} as {format_name}: {err}",
             "hint": (
                 "Google caps exports at 10 MB of exported content; very large "
-                "documents may need a lighter format such as txt or md."
+                "files may need a lighter format (txt, md, csv) or a "
+                "narrower read through the service's own API."
             ),
         })
 
@@ -304,11 +404,11 @@ async def _handle_google_export_doc(
     if filename:
         clean_filename = _sanitize_workspace_filename(filename)
     else:
-        clean_filename = _sanitize_workspace_filename(doc_title)
+        clean_filename = _sanitize_workspace_filename(title)
         if clean_filename:
             clean_filename += ext
     if not clean_filename:
-        clean_filename = f"google_doc_{document_id}{ext}"
+        clean_filename = f"{spec['default_stem']}_{file_id}{ext}"
 
     file_path = (workspace_dir / clean_filename).resolve()
     try:
@@ -330,12 +430,106 @@ async def _handle_google_export_doc(
         "format": format_name,
         "export_mime_type": export_mime,
         "content_type": content_type,
-        "document_title": doc_title,
+        "document_title": title,
         "message": (
-            f"Google Doc '{doc_title}' exported as {format_name} to "
+            f"{label} '{title}' exported as {format_name} to "
             f"'{clean_filename}' ({len(file_bytes)} bytes) in the workspace. "
             f"Use get_workspace_file to read or analyze it: "
             f'tool_call(tool_name="get_workspace_file", arguments={{"path": "{clean_filename}"}})'
         ),
     })
 
+
+async def _handle_google_export_doc(
+    user: dict,
+    conversation_id: str,
+    document_id: str,
+    format: str,
+    filename: str | None = None,
+    project_id: str | None = None,
+) -> str:
+    """Export a native Google Doc to the workspace in a chosen format.
+
+    Args:
+        user: Authenticated user dict (for Google credentials).
+        conversation_id: Conversation UUID.
+        document_id: Google Doc id (the ``/document/d/<id>/`` URL segment).
+        format: Short export format name (``pdf``, ``docx``, ``odt``,
+            ``rtf``, ``txt``, ``md``, ``html``, ``epub``, ``zip``) or the
+            exact export MIME type.
+        filename: Optional workspace filename override. When None, the
+            Doc's title plus the format's extension is used.
+        project_id: Optional project UUID for workspace resolution.
+
+    Returns:
+        JSON string: success receipt (filename, size, format, mime) or an
+        ``error`` object. See ``_export_workspace_file``.
+    """
+    return await _export_workspace_file(
+        "doc", user, conversation_id, document_id, format,
+        filename=filename, project_id=project_id,
+    )
+
+
+async def _handle_google_export_sheet(
+    user: dict,
+    conversation_id: str,
+    spreadsheet_id: str,
+    format: str,
+    filename: str | None = None,
+    project_id: str | None = None,
+) -> str:
+    """Export a native Google Sheet to the workspace in a chosen format.
+
+    Args:
+        user: Authenticated user dict (for Google credentials).
+        conversation_id: Conversation UUID.
+        spreadsheet_id: Google Sheet id (the ``/spreadsheets/d/<id>/`` URL
+            segment).
+        format: Short export format name (``xlsx``, ``ods``, ``pdf``,
+            ``csv``, ``tsv``, ``zip``) or the exact export MIME type.
+            ``csv`` / ``tsv`` carry the first tab only.
+        filename: Optional workspace filename override. When None, the
+            spreadsheet's title plus the format's extension is used.
+        project_id: Optional project UUID for workspace resolution.
+
+    Returns:
+        JSON string: success receipt (filename, size, format, mime) or an
+        ``error`` object. See ``_export_workspace_file``.
+    """
+    return await _export_workspace_file(
+        "sheet", user, conversation_id, spreadsheet_id, format,
+        filename=filename, project_id=project_id,
+    )
+
+
+async def _handle_google_export_slides(
+    user: dict,
+    conversation_id: str,
+    presentation_id: str,
+    format: str,
+    filename: str | None = None,
+    project_id: str | None = None,
+) -> str:
+    """Export a native Google Slides deck to the workspace in a chosen format.
+
+    Args:
+        user: Authenticated user dict (for Google credentials).
+        conversation_id: Conversation UUID.
+        presentation_id: Google Slides id (the ``/presentation/d/<id>/``
+            URL segment).
+        format: Short export format name (``pptx``, ``odp``, ``pdf``,
+            ``txt``, ``png``, ``jpeg``, ``svg``) or the exact export MIME
+            type. The image formats render the first slide only.
+        filename: Optional workspace filename override. When None, the
+            deck's title plus the format's extension is used.
+        project_id: Optional project UUID for workspace resolution.
+
+    Returns:
+        JSON string: success receipt (filename, size, format, mime) or an
+        ``error`` object. See ``_export_workspace_file``.
+    """
+    return await _export_workspace_file(
+        "slides", user, conversation_id, presentation_id, format,
+        filename=filename, project_id=project_id,
+    )

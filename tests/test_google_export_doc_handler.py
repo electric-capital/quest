@@ -266,10 +266,21 @@ class TestRejections:
         publish.assert_not_called()
         assert not any(ws.iterdir())
 
-    def test_sheet_not_supported(self, tmp_path):
+    def test_sheet_points_to_sheet_export_tool(self, tmp_path):
         result, req, _publish, _ws = _export(
             tmp_path,
             metadata=json.dumps({"name": "Budget", "mimeType": "application/vnd.google-apps.spreadsheet"}),
+        )
+        assert "not a Google Doc" in result["error"]
+        assert "download_drive_file" not in result["error"]
+        assert "google_export_sheet" in result["error"]
+        assert f'"spreadsheet_id": "{DOC_ID}"' in result["error"]
+        assert len(req.calls) == 1
+
+    def test_other_workspace_type_not_supported(self, tmp_path):
+        result, req, _publish, _ws = _export(
+            tmp_path,
+            metadata=json.dumps({"name": "Form", "mimeType": "application/vnd.google-apps.form"}),
         )
         assert "not a Google Doc" in result["error"]
         assert "download_drive_file" not in result["error"]
@@ -280,7 +291,7 @@ class TestRejections:
         result, req, publish, ws = _export(
             tmp_path, metadata=json.dumps({"error": "HTTP 404: File not found"}),
         )
-        assert "Failed to get document metadata" in result["error"]
+        assert "Failed to get Google Doc metadata" in result["error"]
         assert len(req.calls) == 1
         publish.assert_not_called()
         assert not any(ws.iterdir())
@@ -295,7 +306,7 @@ class TestRejections:
         result, req, publish, ws = _export(
             tmp_path, export=json.dumps({"error": "HTTP 403: This file is too large to be exported."}),
         )
-        assert "Failed to export document as pdf" in result["error"]
+        assert "Failed to export Google Doc as pdf" in result["error"]
         assert "too large" in result["error"]
         assert "10 MB" in result["hint"]
         assert len(req.calls) == 2
@@ -326,6 +337,8 @@ class TestAuthedGetInteraction:
                 user=USER, conversation_id="conv-1",
             )))
         assert "google_export_doc" in result["error"]
+        assert "google_export_sheet" in result["error"]
+        assert "google_export_slides" in result["error"]
         make.assert_not_called()
 
     def test_authed_get_allows_export_with_output_file(self, tmp_path):

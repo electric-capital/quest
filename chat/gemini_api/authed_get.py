@@ -212,8 +212,21 @@ _SERVICE_REGISTRY: dict[str, dict[str, Any]] = {
         "allowed_endpoints": [
             r"^/drive/v3/files$",          # list files
             r"^/drive/v3/files/[^/]+$",    # get a specific file's metadata (or alt=media download)
-            r"^/drive/v3/files/[^/]+/export$",  # export a Google Workspace doc (google_export_doc tool)
+            # export a Google Workspace file (google_export_doc / _sheet / _slides tools)
+            r"^/drive/v3/files/[^/]+/export$",
+            r"^/drive/v3/files/[^/]+/permissions$",         # who has access
+            r"^/drive/v3/files/[^/]+/permissions/[^/]+$",   # one permission
+            r"^/drive/v3/files/[^/]+/revisions$",           # version history
+            r"^/drive/v3/files/[^/]+/revisions/[^/]+$",     # one revision's metadata
+            r"^/drive/v3/files/[^/]+/comments$",            # comment threads
+            r"^/drive/v3/files/[^/]+/comments/[^/]+$",      # one comment
+            r"^/drive/v3/files/[^/]+/comments/[^/]+/replies$",        # replies on a comment
+            r"^/drive/v3/files/[^/]+/comments/[^/]+/replies/[^/]+$",  # one reply
+            r"^/drive/v3/changes$",        # what changed since a page token
+            r"^/drive/v3/changes/startPageToken$",  # current change cursor
+            r"^/drive/v3/about$",          # storage quota + connected account
             r"^/drive/v3/drives$",         # list shared drives
+            r"^/drive/v3/drives/[^/]+$",   # one shared drive
         ],
     },
     "docs.googleapis.com": {
@@ -1061,7 +1074,8 @@ async def _handle_authed_get_to_file(
     })
 
 
-# Drive ``files.export`` path (GET-allow-listed for the google_export_doc tool).
+# Drive ``files.export`` path (GET-allow-listed for the google_export_doc /
+# google_export_sheet / google_export_slides tools).
 _DRIVE_EXPORT_PATH_RE = re.compile(r"^/drive/v3/files/[^/]+/export$")
 
 
@@ -1121,17 +1135,20 @@ async def handle_authed_get(
         })
 
     # Same reasoning for Drive ``files.export``: the body is a converted
-    # document (PDF/DOCX/...), not JSON. The google_export_doc tool writes it
-    # to the workspace; the allow-list entry exists so that tool (and the
+    # document (PDF/DOCX/XLSX/PPTX/...), not JSON. The google_export_doc /
+    # google_export_sheet / google_export_slides tools write it to the
+    # workspace; the allow-list entry exists so those tools (and the
     # output_file path) can reach the endpoint through _make_authed_request.
     if output_file is None and _DRIVE_EXPORT_PATH_RE.match(parsed.path):
         return json.dumps({
             "error": (
                 "Drive files.export is not supported via the authed_get tool call "
                 "because the exported document bytes cannot be used directly by the "
-                "assistant. Use the google_export_doc tool instead: "
-                'tool_call(tool_name="google_export_doc", arguments={"document_id": "...", "format": "pdf"}). '
-                "It writes the export to the workspace, then use get_workspace_file to read it."
+                "assistant. Use the matching export tool instead: "
+                'tool_call(tool_name="google_export_doc", arguments={"document_id": "...", "format": "pdf"}) '
+                "for Google Docs, google_export_sheet (spreadsheet_id) for Google Sheets, "
+                "or google_export_slides (presentation_id) for Google Slides. "
+                "They write the export to the workspace, then use get_workspace_file to read it."
             )
         })
 

@@ -35,6 +35,8 @@ from chat.gemini_api.tool_handlers import (
     _handle_edit_workspace_file,
     _handle_download_drive_file,
     _handle_google_export_doc,
+    _handle_google_export_sheet,
+    _handle_google_export_slides,
     _handle_archive_gmail_message,
     _handle_list_gmail_quest_labels,
     _handle_modify_gmail_labels,
@@ -280,6 +282,22 @@ async def _tool_google_export_doc(ctx: ToolContext, args: dict) -> str:
     )
 
 
+async def _tool_google_export_sheet(ctx: ToolContext, args: dict) -> str:
+    return await _handle_google_export_sheet(
+        ctx.user, ctx.conversation_id, args.get("spreadsheet_id", ""),
+        args.get("format", ""),
+        filename=args.get("filename"), project_id=ctx.project_id,
+    )
+
+
+async def _tool_google_export_slides(ctx: ToolContext, args: dict) -> str:
+    return await _handle_google_export_slides(
+        ctx.user, ctx.conversation_id, args.get("presentation_id", ""),
+        args.get("format", ""),
+        filename=args.get("filename"), project_id=ctx.project_id,
+    )
+
+
 async def _tool_authed_get(ctx: ToolContext, args: dict) -> str:
     return await handle_authed_get(
         args.get("url", ""), headers=args.get("headers"), user=ctx.user,
@@ -518,6 +536,8 @@ TOOL_CALL_HANDLERS: dict[str, ToolHandler] = {
     "wait_for_handles": _tool_wait_for_handles_stub,
     "download_drive_file": _tool_download_drive_file,
     "google_export_doc": _tool_google_export_doc,
+    "google_export_sheet": _tool_google_export_sheet,
+    "google_export_slides": _tool_google_export_slides,
     "archive_gmail_message": _tool_archive_gmail_message,
     "list_gmail_quest_labels": _tool_list_gmail_quest_labels,
     "modify_gmail_labels": _tool_modify_gmail_labels,

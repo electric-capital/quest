@@ -1,6 +1,6 @@
 # Sheets API Documentation
 
-This document describes how Quest accesses Google Sheets content for reading spreadsheets, and how the agent edits spreadsheet cells via the `edit_google_spreadsheet` action request.
+This document describes how Quest accesses Google Sheets content for reading spreadsheets, exports whole spreadsheets into the conversation workspace via `google_export_sheet`, and how the agent edits spreadsheet cells via the `edit_google_spreadsheet` action request.
 
 ## Overview
 
@@ -14,6 +14,7 @@ Sheets **writes** go exclusively through the approval-gated `edit_google_spreads
 |------|-------------|
 | `api/sheets.py` | `get_instructions()` for system prompt documentation (no endpoint functions; reads use `authed_get`), including the "Google Sheets Write Operations" `edit_google_spreadsheet` spec |
 | `chat/action_request_types/edit_google_spreadsheet.py` | `EditGoogleSpreadsheetHandler` -- approval-gated cell-range writes with read-before-write verification |
+| `chat/gemini_api/tool_handlers/drive.py` | `_handle_google_export_sheet()` + `GOOGLE_SHEET_EXPORT_FORMATS` -- the `google_export_sheet` tool over the shared `_export_workspace_file()` routine |
 | `chat/gemini_api/authed_get.py` | `handle_authed_get()` handler with `sheets.googleapis.com` entry in `_SERVICE_REGISTRY` for authenticated Sheets API GET requests, including `allowed_endpoints` regex validation |
 | `auth/google_credentials.py` | `get_valid_service_credentials()` (service credential resolution using `google_services_oauth` exclusively) |
 | `analysis/analyze_large_tool_results.py` | Analytics for detecting both legacy proxy and new `authed_get` patterns for Sheets usage |
@@ -35,6 +36,16 @@ Sheets reads use `authed_get` with the Google Sheets API v4 at `sheets.googleapi
 ## Listing Google Spreadsheets (via Google Drive API)
 
 The Google Sheets API does not provide a list endpoint. Listing and searching for Google Spreadsheets uses the Google Drive API with a mimeType filter (`mimeType='application/vnd.google-apps.spreadsheet'`), also via `authed_get`. The Drive API base URL is `https://www.googleapis.com/drive/v3`. See `api/sheets.py` (`get_instructions()`) for query parameter details.
+
+## Exporting a Spreadsheet to the Workspace (via `google_export_sheet`)
+
+Native Google Sheets carry no downloadable bytes, so `download_drive_file` cannot fetch them. The `google_export_sheet` tool call converts a spreadsheet through the Drive v3 `files.export` endpoint and writes the result to the conversation (or project) workspace, where the model reads it back (`get_workspace_file` for csv/tsv, `run_python` with openpyxl/pandas for xlsx/ods) or the user downloads it from the file browser.
+
+**Implementation:** `_handle_google_export_sheet()` in `chat/gemini_api/tool_handlers/drive.py`, a thin wrapper over the `_export_workspace_file()` routine shared with `google_export_doc` / `google_export_slides` (format resolution, mimeType pre-check, export call, sanitized `<title><ext>` filename, `_publish_file_list_changed`). Dispatched via `tool_call` from `TOOL_CALL_HANDLERS`; schema in `TOOL_CALL_REGISTRY`. Parameters: `spreadsheet_id` (required), `format` (required), optional `filename`. The flow, receipt shape and error handling are those documented for the Docs tool in [Docs API](docs-api.md#exporting-a-doc-to-the-workspace-via-google_export_doc); only the kind check differs: anything other than `application/vnd.google-apps.spreadsheet` is rejected, with a cross-pointer to `google_export_doc` / `google_export_slides` for the other Workspace kinds and to `download_drive_file` for regular files.
+
+**Supported formats** (`GOOGLE_SHEET_EXPORT_FORMATS`, the complete Google Sheets export set): `xlsx`, `ods`, `pdf`, `csv`, `tsv`, `zip` (zipped HTML, one page per tab). `csv` and `tsv` export the **first tab only** -- Drive's export endpoint takes no tab selector -- so the skill text steers per-tab reads to the Sheets API `values` endpoints and whole-workbook needs to `xlsx`. The `system:sheets` skill (`api/sheets.py`) shows the model each format's MIME type.
+
+**Allow-list interaction / scope:** same as the Docs tool -- the Drive `files/{id}/export` GET entry, blocked in the bare `authed_get` tool path, works under `drive.readonly`. Not in `PUBLIC_TOOL_CALL_ALLOWLIST` or `SCRIPT_TOOL_CALL_ALLOWLIST`.
 
 ## Cell Writes via Action Request (`edit_google_spreadsheet`)
 

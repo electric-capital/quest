@@ -477,7 +477,9 @@ that loses layout, fonts, images, headers/footers and tables. From
 (`--convert-to docx`, `odt`, `xlsx`, `pptx`, `png` for a first-page
 preview, ...). For a document stored in Google Drive, `download_drive_file`
 it first, then convert. Native Google Docs / Sheets / Slides have no bytes
-to convert -- export Docs with `google_export_doc` instead. Do not pass
+to convert -- export them with `google_export_doc` / `google_export_sheet` /
+`google_export_slides` instead (those already produce pdf/docx/xlsx/pptx
+directly, so LibreOffice is rarely needed for them). Do not pass
 `-env:UserInstallation` yourself; the `soffice` wrapper already provides a
 per-run profile.
 
@@ -1115,8 +1117,8 @@ _register(SystemSkill(
 _register(SystemSkill(
     id="system:drive",
     name="Google Drive",
-    description="Drive list/search/download and Save-to-Drive; multi-file upload via upload_to_drive; folders via create_drive_folder.",
-    when_to_load="Load when the user asks about Drive files.",
+    description="Drive list/search/download, access/revision/comment/change reads, exports; upload_to_drive, create_drive_folder.",
+    when_to_load="Load when the user asks about Drive files, who has access to a file, a file's version history or comments, or what changed in Drive.",
     requires="google_services",
     content_builder=lambda base_url, _api_key: drive_api.get_instructions(base_url),
 ))
@@ -1133,8 +1135,8 @@ _register(SystemSkill(
 _register(SystemSkill(
     id="system:sheets",
     name="Google Sheets",
-    description="Read spreadsheet values via authed_get; list via Drive with mimeType filter; edit cells via edit_google_spreadsheet.",
-    when_to_load="Load when the user asks about spreadsheet values, to list spreadsheets, or to edit spreadsheet cells.",
+    description="Read values via authed_get; list via Drive; export (xlsx/csv/pdf) via google_export_sheet; edit_google_spreadsheet.",
+    when_to_load="Load when the user asks about spreadsheet values, to list, export or download spreadsheets, or to edit spreadsheet cells.",
     requires="google_services",
     content_builder=lambda base_url, _api_key: sheets_api.get_instructions(base_url),
 ))
@@ -1142,8 +1144,8 @@ _register(SystemSkill(
 _register(SystemSkill(
     id="system:slides",
     name="Google Slides",
-    description="Read Slides presentations/pages via authed_get; list via Drive with mimeType filter.",
-    when_to_load="Load when the user asks to read or list Google Slides presentations.",
+    description="Read presentations/pages via authed_get; list via Drive; export (pptx/pdf/txt/...) via google_export_slides.",
+    when_to_load="Load when the user asks to read, list, or export/download Google Slides presentations.",
     requires="google_services",
     content_builder=lambda base_url, _api_key: slides_api.get_instructions(base_url),
 ))
