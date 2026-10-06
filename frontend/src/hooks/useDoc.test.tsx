@@ -46,7 +46,7 @@ function row(id: string, overrides: Partial<Doc> = {}): Doc {
 }
 
 function detail(id: string, overrides: Partial<DocDetail> = {}): DocDetail {
-  return { ...row(id), content: `# Body of ${id}`, ...overrides };
+  return { ...row(id), content: `# Body of ${id}`, last_write_conversation: null, ...overrides };
 }
 
 function deferred<T>() {

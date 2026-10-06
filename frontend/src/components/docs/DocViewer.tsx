@@ -9,7 +9,7 @@
  * time. Data comes from useDoc, which follows the realtime doc events.
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -17,7 +17,6 @@ import remarkBreaks from 'remark-breaks';
 import remarkMath from 'remark-math';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
-import { fetchConversation } from '../../api/client';
 import { docAssetBase } from '../../api/docsApi';
 import type { DocDetail } from '../../api/types';
 import { useDoc } from '../../hooks/useDoc';
@@ -31,62 +30,34 @@ import './DocViewer.css';
 const CONVERSATION_SOURCE_PREFIX = 'conversation:';
 const ACTION_REQUEST_SOURCE_RE = /^action_request:(.+)$/;
 
-/** What a `conversation:<id>` writer resolved to, tagged with that id. */
-type ConversationWriter =
-  | { id: string; kind: 'found'; title: string; path: string }
-  | { id: string; kind: 'gone' };
-
 /**
  * "Last written by" subject for `last_write_source`, or null to leave the
- * phrase out (no source, an unknown one, or a conversation still loading).
- * A conversation writer is looked up once per id; any failure (404 after a
- * delete, or not visible) reads "a deleted conversation".
+ * phrase out (no source or an unknown one). The writing conversation's
+ * title and project come with the doc (`last_write_conversation`, resolved
+ * by GET /docs/{id} from one metadata row); a conversation that no longer
+ * exists reads "a deleted conversation".
  */
-function useLastWriter(source: string | null): ReactNode {
-  const conversationId = source?.startsWith(CONVERSATION_SOURCE_PREFIX)
-    ? source.slice(CONVERSATION_SOURCE_PREFIX.length) || null
-    : null;
-  const [writer, setWriter] = useState<ConversationWriter | null>(null);
-
-  useEffect(() => {
-    if (!conversationId) return;
-    let cancelled = false;
-    fetchConversation(conversationId).then(
-      (detail) => {
-        if (cancelled) return;
-        const id = encodeURIComponent(conversationId);
-        setWriter({
-          id: conversationId,
-          kind: 'found',
-          title: detail.custom_name || detail.title || 'a conversation',
-          path: detail.project_id
-            ? `/projects/${encodeURIComponent(detail.project_id)}/${id}`
-            : `/chats/${id}`,
-        });
-      },
-      () => {
-        if (!cancelled) setWriter({ id: conversationId, kind: 'gone' });
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [conversationId]);
-
+function lastWriter(doc: DocDetail): ReactNode {
+  const source = doc.last_write_source;
   if (source === 'ui') return 'you';
   const actionRequest = source ? ACTION_REQUEST_SOURCE_RE.exec(source) : null;
   if (actionRequest) return `action request #${actionRequest[1]}`;
-  if (!conversationId || writer?.id !== conversationId) return null;
-  if (writer.kind === 'gone') return 'a deleted conversation';
+  if (!source?.startsWith(CONVERSATION_SOURCE_PREFIX)) return null;
+  const writer = doc.last_write_conversation;
+  if (!writer) return 'a deleted conversation';
+  const id = encodeURIComponent(writer.id);
+  const path = writer.project_id
+    ? `/projects/${encodeURIComponent(writer.project_id)}/${id}`
+    : `/chats/${id}`;
   return (
-    <Link to={writer.path} className="doc-viewer-footer-link">
-      {writer.title}
+    <Link to={path} className="doc-viewer-footer-link">
+      {writer.title || 'a conversation'}
     </Link>
   );
 }
 
 function DocFooter({ doc }: { doc: DocDetail }) {
-  const writer = useLastWriter(doc.last_write_source);
+  const writer = lastWriter(doc);
   const updated = parseUTCTimestamp(doc.updated_at);
   return (
     <footer className="doc-viewer-footer">

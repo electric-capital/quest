@@ -49,7 +49,7 @@ function row(overrides: Partial<Doc> = {}): Doc {
 }
 
 function detail(overrides: Partial<DocDetail> = {}): DocDetail {
-  return { ...row(), content: '# Roadmap', ...overrides };
+  return { ...row(), content: '# Roadmap', last_write_conversation: null, ...overrides };
 }
 
 const OWNER_USER_DOC = detail();

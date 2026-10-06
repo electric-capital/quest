@@ -379,7 +379,37 @@ async def get_ui_doc(
     content = await _doc_files_call(doc_files.read_body, doc["id"])
     row = _doc_row(user, doc, access)
     row["content"] = content
+    row["last_write_conversation"] = await _last_write_conversation(user, row)
     return row
+
+
+async def _last_write_conversation(user: dict, row: dict) -> Optional[dict]:
+    """``{id, title, project_id}`` of the conversation named by the row's
+    ``last_write_source``, for the viewer's "Last written by" footer.
+
+    One metadata-row lookup instead of the viewer fetching the whole chat
+    history for a title. None when the source is not a conversation (``ui``
+    / ``action_request:<id>`` / blanked for non-owners) or the conversation
+    no longer exists -- the viewer then shows "a deleted conversation".
+    """
+    source = row.get("last_write_source")
+    if not isinstance(source, str) or not source.startswith("conversation:"):
+        return None
+    conversation_id = source[len("conversation:"):]
+    if not conversation_id:
+        return None
+    from chat.storage import ChatStorage
+    from db.conversation_store import get_conversation_meta
+
+    meta = await get_conversation_meta(user["id"], conversation_id)
+    if not meta:
+        return None
+    title = await asyncio.to_thread(ChatStorage._resolve_list_title, conversation_id, meta)
+    return {
+        "id": conversation_id,
+        "title": title,
+        "project_id": meta.get("project_id"),
+    }
 
 
 @router.put("/docs/{doc_id}")

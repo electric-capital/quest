@@ -927,8 +927,21 @@ export interface Doc {
 }
 
 /** GET /docs/{id}: the row plus the whole markdown body. */
+/** The conversation named by `last_write_source`, for the viewer footer. */
+export interface DocWriteConversation {
+  id: string;
+  title: string;
+  project_id: string | null;
+}
+
 export interface DocDetail extends Doc {
   content: string;
+  /**
+   * Resolved by GET /docs/{id} when `last_write_source` is a conversation
+   * the owner still has; null otherwise (deleted, not a conversation, or
+   * blanked for non-owners together with `last_write_source`).
+   */
+  last_write_conversation: DocWriteConversation | null;
 }
 
 export interface ListDocsResponse {

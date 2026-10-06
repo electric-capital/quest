@@ -385,6 +385,43 @@ class TestGet:
         assert row["access"]["write"] == "free"
         assert "shares" not in row
 
+    def test_last_write_conversation_resolved_for_the_footer(self, docs_env):
+        """The viewer's "Last written by" line needs the writing conversation's
+        title and project without fetching the whole chat history."""
+        from datetime import datetime
+        from db import conversation_store
+
+        doc = seed_doc(docs_env, "Notes", "x\n", shares=[("bob", "read")])
+        conv_id = str(uuid.uuid4())
+        _run(conversation_store.create_conversation(
+            uid(docs_env, "alice"), conv_id, datetime.utcnow(),
+            project_id=docs_env.private_project, custom_name="Metrics chat",
+        ))
+        _run(docs_env.doc_store.update_after_write(
+            doc["id"], content_size=2, last_write_source=f"conversation:{conv_id}",
+        ))
+        row = client(docs_env).get(f"/app/api/docs/{doc['id']}").json()
+        assert row["last_write_conversation"] == {
+            "id": conv_id, "title": "Metrics chat", "project_id": docs_env.private_project,
+        }
+        # Blanked for a share recipient along with last_write_source.
+        row = client(docs_env, "bob").get(f"/app/api/docs/{doc['id']}").json()
+        assert row["last_write_source"] is None
+        assert row["last_write_conversation"] is None
+
+    def test_last_write_conversation_null_when_gone_or_not_a_conversation(self, docs_env):
+        doc = seed_doc(docs_env, "Notes", "x\n")
+        _run(docs_env.doc_store.update_after_write(
+            doc["id"], content_size=2, last_write_source="conversation:does-not-exist",
+        ))
+        assert client(docs_env).get(f"/app/api/docs/{doc['id']}").json()["last_write_conversation"] is None
+        _run(docs_env.doc_store.update_after_write(
+            doc["id"], content_size=2, last_write_source="action_request:7",
+        ))
+        row = client(docs_env).get(f"/app/api/docs/{doc['id']}").json()
+        assert row["last_write_source"] == "action_request:7"
+        assert row["last_write_conversation"] is None
+
     def test_project_doc_visible_in_ui(self, docs_env):
         doc = seed_doc(docs_env, "Proj", "p\n", project_id=docs_env.private_project)
         row = client(docs_env).get(f"/app/api/docs/{doc['id']}").json()
