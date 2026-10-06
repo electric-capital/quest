@@ -73,7 +73,7 @@ Routes that serve conversation- or project-scoped files go through these accesso
 - the Gmail Simple URL-lookup routes, and
 - the Gmail draft route's workspace attachments (`api/gmail/draft_endpoints.py` -- the body-supplied `conversation_id` is ownership-checked before any attachment is read).
 
-The Quest Docs routes (`chat/docs/routes.py`) do not use these accessors. Doc visibility and ownership are decided by the Quest Docs access rule (`resolve_doc_access`, see [Quest Docs](quest-docs.md)), and the path still comes only from `get_doc_dir`.
+The Quest Docs routes (`chat/docs/routes.py` and its sibling `share_routes.py` / `edit_routes.py` / `history_routes.py`) do not use these accessors. Doc visibility and ownership are decided by the Quest Docs access rule (`resolve_doc_access`, see [Quest Docs](quest-docs.md)), and the path still comes only from `get_doc_dir`. The URL-supplied path parts below it are validated before any path is built: asset names by `files._validate_asset_name()`, revision ids by the fullmatch pattern in `chat/docs/history.py` (and they must name a snapshot `files.list_revisions()` currently lists).
 
 Tests: `tests/test_storage_path_resolvers.py` (canonical-id, containment and symlink cases, plus user-A-cannot-target-user-B route regressions), `tests/test_gmail_url_cache_security.py`, and `tests/test_docs_storage.py` (`get_doc_dir`).
 
