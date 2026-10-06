@@ -1,0 +1,160 @@
+/* Doc viewer confirm dialogs (DocConfirmDialog: mode switch + delete).
+ * Chrome from the design tokens; only the semantic tones (amber warning,
+ * red danger, error text) are literal, dark-first with a light block. */
+
+.doc-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+  background-color: rgba(0, 0, 0, 0.6);
+  z-index: 1000;
+  animation: doc-dialog-fade 0.15s ease-out;
+}
+
+.doc-dialog {
+  width: 460px;
+  max-width: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 1.25rem 1.5rem;
+  background-color: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+  animation: doc-dialog-rise 0.15s ease-out;
+}
+
+@keyframes doc-dialog-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes doc-dialog-rise {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.doc-dialog-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.doc-dialog-body p {
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.doc-dialog-body p:last-child {
+  margin-bottom: 0;
+}
+
+.doc-dialog-error {
+  margin-top: 0.875rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  border-radius: 6px;
+  background-color: rgba(255, 107, 107, 0.1);
+  color: #ff6b6b;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.doc-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+.doc-dialog-button {
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.doc-dialog-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.doc-dialog-cancel {
+  border: 1px solid var(--border-strong);
+  background: none;
+  color: var(--text-secondary);
+}
+
+.doc-dialog-cancel:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+.doc-dialog-confirm {
+  border: 1px solid transparent;
+}
+
+.doc-dialog-confirm:hover:not(:disabled) {
+  border-color: transparent;
+}
+
+.doc-dialog-confirm--default {
+  background-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.doc-dialog-confirm--default:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+}
+
+/* Going public exposes the doc to the internet sandbox: the amber of the
+ * public-project warning and the Public badge. */
+.doc-dialog-confirm--warning {
+  background-color: #e6b422;
+  color: #1f1a0a;
+}
+
+.doc-dialog-confirm--warning:hover:not(:disabled) {
+  background-color: #f0c33a;
+}
+
+.doc-dialog-confirm--danger {
+  background-color: #d32f2f;
+  color: #ffffff;
+}
+
+.doc-dialog-confirm--danger:hover:not(:disabled) {
+  background-color: #b71c1c;
+}
+
+@media (prefers-color-scheme: light) {
+  .doc-dialog-error {
+    border-color: rgba(211, 47, 47, 0.3);
+    background-color: rgba(211, 47, 47, 0.05);
+    color: #d32f2f;
+  }
+
+  .doc-dialog-confirm--warning {
+    background-color: #9a7209;
+    color: #ffffff;
+  }
+
+  .doc-dialog-confirm--warning:hover:not(:disabled) {
+    background-color: #7d5c07;
+  }
+}

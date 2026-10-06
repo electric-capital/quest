@@ -1,0 +1,146 @@
+/* Doc viewer (/docs/<id>). Rendered inside .docs-main (App.css), a column
+ * that scrolls as a whole. One centered column like the chat transcript:
+ * 2rem gutters on desktop, 16px on phones, never a horizontal page scroll. */
+
+.doc-viewer {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 1rem 2rem 3rem;
+}
+
+.doc-viewer-column {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 820px;
+  min-width: 0;
+  margin: 0 auto;
+}
+
+.doc-viewer-body {
+  margin-top: 1.25rem;
+  min-width: 0;
+}
+
+/* The chat markdown look (Message.css .message-content rules) without the
+   user-bubble chrome: flat on the page ground, full column width, like an
+   assistant reply. */
+.doc-viewer-markdown.message-content {
+  max-width: 100%;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+/* Wide block math scrolls inside itself (pre and tables already do) so
+   the pane never scrolls sideways. */
+.doc-viewer-markdown .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.doc-viewer-source {
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: var(--surface-raised);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  /* Wrap instead of scrolling sideways: long lines stay readable on phones. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.doc-viewer-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+}
+
+.doc-viewer-footer {
+  margin-top: 2.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.doc-viewer-footer-link {
+  color: var(--accent-text);
+  font-weight: 500;
+}
+
+.doc-viewer-footer-link:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+/* Loading / not found / error: centered in the pane. */
+.doc-viewer-state {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2rem 16px;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  text-align: center;
+}
+
+.doc-viewer-state-text {
+  margin: 0;
+}
+
+.doc-viewer-state-link {
+  color: var(--accent-text);
+}
+
+.doc-viewer-state-link:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.doc-viewer-retry {
+  padding: 0.4rem 1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.doc-viewer-retry:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background-color: var(--hover);
+}
+
+.doc-viewer-retry:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+@media (max-width: 768px) {
+  .doc-viewer {
+    padding: 0.75rem 16px 2rem;
+  }
+
+  .doc-viewer-body {
+    margin-top: 1rem;
+  }
+}
