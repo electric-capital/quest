@@ -938,9 +938,11 @@ here; `write_note` says why). The rules behind it:
   change needs the user's approval through a `write_doc` action request --
   for the owner and for people with write access alike. With a read-only
   share: "{doc_access.DENY_READ_ONLY_SHARE}"
-- **Public docs** are written freely only from public-project
-  conversations (by the owner and people with write access). Everywhere
-  else they are read-only: "{doc_access.DENY_PUBLIC_DOC_FROM_PRIVATE}"
+- **Public docs** (the docs of a public project) are read and written
+  only from that project's conversations (by the owner and people with
+  write access); every other conversation never sees them. The Quest web
+  UI can read them but never change them:
+  "{doc_access.DENY_PUBLIC_DOC_FROM_PRIVATE}"
 - **Private docs (every user doc included) are invisible to public-project
   conversations** -- there they behave exactly like a nonexistent id.
 - **Project docs** are visible only from conversations of that project;

@@ -517,10 +517,12 @@ async def update_ui_doc(
 @router.put("/docs/{doc_id}/mode")
 async def set_ui_doc_mode(
     doc_id: str,
-    body: SetDocModeRequest,
+    body: Optional[SetDocModeRequest] = None,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """Not switchable in v1: refuses every doc, whatever the body says.
+    """Not switchable in v1: refuses every doc, whatever the body says
+    (the body is optional so a missing or malformed one still gets the
+    404 / 403 / 400 below rather than a 422).
 
     Checked in order: 404 ``doc_not_found`` (missing, hidden, or in a
     public project hidden by the ``public_projects`` gate); 403

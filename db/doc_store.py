@@ -434,8 +434,11 @@ async def update_doc_metadata(
 
         changed = False
         if clean_title is not None and clean_title != doc.title:
+            # A user doc is private whatever a legacy row says (the access
+            # rule treats it so); check the namespace it actually lives in.
+            effective_mode = "private" if doc.project_id is None else doc.mode
             if await _title_taken(
-                db, doc.owner_id, doc.project_id, doc.mode, clean_title,
+                db, doc.owner_id, doc.project_id, effective_mode, clean_title,
                 exclude_doc_id=doc.id,
             ):
                 raise DuplicateDocTitleError(

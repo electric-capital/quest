@@ -41,7 +41,7 @@ function doc(id: string, overrides: Partial<Doc> = {}): Doc {
     updated_at: '2026-10-01T00:00:00',
     scope: 'user',
     shared: false,
-    access: { can_rename: true, can_switch_mode: true, can_delete: true, write: 'free' },
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free' },
     ...overrides,
   };
 }

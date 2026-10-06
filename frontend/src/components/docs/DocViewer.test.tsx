@@ -46,7 +46,7 @@ function doc(overrides: Partial<DocDetail> = {}): DocDetail {
     updated_at: new Date(Date.now() - 5 * 60 * 1000).toISOString().replace('Z', ''),
     scope: 'user',
     shared: false,
-    access: { can_rename: true, can_switch_mode: true, can_delete: true, write: 'free' },
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free' },
     shares: [],
     content: '# Plan\n\n![chart](assets/chart.png)',
     last_write_conversation: null,

@@ -8,7 +8,7 @@ import type { ReactNode } from 'react';
 import { ModalShell } from '../ModalShell';
 import './DocConfirmDialog.css';
 
-export type DocConfirmTone = 'default' | 'warning' | 'danger';
+export type DocConfirmTone = 'default' | 'danger';
 
 export interface DocConfirmDialogProps {
   isOpen: boolean;

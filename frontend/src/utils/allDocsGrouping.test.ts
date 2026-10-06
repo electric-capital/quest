@@ -23,7 +23,7 @@ function doc(overrides: Partial<Doc> & { id: string }): Doc {
     updated_at: '2026-01-01T00:00:00',
     scope: overrides.project_id ? 'project' : 'user',
     shared: false,
-    access: { can_rename: true, can_switch_mode: true, can_delete: true, write: 'free' },
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free' },
     ...overrides,
   };
 }

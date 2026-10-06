@@ -1,5 +1,5 @@
 /* Doc viewer confirm dialog (DocConfirmDialog; the header's Delete confirm).
- * Chrome from the design tokens; only the semantic tones (amber warning,
+ * Chrome from the design tokens; only the semantic tone (
  * red danger, error text) are literal, dark-first with a light block. */
 
 .doc-dialog-overlay {
@@ -122,17 +122,7 @@
   background-color: var(--accent-hover);
 }
 
-/* A cautionary confirm: the amber of the public-project warning and the
- * Public badge. */
-.doc-dialog-confirm--warning {
-  background-color: #e6b422;
-  color: #1f1a0a;
-}
-
-.doc-dialog-confirm--warning:hover:not(:disabled) {
-  background-color: #f0c33a;
-}
-
+/* A destructive confirm (Delete). */
 .doc-dialog-confirm--danger {
   background-color: #d32f2f;
   color: #ffffff;
@@ -149,12 +139,4 @@
     color: #d32f2f;
   }
 
-  .doc-dialog-confirm--warning {
-    background-color: #9a7209;
-    color: #ffffff;
-  }
-
-  .doc-dialog-confirm--warning:hover:not(:disabled) {
-    background-color: #7d5c07;
-  }
-}
+    }

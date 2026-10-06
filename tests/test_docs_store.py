@@ -565,7 +565,10 @@ class TestUserDocsPrivateMigration:
         assert module.revision == _MIGRATION_REV
         assert module.down_revision == "55983a10e266"  # create docs and doc_shares
         script = ScriptDirectory.from_config(Config(str(PROJECT_ROOT / "alembic.ini")))
-        assert script.get_heads() == [_MIGRATION_REV]
+        heads = script.get_heads()
+        assert len(heads) == 1
+        # Reachable from the single head (later migrations may stack on it).
+        assert _MIGRATION_REV in {rev.revision for rev in script.walk_revisions(base="base", head=heads[0])}
 
     def test_flips_public_user_docs_only(self, env):
         store = env["store"]

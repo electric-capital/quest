@@ -16,9 +16,12 @@ inference_api, user_subagent and script runs)::
     | Private, unshared     | Free     | n/a (Hidden) | Hidden | n/a(Hidden) | Read      |
     | Private, shared (any) | Approval | read: Read   | Hidden | Hidden      | Read      |
     |                       |          | write: Appr. |        |             |           |
-    | Public, unshared      | Read     | n/a (Hidden) | Free   | n/a(Hidden) | Read      |
-    | Public, shared        | Read     | Read         | Free   | read: Read  | Read      |
+    | Public, unshared      | Read     | n/a (Hidden) | Free   | n/a(Hidden) | Read (*)  |
+    | Public, shared        | Read     | Read         | Free   | read: Read  | Read (*)  |
     |                       |          |              |        | write: Free |           |
+
+(*) except ``script``: scripts never see project docs (rule 2), and public
+docs are always project docs, so a script sees every public doc as Hidden.
 
 A user doc (``project_id`` None) is always private: the "Public" rows only
 ever describe docs of a public project (seen from that project's
