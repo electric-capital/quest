@@ -7,6 +7,9 @@ Layout (spec section 4.1)::
       assets/<name>.<ext>          raster images only: png, jpg, gif, webp
       revisions/<YYYYMMDDTHHMMSSZ>-<n>.md
                                    snapshot of doc.md taken before each write
+      revisions/<YYYYMMDDTHHMMSSZ>-<n>.json
+                                   its metadata sidecar: {"written_at",
+                                   "source", "size"} (see _snapshot_body)
 
 Rules every function here keeps:
 
@@ -24,6 +27,8 @@ Everything is synchronous; async callers wrap calls in
 """
 
 import errno
+import json
+import logging
 import os
 import re
 import shutil
@@ -42,12 +47,17 @@ from typing import Callable, Iterator, Optional
 from chat import storage as _storage
 from chat.docs import constants
 
+logger = logging.getLogger(__name__)
+
 BODY_NAME = "doc.md"
 ASSETS_DIR_NAME = "assets"
 REVISIONS_DIR_NAME = "revisions"
 
 _BODY_TMP_NAME = BODY_NAME + ".tmp"
 _REVISION_RE = re.compile(r"^(\d{8}T\d{6}Z)-(\d+)\.md$")
+_REVISION_META_RE = re.compile(r"^(\d{8}T\d{6}Z)-(\d+)\.json$")
+# Either half of a snapshot pair; name allocation skips both.
+_REVISION_ENTRY_RE = re.compile(r"^(\d{8}T\d{6}Z)-(\d+)\.(?:md|json)$")
 _ASSET_NAME_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _ASSET_STEM_MAX_LEN = 64
 
@@ -309,20 +319,65 @@ def read_body(doc_id: str) -> str:
 
 
 def _next_revision_path(revisions_dir: Path, now: datetime) -> Path:
+    # Counts .json names too, so a new snapshot never lands beside an
+    # orphan sidecar of an older one (orphans are pruned after the write).
     stamp = now.strftime("%Y%m%dT%H%M%SZ")
     highest = 0
     for name in os.listdir(revisions_dir):
-        m = _REVISION_RE.match(name)
+        m = _REVISION_ENTRY_RE.match(name)
         if m and m.group(1) == stamp:
             highest = max(highest, int(m.group(2)))
     return revisions_dir / f"{stamp}-{highest + 1}.md"
 
 
-def _snapshot_body(paths: DocPaths, data: Optional[bytes] = None) -> Optional[Path]:
+def _revision_meta_path(revision: Path) -> Path:
+    """``revisions/<ts>-<n>.json`` for ``revisions/<ts>-<n>.md``."""
+    return revision.with_suffix(".json")
+
+
+def _write_revision_meta(
+    revision: Path, *, now: datetime, source: Optional[str], size: int,
+) -> None:
+    """Write the sidecar of a just-written snapshot (exclusive create).
+
+    Best-effort: a failure is logged and the snapshot stays without
+    metadata (readers tolerate a missing sidecar), so the body write it
+    precedes still goes ahead.
+    """
+    meta = {
+        "written_at": now.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        "source": None if source is None else str(source),
+        "size": size,
+    }
+    try:
+        _write_new_file(
+            _revision_meta_path(revision),
+            json.dumps(meta, ensure_ascii=False).encode("utf-8"),
+        )
+    except OSError:
+        logger.warning(
+            "[docs] could not write revision metadata for %s",
+            revision.name, exc_info=True,
+        )
+
+
+def _snapshot_body(
+    paths: DocPaths,
+    data: Optional[bytes] = None,
+    *,
+    source: Optional[str] = None,
+) -> Optional[Path]:
     """Copy the current ``doc.md`` into ``revisions/``; None when no body yet.
 
     ``data`` is the current body when the caller already read it. A
     symlinked or special ``doc.md`` raises (never snapshotted through).
+
+    Beside the ``<ts>-<n>.md`` snapshot it writes ``<ts>-<n>.json``:
+    ``{"written_at": <ISO UTC with Z, when the snapshot was taken>,
+    "source": <source>, "size": <bytes of the snapshot>}``. ``source`` is
+    the ``last_write_source`` of the body being snapshotted (None when
+    unknown). The ``.md`` is written first, so a crash leaves at worst a
+    snapshot without a sidecar, never a sidecar without its snapshot.
     """
     if data is None:
         if not os.path.lexists(paths.body):
@@ -333,9 +388,10 @@ def _snapshot_body(paths: DocPaths, data: Optional[bytes] = None) -> Optional[Pa
         target = _next_revision_path(paths.revisions, now)
         try:
             _write_new_file(target, data)
-            return target
         except FileExistsError:
             continue
+        _write_revision_meta(target, now=now, source=source, size=len(data))
+        return target
     raise DocFileError("Could not allocate a revision snapshot name.")
 
 
@@ -362,6 +418,29 @@ def _list_revision_files(revisions_dir: Path) -> list[Path]:
     return found
 
 
+def _unlink_revision_meta(path: Path) -> None:
+    """Remove one sidecar entry (never follows a link; a directory planted
+    at the name is left alone)."""
+    try:
+        if stat.S_ISDIR(os.lstat(path).st_mode):
+            return
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _prune_orphan_revision_meta(revisions_dir: Path) -> None:
+    """Delete every ``<ts>-<n>.json`` whose ``<ts>-<n>.md`` is gone."""
+    if not revisions_dir.is_dir() or revisions_dir.is_symlink():
+        return
+    for name in os.listdir(revisions_dir):
+        if not _REVISION_META_RE.match(name):
+            continue
+        meta = revisions_dir / name
+        if not os.path.lexists(meta.with_suffix(".md")):
+            _unlink_revision_meta(meta)
+
+
 def _prune_revisions(revisions_dir: Path) -> None:
     """Delete snapshots older than the retention window, and the oldest
     ones beyond ``DOC_REVISION_MAX_COUNT``.
@@ -370,30 +449,44 @@ def _prune_revisions(revisions_dir: Path) -> None:
     however old, so an idle doc keeps one restore point. The count cap
     bounds the disk a looping writer can consume inside the window (each
     snapshot is up to ``DOC_MAX_CONTENT_SIZE``).
+
+    Both rules count and date the ``.md`` snapshots only; a snapshot's
+    ``.json`` sidecar is deleted with it, and any sidecar left without its
+    ``.md`` (an interrupted prune, a hand-deleted snapshot) is deleted too.
     """
     revisions = _list_revision_files(revisions_dir)
-    if len(revisions) <= 1:
-        return
-    cutoff = (
-        datetime.now(timezone.utc)
-        - timedelta(days=constants.DOC_REVISION_RETENTION_DAYS)
-    ).timestamp()
-    excess = max(0, len(revisions) - constants.DOC_REVISION_MAX_COUNT)
-    for index, path in enumerate(revisions[:-1]):
-        try:
-            if index < excess or os.lstat(path).st_mtime < cutoff:
+    if len(revisions) > 1:
+        cutoff = (
+            datetime.now(timezone.utc)
+            - timedelta(days=constants.DOC_REVISION_RETENTION_DAYS)
+        ).timestamp()
+        excess = max(0, len(revisions) - constants.DOC_REVISION_MAX_COUNT)
+        for index, path in enumerate(revisions[:-1]):
+            try:
+                if not (index < excess or os.lstat(path).st_mtime < cutoff):
+                    continue
                 path.unlink()
-        except FileNotFoundError:
-            continue
+            except FileNotFoundError:
+                pass
+            _unlink_revision_meta(_revision_meta_path(path))
+    _prune_orphan_revision_meta(revisions_dir)
 
 
-def write_body(doc_id: str, content: str, *, snapshot: bool = True) -> int:
+def write_body(
+    doc_id: str,
+    content: str,
+    *,
+    snapshot: bool = True,
+    snapshot_source: Optional[str] = None,
+) -> int:
     """Replace ``doc.md`` with ``content`` (CRLF -> LF), atomically.
 
     Under the doc lock: snapshot the current body into ``revisions/`` (when
     ``snapshot`` and a body exists), prune old revisions, then write
     ``doc.md.tmp`` and ``os.replace`` it onto ``doc.md``. The size cap is
-    checked before anything is touched.
+    checked before anything is touched. ``snapshot_source`` is the
+    ``last_write_source`` of the body being replaced, recorded in the
+    snapshot's ``.json`` sidecar.
 
     Returns:
         Byte size of the new ``doc.md``.
@@ -406,21 +499,27 @@ def write_body(doc_id: str, content: str, *, snapshot: bool = True) -> int:
     data = _encode_body(_normalize_body(content))
     paths = doc_paths(doc_id)
     with doc_lock(doc_id):
-        _write_body_locked(paths, data, snapshot=snapshot)
+        _write_body_locked(paths, data, snapshot=snapshot, source=snapshot_source)
     return len(data)
 
 
-def _write_body_locked(paths: DocPaths, data: bytes, *, snapshot: bool) -> None:
+def _write_body_locked(
+    paths: DocPaths,
+    data: bytes,
+    *,
+    snapshot: bool,
+    source: Optional[str] = None,
+) -> None:
     """Snapshot + prune + atomic write; caller holds the doc lock.
 
-    The snapshot is skipped when the new body is byte-identical to the
-    current one (nothing to restore to).
+    The snapshot (and its sidecar) is skipped when the new body is
+    byte-identical to the current one (nothing to restore to).
     """
     _ensure_layout(paths, create_root=False)
     if snapshot:
         current = _current_body_bytes(paths)
         if current is not None and current != data:
-            _snapshot_body(paths, current)
+            _snapshot_body(paths, current, source=source)
     _prune_revisions(paths.revisions)
     _atomic_write_body(paths, data)
 
@@ -436,17 +535,18 @@ def modify_body(
     fn: Callable[[str], str],
     *,
     snapshot: bool = True,
+    snapshot_source: Optional[str] = None,
 ) -> tuple[str, int]:
     """Read-modify-write ``doc.md`` in ONE critical section.
 
     Under the doc lock: read the current body, call ``fn(current) ->
-    new_body``, then snapshot/prune/write exactly like :func:`write_body`.
-    This is the primitive every edit/append uses -- a separate
-    ``read_body`` + ``write_body`` pair would let concurrent writers clobber
-    each other (the lock is not re-entrant, so callers cannot wrap the pair
-    themselves). ``fn`` runs with the lock held: keep it pure and quick
-    (string work only). Any exception from ``fn`` propagates unchanged and
-    leaves the body untouched.
+    new_body``, then snapshot/prune/write exactly like :func:`write_body`
+    (``snapshot_source`` as there). This is the primitive every edit/append
+    uses -- a separate ``read_body`` + ``write_body`` pair would let
+    concurrent writers clobber each other (the lock is not re-entrant, so
+    callers cannot wrap the pair themselves). ``fn`` runs with the lock
+    held: keep it pure and quick (string work only). Any exception from
+    ``fn`` propagates unchanged and leaves the body untouched.
 
     Returns:
         ``(new_body, byte_size)`` with ``new_body`` CRLF-normalized as written.
@@ -462,13 +562,45 @@ def modify_body(
         current = current_bytes.decode("utf-8", errors="replace")
         new_body = _normalize_body(fn(current))
         data = _encode_body(new_body)
-        _write_body_locked(paths, data, snapshot=snapshot)
+        _write_body_locked(paths, data, snapshot=snapshot, source=snapshot_source)
     return new_body, len(data)
 
 
 def list_revisions(doc_id: str) -> list[Path]:
-    """Revision snapshot files, oldest first (timestamp, then sequence)."""
+    """Revision snapshot files (the ``.md`` half of each pair), oldest first
+    (timestamp, then sequence). A snapshot without a sidecar is listed."""
     return _list_revision_files(doc_paths(doc_id).revisions)
+
+
+def read_revision_meta(path: Path) -> Optional[dict]:
+    """The ``.json`` sidecar of a snapshot from :func:`list_revisions`.
+
+    Returns the sidecar dict (``written_at`` str, ``source`` str or None,
+    ``size`` int), or None when the sidecar is missing, unreadable (a
+    symlink or special file is never followed or opened blocking), not
+    JSON, or not that shape.
+    """
+    path = Path(path)
+    if not _REVISION_RE.match(path.name):
+        return None
+    try:
+        raw = _read_regular_bytes(
+            _revision_meta_path(path), missing_message="Revision metadata is missing.",
+        )
+        meta = json.loads(raw.decode("utf-8"))
+    except (DocFileError, OSError, ValueError):
+        # ValueError covers JSONDecodeError and UnicodeDecodeError.
+        return None
+    if (
+        not isinstance(meta, dict)
+        or not isinstance(meta.get("written_at"), str)
+        or "source" not in meta
+        or not (meta["source"] is None or isinstance(meta["source"], str))
+        or not isinstance(meta.get("size"), int)
+        or isinstance(meta.get("size"), bool)
+    ):
+        return None
+    return meta
 
 
 # ---------------------------------------------------------------------------

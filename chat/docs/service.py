@@ -1146,7 +1146,10 @@ async def _load_workspace_image(caller: Caller, workspace_path: str) -> tuple[by
 # run with that lock held. Body changes go through
 # files.modify_body, which reads, transforms and writes doc.md in one
 # critical section of the per-doc threading lock (a separate read_body +
-# write_body pair would let concurrent writers clobber each other).
+# write_body pair would let concurrent writers clobber each other). Each
+# passes the doc row's last_write_source (re-read under the lock, so it
+# names the writer of the body being replaced) as snapshot_source for the
+# revision sidecar.
 # ---------------------------------------------------------------------------
 
 
@@ -1159,7 +1162,10 @@ async def _write_edit(caller: Caller, doc: dict, clean: dict, write_source: str)
         replaced.append(count)
         return new_body
 
-    new_body, size = await _files(doc_files.modify_body, doc_id, transform)
+    new_body, size = await _files(
+        doc_files.modify_body, doc_id, transform,
+        snapshot_source=doc.get("last_write_source"),
+    )
     updated = await _finish_write(doc_id, content_size=size, write_source=write_source)
     return {
         "replaced": replaced[0],
@@ -1176,7 +1182,10 @@ async def _write_append(caller: Caller, doc: dict, clean: dict, write_source: st
         _check_body_size(new_body)
         return new_body
 
-    new_body, size = await _files(doc_files.modify_body, doc_id, transform)
+    new_body, size = await _files(
+        doc_files.modify_body, doc_id, transform,
+        snapshot_source=doc.get("last_write_source"),
+    )
     updated = await _finish_write(doc_id, content_size=size, write_source=write_source)
     return {
         "appended_lines": _total_lines(clean["content"]),
@@ -1212,7 +1221,10 @@ async def _write_add_image(caller: Caller, doc: dict, clean: dict, write_source:
             return appended
 
         try:
-            new_body, size = await _files(doc_files.modify_body, doc_id, transform)
+            new_body, size = await _files(
+                doc_files.modify_body, doc_id, transform,
+                snapshot_source=doc.get("last_write_source"),
+            )
         except DocError:
             # The asset landed (assets are additive); keep the counter
             # honest, then report the body failure.
