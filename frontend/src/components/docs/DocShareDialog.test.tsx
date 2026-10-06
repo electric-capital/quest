@@ -244,6 +244,9 @@ describe('DocShareDialog', () => {
       expect(personSelect('ana@x.test').value).toBe('write');
       expect(screen.queryByText('Not shared with anyone yet.')).toBeNull();
       expect(emailInput().value).toBe('');
+      // The next person starts at "Can view" again: edit access is never
+      // carried over to someone else by accident.
+      expect(addPermissionSelect().value).toBe('read');
       // The Add button disabled itself (empty field): the focus is back in it.
       expect(document.activeElement).toBe(emailInput());
     });

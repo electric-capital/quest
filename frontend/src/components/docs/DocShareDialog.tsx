@@ -302,6 +302,9 @@ export function DocShareDialog({ doc, isOpen, onClose, onRowApplied }: DocShareD
     if (row) {
       setEmail('');
       setResults([]);
+      // Back to the least access for the next person: edit access is
+      // granted per person on purpose, never carried over by accident.
+      setAddPermission('read');
     }
     focusAfterRender({ kind: 'input' });
   };

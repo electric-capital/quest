@@ -199,6 +199,33 @@ describe('useDoc', () => {
     expect(result.current.doc?.title).toBe('Renamed');
   });
 
+  it('applyContent replaces the body from a save / restore response and ignores older rows', async () => {
+    mocks.fetchDoc.mockResolvedValueOnce(
+      detail('d1', { updated_at: '2026-10-02T00:00:00', last_write_source: 'ui:1' }),
+    );
+    const { result } = renderHook(() => useDoc('d1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() =>
+      result.current.applyContent({
+        ...row('d1', { updated_at: '2026-10-03T00:00:00', last_write_source: 'ui:1' }),
+        content: 'saved body',
+      }),
+    );
+    expect(result.current.doc?.content).toBe('saved body');
+    expect(result.current.doc?.updated_at).toBe('2026-10-03T00:00:00');
+    // Same writer, nothing in flight: the response is the truth, no re-fetch.
+    expect(mocks.fetchDoc).toHaveBeenCalledTimes(1);
+
+    act(() =>
+      result.current.applyContent({
+        ...row('d1', { updated_at: '2026-10-01T00:00:00' }),
+        content: 'older body',
+      }),
+    );
+    expect(result.current.doc?.content).toBe('saved body');
+  });
+
   it('applyRow does not re-fetch for a row with the same updated_at (a share change)', async () => {
     mocks.fetchDoc.mockResolvedValueOnce(detail('d1', { updated_at: '2026-10-02T00:00:00' }));
     const { result } = renderHook(() => useDoc('d1'));
