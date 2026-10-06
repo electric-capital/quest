@@ -1,0 +1,49 @@
+/* DocModeBadge: Private / Public pill. Same shape as the sidebar's
+ * drill-down public badge (rounded outline pill, small bold text). Private
+ * is neutral and built from tokens; Public reuses the literal amber of the
+ * public-project composer warning (ChatPanel.css), dark-first with a
+ * light-mode override below. */
+.doc-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.3;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.doc-mode-badge svg {
+  flex-shrink: 0;
+}
+
+.doc-mode-badge--sm {
+  gap: 0.2rem;
+  font-size: 0.625rem;
+  padding: 0.05rem 0.35rem;
+}
+
+.doc-mode-badge--private {
+  color: var(--text-secondary);
+  border-color: var(--border-strong);
+  background: var(--hover);
+}
+
+.doc-mode-badge--public {
+  color: #e6b422;
+  border-color: #6b5a1e;
+  background: #2a2416;
+}
+
+@media (prefers-color-scheme: light) {
+  .doc-mode-badge--public {
+    color: #9a7209;
+    border-color: #e0c76a;
+    background: #fdf6e3;
+  }
+}
