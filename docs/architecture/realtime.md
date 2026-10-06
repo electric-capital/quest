@@ -41,7 +41,7 @@ Every publisher is a best-effort `bus.publish_to_user(...)` wrapped in try/excep
 - `chat/file_routes.py` -- the local `_publish_file_list_changed` helper is called from the three mutating REST routes (`upload_files`, `delete_file`, `create_folder`) so a write driven from one tab refreshes file browsers in any other tab the same user has open. Same `scope` rule as the tool handler emission sites.
 - `chat/docs/events.py` -- `publish_doc_list_changed` / `publish_doc_changed`, the Quest Docs globals, always sent to the doc's owner. They are called by:
 
-  - `chat/docs/service.py`, after every body/asset write (model tools and the `write_doc` action request) and for the UI mutations it owns (create, mode switch, delete);
+  - `chat/docs/service.py`, after every body/asset write (model tools and the `write_doc` action request) and for the UI mutations it owns (create, delete; no doc's mode can be switched);
   - `chat/docs/routes.py`, only for a rename that changed something;
   - the project-delete route in `chat/project_routes.py`, once after its directory sweep.
 
