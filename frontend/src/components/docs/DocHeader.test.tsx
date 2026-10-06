@@ -314,15 +314,17 @@ describe('DocHeader', () => {
       onShare: vi.fn(),
     });
 
-    it('owner gets Edit, History and Share between Rename and the downloads', () => {
+    it('owner gets Edit and Share beside the source toggle, History in the menu', () => {
       const extra = viewerHandlers();
       renderHeader(OWNER_USER_DOC, extra);
+      fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      expect(extra.onEdit).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+      expect(extra.onShare).toHaveBeenCalledTimes(1);
       const menu = openMenu();
       expect(menuItemLabels(menu)).toEqual([
         'RenameR',
-        'EditE',
         'HistoryH',
-        'ShareS',
         'Download Markdown',
         'Download with images (.zip)',
         'DeleteD',
@@ -332,8 +334,10 @@ describe('DocHeader', () => {
       expect(screen.queryByRole('menu')).toBeNull();
     });
 
-    it('a read-share recipient gets the downloads only (no History)', () => {
+    it('a read-share recipient gets the downloads only (no Edit, Share or History)', () => {
       renderHeader(NON_OWNER_DOC, viewerHandlers());
+      expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Share' })).toBeNull();
       expect(menuItemLabels(openMenu())).toEqual([
         'Download Markdown',
         'Download with images (.zip)',
@@ -347,8 +351,9 @@ describe('DocHeader', () => {
         access: { ...NON_OWNER_DOC.access, write: 'free', can_edit: true },
       });
       renderHeader(writer, viewerHandlers());
+      expect(screen.getByRole('button', { name: 'Edit' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Share' })).toBeNull();
       expect(menuItemLabels(openMenu())).toEqual([
-        'EditE',
         'HistoryH',
         'Download Markdown',
         'Download with images (.zip)',
@@ -356,23 +361,29 @@ describe('DocHeader', () => {
       expect(screen.getByText('Shared by Bea · Can edit')).toBeTruthy();
     });
 
-    it('single-key hints run the actions while the menu is open', () => {
+    it('single-key hints run the menu actions while the menu is open', () => {
       const extra = viewerHandlers();
       renderHeader(OWNER_USER_DOC, extra);
       openMenu();
-      fireEvent.keyDown(document, { key: 'e' });
-      expect(extra.onEdit).toHaveBeenCalledTimes(1);
+      fireEvent.keyDown(document, { key: 'h' });
+      expect(extra.onShowHistory).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('menu')).toBeNull();
+      // Edit and Share left the menu, so their old hint letters do nothing.
       openMenu();
+      fireEvent.keyDown(document, { key: 'e' });
       fireEvent.keyDown(document, { key: 's' });
-      expect(extra.onShare).toHaveBeenCalledTimes(1);
+      expect(extra.onEdit).not.toHaveBeenCalled();
+      expect(extra.onShare).not.toHaveBeenCalled();
+      expect(screen.getByRole('menu')).toBeTruthy();
     });
 
-    it('edit and history modes drop Edit / History and the source toggle', () => {
+    it('edit and history modes drop Edit, History and the source toggle but keep Share', () => {
       renderHeader(OWNER_USER_DOC, { ...viewerHandlers(), mode: 'edit' });
       expect(screen.queryByRole('button', { name: 'Show source' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Share' })).toBeTruthy();
       expect(menuItemLabels(openMenu())).toEqual([
         'RenameR',
-        'ShareS',
         'Download Markdown',
         'Download with images (.zip)',
         'DeleteD',

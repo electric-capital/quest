@@ -4,12 +4,11 @@
  * Same interaction model as ConversationHeader: the title plus a chevron
  * open a small dropdown, single-key hints act while it is open, and Rename
  * swaps the title for an inline input. Items follow the viewer's access
- * flags: Rename (can_rename), Edit (can_edit, view mode only), History
- * (can_edit, view mode only: earlier versions may hold text the owner
- * removed before sharing), Share (can_share), the two downloads
- * (always), Delete (can_delete, behind a confirm). There is no mode switch:
- * user docs are always private and a project doc takes its project's mode
- * (`access.can_switch_mode` is always false).
+ * flags: Rename (can_rename), History (can_edit, view mode only: earlier
+ * versions may hold text the owner removed before sharing), the two
+ * downloads (always), Delete (can_delete, behind a confirm). There is no
+ * mode switch: user docs are always private and a project doc takes its
+ * project's mode (`access.can_switch_mode` is always false).
  *
  * Beside the title sit the mode badge (a public doc only, see utils/docMode),
  * a folder chip for a project doc (a link to that project's docs when the
@@ -17,7 +16,10 @@
  * else's project), and a share chip: for the owner of a shared doc, "Shared
  * with N people" / "Shared with everyone" opening the Share dialog; for a
  * recipient, who shared it and whether they can edit. On the right, the
- * Show source / Show rendered toggle (view mode only).
+ * action buttons: Edit (can_edit, view mode only), Share (can_share) and
+ * the Show source / Show rendered toggle (view mode only). Edit and Share
+ * sit there rather than in the dropdown because they are the two actions
+ * a reader reaches for most.
  *
  * Writes report the returned row through `onRowApplied` (useDoc.applyRow)
  * rather than waiting for the realtime re-fetch. The body editor, History
@@ -106,7 +108,8 @@ export function DocHeader({
   // versions may hold text the owner removed before sharing.
   const canShowHistory = Boolean(onShowHistory) && doc.access.can_edit && mode === 'view';
   const canShare = Boolean(onShare) && doc.access.can_share;
-  const hasPrimaryItems = canRename || canEdit || canShowHistory || canShare;
+  const hasPrimaryItems = canRename || canShowHistory;
+  const showSourceToggle = mode === 'view';
   const shareSummary = ownerShareSummary(doc) ?? recipientShareSummary(doc);
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -249,7 +252,8 @@ export function DocHeader({
     }
   }, [doc.id, onDeleted]);
 
-  // Menu actions handed to the viewer: close the menu first.
+  // Actions handed to the viewer: close the menu first (the share chip and
+  // the header buttons may be clicked while it is open).
   const runEdit = useCallback(() => {
     setMenuOpen(false);
     onEdit?.();
@@ -270,18 +274,13 @@ export function DocHeader({
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key.toLowerCase();
       if (key === 'r' && canRename) { e.preventDefault(); startRename(); }
-      else if (key === 'e' && canEdit) { e.preventDefault(); runEdit(); }
       else if (key === 'h' && canShowHistory) { e.preventDefault(); runHistory(); }
-      else if (key === 's' && canShare) { e.preventDefault(); runShare(); }
       else if (key === 'd' && canDelete) { e.preventDefault(); openDelete(); }
       else if (key === 'escape') { setMenuOpen(false); }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [
-    menuOpen, canRename, canEdit, canShowHistory, canShare, canDelete,
-    startRename, runEdit, runHistory, runShare, openDelete,
-  ]);
+  }, [menuOpen, canRename, canShowHistory, canDelete, startRename, runHistory, openDelete]);
 
   const closeMenu = () => setMenuOpen(false);
 
@@ -335,25 +334,11 @@ export function DocHeader({
                     <span className="doc-header-menu-key">R</span>
                   </button>
                 )}
-                {canEdit && (
-                  <button type="button" className="doc-header-menu-item" role="menuitem" onClick={runEdit}>
-                    <FilePen size={16} className="doc-header-menu-icon" />
-                    <span>Edit</span>
-                    <span className="doc-header-menu-key">E</span>
-                  </button>
-                )}
                 {canShowHistory && (
                   <button type="button" className="doc-header-menu-item" role="menuitem" onClick={runHistory}>
                     <History size={16} className="doc-header-menu-icon" />
                     <span>History</span>
                     <span className="doc-header-menu-key">H</span>
-                  </button>
-                )}
-                {canShare && (
-                  <button type="button" className="doc-header-menu-item" role="menuitem" onClick={runShare}>
-                    <Users size={16} className="doc-header-menu-icon" />
-                    <span>Share</span>
-                    <span className="doc-header-menu-key">S</span>
                   </button>
                 )}
                 {hasPrimaryItems && <div className="doc-header-menu-separator" role="separator" />}
@@ -441,17 +426,41 @@ export function DocHeader({
           )}
         </div>
 
-        {mode === 'view' && (
+        {(canEdit || canShare || showSourceToggle) && (
           <div className="doc-header-actions">
-            <button
-              type="button"
-              className="doc-header-source-toggle"
-              onClick={onToggleSource}
-              title={showSource ? 'Show the rendered doc' : 'Show the raw markdown'}
-            >
-              {showSource ? <Eye size={16} aria-hidden="true" /> : <Code size={16} aria-hidden="true" />}
-              <span>{showSource ? 'Show rendered' : 'Show source'}</span>
-            </button>
+            {canEdit && (
+              <button
+                type="button"
+                className="doc-header-action-button"
+                onClick={runEdit}
+                title="Edit the doc"
+              >
+                <FilePen size={16} aria-hidden="true" />
+                <span>Edit</span>
+              </button>
+            )}
+            {canShare && (
+              <button
+                type="button"
+                className="doc-header-action-button"
+                onClick={runShare}
+                title="Share the doc"
+              >
+                <Users size={16} aria-hidden="true" />
+                <span>Share</span>
+              </button>
+            )}
+            {showSourceToggle && (
+              <button
+                type="button"
+                className="doc-header-action-button doc-header-source-toggle"
+                onClick={onToggleSource}
+                title={showSource ? 'Show the rendered doc' : 'Show the raw markdown'}
+              >
+                {showSource ? <Eye size={16} aria-hidden="true" /> : <Code size={16} aria-hidden="true" />}
+                <span>{showSource ? 'Show rendered' : 'Show source'}</span>
+              </button>
+            )}
           </div>
         )}
       </div>

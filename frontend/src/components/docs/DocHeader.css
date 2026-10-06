@@ -60,7 +60,7 @@
 /* Keyboard focus keeps the ring; a mouse click doesn't leave one behind. */
 .doc-header-title-button:focus:not(:focus-visible),
 .doc-header-menu-item:focus:not(:focus-visible),
-.doc-header-source-toggle:focus:not(:focus-visible) {
+.doc-header-action-button:focus:not(:focus-visible) {
   outline: none;
 }
 
@@ -173,10 +173,12 @@
 .doc-header-actions {
   display: flex;
   align-items: center;
+  gap: 0.375rem;
   flex-shrink: 0;
 }
 
-.doc-header-source-toggle {
+/* Edit, Share and the Show source toggle share one outlined-button look. */
+.doc-header-action-button {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
@@ -194,7 +196,7 @@
   transition: background-color 0.15s, color 0.15s;
 }
 
-.doc-header-source-toggle:hover {
+.doc-header-action-button:hover {
   border-color: var(--border-strong);
   background-color: var(--hover);
   color: var(--text);
@@ -294,11 +296,25 @@
   }
 }
 
-/* Phone: the title row, then the badge / chip row; the toggle stays on the
-   title row's right. The menu stays a popover under the title. */
+/* Phone: the title row, then the badge / chip row; the action buttons stay
+   on the title row's right as icons only (the label is still read out). The
+   menu stays a popover under the title. */
 @media (max-width: 768px) {
   .doc-header-bar {
     align-items: flex-start;
+  }
+
+  .doc-header-action-button {
+    padding: 0.3rem 0.45rem;
+  }
+
+  .doc-header-action-button span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .doc-header-left {

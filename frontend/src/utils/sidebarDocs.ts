@@ -37,11 +37,6 @@ export function deriveSidebarDocItems(docs: Doc[], limit = SIDEBAR_DOC_LIMIT): D
     .slice(0, Math.max(0, limit));
 }
 
-/** Header count: the loaded number, "+" when the server has more ("5+"). */
-export function docCountLabel(count: number, hasMore: boolean): string {
-  return hasMore ? `${count}+` : String(count);
-}
-
 /**
  * Right-aligned row time. Within a week it is formatRelativeTimestamp's
  * relative label ("5m ago", "3d ago"); older docs get a short date ("Oct 6",

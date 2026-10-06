@@ -61,7 +61,6 @@ interface ProjectPanelProps {
   // while `showDocs` (the Quest Docs feature gate is open for the user).
   showDocs?: boolean;
   docs?: Doc[];
-  docsHasMore?: boolean;
   docsLoading?: boolean;
   // The project's first docs page failed to load.
   docsError?: string | null;
@@ -102,7 +101,6 @@ export function ProjectPanel({
   onArchived,
   showDocs = false,
   docs = NO_DOCS,
-  docsHasMore = false,
   docsLoading = false,
   docsError = null,
   activeDocId = null,
@@ -175,7 +173,6 @@ export function ProjectPanel({
             {showDocs && (
               <DocsSection
                 docs={docs}
-                hasMore={docsHasMore}
                 loading={docsLoading}
                 error={docsError}
                 activeDocId={activeDocId}

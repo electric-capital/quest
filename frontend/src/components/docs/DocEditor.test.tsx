@@ -762,6 +762,78 @@ describe('DocEditor', () => {
     });
   });
 
+  describe('formatting bar', () => {
+    const formatBar = () => screen.getByRole('toolbar', { name: 'Formatting' });
+
+    it('offers headings, inline styles, link and lists in that order', () => {
+      renderEditor();
+      const names = within(formatBar()).getAllByRole('button').map((b) => b.getAttribute('aria-label'));
+      expect(names).toEqual([
+        'Heading 1', 'Heading 2', 'Heading 3',
+        'Bold', 'Italic', 'Strikethrough', 'Inline code',
+        'Link',
+        'Bulleted list', 'Numbered list', 'Quote',
+      ]);
+    });
+
+    it('Bold wraps the selection, keeps it selected and marks the draft dirty', () => {
+      renderEditor(doc({ content: 'say hello there' }));
+      textarea().setSelectionRange(4, 9); // "hello"
+      fireEvent.click(within(formatBar()).getByRole('button', { name: 'Bold' }));
+      expect(textarea().value).toBe('say **hello** there');
+      expect([textarea().selectionStart, textarea().selectionEnd]).toEqual([6, 11]);
+      expect(saveButton().disabled).toBe(false);
+      // Toggles back off.
+      fireEvent.click(within(formatBar()).getByRole('button', { name: 'Bold' }));
+      expect(textarea().value).toBe('say hello there');
+    });
+
+    it('a heading button prefixes the caret line; the list buttons cover every selected line', () => {
+      renderEditor(doc({ content: 'Title\none\ntwo' }));
+      textarea().setSelectionRange(2, 2);
+      fireEvent.click(within(formatBar()).getByRole('button', { name: 'Heading 2' }));
+      expect(textarea().value).toBe('## Title\none\ntwo');
+      expect(textarea().selectionStart).toBe(5);
+
+      textarea().setSelectionRange(9, 16); // "one\ntwo"
+      fireEvent.click(within(formatBar()).getByRole('button', { name: 'Bulleted list' }));
+      expect(textarea().value).toBe('## Title\n- one\n- two');
+      fireEvent.click(within(formatBar()).getByRole('button', { name: 'Numbered list' }));
+      expect(textarea().value).toBe('## Title\n1. one\n2. two');
+    });
+
+    it('Ctrl/Cmd+B, I and K are the Bold, Italic and Link shortcuts', () => {
+      renderEditor(doc({ content: 'word' }));
+      textarea().setSelectionRange(0, 4);
+      expect(fireEvent.keyDown(textarea(), { key: 'b', ctrlKey: true })).toBe(false);
+      expect(textarea().value).toBe('**word**');
+      textarea().setSelectionRange(2, 6);
+      fireEvent.keyDown(textarea(), { key: 'i', metaKey: true });
+      expect(textarea().value).toBe('**_word_**');
+      textarea().setSelectionRange(3, 7);
+      fireEvent.keyDown(textarea(), { key: 'k', ctrlKey: true });
+      expect(textarea().value).toBe('**_[word](url)_**');
+      expect(textarea().value.slice(textarea().selectionStart, textarea().selectionEnd)).toBe('url');
+    });
+
+    it('is disabled, and the shortcuts inert, without edit access', () => {
+      renderEditor(doc({ access: { ...doc().access, can_edit: false } }));
+      const buttons = within(formatBar()).getAllByRole('button');
+      expect(buttons.every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+      textarea().setSelectionRange(0, 8);
+      fireEvent.keyDown(textarea(), { key: 'b', ctrlKey: true });
+      expect(textarea().value).toBe('Original body');
+    });
+
+    it('is hidden on the phone Preview pane', () => {
+      mocks.isMobile = true;
+      renderEditor();
+      expect(screen.getByRole('toolbar', { name: 'Formatting' })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+      expect(screen.queryByRole('toolbar', { name: 'Formatting' })).toBeNull();
+    });
+  });
+
   describe('unsaved-changes guard', () => {
     it('Cancel leaves at once while clean', () => {
       const { onCancel } = renderEditor();

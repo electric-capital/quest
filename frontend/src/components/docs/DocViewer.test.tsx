@@ -122,6 +122,11 @@ function openMenuItem(name: RegExp) {
   fireEvent.click(screen.getByRole('menuitem', { name }));
 }
 
+/** The header's Edit button (beside the Show source toggle). */
+function clickEdit() {
+  fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+}
+
 function titleButton(): HTMLElement {
   return screen.getByRole('button', { name: /Roadmap/ });
 }
@@ -299,8 +304,7 @@ describe('DocViewer', () => {
       const { container } = renderViewer();
       expect(screen.getByRole('button', { name: 'Delete chart.png' })).toBeTruthy();
 
-      fireEvent.click(screen.getByRole('button', { name: /Roadmap/ }));
-      fireEvent.click(screen.getByRole('menuitem', { name: /Edit/ }));
+      clickEdit();
       expect(container.querySelector('.doc-viewer--edit')).not.toBeNull();
       expect(screen.getByRole('textbox', { name: 'Doc markdown' })).toBeTruthy();
       expect(screen.queryByRole('button', { name: 'Delete chart.png' })).toBeNull();
@@ -404,7 +408,7 @@ describe('DocViewer', () => {
       setView({ doc: current });
       const { container } = renderViewer();
 
-      openMenuItem(/Edit/);
+      clickEdit();
       expect(container.querySelector('.doc-viewer--edit')).not.toBeNull();
       fireEvent.change(editorTextarea()!, { target: { value: 'New body' } });
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -418,7 +422,7 @@ describe('DocViewer', () => {
     it('Cancel returns to view and focuses the title', () => {
       setView({ doc: doc() });
       renderViewer();
-      openMenuItem(/Edit/);
+      clickEdit();
       fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
       expect(editorTextarea()).toBeNull();
       expect(document.activeElement).toBe(titleButton());
@@ -443,7 +447,7 @@ describe('DocViewer', () => {
       mocks.fetchDoc.mockResolvedValue({ ...current, content: 'Theirs', updated_at: '2026-10-06T23:00:00' });
       setView({ doc: current });
       renderViewer();
-      openMenuItem(/Edit/);
+      clickEdit();
       fireEvent.change(editorTextarea()!, { target: { value: 'Mine' } });
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
       await waitFor(() => expect(mocks.view.refresh).toHaveBeenCalledTimes(1));
@@ -459,7 +463,7 @@ describe('DocViewer', () => {
     it('a doc that vanishes mid-edit shows the draft read-only: copy, download, discard', async () => {
       setView({ doc: doc() });
       const { rerender } = renderViewer();
-      openMenuItem(/Edit/);
+      clickEdit();
       fireEvent.change(editorTextarea()!, { target: { value: 'Unsaved words' } });
 
       // Deleted elsewhere / share revoked: the re-fetch 404s.
