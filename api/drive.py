@@ -32,7 +32,18 @@ Access the Google Drive API using `authed_get` with the full Google Drive API UR
 |------|-------------|
 | `/drive/v3/files` | List files in the user's Drive |
 | `/drive/v3/files/{{fileId}}` | Get a specific file's metadata |
+| `/drive/v3/files/{{fileId}}/permissions` | Who has access to a file (one entry per user/group/domain/anyone, with `role`) |
+| `/drive/v3/files/{{fileId}}/permissions/{{permissionId}}` | One permission entry |
+| `/drive/v3/files/{{fileId}}/revisions` | Version history of a file (who modified it, when, size) |
+| `/drive/v3/files/{{fileId}}/revisions/{{revisionId}}` | One revision's metadata |
+| `/drive/v3/files/{{fileId}}/comments` | Comment threads on a Doc/Sheet/Slides file (`fields` is REQUIRED) |
+| `/drive/v3/files/{{fileId}}/comments/{{commentId}}` | One comment (`fields` is REQUIRED) |
+| `/drive/v3/files/{{fileId}}/comments/{{commentId}}/replies` | Replies on a comment (`fields` is REQUIRED) |
+| `/drive/v3/changes/startPageToken` | The current change cursor (save it, then poll `/changes` later) |
+| `/drive/v3/changes` | Everything that changed since a page token (`pageToken` is REQUIRED) |
+| `/drive/v3/about` | Storage quota and the connected Google account (`fields` is REQUIRED) |
 | `/drive/v3/drives` | List shared drives |
+| `/drive/v3/drives/{{driveId}}` | One shared drive's metadata |
 
 **File List Parameters:**
 - `q`: Query string for searching files (see Drive API query syntax below)
@@ -53,6 +64,32 @@ Access the Google Drive API using `authed_get` with the full Google Drive API UR
 - `pageSize`: Maximum number of drives per page (1-100)
 - `pageToken`: Token for pagination
 - `q`: Query string for filtering drives
+
+**Permissions Parameters:** (`files/{{fileId}}/permissions`)
+- `fields`: e.g. `permissions(id,type,role,emailAddress,domain,displayName,deleted)`. `type` is `user`, `group`, `domain` or `anyone`; `role` is `owner`, `organizer`, `fileOrganizer`, `writer`, `commenter` or `reader`. A `type=anyone` entry means the file is link-shared.
+- `supportsAllDrives`: Required (`true`) for shared-drive files.
+- `pageSize` / `pageToken`: Pagination (default 100).
+
+**Revisions Parameters:** (`files/{{fileId}}/revisions`)
+- `fields`: e.g. `revisions(id,modifiedTime,lastModifyingUser(displayName,emailAddress),size,keepForever)`. Revisions come oldest-first; the last entry is the current version.
+- `pageSize` / `pageToken`: Pagination (default 200). Revision history exists for Workspace files and uploaded binaries alike; `alt=media` on a revision is blocked here like any other binary download.
+
+**Comments Parameters:** (`files/{{fileId}}/comments`, `.../replies`)
+- `fields`: REQUIRED by Google -- the call fails without it. Use `*` for everything or e.g. `comments(id,content,author(displayName,emailAddress),createdTime,resolved,quotedFileContent(value),replies(content,author(displayName),createdTime))`.
+- `includeDeleted`: Include deleted comments (default false).
+- `startModifiedTime`: Only comments modified after this RFC 3339 timestamp.
+- `pageSize` / `pageToken`: Pagination (default 20, max 100).
+
+**Changes Parameters:** (`changes`, `changes/startPageToken`)
+- `pageToken`: REQUIRED on `/changes` -- get the first one from `/changes/startPageToken`, then persist the `newStartPageToken` from each `/changes` response (e.g. in a workspace file or the project DB) for the next poll. Tokens are per-user and per-drive.
+- `fields`: e.g. `newStartPageToken,nextPageToken,changes(fileId,removed,time,changeType,file(name,mimeType,modifiedTime,lastModifyingUser(displayName),trashed,parents))`.
+- `includeRemoved`: Include deletions/permission losses (default true).
+- `restrictToMyDrive`: Only My Drive changes, excluding files shared with the user (default false).
+- `driveId` + `supportsAllDrives=true` + `includeItemsFromAllDrives=true`: Track a shared drive instead of My Drive.
+- `pageSize`: Up to 1000.
+
+**About Parameters:** (`about`)
+- `fields`: REQUIRED by Google -- e.g. `user(displayName,emailAddress),storageQuota(limit,usage,usageInDrive,usageInDriveTrash)`. `storageQuota` values are byte counts as strings; `limit` is absent for unlimited accounts.
 
 **Query Syntax Examples:**
 The `q` parameter supports powerful search queries:
@@ -95,6 +132,26 @@ tool_call(tool_name="authed_get", arguments={{"url": "{DRIVE_API_BASE}/drives"}}
 
 # List files including shared drives
 tool_call(tool_name="authed_get", arguments={{"url": "{DRIVE_API_BASE}/files?includeItemsFromAllDrives=true&supportsAllDrives=true"}})
+
+# Who has access to a file
+tool_call(tool_name="authed_get", arguments={{"url": "{DRIVE_API_BASE}/files/FILE_ID/permissions?fields=permissions(type,role,emailAddress,domain,displayName)&supportsAllDrives=true"}})
+
+# Version history of a file
+tool_call(tool_name="authed_get", arguments={{"url": "{DRIVE_API_BASE}/files/FILE_ID/revisions?fields=revisions(id,modifiedTime,lastModifyingUser(displayName),size)"}})
+
+# Comment threads on a Doc (fields is required)
+tool_call(tool_name="authed_get", arguments={{"url": "{DRIVE_API_BASE}/files/FILE_ID/comments?fields=comments(id,content,author(displayName),createdTime,resolved,quotedFileContent(value),replies(content,author(displayName),createdTime))"}})
+
+# What changed since the last poll: first get a cursor ...
+tool_call(tool_name="authed_get", arguments={{"url": "{DRIVE_API_BASE}/changes/startPageToken"}})
+# ... then later list changes from it (persist newStartPageToken for the next poll)
+tool_call(tool_name="authed_get", arguments={{"url": "{DRIVE_API_BASE}/changes?pageToken=SAVED_TOKEN&fields=newStartPageToken,nextPageToken,changes(fileId,removed,time,file(name,mimeType,modifiedTime,lastModifyingUser(displayName),trashed))"}})
+
+# Storage quota and connected account (fields is required)
+tool_call(tool_name="authed_get", arguments={{"url": "{DRIVE_API_BASE}/about?fields=user(displayName,emailAddress),storageQuota(limit,usage,usageInDrive,usageInDriveTrash)"}})
+
+# One shared drive
+tool_call(tool_name="authed_get", arguments={{"url": "{DRIVE_API_BASE}/drives/DRIVE_ID"}})
 ```
 
 **Downloading file content (binary):**
@@ -118,7 +175,10 @@ tool_call(tool_name="get_workspace_file", arguments={{"path": "report.pdf"}})
 - To access shared drive files, use `includeItemsFromAllDrives=true` and `supportsAllDrives=true`
 - Use the `fields` parameter to request only the data you need, which reduces response size and saves tokens. Example: `fields=files(id,name,mimeType)` for file listings.
 - For file **metadata** (name, size, mimeType, etc.), use `authed_get`. For file **content** (the actual bytes), use `download_drive_file` as shown above.
-- **Converting a Drive document (e.g. a `.docx` to PDF):** `download_drive_file` it, then convert with headless LibreOffice in the sandbox -- `soffice --headless --convert-to pdf --outdir /workspace report.docx` via `run_python` (see `system:workspace`) -- never with a PDF built from `python-docx` output. Native Google Docs use `google_export_doc` instead.
+- **Converting a Drive document (e.g. a `.docx` to PDF):** `download_drive_file` it, then convert with headless LibreOffice in the sandbox -- `soffice --headless --convert-to pdf --outdir /workspace report.docx` via `run_python` (see `system:workspace`) -- never with a PDF built from `python-docx` output.
+- **Native Google Workspace files have no bytes to download.** `download_drive_file` fails on them; use the export tools instead, which convert through Drive and write the result to the workspace: `google_export_doc` (`document_id`; pdf, docx, odt, rtf, txt, md, html, epub, zip), `google_export_sheet` (`spreadsheet_id`; xlsx, ods, pdf, csv, tsv, zip -- csv/tsv are the first tab only), `google_export_slides` (`presentation_id`; pptx, odp, pdf, txt, png, jpeg, svg -- the images are the first slide only). Load `system:docs` / `system:sheets` / `system:slides` for details. A `files/{{id}}` metadata read tells you the kind: `mimeType` `application/vnd.google-apps.document` / `.spreadsheet` / `.presentation`.
+- A Drive **shortcut** (`mimeType = application/vnd.google-apps.shortcut`) has no content of its own; read `shortcutDetails.targetId` from its metadata and use that id instead.
+- The `comments` and `about` endpoints REQUIRE a `fields` parameter and `/changes` REQUIRES `pageToken`; Google rejects the call without them.
 
 ---
 

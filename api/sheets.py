@@ -7,6 +7,12 @@ makes authenticated GET requests directly to the Google Sheets API at
 Listing Google Spreadsheets uses the Google Drive API
 (``https://www.googleapis.com/drive/v3/files``) with a mimeType filter,
 which is also accessed via ``authed_get`` (Drive is already registered).
+
+Exporting a whole spreadsheet to the workspace as a file (xlsx / ods /
+pdf / csv / tsv / zip) is the ``google_export_sheet`` tool call
+(``_handle_google_export_sheet`` in
+``chat/gemini_api/tool_handlers/drive.py``), which drives the Drive
+``files.export`` endpoint.
 """
 
 SHEETS_API_BASE = "https://sheets.googleapis.com/v4"
@@ -97,6 +103,38 @@ tool_call(tool_name="authed_get", arguments={{"url": "{DRIVE_API_BASE}/files?q=m
 # List Spreadsheets with specific fields
 tool_call(tool_name="authed_get", arguments={{"url": "{DRIVE_API_BASE}/files?q=mimeType%20%3D%20%27application%2Fvnd.google-apps.spreadsheet%27&fields=files(id,name,modifiedTime)"}})
 ```
+
+**Exporting a whole spreadsheet to the workspace (via google_export_sheet):**
+
+Google Sheets have no raw bytes, so `download_drive_file` cannot fetch them. To get a spreadsheet as a file -- for the user to keep, to upload elsewhere, to convert, or to analyze every tab at once with pandas/openpyxl -- use the `google_export_sheet` tool call. It converts the spreadsheet through the Drive `files.export` endpoint, writes the result to the conversation workspace, and returns the filename.
+
+| `format` | Export MIME type | Notes |
+|----------|------------------|-------|
+| `xlsx` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | Excel workbook, every tab; read with `openpyxl` / `pandas.read_excel` in `run_python` |
+| `ods` | `application/vnd.oasis.opendocument.spreadsheet` | OpenDocument spreadsheet, every tab |
+| `pdf` | `application/pdf` | Every tab, print layout |
+| `csv` | `text/csv` | **First tab only** |
+| `tsv` | `text/tab-separated-values` | **First tab only** |
+| `zip` | `application/zip` | Zipped HTML, one page per tab |
+
+```
+# Export as Excel (every tab) and read it with pandas in the sandbox
+tool_call(tool_name="google_export_sheet", arguments={{"spreadsheet_id": "SPREADSHEET_ID", "format": "xlsx"}})
+
+# Export the first tab as CSV under a chosen filename
+tool_call(tool_name="google_export_sheet", arguments={{"spreadsheet_id": "SPREADSHEET_ID", "format": "csv", "filename": "budget.csv"}})
+
+# Export as PDF to send to someone
+tool_call(tool_name="google_export_sheet", arguments={{"spreadsheet_id": "SPREADSHEET_ID", "format": "pdf"}})
+```
+
+The result carries `filename`, `size_bytes`, `format`, `export_mime_type`, and `document_title`. When `filename` is omitted the file is named `<spreadsheet title>.<ext>`.
+
+- Prefer the Sheets API `values` endpoints above when you only need some cells or one tab -- they are cheaper and tab-addressable. Prefer `google_export_sheet` when you need the whole workbook as a file (every tab, or a deliverable).
+- `csv` / `tsv` always carry the first tab. For another tab, read it via `values/<Tab>!A1:Z` through `authed_get`, or export `xlsx` and open the sheet by name in `run_python`.
+- Only native Google Sheets (`mimeType = application/vnd.google-apps.spreadsheet`) are supported. Uploaded `.xlsx` / `.csv` files stored in Drive go through `download_drive_file`; Docs and Slides have their own export tools (`google_export_doc`, `google_export_slides`).
+- Google caps exports at 10 MB of exported content; a huge workbook may need `csv` of the first tab or a ranged read instead.
+- Do NOT call `/drive/v3/files/{{id}}/export` through `authed_get` -- the tool call path rejects it and points you back here.
 
 **Important Notes:**
 - Spreadsheet IDs can be found in Google Sheets URLs (e.g., `https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit`)

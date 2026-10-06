@@ -7,6 +7,12 @@ makes authenticated GET requests directly to the Google Slides API at
 Listing Google Slides presentations uses the Google Drive API
 (``https://www.googleapis.com/drive/v3/files``) with a mimeType filter,
 which is also accessed via ``authed_get`` (Drive is already registered).
+
+Exporting a deck to the workspace as a file (pptx / odp / pdf / txt /
+png / jpeg / svg) is the ``google_export_slides`` tool call
+(``_handle_google_export_slides`` in
+``chat/gemini_api/tool_handlers/drive.py``), which drives the Drive
+``files.export`` endpoint.
 """
 
 SLIDES_API_BASE = "https://slides.googleapis.com/v1"
@@ -71,6 +77,39 @@ tool_call(tool_name="authed_get", arguments={{"url": "{DRIVE_API_BASE}/files?q=m
 # List recent Google Slides presentations
 tool_call(tool_name="authed_get", arguments={{"url": "{DRIVE_API_BASE}/files?q=mimeType%20%3D%20%27application%2Fvnd.google-apps.presentation%27&orderBy=modifiedTime%20desc&pageSize=10"}})
 ```
+
+**Exporting a presentation to the workspace (via google_export_slides):**
+
+Google Slides have no raw bytes, so `download_drive_file` cannot fetch them. To get a deck as a file -- for the user to keep, to upload elsewhere, to convert, or simply to read its text without paging through the Slides API JSON -- use the `google_export_slides` tool call. It converts the deck through the Drive `files.export` endpoint, writes the result to the conversation workspace, and returns the filename.
+
+| `format` | Export MIME type | Notes |
+|----------|------------------|-------|
+| `pptx` | `application/vnd.openxmlformats-officedocument.presentationml.presentation` | PowerPoint deck; read with `python-pptx` in `run_python` |
+| `odp` | `application/vnd.oasis.opendocument.presentation` | OpenDocument presentation |
+| `pdf` | `application/pdf` | Every slide |
+| `txt` | `text/plain` | Plain text of every slide -- the cheapest way to read a deck |
+| `png` | `image/png` | **First slide only** |
+| `jpeg` | `image/jpeg` | **First slide only** |
+| `svg` | `image/svg+xml` | **First slide only** |
+
+```
+# Read a deck's text cheaply
+tool_call(tool_name="google_export_slides", arguments={{"presentation_id": "PRESENTATION_ID", "format": "txt"}})
+
+# Export as PowerPoint (e.g. to upload elsewhere or edit with python-pptx)
+tool_call(tool_name="google_export_slides", arguments={{"presentation_id": "PRESENTATION_ID", "format": "pptx"}})
+
+# Export as PDF under a chosen filename
+tool_call(tool_name="google_export_slides", arguments={{"presentation_id": "PRESENTATION_ID", "format": "pdf", "filename": "q3-review.pdf"}})
+```
+
+The result carries `filename`, `size_bytes`, `format`, `export_mime_type`, and `document_title`. When `filename` is omitted the file is named `<presentation title>.<ext>`.
+
+- Prefer `txt` when YOU need to read the content; use the Slides API above when you need structure (object ids, layouts, element positions) -- e.g. to describe a particular slide.
+- The image formats render only the first slide (Drive's export takes no page selector). For images of every slide, export `pdf` and rasterize pages in `run_python` (`pypdfium2` / LibreOffice `--convert-to png`).
+- Only native Google Slides (`mimeType = application/vnd.google-apps.presentation`) are supported. Uploaded `.pptx` files stored in Drive go through `download_drive_file`; Docs and Sheets have their own export tools (`google_export_doc`, `google_export_sheet`).
+- Google caps exports at 10 MB of exported content; a heavy deck may need `txt` or `pdf` instead of `pptx`.
+- Do NOT call `/drive/v3/files/{{id}}/export` through `authed_get` -- the tool call path rejects it and points you back here.
 
 **Important Notes:**
 - Presentation IDs can be found in Google Slides URLs (e.g., `https://docs.google.com/presentation/d/PRESENTATION_ID/edit`).

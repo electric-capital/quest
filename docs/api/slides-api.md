@@ -1,6 +1,6 @@
 # Slides API Documentation
 
-This document describes how Quest accesses Google Slides content for reading presentations.
+This document describes how Quest accesses Google Slides content for reading presentations and exports decks into the conversation workspace via `google_export_slides`.
 
 ## Overview
 
@@ -27,6 +27,16 @@ Slides reads use `authed_get` with the Google Slides API v1 at `slides.googleapi
 
 The Google Slides API does not provide a list endpoint. Listing and searching for Google Slides presentations uses the Google Drive API with a mimeType filter (`mimeType='application/vnd.google-apps.presentation'`), also via `authed_get`. The Drive API base URL is `https://www.googleapis.com/drive/v3`. See `api/slides.py` (`get_instructions()`) for query parameter details.
 
+## Exporting a Presentation to the Workspace (via `google_export_slides`)
+
+Native Google Slides carry no downloadable bytes, so `download_drive_file` cannot fetch them. The `google_export_slides` tool call converts a deck through the Drive v3 `files.export` endpoint and writes the result to the conversation (or project) workspace, where the model reads it back (`get_workspace_file` for txt/pdf/images, `run_python` with python-pptx for pptx) or the user downloads it from the file browser. For the model's own reading, `txt` (the plain text of every slide) is far cheaper than paging the Slides API JSON.
+
+**Implementation:** `_handle_google_export_slides()` in `chat/gemini_api/tool_handlers/drive.py`, a thin wrapper over the `_export_workspace_file()` routine shared with `google_export_doc` / `google_export_sheet`. Dispatched via `tool_call` from `TOOL_CALL_HANDLERS`; schema in `TOOL_CALL_REGISTRY`. Parameters: `presentation_id` (required), `format` (required), optional `filename`. Flow, receipt and error handling as documented for the Docs tool in [Docs API](docs-api.md#exporting-a-doc-to-the-workspace-via-google_export_doc); the kind check rejects anything other than `application/vnd.google-apps.presentation`, cross-pointing to `google_export_doc` / `google_export_sheet` for the other Workspace kinds and to `download_drive_file` for regular files.
+
+**Supported formats** (`GOOGLE_SLIDES_EXPORT_FORMATS`, the complete Google Slides export set): `pptx`, `odp`, `pdf`, `txt`, `png`, `jpeg`, `svg`. The three image formats render the **first slide only** (Drive's export takes no page selector); the skill text points at `pdf` plus sandbox rasterization for every-slide images.
+
+**Allow-list interaction / scope:** same as the Docs tool -- the Drive `files/{id}/export` GET entry, blocked in the bare `authed_get` tool path, works under `drive.readonly` (no new scope beyond the existing `presentations.readonly` for API reads). Not in `PUBLIC_TOOL_CALL_ALLOWLIST` or `SCRIPT_TOOL_CALL_ALLOWLIST`.
+
 ## System Skill
 
 Slides usage instructions are surfaced through the gated `system:slides` skill (`requires="google_services"`), registered in `chat/system_skills/catalog.py` with its content built from `api/slides.py` (`get_instructions()`). The skill is loadable only when the user has connected Google Services. See [Skill Library](../architecture/skill-library.md).
@@ -41,7 +51,7 @@ Full presentation payloads are large and commonly exceed the `authed_get` respon
 Slides reads are standard Google Slides API GET requests. Using `authed_get` with per-user OAuth support eliminates the need for dedicated proxy endpoints in `quest.py`, reduces backend code, and follows the same pattern used for Google Calendar, Google Drive, Google Docs, Google Sheets, and other external API services. The `authed_get` handler already provides credential injection, hostname-based service matching, and 401 retry logic.
 
 **Why read-only?**
-The allowed-endpoint regexes match only GET-shaped paths and exclude the `:` segment used by the Slides API for write verbs (`:batchUpdate`), so the registry entry cannot reach any mutation endpoint. This matches the read-only posture of the Docs and Sheets integrations.
+The allowed-endpoint regexes match only GET-shaped paths and exclude the `:` segment used by the Slides API for write verbs (`:batchUpdate`), so the registry entry cannot reach any mutation endpoint. This matches the read-only posture of the Docs integration (Sheets has a single approval-gated write). Export is a read too: it writes only into the workspace.
 
 **Why use the Drive API for listing presentations?**
 The Google Slides API does not provide a list endpoint. The Drive API is used with a mimeType filter to return only Google Slides presentations. This follows Google's recommended pattern for discovering presentations.

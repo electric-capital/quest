@@ -27,18 +27,18 @@ The Google Docs API does not provide a list endpoint. Listing and searching for 
 
 Native Google Docs carry no downloadable bytes -- `alt=media` on `files/{id}` fails for Google Workspace files, so `download_drive_file` cannot fetch them. The `google_export_doc` tool call converts a Doc through the Drive v3 `files.export` endpoint and writes the result to the conversation (or project) workspace, where the model reads it back with `get_workspace_file` or the user downloads it from the file browser.
 
-**Implementation:** `_handle_google_export_doc()` in `chat/gemini_api/tool_handlers/drive.py`, dispatched via `tool_call` from the `TOOL_CALL_HANDLERS` table in `chat/gemini_api/tool_dispatch.py`; schema in `TOOL_CALL_REGISTRY` (`chat/llm/tool_schemas.py`). Parameters: `document_id` (required), `format` (required), optional `filename`.
+**Implementation:** `_handle_google_export_doc()` in `chat/gemini_api/tool_handlers/drive.py`, a thin wrapper over the `_export_workspace_file()` routine shared with the sibling `google_export_sheet` / `google_export_slides` tools (per-kind entries in `_EXPORT_KINDS`: accepted source mimeType, format table, label, id parameter name), dispatched via `tool_call` from the `TOOL_CALL_HANDLERS` table in `chat/gemini_api/tool_dispatch.py`; schema in `TOOL_CALL_REGISTRY` (`chat/llm/tool_schemas.py`). Parameters: `document_id` (required), `format` (required), optional `filename`.
 
 **Flow:**
 
 1. Resolve `format` against `GOOGLE_DOC_EXPORT_FORMATS` (short name, case-insensitive, leading dot tolerated, or the exact export MIME type). Unknown formats return an `error` plus the `supported_formats` map without any upstream call.
-2. Fetch `files/{id}?fields=name,mimeType&supportsAllDrives=true` via `_make_authed_request()`. Anything other than `application/vnd.google-apps.document` is rejected: regular files get a pointer to `download_drive_file`; other Workspace types (Sheets, Slides, ...) get a "not supported by this tool" error. The title supplies the default filename.
+2. Fetch `files/{id}?fields=name,mimeType&supportsAllDrives=true` via `_make_authed_request()`. Anything other than `application/vnd.google-apps.document` is rejected: regular files get a pointer to `download_drive_file`; a Sheet or Slides file gets a cross-pointer to `google_export_sheet` / `google_export_slides` with the right id parameter filled in; other Workspace types (Forms, ...) get a "not supported by this tool" error. The title supplies the default filename.
 3. `GET files/{id}/export?mimeType=<export mime>` with `raw_response=True`. Upstream errors (incl. Google's 10 MB export cap) are returned as `error` with a hint to try a lighter format.
 4. Write the bytes to `<workspace>/<filename>` (filename sanitized via `_sanitize_workspace_filename`, traversal-checked; default `<title><ext>`; overwrites like `download_drive_file`), then `_publish_file_list_changed()` so the file browser refreshes. The receipt carries `filename`, `size_bytes`, `format`, `export_mime_type`, `content_type`, `document_title`, and a `message` with the follow-up `get_workspace_file` call.
 
 **Supported formats** (the complete Google Docs export set): `pdf`, `docx`, `odt`, `rtf`, `txt`, `md`, `html`, `epub`, `zip` (zipped HTML with images). The table in `api/docs.py` (`get_instructions()`, surfaced by the `system:docs` skill) shows the model each format's MIME type and steers it to `md`/`txt` when it needs to read the content itself.
 
-**Allow-list interaction:** the Drive `_SERVICE_REGISTRY` entry in `chat/gemini_api/authed_get.py` gained the GET pattern `^/drive/v3/files/[^/]+/export$` so the handler can reuse `_make_authed_request()` (credential injection, 401 refresh). `handle_authed_get()` rejects that path when `output_file` is absent -- mirroring the `alt=media` block -- and points the model at `google_export_doc`; with `output_file` set the export lands under `.responses/` like any other body. Export works under the existing `drive.readonly` scope, no re-consent needed.
+**Allow-list interaction:** the Drive `_SERVICE_REGISTRY` entry in `chat/gemini_api/authed_get.py` gained the GET pattern `^/drive/v3/files/[^/]+/export$` so the handler can reuse `_make_authed_request()` (credential injection, 401 refresh). `handle_authed_get()` rejects that path when `output_file` is absent -- mirroring the `alt=media` block -- and points the model at the three export tools; with `output_file` set the export lands under `.responses/` like any other body. Export works under the existing `drive.readonly` scope, no re-consent needed.
 
 **Not allow-listed for public projects or the script bridge:** like `download_drive_file`, the tool stays out of `PUBLIC_TOOL_CALL_ALLOWLIST` and `SCRIPT_TOOL_CALL_ALLOWLIST`.
 
@@ -46,6 +46,9 @@ Native Google Docs carry no downloadable bytes -- `alt=media` on `files/{id}` fa
 
 **Why a dedicated `google_export_doc` tool instead of reusing `download_drive_file` with a format parameter?**
 `download_drive_file` is a byte-for-byte fetch (`alt=media`) whose contract is "the file as stored"; export is a conversion with a format choice, a different endpoint, a Docs-only precondition, and different failure modes (the 10 MB cap). Keeping them separate keeps each tool's description short and unambiguous for the model, and the mimeType pre-check gives a precise cross-pointer in each direction.
+
+**Why three export tools (Docs / Sheets / Slides) instead of one `google_export_file` with a union format enum?**
+The three kinds have disjoint format sets with kind-specific caveats (csv/tsv = first tab, png/jpeg/svg = first slide), and a single enum would let the model ask for `docx` on a Sheet and only learn upstream that it is invalid. Per-kind tools keep each enum exact and each description short, while one shared `_export_workspace_file()` routine keeps the behaviour (filename rules, errors, receipts) identical, and the mimeType pre-check cross-points between the siblings so a wrong guess costs one cheap metadata call.
 
 
 **Why `authed_get` instead of proxy endpoints?**

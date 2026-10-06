@@ -1,6 +1,6 @@
 # Drive API Documentation
 
-This document describes how Quest accesses Google Drive data for reads, file downloads, and writes (Save to Drive plus the agent-driven `upload_to_drive` and `create_drive_folder` action requests).
+This document describes how Quest accesses Google Drive data for reads (file metadata, permissions, revisions, comments, changes, quota, shared drives), file downloads and Google Workspace exports, and writes (Save to Drive plus the agent-driven `upload_to_drive` and `create_drive_folder` action requests).
 
 ## Overview
 
@@ -20,6 +20,21 @@ The Google Drive entry in `_SERVICE_REGISTRY` sets `requires_user: True` (per-us
 
 Drive reads use `authed_get` with the Google Drive API v3. The `_SERVICE_REGISTRY` entry in `chat/gemini_api/authed_get.py` defines allowed endpoint patterns via regex validation -- requests to non-matching paths are rejected. See that file for the allowed endpoint list and `api/drive.py` (`get_instructions()`) for query parameter documentation provided to the LLM.
 
+The allow-list covers these read-only resources (all GET, all under the existing `drive.readonly` scope, so no re-consent is needed):
+
+| Resource | Paths | Notes |
+|----------|-------|-------|
+| Files | `files`, `files/{id}` | List/search and single-file metadata (`alt=media` blocked in the tool path, see below) |
+| Export | `files/{id}/export` | Reachable only through the three export tools / `output_file` (see below) |
+| Permissions | `files/{id}/permissions`, `.../permissions/{id}` | Who has access; a `type=anyone` entry means link-shared |
+| Revisions | `files/{id}/revisions`, `.../revisions/{id}` | Version history; `alt=media` on a revision is blocked like any binary download |
+| Comments | `files/{id}/comments`, `.../comments/{id}`, `.../comments/{id}/replies`, `.../replies/{id}` | Google requires `fields` on these calls; the skill text says so |
+| Changes | `changes/startPageToken`, `changes` | Change-feed cursor + "what changed since"; `pageToken` required on `changes`, the model is told to persist `newStartPageToken` |
+| About | `about` | Storage quota + connected account; `fields` required |
+| Shared drives | `drives`, `drives/{id}` | List and single shared drive |
+
+Write-shaped paths (`files/{id}/copy`, `files/{id}/watch`, `changes/watch`, `drives/{id}/hide|unhide`, `modifyLabels`) and the legacy `teamdrives` / `apps` resources stay unmatched. `tests/test_google_export_sheet_slides_handlers.py` pins the admitted and refused sets.
+
 **Note:** The `alt=media` parameter is blocked in the `authed_get` tool call path. Binary file content must be downloaded using `download_drive_file` instead (see below). The `POST /api/authed-get` proxy endpoint still supports `alt=media` for sandbox scripts that need direct binary access.
 
 ## File Content Downloads (via `download_drive_file`)
@@ -28,7 +43,7 @@ Binary file content downloads use the `download_drive_file` tool call, which dow
 
 **Implementation:** `_handle_download_drive_file()` in `chat/gemini_api/tool_handlers/drive.py`. Fetches file metadata first (to determine filename if not provided), then downloads binary content via `_make_authed_request()` with `alt=media` and `raw_response=True`, and saves to the conversation workspace directory. See that function for tool parameters.
 
-Native Google Workspace files (Google Docs) have no `alt=media` bytes. Google Docs are exported to the workspace instead via the `google_export_doc` tool (Drive `files/{id}/export`, all nine Docs export formats); the `^/drive/v3/files/[^/]+/export$` GET allow-list entry exists for that tool and `handle_authed_get()` blocks the path without `output_file` the same way it blocks `alt=media`. See [Docs API](docs-api.md#exporting-a-doc-to-the-workspace-via-google_export_doc).
+Native Google Workspace files have no `alt=media` bytes. They are exported to the workspace instead via three sibling tools sharing one implementation (`_export_workspace_file()` in `chat/gemini_api/tool_handlers/drive.py`, Drive `files/{id}/export`): `google_export_doc` (Docs, nine formats -- see [Docs API](docs-api.md#exporting-a-doc-to-the-workspace-via-google_export_doc)), `google_export_sheet` (Sheets: xlsx, ods, pdf, csv, tsv, zip -- csv/tsv first tab only; see [Sheets API](sheets-api.md#exporting-a-spreadsheet-to-the-workspace-via-google_export_sheet)) and `google_export_slides` (Slides: pptx, odp, pdf, txt, png, jpeg, svg -- images first slide only; see [Slides API](slides-api.md#exporting-a-presentation-to-the-workspace-via-google_export_slides)). Each tool pre-checks the file's `mimeType` and, when it is the wrong Workspace kind, returns a cross-pointer naming the right sibling tool and its id parameter; regular files are pointed at `download_drive_file`. The `^/drive/v3/files/[^/]+/export$` GET allow-list entry exists for these tools and `handle_authed_get()` blocks the path without `output_file` the same way it blocks `alt=media`, naming all three tools.
 
 ## Save to Drive (via File Browser)
 
