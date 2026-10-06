@@ -40,8 +40,12 @@ function row(overrides: Partial<Doc> = {}): Doc {
     updated_at: '2026-10-02T00:00:00',
     scope: 'user',
     shared: false,
+    shared_with_me: false,
+    permission: null,
+    owner: null,
+    last_write_user: null,
     // can_switch_mode is always false from the server in v1.
-    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free' },
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true },
     shares: [],
     ...overrides,
   };
@@ -55,14 +59,17 @@ const OWNER_USER_DOC = detail();
 const OWNER_PROJECT_DOC = detail({
   project_id: 'p1',
   scope: 'project',
-  access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free' },
+  access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true },
 });
 const NON_OWNER_DOC = detail({
   owner_id: 2,
   shared: true,
+  shared_with_me: true,
+  permission: 'read',
+  owner: { id: 2, name: 'Bea', email: 'bea@example.com' },
   last_write_source: null,
   shares: undefined,
-  access: { can_rename: false, can_switch_mode: false, can_delete: false, write: 'approval' },
+  access: { can_rename: false, can_switch_mode: false, can_delete: false, write: 'approval', can_edit: false, can_share: false, can_delete_assets: false },
 });
 
 function renderHeader(doc: DocDetail, props: Partial<React.ComponentProps<typeof DocHeader>> = {}) {
@@ -131,7 +138,7 @@ describe('DocHeader', () => {
         OWNER_PROJECT_DOC,
         detail({ project_id: 'p1', scope: 'project', mode: 'public' }),
         // A stale can_switch_mode: true (the server always sends false in v1).
-        detail({ access: { can_rename: true, can_switch_mode: true, can_delete: true, write: 'free' } }),
+        detail({ access: { can_rename: true, can_switch_mode: true, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true } }),
       ];
       for (const doc of docs) {
         renderHeader(doc);
@@ -298,5 +305,115 @@ describe('DocHeader', () => {
     cleanup();
     renderHeader(OWNER_USER_DOC, { showSource: true });
     expect(screen.getByRole('button', { name: 'Show rendered' })).toBeTruthy();
+  });
+
+  describe('edit, history and share', () => {
+    const viewerHandlers = () => ({
+      onEdit: vi.fn(),
+      onShowHistory: vi.fn(),
+      onShare: vi.fn(),
+    });
+
+    it('owner gets Edit, History and Share between Rename and the downloads', () => {
+      const extra = viewerHandlers();
+      renderHeader(OWNER_USER_DOC, extra);
+      const menu = openMenu();
+      expect(menuItemLabels(menu)).toEqual([
+        'RenameR',
+        'EditE',
+        'HistoryH',
+        'ShareS',
+        'Download Markdown',
+        'Download with images (.zip)',
+        'DeleteD',
+      ]);
+      fireEvent.click(within(menu).getByText('History'));
+      expect(extra.onShowHistory).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('menu')).toBeNull();
+    });
+
+    it('a read-share recipient gets the downloads only (no History)', () => {
+      renderHeader(NON_OWNER_DOC, viewerHandlers());
+      expect(menuItemLabels(openMenu())).toEqual([
+        'Download Markdown',
+        'Download with images (.zip)',
+      ]);
+    });
+
+    it('a write-share recipient may edit but not share', () => {
+      const writer = detail({
+        ...NON_OWNER_DOC,
+        permission: 'write',
+        access: { ...NON_OWNER_DOC.access, write: 'free', can_edit: true },
+      });
+      renderHeader(writer, viewerHandlers());
+      expect(menuItemLabels(openMenu())).toEqual([
+        'EditE',
+        'HistoryH',
+        'Download Markdown',
+        'Download with images (.zip)',
+      ]);
+      expect(screen.getByText('Shared by Bea · Can edit')).toBeTruthy();
+    });
+
+    it('single-key hints run the actions while the menu is open', () => {
+      const extra = viewerHandlers();
+      renderHeader(OWNER_USER_DOC, extra);
+      openMenu();
+      fireEvent.keyDown(document, { key: 'e' });
+      expect(extra.onEdit).toHaveBeenCalledTimes(1);
+      openMenu();
+      fireEvent.keyDown(document, { key: 's' });
+      expect(extra.onShare).toHaveBeenCalledTimes(1);
+    });
+
+    it('edit and history modes drop Edit / History and the source toggle', () => {
+      renderHeader(OWNER_USER_DOC, { ...viewerHandlers(), mode: 'edit' });
+      expect(screen.queryByRole('button', { name: 'Show source' })).toBeNull();
+      expect(menuItemLabels(openMenu())).toEqual([
+        'RenameR',
+        'ShareS',
+        'Download Markdown',
+        'Download with images (.zip)',
+        'DeleteD',
+      ]);
+    });
+
+    it('the owner of a shared doc gets a share chip that opens the dialog', () => {
+      const extra = viewerHandlers();
+      renderHeader(
+        detail({
+          shared: true,
+          shares: [
+            { id: 1, user_id: 5, permission: 'read', created_at: '', user: { id: 5, name: 'Cy', email: 'cy@x.io' } },
+            { id: 2, user_id: 6, permission: 'write', created_at: '', user: { id: 6, name: 'Di', email: 'di@x.io' } },
+          ],
+        }),
+        extra,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Shared with 2 people' }));
+      expect(extra.onShare).toHaveBeenCalledTimes(1);
+    });
+
+    it('an everyone grant reads "Shared with everyone"', () => {
+      renderHeader(
+        detail({
+          shared: true,
+          shares: [{ id: 1, user_id: null, permission: 'read', created_at: '', user: null }],
+        }),
+        viewerHandlers(),
+      );
+      expect(screen.getByRole('button', { name: 'Shared with everyone' })).toBeTruthy();
+    });
+
+    it("a doc from someone else's project gets a plain folder chip, not a link", () => {
+      renderHeader(
+        detail({ ...NON_OWNER_DOC, project_id: 'p-other', scope: 'project' }),
+        viewerHandlers(),
+      );
+      expect(screen.getByText('Project doc')).toBeTruthy();
+      expect(screen.queryByRole('link')).toBeNull();
+      expect(screen.getByText('Shared by Bea · Can view')).toBeTruthy();
+    });
   });
 });

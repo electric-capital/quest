@@ -1,0 +1,514 @@
+/* Doc viewer History view (DocHistory), shown in place of the doc body.
+ * Desktop: the version list (a 280px floating card, sticky while the
+ * selected version scrolls) beside the selected version. A narrow pane
+ * (container < 640px) stacks the list above the version; phones
+ * (useIsMobile) show one pane at a time (DocHistory switches them).
+ * Tokens only; the diff keeps SkillContentDiffPreview.css. */
+
+/* While History is open (DocViewer root .doc-viewer--history; its base
+   layout lives in DocViewer.css): the column widens to hold the list beside
+   a full reading column, and the Assets aside -- the CURRENT doc's images --
+   steps out. */
+.doc-viewer--history .doc-viewer-aside {
+  display: none;
+}
+
+.doc-viewer--history .doc-viewer-column,
+.doc-viewer--history .doc-viewer-footer {
+  max-width: 1140px;
+}
+
+@media (min-width: 1025px) {
+  .doc-viewer.doc-viewer--history {
+    grid-template-columns: minmax(0, 1fr);
+    padding-right: 2rem;
+  }
+}
+
+.doc-history {
+  container: doc-history / inline-size;
+  margin-top: 1.25rem;
+  min-width: 0;
+}
+
+.doc-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.doc-history-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* Focused programmatically on entry (tabIndex -1): no ring. */
+.doc-history-title:focus {
+  outline: none;
+}
+
+/* Outline buttons, like the header's Show source toggle. */
+.doc-history-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.3rem 0.625rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.doc-history-button:hover {
+  border-color: var(--border-strong);
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+.doc-history-button:focus:not(:focus-visible),
+.doc-history-notice-dismiss:focus:not(:focus-visible),
+.doc-history-notice-action:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.doc-history-button svg {
+  flex-shrink: 0;
+}
+
+/* "Show changes" while on. */
+.doc-history-button[aria-pressed='true'],
+.doc-history-button[aria-pressed='true']:hover {
+  border-color: rgb(var(--accent-rgb) / 0.45);
+  background-color: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.doc-history-button--primary,
+.doc-history-button--primary:hover {
+  border-color: transparent;
+  color: var(--accent-contrast);
+}
+
+.doc-history-button--primary {
+  background-color: var(--accent);
+}
+
+.doc-history-button--primary:hover {
+  background-color: var(--accent-hover);
+}
+
+/* Notices (stale token, gone revision, lost access, refresh failure). */
+.doc-history-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.5rem 0.5rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: var(--hover);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.doc-history-notice-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.doc-history-notice-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.doc-history-notice-dismiss:hover {
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+.doc-history-notice-action {
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent-text);
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.doc-history-notice-action:hover {
+  text-decoration: underline;
+}
+
+/* Loading / load error of the whole list. */
+.doc-history-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 2.5rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  text-align: center;
+}
+
+.doc-history-state-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* --- Two panes ---------------------------------------------------------- */
+
+.doc-history-layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  align-items: start;
+  gap: 1.5rem;
+  margin-top: 1rem;
+}
+
+/* The list card: the chat RightPanel card chrome. Sticky inside the
+   scrolling .docs-main pane; the list scrolls inside it when long. */
+.doc-history-list-pane {
+  position: sticky;
+  top: 0.75rem;
+  max-height: calc(100vh - 1.5rem);
+  overflow-y: auto;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 0.375rem;
+  background-color: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+}
+
+.doc-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.doc-history-item {
+  position: relative;
+  padding: 0.5rem 0.625rem;
+  border-radius: 8px;
+  transition: background-color 0.15s;
+}
+
+.doc-history-item:hover {
+  background-color: var(--hover);
+}
+
+.doc-history-item.is-selected {
+  background-color: var(--accent-soft);
+}
+
+/* The select button stretches over the whole entry (::after), so a click
+   anywhere on it selects; the author link sits above that layer. */
+.doc-history-item-select {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.doc-history-item-select::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+}
+
+.doc-history-item-select:focus {
+  outline: none;
+}
+
+.doc-history-item-select:focus-visible::after {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Words for screen readers only (the entry names). Absolutely positioned,
+   so outside the button's flex layout. */
+.doc-history-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.doc-history-item-when {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-history-item-badge {
+  flex-shrink: 0;
+  padding: 0 0.4rem;
+  border: 1px solid rgb(var(--accent-rgb) / 0.4);
+  border-radius: 999px;
+  color: var(--accent-text);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.125rem;
+}
+
+.doc-history-item-meta {
+  margin-top: 0.125rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.doc-history-link {
+  position: relative;
+  z-index: 1;
+  color: var(--accent-text);
+  font-weight: 500;
+}
+
+.doc-history-link:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.doc-history-empty {
+  margin: 0.5rem 0.625rem 0;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.doc-history-retention {
+  margin: 0.5rem 0.625rem 0.25rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+/* --- Selected version --------------------------------------------------- */
+
+.doc-history-detail {
+  min-width: 0;
+}
+
+.doc-history-all-versions {
+  margin-bottom: 0.875rem;
+  padding-left: 0.375rem;
+}
+
+.doc-history-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  padding-bottom: 0.875rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.doc-history-detail-heading {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.doc-history-detail-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.doc-history-detail-meta {
+  margin: 0.125rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.doc-history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.doc-history-detail-body {
+  margin-top: 1.25rem;
+  min-width: 0;
+}
+
+.doc-history-detail-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.625rem;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+}
+
+.doc-history-muted {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+}
+
+/* The chat markdown look without the bubble chrome (as .doc-viewer-markdown
+   in DocViewer.css). */
+.doc-history-markdown.message-content {
+  max-width: 100%;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.doc-history-markdown .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.doc-history-changes {
+  min-width: 0;
+}
+
+.doc-history-changes-caption {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.doc-history-changes-hint {
+  margin: 0.125rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+/* --- Copy dialog title field (inside DocConfirmDialog) ------------------ */
+
+.doc-history-copy-label {
+  display: block;
+  margin: 1rem 0 0.375rem;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.doc-history-copy-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.9375rem;
+}
+
+.doc-history-copy-input::placeholder {
+  color: var(--text-muted);
+}
+
+.doc-history-copy-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* --- Narrow layouts ----------------------------------------------------- */
+
+/* A narrow desktop pane: the list stacks above the version and keeps a
+   short scroll box of its own. */
+@container doc-history (max-width: 640px) {
+  .doc-history-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .doc-history-list-pane {
+    position: static;
+    max-height: 18rem;
+  }
+}
+
+/* Phone: one pane at a time, the list at its full height. */
+.doc-history-layout--phone {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.doc-history-layout--phone .doc-history-list-pane {
+  position: static;
+  max-height: none;
+  overflow: visible;
+}
+
+@media (max-width: 768px) {
+  .doc-history {
+    margin-top: 1rem;
+  }
+
+  .doc-history-layout {
+    margin-top: 0.875rem;
+  }
+
+  /* 16px: iOS zooms into smaller inputs on focus. */
+  .doc-history-copy-input {
+    font-size: 1rem;
+  }
+}

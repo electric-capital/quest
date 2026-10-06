@@ -1,0 +1,449 @@
+/* DocShareDialog -- the owner's Share dialog. Same chrome as the doc
+ * viewer's confirm dialog (DocConfirmDialog.css) from the design tokens;
+ * only the semantic error colour is literal, dark-first with a light block.
+ * Controls are aria-disabled (not disabled) while a request is in flight,
+ * so they keep the focus. Phone (768px, same as useIsMobile): a full-width
+ * bottom sheet with 16px gutters, the add row wrapping to a full-width
+ * field, 40px tap targets. */
+
+.doc-share-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+  background-color: rgba(0, 0, 0, 0.6);
+  z-index: 1000;
+  animation: doc-share-fade 0.15s ease-out;
+}
+
+.doc-share-dialog {
+  display: flex;
+  flex-direction: column;
+  width: 540px;
+  max-width: 100%;
+  max-height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  background-color: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+  animation: doc-share-rise 0.15s ease-out;
+}
+
+@keyframes doc-share-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes doc-share-rise {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* Header */
+.doc-share-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1.125rem 1.5rem 0.875rem;
+}
+
+.doc-share-title {
+  margin: 0;
+  min-width: 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.doc-share-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.doc-share-icon-button:hover:not(:disabled):not([aria-disabled='true']) {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.doc-share-icon-button[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.doc-share-icon-button:focus-visible {
+  outline: 2px solid rgb(var(--accent-rgb) / 0.6);
+  outline-offset: 1px;
+}
+
+/* Body (scrolls when the roster is long) */
+.doc-share-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 1.5rem 1rem;
+}
+
+/* Add row: name-or-email field | permission | Add */
+.doc-share-add {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.doc-share-input,
+.doc-share-select {
+  height: 2.25rem;
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: var(--hover);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.doc-share-input {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 0.75rem;
+}
+
+.doc-share-input::placeholder {
+  color: var(--text-muted);
+}
+
+.doc-share-input:focus,
+.doc-share-select:focus {
+  border-color: var(--accent);
+}
+
+.doc-share-input[readonly] {
+  opacity: 0.6;
+}
+
+.doc-share-select {
+  flex-shrink: 0;
+  padding: 0 0.5rem;
+  cursor: pointer;
+}
+
+.doc-share-select:disabled,
+.doc-share-select[aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Native option lists ignore the translucent fill; give them the raised
+ * ground so they stay readable in both schemes. */
+.doc-share-select option {
+  background-color: var(--surface-raised);
+  color: var(--text);
+}
+
+.doc-share-add-button,
+.doc-share-done {
+  flex-shrink: 0;
+  height: 2.25rem;
+  padding: 0 1rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background-color: var(--accent);
+  color: var(--accent-contrast);
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.doc-share-add-button:hover:not(:disabled):not([aria-disabled='true']),
+.doc-share-done:hover:not([aria-disabled='true']) {
+  background-color: var(--accent-hover);
+  border-color: transparent;
+}
+
+.doc-share-add-button:disabled,
+.doc-share-add-button[aria-disabled='true'],
+.doc-share-done[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Typeahead suggestions: in flow under the add row (pushing the rest down)
+ * so the scrolling body can never clip them, height-capped for short
+ * viewports. */
+.doc-share-suggestions {
+  max-height: min(200px, 35vh);
+  margin: 0.375rem 0 0;
+  padding: 0.25rem 0;
+  overflow-y: auto;
+  list-style: none;
+  background-color: var(--surface-overlay);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-menu);
+}
+
+.doc-share-suggestion {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 0.5rem;
+  padding: 0.45rem 0.75rem;
+  cursor: pointer;
+}
+
+.doc-share-suggestion--active {
+  background-color: var(--hover);
+}
+
+.doc-share-suggestion-name {
+  min-width: 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.doc-share-suggestion-email {
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.doc-share-suggestion-note {
+  margin-left: auto;
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+}
+
+/* Error line */
+.doc-share-error {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  border-radius: 6px;
+  background-color: rgba(255, 107, 107, 0.1);
+  color: #ff6b6b;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* Everyone row + roster rows: avatar | name/email | permission | remove */
+.doc-share-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+  padding: 0.4rem 0;
+}
+
+.doc-share-everyone {
+  margin-top: 1rem;
+}
+
+.doc-share-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background-color: var(--hover);
+  color: var(--text-secondary);
+}
+
+.doc-share-avatar--initial {
+  background-color: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.doc-share-person-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.doc-share-person-name,
+.doc-share-person-email {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-share-person-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.doc-share-person-email {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+/* Same width as a remove button, so every select lines up. */
+.doc-share-remove-slot {
+  flex-shrink: 0;
+  width: 2rem;
+}
+
+.doc-share-section-title {
+  margin: 1rem 0 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.doc-share-roster {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.doc-share-empty {
+  margin: 0;
+  padding: 0.4rem 0;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.doc-share-notes {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.doc-share-notes p {
+  margin: 0 0 0.375rem;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.doc-share-notes p:last-child {
+  margin-bottom: 0;
+}
+
+/* Footer */
+.doc-share-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.75rem 1.5rem 1.125rem;
+}
+
+/* Phone: a bottom sheet, 16px gutters, the email field on its own line. */
+@media (max-width: 768px) {
+  .doc-share-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .doc-share-dialog {
+    width: 100%;
+    max-height: 90vh;
+    max-height: 90dvh;
+    border-bottom: none;
+    border-radius: 14px 14px 0 0;
+  }
+
+  .doc-share-header {
+    padding: 1rem 16px 0.75rem;
+  }
+
+  .doc-share-body {
+    padding: 0 16px 0.75rem;
+  }
+
+  .doc-share-footer {
+    padding: 0.5rem 16px calc(0.875rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .doc-share-add {
+    flex-wrap: wrap;
+  }
+
+  .doc-share-input {
+    flex: 1 0 100%;
+  }
+
+  .doc-share-add .doc-share-select {
+    flex: 1 1 auto;
+  }
+
+  /* 16px keeps iOS Safari from zooming the page when a field focuses. */
+  .doc-share-input,
+  .doc-share-select {
+    height: 2.5rem;
+    font-size: 16px;
+  }
+
+  .doc-share-add-button,
+  .doc-share-done {
+    height: 2.5rem;
+  }
+
+  .doc-share-done {
+    width: 100%;
+  }
+
+  .doc-share-row {
+    gap: 0.5rem;
+  }
+
+  /* Decorative; the name/email column needs the room more. */
+  .doc-share-avatar {
+    display: none;
+  }
+
+  /* Tap targets: close and remove buttons at least 40px square. */
+  .doc-share-icon-button,
+  .doc-share-remove-slot {
+    width: 2.5rem;
+    height: 2.5rem;
+  }
+
+  .doc-share-row .doc-share-select {
+    max-width: 8.5rem;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  .doc-share-error {
+    border-color: rgba(211, 47, 47, 0.3);
+    background-color: rgba(211, 47, 47, 0.05);
+    color: #d32f2f;
+  }
+}

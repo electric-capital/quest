@@ -4,14 +4,18 @@
  * scrolling column; the header sticks to its top.
  *
  * Data. The backend has no cross-project doc list, so:
- *   - unfiltered: "Your docs" = useDocs({limit: 50}) (server-paged, "Load
- *     more"), plus one group per project with docs -- archived projects
- *     included and marked, since archiving has no effect on docs (spec 10)
- *     -- from useProjectDocsIndex (one fetchDocs per project, up to 200
- *     docs each);
- *   - filtered (?project=<id>): useDocs({projectId, limit: 50}) only.
- * Both hooks always run (the index is simply disabled while filtered, and
- * until the project list has loaded).
+ *   - unfiltered: "Your docs" = useDocs({limit: 50}) (the user's own user
+ *     docs, server-paged, "Load more"); "Shared with you" =
+ *     useDocs({shared: true, limit: 50}) (docs other people shared, user and
+ *     project docs, its own keyset stream and "Load more"; hidden while
+ *     empty unless it failed); plus one group per project with docs --
+ *     archived projects included and marked, since archiving has no effect
+ *     on docs (spec 10) -- from useProjectDocsIndex (one fetchDocs per
+ *     project, up to 200 docs each);
+ *   - filtered (?project=<id>): useDocs({projectId, limit: 50}) only (no
+ *     shared group).
+ * Every hook always runs (the shared list and the index are simply disabled
+ * while filtered, the index also until the project list has loaded).
  * Search filters everything loaded, client-side. Grouping, filtering and the
  * size column are the pure helpers in utils/allDocsGrouping.ts. The mode
  * badge follows utils/docMode: only a public doc shows one, and the "Mode"
@@ -21,14 +25,16 @@
 
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ChevronLeft, Folder, Globe, Plus, Search } from 'lucide-react';
+import { ChevronLeft, Folder, Globe, Plus, Search, Users } from 'lucide-react';
 import type { Doc, Project } from '../../api/types';
 import { useProjects } from '../../contexts/ProjectsContext';
-import { useDocs } from '../../hooks/useDocs';
+import { useDocs, type DocsList } from '../../hooks/useDocs';
 import { useProjectDocsIndex } from '../../hooks/useProjectDocsIndex';
 import {
+  SHARED_DOCS_GROUP_KEY,
   USER_DOCS_GROUP_KEY,
   docScopeLabel,
+  docScopeTitle,
   filterDocs,
   formatDocSize,
   groupDocs,
@@ -42,7 +48,8 @@ import { DocModeBadge } from './DocModeBadge';
 import { NewDocModal } from './NewDocModal';
 import './DocsListView.css';
 
-/** Page size of the server-paged list ("Your docs", or the filtered project). */
+/** Page size of the server-paged lists ("Your docs" / "Shared with you", or
+ * the filtered project). */
 const PAGE_SIZE = 50;
 
 const PUBLIC_PROJECT_TITLE = 'Public project — internet access, no internal data';
@@ -53,10 +60,11 @@ export function DocsListView({ projectId }: { projectId: string | null }) {
   const filtered = projectId !== null;
 
   // One paged list (the user's docs, or the filtered project's) plus the
-  // per-project index, which only the unfiltered view needs. The index waits
-  // for the project list: fanning out over the empty pre-load list would
-  // "load" an index with no projects in it.
+  // shared list and the per-project index, which only the unfiltered view
+  // needs. The index waits for the project list: fanning out over the empty
+  // pre-load list would "load" an index with no projects in it.
   const list = useDocs({ projectId, limit: PAGE_SIZE });
+  const shared = useDocs({ shared: true, limit: PAGE_SIZE, enabled: !filtered });
   const index = useProjectDocsIndex(projects, !filtered && projectsLoaded);
 
   const [query, setQuery] = useState('');
@@ -80,22 +88,29 @@ export function DocsListView({ projectId }: { projectId: string | null }) {
         },
       ];
     }
-    return groupDocs(list.docs, index.byProject, projects);
-  }, [projectId, filterProject, list.docs, index.byProject, projects]);
+    return groupDocs(list.docs, index.byProject, projects, shared.docs);
+  }, [projectId, filterProject, list.docs, index.byProject, projects, shared.docs]);
 
   const trimmedQuery = query.trim();
   const visibleGroups = useMemo(
     () =>
       groups
         .map((group) => ({ ...group, docs: filterDocs(group.docs, trimmedQuery) }))
-        // A query that hides a whole group drops it; without a query the
-        // paged group stays (empty line + "Load more") unless it failed.
-        .filter(
-          (group) =>
-            group.docs.length > 0 ||
-            (!trimmedQuery && !list.error && group.key === pagedGroupKey),
-        ),
-    [groups, trimmedQuery, list.error, pagedGroupKey],
+        // A query that hides a whole group drops it -- unless the group is
+        // server-paged with more pages, whose "Load more" must stay
+        // reachable (search covers only what is loaded). Without a query
+        // the paged group stays (empty line + "Load more") unless it
+        // failed, and an empty "Shared with you" shows only to report its
+        // error.
+        .filter((group) => {
+          if (group.docs.length > 0) return true;
+          const isShared = group.key === SHARED_DOCS_GROUP_KEY;
+          if (trimmedQuery) {
+            return isShared ? shared.hasMore : group.key === pagedGroupKey && list.hasMore;
+          }
+          return isShared ? shared.error !== null : !list.error && group.key === pagedGroupKey;
+        }),
+    [groups, trimmedQuery, list.error, list.hasMore, shared.error, shared.hasMore, pagedGroupKey],
   );
 
   const totalDocs = groups.reduce((n, group) => n + group.docs.length, 0);
@@ -106,14 +121,15 @@ export function DocsListView({ projectId }: { projectId: string | null }) {
     group.docs.some((doc) => shouldShowDocModeBadge(doc.mode)),
   );
 
-  // Wait for the first page AND the project index (which itself waits for
-  // the project list) before deciding between rows and the empty state, so
-  // a user whose docs are all project docs never sees "No docs yet." flash.
-  // Initial load only: a project-set change (create / delete / archive while
-  // this view is open) keeps the previous groups on screen while the index
-  // re-fans-out, like useDocs keeps its rows during a refresh.
+  // Wait for the first page, the shared list's first page AND the project
+  // index (which itself waits for the project list) before deciding between
+  // rows and the empty state, so a user whose docs are all project docs or
+  // all shared ones never sees "No docs yet." flash. Initial load only: a
+  // project-set change (create / delete / archive while this view is open)
+  // keeps the previous groups on screen while the index re-fans-out, like
+  // useDocs keeps its rows during a refresh.
   const loading = list.loading
-    || (!filtered && (!projectsLoaded || (index.loading && !index.loaded)));
+    || (!filtered && (shared.loading || !projectsLoaded || (index.loading && !index.loaded)));
 
   const handleCreated = useCallback(
     (doc: Doc) => {
@@ -123,21 +139,29 @@ export function DocsListView({ projectId }: { projectId: string | null }) {
     [navigate],
   );
 
-  const loadMoreButton = list.hasMore ? (
-    <button
-      type="button"
-      className="docs-load-more"
-      onClick={list.loadMore}
-      disabled={list.loadingMore}
-    >
-      {list.loadingMore ? 'Loading...' : 'Load more'}
-    </button>
-  ) : null;
+  // The server-paged stream behind a group (the paged list or the shared
+  // one), or null for an index-fed project group. Each paged group owns its
+  // "Load more"; the no-match line (search covers only what is loaded)
+  // gets one that pages every stream with more.
+  const streamFor = (group: DocGroup): DocsList | null => {
+    if (group.key === SHARED_DOCS_GROUP_KEY) return shared;
+    return group.key === pagedGroupKey ? list : null;
+  };
+  const noMatchLoadMoreButton = (
+    <LoadMoreButton
+      hasMore={list.hasMore || shared.hasMore}
+      loadingMore={list.loadingMore || shared.loadingMore}
+      onClick={() => {
+        if (list.hasMore) list.loadMore();
+        if (shared.hasMore) shared.loadMore();
+      }}
+    />
+  );
 
   let body: ReactNode;
   if (loading) {
     body = <div className="docs-list-status">Loading...</div>;
-  } else if (totalDocs === 0 && !list.error) {
+  } else if (totalDocs === 0 && !list.error && !shared.error) {
     body = (
       <div className="docs-list-empty">
         <p className="docs-list-empty-title">No docs yet.</p>
@@ -155,10 +179,10 @@ export function DocsListView({ projectId }: { projectId: string | null }) {
         {visibleDocs === 0 && trimmedQuery ? (
           <div className="docs-list-no-match">
             <p>No docs match '{trimmedQuery}'</p>
-            {loadMoreButton && (
+            {(list.hasMore || shared.hasMore) && (
               <div className="docs-group-footer">
                 <span className="docs-list-no-match-hint">Search covers the docs loaded so far.</span>
-                {loadMoreButton}
+                {noMatchLoadMoreButton}
               </div>
             )}
           </div>
@@ -171,32 +195,49 @@ export function DocsListView({ projectId }: { projectId: string | null }) {
               <span>Updated</span>
               <span className="docs-col-size">Size</span>
             </div>
-            {visibleGroups.map((group) => (
-              <section key={group.key} className="docs-group" aria-label={groupAriaLabel(group, filtered)}>
-                <GroupHeading
-                  group={group}
-                  filtered={filtered}
-                  countSuffix={group.key === pagedGroupKey && list.hasMore && !trimmedQuery ? '+' : ''}
-                />
-                {group.docs.length === 0 ? (
-                  <div className="docs-group-empty">No docs of your own yet.</div>
-                ) : (
-                  <div className="docs-rows">
-                    {group.docs.map((doc) => (
-                      <DocRow
-                        key={doc.id}
-                        doc={doc}
-                        project={doc.project_id ? (projectsById.get(doc.project_id) ?? null) : null}
-                        showModeBadge={shouldShowDocModeBadge(doc.mode)}
+            {visibleGroups.map((group) => {
+              const stream = streamFor(group);
+              return (
+                <section key={group.key} className="docs-group" aria-label={groupAriaLabel(group, filtered)}>
+                  <GroupHeading
+                    group={group}
+                    filtered={filtered}
+                    countSuffix={stream?.hasMore && !trimmedQuery ? '+' : ''}
+                  />
+                  {group.docs.length > 0 ? (
+                    <div className="docs-rows">
+                      {group.docs.map((doc) => (
+                        <DocRow
+                          key={doc.id}
+                          doc={doc}
+                          project={doc.project_id ? (projectsById.get(doc.project_id) ?? null) : null}
+                          showModeBadge={shouldShowDocModeBadge(doc.mode)}
+                        />
+                      ))}
+                    </div>
+                  ) : trimmedQuery ? (
+                    // Kept for its "Load more": more pages may match.
+                    <div className="docs-group-empty">No matches loaded yet.</div>
+                  ) : group.key === SHARED_DOCS_GROUP_KEY ? (
+                    // Shown empty only when its first page failed.
+                    <div className="docs-group-error" role="alert">
+                      {shared.error}
+                    </div>
+                  ) : (
+                    <div className="docs-group-empty">No docs of your own yet.</div>
+                  )}
+                  {stream?.hasMore && (
+                    <div className="docs-group-footer">
+                      <LoadMoreButton
+                        hasMore
+                        loadingMore={stream.loadingMore}
+                        onClick={stream.loadMore}
                       />
-                    ))}
-                  </div>
-                )}
-                {group.key === pagedGroupKey && loadMoreButton && (
-                  <div className="docs-group-footer">{loadMoreButton}</div>
-                )}
-              </section>
-            ))}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
           </>
         ) : null}
       </>
@@ -277,6 +318,23 @@ export function DocsListView({ projectId }: { projectId: string | null }) {
   );
 }
 
+function LoadMoreButton({
+  hasMore,
+  loadingMore,
+  onClick,
+}: {
+  hasMore: boolean;
+  loadingMore: boolean;
+  onClick: () => void;
+}) {
+  if (!hasMore) return null;
+  return (
+    <button type="button" className="docs-load-more" onClick={onClick} disabled={loadingMore}>
+      {loadingMore ? 'Loading...' : 'Load more'}
+    </button>
+  );
+}
+
 function groupAriaLabel(group: DocGroup, filtered: boolean): string {
   if (filtered) return 'Docs';
   return group.projectId ? `${group.label} docs` : group.label;
@@ -323,6 +381,9 @@ function GroupHeading({
   return (
     <div className="docs-group-heading">
       <span className="docs-group-label">
+        {group.key === SHARED_DOCS_GROUP_KEY && (
+          <Users size={14} className="docs-group-folder" aria-hidden="true" />
+        )}
         <span className="docs-group-label-text">{group.label}</span>
       </span>
       {count}
@@ -350,7 +411,9 @@ function DocRow({
       <span className="docs-row-mode">
         {showModeBadge && <DocModeBadge mode={doc.mode} size="sm" />}
       </span>
-      <span className="docs-row-meta docs-row-scope">{docScopeLabel(doc, project)}</span>
+      <span className="docs-row-meta docs-row-scope" title={docScopeTitle(doc)}>
+        {docScopeLabel(doc, project)}
+      </span>
       <span className="docs-row-meta docs-row-updated" title={updatedTitle}>
         {formatRelativeTimestamp(doc.updated_at)}
       </span>

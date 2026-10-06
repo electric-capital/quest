@@ -59,10 +59,20 @@
   gap: 2px;
 }
 
+/* One list entry: the row button, plus the owner's Delete button beside it
+   (a sibling: buttons cannot nest). */
+.doc-asset-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
 .doc-asset-row {
   display: flex;
   align-items: center;
   gap: 0.625rem;
+  flex: 1 1 auto;
   width: 100%;
   min-width: 0;
   padding: 0.375rem 0.5rem;
@@ -133,6 +143,57 @@
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
   white-space: nowrap;
+}
+
+/* Owner's per-image Delete. Space is always reserved; on hover-capable
+   devices the icon shows while the entry is hovered or focused, touch
+   screens always show it. */
+.doc-asset-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  margin-left: 2px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color 0.12s, color 0.12s, opacity 0.12s;
+}
+
+.doc-asset-delete:hover {
+  background-color: var(--hover);
+  color: #ff6b6b;
+}
+
+.doc-asset-delete:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.doc-asset-delete:focus-visible {
+  outline: 2px solid rgb(var(--accent-rgb) / 0.6);
+  outline-offset: -2px;
+}
+
+@media (hover: hover) {
+  .doc-asset-delete {
+    opacity: 0;
+  }
+
+  .doc-asset-item:hover .doc-asset-delete,
+  .doc-asset-item:focus-within .doc-asset-delete {
+    opacity: 1;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  .doc-asset-delete:hover {
+    color: #d32f2f;
+  }
 }
 
 .doc-assets-empty {

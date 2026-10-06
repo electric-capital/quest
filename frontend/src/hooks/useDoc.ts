@@ -24,9 +24,12 @@ export interface DocView {
   // null then.
   notFound: boolean;
   refresh: () => Promise<void>;
-  // Merge a row returned by the rename / mode endpoints (no `content`) into
+  // Merge a row returned by the rename / share endpoints (no `content`) into
   // the loaded doc, keeping its body.
   applyRow: (row: Doc) => void;
+  // Merge a row WITH its body (a content save or a restore response) into
+  // the loaded doc, replacing the body; the assets list is kept.
+  applyContent: (row: Doc & { content: string }) => void;
 }
 
 /** What has been loaded, tagged with the doc id it was loaded for. */
@@ -100,16 +103,33 @@ export function useDoc(docId: string | null): DocView {
       // by a newer refresh) must not roll the title/token back.
       if (row.updated_at < prev.doc.updated_at) return;
       commit({ ...prev, doc: { ...prev.doc, ...row } });
-      // Rows carry no body. A changed size / asset count / write source
-      // (e.g. the `current` row of a stale_update 409 after a model write
-      // whose events this tab missed) means the shown content is stale too.
-      const bodyChanged =
-        row.content_size !== prev.doc.content_size
-        || row.asset_count !== prev.doc.asset_count
-        || row.last_write_source !== prev.doc.last_write_source;
+      // Rows carry no body. A NEWER `updated_at` (a rename response, or the
+      // `current` row of a stale_update 409 after a write this tab missed)
+      // may come with a body this tab has not seen -- size / asset count /
+      // source can all coincide -- and an editor adopts the shown token, so
+      // re-fetch rather than pair the new token with the old body. An equal
+      // `updated_at` (a share change: access only) needs no body.
+      const newer = row.updated_at > prev.doc.updated_at;
       // A fetch that started before this write would land with the old row;
       // re-fetch so the newest response wins instead.
-      if (bodyChanged || pendingSeqRef.current !== null) void refresh();
+      if (newer || pendingSeqRef.current !== null) void refresh();
+    },
+    [docId, commit, refresh],
+  );
+
+  const applyContent = useCallback(
+    (row: Doc & { content: string }) => {
+      const prev = stateRef.current;
+      if (docId === null || row.id !== docId || prev.id !== docId || !prev.doc) return;
+      if (row.updated_at < prev.doc.updated_at) return;
+      // The row's fields and body replace the shown ones; `assets` and
+      // `last_write_conversation` (not in the row) stay until a re-fetch.
+      commit({ ...prev, doc: { ...prev.doc, ...row, content: row.content } });
+      // The writer's conversation link depends on last_write_source, which a
+      // UI save changes; an in-flight fetch could also land older data.
+      if (row.last_write_source !== prev.doc.last_write_source || pendingSeqRef.current !== null) {
+        void refresh();
+      }
     },
     [docId, commit, refresh],
   );
@@ -135,5 +155,6 @@ export function useDoc(docId: string | null): DocView {
     notFound: current.notFound,
     refresh,
     applyRow,
+    applyContent,
   };
 }

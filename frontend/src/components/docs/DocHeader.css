@@ -144,6 +144,25 @@
   flex-shrink: 0;
 }
 
+/* Plain-text chips (a recipient's "Shared by", another user's project). */
+.doc-header-chip--static,
+.doc-header-chip--static:hover {
+  background: var(--hover);
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+/* The owner's share chip is a button that opens the Share dialog. */
+.doc-header-share-chip {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.doc-header-share-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .doc-header-project-name {
   overflow: hidden;
   text-overflow: ellipsis;

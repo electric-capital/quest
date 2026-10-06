@@ -1,9 +1,9 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FetchDocsOptions } from '../api/docsApi';
 import { ApiClientError } from '../api/request';
 import type { Doc, ListDocsResponse } from '../api/types';
-import { useDocs, type UseDocsOptions } from './useDocs';
+import { DOCS_REFRESH_DEBOUNCE_MS, useDocs, type UseDocsOptions } from './useDocs';
 
 type GlobalListener = (event: { type: string; [key: string]: unknown }) => void;
 
@@ -41,7 +41,11 @@ function doc(id: string, overrides: Partial<Doc> = {}): Doc {
     updated_at: '2026-10-01T00:00:00',
     scope: 'user',
     shared: false,
-    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free' },
+    shared_with_me: false,
+    permission: null,
+    owner: null,
+    last_write_user: null,
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true },
     ...overrides,
   };
 }
@@ -65,10 +69,22 @@ function emit(type: string) {
   for (const cb of mocks.global) cb({ type });
 }
 
+/** Emit doc_list_changed and let the refresh debounce run out (fake timers). */
+async function emitDocListChanged() {
+  await act(async () => {
+    emit('doc_list_changed');
+    await vi.advanceTimersByTimeAsync(DOCS_REFRESH_DEBOUNCE_MS);
+  });
+}
+
 describe('useDocs', () => {
   beforeEach(() => {
     mocks.fetchDocs.mockReset();
     mocks.global.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('loads the first page, appends the next one by cursor, and stops at has_more false', async () => {
@@ -117,6 +133,47 @@ describe('useDocs', () => {
     expect(mocks.fetchDocs).toHaveBeenCalledWith({ projectId: 'proj-1', limit: 50 });
   });
 
+  it('lists the shared stream, ignoring a project id, and pages it by its own cursor', async () => {
+    mocks.fetchDocs.mockResolvedValueOnce(page(['s1', 's2'], 'shared-cursor'));
+    const { result } = renderHook(() => useDocs({ shared: true, projectId: 'proj-1', limit: 2 }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(mocks.fetchDocs).toHaveBeenCalledTimes(1);
+    expect(mocks.fetchDocs.mock.calls[0][0]).toEqual({ shared: true, limit: 2 });
+    expect(result.current.docs.map((d) => d.id)).toEqual(['s1', 's2']);
+
+    mocks.fetchDocs.mockResolvedValueOnce(page(['s3']));
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.docs).toHaveLength(3));
+    expect(mocks.fetchDocs.mock.calls[1][0]).toEqual({ shared: true, limit: 2, cursor: 'shared-cursor' });
+    expect(result.current.hasMore).toBe(false);
+
+    // Same realtime refresh as every other list: the loaded window, shared.
+    vi.useFakeTimers();
+    mocks.fetchDocs.mockResolvedValueOnce(page(['s0', 's1', 's2']));
+    await emitDocListChanged();
+    expect(mocks.fetchDocs.mock.calls[2][0]).toEqual({ shared: true, limit: 3 });
+    expect(result.current.docs.map((d) => d.id)).toEqual(['s0', 's1', 's2']);
+  });
+
+  it('treats switching between the own and the shared list as a new list', async () => {
+    const own = deferred<ListDocsResponse>();
+    mocks.fetchDocs.mockReturnValueOnce(own.promise);
+    const { result, rerender } = renderHook((opts: UseDocsOptions) => useDocs(opts), {
+      initialProps: { limit: 5 } as UseDocsOptions,
+    });
+    mocks.fetchDocs.mockResolvedValueOnce(page(['s1']));
+    rerender({ limit: 5, shared: true });
+    expect(mocks.fetchDocs.mock.calls[1][0]).toEqual({ shared: true, limit: 5 });
+    await waitFor(() => expect(result.current.docs.map((d) => d.id)).toEqual(['s1']));
+
+    // The own list's late answer must not land on the shared one.
+    await act(async () => {
+      own.resolve(page(['u1']));
+      await own.promise;
+    });
+    expect(result.current.docs.map((d) => d.id)).toEqual(['s1']);
+  });
+
   it('refreshes the loaded window silently on doc_list_changed and ignores other events', async () => {
     mocks.fetchDocs.mockResolvedValueOnce(page(['a', 'b'], 'cursor-1'));
     const { result } = renderHook(() => useDocs({ limit: 2 }));
@@ -125,13 +182,17 @@ describe('useDocs', () => {
     act(() => result.current.loadMore());
     await waitFor(() => expect(result.current.docs).toHaveLength(3));
 
+    vi.useFakeTimers();
     act(() => emit('conversation_list_changed'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DOCS_REFRESH_DEBOUNCE_MS);
+    });
     expect(mocks.fetchDocs).toHaveBeenCalledTimes(2);
 
     // One request spanning everything loaded, no loading flash.
     const pending = deferred<ListDocsResponse>();
     mocks.fetchDocs.mockReturnValueOnce(pending.promise);
-    act(() => emit('doc_list_changed'));
+    await emitDocListChanged();
     expect(mocks.fetchDocs).toHaveBeenLastCalledWith({ projectId: null, limit: 3 });
     expect(result.current.loading).toBe(false);
     expect(result.current.docs.map((d) => d.id)).toEqual(['a', 'b', 'c']);
@@ -142,6 +203,41 @@ describe('useDocs', () => {
     });
     expect(result.current.docs.map((d) => d.id)).toEqual(['new', 'a', 'b']);
     expect(result.current.hasMore).toBe(true);
+  });
+
+  it('coalesces a burst of doc_list_changed into one trailing refresh', async () => {
+    mocks.fetchDocs.mockResolvedValue(page(['a']));
+    const { result } = renderHook(() => useDocs({ limit: 5 }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(mocks.fetchDocs).toHaveBeenCalledTimes(1);
+
+    vi.useFakeTimers();
+    for (let i = 0; i < 4; i++) {
+      await act(async () => {
+        emit('doc_list_changed');
+        await vi.advanceTimersByTimeAsync(DOCS_REFRESH_DEBOUNCE_MS - 100);
+      });
+    }
+    // Every event restarted the quiet period: nothing fetched yet.
+    expect(mocks.fetchDocs).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(mocks.fetchDocs).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a pending realtime refresh on unmount', async () => {
+    mocks.fetchDocs.mockResolvedValue(page(['a']));
+    const { result, unmount } = renderHook(() => useDocs({ limit: 5 }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    vi.useFakeTimers();
+    act(() => emit('doc_list_changed'));
+    unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DOCS_REFRESH_DEBOUNCE_MS * 2);
+    });
+    expect(mocks.fetchDocs).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the list when a background refresh fails', async () => {

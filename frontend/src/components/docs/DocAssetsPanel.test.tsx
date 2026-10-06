@@ -1,10 +1,21 @@
 // DocAssetsPanel: one row per asset (thumbnail from the doc asset route, name,
-// humanized size), the empty state, the thumbnail fallback, and a row click
-// opening DocImageLightbox on the full image with a Download link.
-import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+// humanized size), the empty state, the thumbnail fallback, a row click
+// opening DocImageLightbox on the full image with a Download link, and the
+// owner's per-image Delete (confirm, asset_in_use, other errors).
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { ApiClientError } from '../../api/request';
 import type { DocAsset } from '../../api/types';
 import { DocAssetsPanel } from './DocAssetsPanel';
+
+const mocks = vi.hoisted(() => ({
+  deleteDocAsset: vi.fn(),
+}));
+
+vi.mock('../../api/docsApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/docsApi')>();
+  return { ...actual, deleteDocAsset: mocks.deleteDocAsset };
+});
 
 const ASSETS: DocAsset[] = [
   { name: 'chart.png', size: 1229, mime: 'image/png' },
@@ -21,6 +32,10 @@ function rows(container: HTMLElement) {
 }
 
 describe('DocAssetsPanel', () => {
+  beforeEach(() => {
+    mocks.deleteDocAsset.mockReset();
+  });
+
   afterEach(() => {
     cleanup();
   });
@@ -87,5 +102,78 @@ describe('DocAssetsPanel', () => {
     expect(details.querySelector('summary')?.textContent).toBe('Assets (3)');
     expect(container.querySelector('.right-panel-card')).toBeNull();
     expect(rows(container).map((row) => row.name)).toEqual(['chart.png', 'my photo.jpg', 'scan.webp']);
+  });
+  describe('delete', () => {
+    const DELETED = {
+      deleted: true,
+      asset_count: 2,
+      updated_at: '2026-10-06T10:00:30',
+      previous_updated_at: '2026-10-06T10:00:00',
+    };
+
+    it('offers no Delete without canDelete', () => {
+      render(<DocAssetsPanel docId="d1" assets={ASSETS} />);
+      expect(screen.queryByRole('button', { name: /^Delete / })).toBeNull();
+    });
+
+    it('confirms, deletes and reports the deleted image', async () => {
+      mocks.deleteDocAsset.mockResolvedValue(DELETED);
+      const onDeleted = vi.fn();
+      render(<DocAssetsPanel docId="d1" assets={ASSETS} canDelete onDeleted={onDeleted} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete my photo.jpg' }));
+      const dialog = screen.getByRole('dialog');
+      expect(within(dialog).getByText("Delete image 'my photo.jpg'?")).toBeTruthy();
+      expect(mocks.deleteDocAsset).not.toHaveBeenCalled();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+      expect(mocks.deleteDocAsset).toHaveBeenCalledWith('d1', 'my photo.jpg');
+      await waitFor(() => expect(onDeleted).toHaveBeenCalledWith('my photo.jpg', DELETED));
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('Cancel in the confirm deletes nothing', () => {
+      const onDeleted = vi.fn();
+      render(<DocAssetsPanel docId="d1" assets={ASSETS} canDelete onDeleted={onDeleted} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Delete chart.png' }));
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(mocks.deleteDocAsset).not.toHaveBeenCalled();
+    });
+
+    it('explains asset_in_use inside the dialog', async () => {
+      mocks.deleteDocAsset.mockRejectedValue(
+        new ApiClientError('Asset is referenced by the doc body.', 409, 'asset_in_use'),
+      );
+      const onDeleted = vi.fn();
+      render(<DocAssetsPanel docId="d1" assets={ASSETS} canDelete onDeleted={onDeleted} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Delete chart.png' }));
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }));
+
+      const alert = await within(screen.getByRole('dialog')).findByRole('alert');
+      expect(alert.textContent).toBe('This image is used in the doc. Remove it from the text first.');
+      expect(onDeleted).not.toHaveBeenCalled();
+    });
+
+    it('shows other failures inline', async () => {
+      mocks.deleteDocAsset.mockRejectedValue(new ApiClientError('Server exploded', 500));
+      render(<DocAssetsPanel docId="d1" assets={ASSETS} canDelete onDeleted={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Delete chart.png' }));
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }));
+      expect((await screen.findByRole('alert')).textContent).toBe('Server exploded');
+    });
+
+    it('the row still opens the lightbox when Delete is offered', () => {
+      render(<DocAssetsPanel docId="d1" assets={ASSETS} canDelete onDeleted={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', { name: /^chart\.png/ }));
+      expect(within(screen.getByRole('dialog')).getByRole('heading').textContent).toBe('chart.png');
+    });
+
+    it('the phone section offers Delete too', () => {
+      render(
+        <DocAssetsPanel docId="d1" assets={ASSETS} variant="details" canDelete onDeleted={vi.fn()} />,
+      );
+      expect(screen.getAllByRole('button', { name: /^Delete /, hidden: true })).toHaveLength(3);
+    });
   });
 });

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { Doc, Project } from '../api/types';
 import {
+  SHARED_DOCS_GROUP_KEY,
   USER_DOCS_GROUP_KEY,
   docScopeLabel,
+  docScopeTitle,
   filterDocs,
   formatDocSize,
   groupDocs,
@@ -23,7 +25,11 @@ function doc(overrides: Partial<Doc> & { id: string }): Doc {
     updated_at: '2026-01-01T00:00:00',
     scope: overrides.project_id ? 'project' : 'user',
     shared: false,
-    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free' },
+    shared_with_me: false,
+    permission: null,
+    owner: null,
+    last_write_user: null,
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true },
     ...overrides,
   };
 }
@@ -67,6 +73,21 @@ describe('filterDocs', () => {
 
   it('returns nothing when no doc matches', () => {
     expect(filterDocs(docs, 'zzz')).toEqual([]);
+  });
+
+  it("matches a shared doc's owner name or email, never the viewer's own docs' owner", () => {
+    const shared = doc({
+      id: 's',
+      title: 'Budget',
+      owner_id: 2,
+      shared_with_me: true,
+      owner: { id: 2, name: 'Ana Lopez', email: 'ana@x.test' },
+    });
+    const own = doc({ id: 'o', title: 'Mine', owner: { id: 2, name: 'Ana Lopez', email: 'ana@x.test' } });
+    expect(filterDocs([shared, own], 'lopez').map((d) => d.id)).toEqual(['s']);
+    expect(filterDocs([shared, own], 'ANA@X').map((d) => d.id)).toEqual(['s']);
+    // Name and email are matched separately.
+    expect(filterDocs([shared], 'lopez ana')).toEqual([]);
   });
 
   it('keeps the input order', () => {
@@ -134,6 +155,35 @@ describe('groupDocs', () => {
     expect(groups[1].docs.map((d) => d.id)).toEqual(['new', 'old']);
   });
 
+  it('puts "Shared with you" right after "Your docs" when shared docs are passed', () => {
+    const shared = [doc({ id: 's1', owner_id: 2, shared_with_me: true })];
+    const groups = groupDocs(
+      [doc({ id: 'u1' })],
+      { 'p-alpha': [doc({ id: 'a1', project_id: 'p-alpha' })] },
+      projects,
+      shared,
+    );
+    expect(groups.map((g) => g.key)).toEqual([
+      USER_DOCS_GROUP_KEY,
+      SHARED_DOCS_GROUP_KEY,
+      projectGroupKey('p-alpha'),
+    ]);
+    expect(groups[1]).toMatchObject({
+      label: 'Shared with you',
+      project: null,
+      projectId: null,
+      docs: shared,
+    });
+  });
+
+  it('keeps an empty "Shared with you" (the view decides) and omits it when not passed', () => {
+    expect(groupDocs([], {}, projects, []).map((g) => g.key)).toEqual([
+      USER_DOCS_GROUP_KEY,
+      SHARED_DOCS_GROUP_KEY,
+    ]);
+    expect(groupDocs([], {}, projects).map((g) => g.key)).toEqual([USER_DOCS_GROUP_KEY]);
+  });
+
   it('breaks a name tie by project id', () => {
     const twins = [project('p2', 'Same'), project('p1', 'same')];
     const groups = groupDocs(
@@ -160,13 +210,35 @@ describe('docScopeLabel', () => {
     expect(docScopeLabel(doc({ id: 'u' }), null)).toBe('Your doc');
   });
 
-  it('says "Shared with you" for a user doc the viewer does not own', () => {
+  it('says "Shared by <owner>" for a doc shared with the viewer, project docs included', () => {
+    const readerAccess = { can_rename: false, can_switch_mode: false, can_delete: false, write: 'denied' as const, can_edit: false, can_share: false, can_delete_assets: false };
     const shared = doc({
       id: 's',
       owner_id: 2,
-      access: { can_rename: false, can_switch_mode: false, can_delete: false, write: 'approval' },
+      shared_with_me: true,
+      permission: 'read',
+      owner: { id: 2, name: 'Ana', email: 'ana@x.test' },
+      access: readerAccess,
     });
-    expect(docScopeLabel(shared, null)).toBe('Shared with you');
+    expect(docScopeLabel(shared, null)).toBe('Shared by Ana');
+    expect(docScopeTitle(shared)).toBe('Shared by Ana · can view');
+
+    const sharedProjectDoc = doc({
+      id: 'sp',
+      owner_id: 3,
+      project_id: 'p-theirs',
+      shared_with_me: true,
+      permission: 'write',
+      owner: { id: 3, name: '', email: 'bo@x.test' },
+      access: { ...readerAccess, write: 'free', can_edit: true },
+    });
+    expect(docScopeLabel(sharedProjectDoc, null)).toBe('Shared by bo@x.test');
+    expect(docScopeTitle(sharedProjectDoc)).toBe('Shared by bo@x.test · can edit');
+  });
+
+  it('has no tooltip for the viewer\'s own docs', () => {
+    expect(docScopeTitle(doc({ id: 'u' }))).toBeUndefined();
+    expect(docScopeTitle(doc({ id: 'a', project_id: 'p-alpha' }))).toBeUndefined();
   });
 });
 

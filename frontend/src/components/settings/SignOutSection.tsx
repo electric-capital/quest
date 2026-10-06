@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { logout, logoutAndDisconnect, deleteAccount } from '../../api/client';
+import { clearAllDocDrafts } from '../../utils/docDraftBackup';
 import './SignOutSection.css';
 
 export function SignOutSection() {
@@ -9,6 +10,8 @@ export function SignOutSection() {
     setIsLoggingOut(true);
     try {
       await logout();
+      // Unsaved Quest Docs drafts must not outlive the session in this browser.
+      clearAllDocDrafts();
       window.location.href = '/';
     } catch (error) {
       console.error('Failed to logout:', error);
@@ -23,6 +26,8 @@ export function SignOutSection() {
     setIsLoggingOut(true);
     try {
       await logoutAndDisconnect();
+      // Unsaved Quest Docs drafts must not outlive the session in this browser.
+      clearAllDocDrafts();
       window.location.href = '/';
     } catch (error) {
       console.error('Failed to logout and disconnect:', error);
@@ -41,6 +46,8 @@ export function SignOutSection() {
     setIsLoggingOut(true);
     try {
       await deleteAccount();
+      // Unsaved Quest Docs drafts must not outlive the session in this browser.
+      clearAllDocDrafts();
       window.location.href = '/';
     } catch (error) {
       console.error('Failed to delete account:', error);

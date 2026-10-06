@@ -22,7 +22,11 @@ function doc(overrides: Partial<Doc> & { id: string }): Doc {
     updated_at: '2026-01-01T00:00:00',
     scope: 'user',
     shared: false,
-    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free' },
+    shared_with_me: false,
+    permission: null,
+    owner: null,
+    last_write_user: null,
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true },
     ...overrides,
   };
 }
