@@ -130,6 +130,17 @@ class TestRegistry:
             for term in _PUBLIC_PROMPT_FORBIDDEN:
                 assert term not in text, (name, term)
 
+    def test_create_doc_description_says_user_docs_are_private(self):
+        from chat.llm.tool_schemas import TOOL_CALL_REGISTRY
+
+        spec = TOOL_CALL_REGISTRY["create_doc"]
+        desc = spec["description"]
+        assert "user docs are always private" in desc
+        assert 'in a public project use target="project"' in desc
+        assert "mode" in desc and "public" in desc
+        target = spec["parameters"]["properties"]["target"]["description"]
+        assert "always private" in target and "public project" in target
+
     def test_write_descriptions_explain_the_handoff(self):
         from chat.llm.tool_schemas import TOOL_CALL_REGISTRY
 
@@ -334,9 +345,13 @@ class TestTiers:
     def test_public_dispatch_reaches_doc_tools(self, docs_env):
         private = seed_doc(docs_env, title="Secret")
         project = docs_env.public_project
-        created = _dispatch(docs_env, "create_doc", {"title": "Findings", "content": "web\n"},
-                            project_id=project, is_public=True)
+        created = _dispatch(
+            docs_env, "create_doc",
+            {"title": "Findings", "content": "web\n", "target": "project"},
+            project_id=project, is_public=True,
+        )
         assert created["mode"] == "public"
+        assert created["project_id"] == project
         listed = _dispatch(docs_env, "list_docs", {}, project_id=project, is_public=True)
         assert [d["id"] for d in listed["docs"]] == [created["id"]]
         hidden = _dispatch(docs_env, "read_doc", {"doc_id": private["id"]},
@@ -347,9 +362,34 @@ class TestTiers:
                              project_id=project, is_public=True)
         assert "error" not in appended
 
+    @pytest.mark.parametrize("arguments", [
+        {"title": "Mine", "content": "x"},
+        {"title": "Mine", "content": "x", "target": "user"},
+    ])
+    def test_public_dispatch_refuses_user_docs(self, docs_env, arguments):
+        result = _dispatch(docs_env, "create_doc", arguments,
+                           project_id=docs_env.public_project, is_public=True)
+        assert result == {"error": (
+            "User docs are always private and cannot be created from a public "
+            'conversation; use create_doc(target="project") to create a doc in '
+            "this project."
+        )}
+        assert list(docs_env.dirs["docs"].iterdir()) == []
+
+    def test_private_dispatch_creates_private_docs(self, docs_env):
+        user_doc = _dispatch(docs_env, "create_doc", {"title": "Mine", "content": "x"})
+        assert (user_doc["mode"], user_doc["scope"]) == ("private", "user")
+        proj_doc = _dispatch(
+            docs_env, "create_doc", {"title": "Proj", "content": "x", "target": "project"},
+            project_id=docs_env.private_project,
+        )
+        assert (proj_doc["mode"], proj_doc["scope"]) == ("private", "project")
+
     def test_private_dispatch_cannot_write_public_doc(self, docs_env):
-        doc = seed_doc(docs_env, mode="public")
-        result = _dispatch(docs_env, "append_to_doc", {"doc_id": doc["id"], "content": "x"})
+        doc = seed_doc(docs_env, mode="public", project_id=docs_env.public_project)
+        # Defensive shape: a private caller inside the public project.
+        result = _dispatch(docs_env, "append_to_doc", {"doc_id": doc["id"], "content": "x"},
+                           project_id=docs_env.public_project)
         assert result == {"error": DENY_PUBLIC_DOC_FROM_PRIVATE}
 
     @pytest.mark.parametrize("tool", sorted(WRITE_TOOLS))

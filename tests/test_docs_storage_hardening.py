@@ -236,7 +236,18 @@ def test_list_accessible_docs_mode_filter_applies_before_limit(env):
     alice = env["alice"]
     for i in range(5):
         _run(store.create_doc(alice, f"Private {i}", mode="private"))
-    pub = _run(store.create_doc(alice, "Public one", mode="public"))
+
+    async def _project():
+        async with env["session"]() as db:
+            project = env["models"].Project(user_id=alice, name="Open", public=True)
+            db.add(project)
+            await db.commit()
+            await db.refresh(project)
+            return project.id
+
+    # Only project docs can be public.
+    project_id = _run(_project())
+    pub = _run(store.create_doc(alice, "Public one", mode="public", project_id=project_id))
 
     async def _age_public():
         async with env["session"]() as db:
@@ -245,9 +256,10 @@ def test_list_accessible_docs_mode_filter_applies_before_limit(env):
             await db.commit()
 
     _run(_age_public())
-    rows = _run(store.list_accessible_docs(alice, mode="public", limit=3))
+    scope = dict(project_id=project_id, include_user_docs=True, include_project_docs=True)
+    rows = _run(store.list_accessible_docs(alice, mode="public", limit=3, **scope))
     assert [r["id"] for r in rows] == [pub["id"]]
-    rows = _run(store.list_accessible_docs(alice, mode="private", limit=3))
+    rows = _run(store.list_accessible_docs(alice, mode="private", limit=3, **scope))
     assert len(rows) == 3 and all(r["mode"] == "private" for r in rows)
     with pytest.raises(ValueError):
         _run(store.list_accessible_docs(alice, mode="secret"))

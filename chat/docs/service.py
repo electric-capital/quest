@@ -65,7 +65,12 @@ from chat.docs.access import (
     resolve_doc_access,
     write_note,
 )
-from chat.docs.constants import doc_not_found_message, docs_disabled_message
+from chat.docs.constants import (
+    doc_not_found_message,
+    docs_disabled_message,
+    user_doc_in_public_conversation_message,
+    user_doc_mode_private_message,
+)
 from config import feature_gates
 from db import doc_store
 
@@ -88,6 +93,7 @@ __all__ = [
     "edit_doc",
     "get_visible_doc",
     "list_docs",
+    "mode_switch_refusal",
     "preview_write_operation",
     "read_doc",
     "require_enabled",
@@ -153,8 +159,8 @@ class DocRequestError(DocError):
     ``code`` is the stable machine-readable error code the HTTP routes
     return: ``invalid_title``, ``invalid_description``, ``invalid_mode``,
     ``project_not_found``, ``project_doc_mode_inherited``,
-    ``duplicate_title`` or ``invalid_request``. ``str(e)`` is the
-    user-facing message.
+    ``user_doc_mode_private``, ``duplicate_title``, ``forbidden`` or
+    ``invalid_request``. ``str(e)`` is the user-facing message.
     """
 
     def __init__(self, code: str, message: str):
@@ -425,8 +431,13 @@ async def _visible_docs(
     Candidates come from ``doc_store.list_accessible_docs`` (owner or
     share); each is filtered through the access rule. Pages through the
     store with its keyset cursor so hidden rows never eat into ``limit``.
+
+    A public conversation sees only public docs, and only project docs
+    can be public (user docs are always private), so it lists its own
+    project's docs and never queries user docs at all -- not even a
+    leftover row whose stored mode still says ``public``.
     """
-    include_user = scope in ("user", "all")
+    include_user = scope in ("user", "all") and not caller.is_public
     include_project = scope in ("project", "all") and bool(caller.project_id)
     if not include_user and not include_project:
         return []
@@ -668,11 +679,13 @@ async def create_doc(
 ) -> dict:
     """Create a doc in this conversation's mode (never gated: no shares yet).
 
-    ``target="user"``: a user doc in ``creation_mode(caller.is_public)``.
+    ``target="user"``: a user doc, always private -- refused from a public
+    conversation (which never creates a private doc) with
+    ``user_doc_in_public_conversation_message``.
     ``target="project"``: a doc of the conversation's project (which the
     user must own), in the project's mode -- which equals the
-    conversation's, since a public conversation is one in a public project.
-    Only top-level and Slack conversations create docs.
+    conversation's (``creation_mode``), since a public conversation is one
+    in a public project. Only top-level and Slack conversations create docs.
 
     Order: lay out the directory under a fresh id, then insert the row (a
     crash in between leaves an invisible orphan directory, never a row
@@ -700,11 +713,15 @@ async def create_doc(
     target = target or "user"
     if target not in ("user", "project"):
         raise DocError('target must be "user" or "project".')
+    if target == "user" and caller.is_public:
+        # User docs are always private, and a public conversation must
+        # never create a private doc (taint): only its project's docs.
+        raise DocError(user_doc_in_public_conversation_message())
 
     user_id = caller.user["id"]
     conversation_mode = creation_mode(caller.is_public)
     project_id = None
-    mode = conversation_mode
+    mode = "private"  # every user doc
     if target == "project":
         if not caller.project_id:
             raise DocError(
@@ -733,7 +750,7 @@ async def create_doc(
 
     doc_id = str(uuid.uuid4())
     try:
-        size = await _files(doc_files.init_doc, doc_id, content)
+        size = await _files(doc_files.init_doc, doc_id, content, write_source=write_source)
         doc = await doc_store.create_doc(
             user_id,
             title,
@@ -812,13 +829,15 @@ async def create_doc_from_ui(
     """Create an EMPTY doc from the UI (``POST /app/api/docs``), owned by ``user``.
 
     :func:`create_doc` serves conversations only (it derives the mode from
-    the conversation); a UI create has no conversation, so the mode comes
-    from the request: a user doc takes ``mode`` (default ``"private"``), a
-    project doc always takes its project's mode (``projects.public``) and a
-    supplied ``mode`` that disagrees is refused. The project must be owned
-    by ``user`` (project docs are owned by the project owner). Content is
-    empty, so creating a public doc here cannot move internal data across
-    the taint boundary.
+    the conversation); a UI create has no conversation. A user doc is
+    always private: ``mode`` may be omitted or ``"private"``, while
+    ``"public"`` is refused with ``user_doc_mode_private`` (a public doc is
+    created inside a public project). A project doc always takes its
+    project's mode (``projects.public``) and a supplied ``mode`` that
+    disagrees is refused. The project must be owned by ``user`` (project
+    docs are owned by the project owner). Content is empty, so creating a
+    public project doc here cannot move internal data across the taint
+    boundary.
 
     Same order and cleanup as :func:`create_doc`: lay out the directory
     under a fresh id, insert the row with ``last_write_source="ui"``,
@@ -831,9 +850,9 @@ async def create_doc_from_ui(
     Raises:
         DocDisabled: gate closed.
         DocRequestError: ``invalid_title`` / ``invalid_description`` /
-            ``invalid_mode`` / ``project_not_found`` /
-            ``project_doc_mode_inherited`` / ``duplicate_title`` /
-            ``invalid_request``.
+            ``invalid_mode`` / ``user_doc_mode_private`` /
+            ``project_not_found`` / ``project_doc_mode_inherited`` /
+            ``duplicate_title`` / ``invalid_request``.
         DocError: a storage failure laying out the directory.
     """
     require_enabled(
@@ -864,12 +883,14 @@ async def create_doc_from_ui(
                 "it cannot be chosen separately.",
             )
         mode = project_mode
-    elif mode is None:
+    elif mode == "public":
+        raise DocRequestError("user_doc_mode_private", user_doc_mode_private_message())
+    else:
         mode = "private"
 
     doc_id = str(uuid.uuid4())
     try:
-        size = await _files(doc_files.init_doc, doc_id, "")
+        size = await _files(doc_files.init_doc, doc_id, "", write_source="ui")
         doc = await doc_store.create_doc(
             user_id,
             clean_title,
@@ -1146,7 +1167,11 @@ async def _load_workspace_image(caller: Caller, workspace_path: str) -> tuple[by
 # run with that lock held. Body changes go through
 # files.modify_body, which reads, transforms and writes doc.md in one
 # critical section of the per-doc threading lock (a separate read_body +
-# write_body pair would let concurrent writers clobber each other).
+# write_body pair would let concurrent writers clobber each other). Each
+# passes its own write_source -- the writer of the NEW body -- which
+# files.py records in doc.meta.json; a later snapshot copies that file into
+# its revision sidecar, so attribution follows the body itself, not the
+# row's last_write_source (which asset-only writes also bump).
 # ---------------------------------------------------------------------------
 
 
@@ -1159,7 +1184,10 @@ async def _write_edit(caller: Caller, doc: dict, clean: dict, write_source: str)
         replaced.append(count)
         return new_body
 
-    new_body, size = await _files(doc_files.modify_body, doc_id, transform)
+    new_body, size = await _files(
+        doc_files.modify_body, doc_id, transform,
+        write_source=write_source,
+    )
     updated = await _finish_write(doc_id, content_size=size, write_source=write_source)
     return {
         "replaced": replaced[0],
@@ -1176,7 +1204,10 @@ async def _write_append(caller: Caller, doc: dict, clean: dict, write_source: st
         _check_body_size(new_body)
         return new_body
 
-    new_body, size = await _files(doc_files.modify_body, doc_id, transform)
+    new_body, size = await _files(
+        doc_files.modify_body, doc_id, transform,
+        write_source=write_source,
+    )
     updated = await _finish_write(doc_id, content_size=size, write_source=write_source)
     return {
         "appended_lines": _total_lines(clean["content"]),
@@ -1212,7 +1243,10 @@ async def _write_add_image(caller: Caller, doc: dict, clean: dict, write_source:
             return appended
 
         try:
-            new_body, size = await _files(doc_files.modify_body, doc_id, transform)
+            new_body, size = await _files(
+                doc_files.modify_body, doc_id, transform,
+                write_source=write_source,
+            )
         except DocError:
             # The asset landed (assets are additive); keep the counter
             # honest, then report the body failure.
@@ -1279,8 +1313,8 @@ async def apply_write_operation(
     append: content, ensure_blank_line; add_image: workspace_path, alt,
     placement). The write_doc action request calls this at approve time
     with ``bypass_approval=True``: an ``approval`` verdict then proceeds,
-    while hidden/missing (``doc_not_found_message``) and ``denied``
-    (``deny_reason`` -- e.g. the doc was switched to public meanwhile)
+    while hidden/missing (``doc_not_found_message``, e.g. the share was
+    revoked or the doc deleted meanwhile) and ``denied`` (``deny_reason``)
     still refuse, and edit still requires the read sidecar.
 
     Raises:
@@ -1301,9 +1335,9 @@ async def apply_write_operation(
 
     async def _locked() -> dict:
         async with _write_lock(doc["id"]):
-            # Re-resolve under the lock: a share added or a mode flipped
-            # while this write queued must change the verdict (the
-            # approval card / the public-doc denial are decided here).
+            # Re-resolve under the lock: a share added or revoked while
+            # this write queued must change the verdict (the approval card
+            # and the hidden / read-only refusals are decided here).
             fresh_doc, fresh_access, fresh_clean = await _resolve_write(
                 caller, doc_id, operation, params,
             )
@@ -1461,53 +1495,25 @@ async def add_doc_image(
 
 
 # ---------------------------------------------------------------------------
-# UI mutations that must serialize with model writes
+# UI: the (always refused) mode switch, and the delete that must serialize
+# with model writes
 # ---------------------------------------------------------------------------
 
 
-async def switch_doc_mode(user: dict, doc_id: str, mode: str) -> dict:
-    """Owner-only private <-> public switch for a USER doc, under the doc lock.
+def mode_switch_refusal(doc: dict) -> DocRequestError:
+    """Why ``doc``'s mode cannot be switched -- no doc's can in v1.
 
-    The lock matters for taint: a model write that passed its access check
-    before the flip must not land after the doc became public, so the
-    switch waits for in-flight writes (and later writers re-resolve access
-    under the same lock and see the new mode). Returns the doc dict with
-    shares (unchanged when ``mode`` is already set).
-
-    Raises:
-        DocDisabled, DocError (hidden/missing), DocRequestError with code
-        ``forbidden`` / ``invalid_mode`` / ``project_doc_mode_inherited`` /
-        ``duplicate_title``.
+    A user doc is always private (``user_doc_mode_private``); a project doc
+    keeps its project's immutable mode (``project_doc_mode_inherited``).
+    ``PUT /docs/{id}/mode`` stays registered and raises this after its
+    404 / 403 checks.
     """
-    caller = Caller(user=user, conversation_id=None, project_id=None,
-                    is_public=False, run_kind="ui")
-    doc, _access = await get_visible_doc(caller, doc_id)
-    if doc["owner_id"] != user["id"]:
-        raise DocRequestError("forbidden", "Only the doc's owner can change its mode.")
-    if mode not in constants.DOC_MODES:
-        raise DocRequestError(
-            "invalid_mode", f"mode must be one of: {', '.join(constants.DOC_MODES)}.",
-        )
-    if doc["project_id"] is not None:
-        raise DocRequestError(
-            "project_doc_mode_inherited",
-            "Project docs take their project's mode; it cannot be switched.",
-        )
-    if doc["mode"] == mode:
-        return doc
-
-    async def _locked() -> dict:
-        async with _write_lock(doc["id"]):
-            try:
-                updated = await doc_store.set_doc_mode(doc["id"], mode)
-            except doc_store.DuplicateDocTitleError as exc:
-                raise DocRequestError("duplicate_title", str(exc)) from None
-            if updated is None:
-                raise DocError(doc_not_found_message(doc_id))
-            _publish_write(updated)
-            return updated
-
-    return await _shielded(_locked())
+    if doc.get("project_id") is None:
+        return DocRequestError("user_doc_mode_private", user_doc_mode_private_message())
+    return DocRequestError(
+        "project_doc_mode_inherited",
+        "Project docs take their project's mode; it cannot be switched.",
+    )
 
 
 async def delete_doc_from_ui(user: dict, doc_id: str) -> dict:

@@ -298,6 +298,10 @@ class TestPublicSystemPrompt:
         paragraph = p[docs:p.index("**Conversation naming")]
         assert "PUBLIC docs" in paragraph
         assert "no approval step" in paragraph
+        # User docs are always private: docs are created in this project.
+        assert "User docs are always private" in paragraph
+        assert 'create_doc(target="project")' in paragraph
+        assert "no doc's mode can be switched" in paragraph
 
     def test_doc_registry_roster_matches(self):
         # The prompt derives the doc tools from the registry's

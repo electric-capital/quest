@@ -2,23 +2,24 @@
 
 ## Overview
 
-A **Quest Doc** is a markdown document that lives entirely inside Quest. It is owned by a user (a **user doc**) or by a project (a **project doc**, owned by the project owner). Each doc is a `docs` row plus a directory holding `doc.md`, embedded raster images and revision snapshots. Models reach docs only through seven purpose-built dynamic tools (list, search, read, create, search/replace edit, append, add image). One access function decides, for each conversation, whether a write is approval-free, needs a `write_doc` action request, or is impossible. The whole feature sits behind the off-by-default, per-user-capable `docs` [feature gate](feature-gates.md). The HTTP surface (`/app/api/docs*`) is documented in [Quest Docs API](../api/quest-docs-api.md). Google Docs is a separate feature ([Docs API](../api/docs-api.md), `system:docs`).
+A **Quest Doc** is a markdown document that lives entirely inside Quest. It is owned by a user (a **user doc**) or by a project (a **project doc**, owned by the project owner). Each doc is a `docs` row plus a directory holding `doc.md`, embedded raster images and revision snapshots. Models reach docs only through seven purpose-built dynamic tools (list, search, read, create, search/replace edit, append, add image). One access function decides, for each conversation, whether a write is approval-free, needs a `write_doc` action request, or is impossible. The whole feature sits behind the off-by-default, per-user-capable `docs` [feature gate](feature-gates.md). The HTTP surface (`/app/api/docs*`) is documented in [Quest Docs API](../api/quest-docs-api.md), and the view-only UI at `/docs` under [Frontend](#frontend). Google Docs is a separate feature ([Docs API](../api/docs-api.md), `system:docs`).
 
-Docs come in two **modes** that mirror [public projects](public-projects.md). **Private** docs hold internal information; only private conversations can read or write them, and public conversations are never told they exist. **Public** docs hold only content that came from the internet-enabled public sandbox (or that a human typed in the UI). Public conversations read and write them; private conversations may read them but never write, so internal data cannot flow into a doc that a public conversation could later exfiltrate.
+Docs come in two **modes** that mirror [public projects](public-projects.md). **Private** docs hold internal information; only private conversations can read or write them, and public conversations are never told they exist. **Public** docs hold only content that came from the internet-enabled public sandbox (or that a human typed in the UI). Public conversations read and write them; private conversations may read them but never write, so internal data cannot flow into a doc that a public conversation could later exfiltrate. A user doc is always private: the only public docs are the docs of a public project, which inherit `projects.public` at creation, and no doc's mode ever changes ([Mode is fixed at creation](#mode-is-fixed-at-creation)).
 
 ## Key Files
 
 | File | Description |
 |------|-------------|
-| `chat/docs/constants.py` | Every cap and the retention numbers (`DOC_MAX_*`, `DOC_READ_MAX_CHARS`, `DOC_REVISION_RETENTION_DAYS`, `DOC_REVISION_MAX_COUNT`, `DOC_SEARCH_*`), `DOC_MODES`, `DOC_SHARE_PERMISSIONS`, the prompt pseudo-key `DOCS_SERVICE_KEY`, and the two shared texts: `doc_not_found_message()` (THE not-found text) and `docs_disabled_message()` |
+| `chat/docs/constants.py` | Every cap and the retention numbers (`DOC_MAX_*`, `DOC_READ_MAX_CHARS`, `DOC_REVISION_RETENTION_DAYS`, `DOC_REVISION_MAX_COUNT`, `DOC_SEARCH_*`), `DOC_MODES`, `DOC_SHARE_PERMISSIONS`, the prompt pseudo-key `DOCS_SERVICE_KEY`, and the shared texts: `doc_not_found_message()` (THE not-found text), `docs_disabled_message()`, `user_doc_mode_private_message()` (the UI's 400 `user_doc_mode_private`) and `user_doc_in_public_conversation_message()` (the `create_doc` refusal of `target="user"` in a public conversation) |
 | `chat/docs/access.py` | `resolve_doc_access()` (the only place the matrix lives), `DocAccess`, `HIDDEN`, `RUN_KINDS` / `READ_ONLY_RUN_KINDS`, the `DENY_*` reason constants, `APPROVAL_WRITE_NOTE`, `effective_share()`, `write_note()`, `creation_mode()` |
 | `chat/docs/files.py` | On-disk layer: `doc_paths()` (via `ChatStorage.get_doc_dir`), the per-doc `doc_lock()`, `init_doc` / `read_body` / `modify_body` / `write_body`, revision snapshot + prune, assets (`sniff_image_type`, `sanitize_asset_name`, `add_asset`, `asset_path`, `read_asset`), `build_zip`, `delete_doc_dir` |
-| `chat/docs/service.py` | The one read/write path shared by tools, routes and the action request: `Caller`, the `DocError` / `DocApprovalRequired` / `DocDisabled` / `DocRequestError` errors, `list_docs` / `search_docs` / `read_doc` / `create_doc` / `create_doc_from_ui` / `edit_doc` / `append_to_doc` / `add_doc_image`, `apply_write_operation`, `preview_write_operation`, and the locked UI mutations `switch_doc_mode` / `delete_doc_from_ui` |
+| `chat/docs/service.py` | The one read/write path shared by tools, routes and the action request: `Caller`, the `DocError` / `DocApprovalRequired` / `DocDisabled` / `DocRequestError` errors, `list_docs` / `search_docs` / `read_doc` / `create_doc` / `create_doc_from_ui` / `edit_doc` / `append_to_doc` / `add_doc_image`, `apply_write_operation`, `preview_write_operation`, the locked UI delete `delete_doc_from_ui`, and `mode_switch_refusal()` (the error every `PUT /docs/{id}/mode` gets) |
 | `chat/docs/events.py` | `publish_doc_list_changed()` / `publish_doc_changed()` (best-effort per-user globals, event-loop thread only); the module docstring records who publishes |
 | `chat/docs/routes.py` | The `/app/api/docs*` router, mounted in `quest.py`; `_get_doc_for_ui()` adds the hidden-public-project 404 |
-| `db/doc_store.py` | Async metadata CRUD returning dicts (`_doc_to_dict` documents the shape), `_title_taken()`, `list_accessible_docs()` (keyset candidates), `update_doc_metadata()` (`StaleDocError`), `set_doc_mode()`, `update_after_write()`, `delete_doc()`, `list_doc_ids_for_project/user()`, and the share helpers `add_share` / `remove_share` / `list_shares` |
+| `db/doc_store.py` | Async metadata CRUD returning dicts (`_doc_to_dict` documents the shape), `create_doc()` (refuses a public user doc with `DocValidationError`), `_title_taken()`, `list_accessible_docs()` (keyset candidates), `update_doc_metadata()` (`StaleDocError`), `update_after_write()`, `delete_doc()`, `list_doc_ids_for_project/user()`, and the share helpers `add_share` / `remove_share` / `list_shares` |
 | `db/models.py` | `Doc`, `DocShare`, `ActionRequestType.WRITE_DOC` |
 | `alembic/versions/55983a10e266_create_docs_and_doc_shares.py` | Creates `docs` + `doc_shares` and their indexes |
+| `alembic/versions/e1b7c4d9a2f6_user_docs_always_private.py` | Sets `mode='private'` on every user doc, renaming a flipped row on a title clash ([Mode is fixed at creation](#mode-is-fixed-at-creation)) |
 | `config/paths.py` | `DOCS_DIR = DATA_DIR / "docs"` |
 | `chat/storage.py` | `ChatStorage.get_doc_dir()` (sole id-to-path resolver) and the `doc_reads.json` sidecar (`get_doc_read_ids` / `add_doc_read_ids`) |
 | `chat/gemini_api/tool_handlers/docs.py` | The seven tool handlers: argument coercion, gate check, error-shape mapping |
@@ -42,18 +43,36 @@ Docs come in two **modes** that mirror [public projects](public-projects.md). **
 |------|---------|
 | Owner | `docs.owner_id`. A project doc is owned by the project owner. |
 | Scope | Derived, never stored: `project` when `project_id` is set, else `user`. |
-| Mode | `private` or `public`, stored on every row. A user doc changes mode only through the owner's UI route (`service.switch_doc_mode`). A project doc copies `projects.public` at creation and can never be switched. |
+| Mode | `private` or `public`, stored on every row and fixed at creation. A user doc is always `private`. A project doc copies `projects.public` at creation. No doc's mode can be switched ([Mode is fixed at creation](#mode-is-fixed-at-creation)). |
 | Share | A `doc_shares` row granting `read` or `write` to one user, or to everyone on the install (`user_id` NULL). |
 | Private conversation | Any conversation outside a public project: standalone, private project, routine, Slack, sub-agent, inference API, cross-user subagent. |
 | Public conversation | A conversation inside a public project (`is_public` in `run_conversation_turn`). |
 
 Invariants the code keeps:
 
-1. **Taint.** Content enters a public doc only from public conversations or from the UI. A private conversation never gets a non-denied write verdict on a public doc. `creation_mode()` makes every conversation create docs in its own mode, and `create_doc(target="project")` refuses when the project's mode disagrees with the conversation's. The action request re-resolves access at Approve, so a doc switched to public while a card sat open refuses. Switching a user doc from private to public is a deliberate human act through the UI route, not a model path, and it runs under the same per-doc write lock as model writes: a write that passed its access check before the flip either lands first (while the doc is still private) or re-resolves after the flip and is refused. It can never land after the doc became public.
+1. **Taint.** Content enters a public doc only from public conversations or from the UI. A private conversation never gets a non-denied write verdict on a public doc. Every doc is created in its final mode and keeps it: a user doc is always private, and a public conversation cannot create one at all (`create_doc(target="user")` is refused there); a project doc takes `creation_mode()`, the conversation's own mode, and `create_doc(target="project")` refuses when the project's mode disagrees with the conversation's. No doc's mode ever changes, so no internal content can be promoted into the public partition and nothing needs a switch-time re-check. The action request still re-resolves access at Approve, so a doc that became hidden while a card sat open (share revoked, doc deleted) refuses.
 2. **Invisibility.** In every tool, a doc the caller may not see behaves exactly like a nonexistent id. The text is the same (`doc_not_found_message`) and so is the work: `doc_store.get_doc` runs its shares query for a missing id too, so both cost two queries and neither touches the files. Hidden docs never appear in list or search output. Title uniqueness is scoped per mode so that the `create_doc` collision error cannot reveal a private title to a public conversation (see Design Decisions).
 3. **Single rule.** Every read/write decision goes through `resolve_doc_access()`. Tools, routes, the pre-card, the approve-time execute, `list_docs` / `search_docs` and the UI `access` object consume its `DocAccess`; none re-derive the rule.
 4. **Paths.** `ChatStorage.get_doc_dir()` is the only id-to-path resolver (canonical id + containment check, see [Data Paths](data-paths.md)). `chat/docs/files.py` gets every path through `doc_paths()`.
 5. **No full replace.** No model-facing path replaces a whole body in one call. Edits are exact search/replace (`apply_content_edit`), plus append and image add. `files.write_body()` exists for a future UI editor and has no production caller.
+
+### Mode is fixed at creation
+
+A user doc (`project_id` NULL) can never be public. The only way to have a public doc is to create it inside a public project, where the mode is inherited from the immutable `projects.public`. No doc's mode is ever switched, by a model or in the UI. The reason: a doc may only become public by being born in a public project, so no internal content can ever be promoted into the public partition, and the taint invariant needs no switch-time re-check (see Design Decisions). Spec sections 4.2 (a user-doc mode switch through an explicit UI action) and 8.4 (its mode-switch dialog) are deliberately not built.
+
+Every creation path enforces it:
+
+- `doc_store.create_doc()` refuses a public user doc with `DocValidationError`.
+- `service.create_doc()` (the `create_doc` tool) makes every user doc private and refuses `target="user"` (the default) from a public conversation with `user_doc_in_public_conversation_message()`, before any directory or row is written. A public conversation creates docs only with `target="project"`. The tool description, the `system:quest_docs` skill and `_PUBLIC_DOCS_SECTION` all say so.
+- `service.create_doc_from_ui()` (`POST /docs`) creates a user doc private and refuses `mode: "public"` without a `project_id` with 400 `user_doc_mode_private`, whatever the `public_projects` gate says. A project doc takes its project's mode (400 `project_doc_mode_inherited` on a disagreeing `mode`).
+
+Nothing switches a mode. `PUT /docs/{id}/mode` stays registered (so an old client gets a clear error) but refuses every doc after its 404 / 403 checks, through `service.mode_switch_refusal()`: 400 `user_doc_mode_private` for a user doc, 400 `project_doc_mode_inherited` for a project doc. `access.can_switch_mode` is always false, kept only for the frontend type. With no switch, no `doc_changed` / `doc_list_changed` is ever published for a mode change.
+
+The access rule backs this up: `resolve_doc_access()` evaluates a doc with `project_id` NULL as private for every decision, whatever its stored `mode`, so public conversations never see a user doc. `_visible_docs()` in the service goes further and drops user docs from the SQL query for a public caller, so `list_docs` / `search_docs` never load them there.
+
+Migration `e1b7c4d9a2f6` (down_revision `55983a10e266`) sets `mode='private'` on every user doc. Titles are unique per (owner, project, mode), so a flipped row whose title would collide with one of the owner's private user docs is renamed `<title> (formerly public)`, then `(formerly public 2)` and so on, cut to fit the 200-char title cap (casefold comparison, like `_title_taken()`). `updated_at` is left untouched, since this is a data correction rather than an edit. The downgrade is a no-op, because the previous mode is not recoverable.
+
+In the frontend there is no Switch item in the viewer menu and no mode picker in New Doc (`CreateDocRequest` has no `mode`). The mode badge shows only on public docs (`shouldShowDocModeBadge()` in `utils/docMode.ts` is `mode === 'public'`): private is the unremarkable default, and a public doc's exposure to public conversations is never hidden.
 
 ## Storage
 
@@ -66,10 +85,12 @@ Everything for one doc lives under `DOCS_DIR/<doc_id>/` (layout documented at th
 | `doc.md` | The current body: UTF-8, CRLF normalized to LF, no front matter (all metadata is in the DB, so a download is clean) |
 | `assets/<name>.<ext>` | Embedded raster images (png, jpg, gif, webp). The extension always comes from `sniff_image_type()` (magic bytes), never from the caller's file name. The body references them relatively as `![alt](assets/<name>)` |
 | `revisions/<YYYYMMDDTHHMMSSZ>-<n>.md` | Snapshots of `doc.md` taken before each body write |
+| `doc.meta.json` | Who wrote the current `doc.md` and when: `{written_at, source, size}` (see Revision policy) |
+| `revisions/<YYYYMMDDTHHMMSSZ>-<n>.json` | The snapshot's metadata sidecar: a copy of the replaced body's `doc.meta.json` |
 
 Safety rules applied everywhere in `files.py`: leaves are opened `O_NOFOLLOW`, then re-checked as regular files on the descriptor (`fstat` + `S_ISREG`). Reads also pass `O_NONBLOCK`, so a planted FIFO can never block. Body writes are atomic (`doc.md.tmp` + `os.replace`). Assets are written to a temp file and hard-linked into place (`os.link` fails on an existing name, which drives the `-2`, `-3` suffixing). Only `init_doc()` creates a doc root, so a write racing a delete fails instead of resurrecting a directory whose row is gone. A doc directory is never mounted into a sandbox.
 
-Concurrency uses two locks. `files.doc_lock()` is a per-doc `threading.Lock` held for one file call. `modify_body()` reads, transforms and writes `doc.md` in a single critical section, because two separate calls would let concurrent writers clobber each other. The service additionally holds a per-doc `asyncio.Lock` across the whole write (see [Write path](#write-path)); the UI mode switch and delete take the same lock ([UI mutations](#ui-mutations)). Both locks are process-local, and each lock table holds weak values.
+Concurrency uses two locks. `files.doc_lock()` is a per-doc `threading.Lock` held for one file call. `modify_body()` reads, transforms and writes `doc.md` in a single critical section, because two separate calls would let concurrent writers clobber each other. The service additionally holds a per-doc `asyncio.Lock` across the whole write (see [Write path](#write-path)); the UI delete takes the same lock ([UI mutations](#ui-mutations)). Both locks are process-local, and each lock table holds weak values.
 
 ### Revision policy
 
@@ -79,15 +100,17 @@ Concurrency uses two locks. `files.doc_lock()` is a per-doc `threading.Lock` hel
 - **Pruning at write time** (`_prune_revisions()`) deletes snapshots older than `DOC_REVISION_RETENTION_DAYS` (30, by file mtime). It also deletes the oldest snapshots beyond `DOC_REVISION_MAX_COUNT` (200). The cap bounds the disk a looping writer can use inside the window, since each snapshot can be up to 1 MB.
 - **The newest snapshot is always kept**, however old. An idle doc keeps one restore point.
 
-Creation (`init_doc`) takes no snapshot. Metadata changes (rename, description, mode) do not touch files. An `add_doc_image` with `placement: "none"` stores the asset without writing the body, so it takes no snapshot either. Revisions are not exposed anywhere yet: `files.list_revisions()` has no production caller.
+- **Every snapshot gets a metadata sidecar.** Each doc keeps `doc.meta.json` = `{"written_at": <ISO UTC, ms, Z>, "source": <the write source of the CURRENT body: "conversation:<id>" | "ui" | "action_request:<id>" | null>, "size": <bytes>}`, written by `init_doc` and after every body write (`doc.meta.json.tmp` created exclusively with O_NOFOLLOW, then `os.replace`; read with O_NOFOLLOW + S_ISREG). `write_body` / `modify_body` / `init_doc` take `write_source`, which the service fills with the current writer's source. Asset-only writes (`add_asset`, incl. `placement: "none"`) never touch it, so it is NOT the row's `last_write_source`: that field names whoever wrote last, including image adds. Before a body write replaces `doc.md`, the snapshot's sidecar `revisions/<ts>-<n>.json` is a copy of `doc.meta.json`, so `written_at` is when that body was written and `source` who wrote it. Fallback when the meta is missing, unreadable or its `size` disagrees with the body (legacy docs, a body edited by hand): `{"written_at": <doc.md mtime, ISO Z>, "source": null, "size": <bytes>}`. A failed meta write is logged, the stale file removed (the next snapshot then falls back to a null source) and the save still succeeds. Name allocation skips leftover `.json` names. Pruning deletes a `.json` together with its `.md` under both rules and sweeps orphan `.json` files (an undeletable one is logged and skipped; a symlink at a sidecar name is unlinked, not followed). A snapshot without a sidecar is tolerated: `files.read_revision_meta(path)` returns the dict or None (missing, malformed, wrong shape, negative size, or not a regular file); `read_doc_meta(doc_id)` reads the current one. `doc.meta.json` is not an asset and not part of the zip download. This is the attribution the later History view reads; no API or UI exposes it yet.
+
+Creation (`init_doc`) takes no snapshot. Metadata changes (rename, description) do not touch files. An `add_doc_image` with `placement: "none"` stores the asset without writing the body, so it takes no snapshot either. Revisions are not exposed anywhere yet: `files.list_revisions()`, `read_revision_meta()` and `read_doc_meta()` have no production caller.
 
 ### Tables
 
-`docs` and `doc_shares` are created by migration `55983a10e266` (models in `db/models.py`, store in `db/doc_store.py`):
+`docs` and `doc_shares` are created by migration `55983a10e266` (models in `db/models.py`, store in `db/doc_store.py`). Migration `e1b7c4d9a2f6` later set every user doc's `mode` to `private`, renaming a flipped row on a title clash ([Mode is fixed at creation](#mode-is-fixed-at-creation)).
 
-- **`docs`** holds the owner (`ON DELETE CASCADE`), the nullable `project_id` (`ON DELETE CASCADE`, NULL = user doc), title (1..200), description (0..500), mode, the cached `content_size` / `asset_count` (for list views), `last_write_source` (`conversation:<id>` from tools, `ui` from routes, `action_request:<id>` from `write_doc`), and `created_at` / `updated_at`. `updated_at` doubles as the optimistic-concurrency token for `PUT /docs/{id}`.
+- **`docs`** holds the owner (`ON DELETE CASCADE`), the nullable `project_id` (`ON DELETE CASCADE`, NULL = user doc), title (1..200), description (0..500), mode (always `private` for a user doc; a project doc's copy of `projects.public`), the cached `content_size` / `asset_count` (for list views), `last_write_source` (`conversation:<id>` from tools, `ui` from routes, `action_request:<id>` from `write_doc`), and `created_at` / `updated_at`. `updated_at` doubles as the optimistic-concurrency token for `PUT /docs/{id}`.
 - **`doc_shares`** grants `read` / `write` to a user (`ON DELETE CASCADE`) or, with `user_id` NULL, to everyone on the install. The unique `(doc_id, user_id)` index cannot stop duplicate NULL rows in SQLite, so the partial unique index `ix_doc_shares_everyone` (`WHERE user_id IS NULL`) allows at most one everyone row per doc. `add_share()` upserts and refuses the owner as a recipient (a share row would turn the owner's own writes into approval-gated ones).
-- **Title uniqueness** is case-insensitive per **(owner, project, mode)**, enforced by `_title_taken()` in `db/doc_store.py`, not by an index. A NULL `project_id` is its own scope. The comparison uses Python `casefold()` because SQLite `lower()` folds ASCII only. The check runs on create, on rename (`update_doc_metadata`), and on mode switch (`set_doc_mode` raises `DuplicateDocTitleError` when the target mode already has the title; `switch_doc_mode` maps it to `DocRequestError("duplicate_title")` and the route returns 409). It is check-then-insert like the skills store, with no lock against a simultaneous create.
+- **Title uniqueness** is case-insensitive per **(owner, project, mode)**, enforced by `_title_taken()` in `db/doc_store.py`, not by an index. A NULL `project_id` is its own scope. The comparison uses Python `casefold()` because SQLite `lower()` folds ASCII only. The check runs on create and on rename (`update_doc_metadata`). It is check-then-insert like the skills store, with no lock against a simultaneous create.
 
 ### Read sidecar
 
@@ -97,22 +120,24 @@ Creation (`init_doc`) takes no snapshot. Metadata changes (rename, description, 
 
 `resolve_doc_access(doc, *, user_id, is_public, project_id, run_kind)` in `chat/docs/access.py` returns `DocAccess(visible, can_read, write, deny_reason)`, where `write` is `free`, `approval` or `denied`. `doc` must carry its `shares` list; a dict fetched without shares raises instead of being read as unshared.
 
-The matrix (from the `access.py` module docstring; "recipient" = a share recipient; the last column covers `sub_agent`, `inference_api`, `user_subagent` and `script`):
+The matrix (from the `access.py` module docstring, with the Public rows' `script` cell spelled out; "recipient" = a share recipient; the last column covers `sub_agent`, `inference_api`, `user_subagent` and `script`):
 
 | Doc | Private owner | Private recipient | Public owner | Public recipient | Read-only run kinds |
 |-----|---------------|-------------------|--------------|------------------|---------------------|
 | Private, unshared | Free | n/a (Hidden) | Hidden | n/a (Hidden) | Read |
 | Private, shared (any) | Approval | read: Read; write: Approval | Hidden | Hidden | Read |
-| Public, unshared | Read | n/a (Hidden) | Free | n/a (Hidden) | Read |
-| Public, shared | Read | Read | Free | read: Read; write: Free | Read |
+| Public, unshared | Read | n/a (Hidden) | Free | n/a (Hidden) | Read (`script`: Hidden) |
+| Public, shared | Read | Read | Free | read: Read; write: Free | Read (`script`: Hidden) |
+
+A user doc (`project_id` NULL) is always private: step 0 of `resolve_doc_access()` evaluates it as `private` for every decision, whatever its stored `mode` (defensive; after migration `e1b7c4d9a2f6` no public user doc exists). So the Public rows describe only docs of a public project, seen from that project's conversations (rule 2), and every Public owner / Public recipient cell of a user doc is Hidden. Every Private cell is unchanged. The `script` cell of the Public rows is Hidden: scripts never see project docs (rule 2), and every public doc is a project doc, so no script can read a public doc.
 
 The rules layered on the matrix are applied in order:
 
 1. No owner match and no share (the user's own row or the everyone row, higher permission wins in `effective_share()`) -> Hidden.
 2. Project docs are visible only from conversations of that same project, and from the UI. Standalone conversations, other projects and scripts see Hidden.
-3. A public conversation never sees a private doc, even the owner's, even with a write share.
+3. A public conversation never sees a private doc, even the owner's, even with a write share. That includes every user doc.
 4. Read-only run kinds read what they can see and never write. Each gets its own `DENY_*` reason.
-5. `ui` (the routes): Free for the owner or a write share, else Read. Ownership-only operations are a separate check, not part of the matrix: in the route for rename, in `switch_doc_mode` / `delete_doc_from_ui` for mode switch and delete (`DocRequestError("forbidden")`). Also outside the matrix, `_get_doc_for_ui()` in `chat/docs/routes.py` hides a public project's docs (`project_id` set and `mode == "public"`, since a project doc mirrors its project's flag) while the `public_projects` gate is closed for the user. Every by-id route then 404s with the missing-doc body, matching the project routes' hidden-public-project rule.
+5. `ui` (the routes): Free for the owner or a write share, else Read. Ownership-only operations are a separate check, not part of the matrix: in the route for rename, in `delete_doc_from_ui` for delete (`DocRequestError("forbidden")`). No doc's mode can be switched: the mode route checks ownership, then refuses every doc (see [Mode is fixed at creation](#mode-is-fixed-at-creation)). Also outside the matrix, `_get_doc_for_ui()` in `chat/docs/routes.py` hides a public project's docs (`project_id` set and `mode == "public"`, since a project doc mirrors its project's flag) while the `public_projects` gate is closed for the user. Every by-id route then 404s with the missing-doc body, matching the project routes' hidden-public-project rule.
 6. `slack`: an Approval verdict becomes a denial (`DENY_SLACK_NEEDS_APPROVAL`), because Slack-driven runs cannot open action requests.
 
 `write_note()` turns a verdict into the short `write_note` that `list_docs` / `read_doc` return: none for free, `APPROVAL_WRITE_NOTE` for approval, `deny_reason` otherwise. `tests/test_docs_access.py` covers every cell.
@@ -129,13 +154,13 @@ The rules layered on the matrix are applied in order:
 
 ### Read side
 
-- `list_docs`: candidates come from `doc_store.list_accessible_docs()` (owner or share, keyset-paged on `(updated_at, id)` descending). Every row still passes the access rule, and the store is paged past hidden rows so they never use up `limit`. A public caller adds a SQL `mode = 'public'` filter. Scope `project` is empty outside a project. Rows carry a `shared` flag but never the share roster.
+- `list_docs`: candidates come from `doc_store.list_accessible_docs()` (owner or share, keyset-paged on `(updated_at, id)` descending). Every row still passes the access rule, and the store is paged past hidden rows so they never use up `limit`. A public caller never queries user docs (`_visible_docs()` passes `include_user_docs=False`, since user docs are always private) and adds a SQL `mode = 'public'` filter, so it lists only its own project's docs. Scope `project` is empty outside a project. Rows carry a `shared` flag but never the share roster.
 - `search_docs`: case-insensitive substring match on title, description and body. Bodies of visible docs are read newest-first until the next one would push the scanned total past `DOC_SEARCH_MAX_SCAN_BYTES` (50 MB). After that, only titles and descriptions are matched and `truncated` is true. Up to `DOC_SEARCH_SNIPPETS_PER_DOC` non-overlapping ~200-char snippets per doc, with 1-based line numbers. A metadata-only hit has `matches: []`.
 - `read_doc`: the whole body or a 1-based inclusive line range, capped at `DOC_READ_MAX_CHARS` and cut at a line boundary. A cut sets `truncated` and a paging `note`. Lines split on LF only, so they agree with search's line numbers. Records the read.
 
 ### Create
 
-`create_doc` (conversations) lays out the directory under a fresh uuid, then inserts the row. A failed insert removes the directory again; a crash in between leaves an invisible orphan directory, never a row without a body. Only `top_level` and `slack` callers may create; creation is never gated because a new doc has no shares. The new id is recorded as read. `create_doc_from_ui` (`POST /docs`) creates an empty doc with an explicit mode (a project doc always takes its project's mode) and `last_write_source="ui"`.
+`create_doc` (conversations) lays out the directory under a fresh uuid, then inserts the row. A failed insert removes the directory again; a crash in between leaves an invisible orphan directory, never a row without a body. Only `top_level` and `slack` callers may create; creation is never gated because a new doc has no shares. The new id is recorded as read. A user doc is always created private, and `target="user"` from a public conversation is refused before the directory is laid out; a project doc takes its project's mode. `create_doc_from_ui` (`POST /docs`) creates an empty doc with `last_write_source="ui"`: a user doc private (a `mode: "public"` is `user_doc_mode_private`), a project doc in its project's mode. See [Mode is fixed at creation](#mode-is-fixed-at-creation).
 
 ### Write path
 
@@ -143,14 +168,16 @@ The rules layered on the matrix are applied in order:
 
 1. **First pass, outside any lock** (`_resolve_write`): gate, parameter normalization, visibility (hidden == missing), `denied` -> `deny_reason`, then the read-sidecar check for `edit` and the conversation requirement for `add_image`. Hidden, denied or unread docs never take or create a lock.
 2. **Approval**: unless `bypass_approval`, an `approval` verdict first dry-runs the operation (`_compute_preview`), so a stale `old_string`, a bad image or an oversized body fails now. It then raises `DocApprovalRequired` carrying `suggested_request`.
-3. **Locked write**: under the per-doc `asyncio.Lock`, access is resolved again, so a share added or a mode flipped while this write queued changes the verdict. The writer then runs (`files.modify_body` for edit and append; `add_asset` followed by an optional body append for images), and `update_after_write` bumps `content_size` / `asset_count` / `last_write_source` / `updated_at` in write order. Finally `doc_changed` + `doc_list_changed` go to the owner.
+3. **Locked write**: under the per-doc `asyncio.Lock`, access is resolved again, so a share added or revoked while this write queued changes the verdict. The writer then runs (`files.modify_body` for edit and append; `add_asset` followed by an optional body append for images), and `update_after_write` bumps `content_size` / `asset_count` / `last_write_source` / `updated_at` in write order. Finally `doc_changed` + `doc_list_changed` go to the owner.
 4. **Shielded**: the locked part runs via `_shielded()`, so a cancelled turn (Stop mid-write) cannot strand a landed file write without its DB bump and events. A late failure is logged.
 
 `add_image` reads the workspace file through `resolve_workspace_file()` (path guards) plus an `O_NOFOLLOW` / `S_ISREG` descriptor read capped at `DOC_MAX_IMAGE_SIZE`, then validates it by magic bytes. With `placement: "append"` the body cap is pre-checked using the provisional asset name before the asset is stored. If the body append still fails, the asset counter is recorded anyway (assets are additive) and the error is raised. When the params carry `expected_sha256` (set only by the `write_doc` execute, from the card's `image_preview.sha256`; `_suggested_request()` never emits it), a file whose sha256 differs is refused. A project workspace is shared by sibling conversations, which could swap the file while the card sat open.
 
 ### UI mutations
 
-`switch_doc_mode(user, doc_id, mode)` and `delete_doc_from_ui(user, doc_id)` serve `PUT /docs/{id}/mode` and `DELETE /docs/{id}`. Each resolves visibility as `ui`, then checks ownership (`forbidden`). `switch_doc_mode` also checks the mode (`invalid_mode`), refuses project docs (`project_doc_mode_inherited`) and returns the doc unchanged when it already has that mode. The mutation itself (`doc_store.set_doc_mode`, or `doc_store.delete_doc` plus the directory removal) runs under the per-doc `asyncio.Lock` and `_shielded()`, so it waits for any in-flight model write. The mode switch publishes `doc_changed` + `doc_list_changed`; delete publishes `doc_list_changed`. Rename stays a plain metadata update in the route (`doc_store.update_doc_metadata`).
+`delete_doc_from_ui(user, doc_id)` serves `DELETE /docs/{id}`. It resolves visibility as `ui`, then checks ownership (`forbidden`). The deletion itself (`doc_store.delete_doc` plus the directory removal) runs under the per-doc `asyncio.Lock` and `_shielded()`, so it waits for any in-flight model write, and publishes `doc_list_changed`. Rename stays a plain metadata update in the route (`doc_store.update_doc_metadata`).
+
+There is no mode mutation. `mode_switch_refusal(doc)` only builds the `DocRequestError` that `PUT /docs/{id}/mode` raises after the route's own 404 / 403 checks (`user_doc_mode_private` for a user doc, `project_doc_mode_inherited` for a project doc). It takes no lock, changes nothing and publishes nothing ([Mode is fixed at creation](#mode-is-fixed-at-creation)).
 
 ## Model-Facing Tools
 
@@ -174,7 +201,7 @@ Error results come in three shapes:
 
 Enforcement outside the access rule:
 
-- **Public conversations**: all seven are in `PUBLIC_TOOL_CALL_ALLOWLIST`. The access rule hides every private doc there, and public conversations only ever get `free` or `denied` on public docs, so the blocked `create_action_request` is never needed.
+- **Public conversations**: all seven are in `PUBLIC_TOOL_CALL_ALLOWLIST`. The access rule hides every private doc there (every user doc included), `create_doc` refuses `target="user"` there, and public conversations only ever get `free` or `denied` on public docs, so the blocked `create_action_request` is never needed.
 - **Inference API runs**: the `mutating` flag puts the four writes in `mutating_tool_call_tools()`, which is hard-rejected at dispatch and refused for the run's sandbox lease (see [Inference API](../api/inference-api.md)). The access rule would deny them anyway.
 - **Sub-agents and cross-user subagents**: `get_sub_agent_system_prompt()` and `get_user_subagent_system_prompt()` drop `_doc_write_tool_names()` from their Dynamic Tools section. If called anyway, `create_doc` refuses through `_CREATE_DENY_REASONS` and the other writes through the access rule.
 
@@ -191,9 +218,9 @@ Enforcement outside the access rule:
   - caps the output at 400 lines (`truncated: true`; the `added` / `removed` counts stay exact);
   - adds `total_old_lines` / `total_new_lines` to the usual `{added, removed, lines}` dict.
 
-  Line numbers match `read_doc`'s. `lines` is therefore NOT the whole body. `SkillContentDiffPreview.tsx` currently treats it as the whole body (its "Show full content" toggle shows only the emitted lines), so the doc card renderer should show the elided stretches from the line numbers and the two totals.
-- **`render_preview`**: Doc / Mode / Scope / Shares / Operation rows. The diff reuses the `skill_content_diff` field type, rendered by `SkillContentDiffPreview.tsx`. `add_image` adds a `doc_image`-typed Image field carrying `{workspace_path, asset_name, markdown, size_bytes}`; the frontend has no renderer for it yet and shows the plain value. Without an injected diff, edit and append fall back to raw Replace / With / Append rows.
-- **`execute`**: `chat/action_request_routes.py` passes `request_id=` to this one handler type. `execute` calls `apply_write_operation(..., bypass_approval=True, write_source="action_request:<id>")`, passing the card's `image_preview.sha256` as `expected_sha256` for `add_image`, so a workspace file swapped after the proposal is refused. This re-resolves access, so a doc that became public or hidden refuses and a doc whose shares were all removed is simply written. It also re-checks the read sidecar for `edit` and re-applies against the live body; that is the TOCTOU close, so a changed `old_string` fails the Approve and the request stays open. The service publishes the realtime events itself.
+  Line numbers match `read_doc`'s. `lines` is therefore NOT the whole body; the card renderer marks the rest from the line numbers and the two totals (see [Frontend -- write_doc card](#write_doc-card)).
+- **`render_preview`**: Doc / Mode / Scope / Shares / Operation rows. The diff reuses the `skill_content_diff` field type, rendered by `SkillContentDiffPreview.tsx`. `add_image` adds a `doc_image`-typed Image field carrying `{workspace_path, asset_name, markdown, size_bytes}`, rendered by `DocImagePreview.tsx`. Without an injected diff, edit and append fall back to raw Replace / With / Append rows.
+- **`execute`**: `chat/action_request_routes.py` passes `request_id=` to this one handler type. `execute` calls `apply_write_operation(..., bypass_approval=True, write_source="action_request:<id>")`, passing the card's `image_preview.sha256` as `expected_sha256` for `add_image`, so a workspace file swapped after the proposal is refused. This re-resolves access, so a doc that became hidden (the share revoked, the doc deleted) refuses and a doc whose shares were all removed is simply written. It also re-checks the read sidecar for `edit` and re-applies against the live body; that is the TOCTOU close, so a changed `old_string` fails the Approve and the request stays open. The service publishes the realtime events itself.
 - **Fail closed on a missing project**: `project_is_public()` raises `RuntimeError` when the conversation has a `project_id` but `project_store.get_project` finds no row for the user, rather than treating the conversation as private. At Approve this surfaces as the resolve route's 500 `execution_failed` with the request left open. At proposal time the same error is not a `ValueError`, so it escapes the pre-card as a run-fatal error instead of `Invalid parameters`.
 - **Labels**: `display_name` "Write Doc", `approve_label` "Apply", `resolved_label` "Applied", and a neutral `summary_snippet` ("Edit 'Title'", "Append to 'Title'", "Add image to 'Title'") because the snippet also shows on stopped and denied cards.
 
@@ -204,13 +231,14 @@ Enforcement outside the access rule:
 - **Tools**: every doc tool returns `docs_disabled` before any DB work. Dispatch still routes them (they are allowlisted in public conversations), so a routine that calls them gets the same structured error.
 - **Prompt**: `get_user_connected_services()` sets the pseudo-key `docs` (`DOCS_SERVICE_KEY`) from the gate. Registry specs with `requires_service: "docs"` and the `system:quest_docs` skill (`requires="docs"`) then drop out like a disconnected service. An explicit `load_skills(["system:quest_docs"])` gets `docs_disabled_message()` (Settings > Features) instead of the connector text (`load_system_skills()` in `chat/system_skills/loader.py`). `validate_plugin()` in `config/plugins.py` refuses a plugin whose id is a pseudo-key, because the gate would overwrite that plugin's connected state. `PSEUDO_SERVICE_KEYS` in `api/instructions.py` marks the key as a capability rather than a connection, and `GET /me`'s `has_any_service_connected` skips it. The public prompt has no connected-services map, so `run_conversation_turn` passes `docs_enabled=docs_enabled_for(...)` to `get_public_project_system_prompt()`.
 - **Routes**: every `/app/api/docs*` route returns 403 `docs_disabled` first.
+- **Frontend**: reads the gate from `enabled_features` on `GET /me` (`DOCS_FEATURE` in `frontend/src/api/docsApi.ts`). The Sidebar Docs blocks are not rendered, the doc hooks fetch nothing (`enabled: false`), and a `/docs*` URL shows `DocsGateClosed.tsx` instead of the view (see [Frontend](#frontend)).
 - **Action request**: the pre-card and the approve-time execute both refuse through the service gate.
 - Nothing is deleted. Rows and files survive, and reopening the gate restores everything.
 
 ## Prompting
 
-- **`system:quest_docs`** (name "Quest Docs"; `system:docs` is the Google Docs skill) covers when a doc beats a workspace file, the tool set, modes and verdicts (quoting the `DENY_*` constants), read-before-edit, the `approval_required` -> `write_doc` handoff with the three `params` shapes, the Slack limitation, images, paging, the routine pattern (one doc, `append_to_doc` under a dated heading per run, never a new doc per run), and the script bridge. Caps in the text are rendered from `chat/docs/constants.py`.
-- **Public prompt**: `_PUBLIC_DOCS_SECTION` follows the Boundaries block only while `docs_enabled`, and stands in for the skill. It may not name internal-only tools or skills (`tests/test_public_projects.py::test_no_internal_tool_docs`), which is why the write-tool descriptions say "write_doc action request" rather than spelling out `create_action_request(`.
+- **`system:quest_docs`** (name "Quest Docs"; `system:docs` is the Google Docs skill) covers when a doc beats a workspace file, the tool set, modes (user docs always private, public docs only in public projects, no mode switch, `target="user"` refused in a public conversation) and verdicts (quoting the `DENY_*` constants), read-before-edit, the `approval_required` -> `write_doc` handoff with the three `params` shapes, the Slack limitation, images, paging, the routine pattern (one doc, `append_to_doc` under a dated heading per run, never a new doc per run), and the script bridge. Caps in the text are rendered from `chat/docs/constants.py`.
+- **Public prompt**: `_PUBLIC_DOCS_SECTION` follows the Boundaries block only while `docs_enabled`, and stands in for the skill. It says the conversation sees and creates only its own project's public docs, so it always creates with `create_doc(target="project")`. It may not name internal-only tools or skills (`tests/test_public_projects.py::test_no_internal_tool_docs`), which is why the write-tool descriptions say "write_doc action request" rather than spelling out `create_action_request(`.
 - No doc titles are ever injected into a prompt. Discovery is tools-only.
 - `system:action_requests` and the `create_action_request` description route `write_doc` to `system:quest_docs`.
 
@@ -218,17 +246,131 @@ Enforcement outside the access rule:
 
 Two per-user globals ([Realtime](realtime.md)), built by `make_doc_list_changed()` / `make_doc_changed()` in `chat/realtime/events.py` and published best-effort through `chat/docs/events.py`, always to the doc's **owner** (share-recipient fan-out is not implemented):
 
-- `doc_list_changed` (no payload) after create, rename/description change, mode switch, delete, every body or asset write, and a project delete that removed docs.
-- `doc_changed {doc_id, updated_at}` after create and every body/asset write, rename and mode switch. Doc delete emits only `doc_list_changed`.
+- `doc_list_changed` (no payload) after create, rename/description change, delete, every body or asset write, and a project delete that removed docs.
+- `doc_changed {doc_id, updated_at}` after create and every body/asset write and rename. Doc delete emits only `doc_list_changed`.
 
-Who publishes (recorded in the `chat/docs/events.py` docstring):
+No mode switch exists, so neither event is ever sent for a mode change. Who publishes (recorded in the `chat/docs/events.py` docstring):
 
-- `chat/docs/service.py` publishes for every body/asset write and for the UI mutations it owns (create, mode switch, delete);
+- `chat/docs/service.py` publishes for every body/asset write and for the UI mutations it owns (create, delete);
 - the doc routes publish for the metadata-only rename, and only when something changed;
 - the project-delete route publishes `doc_list_changed` once, after its directory sweep;
 - tools never publish.
 
-Publishing is event-loop-thread only, because `bus.publish_to_user` is not thread-safe. Neither envelope carries a `conversation_id`, so they reach `PersistentWebSocket`'s global handlers without an allow-list entry. No frontend code consumes them yet.
+Publishing is event-loop-thread only, because `bus.publish_to_user` is not thread-safe. Neither envelope carries a `conversation_id`, so they reach `PersistentWebSocket`'s global handlers without an allow-list entry. The frontend consumers are `useDocs`, `useProjectDocsIndex` and `useDoc` (see [Frontend -- Realtime consumers](#realtime-consumers)).
+
+Because only the owner receives the events, a share recipient's open sidebar, All Docs view or viewer does not update live when the owner or a model writes the doc; it catches up on the next mount or any refresh its own `doc_list_changed` triggers. The frontend cannot fix this: it needs the share-recipient fan-out listed under [Not Implemented](#not-implemented).
+
+## Frontend
+
+A view-only UI: browse, read, create empty docs, rename, download and delete. There is no mode switch ([Mode is fixed at creation](#mode-is-fixed-at-creation)). Content changes still come only from models (tools and `write_doc`). The only backend change it needed is the SPA route plus the Swagger UI move it forced. Paths below are under `frontend/src/` unless noted.
+
+| File | Role |
+|------|------|
+| `api/docsApi.ts` | Client for `/app/api/docs*`, the cookie-authed URL builders (`docAssetBase`, `docAssetUrl`, `docDownloadUrl`), `DOCS_FEATURE`, and `isStaleUpdateError` / `staleUpdateCurrent` for the flat 409 |
+| `api/types.ts` | `Doc`, `DocDetail`, `ListDocsResponse`, `DocImagePreview`; `PreviewField.image` and the optional `truncated` / `total_old_lines` / `total_new_lines` on `SkillContentDiff` |
+| `utils/docsRoute.ts` | `parseDocsRoute()`, `docsListPath()`, `docViewerPath()` |
+| `hooks/useDocs.ts` | One keyset-paged list (the user's docs, or one project's) with `loadMore` and a silent `refresh` |
+| `hooks/useProjectDocsIndex.ts` | Per-project fan-out for the unfiltered All Docs view |
+| `hooks/useDoc.ts` | One doc (row + body) for the viewer, `notFound`, `applyRow()` |
+| `components/sidebar/DocsSection.tsx` + `utils/sidebarDocs.ts` | The sidebar Docs block and its pure row-order / count / time helpers |
+| `components/docs/DocsListView.tsx` + `utils/allDocsGrouping.ts` | The All Docs view and its pure search / grouping / scope-label / size helpers |
+| `components/docs/NewDocModal.tsx` | Creates an empty doc (`POST /docs`); no mode picker, never sends `mode` |
+| `components/docs/DocViewer.tsx`, `DocHeader.tsx`, `DocConfirmDialog.tsx` | The viewer, its title unit and menu (no mode switch), and the confirm dialog behind Delete |
+| `components/docs/DocModeBadge.tsx` + `utils/docMode.ts` | The Private / Public pill and the one display rule `shouldShowDocModeBadge(mode)` (`mode === 'public'`), so only public docs carry it: sidebar rows, All Docs rows, the viewer header, and the New Doc inherited-mode line |
+| `components/docs/DocsGateClosed.tsx` | Notice on a `/docs*` URL while the gate is closed |
+| `components/Message.tsx` | `MarkdownWorkspaceContext.assetBase` and the doc branch of `MarkdownImage` |
+| `components/ActionRequestPreviewFields.tsx`, `DocImagePreview.tsx`, `SkillContentDiffPreview.tsx` | `write_doc` card rendering |
+| `App.tsx`, `components/MobileShell.tsx`, `components/Sidebar.tsx`, `components/sidebar/ProjectPanel.tsx` | Route rendering and sidebar mounting |
+| `quest.py` (repo root) | `serve_spa_docs` and the moved Swagger UI / ReDoc URLs |
+
+### Routes and state
+
+| URL | View |
+|-----|------|
+| `/docs` | All Docs |
+| `/docs?project=<id>` | All Docs filtered to one project |
+| `/docs/<id>` | Doc viewer |
+
+The URL is the only state. There is no `NavigationContext` field: `App.tsx` and the Sidebar run `parseDocsRoute(location.pathname, location.search)` on every render. A viewer id must match `[A-Za-z0-9_-]{1,64}`, so a decoded `/` or `..` is never spliced into an `/app/api/docs/<id>/...` URL. Paths deeper than `/docs/<id>` are not docs routes. A docs route is a full main-pane takeover like the `/inbox` RequestsView: `AppContent` renders the view inside `.main-content.docs-main` with no RightPanel, and `activeConversationId` is null there, so no conversation row stays highlighted. `showRequestsView` (the legacy `NavigationContext` flag behind `/inbox`) still wins the render, so the Sidebar clears it before navigating to a docs view.
+
+On the server, `serve_spa_docs` in `quest.py` serves `index.html` for `/docs` and `/docs/{rest:path}`, registered before the `/{filename}` static fallback. FastAPI's interactive docs moved out of the way: `FastAPI(...)` sets `docs_url="/api-docs"` (Swagger UI), `redoc_url="/api-redoc"` and `swagger_ui_oauth2_redirect_url="/api-docs/oauth2-redirect"`, so no non-SPA route is left under `/docs/`. `/openapi.json` is unchanged, and the `run.py` banner prints `/api-docs`.
+
+### Sidebar
+
+`Sidebar.tsx` mounts two `useDocs` instances with limit `SIDEBAR_DOC_LIMIT` (5): the user's docs, and the drilled project's docs (enabled only while drilled). Both render through `DocsSection`, only while the gate is open:
+
+- on the main panel, between Projects and Conversations, with a header that opens `/docs`;
+- in `ProjectPanel`'s drill-down, below Routines (order: Routines, Docs, Conversations), with a header that opens `/docs?project=<id>`.
+
+The whole header is a button with a count ("5+" when the server has more). Rows show the title, a small `DocModeBadge` (public docs only) and a compact time, newest `updated_at` first (`deriveSidebarDocItems`). The doc open in the viewer is highlighted, from the URL. The empty state reads "Ask Quest to create a doc". After navigating, the Sidebar calls its `onNavigateAway` prop, which `MobileShell` sets to close the phone drawer; the desktop layout passes nothing.
+
+### All Docs view
+
+`DocsListView.tsx` shows a header (title "All Docs", or the project's name with a folder icon, a public badge and an "All docs" back link when filtered), a search box, a New Doc button, and grouped rows: title + description, mode badge (public docs only; the "Mode" column label shows only while a visible row is public, the column slot stays either way), scope, relative update time (absolute on hover), and size + image count. The paged group gets a "Load more" footer. Search filters everything loaded, client-side, on title and description.
+
+The backend has no cross-project list: `GET /docs` without `project_id` returns only user docs (owned or shared). So the unfiltered view combines two sources:
+
+- "Your docs": `useDocs({limit: 50})`, server-paged. A doc shared with the user shows the scope "Shared with you" (`docScopeLabel`).
+- One group per project (archived ones included, with an "Archived" chip on the heading: archiving has no effect on docs) from `useProjectDocsIndex`. It runs `fetchDocs({projectId, limit: 200})` for every project in parallel (`Promise.allSettled`) once the project list has loaded. A failed project's group is omitted and a single warning line shows. The fan-out is keyed on the sorted project-id set, so a `ProjectsContext` reload or rename does not re-fetch, and a changed set keeps the previous groups on screen while it re-fans-out (`loaded`). `doc_list_changed` re-runs it behind a 600 ms trailing debounce, so a burst of model writes costs one fan-out. Groups follow "Your docs", ordered by project name (`groupDocs`).
+
+The filtered view (`?project=<id>`) uses only `useDocs({projectId, limit: 50})`. The trade-off of the fan-out is one request per project on open and per debounced `doc_list_changed` burst, and at most 200 docs per project in the unfiltered view (the filtered view pages). Between 769px and 1024px the Scope and Size columns are hidden so the title keeps room.
+
+`NewDocModal.tsx` collects a title, an optional description and a location ("Your docs" or a non-archived project, preselected to the filtered project). There is no mode picker and no `mode` is ever sent (`CreateDocRequest` in `api/types.ts` has none): a user doc is always private and a project doc takes its project's mode, so `project_doc_mode_inherited` cannot happen. Only a public project gets the read-only "Mode: Public — inherited from the project" line. On success the view navigates to the new doc's viewer.
+
+### Viewer
+
+`DocViewer.tsx` (`useDoc`) has loading, not-found ("This doc no longer exists." with an All docs link; also what a deleted doc turns into), error-with-Retry and empty-doc states. The doc renders in a centered column (820px max).
+
+`DocHeader.tsx` follows `ConversationHeader.tsx`: the title plus a chevron opens a dropdown, single-key hints act while it is open, and Rename swaps in an inline input. The items follow the row's `access` flags:
+
+- **Rename** (R, `can_rename`): sends `expected_updated_at`. A `stale_update` 409 applies the error's `current` row through `useDoc.applyRow()` and shows a notice. `duplicate_title` / `invalid_title` keep the input open.
+- **Download Markdown** and **Download with images (.zip)**: plain `<a download>` links on `docDownloadUrl`, always offered.
+- **Delete** (D, `can_delete`): behind a `DocConfirmDialog`, then navigates to the doc's list (`docsListPath(project_id)`).
+
+There is no mode-switch item for any doc: the header ignores `access.can_switch_mode`, which the server always sends as false ([Mode is fixed at creation](#mode-is-fixed-at-creation)). A non-owner therefore gets only the downloads. A marked comment in the menu reserves the slot for the Share, History and Edit items that are not built. Beside the title sit the `DocModeBadge` (public docs only) and, for a project doc, a folder chip linking to `/docs?project=<id>`. On the right, a Show source / Show rendered toggle (remembered per doc id) swaps the body for a `<pre>` of the raw markdown.
+
+The body is `ReactMarkdown` with the same plugin set as `FileViewerModal` and the chat's shared `markdownComponents`, inside `.message-content` for the chat typography, wrapped in `MarkdownWorkspaceContext.Provider` with `assetBase = docAssetBase(id)`. With `assetBase` set, `MarkdownImage` changes its resolution rule:
+
+- only `assets/<name>` resolves (exactly one segment, no leading dot, after the usual percent-decode and `./` / `/` / `workspace/` strip), to the cookie-authed `GET /app/api/docs/{id}/assets/{name}`;
+- any other relative src renders the missing-image chip, and `conversationId` is ignored;
+- external srcs stay click-through links and are never auto-fetched, as in chat;
+- SVG never renders, because the asset store holds only magic-byte-sniffed raster images and the asset route serves only the raster `_INLINE_IMAGE_MIMES` types.
+
+The viewer passes no `onOpenImage`, so doc images are not click-to-enlarge.
+
+The footer reads "Last written by X · Updated <relative>", with X from `last_write_source`:
+
+- `ui`: "you";
+- `action_request:<n>`: "action request #n";
+- `conversation:<id>`: the conversation's title from the row's `last_write_conversation` (`{id, title, project_id}`, resolved by `GET /docs/{id}` from one conversations-row lookup -- the viewer never fetches the chat history for a title), linked to `/chats/<id>` or `/projects/<pid>/<id>`; null (the conversation is gone) reads "a deleted conversation";
+- null: the writer phrase is left out. That includes every non-owner, since the API blanks the field for them.
+
+### Assets panel
+
+`GET /docs/{id}` lists the doc's images as `assets: [{name, size, mime}]` (regular files directly in `assets/`, sorted by name, hidden names / symlinks / directories skipped, names outside `[A-Za-z0-9._-]+` -- all `add_asset` ever produces -- skipped so a hand-planted name can never break the JSON or the asset route's headers, MIME from `_INLINE_IMAGE_MIMES` by extension, built in a thread). It rides on the detail payload rather than a separate endpoint because the per-doc cap is 200 assets (a few KB at most) and the viewer always needs both. `DocAssetsPanel.tsx` renders them as a `.right-panel-card` in a 280px right gutter beside the doc column (the chat RightPanel's footprint): a lazy 40px thumbnail from `GET /docs/{id}/assets/{name}` (an icon when it fails), the filename and size, "No images in this doc." when empty; a click opens `DocImageLightbox.tsx` (ModalShell, the full image, name + size, a Download link). At 1024px and below the card drops under the body; on phones (`useIsMobile`) a collapsed "Assets (N)" `<details>` section replaces it so the document stays first.
+
+### write_doc card
+
+Both card renderers (`ActionRequestMessage.tsx` and `RequestsView.tsx`) go through `ActionRequestPreviewFields.tsx`:
+
+- **`doc_image` field**: `DocImagePreview.tsx`. At card time the image is still a workspace file of the proposing conversation (project conversations share the project workspace, so the card's conversation id always resolves it), so the lazy thumbnail loads from `GET /conversations/{id}/files/download`. A load failure falls back to a path chip, and a click opens `FileViewerModal`. The caption shows the asset name, the size and "Stored as `assets/<name>`". The markdown line is labeled "Appended:", or "Markdown:" for `placement: "none"` (read from the request params).
+- **Bounded `skill_content_diff`**: `SkillContentDiffPreview.tsx` detects the window by the presence of `total_old_lines` / `total_new_lines`. It draws "N lines above / below not shown" edge separators computed from the first and last emitted line numbers and the totals. The toggle reads "Show context lines", since expanding can only reveal the window's own context lines. A `truncated` diff adds a note that the +/- counts are still exact. Whole-body diffs (`edit_skill`, `edit_routine`; no totals) render as before.
+
+The Mode row stays plain text. The resolved "Applied" label and the snippet come from the server, so they need no frontend code.
+
+### Realtime consumers
+
+All three subscribe through `persistentWebSocket.onGlobalEvent`, only while enabled:
+
+- `useDocs`: a silent `refresh()` of the loaded window (one request, `limit = min(200, max(page size, loaded))`) on every `doc_list_changed`.
+- `useProjectDocsIndex`: re-runs the fan-out on every `doc_list_changed`. A project whose refresh fails keeps the rows it had.
+- `useDoc`: re-fetches on `doc_changed` for its doc when `updated_at` differs from the one shown, and on every `doc_list_changed`. The second case is how a delete (which sends only `doc_list_changed`) reaches an open viewer: the re-fetch 404s and the viewer shows `notFound`.
+
+The owner-only delivery limit is described under [Realtime](#realtime).
+
+### Phone
+
+`MobileShell.tsx` receives the parsed `docsRoute` and `docsEnabled` from `App.tsx` and renders the same three views (or `DocsGateClosed`) in `.mobile-main`. It closes the nav drawer and the workspace drawer whenever the docs route changes, and shows no workspace button on docs routes. The views use 16px gutters at phone width, and All Docs rows stack.
 
 ## Lifecycle
 
@@ -242,7 +384,7 @@ Publishing is event-loop-thread only, because `bus.publish_to_user` is not threa
 
 Sandbox scripts (`run_script` / `run_python` through `POST /api/tool-call`, see [Gemini API -- Script tool-call bridge](gemini-api.md)) get the three reads only (`SCRIPT_TOOL_CALL_ALLOWLIST`). The bridge dispatches with `is_script=True` -> `run_kind="script"`, and `_doc_caller()` gives scripts no conversation, no project and `is_public=False`. As a result:
 
-- scripts see only user docs (project docs are Hidden);
+- scripts see only user docs (project docs are Hidden), so never a public doc, since every public doc is a project doc;
 - every write is denied (`DENY_SCRIPT`);
 - reads are not recorded in any sidecar;
 - scripts are always private callers.
@@ -254,13 +396,15 @@ The last point is safe because public containers get no sandbox token, so they h
 - Caps (`chat/docs/constants.py`): body 1 MB, image 5 MB, 200 images / 100 MB per doc, `read_doc` page 200,000 chars, title 200 / description 500 chars, search scan 50 MB, 3 snippets of ~200 chars per doc, `list_docs` limit 1..200 (default 50), `search_docs` limit 1..50 (default 20).
 - Raster images only (png, jpg/jpeg, gif, webp), sniffed by content. SVG and anything else is refused.
 - The write locks are in-process (one `asyncio.Lock` and one `threading.Lock` per doc id), which is correct for the single-process server.
-- Doc bodies, assets and revisions are plaintext on disk, like workspaces (see [Encryption at Rest](encryption-at-rest.md)).
+- Doc bodies, assets, revisions and the `doc.meta.json` / sidecar attribution files are plaintext on disk, like workspaces (see [Encryption at Rest](encryption-at-rest.md)).
 
 ## Design Decisions
 
-**Why scope title uniqueness per mode?** If private and public user docs shared one title namespace, a public conversation could probe `create_doc(title=...)` and learn from the collision error whether a private doc with that title exists. That would break invisibility. With per-mode scoping, a public conversation only ever collides with public titles. The cost is that a mode switch can collide, which is why `PUT /docs/{id}/mode` returns 409 `duplicate_title`.
+**Why can a user doc never be public?** A doc may only become public by being born in a public project, so no internal content can ever be promoted into the public partition. A user doc is reachable from every private conversation and may hold internal data. Switching it to public would hand that body to the internet-enabled public sandbox, and it would take a switch-time re-check to keep taint safe: ordering the flip against queued model writes under the doc lock, dropping the approval gate for write-share recipients, and resolving title collisions in the target mode. With the mode fixed at creation, the taint invariant holds by construction and none of that is needed. The cost is that spec 4.2's user-doc mode switch and its 8.4 dialog are not offered; a user who wants a public doc creates it in a public project.
 
-**Why does a shared private doc need approval, but a shared public doc does not?** The approval card protects internal data that has several stakeholders. A public doc only ever holds sandbox-originated content, every writer is itself a credential-less public conversation, and the recipients opted into `write`. Consequence: switching a shared private doc to public removes the approval gate for its write-share recipients.
+**Why scope title uniqueness per mode?** If private and public user docs shared one title namespace, a public conversation could probe `create_doc(title=...)` and learn from the collision error whether a private doc with that title exists. That would break invisibility. With per-mode scoping, a public conversation only ever collides with public titles. Now that user docs are always private and every project's docs share the project's mode, each (owner, project) scope holds a single mode and the mode key is a belt-and-braces no-op for new rows. It mattered only for legacy public user docs, which is why migration `e1b7c4d9a2f6` renames a flipped row whose title would collide with a private one.
+
+**Why does a shared private doc need approval, but a shared public doc does not?** The approval card protects internal data that has several stakeholders. A public doc only ever holds sandbox-originated content, every writer is itself a credential-less public conversation, and the recipients opted into `write`. No doc's mode changes, so a private doc never loses its approval gate.
 
 **Why one access function?** The matrix has enough cells (mode x relationship x conversation kind x run kind) that re-deriving any part of it at a call site would drift. Tools, routes, the pre-card, the execute and the prompt all consume one `DocAccess`, and one table-driven test pins it.
 
@@ -270,16 +414,25 @@ The last point is safe because public containers get no sandbox token, so they h
 
 **Why files on disk instead of DB rows?** A doc is a portable artifact: `doc.md` plus `assets/` downloads as-is (md or zip) with working relative image links, and revisions are plain files.
 
+**Why move Swagger UI instead of picking another SPA path?** `/docs` and `/docs/<id>` are the user-facing deep links. FastAPI registers its docs routes inside the constructor, ahead of every `@app.get`, so the default `docs_url` would always shadow the SPA route. Nothing but the `run.py` banner pointed at Swagger UI, and `/openapi.json` stays where it was.
+
+**Why is the URL the only docs state?** Deep links, reload and back/forward then work without a URL-to-context sync effect. `showRequestsView` behind `/inbox` is the legacy exception that the docs routes deliberately did not copy.
+
+**Why does All Docs fan out per project?** The list endpoint returns either user docs or one project's docs, and the UI was built without backend changes beyond the SPA route. One `fetchDocs` per project reuses the existing endpoint and its access rule, and lets one failing project degrade to a missing group instead of failing the view. A cross-project list endpoint would replace `useProjectDocsIndex` without changing `DocsListView`'s grouping.
+
 ## Not Implemented
 
 These are designed for but not built:
 
-- **Any UI**: sidebar Docs section, All Docs view, viewer, the mode-switch confirmation dialog, a `doc_image` card renderer, and a diff renderer that understands the bounded `content_diff` (elided stretches, `truncated`, `total_old_lines` / `total_new_lines`). Planned frontend routes `/docs` and `/docs/<id>` collide with FastAPI's default Swagger UI at `/docs` (`FastAPI(...)` in `quest.py` keeps the default `docs_url`; `/redoc` likewise), so the SPA route needs the docs URL disabled or moved.
-- **Sharing routes/UI**: `doc_store.add_share` / `remove_share` / `list_shares` exist, but no route or tool creates shares. Today the approval path and every share cell of the matrix are reachable only through rows written directly. Share-recipient event fan-out and a shared-with-me listing are part of the same work.
-- **Revisions route** (`GET /docs/{id}/revisions`) and restore. Snapshots are written and pruned but not served.
-- **Human editing** (`PUT /docs/{id}/content` with `expected_updated_at`, image upload into `assets/`). `files.write_body()` is the primitive this will use.
+- **Sharing routes/UI**: `doc_store.add_share` / `remove_share` / `list_shares` exist, but no route or tool creates shares. Today the approval path and every share cell of the matrix are reachable only through rows written directly. Share-recipient event fan-out (see [Realtime](#realtime)) and a separate shared-with-me group in All Docs are part of the same work (today a shared user doc sits in "Your docs" with the scope "Shared with you"), as is the viewer's Share menu item (its slot is reserved by a comment in `DocHeader.tsx`).
+- **Revisions route** (`GET /docs/{id}/revisions`), restore, and the viewer's History item. Snapshots are written and pruned but not served.
+- **Human editing** (`PUT /docs/{id}/content` with `expected_updated_at`, image upload into `assets/`) and the viewer's Edit item. `files.write_body()` is the primitive this will use. The UI also never edits a description, although `PUT /docs/{id}` accepts one.
 - **FTS5** behind `search_docs`. Search is the bounded scan above.
+
+Deliberately not built (not planned): spec section 4.2's user-doc mode switch and section 8.4's mode-switch dialog. User docs are always private and no doc's mode can change ([Mode is fixed at creation](#mode-is-fixed-at-creation)); `PUT /docs/{id}/mode` remains only as a route that refuses every doc.
 
 ## Testing
 
-`tests/test_docs_access.py` (every matrix cell and edge rule), `tests/test_docs_store.py` (metadata store, title scoping, shares), `tests/test_docs_storage.py` + `tests/test_docs_storage_hardening.py` (resolver, sidecar, files layer, symlinks, revisions), `tests/test_docs_service.py` + `tests/test_docs_service_hardening.py` (service pipeline, locking, cancellation), `tests/test_docs_tools.py` (handlers, dispatch, registry, allowlists), `tests/test_write_doc_action_request.py` (handler, pre-card, round-trip, TOCTOU), `tests/test_docs_prompting.py` (gate-aware prompts and skill, account-delete sweep), `tests/test_docs_routes.py` (HTTP routes, project-delete sweep), `tests/test_docs_review_followups.py` (bounded card diff, locked mode switch/delete incl. the queued-write taint race, hidden public-project docs on every by-id route, the image sha256 pin, the missing-project fail-closed). Also `tests/test_public_projects.py` (public prompt with and without docs) and `tests/test_inference_api.py` (mutating roster).
+`tests/test_docs_access.py` (every matrix cell and edge rule; the Public rows are public-project docs, plus legacy public user-doc rows that must evaluate as private), `tests/test_docs_store.py` (metadata store, title scoping, shares, the public-user-doc refusal, and migration `e1b7c4d9a2f6` incl. the `(formerly public)` renames), `tests/test_docs_storage.py` + `tests/test_docs_storage_hardening.py` (resolver, sidecar, files layer, symlinks, revisions), `tests/test_docs_service.py` + `tests/test_docs_service_hardening.py` (service pipeline, locking, cancellation, user docs always private incl. the public-conversation `create_doc` refusal), `tests/test_docs_tools.py` (handlers, dispatch, registry, allowlists, public dispatch refusing user docs), `tests/test_write_doc_action_request.py` (handler, pre-card, round-trip, TOCTOU), `tests/test_docs_prompting.py` (gate-aware prompts and skill, account-delete sweep), `tests/test_docs_routes.py` (HTTP routes incl. `user_doc_mode_private` on create and the always-refused mode route, project-delete sweep), `tests/test_docs_review_followups.py` (bounded card diff, the locked delete waiting for an in-flight write, the mode route refusing every doc, hidden public-project docs on every by-id route, the image sha256 pin, the missing-project fail-closed). Also `tests/test_public_projects.py` (public prompt with and without docs), `tests/test_inference_api.py` (mutating roster) and `tests/test_spa_docs_routes.py` (the `/docs` SPA routes ahead of the static fallback, Swagger UI / ReDoc / OAuth2 redirect moved, `/openapi.json` unchanged; runs `quest` in a subprocess).
+
+Frontend (vitest, `npm test`, files under `frontend/src/`): `api/docsApi.test.ts` (URL builders, stale_update helpers), `hooks/useDocs.test.tsx` and `hooks/useDoc.test.tsx` (paging, refresh on the realtime events, superseded responses, `applyRow`), `utils/docsRoute.test.ts`, `utils/sidebarDocs.test.ts`, `utils/allDocsGrouping.test.ts`, `utils/docMode.test.ts` (the public-only badge rule), `components/sidebar/DocsSection.test.tsx` (public-only row badges), `components/docs/DocsListView.test.tsx` (grouping, search, failed-project warning, filtered view, public-only badges and the Mode column label, New Doc with no mode picker sending no `mode`), `components/docs/DocHeader.test.tsx` (menu items by access flags with no mode switch even when the flag says otherwise, rename incl. the 409 paths, delete, the public-only badge), `components/docs/DocViewer.test.tsx` (states, Show source, footer writers), `components/MarkdownImage.test.tsx` (`assetBase` resolution vs the conversation workspace), `components/DocImagePreview.test.tsx` (incl. the `ActionRequestPreviewFields` branch) and `components/SkillContentDiffPreview.test.tsx` (bounded window vs whole-body diffs).

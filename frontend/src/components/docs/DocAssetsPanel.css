@@ -1,0 +1,181 @@
+/* Doc viewer "Assets" list. The `card` variant borrows the chat RightPanel's
+ * floating-card chrome (.right-panel-card in RightPanel.css: raised surface,
+ * rounded, shadowed) and the FileBrowser's uppercase heading; the `details`
+ * variant is the phone's collapsed section under the document. */
+
+/* Shrinks to the (sticky, viewport-capped) aside; the list scrolls. */
+.doc-assets-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+.doc-assets-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  padding: 0.75rem 1rem 0.5rem;
+}
+
+/* Same as .file-browser-header h3 ("PROJECT FILES"). */
+.doc-assets-heading {
+  margin: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.doc-assets-count {
+  padding: 0 0.375rem;
+  min-width: 1.125rem;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background-color: var(--hover);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.125rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* The list scrolls inside the card when it outgrows the viewport. */
+.doc-assets-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 0.5rem 0.5rem;
+}
+
+.doc-assets-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.doc-asset-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.375rem 0.5rem;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.12s;
+}
+
+.doc-asset-row:hover {
+  background-color: var(--hover);
+}
+
+.doc-asset-row:active {
+  background-color: var(--pressed);
+}
+
+.doc-asset-row:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.doc-asset-row:focus-visible {
+  outline: 2px solid rgb(var(--accent-rgb) / 0.6);
+  outline-offset: -2px;
+}
+
+.doc-asset-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background-color: var(--hover);
+}
+
+.doc-asset-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.doc-asset-thumb-icon {
+  color: var(--text-muted);
+}
+
+.doc-asset-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+}
+
+.doc-asset-size {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.doc-assets-empty {
+  margin: 0;
+  padding: 0.25rem 0.5rem 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+/* Phone: a collapsed section under the document. */
+.doc-assets-details {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background-color: var(--surface-raised);
+}
+
+.doc-assets-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.625rem 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.doc-assets-summary::-webkit-details-marker {
+  display: none;
+}
+
+.doc-assets-summary-chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+
+.doc-assets-details[open] .doc-assets-summary-chevron {
+  transform: rotate(90deg);
+}
+
+.doc-assets-details-body {
+  padding: 0 0.25rem 0.375rem;
+}

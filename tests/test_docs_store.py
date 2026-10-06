@@ -8,9 +8,11 @@ Covers (spec section 4.2):
 3. list_accessible_docs: candidates (owner, per-user share, everyone share),
    scope flags, ``(updated_at DESC, id DESC)`` order and keyset paging.
 4. update_doc_metadata (stale token, duplicate title, bump only on change),
-   set_doc_mode, update_after_write.
+   user docs always private (no mode switch), update_after_write.
 5. delete_doc + shares, the share upsert / single-everyone-row rules.
 6. list_doc_ids_for_project / _for_user and FK cascades on project/user delete.
+7. Migration e1b7c4d9a2f6: leftover public user docs become private, with
+   colliding titles renamed so per-(owner, project, mode) uniqueness holds.
 
 Same isolation pattern as tests/test_project_archive.py, plus
 ``PRAGMA foreign_keys=ON`` on every connection like db/engine.py.
@@ -79,6 +81,7 @@ def env(monkeypatch):
         "store": doc_store_mod,
         "models": models_mod,
         "session": session_local,
+        "sync_engine": sync_engine,
         "alice": alice,
         "bob": bob,
         "carol": carol,
@@ -333,17 +336,15 @@ class TestUpdateMetadata:
 
 
 class TestModeAndWrites:
-    def test_set_doc_mode(self, env):
+    def test_user_docs_are_always_private(self, env):
         store = env["store"]
-        doc = _create(env)
-        _run(_set_updated_at(env, doc["id"], datetime(2026, 1, 1)))
-        before = _run(store.get_doc(doc["id"]))["updated_at"]
-        out = _run(store.set_doc_mode(doc["id"], "public"))
-        assert out["mode"] == "public"
-        assert out["updated_at"] != before
-        with pytest.raises(store.DocValidationError):
-            _run(store.set_doc_mode(doc["id"], "internal"))
-        assert _run(store.set_doc_mode("nope", "public")) is None
+        with pytest.raises(store.DocValidationError, match="always private"):
+            _create(env, title="Open", mode="public")
+        # Project docs carry their project's mode, public included.
+        doc = _create(env, title="Open", mode="public", project_id=env["p1"])
+        assert doc["mode"] == "public"
+        # No mode switch exists any more.
+        assert not hasattr(store, "set_doc_mode")
 
     def test_update_after_write(self, env):
         store = env["store"]
@@ -487,3 +488,160 @@ class TestSweepsAndCascades:
         remaining = _run(store.get_doc(alice_doc["id"]))
         # bob's share vanished with him; the everyone row survives
         assert [s["user_id"] for s in remaining["shares"]] == [None]
+
+
+# ---------------------------------------------------------------------------
+# Migration e1b7c4d9a2f6: user docs are always private
+# ---------------------------------------------------------------------------
+
+_MIGRATION_REV = "e1b7c4d9a2f6"
+
+
+def _migration():
+    import importlib.util
+
+    from config.paths import PROJECT_ROOT
+
+    path = PROJECT_ROOT / "alembic" / "versions" / f"{_MIGRATION_REV}_user_docs_always_private.py"
+    spec = importlib.util.spec_from_file_location(f"migration_{_MIGRATION_REV}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _run_migration(env, step="upgrade"):
+    """Run the revision's upgrade()/downgrade() body against the test DB."""
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    module = _migration()
+    with env["sync_engine"].begin() as conn:
+        with Operations.context(MigrationContext.configure(conn)):
+            getattr(module, step)()
+
+
+def _legacy_public(env, doc_id, *, title=None, created_at=None):
+    """Make a user doc a pre-migration public user doc (raw SQL: the store
+    refuses to create one). ``title`` may duplicate one of the owner's
+    private user docs, which the old per-mode namespaces allowed."""
+    sets = ["mode = 'public'"]
+    if title is not None:
+        sets.append("title = :title")
+    if created_at is not None:
+        sets.append("created_at = :created")
+    with env["sync_engine"].begin() as conn:
+        result = conn.execute(
+            text(f"UPDATE docs SET {', '.join(sets)} WHERE id = :id AND project_id IS NULL"),
+            {"id": doc_id, "title": title, "created": created_at},
+        )
+        assert result.rowcount == 1
+
+
+def _rows(env):
+    with env["sync_engine"].connect() as conn:
+        return {
+            r.id: r for r in conn.execute(text(
+                "SELECT id, owner_id, project_id, title, mode, updated_at FROM docs"
+            ))
+        }
+
+
+def _assert_titles_unique_per_scope(env):
+    seen = set()
+    for row in _rows(env).values():
+        key = (row.owner_id, row.project_id, row.mode, row.title.strip().casefold())
+        assert key not in seen, key
+        seen.add(key)
+
+
+class TestUserDocsPrivateMigration:
+    def test_revision_chain(self):
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        from config.paths import PROJECT_ROOT
+
+        module = _migration()
+        assert module.revision == _MIGRATION_REV
+        assert module.down_revision == "55983a10e266"  # create docs and doc_shares
+        script = ScriptDirectory.from_config(Config(str(PROJECT_ROOT / "alembic.ini")))
+        heads = script.get_heads()
+        assert len(heads) == 1
+        # Reachable from the single head (later migrations may stack on it).
+        assert _MIGRATION_REV in {rev.revision for rev in script.walk_revisions(base="base", head=heads[0])}
+
+    def test_flips_public_user_docs_only(self, env):
+        store = env["store"]
+        kept_private = _create(env, title="Kept")
+        legacy = _create(env, title="Plan", content_size=3)
+        _run(store.add_share(legacy["id"], env["bob"], "write"))
+        bobs_legacy = _create(env, owner=env["bob"], title="Kept")
+        project_public = _create(env, title="Open", mode="public", project_id=env["p1"])
+        project_private = _create(env, title="Closed", project_id=env["p2"])
+        for doc in (legacy, bobs_legacy):
+            _legacy_public(env, doc["id"])
+        before = _rows(env)
+        assert before[legacy["id"]].mode == before[bobs_legacy["id"]].mode == "public"
+
+        _run_migration(env)
+
+        after = _rows(env)
+        assert {i: (r.mode, r.title) for i, r in after.items()} == {
+            kept_private["id"]: ("private", "Kept"),
+            legacy["id"]: ("private", "Plan"),
+            bobs_legacy["id"]: ("private", "Kept"),  # another owner: no clash
+            project_public["id"]: ("public", "Open"),  # project docs untouched
+            project_private["id"]: ("private", "Closed"),
+        }
+        # A data correction, not an edit: updated_at unchanged.
+        assert {i: r.updated_at for i, r in after.items()} == {
+            i: r.updated_at for i, r in before.items()
+        }
+        # Shares survive, and the flipped row works through the store.
+        flipped = _run(store.get_doc(legacy["id"]))
+        assert flipped["mode"] == "private"
+        assert [s["user_id"] for s in flipped["shares"]] == [env["bob"]]
+        assert _run(store.update_doc_metadata(legacy["id"], description="d"))["description"] == "d"
+        _assert_titles_unique_per_scope(env)
+
+    def test_colliding_titles_are_renamed(self, env):
+        store = env["store"]
+        _create(env, title="Notes")
+        long_title = "x" * DOC_TITLE_MAX_LEN
+        _create(env, title=long_title)
+        first = _create(env, title="tmp 1")
+        second = _create(env, title="tmp 2")
+        long_legacy = _create(env, title="tmp 3")
+        _legacy_public(env, first["id"], title="notes", created_at="2026-01-01 00:00:00.000000")
+        _legacy_public(env, second["id"], title="NOTES ", created_at="2026-01-02 00:00:00.000000")
+        _legacy_public(
+            env, long_legacy["id"], title=long_title.upper(), created_at="2026-01-03 00:00:00.000000",
+        )
+
+        _run_migration(env)
+
+        rows = _rows(env)
+        assert rows[first["id"]].title == "notes (formerly public)"
+        assert rows[second["id"]].title == "NOTES (formerly public 2)"
+        renamed = rows[long_legacy["id"]].title
+        assert renamed.endswith(" (formerly public)")
+        assert len(renamed) == DOC_TITLE_MAX_LEN
+        assert all(r.mode == "private" for r in rows.values())
+        # The per-(owner, project, mode) title rule holds over the flipped
+        # rows, and the store keeps enforcing it on top of them.
+        _assert_titles_unique_per_scope(env)
+        with pytest.raises(store.DuplicateDocTitleError):
+            _create(env, title="Notes (Formerly Public)")
+        assert _create(env, title="Notes 2")["mode"] == "private"
+
+    def test_rerun_and_downgrade_change_nothing(self, env):
+        _create(env, title="plan ")  # private twin: the legacy row gets renamed
+        legacy = _create(env, title="tmp")
+        _legacy_public(env, legacy["id"], title="Plan")
+        _run_migration(env)
+        once = _rows(env)
+        assert once[legacy["id"]].title == "Plan (formerly public)"
+        _run_migration(env)
+        assert _rows(env) == once
+        _run_migration(env, "downgrade")
+        assert _rows(env) == once

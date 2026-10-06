@@ -1,0 +1,109 @@
+/* Image preview inside write_doc add_image approval cards (doc_image field). */
+
+/* The generic preview fields are flex rows (key left, value right); the
+   image preview needs the full card width, so its field stacks instead.
+   Applies to both the chat card and the Requests pane variants. */
+.action-request-preview-field.doc-image-field,
+.request-preview-field.doc-image-field {
+  display: block;
+  min-width: 0;
+}
+
+.doc-image-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  min-width: 0;
+}
+
+/* Thumbnail: a subtle rounded frame; click opens the full-size viewer. */
+.doc-image-preview-thumb {
+  /* Inline-block so the frame shrinks to the (max-width-capped) image
+   * instead of stretching to the button's natural width. */
+  display: inline-block;
+  width: fit-content;
+  max-width: min(240px, 100%);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--hover);
+  cursor: zoom-in;
+  line-height: 0;
+}
+
+.doc-image-preview-thumb:hover {
+  border-color: var(--border-strong);
+}
+
+.doc-image-preview-thumb:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.doc-image-preview-thumb img {
+  display: block;
+  max-width: 100%;
+  max-height: 180px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+
+/* Fallback chip when the workspace file can't be loaded. */
+.doc-image-preview-missing {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-style: italic;
+  opacity: 0.7;
+  overflow-wrap: anywhere;
+}
+
+.doc-image-preview-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.6rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  min-width: 0;
+}
+
+.doc-image-preview-name {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.doc-image-preview-caption code {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.doc-image-preview-markdown {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.doc-image-preview-markdown-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.doc-image-preview-markdown-code {
+  display: block;
+  padding: 0.3rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text);
+  background: var(--hover);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

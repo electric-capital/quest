@@ -12,11 +12,12 @@ realtime events captured). Covers:
    unchanged and ``doc_precard_check`` accepts it and injects the preview
    keys (content_diff, title, mode, scope, share summary, image preview).
 3. Pre-card rejections: directly writable doc, hidden doc (byte-equal
-   not-found text), unread doc, public doc from a private conversation,
-   stale old_string, read share, gate closed.
+   not-found text), unread doc, public (project) doc from a private
+   conversation (hidden), stale old_string, read share, gate closed.
 4. ``execute``: happy paths per operation (body, revision snapshot,
    ``last_write_source = action_request:<id>``, events, updated_at) and the
-   approve-time re-checks (TOCTOU, taint, share removal, gate, deletion).
+   approve-time re-checks (TOCTOU, share downgrade / removal, a leftover
+   public user doc staying private, gate, deletion).
 5. ``render_preview`` / ``summary_snippet`` / labels, registration.
 6. End to end through the ``create_action_request`` dispatch arm and the
    resolve route (``request_id`` reaches execute).
@@ -29,16 +30,14 @@ from datetime import datetime, timezone
 
 import pytest
 
-from chat.docs.access import (
-    DENY_PUBLIC_DOC_FROM_PRIVATE,
-    DENY_READ_ONLY_SHARE,
-)
+from chat.docs.access import DENY_READ_ONLY_SHARE
 from chat.docs.constants import doc_not_found_message, docs_disabled_message
 from tests.test_docs_service import (  # noqa: F401  (docs_env is a fixture)
     PNG,
     body,
     docs_env,
     make_caller,
+    make_legacy_public,
     seed_doc,
     svc,
     workspace_dir,
@@ -391,13 +390,29 @@ class TestPrecard:
             propose(make_caller(docs_env), edit_params(doc["id"]))
 
     def test_public_doc_from_private_conversation(self, docs_env):
-        doc = shared_doc(docs_env, mode="public", permission="write")
-        caller = make_caller(docs_env)
-        read(caller, doc["id"])
-        for params in (edit_params(doc["id"]), append_params(doc["id"])):
-            with pytest.raises(ValueError) as exc:
-                propose(caller, params)
-            assert str(exc.value) == DENY_PUBLIC_DOC_FROM_PRIVATE
+        # Public docs are public-project docs (user docs are always
+        # private): every private conversation is outside that project, so
+        # it never sees one (the pre-card derives is_public from the
+        # project, so a "private caller in the public project" cannot occur).
+        doc = shared_doc(
+            docs_env, mode="public", permission="write", project_id=docs_env.public_project,
+        )
+        for caller in (make_caller(docs_env),
+                       make_caller(docs_env, project=docs_env.private_project)):
+            for params in (edit_params(doc["id"]), append_params(doc["id"])):
+                with pytest.raises(ValueError) as exc:
+                    propose(caller, params)
+                assert str(exc.value) == doc_not_found_message(doc["id"])
+
+    def test_public_doc_never_needs_a_card(self, docs_env):
+        # From its own public project the doc is written directly (or is a
+        # read-only share): write_doc never applies to a public doc.
+        doc = shared_doc(
+            docs_env, mode="public", permission="write", project_id=docs_env.public_project,
+        )
+        caller = make_caller(docs_env, project=docs_env.public_project, public=True)
+        with pytest.raises(ValueError, match="writable directly"):
+            propose(caller, append_params(doc["id"]))
 
     def test_stale_old_string(self, docs_env):
         doc = shared_doc(docs_env)
@@ -530,16 +545,27 @@ class TestExecute:
         assert body(doc["id"]) == "omega beta\ngamma\n"
         assert _run(docs_env.doc_store.get_doc(doc["id"]))["last_write_source"] == "ui"
 
-    def test_taint_doc_went_public(self, docs_env):
+    def test_share_downgraded_at_approve_refuses(self, docs_env):
+        doc = shared_doc(docs_env, permission="write")
+        bob = make_caller(docs_env, who="bob")
+        params = propose(bob, append_params(doc["id"]))
+        _run(docs_env.doc_store.add_share(doc["id"], docs_env.users["bob"]["id"], "read"))
+        with pytest.raises(RuntimeError) as exc:
+            execute(params, bob)
+        assert str(exc.value) == DENY_READ_ONLY_SHARE
+        assert body(doc["id"]) == SHARED_BODY
+        assert _run(docs_env.doc_store.get_doc(doc["id"]))["last_write_source"] is None
+
+    def test_legacy_public_user_doc_is_still_private_at_approve(self, docs_env):
+        """A user doc's stored mode cannot make it public (defensive: a
+        pre-migration row): the approved change still applies."""
         doc = shared_doc(docs_env)
         caller = make_caller(docs_env)
         params = propose(caller, append_params(doc["id"]))
-        _run(docs_env.doc_store.set_doc_mode(doc["id"], "public"))
-        with pytest.raises(RuntimeError) as exc:
-            execute(params, caller)
-        assert str(exc.value) == DENY_PUBLIC_DOC_FROM_PRIVATE
-        assert body(doc["id"]) == SHARED_BODY
-        assert _run(docs_env.doc_store.get_doc(doc["id"]))["last_write_source"] is None
+        make_legacy_public(docs_env, doc["id"])
+        execute(params, caller, request_id=46)
+        assert body(doc["id"]) == SHARED_BODY + "\nentry\n"
+        assert _run(docs_env.doc_store.get_doc(doc["id"]))["last_write_source"] == "action_request:46"
 
     def test_shares_removed_still_applies(self, docs_env):
         doc = shared_doc(docs_env)
@@ -818,10 +844,11 @@ class TestEndToEnd:
         doc_row = _run(ar_env.doc_store.get_doc(doc["id"]))
         assert doc_row["last_write_source"] == f"action_request:{request_id}"
 
-    def test_approve_failure_keeps_request_open(self, ar_env):
+    def test_approve_failure_keeps_request_open(self, ar_env, monkeypatch):
         from fastapi import HTTPException
 
         from chat.action_request_routes import ResolveRequestBody, resolve_user_action_request
+        from chat.docs import constants
         from chat.gemini_api.turn_tools import SuspendForActionRequest
 
         doc = shared_doc(ar_env)
@@ -829,7 +856,10 @@ class TestEndToEnd:
         with pytest.raises(SuspendForActionRequest) as suspended:
             _arm(caller, append_params(doc["id"]))
         request_id = suspended.value.request_id
-        _run(ar_env.doc_store.set_doc_mode(doc["id"], "public"))
+        # The change no longer fits at approve time (the cap stands in for
+        # a doc that grew while the card sat open).
+        cap = len(SHARED_BODY) + 2
+        monkeypatch.setattr(constants, "DOC_MAX_CONTENT_SIZE", cap)
 
         class _Req:
             app = None
@@ -839,7 +869,7 @@ class TestEndToEnd:
                 request_id, ResolveRequestBody(action="execute"), _Req(), caller.user,
             ))
         assert exc.value.status_code == 500
-        assert DENY_PUBLIC_DOC_FROM_PRIVATE in exc.value.detail["message"]
+        assert f"over the {cap}-byte limit" in exc.value.detail["message"]
         row = _run(ar_env.action_request_store.get_action_request(caller.user["id"], request_id))
         assert row["status"] == "open"
         assert body(doc["id"]) == SHARED_BODY

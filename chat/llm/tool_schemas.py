@@ -1333,13 +1333,15 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "that later conversations can find with list_docs / search_docs "
             "and read with read_doc. Use it for content meant to outlive "
             "this conversation (notes, reports, running logs); keep scratch "
-            "files in the workspace. The doc takes this conversation's mode "
-            "(a public-project conversation creates public docs, every "
-            "other conversation private ones). target 'user' (default) "
-            "creates one of the user's own docs; target 'project' creates a "
-            "doc of this conversation's project, visible only from that "
-            "project's conversations. Titles are unique per user and mode (per "
-            "project for project docs), case-insensitively. Content is "
+            "files in the workspace. target 'user' (default) creates one of "
+            "the user's own docs; user docs are always private, so in a "
+            "public project use target=\"project\" (target 'user' is "
+            "refused there). target 'project' creates a doc of this "
+            "conversation's project, visible only from that project's "
+            "conversations; it takes the project's mode (public in a "
+            "public project, private otherwise). No doc's mode can be "
+            "changed later. Titles are unique per user (per project for "
+            "project docs), case-insensitively. Content is "
             "markdown, max 1 MB; reference images with add_doc_image rather "
             "than external URLs. The new doc counts as read, so edit_doc "
             "works on it right away. Returns {id, title, mode, scope, "
@@ -1365,9 +1367,11 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                     "enum": ["user", "project"],
                     "default": "user",
                     "description": (
-                        "'user' (default) for one of the user's docs, "
+                        "'user' (default) for one of the user's docs "
+                        "(always private; refused in a public project), "
                         "'project' for a doc of this conversation's project "
-                        "(project conversations only)."
+                        "(project conversations only; the only target in a "
+                        "public project)."
                     ),
                 },
                 "intent_message": {

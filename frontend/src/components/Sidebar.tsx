@@ -1,24 +1,27 @@
 /**
- * Sidebar shell: brand bar, the two sliding panels (projects + standalone
- * conversations, and the drilled project), the update banner, the user bar
- * and the modals. Owns the cross-list flows -- drilling in and out of a
- * project, creating chats, running routines, project/routine CRUD
- * follow-ups -- and delegates:
+ * Sidebar shell: brand bar, the two sliding panels (projects + docs +
+ * standalone conversations, and the drilled project), the update banner, the
+ * user bar and the modals. Owns the cross-list flows -- drilling in and out
+ * of a project, creating chats, running routines, opening docs,
+ * project/routine CRUD follow-ups -- and delegates:
  *
  * - data fetching / paging / polling / realtime refresh to
- *   hooks/useTopLevelConversations, useProjectConversations, useProjectRoutines
- * - list derivation (filters, routine grouping, ordering) to utils/sidebarItems
+ *   hooks/useTopLevelConversations, useProjectConversations,
+ *   useProjectRoutines, useDocs
+ * - list derivation (filters, routine grouping, ordering) to
+ *   utils/sidebarItems and utils/sidebarDocs
  * - section rendering to components/sidebar/*
  */
 
 import React, { useEffect, useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Search, Inbox, SquarePen } from 'lucide-react';
 import {
   duplicateConversationWorkspace,
   createProjectConversation,
   ApiClientError,
 } from '../api/client';
+import { DOCS_FEATURE } from '../api/docsApi';
 import type { Conversation, Routine } from '../api/types';
 import { useAppConfig } from '../contexts/AppConfigContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -37,10 +40,14 @@ import { seedNewConversation } from '../utils/newConversation';
 import { useTopLevelConversations } from '../hooks/useTopLevelConversations';
 import { useProjectConversations } from '../hooks/useProjectConversations';
 import { useProjectRoutines } from '../hooks/useProjectRoutines';
+import { useDocs } from '../hooks/useDocs';
+import { docsListPath, docViewerPath, parseDocsRoute } from '../utils/docsRoute';
+import { SIDEBAR_DOC_LIMIT } from '../utils/sidebarDocs';
 import { SearchModal } from './SearchModal';
 import { QuestLogo } from './QuestLogo';
 import { RequestsBadge } from './sidebar/RequestsBadge';
 import { ProjectsSection } from './sidebar/ProjectsSection';
+import { DocsSection } from './sidebar/DocsSection';
 import { ConversationsSection } from './sidebar/ConversationsSection';
 import { ProjectPanel } from './sidebar/ProjectPanel';
 import './Sidebar.css';
@@ -56,6 +63,10 @@ interface SidebarProps {
   // conversation. The mobile shell keeps its nav drawer open for those.
   onConversationSelect: (id: string, projectId?: string | null, opts?: { implicit?: boolean }) => void;
   onNewConversation: (id: string, projectId?: string | null) => void;
+  // Called after the Sidebar navigates to a view that is not a conversation
+  // (a doc, the All Docs list): the host closes its drawer on phone. The
+  // desktop layout passes nothing.
+  onNavigateAway?: () => void;
 }
 
 /**
@@ -64,7 +75,12 @@ interface SidebarProps {
  * callback props in App.tsx, this ensures the Sidebar only re-renders
  * when its own props or internal state actually change.
  */
-export const Sidebar = React.memo(function Sidebar({ activeConversationId, onConversationSelect, onNewConversation }: SidebarProps) {
+export const Sidebar = React.memo(function Sidebar({
+  activeConversationId,
+  onConversationSelect,
+  onNewConversation,
+  onNavigateAway,
+}: SidebarProps) {
   const { userEmail, userName, enabledFeatures } = useAuth();
   const { appName, updateAvailable } = useAppConfig();
   const {
@@ -96,6 +112,23 @@ export const Sidebar = React.memo(function Sidebar({ activeConversationId, onCon
   const drilledProjectIsPublic = Boolean(drilledProject?.public);
 
   const navigate = useNavigate();
+
+  // Quest Docs: the user's latest docs on the main panel and the drilled
+  // project's in its panel, both only while the feature gate is open. The URL
+  // says which doc / All Docs view is showing (no NavigationContext state).
+  const docsEnabled = enabledFeatures.includes(DOCS_FEATURE);
+  const userDocs = useDocs({ limit: SIDEBAR_DOC_LIMIT, enabled: docsEnabled });
+  const projectDocs = useDocs({
+    projectId: drilledProjectId,
+    limit: SIDEBAR_DOC_LIMIT,
+    enabled: docsEnabled && drilledProjectId !== null,
+  });
+  const location = useLocation();
+  const docsRoute = parseDocsRoute(location.pathname, location.search);
+  const activeDocId = docsRoute?.kind === 'viewer' ? docsRoute.docId : null;
+  // The project id of the All Docs view showing (null = unfiltered), or
+  // undefined when no All Docs view is showing.
+  const docsListProjectId = docsRoute?.kind === 'list' ? docsRoute.projectId : undefined;
 
   // Per-project conversation filters. Default to false (hide archived, hide
   // Slack conversations) on every page load; no persistence. Independent of
@@ -287,6 +320,24 @@ export const Sidebar = React.memo(function Sidebar({ activeConversationId, onCon
     onConversationSelect(id, projectId);
   }
 
+  // Docs views are URL routes (/docs/<id>, /docs[?project=<id>]); App maps
+  // them to the main pane, where activeConversationId is null, so no
+  // conversation row stays highlighted. Clearing the requests flag here
+  // (like handleConversationClick) avoids a frame of the inbox in between.
+  function handleOpenDoc(id: string) {
+    setError(null);
+    setShowRequestsView(false);
+    navigate(docViewerPath(id));
+    onNavigateAway?.();
+  }
+
+  function handleOpenAllDocs(projectId: string | null) {
+    setError(null);
+    setShowRequestsView(false);
+    navigate(docsListPath(projectId));
+    onNavigateAway?.();
+  }
+
   // Deselect an archived conversation if it was the active one.
   function handleArchived(conversationId: string) {
     if (activeConversationId === conversationId) {
@@ -380,7 +431,8 @@ export const Sidebar = React.memo(function Sidebar({ activeConversationId, onCon
     }
   }
 
-  // No row is active while the requests inbox view is showing.
+  // No row is active while the requests inbox view is showing. (Docs views
+  // need no check: activeConversationId is already null on their routes.)
   const highlightedConversationId = showRequestsView ? null : activeConversationId;
 
   return (
@@ -447,6 +499,19 @@ export const Sidebar = React.memo(function Sidebar({ activeConversationId, onCon
               />
             )}
 
+            {docsEnabled && (
+              <DocsSection
+                docs={userDocs.docs}
+                hasMore={userDocs.hasMore}
+                loading={userDocs.loading}
+                error={userDocs.error}
+                activeDocId={activeDocId}
+                onOpenDoc={handleOpenDoc}
+                onOpenAll={() => handleOpenAllDocs(null)}
+                headerActive={docsListProjectId === null}
+              />
+            )}
+
             <ConversationsSection
               list={topLevel}
               activeConversationId={highlightedConversationId}
@@ -488,6 +553,15 @@ export const Sidebar = React.memo(function Sidebar({ activeConversationId, onCon
                 onSelect={(id) => handleConversationClick(id, drilledProject.id)}
                 updateConversations={(updater) => projectConversations.update(drilledProject.id, updater)}
                 onArchived={handleArchived}
+                showDocs={docsEnabled}
+                docs={projectDocs.docs}
+                docsHasMore={projectDocs.hasMore}
+                docsLoading={projectDocs.loading}
+                docsError={projectDocs.error}
+                activeDocId={activeDocId}
+                onOpenDoc={handleOpenDoc}
+                onOpenAllDocs={() => handleOpenAllDocs(drilledProject.id)}
+                docsHeaderActive={docsListProjectId === drilledProject.id}
               />
             )}
           </div>

@@ -345,6 +345,7 @@ A composite unique index `ix_skill_shares_skill_id_user_id` on `(skill_id, user_
 `Doc` (`docs`) and `DocShare` (`doc_shares`) in `db/models.py` (Alembic migration `55983a10e266`) hold the metadata of [Quest Docs](quest-docs.md); bodies, assets and revisions live on disk under `DOCS_DIR`.
 
 - `docs.owner_id` cascades with the user and the nullable `docs.project_id` cascades with the project (NULL = a user doc).
+- `docs.mode` is always `private` for a user doc (`doc_store.create_doc()` refuses a public one; migration `e1b7c4d9a2f6` flipped the leftovers); a project doc copies `projects.public`.
 - `doc_shares.user_id` NULL means everyone on the install; the partial unique index `ix_doc_shares_everyone` allows one such row per doc.
 - Title uniqueness (case-insensitive per owner, project and mode) is enforced in `db/doc_store.py`, not by an index.
 
@@ -518,7 +519,7 @@ The long-context flag (per-call context > 200K tokens; Gemini keys on `prompt_to
 
 **`db/skill_store.py`** -- Skill CRUD, sharing management, access checks, and auto-load management. See [Skill Library Architecture](skill-library.md) for the full feature description. Access control follows four visibility levels (private, shared, public, project). `get_user_autoloaded_skills()`, `get_project_autoloaded_skills()`, and `get_routine_autoloaded_skills()` join with their respective auto-load junction tables and apply access control filtering, returning skills ordered by name for deterministic prompt ordering. Routine auto-load list/toggle helpers are `list_routine_autoloaded_skill_ids()` and `set_routine_skill_autoload()`.
 
-**`db/doc_store.py`** -- Quest Docs metadata: CRUD, per-mode title uniqueness (`_title_taken()`), the keyset candidate list `list_accessible_docs()`, `update_doc_metadata()` (raises `StaleDocError` on an `expected_updated_at` mismatch), `set_doc_mode()`, `update_after_write()`, the id collectors used by the project- and account-delete directory sweeps, and the share helpers. Access decisions are NOT made here (see `chat/docs/access.py`); body writes go through `chat/docs/service.py`. See [Quest Docs](quest-docs.md).
+**`db/doc_store.py`** -- Quest Docs metadata: CRUD, per-mode title uniqueness (`_title_taken()`), the keyset candidate list `list_accessible_docs()`, `update_doc_metadata()` (raises `StaleDocError` on an `expected_updated_at` mismatch), `update_after_write()`, the id collectors used by the project- and account-delete directory sweeps, and the share helpers. Access decisions are NOT made here (see `chat/docs/access.py`); body writes go through `chat/docs/service.py`. See [Quest Docs](quest-docs.md).
 
 ## Engine and Sessions
 

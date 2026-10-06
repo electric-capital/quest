@@ -39,7 +39,7 @@ def _doc_write_tool_names() -> frozenset[str]:
 # system:quest_docs there; the tool descriptions carry the details. Must not
 # name internal-only tools or skills (tests/test_public_projects.py).
 _PUBLIC_DOCS_SECTION = """
-**Quest Docs:** Docs are persistent markdown documents kept inside Quest; they outlive this conversation and later conversations can find them again. This conversation sees only PUBLIC docs and creates only public docs. Find docs with `list_docs` / `search_docs`, read them with `read_doc` (required before `edit_doc`), create one with `create_doc`, change it with `edit_doc` (exact string replacement) or `append_to_doc`, and embed a workspace image with `add_doc_image`.
+**Quest Docs:** Docs are persistent markdown documents kept inside Quest; they outlive this conversation and later conversations can find them again. This conversation sees only PUBLIC docs, which live only in public projects: it sees this project's docs and creates docs only in this project. User docs are always private, so always create with `create_doc(target="project")` (`target="user"` is refused here); no doc's mode can be switched. Find docs with `list_docs` / `search_docs`, read them with `read_doc` (required before `edit_doc`), change one with `edit_doc` (exact string replacement) or `append_to_doc`, and embed a workspace image with `add_doc_image`.
 Public docs the user owns or was given write access to are written directly, with no approval step. Use a doc for content meant to last (notes, reports, running logs appended under a dated heading) and the workspace for scratch files.
 """
 

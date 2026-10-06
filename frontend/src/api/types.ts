@@ -270,10 +270,28 @@ export interface SkillContentDiffLine {
 // field, computed server-side at proposal time. `lines` covers the WHOLE
 // old/new skill body so the card can render both the collapsed
 // changed-hunks snippet and the expanded full-content view.
+//
+// write_doc cards send a BOUNDED window instead (changed hunks plus 3
+// context lines): they set `total_old_lines` / `total_new_lines` so the
+// card can show the elided stretches, and `truncated` when the window was
+// cut at its line cap (the +added / -removed counts stay exact).
 export interface SkillContentDiff {
   added: number;
   removed: number;
   lines: SkillContentDiffLine[];
+  truncated?: boolean;
+  total_old_lines?: number;
+  total_new_lines?: number;
+}
+
+/** The image a write_doc `add_image` operation embeds (preview field type
+ *  'doc_image'). `workspace_path` is relative to the proposing
+ *  conversation's workspace; `markdown` is the line appended to the doc. */
+export interface DocImagePreview {
+  workspace_path: string;
+  asset_name: string;
+  markdown: string;
+  size_bytes: number | null;
 }
 
 /** One workspace file listed on a subagent_return approval card. `path` is
@@ -289,12 +307,14 @@ export interface PreviewField {
   key: string;
   value: string;
   // Discriminator for structured (non key/value) preview fields:
-  // 'spreadsheet_diff', 'skill_content_diff' and 'subagent_return_files'
-  // exist today; unknown types fall back to the plain value string.
+  // 'spreadsheet_diff', 'skill_content_diff', 'subagent_return_files' and
+  // 'doc_image' exist today; unknown types fall back to the plain value
+  // string.
   type?: string;
   grid?: SpreadsheetDiffGrid;
   diff?: SkillContentDiff;
   files?: SubagentReturnFileEntry[];
+  image?: DocImagePreview;
 }
 
 export interface ActionRequestMessage {
@@ -855,6 +875,108 @@ export interface Routine {
 
 export interface RoutinesListResponse {
   routines: Routine[];
+}
+
+// Quest Docs types (/app/api/docs; see docs/api/quest-docs-api.md)
+
+/** A user doc is always private; a project doc mirrors its project's `public` flag. */
+export type DocMode = 'private' | 'public';
+
+/** `project` when the doc belongs to a project (`project_id` set), else `user`. */
+export type DocScope = 'user' | 'project';
+
+/** What the UI may offer for this doc, computed server-side per viewer. */
+export interface DocAccess {
+  can_rename: boolean;
+  // Always false in v1: no doc's mode can be switched.
+  can_switch_mode: boolean;
+  can_delete: boolean;
+  // The UI write verdict: 'free' for the owner or a write share.
+  write: 'free' | 'approval' | 'denied';
+}
+
+/** One share-roster entry; `user_id` null means everyone. Owner only. */
+export interface DocShare {
+  id: number;
+  user_id: number | null;
+  permission: 'read' | 'write';
+  created_at: string;
+}
+
+/** Doc row as returned by the list / create / rename endpoints. */
+export interface Doc {
+  id: string;
+  owner_id: number;
+  project_id: string | null;
+  title: string;
+  description: string;
+  mode: DocMode;
+  content_size: number;
+  asset_count: number;
+  // 'ui', 'conversation:<id>', 'action_request:<id>', or null (always null
+  // for non-owners).
+  last_write_source: string | null;
+  // Naive-UTC ISO strings (no 'Z'; parse with parseUTCTimestamp).
+  // `updated_at` doubles as the optimistic-concurrency token.
+  created_at: string;
+  updated_at: string;
+  scope: DocScope;
+  shared: boolean;
+  access: DocAccess;
+  // Present for the owner only.
+  shares?: DocShare[];
+}
+
+/** GET /docs/{id}: the row plus the whole markdown body. */
+/** The conversation named by `last_write_source`, for the viewer footer. */
+export interface DocWriteConversation {
+  id: string;
+  title: string;
+  project_id: string | null;
+}
+
+/**
+ * One embedded image in the doc's `assets/` directory, as listed by
+ * GET /docs/{id} (regular files with a known image extension only).
+ */
+export interface DocAsset {
+  name: string;
+  size: number;
+  mime: string;
+}
+
+export interface DocDetail extends Doc {
+  content: string;
+  /**
+   * Resolved by GET /docs/{id} when `last_write_source` is a conversation
+   * the owner still has; null otherwise (deleted, not a conversation, or
+   * blanked for non-owners together with `last_write_source`).
+   */
+  last_write_conversation: DocWriteConversation | null;
+  /** The doc's images, sorted by name (served by GET /docs/{id}/assets/{name}). */
+  assets: DocAsset[];
+}
+
+export interface ListDocsResponse {
+  docs: Doc[];
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+export interface CreateDocRequest {
+  title: string;
+  description?: string;
+  // No `mode`: a user doc is always private and a project doc takes its
+  // project's mode, so the UI never sends one.
+  project_id?: string | null;
+}
+
+export interface UpdateDocRequest {
+  title?: string;
+  description?: string;
+  // Optimistic-concurrency token (the row's updated_at as loaded). A
+  // mismatch rejects with a flat 409 stale_update carrying `current`.
+  expected_updated_at?: string;
 }
 
 // Project table types

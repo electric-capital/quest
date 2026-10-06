@@ -900,9 +900,10 @@ Reads:
 Writes:
 
 - **create_doc(title, content, description?, target?)** -- a new doc.
-  `target`: `user` (default) or `project` (project conversations only).
-  Titles are 1-200 characters and unique per owner and mode (per project for
-  project docs), case-insensitively. The new doc counts as read.
+  `target`: `user` (default; always a private doc) or `project` (project
+  conversations only; the doc takes the project's mode). Titles are 1-200
+  characters and unique per owner (per project for project docs),
+  case-insensitively. The new doc counts as read.
 - **edit_doc(doc_id, old_string, new_string, replace_all?)** -- exact string
   replacement (whitespace included); `old_string` must be unique unless
   `replace_all` is true; an empty `new_string` deletes the match.
@@ -912,17 +913,19 @@ Writes:
 - **add_doc_image(doc_id, workspace_path, alt?, placement?)** -- embeds a
   workspace image (see Images below).
 
-There is no whole-body replace, and no tool renames, deletes or changes the
-mode of a doc: the user does that in the UI. The body is capped at
-{body_cap}.
+There is no whole-body replace, and no tool renames or deletes a doc: the
+user does that in the UI. The body is capped at {body_cap}.
 
 ### Modes and who may write
 
-Every doc is `private` or `public`. A conversation creates docs in its own
-mode: private conversations (standalone chats, private projects and their
-routines, Slack) create private docs; public-project conversations (and
-their routines) create public docs. Project docs take their project's mode
-for good; the user can switch a user doc's mode in the UI.
+Every doc is `private` or `public`. **User docs are always private.**
+Public docs live only in public projects: a project doc takes its
+project's mode for good. A doc's mode never changes -- there is no mode
+switch, in the tools or in the UI. Private conversations (standalone chats,
+private projects and their routines, Slack) create private docs, user or
+project. Public-project conversations (and their routines) create only
+public docs of their own project, with `create_doc(target="project")`;
+`target="user"` is refused there.
 
 `list_docs` and `read_doc` report the verdict for each doc in `writable`:
 `free` (the write tools work directly), `approval` (a shared private doc:
@@ -935,11 +938,13 @@ here; `write_note` says why). The rules behind it:
   change needs the user's approval through a `write_doc` action request --
   for the owner and for people with write access alike. With a read-only
   share: "{doc_access.DENY_READ_ONLY_SHARE}"
-- **Public docs** are written freely only from public-project
-  conversations (by the owner and people with write access). Everywhere
-  else they are read-only: "{doc_access.DENY_PUBLIC_DOC_FROM_PRIVATE}"
-- **Private docs are invisible to public-project conversations** -- there
-  they behave exactly like a nonexistent id.
+- **Public docs** (the docs of a public project) are read and written
+  only from that project's conversations (by the owner and people with
+  write access); every other conversation never sees them. The Quest web
+  UI can read them but never change them:
+  "{doc_access.DENY_PUBLIC_DOC_FROM_PRIVATE}"
+- **Private docs (every user doc included) are invisible to public-project
+  conversations** -- there they behave exactly like a nonexistent id.
 - **Project docs** are visible only from conversations of that project;
   standalone chats and other projects never see them.
 - **Read-only runs** never write: sub-agents ("{doc_access.DENY_SUB_AGENT}"),

@@ -1,19 +1,21 @@
 /**
  * The Sidebar's drill-down panel for one project: back/settings header, the
- * Routines section, and the project's conversation list with routine runs
- * folded into expandable groups. Data comes from useProjectConversations /
- * useProjectRoutines (owned by the Sidebar); this component renders it and
- * owns only its own row UI state.
+ * Routines section, the project's Docs block (Quest Docs gate open only), and
+ * the project's conversation list with routine runs folded into expandable
+ * groups. Data comes from useProjectConversations / useProjectRoutines /
+ * useDocs (owned by the Sidebar); this component renders it and owns only
+ * its own row UI state.
  */
 
 import { useMemo, useState } from 'react';
 import { Archive } from 'lucide-react';
-import type { Conversation, Project, Routine } from '../../api/types';
+import type { Conversation, Doc, Project, Routine } from '../../api/types';
 import { useConversationListActions } from '../../hooks/useConversationListActions';
 import { useFlipListAnimation } from '../../hooks/useFlipListAnimation';
 import { deriveProjectSidebarItems } from '../../utils/sidebarItems';
 import { ConversationFilterMenu } from './ConversationFilterMenu';
 import { ConversationRow } from './ConversationRow';
+import { DocsSection } from './DocsSection';
 import { RoutinesSection } from './RoutinesSection';
 import {
   ChevronLeftIcon,
@@ -55,7 +57,25 @@ interface ProjectPanelProps {
   updateConversations: (updater: (prev: Conversation[]) => Conversation[]) => void;
   // A row was archived (the Sidebar deselects it if it was active).
   onArchived: (conversationId: string) => void;
+  // The project's Docs block, rendered between Routines and Conversations
+  // while `showDocs` (the Quest Docs feature gate is open for the user).
+  showDocs?: boolean;
+  docs?: Doc[];
+  docsHasMore?: boolean;
+  docsLoading?: boolean;
+  // The project's first docs page failed to load.
+  docsError?: string | null;
+  // The doc open in the viewer (its row is highlighted).
+  activeDocId?: string | null;
+  onOpenDoc?: (id: string) => void;
+  // Opens the All Docs view filtered to this project.
+  onOpenAllDocs?: () => void;
+  // That filtered All Docs view is the one showing.
+  docsHeaderActive?: boolean;
 }
+
+const NO_DOCS: Doc[] = [];
+const noop = () => {};
 
 export function ProjectPanel({
   project,
@@ -80,6 +100,15 @@ export function ProjectPanel({
   onSelect,
   updateConversations,
   onArchived,
+  showDocs = false,
+  docs = NO_DOCS,
+  docsHasMore = false,
+  docsLoading = false,
+  docsError = null,
+  activeDocId = null,
+  onOpenDoc = noop,
+  onOpenAllDocs = noop,
+  docsHeaderActive = false,
 }: ProjectPanelProps) {
   const listRef = useFlipListAnimation<HTMLDivElement>();
   // Held here, not in the popover: toggling the archive filter reloads the
@@ -140,6 +169,19 @@ export function ProjectPanel({
                 onNewRoutine={onNewRoutine}
                 onOpenSettings={onRoutineSettings}
                 onRun={onRunRoutine}
+              />
+            )}
+
+            {showDocs && (
+              <DocsSection
+                docs={docs}
+                hasMore={docsHasMore}
+                loading={docsLoading}
+                error={docsError}
+                activeDocId={activeDocId}
+                onOpenDoc={onOpenDoc}
+                onOpenAll={onOpenAllDocs}
+                headerActive={docsHeaderActive}
               />
             )}
 
