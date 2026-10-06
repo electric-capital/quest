@@ -25,6 +25,8 @@ export interface DocsSectionProps {
   hasMore: boolean;
   // The first page has not landed yet.
   loading: boolean;
+  // useDocs().error: the first page failed to load (no docs to show).
+  error?: string | null;
   // The doc open in the viewer, so its row is highlighted.
   activeDocId: string | null;
   onOpenDoc: (id: string) => void;
@@ -37,12 +39,15 @@ export function DocsSection({
   docs,
   hasMore,
   loading,
+  error = null,
   activeDocId,
   onOpenDoc,
   onOpenAll,
   headerActive = false,
 }: DocsSectionProps) {
   const items = useMemo(() => deriveSidebarDocItems(docs), [docs]);
+  // A failed load is not "no docs": no "0" count and no create hint.
+  const failed = !loading && Boolean(error) && docs.length === 0;
 
   return (
     <div className="docs-section">
@@ -56,7 +61,7 @@ export function DocsSection({
         >
           <span className="section-label">Docs</span>
           {/* No count until the first page lands, so it never flashes "0". */}
-          {!loading && (
+          {!loading && !failed && (
             <span className="docs-count">{docCountLabel(docs.length, hasMore)}</span>
           )}
           <ChevronRightIcon className="docs-section-chevron" />
@@ -86,8 +91,12 @@ export function DocsSection({
 
       {/* Quiet while the first page loads: no "Loading..." line that would
           flash before the rows or the empty state. */}
-      {!loading && docs.length === 0 && (
-        <div className="sidebar-empty">Ask Quest to create a doc</div>
+      {failed ? (
+        <div className="sidebar-empty">Couldn't load docs</div>
+      ) : (
+        !loading && docs.length === 0 && (
+          <div className="sidebar-empty">Ask Quest to create a doc</div>
+        )
       )}
     </div>
   );

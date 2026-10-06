@@ -174,7 +174,8 @@ export function CopyableTable({ children, ...props }: React.HTMLAttributes<HTMLT
  * `assetBase` switches image resolution to a Quest Doc's asset store (the
  * doc viewer sets it to `docAssetBase(docId)`): `assets/<name>` maps to
  * `<assetBase>/<name>`, every other relative src is a missing ref, and
- * `conversationId` is ignored.
+ * `conversationId` is ignored. Link hrefs of the `assets/<name>` form
+ * resolve the same way (other hrefs are untouched).
  */
 export interface MarkdownWorkspaceContextValue {
   conversationId?: string;
@@ -193,6 +194,27 @@ const EXTERNAL_SRC_RE = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
  * `.`/`..` can never re-target the URL).
  */
 const DOC_ASSET_SRC_RE = /^assets\/([^/.][^/]*)$/;
+
+/**
+ * A relative markdown destination as a workspace path: percent-decoded
+ * (markdown destinations arrive encoded), with a leading "./", "/" and
+ * "workspace/" dropped.
+ */
+function normalizeMarkdownPath(src: string): string {
+  let path = src;
+  try {
+    path = decodeURIComponent(src);
+  } catch {
+    // Malformed escape: keep the raw string.
+  }
+  return path.replace(/^\.\//, '').replace(/^\/+/, '').replace(/^workspace\//, '');
+}
+
+/** The doc asset route for an `assets/<name>` path, else null. */
+function docAssetUrl(path: string, assetBase: string): string | null {
+  const asset = DOC_ASSET_SRC_RE.exec(path);
+  return asset ? `${assetBase}/${encodeURIComponent(asset[1])}` : null;
+}
 
 /**
  * Markdown `img` renderer: workspace-relative srcs are rewritten to the
@@ -223,20 +245,12 @@ function MarkdownImage({ src, alt }: React.ImgHTMLAttributes<HTMLImageElement>) 
     );
   }
 
-  // Markdown destinations arrive percent-encoded; decode before re-encoding
-  // as a query param. Normalize leading "./", "/" and "workspace/".
-  let path = src;
-  try {
-    path = decodeURIComponent(src);
-  } catch {
-    // Malformed escape: keep the raw string.
-  }
-  path = path.replace(/^\.\//, '').replace(/^\/+/, '').replace(/^workspace\//, '');
+  // Decoded here, re-encoded as a query param / path segment below.
+  const path = normalizeMarkdownPath(src);
 
   let url: string | null = null;
   if (assetBase) {
-    const asset = DOC_ASSET_SRC_RE.exec(path);
-    url = asset ? `${assetBase}/${encodeURIComponent(asset[1])}` : null;
+    url = docAssetUrl(path, assetBase);
   } else if (conversationId) {
     url = `${API_BASE_URL}/conversations/${conversationId}/files/download?path=${encodeURIComponent(path)}`;
   }
@@ -264,13 +278,28 @@ function MarkdownImage({ src, alt }: React.ImgHTMLAttributes<HTMLImageElement>) 
   );
 }
 
-/** Shared ReactMarkdown components prop for assistant messages */
-export const markdownComponents = {
-  a: ({ children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
-    <a {...props} target="_blank" rel="noopener noreferrer">
+/**
+ * Markdown `a` renderer: every link opens in a new tab. Inside a doc
+ * (`assetBase` set) a relative `assets/<name>` href -- e.g. a link to an
+ * attached image or file -- resolves to the doc's asset route by the same
+ * rule as images; every other href is left as written.
+ */
+function MarkdownLink({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
+  const { assetBase } = React.useContext(MarkdownWorkspaceContext);
+  let resolved = href;
+  if (assetBase && typeof href === 'string' && href && !EXTERNAL_SRC_RE.test(href)) {
+    resolved = docAssetUrl(normalizeMarkdownPath(href), assetBase) ?? href;
+  }
+  return (
+    <a {...props} href={resolved} target="_blank" rel="noopener noreferrer">
       {children}
     </a>
-  ),
+  );
+}
+
+/** Shared ReactMarkdown components prop for assistant messages */
+export const markdownComponents = {
+  a: MarkdownLink,
   img: MarkdownImage,
   table: ({ children, ...props }: React.HTMLAttributes<HTMLTableElement>) => (
     <CopyableTable {...props}>{children}</CopyableTable>

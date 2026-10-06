@@ -504,6 +504,7 @@ export const Sidebar = React.memo(function Sidebar({
                 docs={userDocs.docs}
                 hasMore={userDocs.hasMore}
                 loading={userDocs.loading}
+                error={userDocs.error}
                 activeDocId={activeDocId}
                 onOpenDoc={handleOpenDoc}
                 onOpenAll={() => handleOpenAllDocs(null)}
@@ -556,6 +557,7 @@ export const Sidebar = React.memo(function Sidebar({
                 docs={projectDocs.docs}
                 docsHasMore={projectDocs.hasMore}
                 docsLoading={projectDocs.loading}
+                docsError={projectDocs.error}
                 activeDocId={activeDocId}
                 onOpenDoc={handleOpenDoc}
                 onOpenAllDocs={() => handleOpenAllDocs(drilledProject.id)}

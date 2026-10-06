@@ -60,33 +60,32 @@ function countAbove(lines: SkillContentDiffLine[]): number {
 
 /**
  * Lines of the document below the last of `lines` that the rendered rows
- * do not show: `total_old_lines` minus the last old-side line number, with
- * `total_new_lines` vs the last new-side number as the fallback when the
- * old side has no line, no total, or nothing below (e.g. a truncated
- * append whose cut-off lines are all additions).
+ * do not show, counted on the side of that last row: after an added line
+ * (e.g. a truncated insertion, whose cut-off lines are additions) it is
+ * `total_new_lines` minus its new-side number, otherwise `total_old_lines`
+ * minus the last old-side number. The other side is the fallback when the
+ * chosen side has no total (or no line number).
  */
 function countBelow(
   lines: SkillContentDiffLine[],
   totalOld: number | undefined,
   totalNew: number | undefined,
 ): number {
-  let oldCount = 0;
-  let newCount = 0;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const n = lines[i].old_line;
-    if (n != null) {
-      if (typeof totalOld === 'number') oldCount = Math.max(0, totalOld - n);
-      break;
+  if (lines.length === 0) return 0;
+  const below = (side: 'old_line' | 'new_line', total: number | undefined): number | null => {
+    if (typeof total !== 'number') return null;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const n = lines[i][side];
+      if (n != null) return Math.max(0, total - n);
     }
-  }
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const n = lines[i].new_line;
-    if (n != null) {
-      if (typeof totalNew === 'number') newCount = Math.max(0, totalNew - n);
-      break;
-    }
-  }
-  return oldCount > 0 ? oldCount : newCount;
+    return null;
+  };
+  const oldBelow = () => below('old_line', totalOld);
+  const newBelow = () => below('new_line', totalNew);
+  const [primary, fallback] = lines[lines.length - 1].type === 'add'
+    ? [newBelow, oldBelow]
+    : [oldBelow, newBelow];
+  return primary() ?? fallback() ?? 0;
 }
 
 /**

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   fetchDocs: vi.fn<(opts: FetchDocsOptions) => Promise<ListDocsResponse>>(),
   createDoc: vi.fn<(body: CreateDocRequest) => Promise<Doc>>(),
   projects: [] as Project[],
+  projectsLoaded: true,
   global: new Set<(event: { type: string; [key: string]: unknown }) => void>(),
 }));
 
@@ -30,7 +31,7 @@ vi.mock('../../services/PersistentWebSocket', () => ({
 }));
 
 vi.mock('../../contexts/ProjectsContext', () => ({
-  useProjects: () => ({ projects: mocks.projects, projectsLoaded: true }),
+  useProjects: () => ({ projects: mocks.projects, projectsLoaded: mocks.projectsLoaded }),
 }));
 
 function doc(id: string, overrides: Partial<Doc> = {}): Doc {
@@ -93,9 +94,11 @@ beforeEach(() => {
   mocks.createDoc.mockReset();
   mocks.global.clear();
   mocks.projects = [];
+  mocks.projectsLoaded = true;
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
 });
 
@@ -117,24 +120,30 @@ describe('DocsListView', () => {
       if (opts.projectId === 'pb') {
         return page([doc('b1', { project_id: 'pb', mode: 'public', title: 'Beta plan' })]);
       }
+      if (opts.projectId === 'parch') {
+        return page([doc('o1', { project_id: 'parch', title: 'Old notes' })]);
+      }
       throw new Error('boom');
     });
 
     const { container } = renderView(null);
     await waitFor(() => expect(screen.getByText('My notes')).toBeTruthy());
 
-    // One user-docs page plus one fetch per NON-archived project.
+    // One user-docs page plus one fetch per project, archived ones included
+    // (archiving a project has no effect on its docs).
     const fetched = mocks.fetchDocs.mock.calls.map(([opts]) => opts.projectId ?? null).sort();
-    expect(fetched).toEqual([null, 'pa', 'pb', 'px']);
+    expect(fetched).toEqual([null, 'pa', 'parch', 'pb', 'px']);
     expect(mocks.fetchDocs.mock.calls.find(([opts]) => !opts.projectId)?.[0].limit).toBe(50);
     expect(mocks.fetchDocs.mock.calls.find(([opts]) => opts.projectId === 'pa')?.[0].limit).toBe(200);
 
     // "Your docs" first (count marked "+" while more pages exist), then
-    // projects by name case-insensitively; the failed project is omitted.
-    expect(groupHeadings(container)).toEqual(['Your docs1+', 'Alpha1', 'beta1']);
+    // projects by name case-insensitively; the failed project is omitted
+    // and the archived one carries an "Archived" chip.
+    expect(groupHeadings(container)).toEqual(['Your docs1+', 'Alpha1', 'beta1', 'OldArchived1']);
+    expect(container.querySelectorAll('.docs-group-archived')).toHaveLength(1);
     expect(screen.getByText('Some project docs could not be loaded.')).toBeTruthy();
     expect(screen.getByText('Load more')).toBeTruthy();
-    expect(screen.getAllByText('1.2 KB + 2 images')).toHaveLength(3);
+    expect(screen.getAllByText('1.2 KB + 2 images')).toHaveLength(4);
     expect(container.querySelector('a.docs-row')?.getAttribute('href')).toBe('/docs/u1');
 
     // Search hides whole groups, matches descriptions, and reports no match.
@@ -146,12 +155,71 @@ describe('DocsListView', () => {
     search('zzz');
     expect(screen.getByText("No docs match 'zzz'")).toBeTruthy();
 
-    // doc_list_changed refreshes the user list and every project again.
+    // doc_list_changed refreshes the user list per event, and every project
+    // once per burst: the index re-fan-out waits for a 600 ms quiet period.
+    vi.useFakeTimers();
     const before = mocks.fetchDocs.mock.calls.length;
+    const projectFetches = () =>
+      mocks.fetchDocs.mock.calls.slice(before).filter(([opts]) => opts.projectId).length;
+    for (let i = 0; i < 3; i++) {
+      await act(async () => {
+        mocks.global.forEach((cb) => cb({ type: 'doc_list_changed' }));
+        await vi.advanceTimersByTimeAsync(200);
+      });
+    }
+    expect(mocks.fetchDocs.mock.calls.length).toBe(before + 3);
+    expect(projectFetches()).toBe(0);
     await act(async () => {
-      mocks.global.forEach((cb) => cb({ type: 'doc_list_changed' }));
+      await vi.advanceTimersByTimeAsync(399);
     });
-    await waitFor(() => expect(mocks.fetchDocs.mock.calls.length).toBe(before + 4));
+    expect(projectFetches()).toBe(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(projectFetches()).toBe(4);
+    expect(mocks.fetchDocs.mock.calls.length).toBe(before + 3 + 4);
+  });
+
+  it('waits for the project list and the index before showing the empty state', async () => {
+    // Cold load: the project list has not arrived yet, and the user's only
+    // docs are project docs.
+    mocks.projectsLoaded = false;
+    mocks.projects = [];
+    let resolveProject: (response: ListDocsResponse) => void = () => {};
+    mocks.fetchDocs.mockImplementation((opts) => {
+      if (!opts.projectId) return Promise.resolve(page([]));
+      return new Promise((resolve) => {
+        resolveProject = resolve;
+      });
+    });
+
+    const { rerender } = renderView(null);
+    await waitFor(() => expect(mocks.fetchDocs).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    // The user page is in, but nothing is fanned out over the empty
+    // pre-load project list, and the view keeps loading.
+    expect(mocks.fetchDocs.mock.calls[0][0].projectId ?? null).toBeNull();
+    expect(screen.getByText('Loading...')).toBeTruthy();
+    expect(screen.queryByText('No docs yet.')).toBeNull();
+
+    mocks.projectsLoaded = true;
+    mocks.projects = [project('pa', 'Alpha')];
+    rerender(
+      <MemoryRouter>
+        <DocsListView projectId={null} />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(mocks.fetchDocs).toHaveBeenCalledTimes(2));
+    expect(mocks.fetchDocs.mock.calls[1][0].projectId).toBe('pa');
+    // The project fetch is still in flight: still loading, no empty state.
+    expect(screen.getByText('Loading...')).toBeTruthy();
+    expect(screen.queryByText('No docs yet.')).toBeNull();
+
+    await act(async () => {
+      resolveProject(page([doc('a1', { project_id: 'pa', title: 'Alpha plan' })]));
+    });
+    expect(screen.getByText('Alpha plan')).toBeTruthy();
+    expect(screen.queryByText('No docs yet.')).toBeNull();
   });
 
   it('shows the empty state when there are no docs anywhere', async () => {

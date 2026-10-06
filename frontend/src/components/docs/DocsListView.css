@@ -254,6 +254,18 @@
   opacity: 0.8;
 }
 
+/* Archived project: same muted outline pill as the sidebar drill-down's
+ * "Archived" badge. Archiving does not touch a project's docs. */
+.docs-group-archived {
+  flex-shrink: 0;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
 .docs-group-count {
   flex-shrink: 0;
   padding: 0.05rem 0.45rem;
@@ -436,6 +448,24 @@
   padding: 0 0.75rem;
   font-size: 0.8125rem;
   color: var(--text-muted);
+}
+
+/* Narrow desktop: beside the 260px sidebar the fixed columns would squeeze
+ * the title to a few dozen pixels, so drop Scope and Size (the column labels
+ * and the cells) and keep title | mode | updated. The phone layout below
+ * restacks the rows and shows every field again. */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .docs-columns,
+  .docs-row {
+    grid-template-columns: minmax(0, 1fr) 4.75rem 7.5rem;
+  }
+
+  .docs-col-scope,
+  .docs-col-size,
+  .docs-row-scope,
+  .docs-row-size {
+    display: none;
+  }
 }
 
 /* Phone: 16px gutters, header wraps to a full-width search row, rows stack

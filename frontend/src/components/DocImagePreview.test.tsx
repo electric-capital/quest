@@ -119,7 +119,8 @@ describe('ActionRequestPreviewFields doc_image branch', () => {
     );
     const row = container.querySelector(`.${classPrefix}-field.doc-image-field`);
     expect(row).toBeTruthy();
-    expect(row?.querySelector(`.${classPrefix}-key`)?.textContent).toBe('Image: q3-sales.png (42.1 KB)');
+    // Key only: the image caption below carries the name and size.
+    expect(row?.querySelector(`.${classPrefix}-key`)?.textContent).toBe('Image:');
     expect(screen.getByRole('img', { name: 'q3-sales.png' }).getAttribute('src')).toBe(EXPECTED_SRC);
     expect(screen.getByText('Appended:')).toBeTruthy();
   });

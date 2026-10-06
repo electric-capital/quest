@@ -103,3 +103,41 @@ describe('MarkdownImage', () => {
     });
   });
 });
+
+// The shared `a` renderer (MarkdownLink): inside a doc, `assets/<name>`
+// hrefs resolve to the asset route by the image rule; everything else is
+// left alone, and every link opens in a new tab.
+describe('MarkdownLink', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('rewrites assets/<name> hrefs inside a doc and keeps other hrefs', () => {
+    renderMarkdown(
+      [
+        '[file](./assets/q3%20report.pdf)',
+        '[nested](assets/sub/x.png)',
+        '[other](notes/a.md)',
+        '[ext](https://example.com/assets/x.png)',
+        '[anchor](#intro)',
+      ].join(' '),
+      DOC_CTX,
+    );
+    const href = (name: string) => screen.getByRole('link', { name }).getAttribute('href');
+    expect(href('file')).toBe('/app/api/docs/d1/assets/q3%20report.pdf');
+    expect(href('nested')).toBe('assets/sub/x.png');
+    expect(href('other')).toBe('notes/a.md');
+    expect(href('ext')).toBe('https://example.com/assets/x.png');
+    expect(href('anchor')).toBe('#intro');
+    const file = screen.getByRole('link', { name: 'file' });
+    expect(file.getAttribute('target')).toBe('_blank');
+    expect(file.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
+  it('leaves assets/<name> hrefs alone outside a doc', () => {
+    renderMarkdown('[file](assets/chart.png)', { conversationId: 'c1' });
+    const link = screen.getByRole('link', { name: 'file' });
+    expect(link.getAttribute('href')).toBe('assets/chart.png');
+    expect(link.getAttribute('target')).toBe('_blank');
+  });
+});

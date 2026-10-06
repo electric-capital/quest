@@ -50,7 +50,8 @@ export function ActionRequestPreviewFields({
           </div>
         ) : field.type === 'doc_image' && field.image ? (
           <div key={i} className={`${classPrefix}-field doc-image-field`}>
-            <span className={`${classPrefix}-key`}>{field.key}: {field.value}</span>
+            {/* The image caption already shows the name and size. */}
+            <span className={`${classPrefix}-key`}>{field.key}:</span>
             <DocImagePreview
               image={field.image}
               conversationId={conversationId}

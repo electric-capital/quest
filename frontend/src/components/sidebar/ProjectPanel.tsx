@@ -63,6 +63,8 @@ interface ProjectPanelProps {
   docs?: Doc[];
   docsHasMore?: boolean;
   docsLoading?: boolean;
+  // The project's first docs page failed to load.
+  docsError?: string | null;
   // The doc open in the viewer (its row is highlighted).
   activeDocId?: string | null;
   onOpenDoc?: (id: string) => void;
@@ -102,6 +104,7 @@ export function ProjectPanel({
   docs = NO_DOCS,
   docsHasMore = false,
   docsLoading = false,
+  docsError = null,
   activeDocId = null,
   onOpenDoc = noop,
   onOpenAllDocs = noop,
@@ -164,6 +167,7 @@ export function ProjectPanel({
                 docs={docs}
                 hasMore={docsHasMore}
                 loading={docsLoading}
+                error={docsError}
                 activeDocId={activeDocId}
                 onOpenDoc={onOpenDoc}
                 onOpenAll={onOpenAllDocs}

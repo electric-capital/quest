@@ -129,4 +129,27 @@ describe('SkillContentDiffPreview', () => {
     expect(screen.getByText(/603 lines below not shown/)).toBeTruthy();
     expect(screen.getByText(/8 lines above not shown/)).toBeTruthy();
   });
+
+  it('counts below a truncated mid-doc insertion on the new side', () => {
+    // 100-line doc, 1000 lines inserted after line 50; the server cut the
+    // window at 400 lines (3 context + 397 additions). The old side still
+    // has 50 lines below line 50, but the last rendered row is an addition,
+    // so the count is the new doc's 1100 lines minus new line 447.
+    const lines: SkillContentDiffLine[] = [context(48), context(49), context(50)];
+    for (let n = 51; n <= 447; n++) lines.push(add(n, `inserted ${n}`));
+    const diff: SkillContentDiff = {
+      added: 1000,
+      removed: 0,
+      lines,
+      truncated: true,
+      total_old_lines: 100,
+      total_new_lines: 1100,
+    };
+    render(<SkillContentDiffPreview diff={diff} />);
+
+    expect(screen.getByText(/653 lines below not shown/)).toBeTruthy();
+    expect(screen.queryByText(/50 lines below not shown/)).toBeNull();
+    // Collapsed: line 48 folds into the edge separator above.
+    expect(screen.getByText(/48 lines above not shown/)).toBeTruthy();
+  });
 });

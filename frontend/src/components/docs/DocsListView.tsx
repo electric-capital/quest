@@ -5,10 +5,13 @@
  *
  * Data. The backend has no cross-project doc list, so:
  *   - unfiltered: "Your docs" = useDocs({limit: 50}) (server-paged, "Load
- *     more"), plus one group per non-archived project from
- *     useProjectDocsIndex (one fetchDocs per project, up to 200 docs each);
+ *     more"), plus one group per project with docs -- archived projects
+ *     included and marked, since archiving has no effect on docs (spec 10)
+ *     -- from useProjectDocsIndex (one fetchDocs per project, up to 200
+ *     docs each);
  *   - filtered (?project=<id>): useDocs({projectId, limit: 50}) only.
- * Both hooks always run (the index is simply disabled while filtered).
+ * Both hooks always run (the index is simply disabled while filtered, and
+ * until the project list has loaded).
  * Search filters everything loaded, client-side. Grouping, filtering and the
  * size column are the pure helpers in utils/allDocsGrouping.ts.
  */
@@ -46,9 +49,11 @@ export function DocsListView({ projectId }: { projectId: string | null }) {
   const filtered = projectId !== null;
 
   // One paged list (the user's docs, or the filtered project's) plus the
-  // per-project index, which only the unfiltered view needs.
+  // per-project index, which only the unfiltered view needs. The index waits
+  // for the project list: fanning out over the empty pre-load list would
+  // "load" an index with no projects in it.
   const list = useDocs({ projectId, limit: PAGE_SIZE });
-  const index = useProjectDocsIndex(projects, !filtered);
+  const index = useProjectDocsIndex(projects, !filtered && projectsLoaded);
 
   const [query, setQuery] = useState('');
   const [newDocOpen, setNewDocOpen] = useState(false);
@@ -92,12 +97,14 @@ export function DocsListView({ projectId }: { projectId: string | null }) {
   const totalDocs = groups.reduce((n, group) => n + group.docs.length, 0);
   const visibleDocs = visibleGroups.reduce((n, group) => n + group.docs.length, 0);
 
-  // Wait for the first page AND the first project index before deciding
-  // between rows and the empty state. With no user docs, also wait for the
-  // project list itself: until it lands the index has nothing to fetch.
-  const loading =
-    list.loading ||
-    (!filtered && (index.loading || (!projectsLoaded && totalDocs === 0)));
+  // Wait for the first page AND the project index (which itself waits for
+  // the project list) before deciding between rows and the empty state, so
+  // a user whose docs are all project docs never sees "No docs yet." flash.
+  // Initial load only: a project-set change (create / delete / archive while
+  // this view is open) keeps the previous groups on screen while the index
+  // re-fans-out, like useDocs keeps its rows during a refresh.
+  const loading = list.loading
+    || (!filtered && (!projectsLoaded || (index.loading && !index.loaded)));
 
   const handleCreated = useCallback(
     (doc: Doc) => {
@@ -151,9 +158,9 @@ export function DocsListView({ projectId }: { projectId: string | null }) {
             <div className="docs-columns" aria-hidden="true">
               <span>Title</span>
               <span>Mode</span>
-              <span>Scope</span>
+              <span className="docs-col-scope">Scope</span>
               <span>Updated</span>
-              <span>Size</span>
+              <span className="docs-col-size">Size</span>
             </div>
             {visibleGroups.map((group) => (
               <section key={group.key} className="docs-group" aria-label={groupAriaLabel(group, filtered)}>
@@ -297,6 +304,7 @@ function GroupHeading({
               <Globe size={12} aria-hidden="true" />
             </span>
           )}
+          {group.project?.archived && <span className="docs-group-archived">Archived</span>}
         </Link>
         {count}
       </div>
