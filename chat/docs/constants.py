@@ -33,6 +33,8 @@ DOC_SEARCH_MAX_SCAN_BYTES = 50 * 1024 * 1024
 DOC_SEARCH_SNIPPETS_PER_DOC = 3
 DOC_SEARCH_SNIPPET_CHARS = 200
 
+# A user doc (no project) is always "private"; only project docs can be
+# "public", copying their project's immutable ``public`` flag.
 DOC_MODES = ("private", "public")
 DOC_SHARE_PERMISSIONS = ("read", "write")
 
@@ -53,13 +55,25 @@ def doc_not_found_message(doc_id: str) -> str:
     return f"Doc not found: {doc_id}"
 
 
-def public_docs_disabled_message() -> str:
-    """UI-facing text (400 ``public_projects_disabled``) when a user asks
-    for a public user doc while the ``public_projects`` gate is closed for
-    them: creating one, or switching a private doc to public."""
+def user_doc_mode_private_message() -> str:
+    """UI-facing text (400 ``user_doc_mode_private``): a user (non-project)
+    doc is always private, so ``POST /docs`` with ``mode: "public"`` and no
+    project, and every ``PUT /docs/{id}/mode`` on a user doc, are refused.
+    The only public docs are the docs of a public project."""
     return (
-        "Public docs need public projects, which are not available to your "
-        "account."
+        "User docs are always private. Create the doc inside a public "
+        "project to make it public."
+    )
+
+
+def user_doc_in_public_conversation_message() -> str:
+    """Model-facing ``create_doc`` refusal for ``target="user"`` (the
+    default) in a public-project conversation: user docs are always
+    private, and a public conversation never creates a private doc."""
+    return (
+        "User docs are always private and cannot be created from a public "
+        'conversation; use create_doc(target="project") to create a doc in '
+        "this project."
     )
 
 

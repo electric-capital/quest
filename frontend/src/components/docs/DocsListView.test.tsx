@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => ({
   createDoc: vi.fn<(body: CreateDocRequest) => Promise<Doc>>(),
   projects: [] as Project[],
   projectsLoaded: true,
-  enabledFeatures: ['docs', 'public_projects'] as string[],
   global: new Set<(event: { type: string; [key: string]: unknown }) => void>(),
 }));
 
@@ -35,10 +34,6 @@ vi.mock('../../contexts/ProjectsContext', () => ({
   useProjects: () => ({ projects: mocks.projects, projectsLoaded: mocks.projectsLoaded }),
 }));
 
-vi.mock('../../contexts/AuthContext', () => ({
-  useAuth: () => ({ enabledFeatures: mocks.enabledFeatures }),
-}));
-
 function doc(id: string, overrides: Partial<Doc> = {}): Doc {
   return {
     id,
@@ -54,7 +49,7 @@ function doc(id: string, overrides: Partial<Doc> = {}): Doc {
     updated_at: '2026-10-01T00:00:00',
     scope: overrides.project_id ? 'project' : 'user',
     shared: false,
-    access: { can_rename: true, can_switch_mode: true, can_delete: true, write: 'free' },
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free' },
     ...overrides,
   };
 }
@@ -108,7 +103,6 @@ beforeEach(() => {
   mocks.global.clear();
   mocks.projects = [];
   mocks.projectsLoaded = true;
-  mocks.enabledFeatures = ['docs', 'public_projects'];
 });
 
 afterEach(() => {
@@ -263,13 +257,16 @@ describe('DocsListView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New Doc' }));
     const select = document.querySelector<HTMLSelectElement>('#new-doc-location-select');
     expect(select?.value).toBe('pb');
-    // A project doc inherits the project's mode: read-only line, no radio.
-    expect(document.querySelector('.new-doc-mode-inherited')?.textContent).toContain('Public');
-    expect(document.querySelector('.new-doc-mode')).toBeNull();
+    // A public project's doc inherits Public: a read-only line, no picker.
+    expect(document.querySelector('.new-doc-mode-inherited')?.textContent).toBe(
+      'Mode: Public — inherited from the project',
+    );
+    expect(screen.queryByRole('radio')).toBeNull();
 
-    // Switching to "Your docs" brings the mode radio back.
+    // "Your docs" is always private: no line, no picker.
     fireEvent.change(select!, { target: { value: '' } });
-    expect(document.querySelector('.new-doc-mode')).not.toBeNull();
+    expect(document.querySelector('.new-doc-mode-inherited')).toBeNull();
+    expect(screen.queryByRole('radio')).toBeNull();
 
     fireEvent.change(document.querySelector('#new-doc-title-input')!, {
       target: { value: '  Hi ' },
@@ -278,42 +275,56 @@ describe('DocsListView', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Create Doc' }));
     });
-    expect(mocks.createDoc).toHaveBeenCalledWith({ title: 'Hi', mode: 'private' });
+    // Never a `mode`: the server makes a user doc private.
+    expect(mocks.createDoc).toHaveBeenCalledWith({ title: 'Hi' });
   });
 
-  describe('with public projects closed for the user', () => {
-    beforeEach(() => {
-      mocks.enabledFeatures = ['docs'];
-    });
-
-    it('hides Private badges and the Mode column label when every row is private', async () => {
-      mocks.fetchDocs.mockResolvedValue(page([doc('u1'), doc('u2')]));
+  describe('mode badges', () => {
+    it('badges no private row and leaves the Mode column label out when every row is private', async () => {
+      mocks.projects = [project('pa', 'Alpha')];
+      mocks.fetchDocs.mockImplementation(async (opts) =>
+        opts.projectId
+          ? page([doc('a1', { project_id: 'pa', title: 'Alpha plan' })])
+          : page([doc('u1'), doc('u2')]),
+      );
       const { container } = renderView(null);
-      await waitFor(() => expect(screen.getByText('Doc u1')).toBeTruthy());
+      await waitFor(() => expect(screen.getByText('Alpha plan')).toBeTruthy());
 
       expect(badgeLabels(container)).toEqual([]);
       expect(modeColumnLabel(container)).toBe('');
       // The grid slot stays, so the other columns keep their place.
-      expect(container.querySelectorAll('.docs-row-mode')).toHaveLength(2);
+      expect(container.querySelectorAll('.docs-row-mode')).toHaveLength(3);
     });
 
-    it('still badges a leftover public doc, and keeps the Mode label for it', async () => {
-      mocks.fetchDocs.mockResolvedValue(page([doc('u1'), doc('u2', { mode: 'public' })]));
+    it('badges a public row and shows the Mode label only while one is visible', async () => {
+      mocks.projects = [project('pb', 'beta', { public: true })];
+      mocks.fetchDocs.mockImplementation(async (opts) =>
+        opts.projectId
+          ? page([doc('b1', { project_id: 'pb', mode: 'public', title: 'Beta plan' })])
+          : page([doc('u1', { title: 'My notes' })]),
+      );
       const { container } = renderView(null);
-      await waitFor(() => expect(screen.getByText('Doc u1')).toBeTruthy());
+      await waitFor(() => expect(screen.getByText('Beta plan')).toBeTruthy());
 
       expect(badgeLabels(container)).toEqual(['Public']);
       expect(modeColumnLabel(container)).toBe('Mode');
-    });
 
-    it('New Doc has no mode radio and sends no mode for a user doc', async () => {
+      // A search that hides the public row drops the label with it.
+      search('notes');
+      expect(badgeLabels(container)).toEqual([]);
+      expect(modeColumnLabel(container)).toBe('');
+    });
+  });
+
+  describe('New Doc', () => {
+    it('has no mode picker and sends no mode for a user doc', async () => {
       mocks.fetchDocs.mockResolvedValue(page([]));
       renderView(null);
       await waitFor(() => expect(screen.getByText('No docs yet.')).toBeTruthy());
 
       fireEvent.click(screen.getByRole('button', { name: 'New Doc' }));
-      expect(document.querySelector('.new-doc-mode')).toBeNull();
       expect(screen.queryByRole('radio')).toBeNull();
+      expect(screen.queryByText(/Mode/)).toBeNull();
 
       fireEvent.change(document.querySelector('#new-doc-title-input')!, {
         target: { value: 'Notes' },
@@ -325,9 +336,7 @@ describe('DocsListView', () => {
       expect(mocks.createDoc).toHaveBeenCalledWith({ title: 'Notes' });
     });
 
-    it('New Doc drops the inherited-mode line for a private project, keeps it for a public one', async () => {
-      // A leftover public project (normally hidden while the gate is closed)
-      // still shows its public state.
+    it('shows the inherited-mode line only for a public project, and sends no mode', async () => {
       mocks.projects = [project('pa', 'Alpha'), project('pb', 'beta', { public: true })];
       mocks.fetchDocs.mockResolvedValue(page([]));
       renderView('pa');
@@ -337,20 +346,32 @@ describe('DocsListView', () => {
       const select = document.querySelector<HTMLSelectElement>('#new-doc-location-select')!;
       expect(select.value).toBe('pa');
       expect(document.querySelector('.new-doc-mode-inherited')).toBeNull();
-      expect(document.querySelector('.new-doc-mode')).toBeNull();
 
       fireEvent.change(select, { target: { value: 'pb' } });
-      expect(document.querySelector('.new-doc-mode-inherited')?.textContent).toContain('Public');
+      expect(document.querySelector('.new-doc-mode-inherited')?.textContent).toBe(
+        'Mode: Public — inherited from the project',
+      );
+      expect(screen.queryByRole('radio')).toBeNull();
 
       fireEvent.change(document.querySelector('#new-doc-title-input')!, {
         target: { value: 'Plan' },
       });
       mocks.createDoc.mockResolvedValue(doc('new2', { project_id: 'pb', mode: 'public' }));
-      fireEvent.change(select, { target: { value: 'pa' } });
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: 'Create Doc' }));
       });
-      expect(mocks.createDoc).toHaveBeenCalledWith({ title: 'Plan', project_id: 'pa' });
+      expect(mocks.createDoc).toHaveBeenCalledWith({ title: 'Plan', project_id: 'pb' });
+
+      // A private project's doc gets the same request shape, no line.
+      fireEvent.click(screen.getByRole('button', { name: 'New Doc' }));
+      fireEvent.change(document.querySelector('#new-doc-title-input')!, {
+        target: { value: 'Other' },
+      });
+      mocks.createDoc.mockResolvedValue(doc('new3', { project_id: 'pa' }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Create Doc' }));
+      });
+      expect(mocks.createDoc).toHaveBeenLastCalledWith({ title: 'Other', project_id: 'pa' });
     });
   });
 });

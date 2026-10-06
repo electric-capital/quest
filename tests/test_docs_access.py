@@ -1,6 +1,10 @@
 """Quest Docs access rule: every cell of the spec's 5.1 matrix, plus the
 project, public-conversation, share-precedence and run_kind edge rules
 pinned on :func:`chat.docs.access.resolve_doc_access`.
+
+User docs are always private: the matrix's public rows are public-project
+docs, and a user doc whose stored mode still says "public" (pre-migration
+leftover) gets exactly the private user doc's verdicts.
 """
 
 import itertools
@@ -69,32 +73,45 @@ def RO(reason):
 # The matrix
 # ---------------------------------------------------------------------------
 
+# The "private" rows are user docs (always private). User docs can never be
+# public: the "public" rows are docs of the public project PROJECT, the only
+# kind of public doc there is. The "legacy_public_user" rows are user docs
+# whose stored mode still says "public" (rows from before migration
+# e1b7c4d9a2f6): the rule evaluates them as private, so they expect exactly
+# what the matching private row expects -- in particular Hidden from every
+# public conversation.
 DOC_ROWS = {
     "private_unshared": _doc("private"),
     "private_shared_read": _doc("private", [(RECIPIENT, "read")]),
     "private_shared_write": _doc("private", [(RECIPIENT, "write")]),
     "private_shared_everyone_read": _doc("private", [(None, "read")]),
-    "public_unshared": _doc("public"),
-    "public_shared_read": _doc("public", [(RECIPIENT, "read")]),
-    "public_shared_write": _doc("public", [(RECIPIENT, "write")]),
+    "public_unshared": _doc("public", project_id=PROJECT),
+    "public_shared_read": _doc("public", [(RECIPIENT, "read")], project_id=PROJECT),
+    "public_shared_write": _doc("public", [(RECIPIENT, "write")], project_id=PROJECT),
+    "legacy_public_user_unshared": _doc("public"),
+    "legacy_public_user_shared_read": _doc("public", [(RECIPIENT, "read")]),
+    "legacy_public_user_shared_write": _doc("public", [(RECIPIENT, "write")]),
+    "legacy_public_user_shared_everyone_read": _doc("public", [(None, "read")]),
 }
 
-# column -> (user_id, is_public, run_kind); every caller here is outside a
-# project (project_id=None) and the docs are user docs.
+# column -> (user_id, is_public, run_kind, project_id). Conversation runs
+# are conversations of PROJECT (a public conversation is always one in a
+# public project; user docs are visible from any project); script and ui
+# carry no conversation context (project_id=None), as their callers pass.
 COLUMNS = {
-    "owner_private": (OWNER, False, "top_level"),
-    "recipient_private": (RECIPIENT, False, "top_level"),
-    "owner_public": (OWNER, True, "top_level"),
-    "recipient_public": (RECIPIENT, True, "top_level"),
-    "stranger_private": (STRANGER, False, "top_level"),
-    "owner_sub_agent": (OWNER, False, "sub_agent"),
-    "owner_inference_api": (OWNER, False, "inference_api"),
-    "owner_user_subagent": (OWNER, False, "user_subagent"),
-    "owner_script": (OWNER, False, "script"),
-    "owner_slack": (OWNER, False, "slack"),
-    "recipient_slack": (RECIPIENT, False, "slack"),
-    "ui_owner": (OWNER, False, "ui"),
-    "ui_recipient": (RECIPIENT, False, "ui"),
+    "owner_private": (OWNER, False, "top_level", PROJECT),
+    "recipient_private": (RECIPIENT, False, "top_level", PROJECT),
+    "owner_public": (OWNER, True, "top_level", PROJECT),
+    "recipient_public": (RECIPIENT, True, "top_level", PROJECT),
+    "stranger_private": (STRANGER, False, "top_level", PROJECT),
+    "owner_sub_agent": (OWNER, False, "sub_agent", PROJECT),
+    "owner_inference_api": (OWNER, False, "inference_api", PROJECT),
+    "owner_user_subagent": (OWNER, False, "user_subagent", PROJECT),
+    "owner_script": (OWNER, False, "script", None),
+    "owner_slack": (OWNER, False, "slack", PROJECT),
+    "recipient_slack": (RECIPIENT, False, "slack", PROJECT),
+    "ui_owner": (OWNER, False, "ui", None),
+    "ui_recipient": (RECIPIENT, False, "ui", None),
 }
 
 READ_ONLY_COLUMNS = {
@@ -103,6 +120,10 @@ READ_ONLY_COLUMNS = {
     "owner_user_subagent": RO(DENY_USER_SUBAGENT),
     "owner_script": RO(DENY_SCRIPT),
 }
+
+# Public docs are project docs, and sandbox scripts (no conversation
+# context) never see a project doc (rule 2).
+PUBLIC_DOC_READ_ONLY_COLUMNS = {**READ_ONLY_COLUMNS, "owner_script": H}
 
 EXPECTED = {
     "private_unshared": {
@@ -160,7 +181,7 @@ EXPECTED = {
         "owner_public": FREE,
         "recipient_public": H,
         "stranger_private": H,
-        **READ_ONLY_COLUMNS,
+        **PUBLIC_DOC_READ_ONLY_COLUMNS,
         "owner_slack": RO(DENY_PUBLIC_DOC_FROM_PRIVATE),
         "recipient_slack": H,
         "ui_owner": FREE,
@@ -172,7 +193,7 @@ EXPECTED = {
         "owner_public": FREE,
         "recipient_public": RO(DENY_READ_ONLY_SHARE),
         "stranger_private": H,
-        **READ_ONLY_COLUMNS,
+        **PUBLIC_DOC_READ_ONLY_COLUMNS,
         "owner_slack": RO(DENY_PUBLIC_DOC_FROM_PRIVATE),
         "recipient_slack": RO(DENY_PUBLIC_DOC_FROM_PRIVATE),
         "ui_owner": FREE,
@@ -184,13 +205,21 @@ EXPECTED = {
         "owner_public": FREE,
         "recipient_public": FREE,
         "stranger_private": H,
-        **READ_ONLY_COLUMNS,
+        **PUBLIC_DOC_READ_ONLY_COLUMNS,
         "owner_slack": RO(DENY_PUBLIC_DOC_FROM_PRIVATE),
         "recipient_slack": RO(DENY_PUBLIC_DOC_FROM_PRIVATE),
         "ui_owner": FREE,
         "ui_recipient": FREE,
     },
 }
+
+# A leftover public user doc is a private user doc for every decision.
+EXPECTED.update({
+    "legacy_public_user_unshared": EXPECTED["private_unshared"],
+    "legacy_public_user_shared_read": EXPECTED["private_shared_read"],
+    "legacy_public_user_shared_write": EXPECTED["private_shared_write"],
+    "legacy_public_user_shared_everyone_read": EXPECTED["private_shared_everyone_read"],
+})
 
 
 def test_expected_table_covers_every_cell():
@@ -199,17 +228,28 @@ def test_expected_table_covers_every_cell():
         assert set(row) == set(COLUMNS)
 
 
+def test_public_conversation_never_sees_a_user_doc():
+    """The 'public conversation x user doc' cells are all Hidden: user docs
+    are always private, whatever their stored mode."""
+    for row, doc in DOC_ROWS.items():
+        if doc["project_id"] is not None:
+            continue
+        for column, (_uid, is_public, _kind, _pid) in COLUMNS.items():
+            if is_public:
+                assert EXPECTED[row][column] == H, (row, column)
+
+
 @pytest.mark.parametrize(
     "row,column",
     [(r, c) for r in DOC_ROWS for c in COLUMNS],
 )
 def test_matrix_cell(row, column):
-    user_id, is_public, run_kind = COLUMNS[column]
+    user_id, is_public, run_kind, project_id = COLUMNS[column]
     access = resolve_doc_access(
         DOC_ROWS[row],
         user_id=user_id,
         is_public=is_public,
-        project_id=None,
+        project_id=project_id,
         run_kind=run_kind,
     )
     assert access == EXPECTED[row][column]
@@ -218,15 +258,17 @@ def test_matrix_cell(row, column):
 @pytest.mark.parametrize("run_kind", sorted(READ_ONLY_RUN_KINDS))
 @pytest.mark.parametrize("row", sorted(DOC_ROWS))
 def test_read_only_run_kinds_in_public_context(run_kind, row):
-    """Read-only kinds read public docs and still never see private ones."""
+    """Read-only kinds read public (project) docs of their project and still
+    never see private ones -- every user doc included."""
     doc = DOC_ROWS[row]
+    project_id = None if run_kind == "script" else PROJECT
     access = resolve_doc_access(
-        doc, user_id=OWNER, is_public=True, project_id=None, run_kind=run_kind
+        doc, user_id=OWNER, is_public=True, project_id=project_id, run_kind=run_kind
     )
-    if doc["mode"] == "private":
+    if doc["project_id"] is None or doc["mode"] == "private":
         assert access == HIDDEN
     else:
-        assert access == READ_ONLY_COLUMNS[f"owner_{run_kind}"]
+        assert access == PUBLIC_DOC_READ_ONLY_COLUMNS[f"owner_{run_kind}"]
 
 
 # ---------------------------------------------------------------------------
@@ -350,16 +392,19 @@ def test_taint_and_invisibility_hold_everywhere(run_kind):
         access = resolve_doc_access(
             doc, user_id=user_id, is_public=is_public, project_id=project_id, run_kind=run_kind
         )
+        # A user doc is private whatever its stored mode says.
+        effective_mode = "private" if doc_project_id is None else mode
         # Hidden verdicts are exactly HIDDEN: no deny_reason leaks.
         if not access.visible:
             assert access == HIDDEN
         else:
             assert access.can_read
-        # Invisibility: a public conversation never learns of a private doc.
-        if is_public and mode == "private":
+        # Invisibility: a public conversation never learns of a private doc
+        # -- nor of any user doc.
+        if is_public and (effective_mode == "private" or doc_project_id is None):
             assert access == HIDDEN
         # Taint: a private conversation never writes a public doc.
-        if mode == "public" and not is_public and run_kind != "ui":
+        if effective_mode == "public" and not is_public and run_kind != "ui":
             assert access.write == "denied"
         # Read-only kinds never write.
         if run_kind in READ_ONLY_RUN_KINDS:
@@ -367,6 +412,51 @@ def test_taint_and_invisibility_hold_everywhere(run_kind):
         # Slack never gets an approval verdict (it cannot open a card).
         if run_kind == "slack":
             assert access.write != "approval"
+
+
+@pytest.mark.parametrize("run_kind", RUN_KINDS)
+def test_legacy_public_user_doc_is_exactly_a_private_user_doc(run_kind):
+    """Every verdict on a user doc with stored mode "public" equals the
+    verdict on the same doc stored "private" (defensive: migration
+    e1b7c4d9a2f6 flips such rows)."""
+    for shares, user_id, is_public, project_id in itertools.product(
+        _SHARE_SETS, (OWNER, RECIPIENT, STRANGER), (False, True),
+        (None, PROJECT, OTHER_PROJECT),
+    ):
+        kwargs = dict(
+            user_id=user_id, is_public=is_public, project_id=project_id, run_kind=run_kind,
+        )
+        assert resolve_doc_access(_doc("public", shares), **kwargs) == resolve_doc_access(
+            _doc("private", shares), **kwargs
+        )
+
+
+@pytest.mark.parametrize(
+    "shares,user_id",
+    [
+        ((), OWNER),
+        ([(RECIPIENT, "write")], OWNER),
+        ([(RECIPIENT, "write")], RECIPIENT),
+        ([(None, "write")], STRANGER),
+    ],
+)
+def test_legacy_public_user_doc_hidden_from_public_conversations(shares, user_id):
+    for project_id in (None, PROJECT):
+        assert _access(
+            _doc("public", shares), user_id=user_id, is_public=True, project_id=project_id,
+        ) == HIDDEN
+
+
+def test_legacy_public_user_doc_treated_as_private_in_private_conversations():
+    assert _access(_doc("public")) == FREE
+    shared_read = _doc("public", [(RECIPIENT, "read")])
+    assert _access(shared_read) == AR
+    assert _access(shared_read, user_id=RECIPIENT) == RO(DENY_READ_ONLY_SHARE)
+    shared_write = _doc("public", [(RECIPIENT, "write")])
+    assert _access(shared_write, user_id=RECIPIENT) == AR
+    assert _access(shared_write, user_id=RECIPIENT, run_kind="slack") == RO(
+        DENY_SLACK_NEEDS_APPROVAL
+    )
 
 
 # ---------------------------------------------------------------------------

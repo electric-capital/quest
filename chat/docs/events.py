@@ -6,7 +6,7 @@ chat/realtime/events.py: ``doc_list_changed`` (list views re-fetch) and
 doc's owner; share-recipient fan-out arrives with the sharing UI.
 
 chat/docs/service.py publishes for every body/asset write and for the UI
-mutations it owns (create, mode switch, delete); the doc routes publish
+mutations it owns (create, delete); the doc routes publish
 for the metadata-only rename, and the project-delete route once after its
 directory sweep. Tools never publish. Publishing is best-effort: a failure
 is logged at debug and never undoes the write. Event-loop thread only

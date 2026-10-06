@@ -18,11 +18,12 @@ access through the service (must be ``approval``), runs the operation
 against the live body and injects the server-only preview keys
 (:data:`SERVER_INJECTED_KEYS`). ``execute`` calls
 ``chat.docs.service.apply_write_operation(..., bypass_approval=True)``, which
-re-resolves access (a doc switched to public, or hidden, meanwhile refuses;
-a doc whose shares were all removed is simply written), re-checks the read
-sidecar for ``edit`` and re-applies against the live body (TOCTOU: a stale
-``old_string`` fails the approve), then snapshots, writes, bumps
-``updated_at`` and records ``last_write_source = "action_request:<id>"``.
+re-resolves access (a doc hidden meanwhile -- the share revoked, the doc
+deleted -- refuses; a doc whose shares were all removed is simply written),
+re-checks the read sidecar for ``edit`` and re-applies against the live
+body (TOCTOU: a stale ``old_string`` fails the approve), then snapshots,
+writes, bumps ``updated_at`` and records
+``last_write_source = "action_request:<id>"``.
 The service publishes ``doc_changed`` / ``doc_list_changed`` itself.
 
 Like the skill handlers there is no ``validate_against_upstream`` -- docs
@@ -370,7 +371,7 @@ class WriteDocHandler(ActionRequestHandler):
         )
         try:
             # bypass_approval: the user just approved. Hidden / denied
-            # verdicts (e.g. the doc went public meanwhile), a closed gate,
+            # verdicts (e.g. the share was revoked meanwhile), a closed gate,
             # an unread doc and a stale old_string still refuse.
             op_params = operation_params(params)
             if operation == "add_image":

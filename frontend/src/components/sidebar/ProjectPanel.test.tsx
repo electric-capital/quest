@@ -50,7 +50,6 @@ function renderPanel(props: { showRoutines: boolean; showDocs: boolean }) {
       onArchived={noop}
       showDocs={props.showDocs}
       docs={[]}
-      docsShowPrivateBadge={false}
     />,
   );
 }

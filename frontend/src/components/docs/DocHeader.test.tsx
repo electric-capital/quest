@@ -1,24 +1,21 @@
-// DocHeader: menu items follow the viewer's access flags, rename sends the
-// optimistic-concurrency token and recovers from a stale_update 409, and the
-// mode-switch dialog shows the spec 8.4 text.
+// DocHeader: menu items follow the viewer's access flags (no mode switch for
+// any doc), rename sends the optimistic-concurrency token and recovers from a
+// stale_update 409, and only a public doc shows a mode badge.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ApiClientError } from '../../api/request';
-import type { Doc, DocDetail, DocMode } from '../../api/types';
+import type { Doc, DocDetail } from '../../api/types';
 import { DocHeader } from './DocHeader';
 
 const mocks = vi.hoisted(() => ({
   updateDoc: vi.fn(),
-  setDocMode: vi.fn(),
   deleteDoc: vi.fn(),
-  enabledFeatures: ['docs', 'public_projects'] as string[],
 }));
 
 vi.mock('../../api/docsApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/docsApi')>()),
   updateDoc: mocks.updateDoc,
-  setDocMode: mocks.setDocMode,
   deleteDoc: mocks.deleteDoc,
 }));
 
@@ -26,10 +23,6 @@ vi.mock('../../contexts/ProjectsContext', () => ({
   useProjects: () => ({
     projects: [{ id: 'p1', name: 'Launch Plan' }],
   }),
-}));
-
-vi.mock('../../contexts/AuthContext', () => ({
-  useAuth: () => ({ enabledFeatures: mocks.enabledFeatures }),
 }));
 
 function row(overrides: Partial<Doc> = {}): Doc {
@@ -47,7 +40,8 @@ function row(overrides: Partial<Doc> = {}): Doc {
     updated_at: '2026-10-02T00:00:00',
     scope: 'user',
     shared: false,
-    access: { can_rename: true, can_switch_mode: true, can_delete: true, write: 'free' },
+    // can_switch_mode is always false from the server in v1.
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free' },
     shares: [],
     ...overrides,
   };
@@ -99,9 +93,7 @@ function menuItemLabels(menu: HTMLElement): string[] {
 describe('DocHeader', () => {
   beforeEach(() => {
     mocks.updateDoc.mockReset();
-    mocks.setDocMode.mockReset();
     mocks.deleteDoc.mockReset();
-    mocks.enabledFeatures = ['docs', 'public_projects'];
   });
 
   afterEach(() => {
@@ -109,12 +101,11 @@ describe('DocHeader', () => {
   });
 
   describe('menu items by access flags', () => {
-    it('owner of a user doc gets Rename, Switch, both downloads and Delete', () => {
+    it('owner of a user doc gets Rename, both downloads and Delete', () => {
       renderHeader(OWNER_USER_DOC);
       const menu = openMenu();
       expect(menuItemLabels(menu)).toEqual([
         'RenameR',
-        'Switch to publicP',
         'Download Markdown',
         'Download with images (.zip)',
         'DeleteD',
@@ -122,12 +113,7 @@ describe('DocHeader', () => {
       expect(within(menu).queryByText(/share|history|edit/i)).toBeNull();
     });
 
-    it('offers Switch to private on a public doc', () => {
-      renderHeader(detail({ mode: 'public' }));
-      expect(within(openMenu()).getByRole('menuitem', { name: /Switch to private/ })).toBeTruthy();
-    });
-
-    it('owner of a project doc gets no mode switch, and a folder chip to the project docs', () => {
+    it('owner of a project doc gets the same items, and a folder chip to the project docs', () => {
       renderHeader(OWNER_PROJECT_DOC);
       const chip = screen.getByRole('link', { name: 'Launch Plan' });
       expect(chip.getAttribute('href')).toBe('/docs?project=p1');
@@ -139,6 +125,25 @@ describe('DocHeader', () => {
       ]);
     });
 
+    it('offers no mode switch for any doc, even if a server flag says it may', () => {
+      const docs = [
+        OWNER_USER_DOC,
+        OWNER_PROJECT_DOC,
+        detail({ project_id: 'p1', scope: 'project', mode: 'public' }),
+        // A stale can_switch_mode: true (the server always sends false in v1).
+        detail({ access: { can_rename: true, can_switch_mode: true, can_delete: true, write: 'free' } }),
+      ];
+      for (const doc of docs) {
+        renderHeader(doc);
+        const menu = openMenu();
+        expect(within(menu).queryByText(/Switch to/)).toBeNull();
+        expect(within(menu).queryByText('P')).toBeNull();
+        fireEvent.keyDown(document, { key: 'p' });
+        expect(screen.queryByRole('dialog')).toBeNull();
+        cleanup();
+      }
+    });
+
     it('non-owner gets only the two downloads, as cookie-authed links', () => {
       renderHeader(NON_OWNER_DOC);
       const menu = openMenu();
@@ -147,23 +152,6 @@ describe('DocHeader', () => {
       expect(md.getAttribute('href')).toBe('/app/api/docs/d1/download?format=md');
       expect(md.hasAttribute('download')).toBe(true);
       expect(zip.getAttribute('href')).toBe('/app/api/docs/d1/download?format=zip');
-    });
-
-    it('a private doc the server will not switch (public projects closed) offers no switch', () => {
-      mocks.enabledFeatures = ['docs'];
-      renderHeader(
-        detail({ access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free' } }),
-      );
-      const menu = openMenu();
-      expect(menuItemLabels(menu)).toEqual([
-        'RenameR',
-        'Download Markdown',
-        'Download with images (.zip)',
-        'DeleteD',
-      ]);
-      expect(within(menu).queryByText(/Switch to/)).toBeNull();
-      fireEvent.keyDown(document, { key: 'p' });
-      expect(screen.queryByRole('dialog')).toBeNull();
     });
 
     it('ignores the hint keys for actions the viewer may not take', () => {
@@ -262,57 +250,6 @@ describe('DocHeader', () => {
     });
   });
 
-  describe('mode switch', () => {
-    it('private -> public shows the verbatim warning (+ write-share line) and applies the row', async () => {
-      const switched = row({ mode: 'public' as DocMode });
-      mocks.setDocMode.mockResolvedValue(switched);
-      const { onRowApplied } = renderHeader(
-        detail({
-          shares: [{ id: 1, user_id: 7, permission: 'write', created_at: '2026-10-01T00:00:00' }],
-        }),
-      );
-
-      openMenu();
-      fireEvent.keyDown(document, { key: 'p' });
-      const dialog = screen.getByRole('dialog');
-      expect(within(dialog).getByRole('heading').textContent).toBe("Make 'Roadmap' public?");
-      const paragraphs = Array.from(dialog.querySelectorAll('p')).map((p) => p.textContent);
-      expect(paragraphs).toEqual([
-        "Public conversations run in an internet-enabled sandbox and may send this doc's content to third-party sites. Public conversations will be able to read and change it, and private conversations will no longer be able to change it.",
-        'Write access for people you shared it with will no longer require your approval.',
-      ]);
-
-      await act(async () => {
-        fireEvent.click(within(dialog).getByRole('button', { name: 'Switch to public' }));
-      });
-      expect(mocks.setDocMode).toHaveBeenCalledWith('d1', 'public');
-      expect(onRowApplied).toHaveBeenCalledWith(switched);
-      expect(screen.queryByRole('dialog')).toBeNull();
-    });
-
-    it('public -> private is a plain confirm; a failure stays in the dialog', async () => {
-      mocks.setDocMode.mockRejectedValue(
-        new ApiClientError('You already have a private doc named "Roadmap".', 409, 'duplicate_title'),
-      );
-      renderHeader(detail({ mode: 'public' }));
-
-      openMenu();
-      fireEvent.click(screen.getByRole('menuitem', { name: /Switch to private/ }));
-      const dialog = screen.getByRole('dialog');
-      expect(within(dialog).getByRole('heading').textContent).toBe("Make 'Roadmap' private?");
-      expect(Array.from(dialog.querySelectorAll('p')).map((p) => p.textContent)).toEqual([
-        'Public conversations will no longer see this doc, and private conversations will be able to change it again.',
-      ]);
-
-      await act(async () => {
-        fireEvent.click(within(dialog).getByRole('button', { name: 'Switch to private' }));
-      });
-      expect(within(screen.getByRole('dialog')).getByRole('alert').textContent).toBe(
-        'You already have a private doc named "Roadmap".',
-      );
-    });
-  });
-
   describe('delete', () => {
     it('confirms, deletes and reports onDeleted', async () => {
       mocks.deleteDoc.mockResolvedValue({ deleted: true });
@@ -334,24 +271,23 @@ describe('DocHeader', () => {
   });
 
   describe('mode badge', () => {
-    const badge = (container: HTMLElement) => container.querySelector('.doc-mode-badge');
+    const badge = () => document.querySelector('.doc-mode-badge');
 
-    it('shows the Private badge while public projects are open', () => {
+    it('shows no badge on a private user doc (and no meta row at all)', () => {
       renderHeader(OWNER_USER_DOC);
-      expect(badge(document.body)?.textContent).toBe('Private');
-    });
-
-    it('hides the Private badge while public projects are closed for the user', () => {
-      mocks.enabledFeatures = ['docs'];
-      renderHeader(OWNER_USER_DOC);
-      expect(badge(document.body)).toBeNull();
+      expect(badge()).toBeNull();
       expect(document.querySelector('.doc-header-meta')).toBeNull();
     });
 
-    it('always shows the Public badge, even with public projects closed', () => {
-      mocks.enabledFeatures = ['docs'];
-      renderHeader(detail({ mode: 'public' }));
-      expect(badge(document.body)?.textContent).toBe('Public');
+    it('shows no badge on a private project doc, only the folder chip', () => {
+      renderHeader(OWNER_PROJECT_DOC);
+      expect(badge()).toBeNull();
+      expect(screen.getByRole('link', { name: 'Launch Plan' })).toBeTruthy();
+    });
+
+    it('shows the Public badge on a public doc', () => {
+      renderHeader(detail({ project_id: 'p1', scope: 'project', mode: 'public' }));
+      expect(badge()?.textContent).toBe('Public');
     });
   });
 

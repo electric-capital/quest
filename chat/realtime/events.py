@@ -87,7 +87,7 @@ def make_doc_list_changed() -> dict[str, Any]:
     """Envelope for ``doc_list_changed``.
 
     Per-user global published after any Quest Docs mutation that can change
-    a list view (create, rename, mode switch, delete, and every body/asset
+    a list view (create, rename, delete, and every body/asset
     write, which bumps ``updated_at`` and so the sort order). Carries no
     ids: the sidebar and the All Docs view simply re-fetch their loaded
     window. Published through chat/docs/events.py only.

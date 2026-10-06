@@ -2,13 +2,14 @@
 
 Pins the fixes made after the service review:
 
-1. Title uniqueness is scoped per mode, so a public conversation's
-   ``create_doc`` can never learn whether a private doc of that title exists
-   (invariant 2), and a mode switch into a colliding title is refused.
+1. A public conversation's ``create_doc`` can never learn whether a
+   private doc of that title exists (invariant 2): it creates only in its
+   public project's namespace, and its user-doc creates are refused with
+   one fixed text.
 2. ``add_doc_image`` never echoes a server-side path in an error.
 3. A write cancelled mid-flight still lands its DB bump (shielded).
 4. Access is re-resolved under the per-doc lock (a share added while a
-   write queues turns it into an approval).
+   write queues turns it into an approval; a share revoked hides the doc).
 5. Lone surrogates fail as a DocError, not a raw codec error.
 6. Hidden and missing ids do the same DB work.
 """
@@ -18,8 +19,10 @@ import uuid
 
 import pytest
 
-from chat.docs.access import DENY_PUBLIC_DOC_FROM_PRIVATE
-from chat.docs.constants import doc_not_found_message
+from chat.docs.constants import (
+    doc_not_found_message,
+    user_doc_in_public_conversation_message,
+)
 from chat.docs.service import DocApprovalRequired, DocError
 from tests.test_docs_service import (  # noqa: F401  (fixture re-export)
     PNG,
@@ -37,22 +40,23 @@ class TestTitleNamespacePerMode:
     def test_public_caller_cannot_probe_private_titles(self, docs_env):
         seed_doc(docs_env, title="Acquisition of Acme", mode="private")
         public_caller = make_caller(docs_env, project=docs_env.public_project, public=True)
-        # The same title in the public namespace succeeds: the collision error
-        # would otherwise leak the private doc's existence one bit at a time.
-        created = _run(svc().create_doc(public_caller, "acquisition of acme", "pub\n"))
+        # A public conversation creates only in its public project's
+        # namespace, where a private title never collides: the collision
+        # error would otherwise leak the private doc's existence one bit at
+        # a time.
+        created = _run(svc().create_doc(
+            public_caller, "acquisition of acme", "pub\n", target="project",
+        ))
         assert created["mode"] == "public"
+        # Its user-doc creates are refused with one text, whatever the title.
+        for title in ("ACQUISITION OF ACME", f"unused {uuid.uuid4()}"):
+            with pytest.raises(DocError) as exc:
+                _run(svc().create_doc(public_caller, title, "x\n"))
+            assert str(exc.value) == user_doc_in_public_conversation_message()
         # And the private namespace still refuses its own duplicates.
         private_caller = make_caller(docs_env)
         with pytest.raises(DocError, match="already exists"):
             _run(svc().create_doc(private_caller, "ACQUISITION OF ACME", "x\n"))
-
-    def test_mode_switch_into_colliding_title_refused(self, docs_env):
-        store = docs_env.doc_store
-        private = seed_doc(docs_env, title="Report", mode="private")
-        seed_doc(docs_env, title="report", mode="public")
-        with pytest.raises(store.DuplicateDocTitleError):
-            _run(store.set_doc_mode(private["id"], "public"))
-        assert _run(store.get_doc(private["id"]))["mode"] == "private"
 
 
 class TestErrorShaping:
@@ -156,19 +160,27 @@ class TestLockedWrite:
         _run(scenario())
         assert body(doc["id"]) == "start\n"
 
-    def test_mode_flip_while_queued_denies_write(self, docs_env):
-        doc = seed_doc(docs_env, content="start\n")
-        caller = make_caller(docs_env)
+    def test_share_revoked_while_queued_hides_the_doc(self, docs_env):
+        """A write-share recipient's write queued behind the lock is refused
+        as not found once the owner revoked the share meanwhile."""
+        doc = seed_doc(
+            docs_env, content="start\n", mode="public",
+            project_id=docs_env.public_project, shares=[("bob", "write")],
+        )
+        # bob's free write needs a public conversation of the doc's project.
+        bob = make_caller(docs_env, who="bob", project=docs_env.public_project, public=True)
         lock = svc()._write_lock(doc["id"])
 
         async def scenario():
             async with lock:
-                writer = asyncio.create_task(svc().append_to_doc(caller, doc["id"], "entry"))
-                await asyncio.sleep(0.05)
-                await docs_env.doc_store.set_doc_mode(doc["id"], "public")
+                writer = asyncio.create_task(svc().append_to_doc(bob, doc["id"], "entry"))
+                await asyncio.sleep(0.05)  # writer passed its first resolve, now waits
+                assert not writer.done()
+                [share] = await docs_env.doc_store.list_shares(doc["id"])
+                await docs_env.doc_store.remove_share(doc["id"], share["id"])
             with pytest.raises(DocError) as exc:
                 await writer
-            assert str(exc.value) == DENY_PUBLIC_DOC_FROM_PRIVATE
+            assert str(exc.value) == doc_not_found_message(doc["id"])
 
         _run(scenario())
         assert body(doc["id"]) == "start\n"

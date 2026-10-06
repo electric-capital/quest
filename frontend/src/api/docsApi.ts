@@ -13,7 +13,6 @@ import type {
   CreateDocRequest,
   Doc,
   DocDetail,
-  DocMode,
   ListDocsResponse,
   UpdateDocRequest,
 } from './types';
@@ -34,11 +33,6 @@ export function docsEndpoint(): string {
 /** `/app/api/docs/{id}` (read, rename, delete). */
 export function docEndpoint(id: string): string {
   return `${docsEndpoint()}/${encodeURIComponent(id)}`;
-}
-
-/** `/app/api/docs/{id}/mode` (private <-> public switch). */
-export function docModeEndpoint(id: string): string {
-  return `${docEndpoint(id)}/mode`;
 }
 
 /** Base URL the doc's `assets/<name>` image references resolve against. */
@@ -96,14 +90,6 @@ export function fetchDoc(id: string): Promise<DocDetail> {
  */
 export function updateDoc(id: string, body: UpdateDocRequest): Promise<Doc> {
   return apiPut(docEndpoint(id), { body });
-}
-
-/**
- * Switch a user doc between private and public (owner only). Returns the row
- * without `content`. Project docs reject with `project_doc_mode_inherited`.
- */
-export function setDocMode(id: string, mode: DocMode): Promise<Doc> {
-  return apiPut(docModeEndpoint(id), { body: { mode } });
 }
 
 /** Delete a doc and its files (owner only). */

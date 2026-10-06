@@ -879,7 +879,7 @@ export interface RoutinesListResponse {
 
 // Quest Docs types (/app/api/docs; see docs/api/quest-docs-api.md)
 
-/** A user doc picks its mode; a project doc mirrors its project's `public` flag. */
+/** A user doc is always private; a project doc mirrors its project's `public` flag. */
 export type DocMode = 'private' | 'public';
 
 /** `project` when the doc belongs to a project (`project_id` set), else `user`. */
@@ -888,6 +888,7 @@ export type DocScope = 'user' | 'project';
 /** What the UI may offer for this doc, computed server-side per viewer. */
 export interface DocAccess {
   can_rename: boolean;
+  // Always false in v1: no doc's mode can be switched.
   can_switch_mode: boolean;
   can_delete: boolean;
   // The UI write verdict: 'free' for the owner or a write share.
@@ -902,7 +903,7 @@ export interface DocShare {
   created_at: string;
 }
 
-/** Doc row as returned by the list / create / rename / mode endpoints. */
+/** Doc row as returned by the list / create / rename endpoints. */
 export interface Doc {
   id: string;
   owner_id: number;
@@ -965,8 +966,8 @@ export interface ListDocsResponse {
 export interface CreateDocRequest {
   title: string;
   description?: string;
-  // User docs only; a project doc always takes its project's mode.
-  mode?: DocMode;
+  // No `mode`: a user doc is always private and a project doc takes its
+  // project's mode, so the UI never sends one.
   project_id?: string | null;
 }
 

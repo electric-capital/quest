@@ -14,16 +14,15 @@
  * until the project list has loaded).
  * Search filters everything loaded, client-side. Grouping, filtering and the
  * size column are the pure helpers in utils/allDocsGrouping.ts. The mode
- * badge follows utils/docMode: a private doc shows none while the
- * public_projects gate is closed for the user, and the "Mode" column label
- * goes too when no rendered row shows a badge.
+ * badge follows utils/docMode: only a public doc shows one, and the "Mode"
+ * column label is shown only while some rendered row is public (the column
+ * slot stays either way).
  */
 
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ChevronLeft, Folder, Globe, Plus, Search } from 'lucide-react';
 import type { Doc, Project } from '../../api/types';
-import { useAuth } from '../../contexts/AuthContext';
 import { useProjects } from '../../contexts/ProjectsContext';
 import { useDocs } from '../../hooks/useDocs';
 import { useProjectDocsIndex } from '../../hooks/useProjectDocsIndex';
@@ -36,7 +35,7 @@ import {
   projectGroupKey,
   type DocGroup,
 } from '../../utils/allDocsGrouping';
-import { isPublicProjectsEnabled, shouldShowDocModeBadge } from '../../utils/docMode';
+import { shouldShowDocModeBadge } from '../../utils/docMode';
 import { docsListPath, docViewerPath } from '../../utils/docsRoute';
 import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatters';
 import { DocModeBadge } from './DocModeBadge';
@@ -51,8 +50,6 @@ const PUBLIC_PROJECT_TITLE = 'Public project — internet access, no internal da
 export function DocsListView({ projectId }: { projectId: string | null }) {
   const navigate = useNavigate();
   const { projects, projectsLoaded } = useProjects();
-  const { enabledFeatures } = useAuth();
-  const publicProjectsEnabled = isPublicProjectsEnabled(enabledFeatures);
   const filtered = projectId !== null;
 
   // One paged list (the user's docs, or the filtered project's) plus the
@@ -103,10 +100,10 @@ export function DocsListView({ projectId }: { projectId: string | null }) {
 
   const totalDocs = groups.reduce((n, group) => n + group.docs.length, 0);
   const visibleDocs = visibleGroups.reduce((n, group) => n + group.docs.length, 0);
-  // The "Mode" column label only while some rendered row shows a badge:
-  // with public projects closed for the user, all-private rows show none.
+  // The "Mode" column label only while some rendered row shows a badge
+  // (a public doc); all-private rows show none.
   const anyModeBadge = visibleGroups.some((group) =>
-    group.docs.some((doc) => shouldShowDocModeBadge(doc.mode, publicProjectsEnabled)),
+    group.docs.some((doc) => shouldShowDocModeBadge(doc.mode)),
   );
 
   // Wait for the first page AND the project index (which itself waits for
@@ -190,7 +187,7 @@ export function DocsListView({ projectId }: { projectId: string | null }) {
                         key={doc.id}
                         doc={doc}
                         project={doc.project_id ? (projectsById.get(doc.project_id) ?? null) : null}
-                        showModeBadge={shouldShowDocModeBadge(doc.mode, publicProjectsEnabled)}
+                        showModeBadge={shouldShowDocModeBadge(doc.mode)}
                       />
                     ))}
                   </div>

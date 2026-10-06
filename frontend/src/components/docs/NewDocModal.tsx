@@ -1,21 +1,18 @@
 /**
  * Modal for creating an empty Quest Doc from the All Docs view (POST /docs).
- * Mirrors NewProjectModal. A user doc ("Your docs") picks its mode; a
- * project doc always takes its project's mode, so the radio is replaced by
- * a read-only line and no `mode` is sent (a disagreeing one would 400
- * `project_doc_mode_inherited`). While the `public_projects` gate is closed
- * for the user, public docs are unavailable too: the radio is hidden, a
- * user doc is created with no `mode` (the server makes it private), and the
- * read-only line is left out for a private project (a public project's
- * line stays: a public state is never hidden).
+ * Mirrors NewProjectModal. There is no mode picker and no `mode` is ever
+ * sent: a user doc ("Your docs") is always private, and a project doc takes
+ * its project's mode (a disagreeing one would 400
+ * `project_doc_mode_inherited`). A public project's doc says so in a
+ * read-only line; a private one gets none, like every private doc has no
+ * mode badge (utils/docMode).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createDoc } from '../../api/docsApi';
 import { ApiClientError } from '../../api/request';
 import type { CreateDocRequest, Doc, DocMode, Project } from '../../api/types';
-import { useAuth } from '../../contexts/AuthContext';
-import { isPublicProjectsEnabled, shouldShowDocModeBadge } from '../../utils/docMode';
+import { shouldShowDocModeBadge } from '../../utils/docMode';
 import { ModalShell } from '../ModalShell';
 import './NewDocModal.css';
 
@@ -42,12 +39,9 @@ export function NewDocModal({
   initialProjectId,
   onCreated,
 }: NewDocModalProps) {
-  const { enabledFeatures } = useAuth();
-  const publicDocsAvailable = isPublicProjectsEnabled(enabledFeatures);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [location, setLocation] = useState(USER_DOCS_LOCATION);
-  const [mode, setMode] = useState<DocMode>('private');
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
@@ -72,7 +66,6 @@ export function NewDocModal({
     setTitle('');
     setDescription('');
     setLocation(initialLocation);
-    setMode('private');
     setError(null);
     const timer = setTimeout(() => titleRef.current?.focus(), 50);
     return () => clearTimeout(timer);
@@ -83,8 +76,7 @@ export function NewDocModal({
 
   const selectedProject =
     location === USER_DOCS_LOCATION ? null : (projects.find((p) => p.id === location) ?? null);
-  // A project doc's mode, shown read-only -- and, like every mode badge, not
-  // at all for a private project while public docs are unavailable.
+  // The mode a project doc inherits; only a public one is shown.
   const inheritedMode: DocMode = selectedProject?.public ? 'public' : 'private';
 
   const handleSubmit = useCallback(
@@ -96,11 +88,7 @@ export function NewDocModal({
       const body: CreateDocRequest = { title: trimmedTitle };
       const trimmedDescription = description.trim();
       if (trimmedDescription) body.description = trimmedDescription;
-      if (location !== USER_DOCS_LOCATION) {
-        body.project_id = location;
-      } else if (publicDocsAvailable) {
-        body.mode = mode;
-      }
+      if (location !== USER_DOCS_LOCATION) body.project_id = location;
 
       setIsCreating(true);
       setError(null);
@@ -114,7 +102,7 @@ export function NewDocModal({
         setIsCreating(false);
       }
     },
-    [title, description, location, mode, publicDocsAvailable, isCreating, onCreated, onClose],
+    [title, description, location, isCreating, onCreated, onClose],
   );
 
   return (
@@ -182,49 +170,11 @@ export function NewDocModal({
           ))}
         </select>
 
-        {location !== USER_DOCS_LOCATION ? (
-          shouldShowDocModeBadge(inheritedMode, publicDocsAvailable) && (
-            <p className="new-doc-mode-inherited">
-              Mode: <strong>{inheritedMode === 'public' ? 'Public' : 'Private'}</strong> — inherited
-              from the project
-            </p>
-          )
-        ) : publicDocsAvailable ? (
-          <fieldset className="new-doc-mode" disabled={isCreating}>
-            <legend className="new-doc-label new-doc-label-spaced">Mode</legend>
-            <label className="new-doc-mode-option">
-              <input
-                type="radio"
-                name="new-doc-mode"
-                value="private"
-                checked={mode === 'private'}
-                onChange={() => setMode('private')}
-              />
-              <span className="new-doc-mode-label">
-                Private
-                <span className="new-doc-mode-hint">
-                  Only private conversations can read or change it.
-                </span>
-              </span>
-            </label>
-            <label className="new-doc-mode-option">
-              <input
-                type="radio"
-                name="new-doc-mode"
-                value="public"
-                checked={mode === 'public'}
-                onChange={() => setMode('public')}
-              />
-              <span className="new-doc-mode-label">
-                Public
-                <span className="new-doc-mode-hint">
-                  Public conversations can read and change it; private conversations can only
-                  read it.
-                </span>
-              </span>
-            </label>
-          </fieldset>
-        ) : null}
+        {selectedProject && shouldShowDocModeBadge(inheritedMode) && (
+          <p className="new-doc-mode-inherited">
+            Mode: <strong>Public</strong> — inherited from the project
+          </p>
+        )}
 
         {error && (
           <div className="new-doc-error" role="alert">

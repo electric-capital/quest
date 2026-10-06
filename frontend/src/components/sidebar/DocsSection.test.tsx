@@ -1,6 +1,5 @@
-// DocsSection: the mode badge on each row follows utils/docMode -- a private
-// doc's "Private" badge only while `showPrivateBadge` (the public_projects
-// gate is open for the user), a public doc's badge always.
+// DocsSection: the mode badge on each row follows utils/docMode -- a public
+// doc's row carries the "Public" badge, a private doc's row none.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
 import type { Doc } from '../../api/types';
@@ -22,23 +21,20 @@ function doc(id: string, overrides: Partial<Doc> = {}): Doc {
     updated_at: `2026-10-0${4 - Number(id.slice(1))}T00:00:00`,
     scope: 'user',
     shared: false,
-    access: { can_rename: true, can_switch_mode: true, can_delete: true, write: 'free' },
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free' },
     ...overrides,
   };
 }
 
-const DOCS = [doc('d1'), doc('d2', { mode: 'public' }), doc('d3')];
-
-function renderSection(showPrivateBadge: boolean) {
+function renderSection(docs: Doc[]) {
   return render(
     <DocsSection
-      docs={DOCS}
+      docs={docs}
       hasMore={false}
       loading={false}
       activeDocId={null}
       onOpenDoc={vi.fn()}
       onOpenAll={vi.fn()}
-      showPrivateBadge={showPrivateBadge}
     />,
   );
 }
@@ -56,8 +52,12 @@ describe('DocsSection', () => {
     cleanup();
   });
 
-  it('shows no badge on private rows when showPrivateBadge is false, but keeps the public one', () => {
-    const { container } = renderSection(false);
+  it('badges only the public row', () => {
+    const { container } = renderSection([
+      doc('d1'),
+      doc('d2', { project_id: 'p1', scope: 'project', mode: 'public' }),
+      doc('d3'),
+    ]);
     expect(rowBadges(container)).toEqual([
       ['Doc d1', null],
       ['Doc d2', 'Public'],
@@ -65,12 +65,13 @@ describe('DocsSection', () => {
     ]);
   });
 
-  it('badges every row when showPrivateBadge is true', () => {
-    const { container } = renderSection(true);
+  it('shows no badge at all when every row is private', () => {
+    const { container } = renderSection([doc('d1'), doc('d2'), doc('d3')]);
     expect(rowBadges(container)).toEqual([
-      ['Doc d1', 'Private'],
-      ['Doc d2', 'Public'],
-      ['Doc d3', 'Private'],
+      ['Doc d1', null],
+      ['Doc d2', null],
+      ['Doc d3', null],
     ]);
+    expect(container.querySelector('.doc-mode-badge')).toBeNull();
   });
 });

@@ -20,6 +20,13 @@ inference_api, user_subagent and script runs)::
     | Public, shared        | Read     | Read         | Free   | read: Read  | Read      |
     |                       |          |              |        | write: Free |           |
 
+A user doc (``project_id`` None) is always private: the "Public" rows only
+ever describe docs of a public project (seen from that project's
+conversations, rule 2), and every "Public owner / Public recipient" cell of
+a user doc is Hidden. A stored ``mode="public"`` on a user doc (a leftover
+of the dropped user-doc mode switch; migration ``e1b7c4d9a2f6`` flips them)
+is evaluated as ``private`` for every decision below.
+
 (Read-only run kinds read only docs they can see: rules 1-3 below still
 apply to them.)
 
@@ -42,14 +49,15 @@ Rules layered on the matrix, applied in this order:
 4. Read-only run kinds (sub-agents, inference-API runs, cross-user subagent
    runs, sandbox scripts) can read whatever they can see and never write.
 5. ``ui`` (the HTTP routes): Free for the owner or a write share, else
-   Read. Ownership-only operations (rename, mode switch, delete) are a
-   separate route check, not part of this matrix.
+   Read. Ownership-only operations (rename, delete) are a separate route
+   check, not part of this matrix; no doc's mode can be switched.
 6. Slack-driven runs cannot open action requests, so an Approval verdict
    becomes a denial there.
 
 Taint (invariant 1): a private conversation never gets a non-denied write
-verdict on a public doc, and :func:`creation_mode` makes every conversation
-create docs in its own mode.
+verdict on a public doc, and a conversation only creates docs in its own
+mode -- :func:`creation_mode` for project docs, while user docs (always
+private) cannot be created from a public conversation at all.
 
 Callers pass ``is_public=False`` and ``project_id=None`` for the ``ui`` and
 ``script`` run kinds (neither runs inside a conversation).
@@ -218,10 +226,15 @@ def resolve_doc_access(
     """
     if run_kind not in RUN_KINDS:
         raise ValueError(f"unknown run_kind: {run_kind!r}")
-    mode = doc["mode"]
-    if mode not in DOC_MODES:
-        raise ValueError(f"unknown doc mode: {mode!r}")
+    stored_mode = doc["mode"]
+    if stored_mode not in DOC_MODES:
+        raise ValueError(f"unknown doc mode: {stored_mode!r}")
     _shares(doc)  # fail closed on a partial dict before any verdict
+
+    # 0. A user doc is always private, whatever its row says (defensive:
+    # after migration e1b7c4d9a2f6 no public user doc exists).
+    doc_project_id = doc["project_id"]
+    mode = "private" if doc_project_id is None else stored_mode
 
     # 1. Relationship.
     is_owner = doc["owner_id"] == user_id
@@ -233,7 +246,6 @@ def resolve_doc_access(
         return HIDDEN
 
     # 3. Project docs: only from that project's conversations (or the UI).
-    doc_project_id = doc["project_id"]
     if doc_project_id is not None and run_kind != "ui" and project_id != doc_project_id:
         return HIDDEN
 
@@ -278,6 +290,9 @@ def creation_mode(is_public: bool) -> str:
     """The mode of a doc created from a conversation: always its own mode.
 
     The creation half of the taint invariant: a private conversation can
-    only create private docs and a public one only public docs.
+    only create private docs and a public one only public docs. Only
+    project docs can be public, so a public conversation creates docs of
+    its (public) project only; user docs are always private and the
+    service refuses to create one from a public conversation.
     """
     return "public" if is_public else "private"

@@ -4,7 +4,7 @@
  * is a button that opens the All Docs view (filtered to the project when
  * drilled); a row opens that doc's viewer. Data comes from useDocs (owned by
  * the Sidebar) and row order from utils/sidebarDocs; this component only
- * renders it.
+ * renders it. Only a public doc's row carries a mode badge (utils/docMode).
  */
 
 import { useMemo } from 'react';
@@ -34,10 +34,6 @@ export interface DocsSectionProps {
   onOpenAll: () => void;
   // The All Docs view this header opens is the one showing.
   headerActive?: boolean;
-  // Render the "Private" badge on private rows: true while the
-  // public_projects gate is open for the user (public rows always show
-  // theirs; see utils/docMode shouldShowDocModeBadge).
-  showPrivateBadge: boolean;
 }
 
 export function DocsSection({
@@ -49,7 +45,6 @@ export function DocsSection({
   onOpenDoc,
   onOpenAll,
   headerActive = false,
-  showPrivateBadge,
 }: DocsSectionProps) {
   const items = useMemo(() => deriveSidebarDocItems(docs), [docs]);
   // A failed load is not "no docs": no "0" count and no create hint.
@@ -87,7 +82,7 @@ export function DocsSection({
           >
             <FileText size={14} className="doc-row-icon" aria-hidden="true" />
             <span className="doc-row-title">{doc.title}</span>
-            {shouldShowDocModeBadge(doc.mode, showPrivateBadge) && (
+            {shouldShowDocModeBadge(doc.mode) && (
               <DocModeBadge mode={doc.mode} size="sm" />
             )}
             <span className="doc-row-time" title={formatSidebarDocTimeTitle(doc.updated_at)}>

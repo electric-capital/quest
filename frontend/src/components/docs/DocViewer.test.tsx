@@ -27,10 +27,6 @@ vi.mock('../../contexts/ProjectsContext', () => ({
   useProjects: () => ({ projects: [] }),
 }));
 
-vi.mock('../../contexts/AuthContext', () => ({
-  useAuth: () => ({ enabledFeatures: ['docs', 'public_projects'] }),
-}));
-
 // Message.tsx (markdownComponents) reaches pdfjs-dist through its card
 // imports; pdf.js needs browser canvas APIs jsdom lacks.
 vi.mock('../PdfViewer', () => ({ PdfViewer: () => null }));

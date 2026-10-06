@@ -1404,7 +1404,8 @@ class Doc(Base):
     )
 
     # "private" | "public" (chat/docs/constants.py DOC_MODES). Project docs
-    # copy the project's immutable ``public`` flag at creation.
+    # copy the project's immutable ``public`` flag at creation; user docs
+    # (NULL project_id) are always "private".
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
 
     # Cached bytes of doc.md and file count of assets/, for list views.

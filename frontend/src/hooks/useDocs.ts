@@ -158,7 +158,7 @@ export function useDocs({
     })();
   }, [key, project, pageSize, loadingMore, commit]);
 
-  // Realtime: any create / rename / mode switch / delete / model write.
+  // Realtime: any create / rename / delete / model write.
   useEffect(() => {
     if (key === null) return;
     return persistentWebSocket.onGlobalEvent((event) => {

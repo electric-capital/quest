@@ -110,7 +110,7 @@ export function useProjectDocsIndex(projects: Project[], enabled: boolean): Proj
     void load();
   }, [idsKey, load, commit]);
 
-  // Realtime: any doc create / rename / mode switch / delete / model write.
+  // Realtime: any doc create / rename / delete / model write.
   // Trailing debounce: every event restarts the timer, and a project-set
   // change or unmount cancels a pending refresh (the set change loads anyway).
   useEffect(() => {

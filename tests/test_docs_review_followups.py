@@ -1,5 +1,6 @@
-"""Second review round: write_doc card cost, locked UI mutations, hidden
-public-project docs by id, pinned image bytes at approve time.
+"""Second review round: write_doc card cost, locked UI mutations (delete;
+the mode switch is refused for every doc), hidden public-project docs by
+id, pinned image bytes at approve time.
 """
 
 import asyncio
@@ -60,52 +61,20 @@ class TestBoundedCardDiff:
 
 
 class TestLockedUiMutations:
-    def test_mode_switch_waits_for_in_flight_write(self, docs_env):
+    def test_delete_waits_for_in_flight_write(self, docs_env):
         doc = seed_doc(docs_env, content="start\n")
         lock = svc()._write_lock(doc["id"])
         alice = docs_env.users["alice"]
 
         async def scenario():
             async with lock:
-                switch = asyncio.create_task(svc().switch_doc_mode(alice, doc["id"], "public"))
+                delete = asyncio.create_task(svc().delete_doc_from_ui(alice, doc["id"]))
                 await asyncio.sleep(0.05)
-                assert not switch.done()
-            updated = await switch
-            assert updated["mode"] == "public"
+                assert not delete.done()
+            await delete
 
         _run(scenario())
-
-    def test_queued_private_write_cannot_land_after_flip_to_public(self, docs_env):
-        """A model write that passed its first access check before the
-        owner flipped the doc public is denied once it gets the lock."""
-        doc = seed_doc(docs_env, content="start\n")
-        caller = make_caller(docs_env)
-        alice = docs_env.users["alice"]
-        lock = svc()._write_lock(doc["id"])
-
-        async def scenario():
-            async with lock:
-                writer = asyncio.create_task(
-                    svc().append_to_doc(caller, doc["id"], "INTERNAL SECRET"),
-                )
-                await asyncio.sleep(0.05)  # writer resolved once, now queued
-                switch = asyncio.create_task(svc().switch_doc_mode(alice, doc["id"], "public"))
-                await asyncio.sleep(0.05)
-            # Both queued behind us; the writer was first in line.
-            results = await asyncio.gather(writer, switch, return_exceptions=True)
-            return results
-
-        writer_result, switch_result = _run(scenario())
-        final = body(doc["id"])
-        mode = _run(docs_env.doc_store.get_doc(doc["id"]))["mode"]
-        assert mode == "public"
-        if isinstance(writer_result, Exception):
-            # Switch won the lock first: the write was denied.
-            assert "INTERNAL SECRET" not in final
-        else:
-            # Writer won: its content landed while the doc was still private
-            # and the switch (which the owner explicitly confirmed) followed.
-            assert final.endswith("INTERNAL SECRET\n")
+        assert _run(docs_env.doc_store.get_doc(doc["id"])) is None
 
     def test_delete_route_uses_locked_path(self, docs_env):
         doc = seed_doc(docs_env, "Gone")
@@ -119,13 +88,12 @@ class TestLockedUiMutations:
         assert detail(resp)["error"] == "doc_not_found"
 
     def test_mode_switch_route_errors(self, docs_env):
-        open_public_projects(docs_env)  # switching to public needs the gate
+        open_public_projects(docs_env)  # the gate changes nothing for user docs
         private = seed_doc(docs_env, title="Report", mode="private")
-        seed_doc(docs_env, title="REPORT", mode="public")
         c = client(docs_env)
         resp = c.put(f"/app/api/docs/{private['id']}/mode", json={"mode": "public"})
-        assert resp.status_code == 409
-        assert detail(resp)["error"] == "duplicate_title"
+        assert resp.status_code == 400
+        assert detail(resp)["error"] == "user_doc_mode_private"
         resp = client(docs_env, "bob").put(
             f"/app/api/docs/{private['id']}/mode", json={"mode": "public"},
         )

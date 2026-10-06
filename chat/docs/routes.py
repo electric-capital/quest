@@ -18,11 +18,11 @@ Rows returned to the UI are the store's doc dict plus ``scope``,
 (``shares``) is included for the owner only. All sync file IO runs in
 ``asyncio.to_thread``. Doc content is never logged.
 
-Public user docs need the ``public_projects`` gate: while it is closed for
-the user, nothing new can become public (POST with ``mode: "public"`` and a
-switch to public are 400 ``public_projects_disabled``) and
-``access.can_switch_mode`` is false except on a leftover public doc, whose
-only switch is back to private.
+User docs are always private: POST with ``mode: "public"`` and no project
+is 400 ``user_doc_mode_private``; the only public docs are the docs of a
+public project, which take the project's mode. No doc's mode can be
+switched in v1: ``PUT /docs/{id}/mode`` stays registered but refuses every
+doc, and ``access.can_switch_mode`` is always false.
 
 Errors are ``HTTPException(detail={"error": <code>, "message": ...})``
 except the optimistic-concurrency conflict, which is a flat 409
@@ -48,12 +48,7 @@ from chat.docs import events as doc_events
 from chat.docs import files as doc_files
 from chat.docs import service as doc_service
 from chat.docs.access import DocAccess, resolve_doc_access
-from chat.docs.constants import (
-    DOC_MODES,
-    doc_not_found_message,
-    docs_disabled_message,
-    public_docs_disabled_message,
-)
+from chat.docs.constants import doc_not_found_message, docs_disabled_message
 from chat.file_routes import _INLINE_IMAGE_MIMES
 from chat.project_routes import _get_visible_project, _public_projects_enabled_for
 from config.feature_gates import docs_enabled_for
@@ -137,25 +132,12 @@ def _doc_not_found(doc_id: str) -> HTTPException:
     return _http_error(404, "doc_not_found", doc_not_found_message(doc_id))
 
 
-def _public_docs_unavailable() -> HTTPException:
-    return _http_error(400, "public_projects_disabled", public_docs_disabled_message())
-
-
-def _doc_row(
-    user: dict,
-    doc: dict,
-    access: DocAccess,
-    *,
-    public_projects_open: Optional[bool] = None,
-) -> dict:
+def _doc_row(user: dict, doc: dict, access: DocAccess) -> dict:
     """The UI row: doc dict + scope/shared/access; ``shares`` owner-only.
 
-    ``access.can_switch_mode`` = owner AND user doc AND (the
-    ``public_projects`` gate is open for the user OR the doc is already
-    public -- a leftover public doc can still go back to private).
-    ``public_projects_open`` is the caller's gate lookup, passed by list
-    handlers so a page of rows reads the gate file once; None looks it up
-    when it matters.
+    ``access.can_switch_mode`` is always false in v1 (user docs are always
+    private, project docs keep their project's mode); the key stays in the
+    row shape for the frontend type.
     """
     is_owner = doc["owner_id"] == user["id"]
     shares = doc.get("shares") or []
@@ -167,14 +149,9 @@ def _doc_row(
     else:
         # The owner's conversation ids are not the recipient's business.
         row["last_write_source"] = None
-    can_switch_mode = is_owner and doc.get("project_id") is None
-    if can_switch_mode and doc.get("mode") != "public":
-        if public_projects_open is None:
-            public_projects_open = _public_projects_enabled_for(user)
-        can_switch_mode = public_projects_open
     row["access"] = {
         "can_rename": is_owner,
-        "can_switch_mode": can_switch_mode,
+        "can_switch_mode": False,
         "can_delete": is_owner,
         "write": access.write,
     }
@@ -380,11 +357,7 @@ async def list_user_docs(
     before = _parse_cursor(cursor) if cursor else None
 
     page, has_more = await _visible_docs_page(user, project_id, limit, before)
-    public_open = _public_projects_enabled_for(user)
-    rows = [
-        _doc_row(user, doc, access, public_projects_open=public_open)
-        for doc, access in page
-    ]
+    rows = [_doc_row(user, doc, access) for doc, access in page]
     next_cursor = None
     if has_more and rows:
         last = rows[-1]
@@ -399,13 +372,12 @@ async def create_ui_doc(
 ):
     """Create an empty doc owned by the user.
 
-    A user doc takes ``mode`` (default ``private``); a project doc takes
-    its project's mode, and a supplied ``mode`` that disagrees is 400
-    ``project_doc_mode_inherited``. While the ``public_projects`` gate is
-    closed for the user, a user doc is always private: an omitted ``mode``
-    gives ``private`` and an explicit ``"public"`` is 400
-    ``public_projects_disabled`` (project docs are unaffected: a public
-    project is hidden by the same gate). Errors: 404 ``project_not_found``,
+    A user doc is always private: ``mode`` omitted or ``"private"`` gives
+    a private doc, ``"public"`` is 400 ``user_doc_mode_private`` (a public
+    doc is created inside a public project). A project doc takes its
+    project's mode, and a supplied ``mode`` that disagrees is 400
+    ``project_doc_mode_inherited``; a public project hidden by the
+    ``public_projects`` gate is 404 ``project_not_found``. Errors also:
     409 ``duplicate_title``, 400 ``invalid_title`` / ``invalid_description``
     / ``invalid_mode``. Returns the row (201).
     """
@@ -413,8 +385,6 @@ async def create_ui_doc(
     project_id = body.project_id or None
     if project_id is not None:
         await _require_visible_project(user, project_id)
-    elif body.mode == "public" and not _public_projects_enabled_for(user):
-        raise _public_docs_unavailable()
     try:
         doc = await doc_service.create_doc_from_ui(
             user, body.title, body.description or "", body.mode, project_id,
@@ -550,34 +520,19 @@ async def set_ui_doc_mode(
     body: SetDocModeRequest,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """Switch a user doc between ``private`` and ``public`` (owner only).
+    """Not switchable in v1: refuses every doc, whatever the body says.
 
-    Checked in order: 404 ``doc_not_found``; 403 ``forbidden`` for a
-    non-owner; 400 ``public_projects_disabled`` for a target ``public``
-    while the ``public_projects`` gate is closed for the user (a target
-    ``private`` stays allowed, so a leftover public doc can go back); 400
-    ``invalid_mode``; 400 ``project_doc_mode_inherited`` for a project doc
-    (its mode is the project's). No change (and no events) when the doc
-    already has that mode.
+    Checked in order: 404 ``doc_not_found`` (missing, hidden, or in a
+    public project hidden by the ``public_projects`` gate); 403
+    ``forbidden`` for a non-owner; then 400 ``user_doc_mode_private`` for a
+    user doc (always private) or 400 ``project_doc_mode_inherited`` for a
+    project doc (its mode is the project's). Nothing changes and no event
+    is sent. Kept registered so an old client gets a clear error.
     """
     _require_docs_enabled(user)
-    # Hidden-project / missing docs 404 here before the service runs its
-    # own checks (same text either way); ownership is checked here too so
-    # a non-owner gets 403 before the public-projects 400.
     doc, _access = await _get_doc_for_ui(user, doc_id)
     _require_owner(user, doc, "change its mode")
-    mode = body.mode if isinstance(body.mode, str) else ""
-    if mode == "public" and not _public_projects_enabled_for(user):
-        raise _public_docs_unavailable()
-    try:
-        updated = await doc_service.switch_doc_mode(user, doc_id, mode)
-    except doc_service.DocRequestError as exc:
-        _raise_request_error(exc, doc_id)
-    except doc_service.DocDisabled:
-        raise _http_error(403, "docs_disabled", docs_disabled_message())
-    except doc_service.DocError:
-        raise _doc_not_found(doc_id)
-    return _doc_row(user, updated, _ui_access(user, updated))
+    _raise_request_error(doc_service.mode_switch_refusal(doc), doc_id)
 
 
 @router.get("/docs/{doc_id}/assets/{name}")

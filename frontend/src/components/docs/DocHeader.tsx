@@ -4,11 +4,11 @@
  * Same interaction model as ConversationHeader: the title plus a chevron
  * open a small dropdown, single-key hints act while it is open, and Rename
  * swaps the title for an inline input. Items follow the viewer's access
- * flags: Rename (can_rename), Switch to public / private (can_switch_mode,
- * user docs only; opens DocModeSwitchDialog), the two downloads (always),
- * Delete (can_delete, behind a confirm). A non-owner gets only the
- * downloads. Beside the title sit the mode badge (hidden for a private doc
- * while the public_projects gate is closed for the user, see utils/docMode)
+ * flags: Rename (can_rename), the two downloads (always), Delete
+ * (can_delete, behind a confirm). A non-owner gets only the downloads. There
+ * is no mode switch: user docs are always private and a project doc takes
+ * its project's mode (`access.can_switch_mode` is always false in v1).
+ * Beside the title sit the mode badge (a public doc only, see utils/docMode)
  * and, for a project doc, a folder chip linking to that project's docs; on
  * the right, the Show source / Show rendered toggle.
  *
@@ -26,8 +26,6 @@ import {
   FileArchive,
   FileDown,
   Folder,
-  Globe,
-  Lock,
   Pencil,
   Trash2,
 } from 'lucide-react';
@@ -40,12 +38,11 @@ import {
 } from '../../api/docsApi';
 import { ApiClientError } from '../../api/request';
 import type { Doc, DocDetail } from '../../api/types';
-import { useAuth } from '../../contexts/AuthContext';
 import { useProjects } from '../../contexts/ProjectsContext';
-import { isPublicProjectsEnabled, shouldShowDocModeBadge } from '../../utils/docMode';
+import { shouldShowDocModeBadge } from '../../utils/docMode';
 import { docsListPath } from '../../utils/docsRoute';
+import { DocConfirmDialog } from './DocConfirmDialog';
 import { DocModeBadge } from './DocModeBadge';
-import { DocConfirmDialog, DocModeSwitchDialog } from './DocModeSwitchDialog';
 import './DocHeader.css';
 
 /** Server cap on a doc title (chat/docs/constants.py DOC_TITLE_MAX_LEN). */
@@ -63,16 +60,15 @@ export interface DocHeaderProps {
   doc: DocDetail;
   showSource: boolean;
   onToggleSource: () => void;
-  /** A row returned by the rename / mode endpoints (or a stale_update's `current`). */
+  /** A row returned by the rename endpoint (or a stale_update's `current`). */
   onRowApplied: (row: Doc) => void;
   onDeleted: () => void;
 }
 
 export function DocHeader({ doc, showSource, onToggleSource, onRowApplied, onDeleted }: DocHeaderProps) {
   const { projects } = useProjects();
-  const { enabledFeatures } = useAuth();
-  const showModeBadge = shouldShowDocModeBadge(doc.mode, isPublicProjectsEnabled(enabledFeatures));
-  const { can_rename: canRename, can_switch_mode: canSwitchMode, can_delete: canDelete } = doc.access;
+  const showModeBadge = shouldShowDocModeBadge(doc.mode);
+  const { can_rename: canRename, can_delete: canDelete } = doc.access;
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -94,7 +90,6 @@ export function DocHeader({ doc, showSource, onToggleSource, onRowApplied, onDel
     setNotice({ text, seq: noticeSeqRef.current });
   }, []);
 
-  const [modeDialogOpen, setModeDialogOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -192,13 +187,6 @@ export function DocHeader({ doc, showSource, onToggleSource, onRowApplied, onDel
     [cancelRename, doc.id, doc.title, doc.updated_at, onRowApplied, renameValue, showNotice],
   );
 
-  const openModeSwitch = useCallback(() => {
-    if (!canSwitchMode) return;
-    setMenuOpen(false);
-    setNotice(null);
-    setModeDialogOpen(true);
-  }, [canSwitchMode]);
-
   const openDelete = useCallback(() => {
     if (!canDelete) return;
     setMenuOpen(false);
@@ -228,16 +216,14 @@ export function DocHeader({ doc, showSource, onToggleSource, onRowApplied, onDel
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key.toLowerCase();
       if (key === 'r' && canRename) { e.preventDefault(); startRename(); }
-      else if (key === 'p' && canSwitchMode) { e.preventDefault(); openModeSwitch(); }
       else if (key === 'd' && canDelete) { e.preventDefault(); openDelete(); }
       else if (key === 'escape') { setMenuOpen(false); }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [menuOpen, canRename, canSwitchMode, canDelete, startRename, openModeSwitch, openDelete]);
+  }, [menuOpen, canRename, canDelete, startRename, openDelete]);
 
   const closeMenu = () => setMenuOpen(false);
-  const targetMode = doc.mode === 'public' ? 'private' : 'public';
 
   return (
     <div className="doc-header">
@@ -289,17 +275,8 @@ export function DocHeader({ doc, showSource, onToggleSource, onRowApplied, onDel
                     <span className="doc-header-menu-key">R</span>
                   </button>
                 )}
-                {canSwitchMode && (
-                  <button type="button" className="doc-header-menu-item" role="menuitem" onClick={openModeSwitch}>
-                    {targetMode === 'public'
-                      ? <Globe size={16} className="doc-header-menu-icon" />
-                      : <Lock size={16} className="doc-header-menu-icon" />}
-                    <span>{targetMode === 'public' ? 'Switch to public' : 'Switch to private'}</span>
-                    <span className="doc-header-menu-key">P</span>
-                  </button>
-                )}
                 {/* Phase 3 (not built): Share, History, Edit menu items go here. */}
-                {(canRename || canSwitchMode) && <div className="doc-header-menu-separator" role="separator" />}
+                {canRename && <div className="doc-header-menu-separator" role="separator" />}
                 <a
                   className="doc-header-menu-item"
                   role="menuitem"
@@ -373,15 +350,6 @@ export function DocHeader({ doc, showSource, onToggleSource, onRowApplied, onDel
         <div className="doc-header-notice" role="status">
           {notice.text}
         </div>
-      )}
-
-      {canSwitchMode && (
-        <DocModeSwitchDialog
-          isOpen={modeDialogOpen}
-          doc={doc}
-          onClose={() => setModeDialogOpen(false)}
-          onSwitched={onRowApplied}
-        />
       )}
 
       {canDelete && (

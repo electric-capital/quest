@@ -72,9 +72,6 @@ interface ProjectPanelProps {
   onOpenAllDocs?: () => void;
   // That filtered All Docs view is the one showing.
   docsHeaderActive?: boolean;
-  // Private doc rows show their "Private" badge (the public_projects gate is
-  // open for the user); public rows always do.
-  docsShowPrivateBadge?: boolean;
 }
 
 const NO_DOCS: Doc[] = [];
@@ -112,7 +109,6 @@ export function ProjectPanel({
   onOpenDoc = noop,
   onOpenAllDocs = noop,
   docsHeaderActive = false,
-  docsShowPrivateBadge = true,
 }: ProjectPanelProps) {
   const listRef = useFlipListAnimation<HTMLDivElement>();
   // Held here, not in the popover: toggling the archive filter reloads the
@@ -186,7 +182,6 @@ export function ProjectPanel({
                 onOpenDoc={onOpenDoc}
                 onOpenAll={onOpenAllDocs}
                 headerActive={docsHeaderActive}
-                showPrivateBadge={docsShowPrivateBadge}
               />
             )}
 

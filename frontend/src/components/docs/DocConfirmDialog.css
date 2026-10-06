@@ -1,4 +1,4 @@
-/* Doc viewer confirm dialogs (DocConfirmDialog: mode switch + delete).
+/* Doc viewer confirm dialog (DocConfirmDialog; the header's Delete confirm).
  * Chrome from the design tokens; only the semantic tones (amber warning,
  * red danger, error text) are literal, dark-first with a light block. */
 
@@ -122,8 +122,8 @@
   background-color: var(--accent-hover);
 }
 
-/* Going public exposes the doc to the internet sandbox: the amber of the
- * public-project warning and the Public badge. */
+/* A cautionary confirm: the amber of the public-project warning and the
+ * Public badge. */
 .doc-dialog-confirm--warning {
   background-color: #e6b422;
   color: #1f1a0a;

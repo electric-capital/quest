@@ -12,8 +12,9 @@ Covers:
    ``preview_write_operation``.
 4. Taint + invisibility: private conversations never write (or create)
    public docs; public conversations never see private docs (the hidden
-   error is byte-equal to a random missing id); project docs are hidden
-   from standalone and other-project conversations.
+   error is byte-equal to a random missing id) and never create user docs
+   (always private); a leftover public user doc is private everywhere;
+   project docs are hidden from standalone and other-project conversations.
 5. Read-only run kinds and Slack.
 6. Gate closed: DocDisabled before any DB work.
 7. list_docs / search_docs (snippets, title-only hits, truncated scan).
@@ -181,6 +182,25 @@ def seed_doc(env, title="Notes", content="line one\nline two\n", *, owner="alice
     return doc
 
 
+def make_legacy_public(env, doc_id):
+    """Set a USER doc's stored mode to ``public`` behind the store's back:
+    a row from before migration e1b7c4d9a2f6 (the store refuses to create
+    a public user doc, and nothing can switch a mode any more)."""
+    from db.models import Doc
+
+    async def _flip():
+        async with env.doc_store.AsyncSessionLocal() as db:
+            row = await db.get(Doc, doc_id)
+            assert row.project_id is None
+            row.mode = "public"
+            await db.commit()
+
+    _run(_flip())
+    doc = _run(env.doc_store.get_doc(doc_id))
+    assert doc["mode"] == "public"
+    return doc
+
+
 def body(doc_id):
     from chat.docs import files
     return files.read_body(doc_id)
@@ -236,13 +256,35 @@ class TestCreate:
         ]
         assert docs_env.published[1][1]["doc_id"] == result["id"]
 
-    def test_public_conversation_creates_public_docs_only(self, docs_env):
+    def test_public_conversation_creates_public_project_docs_only(self, docs_env):
         caller = make_caller(docs_env, project=docs_env.public_project, public=True)
-        user_doc = _run(svc().create_doc(caller, "Open notes", "x"))
-        assert user_doc["mode"] == "public"
         project_doc = _run(svc().create_doc(caller, "Open proj", "x", target="project"))
         assert project_doc["mode"] == "public"
+        assert project_doc["scope"] == "project"
         assert project_doc["project_id"] == docs_env.public_project
+
+    @pytest.mark.parametrize("target", ["user", None, ""])
+    def test_public_conversation_cannot_create_user_docs(self, docs_env, target):
+        # User docs are always private, and a public conversation never
+        # creates a private doc: target="user" (the default) is refused.
+        caller = make_caller(docs_env, project=docs_env.public_project, public=True)
+        kwargs = {} if target is None else {"target": target}
+        with pytest.raises(DocError) as exc:
+            _run(svc().create_doc(caller, "Open notes", "x", **kwargs))
+        assert str(exc.value) == (
+            "User docs are always private and cannot be created from a public "
+            'conversation; use create_doc(target="project") to create a doc in '
+            "this project."
+        )
+        assert str(exc.value) == constants.user_doc_in_public_conversation_message()
+        assert list(docs_env.dirs["docs"].iterdir()) == []
+        assert docs_env.published == []
+
+    def test_private_conversation_user_docs_are_private(self, docs_env):
+        for caller in (make_caller(docs_env),
+                       make_caller(docs_env, project=docs_env.private_project)):
+            doc = _run(svc().create_doc(caller, f"Mine {caller.project_id}", "x"))
+            assert (doc["mode"], doc["scope"]) == ("private", "user")
 
     def test_private_conversation_creates_private_docs_only(self, docs_env):
         caller = make_caller(docs_env, project=docs_env.private_project)
@@ -689,14 +731,18 @@ class TestApproval:
                 caller, doc["id"], "edit", {"old_string": "alpha", "new_string": "x"},
                 write_source="a", bypass_approval=True,
             ))
-        # denied: flipped to public meanwhile (taint at approve time)
-        _run(docs_env.doc_store.set_doc_mode(doc["id"], "public"))
+        # denied: bob's write share was downgraded to read meanwhile
+        _run(docs_env.doc_store.add_share(doc["id"], docs_env.users["bob"]["id"], "write"))
+        bob = make_caller(docs_env, who="bob")
+        with pytest.raises(DocApprovalRequired):
+            _run(svc().append_to_doc(bob, doc["id"], "x"))
+        _run(docs_env.doc_store.add_share(doc["id"], docs_env.users["bob"]["id"], "read"))
         with pytest.raises(DocError) as exc:
             _run(svc().apply_write_operation(
-                caller, doc["id"], "append", {"content": "x"},
+                bob, doc["id"], "append", {"content": "x"},
                 write_source="a", bypass_approval=True,
             ))
-        assert str(exc.value) == DENY_PUBLIC_DOC_FROM_PRIVATE
+        assert str(exc.value) == DENY_READ_ONLY_SHARE
         # hidden: carol has no relationship
         carol = make_caller(docs_env, who="carol")
         with pytest.raises(DocError) as exc:
@@ -766,10 +812,12 @@ class TestPreview:
         assert list((docs_env.dirs["docs"] / doc["id"] / "assets").iterdir()) == []
 
     def test_preview_errors_match_apply(self, docs_env):
-        doc = seed_doc(docs_env, mode="public")
+        doc = seed_doc(docs_env, mode="public", project_id=docs_env.public_project)
+        # Defensive shape: a private caller inside the public project.
+        caller = make_caller(docs_env, project=docs_env.public_project)
         with pytest.raises(DocError) as exc:
             _run(svc().preview_write_operation(
-                make_caller(docs_env), doc["id"], "append", {"content": "x"},
+                caller, doc["id"], "append", {"content": "x"},
             ))
         assert str(exc.value) == DENY_PUBLIC_DOC_FROM_PRIVATE
 
@@ -781,8 +829,12 @@ class TestPreview:
 
 class TestTaintAndVisibility:
     def test_private_caller_never_writes_public_doc(self, docs_env):
-        doc = seed_doc(docs_env, mode="public", content="pub\n")
-        caller = make_caller(docs_env)
+        doc = seed_doc(
+            docs_env, mode="public", content="pub\n", project_id=docs_env.public_project,
+        )
+        # Public docs are public-project docs; a private caller can only
+        # reach one with the (defensive) private-caller-in-that-project shape.
+        caller = make_caller(docs_env, project=docs_env.public_project)
         (workspace_dir(docs_env, caller) / "i.png").write_bytes(PNG)
         assert _run(svc().read_doc(caller, doc["id"]))["write_note"] == DENY_PUBLIC_DOC_FROM_PRIVATE
         for call in (
@@ -799,7 +851,10 @@ class TestTaintAndVisibility:
 
     def test_public_caller_cannot_see_private_doc(self, docs_env):
         private = seed_doc(docs_env, title="Secret")
-        public_doc = seed_doc(docs_env, title="Open", mode="public", content="open secret\n")
+        public_doc = seed_doc(
+            docs_env, title="Open", mode="public", content="open secret\n",
+            project_id=docs_env.public_project,
+        )
         caller = make_caller(docs_env, project=docs_env.public_project, public=True)
         missing = str(uuid.uuid4())
         for fn in (
@@ -822,6 +877,61 @@ class TestTaintAndVisibility:
         # The public conversation writes the public doc freely.
         _run(svc().append_to_doc(caller, public_doc["id"], "more"))
         assert body(public_doc["id"]).endswith("more\n")
+
+    def test_legacy_public_user_doc_never_reaches_a_public_conversation(self, docs_env):
+        """A user doc whose stored mode still says public (pre-migration)
+        is a private doc: list/search/read from a public conversation never
+        surface it, for the owner or a write-share recipient, whatever the
+        scope."""
+        legacy = make_legacy_public(docs_env, seed_doc(
+            docs_env, title="Legacy open", content="legacy needle\n",
+            shares=[("bob", "write"), (None, "read")],
+        )["id"])
+        project_doc = seed_doc(
+            docs_env, title="Project open", content="project needle\n",
+            mode="public", project_id=docs_env.public_project,
+        )
+        for who in ("alice", "bob", "carol"):
+            caller = make_caller(
+                docs_env, who=who, project=docs_env.public_project, public=True,
+            )
+            visible = [project_doc["id"]] if who == "alice" else []
+            for scope in ("all", "user", "project"):
+                listed = [d["id"] for d in _run(svc().list_docs(caller, scope=scope))]
+                assert listed == (visible if scope != "user" else []), (who, scope)
+                found = _run(svc().search_docs(caller, "needle", scope=scope))
+                assert [r["id"] for r in found["results"]] == (
+                    visible if scope != "user" else []
+                ), (who, scope)
+                assert legacy["id"] not in listed
+            for fn in (
+                lambda d: svc().read_doc(caller, d),
+                lambda d: svc().append_to_doc(caller, d, "x"),
+            ):
+                with pytest.raises(DocError) as exc:
+                    _run(fn(legacy["id"]))
+                assert str(exc.value) == doc_not_found_message(legacy["id"])
+        assert body(legacy["id"]) == "legacy needle\n"
+
+    def test_legacy_public_user_doc_is_private_in_private_conversations(self, docs_env):
+        unshared = make_legacy_public(
+            docs_env, seed_doc(docs_env, title="Mine", content="a\n")["id"],
+        )
+        shared = make_legacy_public(docs_env, seed_doc(
+            docs_env, title="Ours", content="a\n", shares=[("bob", "read")],
+        )["id"])
+        alice = make_caller(docs_env)
+        # Owner, unshared: free (not "read-only, public doc").
+        assert _run(svc().read_doc(alice, unshared["id"]))["writable"] == "free"
+        _run(svc().append_to_doc(alice, unshared["id"], "b"))
+        assert body(unshared["id"]) == "a\n\nb\n"
+        # Owner, shared: approval; read recipient: read-only share.
+        with pytest.raises(DocApprovalRequired):
+            _run(svc().append_to_doc(alice, shared["id"], "b"))
+        bob = make_caller(docs_env, who="bob")
+        with pytest.raises(DocError) as exc:
+            _run(svc().append_to_doc(bob, shared["id"], "b"))
+        assert str(exc.value) == DENY_READ_ONLY_SHARE
 
     def test_project_docs_hidden_outside_their_project(self, docs_env):
         doc = seed_doc(docs_env, title="Proj", project_id=docs_env.private_project)
@@ -952,9 +1062,13 @@ class TestListAndSearch:
             _run(svc().list_docs(caller, scope="team"))
 
     def test_hidden_rows_do_not_eat_the_limit(self, docs_env):
-        visible = seed_doc(docs_env, title="Public one", mode="public")
+        visible = seed_doc(
+            docs_env, title="Public one", mode="public", project_id=docs_env.public_project,
+        )
         for i in range(3):
             seed_doc(docs_env, title=f"Private {i}")  # newer, hidden from public
+        legacy = seed_doc(docs_env, title="Legacy")  # newest, hidden too
+        make_legacy_public(docs_env, legacy["id"])
         caller = make_caller(docs_env, project=docs_env.public_project, public=True)
         assert [r["id"] for r in _run(svc().list_docs(caller, limit=1))] == [visible["id"]]
 

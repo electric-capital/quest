@@ -5,7 +5,6 @@ import {
   docDownloadUrl,
   fetchDocs,
   isStaleUpdateError,
-  setDocMode,
   staleUpdateCurrent,
 } from './docsApi';
 import { ApiClientError, handleErrorResponse } from './request';
@@ -62,14 +61,11 @@ describe('docsApi', () => {
 
     await fetchDocs();
     await fetchDocs({ projectId: 'p1', limit: 5, cursor: '2026-10-01T00:00:00|d9' });
-    await setDocMode('d1', 'public');
 
     const calls = fetchMock.mock.calls as unknown as [string, RequestInit][];
     expect(calls[0][0]).toBe('/app/api/docs');
     expect(calls[1][0]).toBe(
       '/app/api/docs?project_id=p1&limit=5&cursor=2026-10-01T00%3A00%3A00%7Cd9',
     );
-    expect(calls[2][0]).toBe('/app/api/docs/d1/mode');
-    expect(calls[2][1]).toMatchObject({ method: 'PUT', body: JSON.stringify({ mode: 'public' }) });
   });
 });

@@ -176,12 +176,13 @@ async def _title_taken(
 ) -> bool:
     """True when another doc in ``(owner_id, project_id, mode)`` uses ``title``.
 
-    Uniqueness is scoped per MODE on purpose (invariant 2 of the spec):
-    if private and public user docs shared one title namespace, a public
-    conversation could probe ``create_doc(title=...)`` and learn from the
-    collision error whether a private doc of that title exists. Project
-    docs all carry their project's mode, so for them the extra key is a
-    no-op.
+    Uniqueness is scoped per MODE on purpose (invariant 2 of the spec): a
+    public conversation's ``create_doc(title=...)`` must never learn from
+    the collision error whether a private doc of that title exists. Since
+    user docs are always private (``create_doc`` refuses a public one) and
+    project docs all carry their project's mode, a public conversation's
+    creates only ever land in its public project's namespace and the mode
+    key is a belt-and-braces no-op.
 
     Check-then-insert: two simultaneous creates (or renames) with the same
     title can both pass, exactly like the skills store. The UI and the
@@ -251,7 +252,7 @@ async def create_doc(
             ``(owner_id, project_id, mode)``.
         description: 0..500 chars after stripping.
         mode: ``"private"`` or ``"public"`` (project docs: the caller passes
-            the project's mode).
+            the project's mode). A user doc must be ``"private"``.
         project_id: None for a user doc.
         content_size: Bytes of the initial ``doc.md``.
         last_write_source: ``conversation:<id>`` / ``ui`` / ``action_request:<id>``.
@@ -262,12 +263,17 @@ async def create_doc(
         The doc dict with ``shares: []``.
 
     Raises:
-        DocValidationError: invalid title / description / mode / size.
+        DocValidationError: invalid title / description / mode / size, or
+            a public user doc (user docs are always private).
         DuplicateDocTitleError: title collision in the same scope.
     """
     clean_title = _validate_title(title)
     clean_description = _validate_description(description)
     _validate_mode(mode)
+    if project_id is None and mode != "private":
+        raise DocValidationError(
+            "User docs are always private; only project docs can be public."
+        )
     _validate_count(content_size, "content_size")
 
     async with AsyncSessionLocal() as db:
@@ -443,41 +449,6 @@ async def update_doc_metadata(
             changed = True
 
         if changed:
-            doc.updated_at = datetime.now(timezone.utc)
-            await db.commit()
-            await db.refresh(doc)
-        return await _doc_dict_with_shares(db, doc)
-
-
-async def set_doc_mode(doc_id: str, mode: str) -> Optional[dict]:
-    """Switch a doc between ``private`` and ``public``.
-
-    Does NOT check project inheritance (project docs keep the project's
-    mode) -- the route refuses that case before calling. Bumps
-    ``updated_at`` when the mode changes.
-
-    Returns:
-        The doc dict with shares, or None when the doc does not exist.
-
-    Raises:
-        DuplicateDocTitleError: a doc with this title already exists in
-            the target mode (titles are unique per mode, see _title_taken).
-    """
-    _validate_mode(mode)
-    async with AsyncSessionLocal() as db:
-        doc = await db.get(Doc, doc_id)
-        if doc is None:
-            return None
-        if doc.mode != mode:
-            if await _title_taken(
-                db, doc.owner_id, doc.project_id, mode, doc.title,
-                exclude_doc_id=doc.id,
-            ):
-                raise DuplicateDocTitleError(
-                    f"A {mode} doc titled '{doc.title}' already exists; "
-                    "rename one of them first."
-                )
-            doc.mode = mode
             doc.updated_at = datetime.now(timezone.utc)
             await db.commit()
             await db.refresh(doc)

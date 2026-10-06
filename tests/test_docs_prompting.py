@@ -193,6 +193,13 @@ class TestQuestDocsSkill:
             DENY_READ_ONLY_SHARE, DENY_SLACK_NEEDS_APPROVAL,
         ):
             assert text in content, text
+        # User docs are always private; public docs live only in public
+        # projects, created there with target="project"; no mode switch.
+        assert "**User docs are always private.**" in content
+        assert "Public docs live only in public projects" in content
+        assert 'create_doc(target="project")' in content
+        assert "A doc's mode never changes" in content
+        assert "switch a user doc" not in content
         # Images, paging and the routine pattern.
         assert "assets/<name>" in content
         assert 'placement: "none"' in content
