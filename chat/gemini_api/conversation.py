@@ -581,34 +581,16 @@ async def run_conversation_turn(
         # the tool tier, the dispatch allowlist, and the loop arms below.
         is_public = bool(project_data and project_data.get("public"))
 
-        # Server-global gate: while the public_projects feature is off (or
-        # restricted to an allowed-user list this user is not on), existing
-        # public projects are hidden from the UI (see chat/project_routes.py)
-        # and their conversations must not run new turns either -- the
-        # internet-enabled sandbox is the whole point of the gate. Raising
-        # here surfaces a durable error message on the (normally
-        # unreachable) conversation instead of silently running.
-        if is_public:
-            from config.feature_gates import (
-                FEATURE_PUBLIC_PROJECTS, is_feature_enabled_for_user,
-            )
-            if not is_feature_enabled_for_user(
-                FEATURE_PUBLIC_PROJECTS, user["email"]
-            ):
-                raise RuntimeError(
-                    "Public projects are disabled for your account or "
-                    "server-wide. An admin can grant access in Settings > "
-                    "Features."
-                )
-            # Sub-gate: a routine run (scheduled or one-click -- both carry
-            # the conversation's routine_id) in a public project needs the
-            # public_project_routines gate too. The scheduler and the
-            # run-start endpoint already refuse while it is closed; this is
-            # the backstop for every path into a routine conversation.
-            from config.feature_gates import FEATURE_PUBLIC_PROJECT_ROUTINES
-            if routine_id and not is_feature_enabled_for_user(
-                FEATURE_PUBLIC_PROJECT_ROUTINES, user["email"]
-            ):
+        # Server-global gate: a routine run (scheduled or one-click -- both
+        # carry the conversation's routine_id) in a public project needs the
+        # public_project_routines gate (the run executes unattended in the
+        # internet-enabled sandbox). The scheduler and the run-start
+        # endpoint already refuse while it is closed; this is the backstop
+        # for every path into a routine conversation. Raising here surfaces
+        # a durable error message instead of silently running.
+        if is_public and routine_id:
+            from config.feature_gates import public_project_routines_enabled_for
+            if not public_project_routines_enabled_for(user["email"]):
                 raise RuntimeError(
                     "Routines in public projects are disabled for your "
                     "account or server-wide. An admin can grant access in "

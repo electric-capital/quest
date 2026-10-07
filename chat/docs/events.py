@@ -19,7 +19,7 @@ captures it BEFORE the rows go (the cascade takes the share rows with
 them) and publishes to the captured audience afterwards.
 
 Install-wide fan-out (an everyone share) is not filtered per recipient:
-the recipients' ``docs`` / ``public_projects`` gates are not consulted, so
+the recipients' ``docs`` gate is not consulted, so
 a connected user who cannot open the doc still receives its id and
 ``updated_at`` -- never content or a title; the client's follow-up fetch
 goes through the access rule and 404s. Cost: every write to such a doc

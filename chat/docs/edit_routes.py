@@ -8,8 +8,7 @@ Same conventions as chat/docs/routes.py: under ``/app/api``, authenticated
 by ``get_current_user_cookie_or_apikey_checked``, 403 ``docs_disabled``
 first while the ``docs`` gate is closed for the user, then visibility via
 ``routes._get_doc_for_ui`` (404 ``doc_not_found``, one body for a missing
-and a hidden doc, public-project docs hidden while the ``public_projects``
-gate is closed). Errors are ``{"detail": {"error", "message"}}`` except the
+and a hidden doc). Errors are ``{"detail": {"error", "message"}}`` except the
 flat 409 ``stale_update`` of the content PUT. The writes themselves live in
 chat/docs/ui_writes.py (per-doc write lock, revision snapshot for body
 changes, ``ui:<user_id>`` write source, realtime events).

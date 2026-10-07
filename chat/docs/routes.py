@@ -8,9 +8,7 @@ Everything is under ``/app/api``, authenticated by
 Visibility goes through the one access rule
 (``chat.docs.access.resolve_doc_access`` with ``run_kind="ui"``, via
 ``chat.docs.service.get_visible_doc``): a doc the user cannot see is a
-404 ``doc_not_found`` with exactly the body a nonexistent id gets. Docs of
-a public project are hidden the same way while the ``public_projects``
-gate is closed for the viewer or for the doc's owner (frozen for everyone). Rename, mode switch, delete and share
+404 ``doc_not_found`` with exactly the body a nonexistent id gets. Rename, mode switch, delete and share
 management (chat/docs/share_routes.py) additionally require ownership (403
 ``forbidden`` for a visible non-owned doc) -- a route check, not part of the
 matrix.
@@ -92,7 +90,7 @@ from chat.docs import ui_writes
 from chat.docs.access import DocAccess, effective_share, resolve_doc_access
 from chat.docs.constants import doc_not_found_message, docs_disabled_message
 from chat.file_routes import _INLINE_IMAGE_MIMES
-from chat.project_routes import _get_visible_project, _public_projects_enabled_for
+from db.project_store import get_project
 from config.feature_gates import docs_enabled_for
 from db import action_request_store, doc_store, user_store
 
@@ -468,49 +466,13 @@ def _asset_not_found(name: str) -> HTTPException:
 
 
 async def _get_doc_for_ui(user: dict, doc_id: str) -> tuple[dict, DocAccess]:
-    """``(doc, access)`` for a doc the user may see, else 404 doc_not_found.
-
-    Docs of a public project are hidden (same 404) while the
-    ``public_projects`` gate is closed for the viewer OR for the doc's
-    owner, matching the project routes' "hidden public projects 404 on
-    every by-id endpoint" rule: a project hidden from its owner is frozen
-    for its share recipients too (no reads, edits or restores the owner
-    could not see). A project doc's mode mirrors its project's ``public``
-    flag, so no project lookup is needed; the owner's email costs one user
-    lookup, only for a public-project doc seen by a non-owner.
-    """
+    """``(doc, access)`` for a doc the user may see, else 404 doc_not_found."""
     try:
-        doc, access = await doc_service.get_visible_doc(_ui_caller(user), doc_id)
+        return await doc_service.get_visible_doc(_ui_caller(user), doc_id)
     except doc_service.DocDisabled:
         raise _http_error(403, "docs_disabled", docs_disabled_message())
     except doc_service.DocError:
         raise _doc_not_found(doc_id)
-    if _is_public_project_doc(doc):
-        if not _public_projects_enabled_for(user):
-            raise _doc_not_found(doc_id)
-        if doc["owner_id"] != user["id"]:
-            owners = await user_store.get_users_by_ids([doc["owner_id"]])
-            if not _public_projects_open(owners.get(doc["owner_id"]), {}):
-                raise _doc_not_found(doc_id)
-    return doc, access
-
-
-def _is_public_project_doc(doc: dict) -> bool:
-    """A doc of a public project (its mode mirrors ``projects.public``);
-    hidden from the UI while the viewer's or the owner's
-    ``public_projects`` gate is closed."""
-    return doc.get("project_id") is not None and doc.get("mode") == "public"
-
-
-def _public_projects_open(person: Optional[dict], cache: dict) -> bool:
-    """Whether the ``public_projects`` gate is open for ``person`` (a
-    ``get_users_by_ids`` entry; None -- a user that no longer exists --
-    fails closed). ``cache`` memoizes per user id within one request."""
-    if person is None:
-        return False
-    if person["id"] not in cache:
-        cache[person["id"]] = _public_projects_enabled_for(person)
-    return cache[person["id"]]
 
 
 def _raise_request_error(exc: "doc_service.DocRequestError", doc_id: str):
@@ -528,9 +490,8 @@ def _require_owner(user: dict, doc: dict, action: str) -> None:
 
 
 async def _require_visible_project(user: dict, project_id: str) -> dict:
-    """The project, owned by the user and not hidden by the public-projects
-    gate (the same check the project routes use), else 404."""
-    project = await _get_visible_project(user, project_id)
+    """The project, owned by the user, else 404."""
+    project = await get_project(user["id"], project_id)
     if project is None:
         raise _http_error(404, "project_not_found", "Project not found.")
     return project
@@ -582,24 +543,18 @@ async def _visible_docs_page(
     Streams: ``shared`` -> ``doc_store.list_docs_shared_with`` (docs shared
     with the user that they do not own, user and project docs); else
     ``project_id`` -> that project's docs; else the user's OWN user docs.
-    Every row still passes the access rule, and public-project docs are
-    dropped while the viewer's OR the owner's ``public_projects`` gate is
-    closed (the ``_get_doc_for_ui`` rule; the viewer's half is pushed into
-    SQL for the shared stream, the owner's needs the owners' emails --
-    one lookup per store batch, reused for the rows). With ``limit`` it
-    gathers ``limit + 1`` visible rows (paging the store past any hidden
+    Every row still passes the access rule. Other users' owners are looked
+    up in one batch per store page and reused for the rows. With ``limit``
+    it gathers ``limit + 1`` visible rows (paging the store past any hidden
     ones) so ``has_more`` is exact; without it, the whole list.
     """
     want = None if limit is None else limit + 1
-    viewer_gate_open = _public_projects_enabled_for(user) if shared else None
-    gate_cache: dict = {}
     owners: dict = {}
     out: list[tuple[dict, DocAccess]] = []
     while True:
         if shared:
             rows = await doc_store.list_docs_shared_with(
                 user["id"], limit=want, before=before,
-                include_public_project_docs=viewer_gate_open,
             )
         else:
             rows = await doc_store.list_accessible_docs(
@@ -622,13 +577,6 @@ async def _visible_docs_page(
             access = _ui_access(user, doc)
             if not access.visible:
                 continue
-            if _is_public_project_doc(doc):
-                if not _public_projects_open(user, gate_cache):
-                    continue
-                if doc["owner_id"] != user["id"] and not _public_projects_open(
-                    owners.get(doc["owner_id"]), gate_cache,
-                ):
-                    continue
             out.append((doc, access))
             if want is not None and len(out) >= want:
                 break
@@ -683,10 +631,8 @@ async def list_user_docs(
     - ``project_id``: that project's docs (the project must be the user's
       and visible, else 404 ``project_not_found``).
     - ``shared=true``: docs shared WITH the user (a direct or an everyone
-      share) that they do not own, user and project docs alike; docs of a
-      public project are left out while the user's OR the doc owner's
-      ``public_projects`` gate is closed. Together with ``project_id`` ->
-      400 ``invalid_request``.
+      share) that they do not own, user and project docs alike. Together
+      with ``project_id`` -> 400 ``invalid_request``.
 
     With no ``limit`` the whole stream is returned; ``limit`` (1..200) pages
     with an opaque keyset ``next_cursor`` (``<updated_at>|<id>``) the client
@@ -731,8 +677,7 @@ async def create_ui_doc(
     a private doc, ``"public"`` is 400 ``user_doc_mode_private`` (a public
     doc is created inside a public project). A project doc takes its
     project's mode, and a supplied ``mode`` that disagrees is 400
-    ``project_doc_mode_inherited``; a public project hidden by the
-    ``public_projects`` gate is 404 ``project_not_found``. Errors also:
+    ``project_doc_mode_inherited``. Errors also:
     409 ``duplicate_title``, 400 ``invalid_title`` / ``invalid_description``
     / ``invalid_mode``. Returns the row (201).
     """
@@ -881,8 +826,7 @@ async def set_ui_doc_mode(
     (the body is optional so a missing or malformed one still gets the
     404 / 403 / 400 below rather than a 422).
 
-    Checked in order: 404 ``doc_not_found`` (missing, hidden, or in a
-    public project hidden by the ``public_projects`` gate); 403
+    Checked in order: 404 ``doc_not_found`` (missing or hidden); 403
     ``forbidden`` for a non-owner; then 400 ``user_doc_mode_private`` for a
     user doc (always private) or 400 ``project_doc_mode_inherited`` for a
     project doc (its mode is the project's). Nothing changes and no event

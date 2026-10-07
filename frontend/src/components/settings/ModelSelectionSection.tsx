@@ -241,9 +241,8 @@ export function ModelSelectionSection() {
     return out;
   }, [data]);
 
-  const publicMode = data?.public_mode_enabled ?? false;
   const slotOptions = data ? Array.from({ length: data.max_slots }, (_, i) => i + 1) : [];
-  const columnCount = publicMode ? 6 : 3;
+  const columnCount = 6;
 
   return (
     <div className="settings-section">
@@ -251,43 +250,31 @@ export function ModelSelectionSection() {
       <p className="settings-description">
         How the enabled models are offered to users. Pin up to {data?.max_slots ?? 5} models
         to the top level of the composer's model menu with a descriptor of your choice
-        (everything else stays under "All models").
-        {publicMode
-          ? ' Public-project conversations get their own top level, and each model can be allowed or blocked for private and for public conversations.'
-          : ' Turn on Public projects in Features to get a separate top level and per-model allow rules for public-project conversations.'}
-        {' '}Applies to all users. Admin only.
+        (everything else stays under "All models"). Public-project conversations get their
+        own top level, and each model can be allowed or blocked for private and for public
+        conversations. Applies to all users. Admin only.
       </p>
       {loadError ? (
         <div className="svc-cred-load-error">{loadError}</div>
       ) : data === null ? (
         <div className="settings-loading">Loading...</div>
       ) : (
-        <div className={`model-selection-layout${publicMode ? ' public-mode' : ''}`}>
+        <div className="model-selection-layout">
           <div className="model-selection-main">
-            <table className={`model-selection-table${publicMode ? ' public-mode' : ''}`}>
+            <table className="model-selection-table">
               <thead>
-                {publicMode ? (
-                  <>
-                    <tr className="model-selection-header-groups">
-                      <th className="model-selection-col-model" rowSpan={2}>Model</th>
-                      <th className="model-selection-col-descriptor" rowSpan={2} title="Label shown for the model in the top level of either menu">Descriptor</th>
-                      <th colSpan={2} className="model-selection-header-group" title="Standalone and project conversations, routines, Slack and API runs">Private conversations</th>
-                      <th colSpan={2} className="model-selection-header-group" title="Public-project conversations (internet-enabled sandbox)">Public conversations</th>
-                    </tr>
-                    <tr>
-                      <th className="model-selection-col-slot" title="Position in the top level of the private menu">Slot</th>
-                      <th className="model-selection-col-check" title="May be used in private conversations">Allowed</th>
-                      <th className="model-selection-col-slot" title="Position in the top level of the public menu">Slot</th>
-                      <th className="model-selection-col-check" title="May be used in public-project conversations">Allowed</th>
-                    </tr>
-                  </>
-                ) : (
-                  <tr>
-                    <th className="model-selection-col-model">Model</th>
-                    <th className="model-selection-col-slot" title="Position in the top level of the model menu">Top-level slot</th>
-                    <th className="model-selection-col-descriptor" title="Label shown for the model in the top level of the menu">Descriptor</th>
-                  </tr>
-                )}
+                <tr className="model-selection-header-groups">
+                  <th className="model-selection-col-model" rowSpan={2}>Model</th>
+                  <th className="model-selection-col-descriptor" rowSpan={2} title="Label shown for the model in the top level of either menu">Descriptor</th>
+                  <th colSpan={2} className="model-selection-header-group" title="Standalone and project conversations, routines, Slack and API runs">Private conversations</th>
+                  <th colSpan={2} className="model-selection-header-group" title="Public-project conversations (internet-enabled sandbox)">Public conversations</th>
+                </tr>
+                <tr>
+                  <th className="model-selection-col-slot" title="Position in the top level of the private menu">Slot</th>
+                  <th className="model-selection-col-check" title="May be used in private conversations">Allowed</th>
+                  <th className="model-selection-col-slot" title="Position in the top level of the public menu">Slot</th>
+                  <th className="model-selection-col-check" title="May be used in public-project conversations">Allowed</th>
+                </tr>
               </thead>
               <tbody>
                 {groups.map((group) => (
@@ -296,7 +283,6 @@ export function ModelSelectionSection() {
                     label={group.label}
                     rows={group.rows}
                     drafts={drafts}
-                    publicMode={publicMode}
                     columnCount={columnCount}
                     slotOptions={slotOptions}
                     maxDescriptorLength={data.max_descriptor_length}
@@ -311,8 +297,8 @@ export function ModelSelectionSection() {
             <p className="model-selection-note">
               A dot after a model's name means it is currently hidden from users — its
               provider is not configured (grey) or failing its health check (red); fix that
-              in Inference Providers.
-              {publicMode && ' Unticking Allowed also stops existing conversations of that kind from continuing on the model until they switch.'}
+              in Inference Providers. Unticking Allowed also stops existing conversations of
+              that kind from continuing on the model until they switch.
             </p>
             <div className="model-selection-actions">
               <SaveActions
@@ -330,19 +316,17 @@ export function ModelSelectionSection() {
           </div>
           <aside className="model-selection-side">
             <ModelMenuPreview
-              title={`${publicMode ? 'Private menu' : 'Menu preview'}${dirty ? ' (unsaved)' : ''}`}
+              title={`Private menu${dirty ? ' (unsaved)' : ''}`}
               visibility="private"
               rows={data.models}
               drafts={drafts}
             />
-            {publicMode && (
-              <ModelMenuPreview
-                title={`Public menu${dirty ? ' (unsaved)' : ''}`}
-                visibility="public"
-                rows={data.models}
-                drafts={drafts}
-              />
-            )}
+            <ModelMenuPreview
+              title={`Public menu${dirty ? ' (unsaved)' : ''}`}
+              visibility="public"
+              rows={data.models}
+              drafts={drafts}
+            />
           </aside>
         </div>
       )}
@@ -385,7 +369,6 @@ function GroupRows({
   label,
   rows,
   drafts,
-  publicMode,
   columnCount,
   slotOptions,
   maxDescriptorLength,
@@ -397,7 +380,6 @@ function GroupRows({
   label: string;
   rows: ModelSelectionRow[];
   drafts: Record<string, Draft>;
-  publicMode: boolean;
   columnCount: number;
   slotOptions: number[];
   maxDescriptorLength: number;
@@ -413,7 +395,7 @@ function GroupRows({
       </tr>
       {rows.map((row) => {
         const draft = drafts[row.id];
-        const slotted = draft.slot !== null || (publicMode && draft.publicSlot !== null);
+        const slotted = draft.slot !== null || draft.publicSlot !== null;
         const modelCell = (
           <td className="model-selection-col-model">
             <div className="model-selection-model-name">
@@ -450,7 +432,7 @@ function GroupRows({
               row={row}
               visibility={visibility}
               value={slotOf(draft, visibility)}
-              disabled={busy || (publicMode && !allowedIn(draft, visibility))}
+              disabled={busy || !allowedIn(draft, visibility)}
               slotOptions={slotOptions}
               onChange={(slot) => onSlot(row.id, visibility, slot)}
             />
@@ -470,20 +452,11 @@ function GroupRows({
         return (
           <tr key={row.id} className={`model-selection-row${row.available ? '' : ' unavailable'}`}>
             {modelCell}
-            {publicMode ? (
-              <>
-                {descriptorCell}
-                {slotCell('private')}
-                {allowedCell('private')}
-                {slotCell('public')}
-                {allowedCell('public')}
-              </>
-            ) : (
-              <>
-                {slotCell('private')}
-                {descriptorCell}
-              </>
-            )}
+            {descriptorCell}
+            {slotCell('private')}
+            {allowedCell('private')}
+            {slotCell('public')}
+            {allowedCell('public')}
           </tr>
         );
       })}

@@ -1,6 +1,6 @@
 """Second review round: write_doc card cost, locked UI mutations (delete;
-the mode switch is refused for every doc), hidden public-project docs by
-id, pinned image bytes at approve time.
+the mode switch is refused for every doc), pinned image bytes at approve
+time.
 """
 
 import asyncio
@@ -28,7 +28,7 @@ from tests.test_write_doc_action_request import (
     propose,
     shared_doc,
 )
-from tests.test_docs_routes import client, detail, open_public_projects
+from tests.test_docs_routes import client, detail
 
 
 class TestBoundedCardDiff:
@@ -88,7 +88,6 @@ class TestLockedUiMutations:
         assert detail(resp)["error"] == "doc_not_found"
 
     def test_mode_switch_route_errors(self, docs_env):
-        open_public_projects(docs_env)  # the gate changes nothing for user docs
         private = seed_doc(docs_env, title="Report", mode="private")
         c = client(docs_env)
         resp = c.put(f"/app/api/docs/{private['id']}/mode", json={"mode": "public"})
@@ -98,48 +97,6 @@ class TestLockedUiMutations:
             f"/app/api/docs/{private['id']}/mode", json={"mode": "public"},
         )
         assert resp.status_code == 404  # bob cannot see alice's doc at all
-
-
-class TestHiddenPublicProjectDocsById:
-    @pytest.fixture()
-    def hidden_doc(self, docs_env):
-        open_public_projects(docs_env)
-        doc = seed_doc(
-            docs_env, "Open doc", mode="public", project_id=docs_env.public_project,
-            content="open\n",
-        )
-        from chat.docs import files
-        files.add_asset(doc["id"], "c.png", PNG)
-        # Close the public-projects gate: the project and its docs vanish.
-        docs_env.fg.set_feature_enabled(docs_env.fg.FEATURE_PUBLIC_PROJECTS, False)
-        return doc
-
-    def test_every_by_id_route_404s_like_missing(self, docs_env, hidden_doc):
-        c = client(docs_env)
-        doc_id = hidden_doc["id"]
-        missing = str(uuid.uuid4())
-        calls = [
-            lambda i: c.get(f"/app/api/docs/{i}"),
-            lambda i: c.put(f"/app/api/docs/{i}", json={"title": "x"}),
-            lambda i: c.put(f"/app/api/docs/{i}/mode", json={"mode": "private"}),
-            lambda i: c.get(f"/app/api/docs/{i}/assets/c.png"),
-            lambda i: c.get(f"/app/api/docs/{i}/download?format=md"),
-            lambda i: c.delete(f"/app/api/docs/{i}"),
-        ]
-        for call in calls:
-            hidden = call(doc_id)
-            absent = call(missing)
-            assert hidden.status_code == 404 == absent.status_code
-            assert hidden.text.replace(doc_id, "<id>") == absent.text.replace(missing, "<id>")
-        # Nothing was deleted or changed.
-        assert _run(docs_env.doc_store.get_doc(doc_id))["title"] == "Open doc"
-        assert body(doc_id) == "open\n"
-
-    def test_reopening_the_gate_restores_access(self, docs_env, hidden_doc):
-        open_public_projects(docs_env)
-        resp = client(docs_env).get(f"/app/api/docs/{hidden_doc['id']}")
-        assert resp.status_code == 200
-        assert resp.json()["content"] == "open\n"
 
 
 class TestPinnedImageAtApprove:

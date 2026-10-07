@@ -89,68 +89,68 @@ class TestFeatureGateStore:
 
 class TestPerUserAccess:
     def test_all_users_by_default(self, gates_file):
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
+        fg.set_feature_enabled(fg.FEATURE_DOCS, True)
         assert fg.is_feature_enabled_for_user(
-            fg.FEATURE_PUBLIC_PROJECTS, "anyone@example.com"
+            fg.FEATURE_DOCS, "anyone@example.com"
         )
 
     def test_allowed_list_restricts_and_normalizes(self, gates_file):
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
+        fg.set_feature_enabled(fg.FEATURE_DOCS, True)
         fg.set_feature_allowed_users(
-            fg.FEATURE_PUBLIC_PROJECTS,
+            fg.FEATURE_DOCS,
             ["  Alice@Example.com ", "bob@example.com", "alice@example.com", ""],
         )
         gates = fg.read_feature_gates()
-        assert gates[fg.FEATURE_PUBLIC_PROJECTS]["allowed_users"] == [
+        assert gates[fg.FEATURE_DOCS]["allowed_users"] == [
             "alice@example.com", "bob@example.com",
         ]
         # Case-insensitive membership check.
         assert fg.is_feature_enabled_for_user(
-            fg.FEATURE_PUBLIC_PROJECTS, "ALICE@example.COM"
+            fg.FEATURE_DOCS, "ALICE@example.COM"
         )
         assert not fg.is_feature_enabled_for_user(
-            fg.FEATURE_PUBLIC_PROJECTS, "eve@example.com"
+            fg.FEATURE_DOCS, "eve@example.com"
         )
         # The coarse "on at all" check ignores the list.
-        assert fg.is_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS)
+        assert fg.is_feature_enabled(fg.FEATURE_DOCS)
         # enabled_features is per-user.
         assert fg.enabled_features("alice@example.com") == [
-            fg.FEATURE_PUBLIC_PROJECTS
+            fg.FEATURE_DOCS
         ]
         assert fg.enabled_features("eve@example.com") == []
 
     def test_disabled_gate_beats_allowed_list(self, gates_file):
         fg.set_feature_allowed_users(
-            fg.FEATURE_PUBLIC_PROJECTS, ["alice@example.com"]
+            fg.FEATURE_DOCS, ["alice@example.com"]
         )
         assert not fg.is_feature_enabled_for_user(
-            fg.FEATURE_PUBLIC_PROJECTS, "alice@example.com"
+            fg.FEATURE_DOCS, "alice@example.com"
         )
 
     def test_toggling_enabled_preserves_allowed_list(self, gates_file):
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
+        fg.set_feature_enabled(fg.FEATURE_DOCS, True)
         fg.set_feature_allowed_users(
-            fg.FEATURE_PUBLIC_PROJECTS, ["alice@example.com"]
+            fg.FEATURE_DOCS, ["alice@example.com"]
         )
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, False)
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
+        fg.set_feature_enabled(fg.FEATURE_DOCS, False)
+        fg.set_feature_enabled(fg.FEATURE_DOCS, True)
         gates = fg.read_feature_gates()
-        assert gates[fg.FEATURE_PUBLIC_PROJECTS]["allowed_users"] == [
+        assert gates[fg.FEATURE_DOCS]["allowed_users"] == [
             "alice@example.com"
         ]
 
     def test_none_reopens_to_all_users(self, gates_file):
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
+        fg.set_feature_enabled(fg.FEATURE_DOCS, True)
         fg.set_feature_allowed_users(
-            fg.FEATURE_PUBLIC_PROJECTS, ["alice@example.com"]
+            fg.FEATURE_DOCS, ["alice@example.com"]
         )
-        fg.set_feature_allowed_users(fg.FEATURE_PUBLIC_PROJECTS, None)
+        fg.set_feature_allowed_users(fg.FEATURE_DOCS, None)
         assert fg.is_feature_enabled_for_user(
-            fg.FEATURE_PUBLIC_PROJECTS, "eve@example.com"
+            fg.FEATURE_DOCS, "eve@example.com"
         )
         # Back in compact bool form on disk.
         persisted = json.loads(gates_file.read_text())
-        assert persisted[fg.FEATURE_PUBLIC_PROJECTS] is True
+        assert persisted[fg.FEATURE_DOCS] is True
 
     def test_non_per_user_feature_rejects_list(self, gates_file):
         assert fg.FEATURE_USER_SUBAGENTS not in fg.PER_USER_ACCESS_FEATURES
@@ -162,22 +162,22 @@ class TestPerUserAccess:
         fg.set_feature_allowed_users(fg.FEATURE_USER_SUBAGENTS, None)
 
     def test_legacy_bool_file_reads_as_all_users(self, gates_file):
-        gates_file.write_text(json.dumps({fg.FEATURE_PUBLIC_PROJECTS: True}))
+        gates_file.write_text(json.dumps({fg.FEATURE_DOCS: True}))
         assert fg.is_feature_enabled_for_user(
-            fg.FEATURE_PUBLIC_PROJECTS, "anyone@example.com"
+            fg.FEATURE_DOCS, "anyone@example.com"
         )
 
     def test_malformed_allowed_users_fails_closed(self, gates_file):
         gates_file.write_text(json.dumps({
-            fg.FEATURE_PUBLIC_PROJECTS: {
+            fg.FEATURE_DOCS: {
                 "enabled": True, "allowed_users": "not-a-list",
             },
         }))
         assert not fg.is_feature_enabled_for_user(
-            fg.FEATURE_PUBLIC_PROJECTS, "anyone@example.com"
+            fg.FEATURE_DOCS, "anyone@example.com"
         )
         # The gate still reads as "on at all" for the admin view.
-        assert fg.is_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS)
+        assert fg.is_feature_enabled(fg.FEATURE_DOCS)
 
 
 class TestFilterGatedFlags:
@@ -259,7 +259,7 @@ class TestFeatureGateEndpoints:
 
     def test_update_allowed_users_round_trip(self, admin_routes):
         updated = _run(admin_routes.admin_update_feature_gate(
-            fg.FEATURE_PUBLIC_PROJECTS,
+            fg.FEATURE_DOCS,
             admin_routes.FeatureGateUpdate(
                 enabled=True, allowed_users=["Alice@Example.com"],
             ),
@@ -268,15 +268,15 @@ class TestFeatureGateEndpoints:
         assert updated["enabled"] is True
         assert updated["allowed_users"] == ["alice@example.com"]
         assert fg.is_feature_enabled_for_user(
-            fg.FEATURE_PUBLIC_PROJECTS, "alice@example.com"
+            fg.FEATURE_DOCS, "alice@example.com"
         )
         assert not fg.is_feature_enabled_for_user(
-            fg.FEATURE_PUBLIC_PROJECTS, "eve@example.com"
+            fg.FEATURE_DOCS, "eve@example.com"
         )
 
         # Omitting allowed_users keeps the stored list.
         toggled = _run(admin_routes.admin_update_feature_gate(
-            fg.FEATURE_PUBLIC_PROJECTS,
+            fg.FEATURE_DOCS,
             admin_routes.FeatureGateUpdate(enabled=True),
             user=ADMIN_USER,
         ))
@@ -284,13 +284,13 @@ class TestFeatureGateEndpoints:
 
         # An explicit null reopens the gate to all users.
         opened = _run(admin_routes.admin_update_feature_gate(
-            fg.FEATURE_PUBLIC_PROJECTS,
+            fg.FEATURE_DOCS,
             admin_routes.FeatureGateUpdate(enabled=True, allowed_users=None),
             user=ADMIN_USER,
         ))
         assert opened["allowed_users"] is None
         assert fg.is_feature_enabled_for_user(
-            fg.FEATURE_PUBLIC_PROJECTS, "eve@example.com"
+            fg.FEATURE_DOCS, "eve@example.com"
         )
 
     def test_update_allowed_users_rejected_for_unsupported_feature(
@@ -310,14 +310,14 @@ class TestFeatureGateEndpoints:
     def test_update_rejects_non_email_entries(self, admin_routes):
         with pytest.raises(HTTPException) as exc:
             _run(admin_routes.admin_update_feature_gate(
-                fg.FEATURE_PUBLIC_PROJECTS,
+                fg.FEATURE_DOCS,
                 admin_routes.FeatureGateUpdate(
                     enabled=True, allowed_users=["not-an-email"],
                 ),
                 user=ADMIN_USER,
             ))
         assert exc.value.status_code == 400
-        assert not fg.is_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS)
+        assert not fg.is_feature_enabled(fg.FEATURE_DOCS)
 
     def test_update_unknown_feature_404(self, admin_routes):
         with pytest.raises(HTTPException) as exc:

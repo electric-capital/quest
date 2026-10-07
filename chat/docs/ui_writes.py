@@ -9,9 +9,8 @@ the model tools' approval card: the UI verdict of the access rule
 write-share recipient, and ``denied`` otherwise. Deleting an asset is
 owner-only on top of that (a route-level ownership rule, like rename).
 
-Same pipeline as chat/docs/service.py: feature gate -> visible doc (docs of
-a public project are hidden while the ``public_projects`` gate is closed
-for the user, as in the routes) -> access -> per-doc asyncio write lock
+Same pipeline as chat/docs/service.py: feature gate -> visible doc ->
+access -> per-doc asyncio write lock
 (shielded) -> file op in a thread -> DB bump + realtime events
 (``service._finish_write``). A body replace snapshots the replaced body into
 ``revisions/`` and records the writer in ``doc.meta.json``; asset-only
@@ -51,9 +50,7 @@ from chat.docs import constants
 from chat.docs import files as doc_files
 from chat.docs import service
 from chat.docs.access import DENY_UI_READ_ONLY
-from chat.docs.constants import doc_not_found_message
-from config import feature_gates
-from db import doc_store, user_store
+from db import doc_store
 
 logger = logging.getLogger(__name__)
 
@@ -113,42 +110,11 @@ def ui_caller(user: dict) -> service.Caller:
     )
 
 
-def _public_projects_open(email) -> bool:
-    return feature_gates.is_feature_enabled_for_user(
-        feature_gates.FEATURE_PUBLIC_PROJECTS, email or "",
-    )
-
-
-async def public_doc_frozen_for(user: dict, doc: dict) -> bool:
-    """Whether ``doc`` is a public-project doc hidden from ``user`` by the
-    ``public_projects`` gate: closed for the viewer OR for the doc's owner
-    (a project hidden from its owner is frozen for its share recipients
-    too). The same rule as ``routes._get_doc_for_ui``; the lock-time
-    re-checks (here and in chat/docs/history.py) call this so a gate
-    closing while a request queued is honoured. A project doc's mode
-    mirrors its project's ``public`` flag; the owner lookup runs only for a
-    public-project doc seen by a non-owner (a deleted owner fails closed).
-    """
-    if doc.get("project_id") is None or doc.get("mode") != "public":
-        return False
-    if not _public_projects_open(user.get("email")):
-        return True
-    if doc["owner_id"] != user["id"]:
-        owners = await user_store.get_users_by_ids([doc["owner_id"]])
-        owner = owners.get(doc["owner_id"])
-        if owner is None or not _public_projects_open(owner.get("email")):
-            return True
-    return False
-
-
 async def _get_ui_doc(caller: service.Caller, doc_id: str):
-    """``service.get_visible_doc`` plus the routes' public-projects rule
-    (:func:`public_doc_frozen_for`), re-checked here so the under-lock
-    re-check sees it too: a frozen doc raises the one not-found text."""
-    doc, access = await service.get_visible_doc(caller, doc_id)
-    if await public_doc_frozen_for(caller.user, doc):
-        raise service.DocError(doc_not_found_message(doc_id))
-    return doc, access
+    """``service.get_visible_doc`` for a UI caller; a hidden doc raises the
+    one not-found text. Called again under the write lock so a share
+    revoked while a request queued is honoured."""
+    return await service.get_visible_doc(caller, doc_id)
 
 
 def _check_content(content) -> str:
@@ -210,7 +176,7 @@ async def replace_body_from_ui(
 
     Checked before taking the lock: the gate, the content (string, UTF-8,
     under ``DOC_MAX_CONTENT_SIZE`` after CRLF -> LF), the token (required),
-    visibility (incl. the public-projects rule of :func:`_get_ui_doc`) and
+    visibility (:func:`_get_ui_doc`) and
     the UI write verdict. Then, under the per-doc asyncio write lock and
     shielded from cancellation, everything that matters is re-checked
     against a FRESH row (TOCTOU: a share revoked or another write landing

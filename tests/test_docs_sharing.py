@@ -6,8 +6,7 @@ Runs the doc routers in a bare FastAPI app with the auth dependency
 overridden (the tests/test_docs_routes.py pattern, plus the share router)
 on the isolated ``docs_env`` fixture from tests/test_docs_service.py (tmp
 SQLite with foreign keys on, tmp DOCS_DIR / CHATS_DIR / PROJECTS_DIR, docs
-gate open, ``public_projects`` closed, realtime ``publish_to_user``
-captured). Users: alice (owns the three projects), bob, carol.
+gate open, realtime ``publish_to_user`` captured). Users: alice (owns the three projects), bob, carol.
 
 Covers:
 
@@ -124,13 +123,6 @@ def add_user(env, address):
             return user.id
 
     return _run(_add())
-
-
-def open_public_projects_for(env, *who):
-    """Open the public_projects gate for these seeded users only."""
-    fg = env.fg
-    fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
-    fg.set_feature_allowed_users(fg.FEATURE_PUBLIC_PROJECTS, [email(env, w) for w in who])
 
 
 def set_updated_at(env, doc_ids, when):
@@ -359,12 +351,8 @@ class TestAddShare:
             "error": "doc_not_found", "message": doc_not_found_message(missing_id),
         }
 
-    def test_gated_off_public_project_doc_404(self, docs_env):
+    def test_public_project_doc_shareable(self, docs_env):
         doc = seed_doc(docs_env, "Open", mode="public", project_id=docs_env.public_project)
-        resp = share(client(docs_env), doc["id"], user_email=email(docs_env, "bob"),
-                     permission="read")
-        assert resp.status_code == 404
-        docs_env.fg.set_feature_enabled(docs_env.fg.FEATURE_PUBLIC_PROJECTS, True)
         resp = share(client(docs_env), doc["id"], user_email=email(docs_env, "bob"),
                      permission="read")
         assert resp.status_code == 200
@@ -672,12 +660,11 @@ class TestSharedList:
         data = client(docs_env).get("/app/api/docs?shared=true&limit=1").json()
         assert len(data["docs"]) == 1 and data["has_more"] is True
 
-    def test_public_project_doc_hidden_while_gate_closed(self, docs_env):
-        fg = docs_env.fg
+    def test_public_project_doc_listed_and_readable(self, docs_env):
         public = seed_doc(docs_env, "Open", mode="public",
                           project_id=docs_env.public_project, shares=[("bob", "read")])
         older = seed_doc(docs_env, "Older", owner="carol", shares=[("bob", "read")])
-        # Make the public-project doc the newest so it would eat a page slot.
+        # Make the public-project doc the newest so it leads the page.
         _run(docs_env.doc_store.update_after_write(
             public["id"], content_size=1, last_write_source="ui",
         ))
@@ -687,15 +674,6 @@ class TestSharedList:
             data = bob.get("/app/api/docs", params={"shared": "true", **params}).json()
             return [r["id"] for r in data["docs"]], data["has_more"]
 
-        assert shared_ids() == ([older["id"]], False)
-        assert shared_ids(limit=1) == ([older["id"]], False)
-        assert bob.get(f"/app/api/docs/{public['id']}").status_code == 404
-        # Open for alice only: still hidden from bob.
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
-        fg.set_feature_allowed_users(fg.FEATURE_PUBLIC_PROJECTS, [email(docs_env, "alice")])
-        assert shared_ids() == ([older["id"]], False)
-        # Open for everyone: listed and readable.
-        fg.set_feature_allowed_users(fg.FEATURE_PUBLIC_PROJECTS, None)
         assert shared_ids() == ([public["id"], older["id"]], False)
         assert shared_ids(limit=1) == ([public["id"]], True)
         assert bob.get(f"/app/api/docs/{public['id']}").status_code == 200
@@ -1024,52 +1002,20 @@ class TestGetUsersByIds:
         assert _run(user_store.get_users_by_ids([])) == {}
 
 
-class TestOwnerGateFreezesPublicProjectDocs:
-    def _public_doc(self, env, **kwargs):
-        return seed_doc(env, "Open", mode="public", project_id=env.public_project,
-                        shares=[("bob", "write")], **kwargs)
-
-    def test_owner_gate_closed_hides_from_recipient(self, docs_env):
-        doc = self._public_doc(docs_env)
-        older = seed_doc(docs_env, "Older", owner="carol", shares=[("bob", "read")])
-        _run(docs_env.doc_store.update_after_write(
-            doc["id"], content_size=1, last_write_source="ui",
-        ))
-        open_public_projects_for(docs_env, "bob")  # bob yes, alice (owner) no
+class TestPublicProjectDocShares:
+    def test_write_share_recipient_can_edit(self, docs_env):
+        doc = seed_doc(docs_env, "Open", mode="public", project_id=docs_env.public_project,
+                       shares=[("bob", "write")])
         bob = client(docs_env, "bob")
-        resp = bob.get(f"/app/api/docs/{doc['id']}")
-        missing_id = str(uuid.uuid4())
-        assert resp.status_code == 404
-        assert detail(resp) == {
-            "error": "doc_not_found", "message": doc_not_found_message(doc["id"]),
-        }
-        assert detail(bob.get(f"/app/api/docs/{missing_id}")) == {
-            "error": "doc_not_found", "message": doc_not_found_message(missing_id),
-        }
-        for params in ({}, {"limit": 1}):
-            data = bob.get("/app/api/docs", params={"shared": "true", **params}).json()
-            assert [r["id"] for r in data["docs"]] == [older["id"]]
-            assert data["has_more"] is False
-        # The owner is frozen out too.
-        assert client(docs_env).get(f"/app/api/docs/{doc['id']}").status_code == 404
-
-        # Owner's gate opens: everything comes back.
-        open_public_projects_for(docs_env, "alice", "bob")
         row = bob.get(f"/app/api/docs/{doc['id']}").json()
         assert row["access"]["can_edit"] is True
         data = bob.get("/app/api/docs", params={"shared": "true", "limit": 1}).json()
-        assert [r["id"] for r in data["docs"]] == [doc["id"]] and data["has_more"] is True
-
-    def test_viewer_gate_still_applies(self, docs_env):
-        doc = self._public_doc(docs_env)
-        open_public_projects_for(docs_env, "alice")  # owner yes, bob no
-        bob = client(docs_env, "bob")
-        assert bob.get(f"/app/api/docs/{doc['id']}").status_code == 404
-        assert bob.get("/app/api/docs?shared=true").json()["docs"] == []
+        assert [r["id"] for r in data["docs"]] == [doc["id"]]
         assert client(docs_env).get(f"/app/api/docs/{doc['id']}").status_code == 200
 
-    def test_shared_stream_filters_viewer_gate_in_sql(self, docs_env):
-        public = self._public_doc(docs_env)
+    def test_shared_stream_includes_public_project_docs(self, docs_env):
+        public = seed_doc(docs_env, "Open", mode="public", project_id=docs_env.public_project,
+                          shares=[("bob", "write")])
         private_proj = seed_doc(docs_env, "Proj", project_id=docs_env.private_project,
                                 shares=[("bob", "read")])
         user_doc = seed_doc(docs_env, "Mine", shares=[("bob", "read")])
@@ -1078,28 +1024,6 @@ class TestOwnerGateFreezesPublicProjectDocs:
         assert {d["id"] for d in _run(store.list_docs_shared_with(bob_id))} == {
             public["id"], private_proj["id"], user_doc["id"],
         }
-        rows = _run(store.list_docs_shared_with(
-            bob_id, limit=1, include_public_project_docs=False,
-        ))
-        assert [d["id"] for d in rows] == [user_doc["id"]]
-        assert {d["id"] for d in _run(store.list_docs_shared_with(
-            bob_id, include_public_project_docs=False,
-        ))} == {private_proj["id"], user_doc["id"]}
-
-    def test_route_passes_the_viewer_gate_to_sql(self, docs_env, monkeypatch):
-        seen = []
-        real = docs_env.doc_store.list_docs_shared_with
-
-        async def _spy(*args, **kwargs):
-            seen.append(kwargs["include_public_project_docs"])
-            return await real(*args, **kwargs)
-
-        monkeypatch.setattr(docs_env.doc_store, "list_docs_shared_with", _spy)
-        bob = client(docs_env, "bob")
-        bob.get("/app/api/docs?shared=true")
-        open_public_projects_for(docs_env, "bob")
-        bob.get("/app/api/docs?shared=true")
-        assert seen == [False, True]
 
 
 class TestShareRaces:

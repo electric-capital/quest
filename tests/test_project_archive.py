@@ -199,17 +199,14 @@ class TestRoutes:
             _run(archive_user_project("no-such-project", user=user))
         assert exc.value.status_code == 404
 
-    def test_gated_off_public_project_404s(self, env):
+    def test_public_project_archives_like_any_other(self, env):
         from chat.project_routes import archive_user_project
         user = env["user"]
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
         public = _project(env, "Open", public=True)
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, False)
 
-        with pytest.raises(HTTPException) as exc:
-            _run(archive_user_project(public["id"], user=user))
-        assert exc.value.status_code == 404
-        assert _run(env["projects"].get_project(user["id"], public["id"]))["archived"] is False
+        archived = _run(archive_user_project(public["id"], user=user))
+        assert archived["archived"] is True
+        assert archived["public"] is True
 
 
 # ---------------------------------------------------------------------------

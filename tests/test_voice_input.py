@@ -326,8 +326,8 @@ class TestAdminGateAvailability:
         assert "Gemini" in voice["unavailable_reason"]
         assert voice["supports_user_access"] is True
         # Gates without a server dependency are always available.
-        assert by_key[fg.FEATURE_PUBLIC_PROJECTS]["available"] is True
-        assert by_key[fg.FEATURE_PUBLIC_PROJECTS]["unavailable_reason"] is None
+        assert by_key[fg.FEATURE_DOCS]["available"] is True
+        assert by_key[fg.FEATURE_DOCS]["unavailable_reason"] is None
 
     def test_enable_refused_without_vertex(self, admin_routes, monkeypatch):
         _models(monkeypatch, ["claude-haiku-4.5"])
