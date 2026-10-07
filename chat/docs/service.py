@@ -103,7 +103,12 @@ __all__ = [
     "validate_doc_metadata",
 ]
 
-DOC_SCOPES = ("user", "project", "all")
+# list_docs / search_docs scopes: ``user`` = user docs, ``project`` = this
+# conversation's project docs, ``public`` = the public docs this project
+# may read from its doc sources (the public projects listed in Project
+# Settings > Docs access; for a public conversation the same set as
+# ``project``), ``all`` = every doc the conversation can see.
+DOC_SCOPES = ("user", "project", "public", "all")
 WRITE_OPERATIONS = ("edit", "append", "add_image")
 IMAGE_PLACEMENTS = ("append", "none")
 
@@ -214,14 +219,37 @@ def _scope(doc: dict) -> str:
     return "project" if doc.get("project_id") else "user"
 
 
-def _access(caller: Caller, doc: dict) -> DocAccess:
+def _access(
+    caller: Caller, doc: dict, doc_source_project_ids: frozenset[str] = frozenset(),
+) -> DocAccess:
     return resolve_doc_access(
         doc,
         user_id=caller.user["id"],
         is_public=caller.is_public,
         project_id=caller.project_id,
         run_kind=caller.run_kind,
+        doc_source_project_ids=doc_source_project_ids,
     )
+
+
+def _has_doc_sources(caller: Caller) -> bool:
+    """Whether this caller can have doc sources at all: a conversation of
+    a private project (not a script, not the UI, never public)."""
+    return bool(
+        caller.project_id
+        and not caller.is_public
+        and caller.run_kind not in ("script", "ui")
+    )
+
+
+async def _doc_sources(caller: Caller) -> frozenset[str]:
+    """The public projects whose docs this caller's project may read
+    (``project_doc_sources``, Project Settings > Docs access); empty for
+    every caller that is not a private project conversation."""
+    if not _has_doc_sources(caller):
+        return frozenset()
+    from db import project_store
+    return frozenset(await project_store.list_doc_source_project_ids(caller.project_id))
 
 
 def _split_lines(body: str) -> list[str]:
@@ -419,10 +447,11 @@ async def _get_visible_doc(caller: Caller, doc_id) -> tuple[dict, DocAccess]:
     doc = await doc_store.get_doc(doc_id, with_shares=True)
     if doc is None:
         raise DocError(doc_not_found_message(doc_id))
-    access = _access(caller, doc)
+    # The doc-sources lookup runs before the verdict, so a hidden doc and a
+    # nonexistent id still cost the same work (invariant 2).
+    access = _access(caller, doc, await _doc_sources(caller))
     if not access.visible:
-        # Same text and the same work (one lookup, no file IO) as a
-        # nonexistent id -- invariant 2.
+        # Same text as a nonexistent id -- invariant 2.
         raise DocError(doc_not_found_message(doc_id))
     return doc, access
 
@@ -450,11 +479,16 @@ async def _visible_docs(
     A public conversation sees only public docs, and only project docs
     can be public (user docs are always private), so it lists its own
     project's docs and never queries user docs at all -- not even a
-    leftover row whose stored mode still says ``public``.
+    leftover row whose stored mode still says ``public``. A private
+    project conversation additionally lists the public docs of its doc
+    sources (scope ``public``, included in ``all``).
     """
     include_user = scope in ("user", "all") and not caller.is_public
-    include_project = scope in ("project", "all") and bool(caller.project_id)
-    if not include_user and not include_project:
+    include_project = bool(caller.project_id) and (
+        scope in ("project", "all") or (scope == "public" and caller.is_public)
+    )
+    sources = await _doc_sources(caller) if scope in ("public", "all") else frozenset()
+    if not include_user and not include_project and not sources:
         return []
 
     out: list[tuple[dict, DocAccess]] = []
@@ -465,6 +499,7 @@ async def _visible_docs(
             project_id=caller.project_id,
             include_user_docs=include_user,
             include_project_docs=include_project,
+            source_project_ids=sources,
             # A public conversation can only ever see public docs; filtering
             # in SQL keeps hidden private rows from eating the LIMIT.
             mode="public" if caller.is_public else None,
@@ -472,7 +507,7 @@ async def _visible_docs(
             before=before,
         )
         for row in rows:
-            access = _access(caller, row)
+            access = _access(caller, row, sources)
             if not access.visible:
                 continue
             out.append((row, access))
@@ -507,8 +542,11 @@ async def list_docs(
     """Docs this caller can see, newest-updated first.
 
     ``scope``: ``"user"`` (user docs), ``"project"`` (this conversation's
-    project docs; empty outside a project) or ``"all"`` (both). ``limit``
-    is clamped to 1..200. Hidden docs never appear.
+    project docs; empty outside a project), ``"public"`` (the public docs
+    readable from here: from a private project conversation the docs of
+    its doc sources, from a public conversation its own project's docs,
+    nothing elsewhere) or ``"all"`` (everything). ``limit`` is clamped to
+    1..200. Hidden docs never appear.
     """
     require_enabled(caller)
     scope = _check_scope(scope)

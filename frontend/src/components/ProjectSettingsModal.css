@@ -206,6 +206,76 @@
 }
 
 /* Danger zone */
+/* Docs Access section (ProjectDocSourcesSection.tsx) */
+.project-doc-sources h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.project-doc-sources-intro {
+  margin: 0 0 1rem 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.project-doc-sources-empty {
+  padding: 0.75rem 0.875rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.project-doc-sources-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.project-doc-source-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.625rem 0.875rem;
+  font-size: 0.9375rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.project-doc-source-row + .project-doc-source-row {
+  border-top: 1px solid var(--border);
+}
+
+.project-doc-source-row:hover {
+  background-color: var(--hover);
+}
+
+.project-doc-source-row input[type="checkbox"] {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+.project-doc-source-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-doc-source-chip {
+  font-size: 0.75rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+}
+
 .project-settings-danger-zone {
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   padding-top: 1.25rem;

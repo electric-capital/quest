@@ -1,7 +1,8 @@
 /**
  * Modal for editing project settings.
  *
- * Sidebar navigation with three sections: General, Skills, and Danger Zone
+ * Sidebar navigation with four sections: General, Skills, Docs Access (which
+ * public projects' Quest Docs this private project may read) and Danger Zone
  * (archive / unarchive, then the two-step delete).
  * Follows the same pattern as SettingsModal.tsx, including the mobile
  * full-screen two-tier takeover (section list first, content slides over).
@@ -17,8 +18,10 @@ import {
   ApiClientError,
 } from '../api/client';
 import type { Project } from '../api/types';
+import { useAuth } from '../contexts/AuthContext';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { ProjectSkillsSection } from './ProjectSkillsSection';
+import { ProjectDocSourcesSection } from './ProjectDocSourcesSection';
 import { ModalShell } from './ModalShell';
 import './ProjectSettingsModal.css';
 
@@ -30,7 +33,7 @@ interface ProjectSettingsModalProps {
   onProjectDeleted: () => void;
 }
 
-type ProjectSettingsSection = 'general' | 'skills' | 'danger-zone';
+type ProjectSettingsSection = 'general' | 'skills' | 'docs' | 'danger-zone';
 
 interface SectionEntry {
   id: ProjectSettingsSection;
@@ -40,11 +43,15 @@ interface SectionEntry {
 const MAIN_SECTIONS: SectionEntry[] = [
   { id: 'general', label: 'General' },
   { id: 'skills', label: 'Skills' },
+  { id: 'docs', label: 'Docs Access' },
 ];
 
-/** Public projects cannot have project skills, so the Skills section is hidden. */
+/**
+ * Public projects cannot have project skills and never read other
+ * projects' docs, so the Skills and Docs Access sections are hidden.
+ */
 const PUBLIC_MAIN_SECTIONS: SectionEntry[] = MAIN_SECTIONS.filter(
-  (s) => s.id !== 'skills'
+  (s) => s.id !== 'skills' && s.id !== 'docs'
 );
 
 const DANGER_ZONE_SECTION: SectionEntry = { id: 'danger-zone', label: 'Danger Zone' };
@@ -61,6 +68,7 @@ export function ProjectSettingsModal({
   onProjectDeleted,
 }: ProjectSettingsModalProps) {
   const isMobile = useIsMobile();
+  const { enabledFeatures } = useAuth();
   // Sidebar navigation state
   const [activeSection, setActiveSection] = useState<ProjectSettingsSection>('general');
   // Mobile two-tier nav: false shows the section list, true slides the active
@@ -273,6 +281,14 @@ export function ProjectSettingsModal({
 
       case 'skills':
         return projectId ? <ProjectSkillsSection projectId={projectId} /> : null;
+
+      case 'docs':
+        return projectId ? (
+          <ProjectDocSourcesSection
+            projectId={projectId}
+            docsEnabled={enabledFeatures.includes('docs')}
+          />
+        ) : null;
 
       case 'danger-zone':
         return (

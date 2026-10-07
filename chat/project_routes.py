@@ -16,7 +16,9 @@ from db import doc_store
 from db.project_store import (
     create_project,
     get_project,
+    list_doc_source_projects,
     list_projects,
+    set_doc_source_projects,
     update_project,
     set_project_archived,
     delete_project,
@@ -54,6 +56,12 @@ class CreateProjectFromConversationRequest(BaseModel):
 class UpdateProjectRequest(BaseModel):
     name: Optional[str] = None
     guide: Optional[str] = None
+
+
+class UpdateDocSourcesRequest(BaseModel):
+    # Full replacement: the public projects whose Quest Docs this (private)
+    # project's conversations may read. Empty list = no access.
+    source_project_ids: list[str]
 
 
 class CreateProjectConversationRequest(BaseModel):
@@ -289,6 +297,72 @@ async def _set_archived_checked(user: dict, project_id: str, archived: bool) -> 
             detail={"error": "not_found", "message": "Project not found"},
         )
     return project
+
+
+def _doc_source_row(project: dict) -> dict:
+    return {
+        "id": project["id"],
+        "name": project["name"],
+        "public": project["public"],
+        "archived": project["archived"],
+    }
+
+
+@router.get("/projects/{project_id}/doc-sources")
+async def get_project_doc_sources(
+    project_id: str,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """The public projects whose Quest Docs this project's conversations
+    may read (Project Settings > Docs access), by name.
+
+    404 for unknown projects and other users' projects, like every by-id
+    endpoint.
+    """
+    if await get_project(user["id"], project_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": "Project not found"},
+        )
+    sources = await list_doc_source_projects(user["id"], project_id)
+    return {"sources": [_doc_source_row(p) for p in sources]}
+
+
+@router.put("/projects/{project_id}/doc-sources")
+async def update_project_doc_sources(
+    project_id: str,
+    body: UpdateDocSourcesRequest,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Replace the project's doc sources (``set_doc_source_projects``).
+
+    The project must be private (400 ``public_project_no_doc_sources``);
+    every source must be one of the caller's public projects and not the
+    project itself (400 ``invalid_doc_source``). Returns the new list like
+    the GET.
+    """
+    if await get_project(user["id"], project_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": "Project not found"},
+        )
+    try:
+        sources = await set_doc_source_projects(
+            user["id"], project_id, body.source_project_ids,
+        )
+    except ValueError as e:
+        # ProjectDocSourceError (matched by its ``code`` rather than by
+        # class identity: test suites reload db.models / db.project_store).
+        code = getattr(e, "code", None)
+        if code is None:
+            raise
+        raise HTTPException(status_code=400, detail={"error": code, "message": str(e)})
+    if sources is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": "Project not found"},
+        )
+    return {"sources": [_doc_source_row(p) for p in sources]}
 
 
 @router.put("/projects/{project_id}/archive")

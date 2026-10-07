@@ -1294,8 +1294,10 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
         "description": (
             "List the Quest Docs this conversation can see -- markdown "
             "documents kept inside Quest, owned by the user (scope 'user') "
-            "or by this conversation's project (scope 'project') -- newest "
-            "updated first. Each row: id, title, description, mode "
+            "or by a project (scope 'project'): this conversation's project "
+            "docs, plus the read-only public docs of the public projects "
+            "this project was given access to -- newest updated first. "
+            "Each row: id, title, description, mode "
             "('private' or 'public'), scope, project_id, content_size "
             "(bytes), asset_count (embedded images), updated_at, writable "
             "and write_note. writable is 'free' (the write tools work "
@@ -1310,12 +1312,15 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "properties": {
                 "scope": {
                     "type": "string",
-                    "enum": ["user", "project", "all"],
+                    "enum": ["user", "project", "public", "all"],
                     "default": "all",
                     "description": (
                         "'user' = the user's own docs, 'project' = this "
-                        "project's docs (empty outside a project), 'all' "
-                        "(default) = both."
+                        "project's docs (empty outside a project), 'public' "
+                        "= the read-only public docs of the public projects "
+                        "this project was given access to (empty outside a "
+                        "project), 'all' (default) = everything this "
+                        "conversation can see."
                     ),
                 },
                 "limit": {
@@ -1360,11 +1365,12 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                 },
                 "scope": {
                     "type": "string",
-                    "enum": ["user", "project", "all"],
+                    "enum": ["user", "project", "public", "all"],
                     "default": "all",
                     "description": (
-                        "'user', 'project' (this project's docs) or 'all' "
-                        "(default)."
+                        "'user', 'project' (this project's docs), 'public' "
+                        "(the public docs this project was given access to) "
+                        "or 'all' (default)."
                     ),
                 },
                 "limit": {

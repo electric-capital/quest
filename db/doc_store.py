@@ -19,6 +19,7 @@ touch the body go through chat/docs/service.py, which calls
 
 from datetime import datetime, timezone
 from typing import Iterable, Optional
+from collections.abc import Collection
 import uuid
 
 from sqlalchemy import and_, delete, exists, or_, select
@@ -356,6 +357,7 @@ async def list_accessible_docs(
     project_id: Optional[str] = None,
     include_user_docs: bool = True,
     include_project_docs: bool = False,
+    source_project_ids: Collection[str] = (),
     mode: Optional[str] = None,
     owned_only: bool = False,
     limit: Optional[int] = None,
@@ -373,14 +375,18 @@ async def list_accessible_docs(
 
     Scope filter (OR-ed):
         - ``include_user_docs``: user docs (``project_id IS NULL``);
-        - ``include_project_docs`` with ``project_id``: that project's docs.
-      With neither, the result is empty.
+        - ``include_project_docs`` with ``project_id``: that project's docs;
+        - ``source_project_ids``: the public docs (``mode="public"``) of
+          those projects -- a private project's doc sources, readable from
+          its conversations.
+      With none, the result is empty.
 
     Args:
         user_id: The viewing user.
         project_id: Project whose docs to include (with include_project_docs).
         include_user_docs: Include user (non-project) docs.
         include_project_docs: Include ``project_id``'s docs.
+        source_project_ids: Projects whose public docs to include.
         mode: Optional ``"private"`` / ``"public"`` filter. Public-project
             callers pass ``"public"`` so the SQL ``LIMIT`` applies to the
             set they can actually see instead of being eaten by hidden rows.
@@ -398,6 +404,10 @@ async def list_accessible_docs(
         scope_conds.append(Doc.project_id.is_(None))
     if include_project_docs and project_id:
         scope_conds.append(Doc.project_id == project_id)
+    if source_project_ids:
+        scope_conds.append(
+            and_(Doc.project_id.in_(list(source_project_ids)), Doc.mode == "public")
+        )
     if not scope_conds:
         return []
     if mode is not None:
