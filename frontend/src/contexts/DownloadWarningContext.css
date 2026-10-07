@@ -1,0 +1,9 @@
+/* Hidden-data download warning (DownloadWarningProvider): the dialog chrome
+ * is DocConfirmDialog's; only the file name line is styled here. */
+
+.download-warning-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}

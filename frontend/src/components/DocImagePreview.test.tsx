@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { DocImagePreview as DocImagePreviewData, PreviewField } from '../api/types';
+import { DownloadWarningProvider } from '../contexts/DownloadWarningContext';
 import { ActionRequestPreviewFields } from './ActionRequestPreviewFields';
 import { DocImagePreview } from './DocImagePreview';
 
@@ -19,6 +20,7 @@ vi.mock('./FileViewerModal', () => ({
 
 vi.mock('../api/fileApi', () => ({
   downloadFile: vi.fn(),
+  saveBlobToDisk: vi.fn(),
 }));
 
 // Not under test here; keeps FileBrowser's import graph out of the run.
@@ -35,13 +37,17 @@ const IMAGE: DocImagePreviewData = {
 
 const EXPECTED_SRC = '/app/api/conversations/conv-1/files/download?path=charts%2Fq3%20sales.png';
 
+// The download path needs the hidden-data warning provider above it.
+const renderWithProviders = (ui: React.ReactElement) =>
+  render(<DownloadWarningProvider>{ui}</DownloadWarningProvider>);
+
 describe('DocImagePreview', () => {
   afterEach(() => {
     cleanup();
   });
 
   it('renders the workspace thumbnail, caption and appended line', () => {
-    render(<DocImagePreview image={IMAGE} conversationId="conv-1" />);
+    renderWithProviders(<DocImagePreview image={IMAGE} conversationId="conv-1" />);
 
     const img = screen.getByRole('img', { name: 'q3-sales.png' });
     expect(img.getAttribute('src')).toBe(EXPECTED_SRC);
@@ -56,7 +62,7 @@ describe('DocImagePreview', () => {
   });
 
   it('omits the size when unknown and the markdown block when empty', () => {
-    render(
+    renderWithProviders(
       <DocImagePreview
         image={{ ...IMAGE, size_bytes: null, markdown: '' }}
         conversationId="conv-1"
@@ -67,13 +73,13 @@ describe('DocImagePreview', () => {
   });
 
   it('labels the markdown line as a reference when the image is not placed', () => {
-    render(<DocImagePreview image={IMAGE} conversationId="conv-1" placed={false} />);
+    renderWithProviders(<DocImagePreview image={IMAGE} conversationId="conv-1" placed={false} />);
     expect(screen.queryByText('Appended:')).toBeNull();
     expect(screen.getByText('Markdown:')).toBeTruthy();
   });
 
   it('falls back to a path chip when the image fails to load', () => {
-    render(<DocImagePreview image={IMAGE} conversationId="conv-1" />);
+    renderWithProviders(<DocImagePreview image={IMAGE} conversationId="conv-1" />);
     fireEvent.error(screen.getByRole('img', { name: 'q3-sales.png' }));
 
     expect(screen.queryByRole('img')).toBeNull();
@@ -85,7 +91,7 @@ describe('DocImagePreview', () => {
   });
 
   it('opens the workspace file in the file viewer on click', () => {
-    render(<DocImagePreview image={IMAGE} conversationId="conv-1" />);
+    renderWithProviders(<DocImagePreview image={IMAGE} conversationId="conv-1" />);
     expect(screen.queryByTestId('file-viewer')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'q3-sales.png' }));
@@ -109,7 +115,7 @@ describe('ActionRequestPreviewFields doc_image branch', () => {
     ['action-request-preview' as const],
     ['request-preview' as const],
   ])('renders the key line and the image preview (%s)', (classPrefix) => {
-    const { container } = render(
+    const { container } = renderWithProviders(
       <ActionRequestPreviewFields
         previewFields={[{ key: 'Doc', value: 'Roadmap' }, field]}
         params={{ operation: 'add_image', doc_id: 'd1', placement: 'append' }}
@@ -126,7 +132,7 @@ describe('ActionRequestPreviewFields doc_image branch', () => {
   });
 
   it('reads placement "none" from the request params', () => {
-    render(
+    renderWithProviders(
       <ActionRequestPreviewFields
         previewFields={[field]}
         params={{ operation: 'add_image', doc_id: 'd1', placement: 'none' }}
@@ -138,7 +144,7 @@ describe('ActionRequestPreviewFields doc_image branch', () => {
   });
 
   it('falls back to the plain value without an image payload', () => {
-    render(
+    renderWithProviders(
       <ActionRequestPreviewFields
         previewFields={[{ key: 'Image', value: 'charts/q3.png', type: 'doc_image' }]}
         params={{}}

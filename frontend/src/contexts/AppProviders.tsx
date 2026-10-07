@@ -11,6 +11,8 @@
  * - ConversationModelsContext  default + per-conversation models, provider locks
  * - ConversationSkillsContext  queued / loaded skills per conversation
  * - FileBrowserStateContext    per-conversation file-browser path
+ * - DownloadWarningContext     the hidden-data acknowledgement dialog every
+ *                              workspace download goes through
  *
  * Order matters only where a provider reads another: Auth reads AppConfig;
  * Appearance, Projects, Guides and ConversationModels read Auth (and
@@ -27,6 +29,7 @@ import { GuidesProvider } from './GuidesContext';
 import { ConversationModelsProvider } from './ConversationModelsContext';
 import { ConversationSkillsProvider } from './ConversationSkillsContext';
 import { FileBrowserStateProvider } from './FileBrowserStateContext';
+import { DownloadWarningProvider } from './DownloadWarningContext';
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
   return (
@@ -39,7 +42,9 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
                 <ConversationModelsProvider>
                   <ConversationSkillsProvider>
                     <FileBrowserStateProvider>
-                      {children}
+                      <DownloadWarningProvider>
+                        {children}
+                      </DownloadWarningProvider>
                     </FileBrowserStateProvider>
                   </ConversationSkillsProvider>
                 </ConversationModelsProvider>

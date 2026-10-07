@@ -10,7 +10,7 @@
 
 import { useCallback, useState } from 'react';
 import { API_BASE_URL } from '../api/config';
-import { downloadFile } from '../api/fileApi';
+import { useWorkspaceDownload } from '../hooks/useWorkspaceDownload';
 import type { DocImagePreview as DocImagePreviewData } from '../api/types';
 import { FileViewerModal } from './FileViewerModal';
 import './DocImagePreview.css';
@@ -38,21 +38,15 @@ export function DocImagePreview({ image, conversationId, placed = true }: DocIma
   // image (card refreshed from the API) retries.
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const [viewerOpen, setViewerOpen] = useState(false);
+  const downloadWorkspaceFile = useWorkspaceDownload();
 
   const handleDownload = useCallback(async () => {
     try {
-      const { url: blobUrl, filename } = await downloadFile(conversationId, path);
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+      await downloadWorkspaceFile(conversationId, path);
     } catch {
       // Swallow; the user can retry.
     }
-  }, [conversationId, path]);
+  }, [downloadWorkspaceFile, conversationId, path]);
 
   const failed = failedUrl === url;
 

@@ -28,7 +28,8 @@ import { ConvertToProjectModal } from './ConvertToProjectModal';
 import { ExpensiveResumeWarning } from './ExpensiveResumeWarning';
 import { ConversationHeader } from './ConversationHeader';
 import { FileViewerModal } from './FileViewerModal';
-import { downloadFile as apiDownloadFile, uploadFiles } from '../api/fileApi';
+import { uploadFiles } from '../api/fileApi';
+import { useWorkspaceDownload } from '../hooks/useWorkspaceDownload';
 import { buildSlackThreadUrl } from '../utils/slackLinks';
 import { seedNewConversation } from '../utils/newConversation';
 import './ChatPanel.css';
@@ -127,6 +128,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   // Workspace file open in the viewer modal: composer attachments and inline
   // markdown images share it, so only the two fields the modal needs are kept.
   const [attachmentViewer, setAttachmentViewer] = useState<{ workspace_path: string; filename: string } | null>(null);
+  const downloadWorkspaceFile = useWorkspaceDownload();
   const [isConvertModalOpen, setIsConvertModalOpen] = useState(false);
 
   const navigate = useNavigate();
@@ -589,18 +591,11 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   const handleDownloadAttachment = useCallback(async () => {
     if (!attachmentViewer) return;
     try {
-      const { url, filename } = await apiDownloadFile(conversationId, attachmentViewer.workspace_path);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 0);
+      await downloadWorkspaceFile(conversationId, attachmentViewer.workspace_path);
     } catch {
       // Swallow; the modal stays open and the user can retry.
     }
-  }, [attachmentViewer, conversationId]);
+  }, [downloadWorkspaceFile, attachmentViewer, conversationId]);
 
   // Render messages with consecutive tool calls grouped into collapsible units
   const renderGroupedMessages = (allMessages: MessageContent[]) => {

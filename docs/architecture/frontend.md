@@ -2817,6 +2817,7 @@ The file browser provides a right-side panel in the chat interface that allows u
 - Create new folders in the currently-viewed directory via the New Folder button (opens `NewFolderModal`)
 - Download files via a meatball menu (three-dot icon)
 - Download folders as zip via a "Download as Zip" option in the meatball menu
+- Every download of a non-plain-text type (and every folder zip) first shows the hidden-data warning dialog, see [Workspace Download Warning](#workspace-download-warning) below
 - Delete files and folders via the meatball menu with confirmation dialog
 - Navigate folder structures with back/forward/up buttons
 
@@ -2841,8 +2842,11 @@ The file browser provides a right-side panel in the chat interface that allows u
 | `frontend/src/components/ProjectTables.css` | ProjectTables styling (includes meatball menu positioning, hover reveal, dark/light mode) |
 | `frontend/src/components/TableViewerModal.tsx` | Modal (via `createPortal`) for viewing table data with sticky headers, pagination, NULL styling, and cell truncation with tooltips |
 | `frontend/src/components/TableViewerModal.css` | TableViewerModal styling |
-| `frontend/src/hooks/useFileBrowser.ts` | State management hook for file operations (includes `uploadFilesWithPaths`, `buildUploadErrorMessage`, `deleteItem`, `downloadFolder`, `createFolder`, and `uploadPercent` state for progress tracking) |
-| `frontend/src/api/fileApi.ts` | API client functions for file endpoints (includes `xhrUpload()` helper for XHR-based uploads with progress callback, `uploadFiles()` and `uploadFilesWithPaths()` with `onProgress` parameter, `fetchFileContent()`, `getFileInfo()`, `deleteFile()`, `downloadFolder()`, and `createFolder()`) |
+| `frontend/src/hooks/useFileBrowser.ts` | State management hook for file operations (includes `uploadFilesWithPaths`, `buildUploadErrorMessage`, `deleteItem`, `downloadFile` / `downloadFolder` behind the download warning's `confirmDownload`, `createFolder`, and `uploadPercent` state for progress tracking) |
+| `frontend/src/api/fileApi.ts` | API client functions for file endpoints (includes `xhrUpload()` helper for XHR-based uploads with progress callback, `uploadFiles()` and `uploadFilesWithPaths()` with `onProgress` parameter, `fetchFileContent()`, `getFileInfo()`, `deleteFile()`, `downloadFolder()`, `createFolder()`, and `saveBlobToDisk()` -- the one temporary-anchor "hand the blob to the browser" step every workspace download ends with) |
+| `frontend/src/contexts/DownloadWarningContext.tsx` | `DownloadWarningProvider` (in `AppProviders`) renders the single hidden-data warning dialog and exposes `confirmDownload(target)` via `useDownloadWarning()`; see [Workspace Download Warning](#workspace-download-warning) |
+| `frontend/src/hooks/useWorkspaceDownload.ts` | `useWorkspaceDownload()` -- the component-side way to download a workspace file: `confirmDownload`, then `downloadFile()`, then `saveBlobToDisk()`; used by the chat attachment viewer (`ChatPanel.tsx`), `SubagentReturnFilesPreview.tsx` and `DocImagePreview.tsx` |
+| `frontend/src/utils/downloadWarnings.ts` | Pure rule `getDownloadWarning(target)`: which file types warn, with which category explanation (`PLAIN_TEXT_EXTENSIONS` allow-list, `CATEGORY_EXTENSIONS`, `CATEGORY_DETAILS`) |
 | `frontend/src/api/projectDbApi.ts` | API client for project database table browsing and management (`fetchProjectTables()`, `fetchTableData()`, `deleteProjectTable()`) |
 | `frontend/src/utils/fileIcons.ts` | Extension-to-icon mapping utility; maps ~50 file extensions across 16 categories to Lucide icon components and CSS color classes via `getFileIconInfo()` |
 | `frontend/src/utils/directoryTraversal.ts` | Recursive directory traversal via `webkitGetAsEntry()` API; exports `FileWithPath` interface and `extractFilesFromDataTransfer()` |
@@ -2934,8 +2938,8 @@ React hook managing file browser state and operations.
 - `silentRefresh()`: Reload without showing loading state (for auto-refresh)
 - `uploadFiles(files)`: Upload flat files to current path
 - `uploadFilesWithPaths(files)`: Upload files with relative paths for folder uploads (uses `uploadFilesWithPaths()` from `frontend/src/api/fileApi.ts`)
-- `downloadFile(path)`: Download a file
-- `downloadFolder(path)`: Download a folder as a zip archive (sets `zippingFolder` state for notification bar)
+- `downloadFile(path)`: Download a file -- after `confirmDownload()` from `DownloadWarningContext` when the type warns (a cancelled warning returns without fetching or setting an error)
+- `downloadFolder(path)`: Download a folder as a zip archive (always behind `confirmDownload()`; sets `zippingFolder` state for the notification bar only once acknowledged)
 - `zippingFolder`: Name of the folder currently being zipped (null when not zipping)
 - `deleteItem(path)`: Delete a file or folder (fetches info for confirmation, then deletes on user confirm)
 - `createFolder(name)`: Create a new folder inside the current path via `createFolder()` in `frontend/src/api/fileApi.ts`; refreshes the listing on success
@@ -2962,6 +2966,24 @@ The hook uses refs to break dependency cycles that could cause infinite refresh 
 - Each fetch captures its `conversationId` + `path` and discards its results (success or error) if the active conversation/path has moved on before the response lands, so rapid A->B->A switching can't clobber the current list with a stale response
 - `browserStateRef`: Stores latest browser state, allowing state updates without effect dependencies
 
+#### Workspace Download Warning
+
+A prompt-injected agent can write files into the workspace that carry information the user never sees -- a script in an HTML page, bytes in an image's EXIF block, a macro or embedded object in an Office document, an extra member in an archive -- and a download is the one step that moves such a file out of the deployment. Until a sanitization layer exists (planned; some types may then be blocked outright or forced through Quest Docs exports), every workspace download of a type that can hide data first shows a blocking warning dialog with Cancel / "Acknowledge and Download".
+
+**Flow** (every one of the nine UI download triggers follows it):
+
+1. A component calls `confirmDownload({name, kind})` from `useDownloadWarning()` (`frontend/src/contexts/DownloadWarningContext.tsx`), either directly (`hooks/useFileBrowser.ts` `downloadFile` / `downloadFolder`, which keep their own error surface and zipping toast) or through `hooks/useWorkspaceDownload.ts` (the chat attachment / markdown-image viewer in `ChatPanel.tsx`, `SubagentReturnFilesPreview.tsx`, `DocImagePreview.tsx`).
+2. `getDownloadWarning()` (`frontend/src/utils/downloadWarnings.ts`) decides: a file whose extension is in `PLAIN_TEXT_EXTENSIONS` resolves `true` at once; a folder is always an archive; every other extension -- including an unknown or missing one, since the agent picks the name -- warns with the category explanation from `CATEGORY_DETAILS` (`web`, `image`, `document`, `archive`, `media`, `executable`, `other`).
+3. `DownloadWarningProvider` (mounted once in `AppProviders`) opens its `DocConfirmDialog` (`components/docs/DocConfirmDialog.tsx`, the shared confirm) and resolves the promise with the user's answer; only then does the caller fetch (`fileApi.downloadFile` / `downloadFolder`) and hand the blob to the browser (`fileApi.saveBlobToDisk`).
+
+**Behaviour notes:**
+- No remember-me: the dialog shows on every download by design (a file can be planted at any point of a conversation). A second request while one is open cancels the first and takes the dialog over.
+- The warning usually opens over another `ModalShell` (the file viewer, an approval card preview). Both shells close on a document-level bubble-phase Escape listener, so the provider claims Escape in the capture phase while the dialog is open (`stopPropagation` there keeps every bubble listener from running, see `ModalShell.tsx`) and cancels only the warning.
+- This is a UX gate on the frontend only: the `/files/download` route is unchanged and a direct URL fetch is not warned. The server-side part of the defence (sanitization, bans) is the planned follow-up.
+- Quest Docs downloads (`DocHeader.tsx` md/zip links, `DocImageLightbox.tsx` asset link, `DocDraftRecovery.tsx`) are NOT behind the warning: docs are the low-hidden-data-capacity channel that future work may force exports through.
+
+Tests: `frontend/src/utils/downloadWarnings.test.ts` (the rule) and `frontend/src/contexts/DownloadWarningContext.test.tsx` (dialog, resolution, Escape layering, `useWorkspaceDownload` fetching only after an acknowledgement).
+
 #### 4. File API Client (`src/api/fileApi.ts`)
 
 Type-safe API client functions for file operations. Upload functions use XMLHttpRequest via the `xhrUpload()` helper instead of fetch() to support real-time upload progress events.
@@ -2971,8 +2993,9 @@ Type-safe API client functions for file operations. Upload functions use XMLHttp
 - `listFiles(conversationId, path)`: List files at path (cookie auth via `credentials: 'include'`)
 - `uploadFiles(conversationId, files, path, onProgress)`: Upload flat files via XHR. Accepts optional `onProgress` callback for upload progress tracking.
 - `uploadFilesWithPaths(conversationId, files, path, onProgress)`: Upload files with relative paths for folder uploads via XHR. Sends parallel `files` and `paths` form data arrays so the backend can recreate directory structure. Accepts `FileWithPath[]` from `frontend/src/utils/directoryTraversal.ts`. Accepts optional `onProgress` callback.
-- `downloadFile(conversationId, filePath)`: Download file (cookie auth via `credentials: 'include'`)
-- `downloadFolder(conversationId, folderPath)`: Download folder as zip archive (cookie auth via `credentials: 'include'`). Triggers browser download of `{folder-name}.zip`.
+- `downloadFile(conversationId, filePath)`: Fetch a file as a blob URL + filename (cookie auth via `credentials: 'include'`); does NOT trigger the browser download itself
+- `downloadFolder(conversationId, folderPath)`: Same for a folder as a zip archive (`{folder-name}.zip`)
+- `saveBlobToDisk({url, filename})`: Temporary `<a download>` click + deferred `URL.revokeObjectURL`. Every workspace download ends here, and callers reach it only through `useWorkspaceDownload` / `useFileBrowser`, i.e. after the download warning (see [Workspace Download Warning](#workspace-download-warning)).
 - `fetchFileContent(conversationId, filePath)`: Fetch text content of a viewable file (cookie auth via `credentials: 'include'`). Returns `FileContentResponse`.
 - `getFileInfo(conversationId, filePath)`: Get file/folder info with file count (cookie auth via `credentials: 'include'`). Returns `FileInfoResponse`.
 - `deleteFile(conversationId, filePath)`: Delete a file or folder (cookie auth via `credentials: 'include'`). Returns `DeleteFileResponse`.

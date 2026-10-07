@@ -4,9 +4,10 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { FileEntry, ListFilesResponse, UploadResponse } from '../api/types';
-import { listFiles, uploadFiles as apiUploadFiles, uploadFilesWithPaths as apiUploadFilesWithPaths, downloadFile as apiDownloadFile, downloadFolder as apiDownloadFolder, deleteFile as apiDeleteFile, createFolder as apiCreateFolder, FileApiError } from '../api/fileApi';
+import { listFiles, uploadFiles as apiUploadFiles, uploadFilesWithPaths as apiUploadFilesWithPaths, downloadFile as apiDownloadFile, downloadFolder as apiDownloadFolder, deleteFile as apiDeleteFile, createFolder as apiCreateFolder, saveBlobToDisk, FileApiError } from '../api/fileApi';
 import type { FileWithPath } from '../utils/directoryTraversal';
 import { useFileBrowserState } from '../contexts/FileBrowserStateContext';
+import { useDownloadWarning } from '../contexts/DownloadWarningContext';
 
 /**
  * Build a user-facing summary when an upload response contains partial errors.
@@ -69,6 +70,7 @@ interface UseFileBrowserResult {
  */
 export function useFileBrowser(conversationId: string | null): UseFileBrowserResult {
   const { getFileBrowserState, setFileBrowserState } = useFileBrowserState();
+  const { confirmDownload } = useDownloadWarning();
 
   // Get state from context (conversation-specific)
   const browserState = conversationId ? getFileBrowserState(conversationId) : { path: '/', history: ['/'], historyIndex: 0 };
@@ -344,25 +346,17 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
     }
   }, [conversationId, currentPath, fetchFiles]);
 
-  // Download file
+  // Download file (after the hidden-data acknowledgement when the type needs one)
   const downloadFile = useCallback(async (filePath: string): Promise<void> => {
     if (!conversationId) {
       throw new Error('No conversation selected');
     }
 
+    const name = filePath.split('/').filter(Boolean).pop() || filePath;
+    if (!(await confirmDownload({ name, kind: 'file' }))) return;
+
     try {
-      const { url, filename } = await apiDownloadFile(conversationId, filePath);
-
-      // Create a temporary link and click it to download
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-
-      // Clean up the blob URL
-      URL.revokeObjectURL(url);
+      saveBlobToDisk(await apiDownloadFile(conversationId, filePath));
     } catch (err) {
       if (err instanceof FileApiError) {
         setError(err.message);
@@ -371,9 +365,10 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
       }
       throw err;
     }
-  }, [conversationId]);
+  }, [conversationId, confirmDownload]);
 
-  // Download folder as zip
+  // Download folder as zip (always behind the hidden-data acknowledgement:
+  // an archive can hold anything)
   const downloadFolder = useCallback(async (folderPath: string): Promise<void> => {
     if (!conversationId) {
       throw new Error('No conversation selected');
@@ -381,21 +376,11 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
 
     // Extract folder name from path for the notification
     const folderName = folderPath.split('/').filter(Boolean).pop() || 'folder';
+    if (!(await confirmDownload({ name: folderName, kind: 'folder' }))) return;
     setZippingFolder(folderName);
 
     try {
-      const { url, filename } = await apiDownloadFolder(conversationId, folderPath);
-
-      // Create a temporary link and click it to download
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-
-      // Clean up the blob URL
-      URL.revokeObjectURL(url);
+      saveBlobToDisk(await apiDownloadFolder(conversationId, folderPath));
     } catch (err) {
       if (err instanceof FileApiError) {
         setError(err.message);
@@ -406,7 +391,7 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
     } finally {
       setZippingFolder(null);
     }
-  }, [conversationId]);
+  }, [conversationId, confirmDownload]);
 
   // Delete a file or folder
   const deleteItem = useCallback(async (filePath: string): Promise<void> => {
