@@ -531,6 +531,38 @@ class Project(Base):
     )
 
 
+class ProjectDocSource(Base):
+    """A private project's read access to the docs of one public project.
+
+    One row per (project, source) pair: conversations of ``project_id`` may
+    read -- never write -- the Quest Docs of the public project
+    ``source_project_id`` (see chat/docs/access.py rule 2). Both sides are
+    owned by the same user; the routes refuse a public ``project_id`` and a
+    private ``source_project_id``. Cascade-deletes with either project.
+    """
+
+    __tablename__ = "project_doc_sources"
+    __table_args__ = (
+        sa.Index("ix_project_doc_sources_source_project_id", "source_project_id"),
+    )
+
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        sa.ForeignKey("projects.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    source_project_id: Mapped[str] = mapped_column(
+        String(36),
+        sa.ForeignKey("projects.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+
 class Routine(Base):
     """A canned prompt attached to a project that can be run in one click.
 

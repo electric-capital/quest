@@ -872,6 +872,22 @@ export interface ProjectsListResponse {
   projects: Project[];
 }
 
+/**
+ * One public project whose Quest Docs a private project's conversations
+ * may read (Project Settings > Docs Access). A row of
+ * GET/PUT /projects/{id}/doc-sources.
+ */
+export interface ProjectDocSource {
+  id: string;
+  name: string;
+  public: boolean;
+  archived: boolean;
+}
+
+export interface ProjectDocSourcesResponse {
+  sources: ProjectDocSource[];
+}
+
 // Routine types
 export interface Routine {
   id: string;

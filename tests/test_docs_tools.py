@@ -108,7 +108,8 @@ class TestRegistry:
         def required(name):
             return TOOL_CALL_REGISTRY[name]["parameters"]["required"]
 
-        assert props("list_docs")["scope"]["enum"] == ["user", "project", "all"]
+        assert props("list_docs")["scope"]["enum"] == ["user", "project", "public", "all"]
+        assert props("search_docs")["scope"]["enum"] == ["user", "project", "public", "all"]
         assert (props("list_docs")["limit"]["minimum"], props("list_docs")["limit"]["maximum"]) == (1, 200)
         assert props("search_docs")["limit"]["maximum"] == 50
         assert required("search_docs") == ["query"]
@@ -387,10 +388,24 @@ class TestTiers:
 
     def test_private_dispatch_cannot_write_public_doc(self, docs_env):
         doc = seed_doc(docs_env, mode="public", project_id=docs_env.public_project)
-        # Defensive shape: a private caller inside the public project.
-        result = _dispatch(docs_env, "append_to_doc", {"doc_id": doc["id"], "content": "x"},
-                           project_id=docs_env.public_project)
-        assert result == {"error": DENY_PUBLIC_DOC_FROM_PRIVATE}
+        import db.project_store as project_store
+        _run(project_store.set_doc_source_projects(
+            docs_env.users["alice"]["id"], docs_env.private_project,
+            [docs_env.public_project],
+        ))
+        # From the private project with the source, and the defensive
+        # shape of a private caller inside the public project.
+        for project_id in (docs_env.private_project, docs_env.public_project):
+            read = _dispatch(docs_env, "read_doc", {"doc_id": doc["id"]}, project_id=project_id)
+            assert read["writable"] == "denied"
+            result = _dispatch(
+                docs_env, "append_to_doc", {"doc_id": doc["id"], "content": "x"},
+                project_id=project_id,
+            )
+            assert result == {"error": DENY_PUBLIC_DOC_FROM_PRIVATE}
+        # A standalone chat has no doc sources.
+        read = _dispatch(docs_env, "read_doc", {"doc_id": doc["id"]})
+        assert read == {"error": doc_not_found_message(doc["id"])}
 
     @pytest.mark.parametrize("tool", sorted(WRITE_TOOLS))
     def test_inference_api_refuses_writes_at_dispatch(self, docs_env, tool, monkeypatch):

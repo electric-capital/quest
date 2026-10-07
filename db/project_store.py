@@ -13,7 +13,7 @@ from typing import Optional
 from sqlalchemy import select, delete, func, case
 
 from db.engine import AsyncSessionLocal
-from db.models import Project, Conversation, Skill, User
+from db.models import Project, ProjectDocSource, Conversation, Skill, User
 
 
 # Maximum project name length
@@ -285,6 +285,124 @@ async def delete_all_user_projects(user_id: int) -> int:
         )
         await db.commit()
         return result.rowcount
+
+
+class ProjectDocSourceError(ValueError):
+    """A doc-source list was refused; ``code`` is the stable error code
+    (``public_project_no_doc_sources``, ``invalid_doc_source``)."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+async def list_doc_source_project_ids(project_id: str) -> list[str]:
+    """Ids of the public projects whose docs ``project_id``'s conversations
+    may read (Project Settings > Docs access).
+
+    No ownership scoping: the caller already resolved the project. Rows
+    whose source project was deleted cascade away, so every id returned
+    still names an existing project. Empty for an unknown project.
+    """
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ProjectDocSource.source_project_id)
+            .where(ProjectDocSource.project_id == project_id)
+            .order_by(ProjectDocSource.source_project_id.asc())
+        )
+        return list(result.scalars().all())
+
+
+async def list_doc_source_projects(user_id: int, project_id: str) -> list[dict]:
+    """The source projects of ``project_id`` as project dicts, by name,
+    scoped to the owner (a source of another user's -- impossible by
+    construction -- would be left out)."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Project)
+            .join(ProjectDocSource, ProjectDocSource.source_project_id == Project.id)
+            .where(ProjectDocSource.project_id == project_id, Project.user_id == user_id)
+            .order_by(Project.name.asc(), Project.id.asc())
+        )
+        return [_project_to_dict(row) for row in result.scalars().all()]
+
+
+async def set_doc_source_projects(
+    user_id: int, project_id: str, source_project_ids: list[str],
+) -> Optional[list[dict]]:
+    """Replace the doc sources of ``project_id`` with ``source_project_ids``.
+
+    Validates inside one session: the project must be the user's and
+    private (a public project's conversations never read other projects'
+    docs: ``public_project_no_doc_sources``); every source must be a
+    public project of the same user and not the project itself
+    (``invalid_doc_source``). Duplicates collapse. Leaves ``updated_at``
+    alone (the project list order should not jump on a settings change).
+
+    Returns:
+        The new source projects as dicts, by name (what
+        :func:`list_doc_source_projects` returns); None when the project
+        is not found / not the user's.
+
+    Raises:
+        ProjectDocSourceError: on a refused list (nothing changed).
+    """
+    wanted: list[str] = []
+    for sid in source_project_ids:
+        if not isinstance(sid, str) or not sid.strip():
+            raise ProjectDocSourceError(
+                "invalid_doc_source", "Source project ids must be non-empty strings.",
+            )
+        if sid not in wanted:
+            wanted.append(sid)
+
+    async with AsyncSessionLocal() as db:
+        project = await db.get(Project, project_id)
+        if not project or project.user_id != user_id:
+            return None
+        if project.public:
+            raise ProjectDocSourceError(
+                "public_project_no_doc_sources",
+                "Public projects cannot be given access to other projects' docs.",
+            )
+        sources: list[Project] = []
+        for sid in wanted:
+            if sid == project_id:
+                raise ProjectDocSourceError(
+                    "invalid_doc_source", "A project cannot be its own doc source.",
+                )
+            source = await db.get(Project, sid)
+            if not source or source.user_id != user_id:
+                raise ProjectDocSourceError(
+                    "invalid_doc_source", f"Project not found: {sid}",
+                )
+            if not source.public:
+                raise ProjectDocSourceError(
+                    "invalid_doc_source",
+                    f"Only public projects can be doc sources: '{source.name}' is private.",
+                )
+            sources.append(source)
+
+        existing = {
+            row.source_project_id: row
+            for row in (await db.execute(
+                select(ProjectDocSource).where(ProjectDocSource.project_id == project_id)
+            )).scalars().all()
+        }
+        for sid, row in existing.items():
+            if sid not in wanted:
+                await db.delete(row)
+        now = datetime.now(timezone.utc)
+        for sid in wanted:
+            if sid not in existing:
+                db.add(ProjectDocSource(
+                    project_id=project_id, source_project_id=sid, created_at=now,
+                ))
+        await db.commit()
+        return [
+            _project_to_dict(source)
+            for source in sorted(sources, key=lambda row: (row.name, row.id))
+        ]
 
 
 def _project_to_dict(project: Project) -> dict:

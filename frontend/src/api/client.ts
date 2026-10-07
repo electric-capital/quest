@@ -29,6 +29,7 @@ import type {
   UserSearchResult,
   UserSearchResponse,
   Project,
+  ProjectDocSourcesResponse,
   ProjectsListResponse,
   Routine,
   RoutineCostReport,
@@ -481,6 +482,27 @@ export function archiveProject(projectId: string): Promise<Project> {
  */
 export function unarchiveProject(projectId: string): Promise<Project> {
   return apiPut(`${endpoints.project(projectId)}/unarchive`);
+}
+
+/**
+ * The public projects whose Quest Docs this (private) project's
+ * conversations may read (Project Settings > Docs Access).
+ */
+export function fetchProjectDocSources(projectId: string): Promise<ProjectDocSourcesResponse> {
+  return apiGet(`${endpoints.project(projectId)}/doc-sources`);
+}
+
+/**
+ * Replace the project's doc sources with the given public project ids
+ * (full replacement; an empty list removes every source).
+ */
+export function updateProjectDocSources(
+  projectId: string,
+  sourceProjectIds: string[],
+): Promise<ProjectDocSourcesResponse> {
+  return apiPut(`${endpoints.project(projectId)}/doc-sources`, {
+    body: { source_project_ids: sourceProjectIds },
+  });
 }
 
 export function fetchProjectConversations(

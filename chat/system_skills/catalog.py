@@ -886,8 +886,9 @@ database, short facts about the user in memories.
 Reads:
 
 - **list_docs(scope?, limit?)** -- the docs this conversation can see,
-  newest updated first. `scope`: `user` | `project` | `all` (default);
-  `limit` 1-200 (default 50). Each row: `id`, `title`, `description`,
+  newest updated first. `scope`: `user` | `project` (this project's docs)
+  | `public` (the public docs this project was given access to) | `all`
+  (default); `limit` 1-200 (default 50). Each row: `id`, `title`, `description`,
   `mode`, `scope`, `project_id`, `content_size`, `asset_count`,
   `updated_at`, `shared` (true when the doc has share recipients),
   `writable`, `write_note`.
@@ -948,15 +949,19 @@ through a `write_doc` action request) or `denied` (read-only here;
   doc this leaves the agent read-only, because public-project
   conversations cannot open approval cards:
   "{doc_access.DENY_PUBLIC_APPROVAL_REQUIRED}"
-- **Public docs** (the docs of a public project) are read and written
-  only from that project's conversations (by the owner and people with
-  write access); every other conversation never sees them. The Quest web
-  UI can read them but never change them:
+- **Public docs** (the docs of a public project) are written only from
+  that project's conversations (by the owner and people with write
+  access). The conversations of a private project can read them -- never
+  change them -- when the user listed that public project under the
+  private project's **Docs access** setting (Project Settings); they then
+  appear in `list_docs` with scope `public` or `all`. Everywhere else
+  (standalone chats, other projects) they are invisible. Read-only means:
   "{doc_access.DENY_PUBLIC_DOC_FROM_PRIVATE}"
 - **Private docs (every user doc included) are invisible to public-project
   conversations** -- there they behave exactly like a nonexistent id.
 - **Project docs** are visible only from conversations of that project;
-  standalone chats and other projects never see them.
+  standalone chats and other projects never see them (the Docs access
+  setting above is the one exception, for public docs).
 - **Read-only runs** never write: sub-agents ("{doc_access.DENY_SUB_AGENT}"),
   inference API runs, cross-user subagent runs and sandbox scripts. A
   sub-agent returns the content to the top-level agent, which writes it.

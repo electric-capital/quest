@@ -59,6 +59,15 @@ A project can be archived (`projects.archived`, migration `c9e1f4a7b2d8`) -- the
 
 The flag is flipped via **PUT `/app/api/projects/{project_id}/archive`** and **`/unarchive`** (see [Projects API](../api/projects-api.md)). In the UI the controls live in the Project Settings modal's Danger Zone (an Archive / Unarchive block above Delete), the sidebar Projects header has an options menu with "Show Archived" (reusing `ConversationFilterMenu`), archived rows render dimmed, and the drill-down header shows an "Archived" chip.
 
+## Docs Access (doc sources)
+
+A **private** project can be given read access to the [Quest Docs](quest-docs.md) of zero or more of its owner's **public** projects. The setting is per project (nothing is blanket): the owner picks the public projects in Project Settings > Docs Access, and from then on every conversation of the private project -- top-level turns, routines, Slack-driven runs, sub-agents and the other read-only run kinds -- can list, search and read those projects' docs (`list_docs` scope `public`, included in `all`), never change them. Standalone conversations have no setting and no access; public projects cannot be given sources (their conversations stay confined to their own project's docs).
+
+- **Storage**: the `project_doc_sources` link table (`ProjectDocSource` in `db/models.py`, migration `b4d7e2a9c6f1`): one `(project_id, source_project_id)` row per grant, both FKs cascading with their project. `set_doc_source_projects()` in `db/project_store.py` replaces the list under validation (owner's private project, owner's public sources, no self-reference; `ProjectDocSourceError` with codes `public_project_no_doc_sources` / `invalid_doc_source`) and leaves `updated_at` alone; `list_doc_source_project_ids()` / `list_doc_source_projects()` read it.
+- **Enforcement**: the doc access rule's project rule has one exception for public docs of a listed source (`doc_source_project_ids` on `resolve_doc_access()` in `chat/docs/access.py`); the doc service loads the project's sources once per call (`_doc_sources()` in `chat/docs/service.py`) and the store query includes the sources' public docs (`source_project_ids` on `list_accessible_docs()`). The taint rule is untouched: a private conversation's verdict on a public doc is always read-only.
+- **API**: GET / PUT `/app/api/projects/{id}/doc-sources` (see [Projects API](../api/projects-api.md)).
+- **UI**: the Docs Access section of `ProjectSettingsModal` (`ProjectDocSourcesSection.tsx`): a checkbox per public project of the user (archived ones flagged) from `ProjectsContext`, saved as a full replacement; hidden for public projects.
+
 ## Storage Layout
 
 ```
@@ -131,7 +140,7 @@ The `delete_account()` handler in `chat/routes/user.py` cleans up projects, rout
 The frontend provides UI components for project management:
 
 - `NewProjectModal` (`frontend/src/components/NewProjectModal.tsx`) -- Modal for creating a new project (name input)
-- `ProjectSettingsModal` (`frontend/src/components/ProjectSettingsModal.tsx`) -- Modal for editing project settings with sidebar navigation containing three sections: General (project name, project instructions -- the `guide` field's UI label), Skills, and Danger Zone (an Archive / Unarchive Project block -- one click, reversible, neutral styling -- above the two-step Delete Project). The modal is widened with a row layout to accommodate the sidebar.
+- `ProjectSettingsModal` (`frontend/src/components/ProjectSettingsModal.tsx`) -- Modal for editing project settings with sidebar navigation containing four sections: General (project name, project instructions -- the `guide` field's UI label), Skills, Docs Access (`ProjectDocSourcesSection.tsx`, see [Docs Access](#docs-access-doc-sources); hidden for public projects like Skills) and Danger Zone (an Archive / Unarchive Project block -- one click, reversible, neutral styling -- above the two-step Delete Project). The modal is widened with a row layout to accommodate the sidebar.
 
   On mobile (keyed on the `useIsMobile` hook, mirroring `SettingsModal`) it renders as a full-screen two-tier takeover: the first screen is the section list, tapping a section slides its content over the list, and a header back button (or Escape) returns to the list; mobile styling is scoped by a `project-settings-modal-mobile` class.
 

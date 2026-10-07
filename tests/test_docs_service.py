@@ -211,6 +211,15 @@ def make_legacy_public(env, doc_id):
     return doc
 
 
+def give_doc_source(env, project_id, *source_ids, owner="alice"):
+    """Project Settings > Docs access: let ``project_id``'s conversations
+    read the public docs of ``source_ids`` (full replacement)."""
+    import db.project_store as project_store
+    return _run(project_store.set_doc_source_projects(
+        env.users[owner]["id"], project_id, list(source_ids),
+    ))
+
+
 def body(doc_id):
     from chat.docs import files
     return files.read_body(doc_id)
@@ -855,8 +864,9 @@ class TestPreview:
 
     def test_preview_errors_match_apply(self, docs_env):
         doc = seed_doc(docs_env, mode="public", project_id=docs_env.public_project)
-        # Defensive shape: a private caller inside the public project.
-        caller = make_caller(docs_env, project=docs_env.public_project)
+        give_doc_source(docs_env, docs_env.private_project, docs_env.public_project)
+        # A private project reading the public doc through its doc source.
+        caller = make_caller(docs_env, project=docs_env.private_project)
         with pytest.raises(DocError) as exc:
             _run(svc().preview_write_operation(
                 caller, doc["id"], "append", {"content": "x"},
@@ -870,13 +880,21 @@ class TestPreview:
 
 
 class TestTaintAndVisibility:
-    def test_private_caller_never_writes_public_doc(self, docs_env):
+    @pytest.mark.parametrize("where", ["private_project", "public_project"])
+    def test_private_caller_never_writes_public_doc(self, docs_env, where):
         doc = seed_doc(
             docs_env, mode="public", content="pub\n", project_id=docs_env.public_project,
         )
-        # Public docs are public-project docs; a private caller can only
-        # reach one with the (defensive) private-caller-in-that-project shape.
-        caller = make_caller(docs_env, project=docs_env.public_project)
+        give_doc_source(docs_env, docs_env.private_project, docs_env.public_project)
+        # A public doc is readable from a private project that lists its
+        # project as a doc source (and in the defensive
+        # private-caller-in-the-public-project shape) and writable from
+        # neither.
+        project = {
+            "private_project": docs_env.private_project,
+            "public_project": docs_env.public_project,
+        }[where]
+        caller = make_caller(docs_env, project=project)
         (workspace_dir(docs_env, caller) / "i.png").write_bytes(PNG)
         assert _run(svc().read_doc(caller, doc["id"]))["write_note"] == DENY_PUBLIC_DOC_FROM_PRIVATE
         for call in (
@@ -988,6 +1006,167 @@ class TestTaintAndVisibility:
         assert [d["id"] for d in _run(svc().list_docs(inside))] == [doc["id"]]
         assert _run(svc().list_docs(inside, scope="user")) == []
         assert _run(svc().read_doc(inside, doc["id"]))["scope"] == "project"
+
+
+# ---------------------------------------------------------------------------
+# Public docs through a private project's doc sources
+# ---------------------------------------------------------------------------
+
+
+def _ids(rows):
+    return [r["id"] for r in rows]
+
+
+def _plant_source(env, project_id, source_project_id):
+    """Insert a doc-source row behind the store's back (no ownership /
+    mode / gate validation), to exercise the read side alone."""
+    import db.project_store as project_store
+    from db.models import ProjectDocSource
+
+    async def _plant():
+        async with project_store.AsyncSessionLocal() as db:
+            db.add(ProjectDocSource(
+                project_id=project_id, source_project_id=source_project_id,
+            ))
+            await db.commit()
+
+    _run(_plant())
+
+
+class TestDocSources:
+    """A public doc (a doc of a public project) is readable, never
+    writable, from the conversations of a private project whose owner
+    listed that public project as a doc source."""
+
+    def test_owner_reads_from_the_private_project(self, docs_env):
+        user_doc = seed_doc(docs_env, title="Mine", content="mine\n")
+        proj_doc = seed_doc(
+            docs_env, title="Proj", content="proj\n", project_id=docs_env.private_project,
+        )
+        pub = seed_doc(
+            docs_env, title="Open", content="open knowledge\n",
+            project_id=docs_env.public_project, mode="public",
+        )
+        give_doc_source(docs_env, docs_env.private_project, docs_env.public_project)
+        caller = make_caller(docs_env, project=docs_env.private_project)
+
+        assert _ids(_run(svc().list_docs(caller))) == [pub["id"], proj_doc["id"], user_doc["id"]]
+        assert _ids(_run(svc().list_docs(caller, scope="public"))) == [pub["id"]]
+        assert _ids(_run(svc().list_docs(caller, scope="user"))) == [user_doc["id"]]
+        assert _ids(_run(svc().list_docs(caller, scope="project"))) == [proj_doc["id"]]
+        row = _run(svc().list_docs(caller, scope="public"))[0]
+        assert (row["mode"], row["scope"], row["project_id"]) == (
+            "public", "project", docs_env.public_project,
+        )
+        assert row["writable"] == "denied"
+        assert row["write_note"] == DENY_PUBLIC_DOC_FROM_PRIVATE
+        read = _run(svc().read_doc(caller, pub["id"]))
+        assert read["content"] == "open knowledge\n"
+        assert read["writable"] == "denied"
+        assert _ids(_run(svc().search_docs(caller, "knowledge"))["results"]) == [pub["id"]]
+        with pytest.raises(DocError) as exc:
+            _run(svc().append_to_doc(caller, pub["id"], "leak"))
+        assert str(exc.value) == DENY_PUBLIC_DOC_FROM_PRIVATE
+        assert body(pub["id"]) == "open knowledge\n"
+
+    def test_only_listed_sources(self, docs_env):
+        import db.project_store as project_store
+        alice = docs_env.users["alice"]["id"]
+        other_public = _run(project_store.create_project(alice, "Open too", public=True))["id"]
+        pub = seed_doc(
+            docs_env, title="Open", content="o\n", mode="public",
+            project_id=docs_env.public_project,
+        )
+        other_pub = seed_doc(
+            docs_env, title="Open too", content="t\n", mode="public", project_id=other_public,
+        )
+        give_doc_source(docs_env, docs_env.private_project, docs_env.public_project)
+        caller = make_caller(docs_env, project=docs_env.private_project)
+        assert _ids(_run(svc().list_docs(caller, scope="public"))) == [pub["id"]]
+        with pytest.raises(DocError) as exc:
+            _run(svc().read_doc(caller, other_pub["id"]))
+        assert str(exc.value) == doc_not_found_message(other_pub["id"])
+        # Both sources: both docs; no sources: neither.
+        give_doc_source(docs_env, docs_env.private_project, docs_env.public_project, other_public)
+        assert _ids(_run(svc().list_docs(caller, scope="public"))) == [other_pub["id"], pub["id"]]
+        give_doc_source(docs_env, docs_env.private_project)
+        assert _run(svc().list_docs(caller, scope="public")) == []
+        with pytest.raises(DocError) as exc:
+            _run(svc().read_doc(caller, pub["id"]))
+        assert str(exc.value) == doc_not_found_message(pub["id"])
+
+    def test_no_access_without_a_source(self, docs_env):
+        """Standalone chats, other private projects, scripts and other
+        public projects never reach the doc."""
+        import db.project_store as project_store
+        alice = docs_env.users["alice"]["id"]
+        other_public = _run(project_store.create_project(alice, "Open too", public=True))["id"]
+        pub = seed_doc(
+            docs_env, title="Open", content="o\n", mode="public",
+            project_id=docs_env.public_project,
+        )
+        give_doc_source(docs_env, docs_env.private_project, docs_env.public_project)
+        for caller in (
+            make_caller(docs_env),
+            make_caller(docs_env, project=docs_env.other_project),
+            make_caller(docs_env, run_kind="script"),
+            make_caller(docs_env, project=other_public, public=True),
+        ):
+            assert _run(svc().list_docs(caller)) == []
+            assert _run(svc().list_docs(caller, scope="public")) == []
+            with pytest.raises(DocError) as exc:
+                _run(svc().read_doc(caller, pub["id"]))
+            assert str(exc.value) == doc_not_found_message(pub["id"])
+
+    def test_recipients_read_only_through_their_own_project_source(self, docs_env):
+        """Shares still gate the relationship; the source belongs to the
+        reading project (bob's), not to the doc."""
+        import db.project_store as project_store
+        bob = docs_env.users["bob"]["id"]
+        bob_project = _run(project_store.create_project(bob, "Bob's"))["id"]
+        shared = seed_doc(
+            docs_env, title="Shared", content="s\n", mode="public",
+            project_id=docs_env.public_project, shares=[("bob", "write")],
+        )
+        unshared = seed_doc(
+            docs_env, title="Unshared", content="u\n", mode="public",
+            project_id=docs_env.public_project,
+        )
+        # Bob cannot list alice's public project as a source (ownership
+        # check in the store) ...
+        with pytest.raises(project_store.ProjectDocSourceError):
+            give_doc_source(docs_env, bob_project, docs_env.public_project, owner="bob")
+        # ... so plant the row directly to exercise the access rule alone.
+        _plant_source(docs_env, bob_project, docs_env.public_project)
+        caller = make_caller(docs_env, "bob", project=bob_project)
+        assert _ids(_run(svc().list_docs(caller, scope="public"))) == [shared["id"]]
+        read = _run(svc().read_doc(caller, shared["id"]))
+        assert read["write_note"] == DENY_PUBLIC_DOC_FROM_PRIVATE
+        with pytest.raises(DocError) as exc:
+            _run(svc().append_to_doc(caller, shared["id"], "x"))
+        assert str(exc.value) == DENY_PUBLIC_DOC_FROM_PRIVATE
+        with pytest.raises(DocError) as exc:
+            _run(svc().read_doc(caller, unshared["id"]))
+        assert str(exc.value) == doc_not_found_message(unshared["id"])
+
+    def test_public_scope_in_a_public_conversation_is_its_own_docs(self, docs_env):
+        pub = seed_doc(
+            docs_env, title="Open", content="o\n", mode="public",
+            project_id=docs_env.public_project,
+        )
+        caller = make_caller(docs_env, project=docs_env.public_project, public=True)
+        assert _ids(_run(svc().list_docs(caller, scope="public"))) == [pub["id"]]
+        assert _run(svc().list_docs(caller, scope="user")) == []
+
+    def test_deleting_the_source_project_drops_the_link(self, docs_env):
+        import db.project_store as project_store
+        alice = docs_env.users["alice"]["id"]
+        give_doc_source(docs_env, docs_env.private_project, docs_env.public_project)
+        assert _run(project_store.list_doc_source_project_ids(docs_env.private_project)) == [
+            docs_env.public_project,
+        ]
+        assert _run(project_store.delete_project(alice, docs_env.public_project)) is True
+        assert _run(project_store.list_doc_source_project_ids(docs_env.private_project)) == []
 
 
 # ---------------------------------------------------------------------------

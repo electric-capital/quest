@@ -24,11 +24,14 @@ inference_api, user_subagent and script runs)::
 docs are always project docs, so a script sees every public doc as Hidden.
 
 A user doc (``project_id`` None) is always private: the "Public" rows only
-ever describe docs of a public project (seen from that project's
-conversations, rule 2), and every "Public owner / Public recipient" cell of
-a user doc is Hidden. A stored ``mode="public"`` on a user doc (a leftover
-of the dropped user-doc mode switch; migration ``e1b7c4d9a2f6`` flips them)
-is evaluated as ``private`` for every decision below.
+ever describe docs of a public project, and every "Public owner / Public
+recipient" cell of a user doc is Hidden. The "Private owner / Private
+recipient" cells of the Public rows are reached from the conversations of
+a private project that lists the doc's project as a doc source (rule 2,
+``doc_source_project_ids``): there a public doc is readable, never
+writable. A stored ``mode="public"`` on a user doc (a leftover of the
+dropped user-doc mode switch; migration ``e1b7c4d9a2f6`` flips them) is
+evaluated as ``private`` for every decision below.
 
 (Read-only run kinds read only docs they can see: rules 1-3 below still
 apply to them.)
@@ -47,6 +50,14 @@ Rules layered on the matrix, applied in this order:
 2. Project docs are visible only from conversations of that same project
    (and from the UI); standalone conversations, other projects'
    conversations and sandbox scripts (no conversation context) see Hidden.
+   Exception: a PUBLIC doc (a doc of a public project) is visible,
+   read-only, from the conversations of a private project whose owner
+   listed the doc's project among the project's **doc sources**
+   (``doc_source_project_ids``, Project Settings > Docs access; stored in
+   ``project_doc_sources``), so what a chosen public project gathers can
+   be read there. Standalone conversations have no doc sources, public
+   conversations stay confined to their own project's docs, and scripts
+   still see no project doc at all.
 3. A public conversation never learns of a private doc (Hidden, even for
    the owner and even with a write share).
 4. Read-only run kinds (sub-agents, inference-API runs, cross-user subagent
@@ -75,12 +86,14 @@ mode -- :func:`creation_mode` for project docs, while user docs (always
 private) cannot be created from a public conversation at all.
 
 Callers pass ``is_public=False`` and ``project_id=None`` for the ``ui`` and
-``script`` run kinds (neither runs inside a conversation).
+``script`` run kinds (neither runs inside a conversation), and the empty
+default ``doc_source_project_ids`` for everything but a private project
+conversation (the doc service loads the project's sources).
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -254,12 +267,16 @@ def resolve_doc_access(
     is_public: bool,
     project_id: str | None,
     run_kind: str,
+    doc_source_project_ids: Collection[str] = (),
 ) -> DocAccess:
     """Decide visibility, readability and the write verdict for one doc.
 
     ``doc`` is the doc_store dict including ``shares`` (a missing or None
-    ``shares`` raises -- never fail open on a partial dict). ``is_public`` / ``project_id`` describe the calling
-    conversation; ``run_kind`` is one of :data:`RUN_KINDS`.
+    ``shares`` raises -- never fail open on a partial dict). ``is_public`` /
+    ``project_id`` describe the calling conversation; ``run_kind`` is one
+    of :data:`RUN_KINDS`; ``doc_source_project_ids`` are the public
+    projects whose docs the calling (private) project may read (rule 2),
+    empty unless the caller is a private project conversation.
 
     Raises ValueError for an unknown ``run_kind`` or doc mode, or a doc
     dict without its ``shares`` list.
@@ -287,9 +304,20 @@ def resolve_doc_access(
     if not is_owner and share is None:
         return HIDDEN
 
-    # 3. Project docs: only from that project's conversations (or the UI).
+    # 3. Project docs: only from that project's conversations (or the UI),
+    # except public docs of a listed doc source, which a private project's
+    # conversations may read (rule 2). Public conversations stay confined
+    # to their own project's docs; scripts (no conversation) see no
+    # project doc; standalone conversations have no sources.
     if doc_project_id is not None and run_kind != "ui" and project_id != doc_project_id:
-        return HIDDEN
+        if (
+            mode != "public"
+            or is_public
+            or run_kind == "script"
+            or project_id is None
+            or doc_project_id not in doc_source_project_ids
+        ):
+            return HIDDEN
 
     # 4. Public conversations never learn of private docs.
     if is_public and mode == "private":
