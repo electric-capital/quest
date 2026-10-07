@@ -292,7 +292,9 @@ class SubagentReturnHandler(ActionRequestHandler):
                 bus.publish_to_user(
                     run["caller_user_id"],
                     realtime_events.make_file_list_changed(
-                        run["caller_conversation_id"], None, "conversation",
+                        conversation_id=run["caller_conversation_id"],
+                        project_id=None,
+                        scope="conversation",
                     ),
                 )
             except Exception:

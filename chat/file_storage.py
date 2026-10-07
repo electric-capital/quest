@@ -687,3 +687,336 @@ def delete_workspace_item(root: Path, relative_path: str) -> Dict:
         "type": "folder",
         "deleted_count": file_count,
     }
+
+
+# ---------------------------------------------------------------------------
+# Copying entries between workspace roots (conversation <-> project)
+# ---------------------------------------------------------------------------
+
+# First path components that are scratch space by convention and are never
+# promoted out of a conversation workspace (see ``is_scratch_source``).
+SCRATCH_SOURCE_ROOTS = frozenset({".responses", ".subagent_responses", "pasted"})
+
+
+class CopyEntryError(Exception):
+    """Structured refusal from ``copy_entry``.
+
+    ``code`` is one of ``invalid_path``, ``not_found``,
+    ``not_a_regular_file``, ``destination_exists``, ``invalid_destination``
+    or ``forbidden_source``; callers map it onto their own error shape.
+    """
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def _clean_rel(rel: str) -> str:
+    """Strip the leading separators and trailing slashes ``validate_path`` ignores."""
+    return (rel or "").replace("\\", "/").strip("/")
+
+
+def is_scratch_source(rel: str) -> bool:
+    """True when ``rel`` lies in a conversation-only scratch root.
+
+    ``.responses/``, ``.subagent_responses/`` and ``pasted/`` (and anything
+    under them) hold tool-call response bodies, sub-agent deliveries and
+    composer pastes tied to one conversation; copy-to-project refuses them
+    as a source.
+    """
+    parts = [p for p in _clean_rel(rel).split("/") if p and p != "."]
+    return bool(parts) and parts[0] in SCRATCH_SOURCE_ROOTS
+
+
+def _resolve_copy_end(root: Path, rel: str, *, side: str) -> Tuple[Path, str]:
+    """Validate one end of a copy and return ``(unresolved_path, clean_rel)``.
+
+    ``validate_path`` rejects ``..`` and containment escapes; on top of that
+    no existing component below ``root`` may be a symlink (the unresolved
+    path is what gets lstat'ed and opened, so a link can never redirect the
+    copy). The root itself is not a valid end.
+    """
+    code = "invalid_path" if side == "source" else "invalid_destination"
+    clean = _clean_rel(rel)
+    if not clean or clean == ".":
+        raise CopyEntryError(
+            code, f"The {side} path must name an entry, not the workspace root"
+        )
+    is_valid, resolved = validate_path(root, clean)
+    if not is_valid or resolved is None:
+        raise CopyEntryError("invalid_path", f"Invalid {side} path: {rel}")
+    if resolved == root.resolve():
+        raise CopyEntryError(
+            code, f"The {side} path must name an entry, not the workspace root"
+        )
+    current = root
+    for part in Path(clean).parts:
+        current = current / part
+        if current.is_symlink():
+            raise CopyEntryError(
+                "not_a_regular_file" if side == "source" else "invalid_destination",
+                f"'{rel}' passes through a symbolic link",
+            )
+        if not os.path.lexists(current):
+            break
+    return root / clean, clean
+
+
+def _entry_kind(path: Path) -> Optional[str]:
+    """``"file"`` / ``"dir"`` / ``"symlink"`` / ``"special"``, or None if absent."""
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(st.st_mode):
+        return "symlink"
+    if stat.S_ISDIR(st.st_mode):
+        return "dir"
+    if stat.S_ISREG(st.st_mode):
+        return "file"
+    return "special"
+
+
+def _plan_dir(
+    src_dir: Path, dst_dir: Path, include_hidden: bool,
+    files: list, dirs: list,
+) -> int:
+    """Collect the dirs to create and the files to copy below ``src_dir``.
+
+    Walks without following symlinks. Symlinks, special files and (unless
+    ``include_hidden``) dot-named entries are skipped; returns how many.
+    """
+    skipped = 0
+    with os.scandir(src_dir) as it:
+        entries = sorted(it, key=lambda e: e.name)
+    for entry in entries:
+        if entry.name.startswith(".") and not include_hidden:
+            skipped += 1
+            continue
+        src = src_dir / entry.name
+        dst = dst_dir / entry.name
+        if entry.is_symlink():
+            skipped += 1
+        elif entry.is_dir(follow_symlinks=False):
+            dirs.append(dst)
+            skipped += _plan_dir(src, dst, include_hidden, files, dirs)
+        elif entry.is_file(follow_symlinks=False):
+            files.append((src, dst))
+        else:
+            skipped += 1
+    return skipped
+
+
+def _copy_regular_file(src: Path, dst: Path) -> None:
+    """Copy one regular file without following a symlink on either end.
+
+    The source is opened ``O_NOFOLLOW | O_NONBLOCK`` and re-checked on the
+    descriptor (a FIFO swapped in after planning can't block the thread);
+    the bytes go to a temp file beside ``dst`` that is renamed over it, so
+    an existing destination is replaced atomically and never written
+    through. Mode bits and mtime are preserved like ``shutil.copy2``.
+    """
+    fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise CopyEntryError(
+                "not_a_regular_file", f"'{src.name}' is not a regular file"
+            )
+        os.set_blocking(fd, True)
+        tmp_fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{dst.name}.", suffix=".copytmp", dir=dst.parent,
+        )
+        try:
+            with os.fdopen(tmp_fd, "wb") as out, os.fdopen(fd, "rb") as inp:
+                fd = -1  # ownership passed to the file object
+                shutil.copyfileobj(inp, out, 1024 * 1024)
+            os.chmod(tmp_name, stat.S_IMODE(st.st_mode))
+            os.utime(tmp_name, ns=(st.st_atime_ns, st.st_mtime_ns))
+            os.replace(tmp_name, dst)
+        except BaseException:
+            try:
+                os.unlink(tmp_name)
+            except FileNotFoundError:
+                pass
+            raise
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _remove_moved_source(src: Path, kind: str, copied: list) -> None:
+    """Delete exactly what was copied, then prune emptied directories.
+
+    Entries the copy skipped (dot-entries, symlinks, special files) stay in
+    the source, and so does any directory still holding them -- a move
+    never destroys data it did not deliver.
+    """
+    if kind == "file":
+        src.unlink()
+        return
+    for file_src, _dst in copied:
+        file_src.unlink()
+    for dirpath, _dirnames, _filenames in sorted(
+        os.walk(src), key=lambda t: len(Path(t[0]).parts), reverse=True,
+    ):
+        try:
+            os.rmdir(dirpath)
+        except OSError:
+            pass  # not empty: holds skipped entries
+
+
+def copy_entry(
+    src_root: Path,
+    src_rel: str,
+    dst_root: Path,
+    dst_rel: str,
+    *,
+    overwrite: bool,
+    include_hidden: bool,
+    move: bool,
+) -> Dict:
+    """Copy (or move) a file or directory from one workspace root to another.
+
+    Sync; callers run it in ``asyncio.to_thread``. Both roots are browsable
+    roots (``ChatStorage.get_conversation_workspace_root`` /
+    ``get_project_workspace_root``); ``dst_rel`` is required -- callers
+    default it to ``src_rel``. A leading ``/`` is root-relative on both
+    ends, as on every other file route.
+
+    Rules (devplan 00009 sections 6.3 / 10.8):
+
+    * Each end is validated against its own root (``..``, containment
+      escapes and symlink components refused); neither may be the root.
+    * The source must exist and be a regular file or a directory; a
+      symlink or special file (FIFO, socket, device) named as the source is
+      refused with ``not_a_regular_file``.
+    * A directory is walked without following symlinks; symlinks and
+      special files inside it are skipped (not refused), and dot-named
+      entries at every depth are skipped unless ``include_hidden``. A
+      dot-named entry given explicitly as ``src_rel`` is copied.
+    * An existing destination without ``overwrite`` is
+      ``destination_exists``. With ``overwrite`` a file replaces a file and
+      a directory merges entry by entry (unrelated destination entries
+      kept). A type mismatch -- file onto a directory, directory onto a
+      file, at the top or anywhere in the merge -- or a symlink / special
+      file in the way is ``invalid_destination``. Every conflict is found
+      before anything is written.
+    * A destination equal to the source or inside its subtree is
+      ``invalid_destination``.
+    * Missing destination parents are created (a parent that exists as a
+      file is ``invalid_destination``).
+    * ``move`` removes the source only after the whole copy succeeded, and
+      only what was copied (see ``_remove_moved_source``).
+
+    The ``.responses/`` / ``.subagent_responses/`` / ``pasted/`` scratch
+    refusal is the copy-to-project caller's job (``is_scratch_source``).
+
+    Returns:
+        ``{"type": "file" | "folder", "path": "/<dst_rel>",
+        "files_copied": int, "skipped": int, "moved": bool}``.
+
+    Raises:
+        CopyEntryError: on any refusal; nothing has been written then.
+    """
+    src_path, _src_clean = _resolve_copy_end(src_root, src_rel, side="source")
+    dst_path, dst_clean = _resolve_copy_end(dst_root, dst_rel, side="destination")
+
+    src_kind = _entry_kind(src_path)
+    if src_kind is None:
+        raise CopyEntryError("not_found", f"Not found: {src_rel}")
+    if src_kind == "symlink":
+        raise CopyEntryError(
+            "not_a_regular_file", f"'{src_rel}' is a symbolic link"
+        )
+    if src_kind == "special":
+        raise CopyEntryError(
+            "not_a_regular_file", f"'{src_rel}' is not a regular file or folder"
+        )
+
+    src_resolved = src_path.resolve()
+    dst_resolved = dst_path.resolve()
+    if dst_resolved == src_resolved or src_resolved in dst_resolved.parents:
+        raise CopyEntryError(
+            "invalid_destination",
+            "The destination is the source itself or inside it",
+        )
+
+    # Parents: every existing ancestor below the root must be a directory.
+    parent = dst_root
+    for part in Path(dst_clean).parts[:-1]:
+        parent = parent / part
+        if _entry_kind(parent) not in (None, "dir"):
+            raise CopyEntryError(
+                "invalid_destination",
+                f"Cannot create folder '{part}': "
+                "a file with that name already exists",
+            )
+
+    dst_kind = _entry_kind(dst_path)
+    if dst_kind is not None and not overwrite:
+        raise CopyEntryError(
+            "destination_exists", f"'{dst_clean}' already exists"
+        )
+    if dst_kind is not None and dst_kind != src_kind:
+        raise CopyEntryError(
+            "invalid_destination",
+            f"'{dst_clean}' exists and is not a "
+            f"{'folder' if src_kind == 'dir' else 'regular file'}",
+        )
+
+    # Plan the whole copy, then check every planned target, before writing.
+    files: list = []
+    dirs: list = []
+    skipped = 0
+    if src_kind == "file":
+        files.append((src_path, dst_path))
+    else:
+        dirs.append(dst_path)
+        skipped = _plan_dir(src_path, dst_path, include_hidden, files, dirs)
+        if dst_kind is not None:
+            for d in dirs[1:]:
+                if _entry_kind(d) not in (None, "dir"):
+                    raise CopyEntryError(
+                        "invalid_destination",
+                        f"'{d.relative_to(dst_root)}' exists and is not a folder",
+                    )
+            for _s, f in files:
+                if _entry_kind(f) not in (None, "file"):
+                    raise CopyEntryError(
+                        "invalid_destination",
+                        f"'{f.relative_to(dst_root)}' exists and is not "
+                        "a regular file",
+                    )
+
+    created_top = dst_kind is None
+    try:
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        for d in dirs:
+            d.mkdir(exist_ok=True)
+        for s, f in files:
+            _copy_regular_file(s, f)
+    except BaseException:
+        # A fresh destination is removed again so a failed copy leaves
+        # nothing behind; a merge into an existing one cannot be undone.
+        if created_top:
+            if dst_path.is_dir() and not dst_path.is_symlink():
+                shutil.rmtree(dst_path, ignore_errors=True)
+            else:
+                try:
+                    dst_path.unlink()
+                except OSError:
+                    pass
+        raise
+
+    if move:
+        _remove_moved_source(src_path, src_kind, files)
+
+    return {
+        "type": "folder" if src_kind == "dir" else "file",
+        "path": "/" + dst_clean,
+        "files_copied": len(files),
+        "skipped": skipped,
+        "moved": move,
+    }
