@@ -252,6 +252,23 @@ export async function fetchFileContent(
 }
 
 /**
+ * Hand a fetched blob to the browser as a file download (temporary anchor
+ * click), then release the blob URL. Every workspace download ends here --
+ * the hidden-data acknowledgement in contexts/DownloadWarningContext.tsx must
+ * already have happened by the time a caller reaches this.
+ */
+export function saveBlobToDisk({ url, filename }: { url: string; filename: string }): void {
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  // Deferred so the click has dispatched before the URL is revoked.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/**
  * Download a file from the workspace
  * Returns a blob URL that can be used for download
  */

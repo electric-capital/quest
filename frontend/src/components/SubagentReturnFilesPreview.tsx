@@ -8,7 +8,7 @@
 
 import React, { useState, useCallback } from 'react';
 import { Download } from 'lucide-react';
-import { downloadFile } from '../api/fileApi';
+import { useWorkspaceDownload } from '../hooks/useWorkspaceDownload';
 import { getFileIconInfo } from '../utils/fileIcons';
 import { FileViewerModal } from './FileViewerModal';
 import { isImageFile, isJsonFile, isPdfFile, isCsvFile } from './FileBrowser';
@@ -33,21 +33,15 @@ export const SubagentReturnFilesPreview = React.memo(function SubagentReturnFile
   conversationId,
 }: SubagentReturnFilesPreviewProps) {
   const [viewerFile, setViewerFile] = useState<SubagentReturnFileEntry | null>(null);
+  const downloadWorkspaceFile = useWorkspaceDownload();
 
   const handleDownload = useCallback(async (file: SubagentReturnFileEntry) => {
     try {
-      const { url, filename } = await downloadFile(conversationId, file.path);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 0);
+      await downloadWorkspaceFile(conversationId, file.path);
     } catch {
       // Swallow; the user can retry.
     }
-  }, [conversationId]);
+  }, [downloadWorkspaceFile, conversationId]);
 
   return (
     <div className="subagent-return-files">
