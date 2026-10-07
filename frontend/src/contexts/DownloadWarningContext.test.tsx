@@ -79,12 +79,32 @@ describe('DownloadWarningProvider', () => {
     expect(dialog()).toBeNull();
   });
 
+  it('uses the severe form for code: danger title, do-not-run paragraph, danger tone', () => {
+    renderProbe('setup.py');
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+    expect(screen.getByRole('dialog', { name: 'This download may be harmful to run' })).toBeTruthy();
+    expect(screen.getByText(/Source code can do anything when it runs/)).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toMatch(/Do not run, execute, import, compile or install/);
+    const confirm = screen.getByRole('button', { name: 'Acknowledge and Download' });
+    expect(confirm.className).toContain('doc-dialog-confirm--danger');
+  });
+
+  it('warns for markup about rendered remote references, in the plain form', () => {
+    renderProbe('README.md');
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+    expect(dialog()).toBeTruthy();
+    expect(screen.getByText(/a markdown image URL, for example/)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    const confirm = screen.getByRole('button', { name: 'Acknowledge and Download' });
+    expect(confirm.className).toContain('doc-dialog-confirm--default');
+  });
+
   it('names a folder download as a zip archive', () => {
     renderProbe('reports', 'folder');
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
     expect(screen.getByText('reports')).toBeTruthy();
     expect(screen.getByText(/will be downloaded as a zip archive/)).toBeTruthy();
-    expect(screen.getByText(/Archives can contain files of any type/)).toBeTruthy();
+    expect(screen.getByText(/Every file inside carries the same risks/)).toBeTruthy();
   });
 
   it('shows the warning on every download, with no memory of earlier acknowledgements', async () => {

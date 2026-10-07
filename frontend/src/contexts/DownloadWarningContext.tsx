@@ -81,8 +81,11 @@ export function DownloadWarningProvider({ children }: { children: React.ReactNod
       {children}
       <DocConfirmDialog
         isOpen={pending !== null}
-        title="This download may carry hidden data"
+        title={pending?.warning.severity === 'severe'
+          ? 'This download may be harmful to run'
+          : 'This download may carry hidden data'}
         confirmLabel="Acknowledge and Download"
+        tone={pending?.warning.severity === 'severe' ? 'danger' : 'default'}
         busy={false}
         error={null}
         onConfirm={() => settle(true)}
@@ -95,6 +98,13 @@ export function DownloadWarningProvider({ children }: { children: React.ReactNod
               {pending.target.kind === 'folder' ? ' will be downloaded as a zip archive.' : ''}
             </p>
             <p>{pending.warning.detail}</p>
+            {pending.warning.severity === 'severe' && (
+              <p className="download-warning-severe" role="alert">
+                Do not run, execute, import, compile or install this file in any capacity -- including
+                opening it in a tool that evaluates it automatically -- unless you have reviewed every line
+                of it and understand exactly what it does.
+              </p>
+            )}
             <p>
               Files in this workspace may have been written by the agent, and a manipulated agent can
               hide sensitive information in them in ways that are hard to detect. Only continue if you

@@ -7,3 +7,13 @@
   color: var(--text);
   overflow-wrap: anywhere;
 }
+
+/* The do-not-run paragraph of a severe (code / executable) warning. */
+.doc-dialog-body p.download-warning-severe {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(211, 47, 47, 0.4);
+  border-radius: 6px;
+  background-color: rgba(211, 47, 47, 0.1);
+  color: var(--text);
+  font-weight: 500;
+}

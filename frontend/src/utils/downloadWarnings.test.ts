@@ -1,14 +1,32 @@
 // The rule deciding which workspace downloads must be acknowledged first:
-// plain text is silent, everything else -- including the unknown -- warns.
+// inert text is silent, markup warns, code warns severely, and everything
+// else -- including the unknown -- warns.
 import { describe, expect, it } from 'vitest';
 import { getDownloadWarning } from './downloadWarnings';
 
 describe('getDownloadWarning', () => {
   it.each([
-    'notes.txt', 'README.md', 'data.csv', 'config.json', 'script.py', 'styles.css', 'query.sql', 'main.ts',
-  ])('lets plain-text %s through silently', (name) => {
+    'notes.txt', 'data.csv', 'rows.tsv', 'config.json', 'settings.yaml', 'app.toml', 'server.log',
+  ])('lets inert text %s through silently', (name) => {
     expect(getDownloadWarning({ name, kind: 'file' })).toBeNull();
   });
+
+  it.each(['README.md', 'guide.rst', 'feed.xml', 'styles.css'])(
+    'warns for markup %s, whose rendering can fetch remote references', (name) => {
+      const warning = getDownloadWarning({ name, kind: 'file' });
+      expect(warning?.category).toBe('markup');
+      expect(warning?.severity).toBe('warning');
+      expect(warning?.detail).toMatch(/markdown image URL/);
+    },
+  );
+
+  it.each(['script.py', 'query.sql', 'main.ts', 'bundle.js', 'run.sh', 'analysis.ipynb', 'fix.patch'])(
+    'warns severely for code %s', (name) => {
+      const warning = getDownloadWarning({ name, kind: 'file' });
+      expect(warning?.category).toBe('code');
+      expect(warning?.severity).toBe('severe');
+    },
+  );
 
   it('matches the extension case-insensitively', () => {
     expect(getDownloadWarning({ name: 'NOTES.TXT', kind: 'file' })).toBeNull();
@@ -18,7 +36,6 @@ describe('getDownloadWarning', () => {
   it.each([
     ['report.html', 'web'],
     ['chart.svg', 'web'],
-    ['bundle.js', 'web'],
     ['photo.jpg', 'image'],
     ['diagram.png', 'image'],
     ['deck.pptx', 'document'],
@@ -32,6 +49,12 @@ describe('getDownloadWarning', () => {
     const warning = getDownloadWarning({ name, kind: 'file' });
     expect(warning?.category).toBe(category);
     expect(warning?.detail).toBeTruthy();
+  });
+
+  it('marks only code and executables as severe', () => {
+    expect(getDownloadWarning({ name: 'setup.exe', kind: 'file' })?.severity).toBe('severe');
+    expect(getDownloadWarning({ name: 'photo.jpg', kind: 'file' })?.severity).toBe('warning');
+    expect(getDownloadWarning({ name: 'site.zip', kind: 'file' })?.severity).toBe('warning');
   });
 
   it('warns for unknown and missing extensions, since the agent picks the name', () => {
