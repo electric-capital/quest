@@ -6,12 +6,16 @@ inside a directory skipped, dot-entries skipped unless named or
 ``include_hidden``, ``destination_exists`` without ``overwrite`` (nothing
 written), directory merge with ``overwrite``, self/subtree destinations
 refused, and ``move`` deleting the source only after a complete copy.
+Plus the hardening: same-root ancestor destinations, mid-copy symlink swaps,
+fresh-destination cleanup incl. created parents, exclusive top-level
+creation, permission masking and deep trees.
 """
 
 from __future__ import annotations
 
 import os
 import socket
+import stat
 from pathlib import Path
 
 import pytest
@@ -376,11 +380,11 @@ class TestMove:
         real = fs._copy_regular_file
         calls = {"n": 0}
 
-        def flaky(s, d):
+        def flaky(s, d, **kw):
             calls["n"] += 1
             if calls["n"] == 2:
                 raise OSError("disk full")
-            real(s, d)
+            real(s, d, **kw)
 
         monkeypatch.setattr(fs, "_copy_regular_file", flaky)
         with pytest.raises(OSError):
@@ -395,7 +399,7 @@ class TestMove:
         (src / "a.txt").write_text("new")
         (dst / "a.txt").write_text("old")
 
-        def boom(s, d):
+        def boom(s, d, **kw):
             raise OSError("disk full")
 
         monkeypatch.setattr(fs, "_copy_regular_file", boom)
@@ -403,6 +407,195 @@ class TestMove:
             _copy(src, "a.txt", dst, overwrite=True, move=True)
         assert (src / "a.txt").read_text() == "new"
         assert (dst / "a.txt").read_text() == "old"
+
+
+class TestHardening:
+    def test_same_root_ancestor_destination_refused(self, spaces):
+        src, _ = spaces
+        (src / "a" / "b").mkdir(parents=True)
+        (src / "a" / "b" / "x.txt").write_text("x")
+        (src / "a" / "keep.txt").write_text("k")
+        before = _tree(src)
+        for dest in ("a", "/a"):
+            with pytest.raises(CopyEntryError) as exc:
+                copy_entry(src, "a/b", src, dest, overwrite=True,
+                           include_hidden=False, move=False)
+            assert _code(exc) == "invalid_destination"
+        with pytest.raises(CopyEntryError) as exc:
+            copy_entry(src, "a/b/x.txt", src, "a/b", overwrite=True,
+                       include_hidden=False, move=True)
+        assert _code(exc) == "invalid_destination"
+        assert _tree(src) == before
+
+    def test_copy_regular_file_on_fifo_does_not_block(self, spaces):
+        src, dst = spaces
+        os.mkfifo(src / "pipe")
+        with pytest.raises(CopyEntryError) as exc:
+            fs._copy_regular_file(
+                src / "pipe", dst / "pipe", src_root=src, dst_root=dst,
+            )
+        assert _code(exc) == "not_a_regular_file"
+        assert list(dst.iterdir()) == []
+
+    def test_source_fd_outside_root_refused(self, spaces, tmp_path):
+        # Simulates a source dir swapped for a symlink after planning: the
+        # opened descriptor really points outside the source root.
+        src, dst = spaces
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("secret")
+        (src / "d").symlink_to(outside, target_is_directory=True)
+        with pytest.raises(CopyEntryError) as exc:
+            fs._copy_regular_file(
+                src / "d" / "secret.txt", dst / "secret.txt",
+                src_root=src, dst_root=dst,
+            )
+        assert _code(exc) == "invalid_path"
+        assert list(dst.iterdir()) == []
+
+    def test_destination_dir_outside_root_refused(self, spaces, tmp_path):
+        src, dst = spaces
+        (src / "a.txt").write_text("a")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (dst / "d").symlink_to(outside, target_is_directory=True)
+        with pytest.raises(CopyEntryError) as exc:
+            fs._copy_regular_file(
+                src / "a.txt", dst / "d" / "a.txt", src_root=src, dst_root=dst,
+            )
+        assert _code(exc) == "invalid_path"
+        assert list(outside.iterdir()) == []
+
+    def test_mid_copy_dir_swap_aborts_and_cleans_up(self, spaces, tmp_path, monkeypatch):
+        src, dst = spaces
+        (src / "d" / "sub").mkdir(parents=True)
+        (src / "d" / "a.txt").write_text("a")
+        (src / "d" / "sub" / "b.txt").write_text("b")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        real = fs._copy_regular_file
+
+        def swap_then_copy(s, d, **kw):
+            if d.parent.name == "sub" and not d.parent.is_symlink():
+                os.rmdir(d.parent)
+                d.parent.symlink_to(outside, target_is_directory=True)
+            real(s, d, **kw)
+
+        monkeypatch.setattr(fs, "_copy_regular_file", swap_then_copy)
+        with pytest.raises(CopyEntryError) as exc:
+            _copy(src, "d", dst, "x/y/d", move=True)
+        assert _code(exc) == "invalid_path"
+        assert list(outside.iterdir()) == []
+        assert list(dst.iterdir()) == []  # incl. the created parents x/y
+        assert _tree(src) == {"d/a.txt": "a", "d/sub/b.txt": "b"}
+
+    def test_fresh_destination_failure_leaves_no_empty_parents(
+        self, spaces, monkeypatch,
+    ):
+        src, dst = spaces
+        (src / "a.txt").write_text("a")
+        (dst / "keep").mkdir()
+
+        def boom(s, d, **kw):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(fs, "_copy_regular_file", boom)
+        with pytest.raises(OSError):
+            _copy(src, "a.txt", dst, "keep/new/deeper/a.txt")
+        # Only the pre-existing dir is left.
+        assert [p.relative_to(dst) for p in dst.rglob("*")] == [Path("keep")]
+
+    def test_concurrently_created_top_dir_is_not_merged_or_removed(
+        self, spaces, monkeypatch,
+    ):
+        src, dst = spaces
+        (src / "d").mkdir()
+        (src / "d" / "a.txt").write_text("a")
+        real_mkdir = os.mkdir
+
+        def racing_mkdir(path, *a, **kw):
+            if Path(path) == dst / "d":
+                real_mkdir(path, *a, **kw)
+                (dst / "d" / "theirs.txt").write_text("theirs")
+            real_mkdir(path, *a, **kw)
+
+        monkeypatch.setattr(fs.os, "mkdir", racing_mkdir)
+        with pytest.raises(CopyEntryError) as exc:
+            _copy(src, "d", dst)
+        monkeypatch.undo()
+        assert _code(exc) == "destination_exists"
+        assert _tree(dst) == {"d/theirs.txt": "theirs"}
+
+    def test_concurrently_created_top_file_is_not_replaced(self, spaces, monkeypatch):
+        src, dst = spaces
+        (src / "a.txt").write_text("mine")
+        real_link = os.link
+
+        def racing_link(a, b, **kw):
+            Path(b).write_text("theirs")
+            return real_link(a, b, **kw)
+
+        monkeypatch.setattr(fs.os, "link", racing_link)
+        with pytest.raises(CopyEntryError) as exc:
+            _copy(src, "a.txt", dst)
+        assert _code(exc) == "destination_exists"
+        assert _tree(dst) == {"a.txt": "theirs"}
+
+    def test_setuid_and_sticky_bits_stripped(self, spaces):
+        src, dst = spaces
+        f = src / "tool.sh"
+        f.write_text("#!/bin/sh\n")
+        os.chmod(f, 0o4755)
+        d = src / "d"
+        d.mkdir()
+        (d / "g").write_text("g")
+        os.chmod(d / "g", 0o2640 | stat.S_ISVTX)
+        _copy(src, "tool.sh", dst)
+        _copy(src, "d", dst)
+        assert stat.S_IMODE((dst / "tool.sh").stat().st_mode) == 0o755
+        assert stat.S_IMODE((dst / "d" / "g").stat().st_mode) == 0o640
+
+    @staticmethod
+    def _deep(root: Path, depth: int) -> list[str]:
+        cur = root / "d"
+        cur.mkdir()
+        rel = ["d"]
+        for _ in range(depth):  # Path.mkdir(parents=True) itself recurses
+            cur = cur / "a"
+            cur.mkdir()
+            rel.append("a")
+        (cur / "leaf.txt").write_text("leaf")
+        return rel
+
+    def test_deep_tree_within_cap_copies(self, spaces):
+        src, dst = spaces
+        rel = self._deep(src, 60)
+        result = _copy(src, "d", dst, move=True)
+        assert result["files_copied"] == 1 and result["moved"] is True
+        assert (dst.joinpath(*rel) / "leaf.txt").read_text() == "leaf"
+        assert not (src / "d").exists()
+
+    def test_tree_deeper_than_recursion_limit_refused_cleanly(self, spaces):
+        src, dst = spaces
+        self._deep(src, 1100)  # past both the cap and the recursion limit
+        with pytest.raises(CopyEntryError) as exc:
+            _copy(src, "d", dst, move=True)
+        assert _code(exc) == "invalid_path"
+        assert list(dst.iterdir()) == []
+        assert (src / "d").is_dir()
+
+    def test_move_removal_failure_reports_moved_false(self, spaces, monkeypatch):
+        src, dst = spaces
+        (src / "a.txt").write_text("a")
+
+        def fail(*a, **kw):
+            raise PermissionError("read-only source")
+
+        monkeypatch.setattr(fs, "_remove_moved_source", fail)
+        result = _copy(src, "a.txt", dst, move=True)
+        assert result["moved"] is False and result["files_copied"] == 1
+        assert (dst / "a.txt").read_text() == "a"
+        assert (src / "a.txt").read_text() == "a"
 
 
 @pytest.mark.parametrize("rel,expected", [

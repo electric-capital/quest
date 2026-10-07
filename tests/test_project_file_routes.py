@@ -168,6 +168,7 @@ class TestProjectRoutes:
 
         async def fake_request(client, user, method, url, content=None, headers=None):
             sent["body"] = content
+            sent["user"] = user
             return _Resp()
 
         monkeypatch.setattr(file_routes, "make_authenticated_request", fake_request)
@@ -178,15 +179,27 @@ class TestProjectRoutes:
         assert r.status_code == 200, r.text
         assert r.json()["url"].endswith("/document/d/doc1/edit")
         assert b"# shared" in sent["body"]
+        # The Drive request runs as the calling user.
+        assert sent["user"]["id"] == 1
+        assert sent["user"]["email"] == "a@example.test"
 
     @pytest.mark.parametrize("pid", ["p2", "missing", "..", "p1%2F..%2Fp2"])
-    def test_ownership_404(self, env, pid):
+    def test_ownership_404(self, env, pid, monkeypatch):
+        async def no_drive(*a, **kw):
+            raise AssertionError("Drive must not be called for a foreign project")
+
+        monkeypatch.setattr(file_routes, "make_authenticated_request", no_drive)
+        (env["proj_root"] / "folder").mkdir()
         c = env["client"]
         calls = [
             ("GET", f"/app/api/projects/{pid}/files", {}),
             ("GET", f"/app/api/projects/{pid}/files/content", {"params": {"path": "shared.md"}}),
             ("GET", f"/app/api/projects/{pid}/files/download", {"params": {"path": "shared.md"}}),
             ("GET", f"/app/api/projects/{pid}/files/info", {"params": {"path": "shared.md"}}),
+            ("GET", f"/app/api/projects/{pid}/files/download-folder",
+             {"params": {"path": "folder"}}),
+            ("POST", f"/app/api/projects/{pid}/files/save-to-drive",
+             {"json": {"path": "shared.md", "title": "Shared"}}),
             ("DELETE", f"/app/api/projects/{pid}/files", {"params": {"path": "shared.md"}}),
             ("POST", f"/app/api/projects/{pid}/files/create-folder",
              {"json": {"path": "", "name": "x"}}),
@@ -324,6 +337,41 @@ class TestCopyRoutes:
         )
         assert r.status_code == status, r.text
         assert r.json()["detail"]["error"] == code
+
+    def test_io_failure_is_500_and_announces_both_spaces(self, env, monkeypatch):
+        import chat.file_storage as fs
+
+        def boom(*a, **kw):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(fs, "_copy_regular_file", boom)
+        r = env["client"].post(
+            "/app/api/conversations/inproj/files/copy-to-project", json={"path": "mine.md"},
+        )
+        assert r.status_code == 500, r.text
+        assert r.json()["detail"]["error"] == "copy_failed"
+        assert "No space left" in r.json()["detail"]["message"]
+        assert sorted(_scopes(env["events"])) == [
+            ("conversation", "inproj", "p1"),
+            ("project", "inproj", "p1"),
+        ]
+        assert not (env["proj_root"] / "mine.md").exists()
+
+    def test_move_with_failed_source_removal_is_200_not_moved(self, env, monkeypatch):
+        import chat.file_storage as fs
+
+        def fail(*a, **kw):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(fs, "_remove_moved_source", fail)
+        r = env["client"].post(
+            "/app/api/conversations/inproj/files/copy-from-project",
+            json={"path": "shared.md", "move": True},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["moved"] is False
+        assert (env["conv_root"] / "shared.md").read_text() == "# shared"
+        assert (env["proj_root"] / "shared.md").exists()
 
     def test_fifo_source_400(self, env):
         import os

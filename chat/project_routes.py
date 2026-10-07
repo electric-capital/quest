@@ -126,7 +126,9 @@ async def create_project_from_conversation(
     The conversation becomes the project's first conversation. Its files
     stay in its own conversation workspace (nothing is moved into the new,
     empty project workspace); the conversation is marked
-    ``converted_from_standalone`` so its system prompt can say so.
+    ``converted_from_standalone`` (so its system prompt can say so) and
+    ``own_workspace`` (the post-cutover marker, see
+    ``chat.storage.CONVERSATION_NOTICE_FLAGS``).
     """
     user_id = user["id"]
 
@@ -178,6 +180,13 @@ async def create_project_from_conversation(
     project = await _create_project_checked(user, body.name)
     ChatStorage.create_project_workspace(project["id"])
 
+    # Files stay where they are. Make sure the conversation workspace dir
+    # exists even for a conversation that never wrote a file; done before
+    # the DB flip because it is harmless if the flip fails or races (409).
+    ChatStorage.get_conversation_workspace_root(body.conversation_id).mkdir(
+        parents=True, exist_ok=True,
+    )
+
     updated = await set_conversation_project(user_id, body.conversation_id, project["id"])
     if updated is None:
         # Raced with another request that attached the conversation elsewhere.
@@ -189,16 +198,18 @@ async def create_project_from_conversation(
             },
         )
 
-    # Files stay where they are. Make sure the conversation workspace dir
-    # exists even for a conversation that never wrote a file: its presence
-    # is what tells a post-cutover project conversation from a legacy one
-    # whose earlier files live in the shared project workspace.
-    ChatStorage.get_conversation_workspace_root(body.conversation_id).mkdir(
-        parents=True, exist_ok=True,
-    )
-    ChatStorage.set_conversation_flag(
-        body.conversation_id, "converted_from_standalone", True,
-    )
+    # The flags are advisory (system prompt notice + legacy detection); a
+    # failure to write them must never turn a completed conversion into a 500.
+    try:
+        ChatStorage.set_conversation_flag(
+            body.conversation_id, "converted_from_standalone", True,
+        )
+        ChatStorage.set_conversation_flag(body.conversation_id, "own_workspace", True)
+    except Exception:
+        logger.warning(
+            "from-conversation: failed to set notice flags on %s",
+            body.conversation_id, exc_info=True,
+        )
 
     # Project membership changes the system prompt (project guide + skill
     # auto-loads), so drop any cached chat sessions for this user.

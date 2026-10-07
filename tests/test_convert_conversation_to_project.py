@@ -5,7 +5,8 @@ Covers ``POST /projects/from-conversation`` and its building blocks:
 * the route leaves the conversation's files in its own conversation
   workspace (``data/chats/{id}/workspace/``), creates an empty project
   workspace, flips ``conversations.project_id`` and sets the
-  ``converted_from_standalone`` notice flag in chat_history.json;
+  ``converted_from_standalone`` + ``own_workspace`` notice flags in
+  chat_history.json (a flag write failure never fails the conversion);
 * ``conversation_store.set_conversation_project`` -- attaches a standalone
   conversation to a project, refusing wrong-owner and already-in-project rows.
 """
@@ -133,6 +134,7 @@ def test_from_conversation_leaves_files_in_conversation_workspace(_isolated_stor
     assert meta["project_id"] == project["id"]
     assert ChatStorage.get_conversation_flags(conversation_id) == {
         "converted_from_standalone": True,
+        "own_workspace": True,
     }
     # The flag write kept the history intact.
     history = ChatStorage.get_conversation(conversation_id)
@@ -152,6 +154,7 @@ def test_from_conversation_creates_missing_conversation_workspace(_isolated_stor
     assert ws.is_dir()
     assert ChatStorage.get_conversation_flags(conversation_id) == {
         "converted_from_standalone": True,
+        "own_workspace": True,
     }
 
 
@@ -208,7 +211,38 @@ def test_create_project_conversation_creates_conversation_workspace(_isolated_st
     ws = ChatStorage.get_conversation_workspace_root(cid)
     assert ws == storage_mod.CHATS_DIR / cid / "workspace"
     assert ws.is_dir() and list(ws.iterdir()) == []
-    assert ChatStorage.get_conversation_flags(cid) == {}
+    # The explicit post-cutover marker, not the dir's presence.
+    assert ChatStorage.get_conversation_flags(cid) == {"own_workspace": True}
+
+
+def test_standalone_conversation_has_no_workspace_flags(_isolated_storage, _seed):
+    storage_mod, _conv_store_mod, _project_store_mod, _ = _isolated_storage
+    _user_id, conversation_id, _project_id = _seed
+    ChatStorage = storage_mod.ChatStorage
+
+    assert ChatStorage.get_conversation_flags(conversation_id) == {}
+    # Opening the conversation's files mkdirs its workspace as a side effect;
+    # that must not read as a post-cutover marker.
+    ChatStorage.get_conversation_workspace_root(conversation_id).mkdir(parents=True)
+    assert ChatStorage.get_conversation_flags(conversation_id) == {}
+
+
+def test_from_conversation_survives_corrupt_chat_history(_isolated_storage, _seed):
+    storage_mod, conv_store_mod, _project_store_mod, _ = _isolated_storage
+    user_id, conversation_id, _unused_project_id = _seed
+    ChatStorage = storage_mod.ChatStorage
+
+    chat_file = storage_mod.CHATS_DIR / conversation_id / "chat_history.json"
+    chat_file.write_text("{not json")
+
+    project = _convert(user_id, conversation_id)
+
+    meta = _run(conv_store_mod.get_conversation_meta(user_id, conversation_id))
+    assert meta["project_id"] == project["id"]
+    assert ChatStorage.get_conversation_workspace_root(conversation_id).is_dir()
+    # The flag write was skipped; the file was left as it was.
+    assert chat_file.read_text() == "{not json"
+    assert ChatStorage.get_conversation_flags(conversation_id) == {}
 
 
 def test_duplicate_workspace_of_project_conversation_copies_only_its_files(

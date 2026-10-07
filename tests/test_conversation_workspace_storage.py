@@ -221,6 +221,51 @@ class TestConversationFlags:
         (chats / "c1" / "chat_history.json").write_text("{not json")
         assert _cs().get_conversation_flags("c1") == {}
 
+    @pytest.mark.parametrize("content", ["{not json", "[1, 2]", "null"])
+    def test_set_on_corrupt_history_is_a_noop(self, roots, content):
+        chats, _ = roots
+        (chats / "c1").mkdir(parents=True)
+        chat_file = chats / "c1" / "chat_history.json"
+        chat_file.write_text(content)
+        _cs().set_conversation_flag("c1", "own_workspace", True)
+        assert chat_file.read_text() == content
+
+
+# ---------------------------------------------------------------------------
+# Root resolver containment
+# ---------------------------------------------------------------------------
+
+
+class TestRootContainment:
+    def test_conversation_root_symlinked_to_another_conversation_is_refused(self, roots):
+        chats, _ = roots
+        victim = chats / "B" / "workspace"
+        victim.mkdir(parents=True)
+        (chats / "A").mkdir()
+        (chats / "A" / "workspace").symlink_to(victim, target_is_directory=True)
+        with pytest.raises(storage_mod.InvalidStorageIdError):
+            _cs().get_conversation_workspace_root("A")
+        assert _cs().get_conversation_workspace_root("B") == victim
+
+    @pytest.mark.parametrize("level", ["outer", "inner"])
+    def test_project_root_symlinked_to_another_project_is_refused(self, roots, level):
+        _, projects = roots
+        victim = projects / "Q" / "workspace" / "workspace"
+        victim.mkdir(parents=True)
+        (projects / "P").mkdir()
+        if level == "outer":
+            (projects / "P" / "workspace").symlink_to(
+                projects / "Q" / "workspace", target_is_directory=True,
+            )
+        else:
+            (projects / "P" / "workspace").mkdir()
+            (projects / "P" / "workspace" / "workspace").symlink_to(
+                victim, target_is_directory=True,
+            )
+        with pytest.raises(storage_mod.InvalidStorageIdError):
+            _cs().get_project_workspace_root("P")
+        assert _cs().get_project_workspace_root("Q") == victim
+
 
 
 # ---------------------------------------------------------------------------

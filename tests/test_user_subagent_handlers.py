@@ -228,10 +228,14 @@ def test_subagent_return_file_list_shape():
 def _workspaces(tmp_path, monkeypatch):
     """Two conversation dirs under a patched CHATS_DIR (real resolvers).
 
-    The caller conversation is treated as a PROJECT conversation (project
-    lookup patched to ``p1``) to prove returned files still land in its own
-    conversation workspace, never the project workspace.
+    The caller conversation is a PROJECT conversation of ``p1`` (its
+    chat_history.json and conversation meta carry ``project_id``), and
+    ``p1``'s project workspace exists with one file in it, to prove returned
+    files land in the caller's own conversation workspace and the project
+    workspace is left untouched.
     """
+    import json
+
     import chat.storage as storage_mod
 
     chats = tmp_path / "chats"
@@ -239,17 +243,24 @@ def _workspaces(tmp_path, monkeypatch):
     monkeypatch.setattr(storage_mod, "CHATS_DIR", chats)
     monkeypatch.setattr(storage_mod, "PROJECTS_DIR", projects)
 
-    async def _project_for(conversation_id):
-        return "p1" if conversation_id == "caller-conv" else None
+    async def _meta(user_id, conversation_id):
+        if conversation_id == "caller-conv":
+            return {"id": conversation_id, "user_id": 1, "project_id": "p1"}
+        if conversation_id == "sub-conv":
+            return {"id": conversation_id, "user_id": 2, "project_id": None}
+        return None
 
-    monkeypatch.setattr(
-        "db.conversation_store.get_project_for_conversation", _project_for,
-    )
+    monkeypatch.setattr("db.conversation_store.get_conversation_meta", _meta)
 
     sub_dir = chats / "sub-conv"
     caller_dir = chats / "caller-conv"
     (sub_dir / "workspace").mkdir(parents=True)
     (caller_dir / "workspace").mkdir(parents=True)
+    (caller_dir / "chat_history.json").write_text(json.dumps({
+        "id": "caller-conv", "user_id": 1, "project_id": "p1", "messages": [],
+    }))
+    project_root = storage_mod.ChatStorage.create_project_workspace("p1")
+    (project_root / "shared.txt").write_text("project file")
     return sub_dir, caller_dir
 
 
@@ -356,7 +367,9 @@ def test_subagent_return_execute_copies_files(_workspaces, monkeypatch):
     assert result["files_returned"] == [".subagent_responses/report-2.md"]
     assert (dest_dir / "report-2.md").read_text() == "fresh"
     # The caller is a project conversation; nothing went to the project space.
-    assert not (caller_dir.parent.parent / "projects").exists()
+    project_root = caller_dir.parent.parent / "projects" / "p1" / "workspace" / "workspace"
+    assert [p.name for p in project_root.rglob("*")] == ["shared.txt"]
+    assert (project_root / "shared.txt").read_text() == "project file"
     assert (dest_dir / "report.md").read_text() == "old"
     assert updates == [("run-1", "returned")]
     assert resolved["status"] == "accepted"

@@ -1,6 +1,7 @@
 """File storage utilities for workspace file browser."""
 
 import errno
+import logging
 import os
 import re
 import shutil
@@ -11,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 import aiofiles
+
+logger = logging.getLogger(__name__)
 
 # Maximum file size for uploads (200MB)
 MAX_FILE_SIZE = 200 * 1024 * 1024
@@ -778,6 +781,10 @@ def _entry_kind(path: Path) -> Optional[str]:
     return "special"
 
 
+# Deepest folder nesting below the copied directory that copy_entry accepts.
+MAX_COPY_DEPTH = 256
+
+
 def _plan_dir(
     src_dir: Path, dst_dir: Path, include_hidden: bool,
     files: list, dirs: list,
@@ -786,37 +793,98 @@ def _plan_dir(
 
     Walks without following symlinks. Symlinks, special files and (unless
     ``include_hidden``) dot-named entries are skipped; returns how many.
+    Iterative (explicit stack), so a deep tree cannot exhaust the Python
+    recursion limit, and nesting deeper than ``MAX_COPY_DEPTH`` is refused
+    with ``invalid_path`` before anything is written. Every directory is
+    appended to ``dirs`` before anything below it.
     """
     skipped = 0
-    with os.scandir(src_dir) as it:
-        entries = sorted(it, key=lambda e: e.name)
-    for entry in entries:
-        if entry.name.startswith(".") and not include_hidden:
-            skipped += 1
-            continue
-        src = src_dir / entry.name
-        dst = dst_dir / entry.name
-        if entry.is_symlink():
-            skipped += 1
-        elif entry.is_dir(follow_symlinks=False):
-            dirs.append(dst)
-            skipped += _plan_dir(src, dst, include_hidden, files, dirs)
-        elif entry.is_file(follow_symlinks=False):
-            files.append((src, dst))
-        else:
-            skipped += 1
+    stack = [(src_dir, dst_dir, 0)]
+    while stack:
+        cur_src, cur_dst, depth = stack.pop()
+        if depth > MAX_COPY_DEPTH:
+            raise CopyEntryError(
+                "invalid_path",
+                f"Folder nesting is deeper than {MAX_COPY_DEPTH} levels",
+            )
+        with os.scandir(cur_src) as it:
+            entries = sorted(it, key=lambda e: e.name)
+        subdirs = []
+        for entry in entries:
+            if entry.name.startswith(".") and not include_hidden:
+                skipped += 1
+                continue
+            src = cur_src / entry.name
+            dst = cur_dst / entry.name
+            if entry.is_symlink():
+                skipped += 1
+            elif entry.is_dir(follow_symlinks=False):
+                dirs.append(dst)
+                subdirs.append((src, dst, depth + 1))
+            elif entry.is_file(follow_symlinks=False):
+                files.append((src, dst))
+            else:
+                skipped += 1
+        # Reversed so the alphabetically first subdir is walked first.
+        stack.extend(reversed(subdirs))
     return skipped
 
 
-def _copy_regular_file(src: Path, dst: Path) -> None:
+def _is_under(path: str, root_resolved: Path) -> bool:
+    """True when the real ``path`` equals ``root_resolved`` or lies below it.
+
+    A plain string-prefix test on two already-resolved paths (cheaper than
+    ``Path.is_relative_to`` on deep trees).
+    """
+    root = str(root_resolved)
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def _fd_realpath(fd: int, fallback: str) -> str:
+    """Real path of the open descriptor ``fd``.
+
+    Uses ``/proc/self/fd`` (Linux), which reports what the descriptor
+    actually refers to even if a path component was swapped for a symlink
+    after the open. Without /proc it falls back to ``realpath(fallback)``,
+    which only sees the path name as it is now.
+    """
+    proc = f"/proc/self/fd/{fd}"
+    if os.path.isdir("/proc/self/fd"):
+        try:
+            return os.path.realpath(proc)
+        except OSError:
+            pass
+    return os.path.realpath(fallback)
+
+
+def _require_under(real: str, root_resolved: Path, code: str, what: str) -> None:
+    """Raise ``CopyEntryError(code)`` unless ``real`` is inside ``root_resolved``."""
+    if not _is_under(real, root_resolved):
+        raise CopyEntryError(
+            code, f"{what} moved outside the workspace during the copy",
+        )
+
+
+def _copy_regular_file(
+    src: Path, dst: Path, *, src_root: Path, dst_root: Path,
+    exclusive: bool = False,
+) -> None:
     """Copy one regular file without following a symlink on either end.
 
     The source is opened ``O_NOFOLLOW | O_NONBLOCK`` and re-checked on the
-    descriptor (a FIFO swapped in after planning can't block the thread);
-    the bytes go to a temp file beside ``dst`` that is renamed over it, so
-    an existing destination is replaced atomically and never written
-    through. Mode bits and mtime are preserved like ``shutil.copy2``.
+    descriptor (a FIFO swapped in after planning can't block the thread),
+    and the descriptor's real path must lie under ``src_root``; the bytes go
+    to a temp file beside ``dst`` whose real parent must lie under
+    ``dst_root`` (both catch a directory swapped for a symlink mid-copy,
+    ``invalid_path``). The temp file is renamed over ``dst``, so an
+    existing destination is replaced atomically and never written through;
+    with ``exclusive`` it is hard-linked instead, so a destination that
+    appeared concurrently is ``destination_exists`` and never replaced.
+    Permission bits (masked to ``0o777``: no setuid/setgid/sticky) and
+    mtime are preserved like ``shutil.copy2``.
     """
+    src_root_resolved = src_root.resolve()
+    dst_root_resolved = dst_root.resolve()
     fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         st = os.fstat(fd)
@@ -824,18 +892,31 @@ def _copy_regular_file(src: Path, dst: Path) -> None:
             raise CopyEntryError(
                 "not_a_regular_file", f"'{src.name}' is not a regular file"
             )
+        _require_under(
+            _fd_realpath(fd, str(src)), src_root_resolved, "invalid_path",
+            f"Source '{src.name}'",
+        )
         os.set_blocking(fd, True)
         tmp_fd, tmp_name = tempfile.mkstemp(
             prefix=f".{dst.name}.", suffix=".copytmp", dir=dst.parent,
         )
         try:
+            _require_under(
+                os.path.dirname(_fd_realpath(tmp_fd, tmp_name)),
+                dst_root_resolved, "invalid_path", f"Destination of '{dst.name}'",
+            )
             with os.fdopen(tmp_fd, "wb") as out, os.fdopen(fd, "rb") as inp:
-                fd = -1  # ownership passed to the file object
+                tmp_fd = fd = -1  # ownership passed to the file objects
                 shutil.copyfileobj(inp, out, 1024 * 1024)
-            os.chmod(tmp_name, stat.S_IMODE(st.st_mode))
+            os.chmod(tmp_name, stat.S_IMODE(st.st_mode) & 0o777)
             os.utime(tmp_name, ns=(st.st_atime_ns, st.st_mtime_ns))
-            os.replace(tmp_name, dst)
+            if exclusive:
+                _link_exclusive(tmp_name, dst)
+            else:
+                os.replace(tmp_name, dst)
         except BaseException:
+            if tmp_fd >= 0:
+                os.close(tmp_fd)
             try:
                 os.unlink(tmp_name)
             except FileNotFoundError:
@@ -846,25 +927,92 @@ def _copy_regular_file(src: Path, dst: Path) -> None:
             os.close(fd)
 
 
-def _remove_moved_source(src: Path, kind: str, copied: list) -> None:
+def _link_exclusive(tmp_name: str, dst: Path) -> None:
+    """Move ``tmp_name`` to ``dst`` only if ``dst`` does not exist yet.
+
+    A hard link fails atomically on an existing name; on a filesystem
+    without hard links it degrades to an existence check + rename.
+    """
+    try:
+        os.link(tmp_name, dst, follow_symlinks=False)
+    except FileExistsError:
+        raise CopyEntryError(
+            "destination_exists", f"'{dst.name}' already exists"
+        ) from None
+    except OSError:
+        if os.path.lexists(dst):
+            raise CopyEntryError(
+                "destination_exists", f"'{dst.name}' already exists"
+            ) from None
+        os.replace(tmp_name, dst)
+        return
+    try:
+        os.unlink(tmp_name)
+    except OSError:
+        logger.warning("copy_entry: could not remove temp file %s", tmp_name)
+
+
+def _remove_moved_source(
+    src: Path, kind: str, copied: list, src_root: Path,
+) -> None:
     """Delete exactly what was copied, then prune emptied directories.
 
     Entries the copy skipped (dot-entries, symlinks, special files) stay in
     the source, and so does any directory still holding them -- a move
-    never destroys data it did not deliver.
+    never destroys data it did not deliver. Before each delete the real
+    path of the containing directory must still lie under ``src_root``
+    (``invalid_path`` otherwise, stopping the removal), so a directory
+    swapped for a symlink mid-move cannot redirect a delete.
     """
+    root_resolved = src_root.resolve()
     if kind == "file":
+        _require_under(
+            os.path.realpath(src.parent), root_resolved, "invalid_path",
+            f"Source '{src.name}'",
+        )
         src.unlink()
         return
     for file_src, _dst in copied:
+        _require_under(
+            os.path.realpath(file_src.parent), root_resolved, "invalid_path",
+            f"Source '{file_src.name}'",
+        )
         file_src.unlink()
     for dirpath, _dirnames, _filenames in sorted(
         os.walk(src), key=lambda t: len(Path(t[0]).parts), reverse=True,
     ):
+        _require_under(
+            os.path.realpath(dirpath), root_resolved, "invalid_path",
+            f"Source folder '{Path(dirpath).name}'",
+        )
         try:
             os.rmdir(dirpath)
         except OSError:
             pass  # not empty: holds skipped entries
+
+
+def _cleanup_failed_copy(
+    dst_path: Path, created_top: bool, created_parents: list,
+) -> None:
+    """Undo what a failed copy into a fresh destination created.
+
+    Removes the top-level destination only when this copy created it, then
+    rmdirs the ancestor dirs it created (deepest first, only while empty).
+    A merge into an existing destination cannot be undone.
+    """
+    if created_top:
+        if dst_path.is_dir() and not dst_path.is_symlink():
+            shutil.rmtree(dst_path, ignore_errors=True)
+        else:
+            try:
+                dst_path.unlink()
+            except OSError:
+                pass
+    for parent in reversed(created_parents):
+        try:
+            os.rmdir(parent)
+        except OSError:
+            break  # not empty (or gone): stop pruning
 
 
 def copy_entry(
@@ -903,12 +1051,22 @@ def copy_entry(
       file, at the top or anywhere in the merge -- or a symlink / special
       file in the way is ``invalid_destination``. Every conflict is found
       before anything is written.
-    * A destination equal to the source or inside its subtree is
-      ``invalid_destination``.
+    * A destination equal to the source, inside its subtree, or (both ends
+      in the same root) an ancestor of it is ``invalid_destination``.
     * Missing destination parents are created (a parent that exists as a
-      file is ``invalid_destination``).
+      file is ``invalid_destination``). A fresh top-level destination is
+      created exclusively: one that appears concurrently is
+      ``destination_exists``, never merged into or replaced.
+    * Mid-copy symlink swaps are caught: every opened source and every
+      written destination directory must still really lie inside its root
+      (``invalid_path``, see ``_copy_regular_file``).
+    * On a failure into a fresh destination, everything this call created
+      (the destination and any parents) is removed again.
+    * Copied files keep their permission bits masked to ``0o777``.
     * ``move`` removes the source only after the whole copy succeeded, and
-      only what was copied (see ``_remove_moved_source``).
+      only what was copied (see ``_remove_moved_source``). If that removal
+      fails, the copy still stands: the result reports ``moved: false`` and
+      the failure is logged.
 
     The ``.responses/`` / ``.subagent_responses/`` / ``pasted/`` scratch
     refusal is the copy-to-project caller's job (``is_scratch_source``).
@@ -918,7 +1076,11 @@ def copy_entry(
         "files_copied": int, "skipped": int, "moved": bool}``.
 
     Raises:
-        CopyEntryError: on any refusal; nothing has been written then.
+        CopyEntryError: on any refusal; for refusals found before writing
+            (all but ``invalid_path`` mid-copy and a concurrent
+            ``destination_exists``) nothing has been written.
+        OSError: an I/O failure while copying (a fresh destination is
+            cleaned up as above; a merge may be partial).
     """
     src_path, _src_clean = _resolve_copy_end(src_root, src_rel, side="source")
     dst_path, dst_clean = _resolve_copy_end(dst_root, dst_rel, side="destination")
@@ -935,12 +1097,19 @@ def copy_entry(
             "not_a_regular_file", f"'{src_rel}' is not a regular file or folder"
         )
 
+    src_root_resolved = src_root.resolve()
+    dst_root_resolved = dst_root.resolve()
     src_resolved = src_path.resolve()
     dst_resolved = dst_path.resolve()
     if dst_resolved == src_resolved or src_resolved in dst_resolved.parents:
         raise CopyEntryError(
             "invalid_destination",
             "The destination is the source itself or inside it",
+        )
+    if src_root_resolved == dst_root_resolved and dst_resolved in src_resolved.parents:
+        raise CopyEntryError(
+            "invalid_destination",
+            "The destination is a folder that contains the source",
         )
 
     # Parents: every existing ancestor below the root must be a directory.
@@ -990,33 +1159,73 @@ def copy_entry(
                         "a regular file",
                     )
 
-    created_top = dst_kind is None
+    fresh = dst_kind is None
+    created_top = False
+    created_parents: list = []
+
+    def _mkdir_checked(path: Path, *, exist_ok: bool) -> bool:
+        """mkdir ``path`` after checking its parent really is in dst_root."""
+        _require_under(
+            os.path.realpath(path.parent), dst_root_resolved, "invalid_path",
+            f"Folder '{path.parent.name or '/'}'",
+        )
+        try:
+            os.mkdir(path)
+        except FileExistsError:
+            if not exist_ok:
+                raise
+            return False
+        return True
+
     try:
-        dst_path.parent.mkdir(parents=True, exist_ok=True)
-        for d in dirs:
-            d.mkdir(exist_ok=True)
+        current = dst_root
+        for part in Path(dst_clean).parts[:-1]:
+            current = current / part
+            if _mkdir_checked(current, exist_ok=True):
+                created_parents.append(current)
+        if src_kind == "dir":
+            if fresh:
+                try:
+                    _mkdir_checked(dst_path, exist_ok=False)
+                except FileExistsError:
+                    raise CopyEntryError(
+                        "destination_exists", f"'{dst_clean}' already exists"
+                    ) from None
+                created_top = True
+            for d in dirs[1:]:
+                _mkdir_checked(d, exist_ok=True)
         for s, f in files:
-            _copy_regular_file(s, f)
+            _copy_regular_file(
+                s, f, src_root=src_root, dst_root=dst_root,
+                exclusive=fresh and f == dst_path,
+            )
     except BaseException:
         # A fresh destination is removed again so a failed copy leaves
         # nothing behind; a merge into an existing one cannot be undone.
-        if created_top:
-            if dst_path.is_dir() and not dst_path.is_symlink():
-                shutil.rmtree(dst_path, ignore_errors=True)
-            else:
-                try:
-                    dst_path.unlink()
-                except OSError:
-                    pass
+        try:
+            _cleanup_failed_copy(dst_path, created_top, created_parents)
+        except Exception:
+            logger.warning(
+                "copy_entry: cleanup of failed copy to %s failed", dst_path,
+                exc_info=True,
+            )
         raise
 
+    moved = False
     if move:
-        _remove_moved_source(src_path, src_kind, files)
+        try:
+            _remove_moved_source(src_path, src_kind, files, src_root)
+            moved = True
+        except (OSError, CopyEntryError) as exc:
+            logger.warning(
+                "copy_entry: copied %s to %s but removing the source failed: %s",
+                src_path, dst_path, exc,
+            )
 
     return {
         "type": "folder" if src_kind == "dir" else "file",
         "path": "/" + dst_clean,
         "files_copied": len(files),
         "skipped": skipped,
-        "moved": move,
+        "moved": moved,
     }

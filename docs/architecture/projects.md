@@ -28,24 +28,25 @@ The `Conversation` model in `db/models.py` has optional `project_id` (FK to `pro
 
 `db/project_store.py` provides CRUD operations for projects. All functions are `async` and use `AsyncSessionLocal`. `delete_project()` explicitly deletes project skills first (non-cascading FK on `skills.project_id`), then deletes the project row (CASCADE removes conversation rows). `delete_all_user_projects()` follows the same pattern for bulk deletion during account deletion.
 
-`db/conversation_store.py` provides project-aware conversation functions including `create_conversation()` (accepts optional `project_id` and `routine_id`), `list_project_conversations_meta()`, `get_project_for_conversation()`, and `set_conversation_project()` (attaches a standalone conversation to a project; refuses conversations that already belong to one, since their workspace files live in the old project's shared workspace).
+`db/conversation_store.py` provides project-aware conversation functions including `create_conversation()` (accepts optional `project_id` and `routine_id`), `list_project_conversations_meta()`, `get_project_for_conversation()`, and `set_conversation_project()` (attaches a standalone conversation to a project; refuses conversations that already belong to one).
 
 ## Workspace Resolution
 
 Two workspace roots exist, each with one resolver in `chat/storage.py`:
 
 - **Conversation workspace**: `data/chats/{conversation_id}/workspace/` (`ChatStorage.get_conversation_workspace_root()`), for every conversation, standalone or in a project. `create_project_conversation()` creates it up front.
+  The project workspace is reached through the project file routes (`/app/api/projects/{project_id}/files...`) and the copy-to-project / copy-from-project routes (see [File Browser API](../api/file-browser-api.md)).
 - **Project workspace**: `data/projects/{project_id}/workspace/workspace/` (`ChatStorage.get_project_workspace_root()`), shared by all conversations in the project.
 
 The conversation file routes (`resolve_owned_workspace`) and the tool handlers' `_get_workspace_dir()` helper (`chat/gemini_api/tool_handlers/_common.py`, which creates the dir) both resolve to the conversation workspace, project conversations included. `resolve_owned_project_workspace()` in `chat/conversation_access.py` resolves an owned project's workspace root.
 
 ## Converting a Conversation into a Project
 
-A standalone (non-project, non-Slack) conversation can be turned into a new project via **POST `/app/api/projects/from-conversation`** (see [Projects API](../api/projects-api.md)). The endpoint creates the project and its (empty) project workspace, flips `conversations.project_id` via `set_conversation_project()`, and sets the `converted_from_standalone` flag at the top level of the conversation's `chat_history.json` (`ChatStorage.set_conversation_flag()`). No files move: they stay in the conversation workspace `data/chats/{conversation_id}/workspace/` (created if the conversation never had one).
+A standalone (non-project, non-Slack) conversation can be turned into a new project via **POST `/app/api/projects/from-conversation`** (see [Projects API](../api/projects-api.md)). The endpoint creates the project and its (empty) project workspace, flips `conversations.project_id` via `set_conversation_project()`, and sets the `converted_from_standalone` and `own_workspace` flags at the top level of the conversation's `chat_history.json` (`ChatStorage.set_conversation_flag()`, best effort -- a failed flag write is logged and the conversion still succeeds). No files move: they stay in the conversation workspace `data/chats/{conversation_id}/workspace/` (created if the conversation never had one).
 
 Cached SDK sessions are invalidated because project membership changes the system prompt (project guide and skill auto-loads).
 
-In the frontend, the option appears as "Create Project from Chat" in the top-level conversation entry's dropdown menu in `Sidebar.tsx` (hidden for Slack conversations). It opens `ConvertToProjectModal` (`frontend/src/components/ConvertToProjectModal.tsx`, reusing the `NewProjectModal` styles), which prefills the project name from the conversation title and explains that the workspace files move and the chat becomes the project's first conversation. On success the sidebar refetches projects, drops the conversation from the top-level list, and drills into the new project, auto-selecting the moved conversation.
+In the frontend, the option appears as "Create Project from Chat" in the top-level conversation entry's dropdown menu in `Sidebar.tsx` (hidden for Slack conversations). It opens `ConvertToProjectModal` (`frontend/src/components/ConvertToProjectModal.tsx`, reusing the `NewProjectModal` styles), which prefills the project name from the conversation title and explains that the chat becomes the project's first conversation (its copy still says the workspace files move into the project; they no longer do -- the frontend copy is updated in a later phase). On success the sidebar refetches projects, drops the conversation from the top-level list, and drills into the new project, auto-selecting the moved conversation.
 
 ## Archiving a Project
 
@@ -73,16 +74,21 @@ data/
 ├── projects/
 │   └── {project_id}/
 │       ├── project.db              # Per-project SQLite database (created lazily, see project-db.md)
-│       └── workspace/              # Shared workspace for all project conversations
-│           └── (files created by Gemini or uploaded by user)
+│       └── workspace/
+│           └── workspace/          # Project workspace shared by all project conversations
 ├── chats/
 │   └── {conversation_id}/          # Per-conversation directory (both standalone and project)
-│       ├── chat_history.json       # Messages (includes project_id field for project conversations)
-│       └── sdk_history.json        # SDK session history
+│       ├── chat_history.json       # Messages + notice flags (includes project_id field for project conversations)
+│       ├── sdk_history.json        # SDK session history
+│       └── workspace/              # Conversation workspace (files created by the agent or uploaded by the user)
 └── quest.db                       # SQLite database (projects table, conversations.project_id FK)
 ```
 
-Chat history files (`chat_history.json`) for project conversations include a `project_id` field at the top level.
+Chat history files (`chat_history.json`) for project conversations include a `project_id` field at the top level, plus the server-set notice flags of `CONVERSATION_NOTICE_FLAGS` in `chat/storage.py` (read with `ChatStorage.get_conversation_flags()`, written with `set_conversation_flag()`):
+
+- `own_workspace` -- the explicit post-cutover marker: set by `create_project_conversation()` and by POST `/projects/from-conversation`, meaning the conversation has always had its own conversation workspace. A project conversation WITHOUT it that has at least one assistant message is a legacy conversation whose earlier files live in the shared project workspace. The presence of `data/chats/{id}/workspace/` is deliberately not the marker: opening a conversation's files or running any tool creates that dir as a side effect.
+- `converted_from_standalone` -- set by POST `/projects/from-conversation` (files left in place).
+- `legacy_shared_workspace` -- reserved for legacy project conversations.
 
 ## Project Guide Injection
 

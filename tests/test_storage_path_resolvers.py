@@ -190,14 +190,7 @@ def _patch_store(monkeypatch, owned: dict[str, dict], projects: dict[str, dict])
         row = projects.get(project_id)
         return row if row and row["user_id"] == user_id else None
 
-    async def project_for(conversation_id):
-        row = owned.get(conversation_id)
-        return row.get("project_id") if row else None
-
     monkeypatch.setattr("db.conversation_store.get_conversation_meta", get_meta, raising=True)
-    monkeypatch.setattr(
-        "db.conversation_store.get_project_for_conversation", project_for, raising=True
-    )
     monkeypatch.setattr("db.project_store.get_project", get_project, raising=True)
 
 
@@ -213,8 +206,11 @@ class TestOwnershipAccessors:
                 "inproj": {"id": "inproj", "user_id": 1, "project_id": "p1"},
                 "theirs": {"id": "theirs", "user_id": 2, "project_id": None},
             },
-            projects={},
+            projects={"p1": {"id": "p1", "user_id": 1}},
         )
+        # The project workspace of "inproj" exists and holds a file.
+        project_root = _cs().create_project_workspace("p1")
+        (project_root / "shared.txt").write_text("project file")
 
         meta, path = _run(resolve_owned_workspace(1, "solo"))
         assert meta["id"] == "solo" and path == chats / "solo" / "workspace"
@@ -223,6 +219,8 @@ class TestOwnershipAccessors:
         meta, path = _run(resolve_owned_workspace(1, "inproj"))
         assert meta["project_id"] == "p1"
         assert path == chats / "inproj" / "workspace"
+        assert [p.name for p in project_root.iterdir()] == ["shared.txt"]
+        assert (project_root / "shared.txt").read_text() == "project file"
 
         for cid in ("theirs", "missing", "../solo", "solo/workspace"):
             with pytest.raises(HTTPException) as exc:

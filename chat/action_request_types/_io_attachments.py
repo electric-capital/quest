@@ -184,7 +184,9 @@ async def resolve_workspace_file(
 
     ``conversation_id`` is required (workspace resolution needs it); a
     ``None`` value raises ``RuntimeError``, mirroring
-    :func:`read_workspace_attachments`.
+    :func:`read_workspace_attachments`. ``project_id`` is ignored: every
+    conversation, project conversations included, resolves to its own
+    conversation workspace (``ChatStorage.get_conversation_workspace_root``).
     """
     if not conversation_id:
         raise RuntimeError(

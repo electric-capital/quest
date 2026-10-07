@@ -694,7 +694,11 @@ async def _copy_between_spaces(
 
     400 ``not_a_project_conversation`` for a standalone conversation;
     ``copy_entry`` refusals map to 404 ``not_found``, 409
-    ``destination_exists`` and 400 for the rest. Scratch roots
+    ``destination_exists`` and 400 for the rest; an I/O failure while
+    copying is 500 ``copy_failed`` (both spaces are still announced as
+    changed, since part of a merge may have been written). A move whose
+    copy completed but whose source removal failed returns 200 with
+    ``moved: false``. Scratch roots
     (``is_scratch_source``) are refused as a copy-to-project source only:
     copying into the conversation workspace promotes nothing.
     """
@@ -740,6 +744,20 @@ async def _copy_between_spaces(
         raise HTTPException(
             status_code=_COPY_ERROR_STATUS.get(e.code, 400),
             detail={"error": e.code, "message": e.message},
+        )
+    except OSError as e:
+        logger.warning(
+            "copy %s project failed (conversation=%s, path=%r): %s",
+            "to" if to_project else "from", conversation_id, body.path, e,
+        )
+        _publish_file_list_changed(user_id, "conversation", conversation_id, project_id)
+        _publish_file_list_changed(user_id, "project", conversation_id, project_id)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "copy_failed",
+                "message": f"The copy failed: {e.strerror or e}",
+            },
         )
 
     _publish_file_list_changed(user_id, "conversation", conversation_id, project_id)

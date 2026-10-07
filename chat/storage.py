@@ -39,8 +39,22 @@ logger = logging.getLogger(__name__)
 # (see ChatStorage.get_conversation_flags). ``legacy_shared_workspace``: a
 # project conversation whose earlier files live in the shared project
 # workspace; ``converted_from_standalone``: turned into a project's first
-# conversation by POST /projects/from-conversation, files left in place.
-CONVERSATION_NOTICE_FLAGS = ("legacy_shared_workspace", "converted_from_standalone")
+# conversation by POST /projects/from-conversation, files left in place;
+# ``own_workspace``: the explicit post-cutover marker -- set when a project
+# conversation is created (create_project_conversation) or converted
+# (from-conversation), i.e. the conversation has always had its own
+# conversation workspace.
+#
+# Legacy detection rule (phase 2): a conversation is a legacy project
+# conversation -- its earlier files live in the shared project workspace --
+# iff it is a project conversation AND ``own_workspace`` is NOT set AND it has
+# at least one assistant message. The presence of ``chats/{cid}/workspace/``
+# must NOT be used for this: file_storage.validate_path and the tool
+# handlers' _get_workspace_dir mkdir that dir as a side effect of merely
+# opening the conversation or running any tool.
+CONVERSATION_NOTICE_FLAGS = (
+    "legacy_shared_workspace", "converted_from_standalone", "own_workspace",
+)
 
 
 def utc_timestamp() -> str:
@@ -178,8 +192,13 @@ def _check_contained(root: Path, candidate: Path) -> Path:
     """Return ``candidate`` unchanged if it resolves under ``root``, else raise.
 
     Used by the workspace-root resolvers for the fixed segments they append
-    below an already-validated id dir, so a symlinked ``workspace`` entry
-    cannot point a workspace root outside the data tree.
+    below an already-validated id dir. ``root`` is that id dir itself (e.g.
+    ``CHATS_DIR / cid``), not the data root, so a symlinked ``workspace``
+    entry can point neither outside the data tree nor at another
+    conversation's or project's workspace (``chats/A/workspace ->
+    chats/B/workspace``). The id dir was already containment-checked against
+    its data root by ``_resolve_contained_dir``, so "under the resolved id
+    dir" implies "under the data root".
     """
     try:
         candidate.resolve().relative_to(root.resolve())
@@ -249,15 +268,16 @@ class ChatStorage:
         every conversation, standalone or in a project; callers must not
         append ``"workspace"`` to it. Inherits the canonical-id and
         containment checks of ``get_conversation_dir`` and additionally
-        refuses a ``workspace`` entry that resolves outside CHATS_DIR (a
-        planted symlink). The directory is NOT created here.
+        refuses a ``workspace`` entry that resolves outside this
+        conversation's own dir (a planted symlink, incl. one into another
+        conversation's workspace). The directory is NOT created here.
 
         Raises:
-            InvalidStorageIdError: non-canonical id or path outside CHATS_DIR.
+            InvalidStorageIdError: non-canonical id or path outside the
+            conversation dir.
         """
-        return _check_contained(
-            CHATS_DIR, ChatStorage.get_conversation_dir(conversation_id) / "workspace",
-        )
+        conversation_dir = ChatStorage.get_conversation_dir(conversation_id)
+        return _check_contained(conversation_dir, conversation_dir / "workspace")
 
     @staticmethod
     def get_project_workspace_root(project_id: str) -> Path:
@@ -267,15 +287,16 @@ class ChatStorage:
         doubled ``workspace/workspace`` is the historical on-disk layout;
         only this resolver knows about it. Inherits the canonical-id and
         containment checks of ``get_project_dir`` and additionally refuses
-        a root that resolves outside PROJECTS_DIR (a planted symlink at
-        either ``workspace`` level). The directory is NOT created here.
+        a root that resolves outside this project's own dir (a planted
+        symlink at either ``workspace`` level, incl. one into another
+        project). The directory is NOT created here.
 
         Raises:
-            InvalidStorageIdError: non-canonical id or path outside PROJECTS_DIR.
+            InvalidStorageIdError: non-canonical id or path outside the
+            project dir.
         """
-        return _check_contained(
-            PROJECTS_DIR, ChatStorage.get_project_dir(project_id) / "workspace" / "workspace",
-        )
+        project_dir = ChatStorage.get_project_dir(project_id)
+        return _check_contained(project_dir, project_dir / "workspace" / "workspace")
 
     @staticmethod
     def get_doc_dir(doc_id: str) -> Path:
@@ -1030,7 +1051,9 @@ class ChatStorage:
 
         These are NOT the user-chosen ``conversations.flags`` opt-in
         behaviors (chat/conversation_flags.py); they are server-set,
-        persisted-once markers read by the system prompt builder.
+        persisted-once markers read by the system prompt builder. See the
+        ``CONVERSATION_NOTICE_FLAGS`` comment for the legacy-conversation
+        rule built on ``own_workspace``.
         """
         chat_file = ChatStorage._get_chat_history_file(conversation_id)
         if not chat_file.exists():
@@ -1057,11 +1080,15 @@ class ChatStorage:
         stored value already matches. A missing chat_history.json is a
         logged no-op: the file is only ever created by the ``create_*``
         methods, and a flag on a conversation without history has nothing
-        to annotate.
+        to annotate. An unreadable or non-object chat_history.json is also a
+        logged no-op (nothing is written), mirroring
+        ``get_conversation_flags``.
 
-        Concurrency note: same single-event-loop guarantee as
-        ``add_workspace_read_paths`` -- the read-modify-write below must stay
-        fully synchronous so it cannot interleave with a message append.
+        Concurrency note: this is the same synchronous, non-atomic
+        read-modify-write as the other chat_history.json writers. It is safe
+        only because there is no ``await`` between the read and the write
+        and everything runs on the single event loop, so it cannot
+        interleave with a message append; keep it fully synchronous.
 
         Raises:
             ValueError: ``name`` is not one of ``CONVERSATION_NOTICE_FLAGS``.
@@ -1075,8 +1102,21 @@ class ChatStorage:
                 conversation_id, name,
             )
             return
-        with open(chat_file, "r") as f:
-            chat_data = json.load(f)
+        try:
+            with open(chat_file, "r") as f:
+                chat_data = json.load(f)
+        except Exception:
+            logger.warning(
+                "set_conversation_flag(%s, %s): unreadable chat_history.json; skipped",
+                conversation_id, name, exc_info=True,
+            )
+            return
+        if not isinstance(chat_data, dict):
+            logger.warning(
+                "set_conversation_flag(%s, %s): chat_history.json is not an object; skipped",
+                conversation_id, name,
+            )
+            return
         value = bool(value)
         if chat_data.get(name) is value:
             return
@@ -1545,10 +1585,10 @@ class ChatStorage:
         conversation_id = str(uuid.uuid4())
         conversation_dir = ChatStorage._get_conversation_dir(conversation_id)
         conversation_dir.mkdir(parents=True, exist_ok=True)
-        # The conversation workspace exists from the start for every project
-        # conversation created after the per-conversation-workspace cutover;
-        # its presence is how a turn tells a new conversation from a legacy
-        # one whose earlier files live in the shared project workspace.
+        # The conversation workspace exists from the start. Its presence is
+        # NOT the post-cutover marker (opening any conversation mkdirs it);
+        # the explicit ``own_workspace`` flag below is -- see
+        # CONVERSATION_NOTICE_FLAGS.
         ChatStorage.get_conversation_workspace_root(conversation_id).mkdir(exist_ok=True)
 
         created_at_str = utc_timestamp()
@@ -1559,6 +1599,7 @@ class ChatStorage:
             "project_id": project_id,
             "routine_id": routine_id,
             "created_at": created_at_str,
+            "own_workspace": True,
             "messages": []
         }
 
