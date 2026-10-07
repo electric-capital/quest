@@ -371,7 +371,7 @@ class TestProjectPublicFlag:
 
 
 # ---------------------------------------------------------------------------
-# public_projects feature gate
+# Public projects are a default feature: no gate, creatable by everyone
 # ---------------------------------------------------------------------------
 
 
@@ -383,103 +383,50 @@ def gates_file(tmp_path, monkeypatch):
     return path
 
 
-class TestPublicProjectsFeatureGate:
-    def test_registered_and_off_by_default(self, gates_file):
-        assert fg.FEATURE_PUBLIC_PROJECTS in fg.KNOWN_FEATURES
-        assert fg.FEATURE_PUBLIC_PROJECTS in fg.FEATURE_LABELS
-        assert not fg.is_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS)
-
-    def test_not_a_conversation_flag(self, gates_file):
-        # The gate must never interact with the conversation-flags path.
+class TestPublicProjectsUngated:
+    def test_no_feature_gate(self, gates_file):
+        assert "public_projects" not in fg.KNOWN_FEATURES
+        assert "public_projects" not in fg.FEATURE_LABELS
+        # Nor a conversation flag.
         from chat.conversation_flags import KNOWN_FLAGS
-        assert fg.FEATURE_PUBLIC_PROJECTS not in KNOWN_FLAGS
+        assert "public_projects" not in KNOWN_FLAGS
 
-    def test_create_rejected_while_gate_closed(self, gates_file):
-        from chat.project_routes import _create_project_checked
-        with pytest.raises(HTTPException) as exc:
-            _run(_create_project_checked(
-                {"id": 1, "email": "user@example.com"},
-                "Open Research", public=True,
-            ))
-        assert exc.value.status_code == 400
-        assert exc.value.detail["error"] == "public_projects_disabled"
+    def test_stale_gate_key_in_file_is_ignored(self, gates_file):
+        # Installs that toggled the retired gate keep the key in
+        # feature_gates.json; reads ignore it and the next write drops it.
+        gates_file.write_text(json.dumps({"public_projects": False}))
+        assert "public_projects" not in fg.read_feature_gates()
+        fg.set_feature_enabled(fg.FEATURE_USER_SUBAGENTS, True)
+        assert "public_projects" not in json.loads(gates_file.read_text())
 
-    def test_create_rejected_for_user_outside_allowed_list(self, gates_file):
-        from chat.project_routes import _create_project_checked
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
-        fg.set_feature_allowed_users(
-            fg.FEATURE_PUBLIC_PROJECTS, ["alice@example.com"]
-        )
-        with pytest.raises(HTTPException) as exc:
-            _run(_create_project_checked(
-                {"id": 1, "email": "eve@example.com"},
-                "Open Research", public=True,
-            ))
-        assert exc.value.status_code == 400
-        assert exc.value.detail["error"] == "public_projects_disabled"
-
-    def test_visibility_follows_gate(self, gates_file, _isolated_project_store):
-        from chat.project_routes import _get_visible_project, list_user_projects
-        store = _isolated_project_store
-        user = {"id": 1, "email": "user@example.com"}
-
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
-        public = _run(store.create_project(1, "Open Research", public=True))
-        private = _run(store.create_project(1, "Private Things"))
-
-        # Gate open: both visible.
-        assert _run(_get_visible_project(user, public["id"])) is not None
-        names = [p["name"] for p in _run(list_user_projects(user=user))["projects"]]
-        assert set(names) == {"Open Research", "Private Things"}
-
-        # Gate closed: the public project disappears; the row survives.
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, False)
-        assert _run(_get_visible_project(user, public["id"])) is None
-        assert _run(_get_visible_project(user, private["id"])) is not None
-        names = [p["name"] for p in _run(list_user_projects(user=user))["projects"]]
-        assert names == ["Private Things"]
-        assert _run(store.get_project(1, public["id"])) is not None  # row intact
-
-        # Reopening the gate brings it back.
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
-        assert _run(_get_visible_project(user, public["id"])) is not None
-
-        # Restricting the gate to another user hides it again for this one.
-        fg.set_feature_allowed_users(
-            fg.FEATURE_PUBLIC_PROJECTS, ["someone-else@example.com"]
-        )
-        assert _run(_get_visible_project(user, public["id"])) is None
-        fg.set_feature_allowed_users(
-            fg.FEATURE_PUBLIC_PROJECTS, [user["email"]]
-        )
-        assert _run(_get_visible_project(user, public["id"])) is not None
-
-    def test_hidden_project_404s_on_direct_endpoints(
+    def test_create_allowed_with_all_gates_off(
         self, gates_file, _isolated_project_store,
     ):
+        from chat.project_routes import _create_project_checked
+        project = _run(_create_project_checked(
+            {"id": 1, "email": "user@example.com"},
+            "Open Research", public=True,
+        ))
+        assert project["public"] is True
+
+    def test_visible_with_all_gates_off(self, gates_file, _isolated_project_store):
         from chat.project_routes import (
-            get_user_project, update_user_project, delete_user_project,
+            get_user_project, list_user_projects, update_user_project,
             UpdateProjectRequest,
         )
         store = _isolated_project_store
-
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
-        public = _run(store.create_project(1, "Open Research", public=True))
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, False)
-
         user = {"id": 1, "email": "user@example.com"}
-        with pytest.raises(HTTPException) as exc:
-            _run(get_user_project(public["id"], user=user))
-        assert exc.value.status_code == 404
+        public = _run(store.create_project(1, "Open Research", public=True))
+        _run(store.create_project(1, "Private Things"))
 
+        names = [p["name"] for p in _run(list_user_projects(user=user))["projects"]]
+        assert set(names) == {"Open Research", "Private Things"}
+        assert _run(get_user_project(public["id"], user=user))["public"] is True
+        renamed = _run(update_user_project(
+            public["id"], UpdateProjectRequest(name="Renamed"), user=user,
+        ))
+        assert renamed["name"] == "Renamed"
+        # Still owner-scoped: another user's lookup is a 404.
         with pytest.raises(HTTPException) as exc:
-            _run(update_user_project(
-                public["id"], UpdateProjectRequest(name="Renamed"), user=user,
-            ))
+            _run(get_user_project(public["id"], user={"id": 2, "email": "x@example.com"}))
         assert exc.value.status_code == 404
-
-        with pytest.raises(HTTPException) as exc:
-            _run(delete_user_project(public["id"], user=user))
-        assert exc.value.status_code == 404
-        # Not deleted -- still there for when the gate reopens.
-        assert _run(store.get_project(1, public["id"])) is not None

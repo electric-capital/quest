@@ -9,8 +9,7 @@ captured). Users: alice (owns the three projects), bob, carol.
 Covers: the gate (every route 403 ``docs_disabled``), listing (user vs
 project docs, order, keyset paging, shares), create, get (hidden == missing
 byte for byte, the ``assets`` list), rename (409 ``stale_update`` shape),
-the refused mode switch, user docs always private whatever the
-``public_projects`` gate says (closed in the fixture by default), assets,
+the refused mode switch, user docs always private, assets,
 downloads (md + zip, symlink refusal), delete, and the project delete
 route removing the project's doc directories.
 """
@@ -88,10 +87,6 @@ def detail(resp):
 
 def doc_dirs(env):
     return sorted(p.name for p in env.dirs["docs"].iterdir())
-
-
-def open_public_projects(env):
-    env.fg.set_feature_enabled(env.fg.FEATURE_PUBLIC_PROJECTS, True)
 
 
 def uid(env, who):
@@ -266,14 +261,12 @@ class TestList:
         assert resp.status_code == 404
         assert detail(resp)["error"] == "project_not_found"
 
-    def test_gated_off_public_project_404s(self, docs_env):
+    def test_public_project_docs_list(self, docs_env):
         doc = seed_doc(
             docs_env, "Open doc", mode="public", project_id=docs_env.public_project,
         )
         url = f"/app/api/docs?project_id={docs_env.public_project}"
         c = client(docs_env)
-        assert c.get(url).status_code == 404
-        open_public_projects(docs_env)
         assert [r["id"] for r in c.get(url).json()["docs"]] == [doc["id"]]
 
 
@@ -310,10 +303,7 @@ class TestCreate:
             (alice, "doc_list_changed"), (alice, "doc_changed"),
         ])
 
-    @pytest.mark.parametrize("public_projects", [False, True])
-    def test_user_doc_public_mode_400(self, docs_env, public_projects):
-        if public_projects:
-            open_public_projects(docs_env)
+    def test_user_doc_public_mode_400(self, docs_env):
         resp = client(docs_env).post(
             "/app/api/docs", json={"title": "Open", "mode": "public"},
         )
@@ -333,7 +323,6 @@ class TestCreate:
         assert row["project_id"] == docs_env.private_project
         assert row["access"]["can_switch_mode"] is False
 
-        open_public_projects(docs_env)
         row = c.post("/app/api/docs", json={
             "title": "Open proj", "project_id": docs_env.public_project,
         }).json()
@@ -388,14 +377,6 @@ class TestCreate:
         assert resp.status_code == 404
         assert detail(resp)["error"] == "project_not_found"
         assert doc_dirs(docs_env) == []
-
-    def test_gated_off_public_project_404(self, docs_env):
-        resp = client(docs_env).post("/app/api/docs", json={
-            "title": "Open", "project_id": docs_env.public_project,
-        })
-        assert resp.status_code == 404
-        assert detail(resp)["error"] == "project_not_found"
-
 
 # ---------------------------------------------------------------------------
 # Get
@@ -659,13 +640,10 @@ class TestRename:
 
 
 class TestMode:
-    @pytest.mark.parametrize("public_projects", [False, True])
     @pytest.mark.parametrize(
         "payload", [{"mode": "public"}, {"mode": "private"}, {"mode": "secret"}, {}],
     )
-    def test_user_doc_400(self, docs_env, payload, public_projects):
-        if public_projects:
-            open_public_projects(docs_env)
+    def test_user_doc_400(self, docs_env, payload):
         doc = seed_doc(docs_env, "Mine")
         resp = client(docs_env).put(f"/app/api/docs/{doc['id']}/mode", json=payload)
         assert resp.status_code == 400
@@ -677,7 +655,6 @@ class TestMode:
 
     @pytest.mark.parametrize("payload", [{"mode": "public"}, {"mode": "private"}, {}])
     def test_project_doc_inherited(self, docs_env, payload):
-        open_public_projects(docs_env)
         c = client(docs_env)
         for project_id, mode in (
             (docs_env.private_project, "private"), (docs_env.public_project, "public"),
@@ -721,16 +698,12 @@ class TestMode:
 
 
 # ---------------------------------------------------------------------------
-# User docs are always private, whatever the public_projects gate says
-# (closed in docs_env); only public-project docs are public
+# User docs are always private; only public-project docs are public
 # ---------------------------------------------------------------------------
 
 
 class TestUserDocsAlwaysPrivate:
-    @pytest.mark.parametrize("public_projects", [False, True])
-    def test_create_is_private(self, docs_env, public_projects):
-        if public_projects:
-            open_public_projects(docs_env)
+    def test_create_is_private(self, docs_env):
         c = client(docs_env)
         for title, payload in (("Plan", {}), ("Plan 2", {"mode": "private"})):
             resp = c.post("/app/api/docs", json={"title": title, **payload})
@@ -740,13 +713,8 @@ class TestUserDocsAlwaysPrivate:
             assert row["access"]["can_switch_mode"] is False
 
     def test_create_public_400_for_everyone(self, docs_env):
-        fg = docs_env.fg
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
-        fg.set_feature_allowed_users(
-            fg.FEATURE_PUBLIC_PROJECTS, [docs_env.users["bob"]["email"]],
-        )
         payload = {"title": "Open", "mode": "public"}
-        for who in ("alice", "bob"):  # gate closed / open for the user
+        for who in ("alice", "bob"):
             resp = client(docs_env, who).post("/app/api/docs", json=payload)
             assert resp.status_code == 400
             assert detail(resp) == USER_DOC_PRIVATE
@@ -769,14 +737,9 @@ class TestUserDocsAlwaysPrivate:
         assert detail(resp)["error"] == "project_doc_mode_inherited"
 
     def test_public_doc_lives_in_a_public_project(self, docs_env):
-        """The only way to a public doc: create it in a public project,
-        which the public_projects gate must show the user."""
+        """The only way to a public doc: create it in a public project."""
         c = client(docs_env)
         payload = {"title": "Open", "project_id": docs_env.public_project}
-        resp = c.post("/app/api/docs", json=payload)
-        assert resp.status_code == 404
-        assert detail(resp)["error"] == "project_not_found"
-        open_public_projects(docs_env)
         resp = c.post("/app/api/docs", json=payload)
         assert resp.status_code == 201
         row = resp.json()
@@ -784,7 +747,6 @@ class TestUserDocsAlwaysPrivate:
         assert row["access"]["can_switch_mode"] is False
 
     def test_can_switch_mode_always_false(self, docs_env):
-        open_public_projects(docs_env)
         private = seed_doc(docs_env, "Private")
         legacy = make_legacy_public(docs_env, seed_doc(docs_env, "Legacy")["id"])
         proj = seed_doc(docs_env, "Proj", project_id=docs_env.private_project)

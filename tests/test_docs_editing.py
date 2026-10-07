@@ -24,8 +24,8 @@ Covers:
    symlinked names 404 ``asset_not_found`` with nothing outside ``assets/``
    touched, ``asset_in_use`` against the CURRENT body (name-boundary
    regex), asset-only write.
-4. Public-project docs: the owner edits from the UI; hidden (404) while the
-   ``public_projects`` gate is closed. The ``docs`` gate closes every route.
+4. Public-project docs: the owner edits from the UI. The ``docs`` gate
+   closes every route.
 """
 
 import asyncio
@@ -633,48 +633,6 @@ class TestQueuedRaces:
         assert result.code == "forbidden"
         assert files.list_assets(doc["id"]) == []
         assert token(env, doc["id"]) == before
-
-    def test_public_projects_gate_closing_while_queued(self, env):
-        from chat.docs import service
-
-        fg = env.fg
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
-        doc = seed_doc(env, "Open", mode="public", project_id=env.public_project)
-        start = token(env, doc["id"])
-        result = run_queued(
-            doc["id"],
-            lambda: ui_writes().replace_body_from_ui(
-                env.users["alice"], doc["id"], "late\n", expected_updated_at=start,
-            ),
-            lambda: fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, False),
-        )
-        assert type(result) is service.DocError
-        assert str(result) == doc_not_found_message(doc["id"])
-        assert body(doc["id"]) == "line one\nline two\n"
-
-    def test_owner_gate_closing_while_queued_freezes_recipient(self, env):
-        """The lock-time re-check applies the OWNER's public_projects gate
-        too (ui_writes.public_doc_frozen_for), not only the viewer's."""
-        from chat.docs import service
-
-        fg = env.fg
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
-        doc = seed_doc(env, "Open", mode="public", project_id=env.public_project)
-        bob = env.users["bob"]
-        share(env, doc, "bob", "write")
-        start = token(env, doc["id"])
-        result = run_queued(
-            doc["id"],
-            lambda: ui_writes().replace_body_from_ui(
-                bob, doc["id"], "late\n", expected_updated_at=start,
-            ),
-            lambda: fg.set_feature_allowed_users(
-                fg.FEATURE_PUBLIC_PROJECTS, [bob["email"]],
-            ),
-        )
-        assert type(result) is service.DocError
-        assert str(result) == doc_not_found_message(doc["id"])
-        assert body(doc["id"]) == "line one\nline two\n"
 
     def test_previous_updated_at_is_read_under_the_lock(self, env):
         doc = seed_doc(env)
@@ -1361,7 +1319,6 @@ class TestPublicProjectDocs:
         )
 
     def test_owner_edits_public_doc_from_ui(self, env):
-        env.fg.set_feature_enabled(env.fg.FEATURE_PUBLIC_PROJECTS, True)
         doc = self._public_doc(env)
         c = client(env)
         resp = put_content(c, doc["id"], "edited by a person\n", token(env, doc["id"]))
@@ -1371,15 +1328,15 @@ class TestPublicProjectDocs:
         assert up.status_code == 201
         assert c.delete(f"/app/api/docs/{doc['id']}/assets/pic.png").status_code == 200
 
-    def test_hidden_while_public_projects_gate_closed(self, env):
-        doc = self._public_doc(env)  # gate closed by default in the fixture
+    def test_stranger_cannot_edit_public_doc(self, env):
+        doc = self._public_doc(env)
         files.add_asset(doc["id"], "keep.png", PNG)
         files.add_asset(doc["id"], "spare.png", PNG)
-        c = client(env)
+        bob = client(env, "bob")
         responses = [
-            put_content(c, doc["id"], "x\n", token(env, doc["id"])),
-            upload(c, doc["id"], PNG, "new.png"),
-            c.delete(f"/app/api/docs/{doc['id']}/assets/spare.png"),
+            put_content(bob, doc["id"], "x\n", token(env, doc["id"])),
+            upload(bob, doc["id"], PNG, "new.png"),
+            bob.delete(f"/app/api/docs/{doc['id']}/assets/spare.png"),
         ]
         for resp in responses:
             assert resp.status_code == 404
@@ -1388,17 +1345,6 @@ class TestPublicProjectDocs:
         assert sorted(a["name"] for a in files.list_assets(doc["id"])) == [
             "keep.png", "spare.png",
         ]
-
-    def test_service_hides_too(self, env):
-        from chat.docs import service
-
-        doc = self._public_doc(env)
-        with pytest.raises(service.DocError) as exc:
-            _run(ui_writes().replace_body_from_ui(
-                env.users["alice"], doc["id"], "x\n",
-                expected_updated_at=token(env, doc["id"]),
-            ))
-        assert str(exc.value) == doc_not_found_message(doc["id"])
 
 
 class TestDocsGate:

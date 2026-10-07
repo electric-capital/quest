@@ -63,9 +63,8 @@ def project_routines_allowed(project: dict, user: dict) -> bool:
     """Whether this project may have (and run) routines for this user.
 
     Private projects always can. A public project can only while the admin
-    ``public_project_routines`` feature gate (and the ``public_projects``
-    gate it sits on) is open for the user: its routines run in the
-    internet-enabled sandbox, scheduled ones unattended.
+    ``public_project_routines`` feature gate is open for the user: its
+    routines run in the internet-enabled sandbox, scheduled ones unattended.
     """
     return not project.get("public") or public_project_routines_enabled_for(
         user["email"]

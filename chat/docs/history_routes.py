@@ -6,8 +6,7 @@ chat/docs/routes.py: under ``/app/api``, authenticated by
 ``get_current_user_cookie_or_apikey_checked``, 403 ``docs_disabled`` first
 while the ``docs`` gate is closed, visibility through
 ``routes._get_doc_for_ui`` (404 ``doc_not_found`` with one body for a
-missing doc, a hidden one, and a public-project doc hidden by the
-``public_projects`` gates), rows built by ``routes._ui_row``.
+missing doc and a hidden one), rows built by ``routes._ui_row``.
 
 Every route is for EDITORS only (``access.can_edit``: the owner or a
 write-share recipient): right after visibility, a read-only viewer (read

@@ -33,14 +33,6 @@ enabled, non-deprecated model) and persisted as JSON in ``DATA_DIR /
   allowed for a visibility cannot hold that visibility's slot
   (normalization clears it).
 
-**Public mode.** The public-project distinction only exists while the
-server-global ``public_projects`` feature gate is on for anyone
-(:func:`public_mode_enabled`, see config/feature_gates.py). While it is
-off there is one kind of conversation, so the admin table hides the
-Private/Public columns and the public slot, ``is_model_allowed`` allows
-everything, and the catalog reports both flags as allowed; the stored
-values are kept untouched so switching the gate back on restores them.
-
 Models absent from the file get :data:`UNSET_ENTRY` (no slot, empty
 descriptor, allowed everywhere). A MISSING file means the app's historical
 defaults (:data:`DEFAULT_MODEL_SELECTION`: the three curated "Smart /
@@ -92,18 +84,6 @@ DEFAULT_MODEL_SELECTION: dict[str, dict] = {
     "claude-sonnet-5": {**UNSET_ENTRY, "slot": 2, "public_slot": 2, "descriptor": "Faster ($$)"},
     "gemini-3.8-flash": {**UNSET_ENTRY, "slot": 3, "public_slot": 3, "descriptor": "Fastest ($)"},
 }
-
-
-def public_mode_enabled() -> bool:
-    """Whether public projects are switched on server-wide (for anyone).
-
-    The per-user restriction of the gate is irrelevant here: as soon as any
-    user can have public projects, the public menu and the usage flags
-    matter.
-    """
-    from config.feature_gates import FEATURE_PUBLIC_PROJECTS, is_feature_enabled
-
-    return is_feature_enabled(FEATURE_PUBLIC_PROJECTS)
 
 
 def _normalize_slot(value) -> int | None:
@@ -258,12 +238,8 @@ def is_model_allowed(model_id: str, *, public: bool) -> bool:
     """Whether ``model_id`` may run a turn in a public (``True``) or private
     (``False``) conversation.
 
-    Always True while public mode is off (there is only one kind of
-    conversation then, and the admin table hides the flags). Unknown /
-    unlisted models are allowed -- the provider layer decides whether they
-    exist.
+    Unknown / unlisted models are allowed -- the provider layer decides
+    whether they exist.
     """
-    if not public_mode_enabled():
-        return True
     entry = selection_for(model_id)
     return entry["allow_public"] if public else entry["allow_private"]

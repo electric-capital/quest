@@ -31,24 +31,6 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-@pytest.fixture(autouse=True)
-def _isolated_feature_gates(tmp_path, monkeypatch):
-    """Public mode (the public_projects gate) drives what the store enforces
-    and what the catalog reports; keep it off unless a test opens it."""
-    import config.feature_gates as fg
-
-    monkeypatch.setattr(fg, "FEATURE_GATES_FILE", tmp_path / "feature_gates.json")
-
-
-@pytest.fixture
-def public_mode():
-    """Switch the public_projects gate on server-wide."""
-    import config.feature_gates as fg
-
-    fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
-    assert ms.public_mode_enabled()
-
-
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     """Point server_config.json and the Vertex env lookups at tmp_path."""
@@ -198,7 +180,7 @@ def test_save_rejects_duplicate_slots_without_writing(store):
     assert store.exists()
 
 
-def test_selection_for_falls_back_to_qualified_legacy_id(store, public_mode):
+def test_selection_for_falls_back_to_qualified_legacy_id(store):
     ms.save_model_selection({f"openrouter:{DEEPSEEK}": {"allow_public": False}})
     assert ms.selection_for(f"openrouter:{DEEPSEEK}")["allow_public"] is False
     # A bare pre-instances id stored on an old conversation gets the same rule
@@ -208,7 +190,7 @@ def test_selection_for_falls_back_to_qualified_legacy_id(store, public_mode):
     assert ms.selection_for(None) == ms.UNSET_ENTRY
 
 
-def test_is_model_allowed(store, public_mode):
+def test_is_model_allowed(store):
     assert ms.is_model_allowed("claude-opus-4-8", public=True)
     assert ms.is_model_allowed("claude-opus-4-8", public=False)
     ms.save_model_selection({
@@ -223,31 +205,11 @@ def test_is_model_allowed(store, public_mode):
     assert ms.is_model_allowed("no-such-model", public=False)
 
 
-def test_usage_flags_ignored_while_public_mode_off(store):
-    """Without public projects there is one kind of conversation: the flags
-    are hidden in the admin table and must not block anything, but the
-    stored values survive for when the gate reopens."""
-    import config.feature_gates as fg
-
-    ms.save_model_selection({
-        "claude-opus-4-8": {"allow_public": False},
-        "gemini-3.8-flash": {"allow_private": False},
-    })
-    assert not ms.public_mode_enabled()
-    assert ms.is_model_allowed("claude-opus-4-8", public=True)
-    assert ms.is_model_allowed("gemini-3.8-flash", public=False)
-    assert ms.read_model_selection()["gemini-3.8-flash"]["allow_private"] is False
-
-    fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
-    assert not ms.is_model_allowed("claude-opus-4-8", public=True)
-    assert not ms.is_model_allowed("gemini-3.8-flash", public=False)
-
-
 # ---------------------------------------------------------------------------
 # Public catalog (GET /app/api/config `models`)
 # ---------------------------------------------------------------------------
 
-def test_public_model_catalog_carries_selection_fields(store, public_mode):
+def test_public_model_catalog_carries_selection_fields(store):
     from chat.llm.config import public_model_catalog
 
     rows = {m["id"]: m for m in public_model_catalog()}
@@ -271,22 +233,6 @@ def test_public_model_catalog_carries_selection_fields(store, public_mode):
     assert rows["gemini-3.8-flash"]["public_slot"] == 1
     # Saving replaced the defaults wholesale
     assert rows["claude-opus-4-8"]["slot"] is None
-
-
-def test_public_model_catalog_masks_flags_while_public_mode_off(store):
-    from chat.llm.config import public_model_catalog
-
-    ms.save_model_selection({
-        "claude-haiku-4.5": {"slot": 5, "public_slot": 2, "allow_public": False},
-        "gemini-3.8-flash": {"allow_private": False, "public_slot": 1},
-    })
-    rows = {m["id"]: m for m in public_model_catalog()}
-    # Private menu untouched; public menu + usage flags neutralized
-    assert rows["claude-haiku-4.5"]["slot"] == 5
-    assert rows["claude-haiku-4.5"]["public_slot"] is None
-    assert rows["claude-haiku-4.5"]["allow_public"] is True
-    assert rows["gemini-3.8-flash"]["allow_private"] is True
-    assert rows["gemini-3.8-flash"]["public_slot"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +263,6 @@ def test_admin_get_rows_and_availability(admin_routes, health_store):
     result = _run(admin_routes.admin_get_model_selection(user=ADMIN_USER))
     assert result["max_slots"] == ms.MAX_TOP_LEVEL_SLOTS
     assert result["max_descriptor_length"] == ms.MAX_DESCRIPTOR_LENGTH
-    assert result["public_mode_enabled"] is False
     rows = {m["id"]: m for m in result["models"]}
     # Deprecated and admin-disabled models are not curatable rows
     assert not any(resolve_model(m).deprecated for m in rows)
@@ -334,8 +279,7 @@ def test_admin_get_rows_and_availability(admin_routes, health_store):
     assert rows["claude-opus-4-8"]["unavailable_reason"] == "not_configured"
     assert rows["gemini-3.5-flash-lite"]["available"] is False
     assert rows["gemini-3.5-flash-lite"]["unavailable_reason"] == "failing"
-    # Selection fields come from the (default) store, unmasked even with
-    # public mode off (the UI just hides the columns)
+    # Selection fields come from the (default) store
     assert rows["claude-opus-4-8"]["slot"] == 1
     assert rows["claude-opus-4-8"]["public_slot"] == 1
     assert rows["claude-opus-4-8"]["descriptor"] == "Smart ($$$)"
@@ -345,11 +289,6 @@ def test_admin_get_rows_and_availability(admin_routes, health_store):
     result = _run(admin_routes.admin_get_model_selection(user=ADMIN_USER))
     rows = {m["id"]: m for m in result["models"]}
     assert rows["claude-haiku-4.5"]["allow_public"] is False
-
-
-def test_admin_get_reports_public_mode(admin_routes, public_mode):
-    result = _run(admin_routes.admin_get_model_selection(user=ADMIN_USER))
-    assert result["public_mode_enabled"] is True
 
 
 def test_admin_put_full_replacement(admin_routes):

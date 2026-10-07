@@ -1037,16 +1037,11 @@ def _model_selection_view() -> dict:
     Rows are the models an admin can meaningfully curate; entries stored
     for models that are currently disabled or removed stay in the file
     untouched by reads but are dropped by the next full-replacement PUT.
-    ``public_mode_enabled`` tells the UI whether to show the public-menu
-    slot, the Private/Public columns and the public preview at all; the
-    rows carry the STORED flags regardless so a save while the gate is
-    off preserves them.
     """
     from chat.llm.config import get_available_models, get_configured_models, list_model_specs
     from config.model_selection import (
         MAX_DESCRIPTOR_LENGTH,
         MAX_TOP_LEVEL_SLOTS,
-        public_mode_enabled,
         read_model_selection,
         selection_for,
     )
@@ -1077,7 +1072,6 @@ def _model_selection_view() -> dict:
     return {
         "max_slots": MAX_TOP_LEVEL_SLOTS,
         "max_descriptor_length": MAX_DESCRIPTOR_LENGTH,
-        "public_mode_enabled": public_mode_enabled(),
         "models": rows,
     }
 

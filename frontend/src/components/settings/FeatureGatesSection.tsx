@@ -15,7 +15,7 @@ import './FeatureGatesSection.css';
  * immediately -- there is no separate Save button. Reuses the service
  * credential card + toggle chrome.
  *
- * Gates with supports_user_access (currently public_projects) additionally
+ * Gates with supports_user_access (e.g. public_project_routines) additionally
  * get an access editor: "All users" vs "Only specific users" with a
  * checkbox roster, each change saved immediately like the toggle.
  */

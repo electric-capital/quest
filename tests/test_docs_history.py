@@ -19,7 +19,7 @@ Covers:
 2. Reading one revision, ``?diff=current``, bad ``diff`` values, malformed /
    missing / pruned / symlinked revision ids (one ``revision_not_found``).
 3. Access: gate, strangers (hidden == missing), read shares (no restore),
-   public-project docs behind the ``public_projects`` gate.
+   public-project docs.
 4. Restore: snapshot + write with ``ui:<user_id>``, identical body = no
    write, stale token (flat 409), a write landing while the restore waits
    for the per-doc lock (TOCTOU), token validation, a write-share
@@ -1031,18 +1031,10 @@ class TestAccess:
         assert doc_dirs(env) == dirs
         assert user_docs_of(env, "bob") == []
 
-    def test_public_project_doc_behind_gate(self, env):
+    def test_public_project_doc_history(self, env):
         doc = seed_doc(env, "Open", "v0\n", mode="public", project_id=env.public_project)
         write(env, doc["id"], "v1\n", f"ui:{uid(env, 'alice')}")
         (rev,) = rev_ids(doc["id"])
-        tok = token(env, doc["id"])
-        expected = {"error": "doc_not_found", "message": doc_not_found_message(doc["id"])}
-        for resp in _all_routes(client(env), doc["id"], rev, tok):
-            assert resp.status_code == 404
-            assert detail(resp) == expected
-        assert body(doc["id"]) == "v1\n"
-
-        env.fg.set_feature_enabled(env.fg.FEATURE_PUBLIC_PROJECTS, True)
         c = client(env)
         assert c.get(f"/app/api/docs/{doc['id']}/revisions").status_code == 200
         resp = copy(c, doc["id"], rev)

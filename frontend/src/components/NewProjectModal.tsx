@@ -4,13 +4,8 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { createProject, ApiClientError } from '../api/client';
-import { useAuth } from '../contexts/AuthContext';
 import { ModalShell } from './ModalShell';
 import './NewProjectModal.css';
-
-// Server-global feature gate key for public projects
-// (config/feature_gates.py FEATURE_PUBLIC_PROJECTS).
-const PUBLIC_PROJECTS_FEATURE = 'public_projects';
 
 interface NewProjectModalProps {
   isOpen: boolean;
@@ -24,10 +19,6 @@ export function NewProjectModal({ isOpen, onClose, onProjectCreated }: NewProjec
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  // The public-project option is offered only while an admin has the
-  // server-global public_projects feature gate open.
-  const { enabledFeatures } = useAuth();
-  const publicProjectsEnabled = enabledFeatures.includes(PUBLIC_PROJECTS_FEATURE);
 
   // Focus input when modal opens
   useEffect(() => {
@@ -88,24 +79,22 @@ export function NewProjectModal({ isOpen, onClose, onProjectCreated }: NewProjec
           maxLength={100}
           disabled={isCreating}
         />
-        {publicProjectsEnabled && (
-          <label className="new-project-public-row">
-            <input
-              type="checkbox"
-              checked={isPublic}
-              onChange={(e) => setIsPublic(e.target.checked)}
-              disabled={isCreating}
-            />
-            <span className="new-project-public-label">
-              Public project
-              <span className="new-project-public-hint">
-                Conversations get internet access from the code sandbox, but no
-                access to your internal data or connected services (no email,
-                Slack, memories, or skills). Cannot be changed later.
-              </span>
+        <label className="new-project-public-row">
+          <input
+            type="checkbox"
+            checked={isPublic}
+            onChange={(e) => setIsPublic(e.target.checked)}
+            disabled={isCreating}
+          />
+          <span className="new-project-public-label">
+            Public project
+            <span className="new-project-public-hint">
+              Conversations get internet access from the code sandbox, but no
+              access to your internal data or connected services (no email,
+              Slack, memories, or skills). Cannot be changed later.
             </span>
-          </label>
-        )}
+          </span>
+        </label>
         {error && <div className="new-project-error">{error}</div>}
         <div className="new-project-actions">
           <button

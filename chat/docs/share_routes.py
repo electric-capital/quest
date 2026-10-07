@@ -24,8 +24,7 @@ non-empty XOR ``everyone: true``), 400 ``invalid_permission``, 404
 is deleted mid-request), 409 ``ambiguous_user`` when several case-variant
 accounts match and none exactly, 400 ``cannot_share_with_owner`` for the
 owner's own email; DELETE: 404 ``share_not_found`` for a malformed id or a
-share that is not this doc's. A doc of a public project is frozen (404)
-while the viewer's or the owner's ``public_projects`` gate is closed.
+share that is not this doc's.
 
 What a share grants is decided by the one access rule
 (chat/docs/access.py), unchanged: in the UI a read share views and a write

@@ -4,8 +4,12 @@
    the colour theme applies; the preview borrows the real menu's classes
    from ChatPanel.css. */
 
+/* Six columns in the table, so the two menu previews sit in a row above
+   it (source order keeps the table first for screen readers) and the table
+   gets the full width. */
 .model-selection-layout {
   display: flex;
+  flex-direction: column;
   gap: 1.5rem;
   align-items: flex-start;
 }
@@ -13,36 +17,18 @@
 .model-selection-main {
   flex: 1 1 auto;
   min-width: 0;
+  width: 100%;
 }
 
 .model-selection-side {
-  flex: 0 0 220px;
-  position: sticky;
-  top: 0;
-}
-
-/* Public mode has six columns, so the two previews move into a row above
-   the table (source order keeps the table first for screen readers) and
-   the table gets the full width. */
-.model-selection-layout.public-mode {
-  flex-direction: column;
-}
-
-.model-selection-layout.public-mode .model-selection-side {
   order: -1;
-  position: static;
-  flex: none;
   display: flex;
   gap: 1.5rem;
   width: 100%;
 }
 
-.model-selection-layout.public-mode .model-selection-preview {
+.model-selection-preview {
   flex: 0 0 240px;
-}
-
-.model-selection-layout.public-mode .model-selection-preview + .model-selection-preview {
-  margin-top: 0;
 }
 
 .model-selection-side-title {
@@ -50,10 +36,6 @@
   font-weight: 600;
   color: var(--text-secondary);
   margin: 0 0 0.5rem;
-}
-
-.model-selection-preview + .model-selection-preview {
-  margin-top: 1.25rem;
 }
 
 .model-selection-table {
@@ -79,8 +61,8 @@
   white-space: nowrap;
 }
 
-/* Two-row header in public mode: the group labels span a slot + allowed
-   pair per visibility; the sub-header carries no bottom padding fuss. */
+/* Two-row header: the group labels span a slot + allowed pair per
+   visibility; the sub-header carries no bottom padding fuss. */
 .model-selection-header-group {
   text-align: center !important;
   border-bottom: 1px solid var(--border) !important;
@@ -99,16 +81,8 @@
 }
 
 .model-selection-col-model {
-  width: 38%;
-  max-width: 0; /* let the id line ellipsize instead of widening the column */
-}
-
-.model-selection-table.public-mode .model-selection-col-model {
   width: 30%;
-}
-
-.model-selection-table.public-mode .model-selection-col-descriptor {
-  min-width: 9rem;
+  max-width: 0; /* let the id line ellipsize instead of widening the column */
 }
 
 .model-selection-col-slot {
@@ -117,7 +91,7 @@
 }
 
 .model-selection-col-descriptor {
-  min-width: 11rem;
+  min-width: 9rem;
 }
 
 .model-selection-col-check {

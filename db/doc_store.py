@@ -423,7 +423,6 @@ async def list_docs_shared_with(
     *,
     limit: Optional[int] = None,
     before: Optional[tuple[datetime, str]] = None,
-    include_public_project_docs: bool = True,
 ) -> list[dict]:
     """Docs shared WITH the user that they do not own, newest first.
 
@@ -434,11 +433,6 @@ async def list_docs_shared_with(
     order and keyset cursor as :func:`list_accessible_docs`; the caller
     still runs every row through the access rule and its own UI filters.
 
-    ``include_public_project_docs=False`` leaves out docs of public
-    projects (``project_id`` set and ``mode="public"``) in SQL -- the
-    caller passes it while the user's ``public_projects`` gate is closed,
-    so hidden rows never eat the ``LIMIT``.
-
     Returns:
         Doc dicts, each with ``shares``.
     """
@@ -448,8 +442,6 @@ async def list_docs_shared_with(
     )
     async with AsyncSessionLocal() as db:
         stmt = select(Doc).where(Doc.owner_id != user_id, share_exists)
-        if not include_public_project_docs:
-            stmt = stmt.where(or_(Doc.project_id.is_(None), Doc.mode != "public"))
         stmt = _keyset_page(stmt, limit=limit, before=before)
         return await _docs_with_shares(db, stmt)
 

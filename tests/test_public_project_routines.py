@@ -4,8 +4,8 @@ Public projects have no routines unless an admin opens the gate (Settings >
 Features) for the user. Covered here, against an isolated SQLite file and a
 per-test feature-gate store:
 
-1. Registry: the gate is known, off by default, per-user capable, and only
-   effective together with ``public_projects``.
+1. Registry: the gate is known, off by default and per-user capable
+   (public projects themselves are ungated).
 2. Routine / schedule routes and the one-click run endpoint refuse public
    projects while the gate is closed and work while it is open; private
    projects are never affected; nothing is deleted.
@@ -116,7 +116,6 @@ def env(tmp_path, monkeypatch):
 
 
 def _open_gates(routines: bool = True):
-    fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
     fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECT_ROUTINES, routines)
 
 
@@ -150,10 +149,9 @@ class TestGateRegistry:
         from chat.conversation_flags import KNOWN_FLAGS
         assert fg.FEATURE_PUBLIC_PROJECT_ROUTINES not in KNOWN_FLAGS
 
-    def test_needs_the_public_projects_gate_too(self, env):
+    def test_only_its_own_gate_is_needed(self, env):
+        # Public projects are ungated, so this is the sole switch.
         fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECT_ROUTINES, True)
-        assert not fg.public_project_routines_enabled_for(EMAIL)
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECTS, True)
         assert fg.public_project_routines_enabled_for(EMAIL)
 
     def test_per_user_access(self, env):
@@ -360,13 +358,6 @@ class TestScheduler:
         # The next regular occurrence fires.
         _poll(env, DUE + timedelta(days=1, seconds=5))
         assert env["spawned"] == [routine["id"]]
-
-    def test_public_projects_gate_closed_also_blocks(self, env):
-        routine = _routine(env, env["public"])
-        _daily_at_due(env, routine)
-        fg.set_feature_enabled(fg.FEATURE_PUBLIC_PROJECT_ROUTINES, True)
-        _poll(env, DUE + timedelta(seconds=5))
-        assert env["spawned"] == []
 
     def test_open_gate_runs_public_routine(self, env):
         routine = _routine(env, env["public"])

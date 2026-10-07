@@ -60,44 +60,10 @@ class CreateProjectConversationRequest(BaseModel):
     routine_id: Optional[str] = None
 
 
-def _public_projects_enabled_for(user: dict) -> bool:
-    """Whether the public-projects gate is open for this user.
-
-    The admin gate can be open to all users or restricted to specific user
-    emails; outside the allowed list it behaves exactly as if closed.
-    """
-    from config.feature_gates import (
-        is_feature_enabled_for_user, FEATURE_PUBLIC_PROJECTS,
-    )
-    return is_feature_enabled_for_user(FEATURE_PUBLIC_PROJECTS, user["email"])
-
-
-async def _get_visible_project(user: dict, project_id: str) -> Optional[dict]:
-    """``get_project``, additionally hiding public projects while gated off.
-
-    While the ``public_projects`` feature gate is closed for this user,
-    existing public projects must disappear from the UI: they are dropped
-    from the list endpoint and 404 on direct access (this helper). The rows
-    and workspaces are untouched, so restoring access brings them back.
-    """
-    project = await get_project(user["id"], project_id)
-    if project and project.get("public") and not _public_projects_enabled_for(user):
-        return None
-    return project
-
-
 async def _create_project_checked(
     user: dict, name: str, public: bool = False
 ) -> dict:
     """Validate the name and create a project row, mapping errors to HTTP."""
-    if public and not _public_projects_enabled_for(user):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "public_projects_disabled",
-                "message": "Public projects are disabled on this server",
-            },
-        )
     if not name or not name.strip():
         raise HTTPException(
             status_code=400,
@@ -251,10 +217,6 @@ async def list_user_projects(
     sidebar's "Show Archived" toggle), mirroring ``GET /conversations``.
     """
     projects = await list_projects(user["id"], include_archived=include_archived)
-    # Hide public projects while the gate is closed for this user (the
-    # rows persist; restoring access brings them back).
-    if not _public_projects_enabled_for(user):
-        projects = [p for p in projects if not p.get("public")]
     return {"projects": projects}
 
 
@@ -264,7 +226,7 @@ async def get_user_project(
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
     """Get a specific project by ID."""
-    project = await _get_visible_project(user, project_id)
+    project = await get_project(user["id"], project_id)
     if not project:
         raise HTTPException(
             status_code=404,
@@ -281,13 +243,6 @@ async def update_user_project(
 ):
     """Update a project's name and/or guide."""
     user_id = user["id"]
-
-    # Hidden (gated-off public) projects 404 like nonexistent ones.
-    if await _get_visible_project(user, project_id) is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
 
     try:
         project = await update_project(user_id, project_id, name=body.name, guide=body.guide)
@@ -326,12 +281,7 @@ async def update_user_project(
 
 
 async def _set_archived_checked(user: dict, project_id: str, archived: bool) -> dict:
-    """Flip the archived flag on a visible project, 404 otherwise."""
-    if await _get_visible_project(user, project_id) is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    """Flip the archived flag on the user's project, 404 otherwise."""
     project = await set_project_archived(user["id"], project_id, archived)
     if not project:
         raise HTTPException(
@@ -368,9 +318,9 @@ async def delete_user_project(
     """Delete a project and all its conversations."""
     user_id = user["id"]
 
-    # Hidden (gated-off public) projects 404 like nonexistent ones -- they
-    # are preserved, not deletable, while invisible.
-    if await _get_visible_project(user, project_id) is None:
+    # Ownership check up front so a foreign id never reaches the
+    # conversation/doc listing below.
+    if await get_project(user_id, project_id) is None:
         raise HTTPException(
             status_code=404,
             detail={"error": "not_found", "message": "Project not found"},
@@ -446,9 +396,8 @@ async def create_project_conversation(
     """Create a new conversation within a project."""
     user_id = user["id"]
 
-    # Verify project exists, belongs to user, and is not hidden by the
-    # public-projects gate
-    project = await _get_visible_project(user, project_id)
+    # Verify project exists and belongs to user
+    project = await get_project(user_id, project_id)
     if not project:
         raise HTTPException(
             status_code=404,
@@ -518,7 +467,7 @@ async def list_project_conversations_endpoint(
 ):
     """List conversations in a project."""
 
-    project = await _get_visible_project(user, project_id)
+    project = await get_project(user["id"], project_id)
     if not project:
         raise HTTPException(
             status_code=404,
@@ -538,8 +487,8 @@ async def get_project_conversation_endpoint(
     """Get conversation history from a project."""
     user_id = user["id"]
 
-    # Verify project ownership (and gate visibility)
-    project = await _get_visible_project(user, project_id)
+    # Verify project ownership
+    project = await get_project(user_id, project_id)
     if not project:
         raise HTTPException(
             status_code=404,

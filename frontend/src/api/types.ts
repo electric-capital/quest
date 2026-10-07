@@ -1737,9 +1737,7 @@ export interface AppModelInfo {
   // composer menu's top-level slot for private and for public-project
   // conversations (1..max, null = "All models" only), the free-text label
   // shown for a slotted model, and whether the model may be used in
-  // private / public-project conversations. While public mode (the
-  // public_projects gate) is off the server reports public_slot as null
-  // and both flags as true.
+  // private / public-project conversations.
   slot: number | null;
   public_slot: number | null;
   descriptor: string;
@@ -1757,7 +1755,6 @@ export interface ModelSelectionRow {
   // Offerable right now: credentials configured and no failing health verdict
   available: boolean;
   unavailable_reason: 'not_configured' | 'failing' | null;
-  // Stored values, unmasked even while public mode is off
   slot: number | null;
   public_slot: number | null;
   descriptor: string;
@@ -1768,9 +1765,6 @@ export interface ModelSelectionRow {
 export interface ModelSelectionListResponse {
   max_slots: number;
   max_descriptor_length: number;
-  // The public_projects gate is on for anyone: the table shows the public
-  // menu slot, the Private/Public columns and the public menu preview
-  public_mode_enabled: boolean;
   models: ModelSelectionRow[];
 }
 
