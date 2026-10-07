@@ -6,12 +6,12 @@ import { getDownloadWarning } from './downloadWarnings';
 
 describe('getDownloadWarning', () => {
   it.each([
-    'notes.txt', 'data.csv', 'rows.tsv', 'config.json', 'settings.yaml', 'app.toml', 'server.log',
+    'notes.txt', 'config.json', 'settings.yaml', 'app.toml', 'server.log', 'refs.bib',
   ])('lets inert text %s through silently', (name) => {
     expect(getDownloadWarning({ name, kind: 'file' })).toBeNull();
   });
 
-  it.each(['README.md', 'guide.rst', 'feed.xml', 'styles.css'])(
+  it.each(['README.md', 'guide.rst', 'feed.xml', 'styles.css', 'data.csv', 'rows.tsv'])(
     'warns for markup %s, whose rendering can fetch remote references', (name) => {
       const warning = getDownloadWarning({ name, kind: 'file' });
       expect(warning?.category).toBe('markup');

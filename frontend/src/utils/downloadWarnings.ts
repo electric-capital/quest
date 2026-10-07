@@ -10,7 +10,7 @@
  *
  * The rule is allow-list shaped: a download is silent only when the extension
  * is an inert text format -- one with no behavior attached to opening it,
- * whose whole content is visible in a text viewer (txt, csv, json, ...).
+ * whose whole content is visible in a text viewer (txt, json, yaml, ...).
  * Everything else -- including an unknown or missing extension, since the
  * agent picks the filename -- warns, with a category-specific explanation
  * where one applies and a generic one otherwise. Text is split three ways:
@@ -53,11 +53,11 @@ export interface DownloadTarget {
  * Inert text: formats with no behavior attached to opening them -- no
  * references another program resolves, nothing that runs. What the user can
  * read in a text viewer is the whole file, so these download silently.
- * (A CSV opened in a spreadsheet app can still evaluate formula cells; it is
- * kept here on the product decision that txt/csv-class data stays silent.)
+ * CSV/TSV are NOT here: a spreadsheet application evaluates formula cells
+ * on open (=HYPERLINK, =IMPORTXML, ...), which is the markup hazard.
  */
 const INERT_TEXT_EXTENSIONS = new Set([
-  'txt', 'csv', 'tsv', 'log', 'json', 'jsonl', 'ndjson',
+  'txt', 'log', 'json', 'jsonl', 'ndjson',
   'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'env', 'bib',
 ]);
 
@@ -65,7 +65,8 @@ const CATEGORY_EXTENSIONS: Record<Exclude<DownloadWarningCategory, 'other'>, rea
   // Text formats a viewer RENDERS, resolving references on the way: a
   // markdown image URL, a CSS url(), an XML stylesheet PI each fetch a
   // remote resource -- and the request itself can carry the leaked data.
-  markup: ['md', 'markdown', 'rst', 'xml', 'css'],
+  // A spreadsheet app evaluating a CSV's formula cells is the same hazard.
+  markup: ['md', 'markdown', 'rst', 'xml', 'css', 'csv', 'tsv'],
   // Source that does something when run, imported, compiled or applied.
   code: [
     'py', 'rb', 'go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'hpp', 'cc', 'cs', 'php', 'r',
@@ -88,7 +89,7 @@ const CATEGORY_EXTENSIONS: Record<Exclude<DownloadWarningCategory, 'other'>, rea
 };
 
 const CATEGORY_DETAILS: Record<DownloadWarningCategory, string> = {
-  markup: 'Markup files are rendered by the program that opens them, and the rendering can fetch remote resources the file references -- a markdown image URL, for example -- so simply viewing the file can send information to a third party.',
+  markup: 'Files like this are rendered by the program that opens them, and the rendering can fetch remote resources the file references -- a markdown image URL, or a formula cell a spreadsheet evaluates in a CSV -- so simply viewing the file can send information to a third party.',
   code: 'Source code can do anything when it runs: read or change files on your computer, connect to the network, send data elsewhere. Nothing here has inspected what it does.',
   web: 'Web files can contain scripts that run as soon as the file is opened in a browser, and markup that is not shown on the rendered page.',
   image: 'Images can carry data in their metadata (such as EXIF fields) and in pixel patterns that are invisible when the picture is viewed.',

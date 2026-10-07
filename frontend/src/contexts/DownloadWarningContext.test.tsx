@@ -93,7 +93,7 @@ describe('DownloadWarningProvider', () => {
     renderProbe('README.md');
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
     expect(dialog()).toBeTruthy();
-    expect(screen.getByText(/a markdown image URL, for example/)).toBeTruthy();
+    expect(screen.getByText(/a markdown image URL, or a formula cell/)).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
     const confirm = screen.getByRole('button', { name: 'Acknowledge and Download' });
     expect(confirm.className).toContain('doc-dialog-confirm--default');
