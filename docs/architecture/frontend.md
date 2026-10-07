@@ -2801,7 +2801,7 @@ The panel header displays "Project Files" when the browsed workspace belongs to 
 
 `RightPanel` falls back to the context `drilledProjectId` whenever it has no conversation (with a live conversation the URL always wins, so a standalone chat viewed while the Sidebar is drilled never grows project cards).
 
-Every file endpoint is keyed by conversation id while all conversations of a project share one workspace directory (`data/projects/<pid>/workspace`, see `ChatStorage.get_workspace_path`).
+Every file endpoint is keyed by conversation id. Since the per-conversation workspace change the conversation file routes serve the conversation's OWN workspace (`ChatStorage.get_conversation_workspace_root`) also for project conversations, so the borrowed handle below shows that conversation's files until the frontend gains a Project Files card backed by project file routes.
 
 The panel therefore borrows the id of any existing conversation of that project (`useProjectWorkspaceProxy`: one `fetchProjectConversations(projectId, includeArchived=true)` call, first row, result discarded when the project changes mid-flight) as the `FileBrowser`'s workspace handle. Uploads, downloads, deletes and the `file_list_changed` refresh (matched on the passed `projectId`) all work against that shared directory.
 

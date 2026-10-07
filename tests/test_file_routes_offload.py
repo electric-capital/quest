@@ -50,16 +50,17 @@ def _slow(return_value):
 
 @pytest.fixture
 def owned_workspace(tmp_path: Path, monkeypatch):
-    (tmp_path / "workspace").mkdir()
+    root = tmp_path / "workspace"
+    root.mkdir()
 
     async def resolve(_user_id, _conversation_id):
-        return {"project_id": None}, tmp_path
+        return {"project_id": None}, root
 
     monkeypatch.setattr(file_routes, "resolve_owned_workspace", resolve)
     monkeypatch.setattr(
         file_routes, "_publish_file_list_changed", lambda *a, **k: None,
     )
-    return tmp_path
+    return root
 
 
 USER = {"id": 1}

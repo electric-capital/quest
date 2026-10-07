@@ -72,26 +72,26 @@ def _check_dir_conflicts(target_dir: Path, stop_at: Path) -> None:
             )
 
 
-def validate_path(workspace_path: Path, requested_path: str) -> Tuple[bool, Optional[Path]]:
+def validate_path(root: Path, requested_path: str) -> Tuple[bool, Optional[Path]]:
     """Validate that a requested path is within the workspace and safe.
 
     Prevents path traversal attacks by ensuring the resolved path
-    is within the workspace directory.
+    is within ``root``. ``root`` is the browsable root itself (a
+    conversation or project workspace root from ``ChatStorage``); nothing
+    is appended to it. It is created if missing.
 
     Args:
-        workspace_path: Base workspace directory path
+        root: Browsable workspace root (the directory the user sees as "/")
         requested_path: User-requested relative path
 
     Returns:
         Tuple of (is_valid, resolved_path) where resolved_path is None if invalid
     """
-    # Get the workspace directory
-    workspace_dir = workspace_path / "workspace"
-    workspace_dir.mkdir(parents=True, exist_ok=True)
+    root.mkdir(parents=True, exist_ok=True)
 
     # Normalize and resolve the requested path
     if not requested_path or requested_path == "/" or requested_path == ".":
-        return True, workspace_dir
+        return True, root
 
     # Clean the requested path - remove leading slashes
     clean_path = requested_path.lstrip("/").lstrip("\\")
@@ -101,11 +101,11 @@ def validate_path(workspace_path: Path, requested_path: str) -> Tuple[bool, Opti
         return False, None
 
     # Resolve the full path
-    full_path = (workspace_dir / clean_path).resolve()
+    full_path = (root / clean_path).resolve()
 
     # Ensure the resolved path is within the workspace
     try:
-        full_path.relative_to(workspace_dir.resolve())
+        full_path.relative_to(root.resolve())
         return True, full_path
     except ValueError:
         return False, None
@@ -130,11 +130,11 @@ def get_file_info(file_path: Path) -> Dict:
     }
 
 
-def list_workspace_files(workspace_path: Path, relative_path: str = "") -> Dict:
+def list_workspace_files(root: Path, relative_path: str = "") -> Dict:
     """List contents of a directory within the workspace.
 
     Args:
-        workspace_path: Base workspace directory path
+        root: Browsable workspace root (the directory the user sees as "/")
         relative_path: Relative path within workspace (empty for root)
 
     Returns:
@@ -144,7 +144,7 @@ def list_workspace_files(workspace_path: Path, relative_path: str = "") -> Dict:
         ValueError: If path validation fails
         FileNotFoundError: If directory doesn't exist
     """
-    is_valid, resolved_path = validate_path(workspace_path, relative_path)
+    is_valid, resolved_path = validate_path(root, relative_path)
 
     if not is_valid or resolved_path is None:
         raise ValueError("Invalid path")
@@ -155,19 +155,16 @@ def list_workspace_files(workspace_path: Path, relative_path: str = "") -> Dict:
     if not resolved_path.is_dir():
         raise ValueError(f"Not a directory: {relative_path}")
 
-    workspace_dir = workspace_path / "workspace"
-    workspace_dir.mkdir(parents=True, exist_ok=True)
-
     # Calculate relative path for display
     try:
-        current_path = "/" + str(resolved_path.relative_to(workspace_dir))
+        current_path = "/" + str(resolved_path.relative_to(root))
         if current_path == "/.":
             current_path = "/"
     except ValueError:
         current_path = "/"
 
     # Determine if we can go up
-    can_go_up = resolved_path.resolve() != workspace_dir.resolve()
+    can_go_up = resolved_path.resolve() != root.resolve()
 
     # List directory contents
     files = []
@@ -201,11 +198,11 @@ def _no_follow_opener(path: str, flags: int) -> int:
     return os.open(path, flags | os.O_NOFOLLOW)
 
 
-async def save_uploaded_file(workspace_path: Path, filename: str, file_content: bytes, relative_path: str = "") -> Dict:
+async def save_uploaded_file(root: Path, filename: str, file_content: bytes, relative_path: str = "") -> Dict:
     """Save an uploaded file to the workspace.
 
     Args:
-        workspace_path: Base workspace directory path
+        root: Browsable workspace root (the directory the user sees as "/")
         filename: Name of the file to save
         file_content: File content as bytes
         relative_path: Relative path within workspace for upload destination
@@ -229,7 +226,7 @@ async def save_uploaded_file(workspace_path: Path, filename: str, file_content: 
         raise ValueError(f"File too large. Maximum size is {MAX_FILE_SIZE // (1024 * 1024)}MB")
 
     # Validate destination path
-    is_valid, resolved_dir = validate_path(workspace_path, relative_path)
+    is_valid, resolved_dir = validate_path(root, relative_path)
 
     if not is_valid or resolved_dir is None:
         raise ValueError("Invalid destination path")
@@ -250,11 +247,10 @@ async def save_uploaded_file(workspace_path: Path, filename: str, file_content: 
             )
         raise
 
-    workspace_dir = workspace_path / "workspace"
 
     # Return file info
     try:
-        rel_path = "/" + str(file_path.relative_to(workspace_dir))
+        rel_path = "/" + str(file_path.relative_to(root))
     except ValueError:
         rel_path = "/" + filename
 
@@ -266,14 +262,14 @@ async def save_uploaded_file(workspace_path: Path, filename: str, file_content: 
 
 
 def create_workspace_folder(
-    workspace_path: Path,
+    root: Path,
     parent_relative_path: str,
     folder_name: str,
 ) -> Dict:
     """Create a new empty folder inside the workspace.
 
     Args:
-        workspace_path: Base workspace directory path
+        root: Browsable workspace root (the directory the user sees as "/")
         parent_relative_path: Relative path of the parent directory within
             the workspace (empty/"/" for root)
         folder_name: Name of the folder to create
@@ -307,7 +303,7 @@ def create_workspace_folder(
         raise ValueError("Folder name is too long (max 255 characters)")
 
     # Resolve the parent directory inside the workspace
-    is_valid, resolved_parent = validate_path(workspace_path, parent_relative_path)
+    is_valid, resolved_parent = validate_path(root, parent_relative_path)
     if not is_valid or resolved_parent is None:
         raise ValueError("Invalid path")
 
@@ -316,14 +312,13 @@ def create_workspace_folder(
     if not resolved_parent.is_dir():
         raise ValueError(f"Not a directory: {parent_relative_path}")
 
-    workspace_dir = workspace_path / "workspace"
     target = resolved_parent / folder_name
 
     # Defense in depth: detect file-at-ancestor-path conflicts.  This is
     # mostly unreachable for a single-level mkdir (since the parent is
     # already validated as a directory) but matches the helper used by
     # save_uploaded_file_with_path().
-    _check_dir_conflicts(target, workspace_dir)
+    _check_dir_conflicts(target, root)
 
     if target.exists():
         raise ValueError(
@@ -335,7 +330,7 @@ def create_workspace_folder(
     target.mkdir(parents=False, exist_ok=False)
 
     try:
-        rel_path = "/" + str(target.relative_to(workspace_dir))
+        rel_path = "/" + str(target.relative_to(root))
     except ValueError:
         rel_path = "/" + folder_name
 
@@ -346,7 +341,7 @@ def create_workspace_folder(
 
 
 async def save_uploaded_file_with_path(
-    workspace_path: Path,
+    root: Path,
     relative_file_path: str,
     file_content: bytes,
     base_relative_path: str = ""
@@ -357,7 +352,7 @@ async def save_uploaded_file_with_path(
     like "folder/subfolder/file.txt" that must be preserved.
 
     Args:
-        workspace_path: Base workspace directory path
+        root: Browsable workspace root (the directory the user sees as "/")
         relative_file_path: Relative path of the file including parent dirs
                            (e.g., "test/sub/file.txt")
         file_content: File content as bytes
@@ -404,7 +399,7 @@ async def save_uploaded_file_with_path(
         )
 
     # Validate destination path
-    is_valid, resolved_dir = validate_path(workspace_path, combined_path)
+    is_valid, resolved_dir = validate_path(root, combined_path)
     if not is_valid or resolved_dir is None:
         raise ValueError("Invalid destination path")
 
@@ -412,8 +407,7 @@ async def save_uploaded_file_with_path(
     # Walk up from the target dir toward the workspace root; if any component
     # already exists as a regular file, mkdir() would fail with an opaque
     # OSError / NotADirectoryError.  Raise a clear ValueError instead.
-    workspace_dir = workspace_path / "workspace"
-    _check_dir_conflicts(resolved_dir, workspace_dir)
+    _check_dir_conflicts(resolved_dir, root)
 
     # Ensure directory exists (creates nested dirs as needed)
     resolved_dir.mkdir(parents=True, exist_ok=True)
@@ -431,11 +425,10 @@ async def save_uploaded_file_with_path(
             )
         raise
 
-    workspace_dir = workspace_path / "workspace"
 
     # Return file info with full relative path
     try:
-        rel_path = "/" + str(file_path.relative_to(workspace_dir))
+        rel_path = "/" + str(file_path.relative_to(root))
     except ValueError:
         rel_path = "/" + relative_file_path
 
@@ -455,11 +448,11 @@ MAX_VIEW_SIZE = 5 * 1024 * 1024
 VIEWABLE_EXTENSIONS = {'.md', '.py', '.txt', '.json', '.csv'}
 
 
-def get_file_content(workspace_path: Path, file_path_str: str) -> Tuple[str, str, int]:
+def get_file_content(root: Path, file_path_str: str) -> Tuple[str, str, int]:
     """Read text content of a file for viewing.
 
     Args:
-        workspace_path: Base workspace directory path
+        root: Browsable workspace root (the directory the user sees as "/")
         file_path_str: Relative path to the file
 
     Returns:
@@ -469,7 +462,7 @@ def get_file_content(workspace_path: Path, file_path_str: str) -> Tuple[str, str
         ValueError: If path validation fails, file type unsupported, or file too large
         FileNotFoundError: If file doesn't exist
     """
-    is_valid, resolved_path = validate_path(workspace_path, file_path_str)
+    is_valid, resolved_path = validate_path(root, file_path_str)
 
     if not is_valid or resolved_path is None:
         raise ValueError("Invalid path")
@@ -515,11 +508,11 @@ def get_file_content(workspace_path: Path, file_path_str: str) -> Tuple[str, str
     return content, resolved_path.name, size
 
 
-def get_file_download(workspace_path: Path, file_path_str: str) -> Tuple[Path, str]:
+def get_file_download(root: Path, file_path_str: str) -> Tuple[Path, str]:
     """Get a file path for download.
 
     Args:
-        workspace_path: Base workspace directory path
+        root: Browsable workspace root (the directory the user sees as "/")
         file_path_str: Relative path to the file
 
     Returns:
@@ -529,7 +522,7 @@ def get_file_download(workspace_path: Path, file_path_str: str) -> Tuple[Path, s
         ValueError: If path validation fails
         FileNotFoundError: If file doesn't exist
     """
-    is_valid, resolved_path = validate_path(workspace_path, file_path_str)
+    is_valid, resolved_path = validate_path(root, file_path_str)
 
     if not is_valid or resolved_path is None:
         raise ValueError("Invalid path")
@@ -543,11 +536,11 @@ def get_file_download(workspace_path: Path, file_path_str: str) -> Tuple[Path, s
     return resolved_path, resolved_path.name
 
 
-def create_folder_zip(workspace_path: Path, folder_path_str: str) -> Tuple[Path, str]:
+def create_folder_zip(root: Path, folder_path_str: str) -> Tuple[Path, str]:
     """Create a temporary zip archive of a folder within the workspace.
 
     Args:
-        workspace_path: Base workspace directory path
+        root: Browsable workspace root (the directory the user sees as "/")
         folder_path_str: Relative path to the folder within workspace
 
     Returns:
@@ -557,7 +550,7 @@ def create_folder_zip(workspace_path: Path, folder_path_str: str) -> Tuple[Path,
         ValueError: If path validation fails or path is not a directory
         FileNotFoundError: If folder doesn't exist
     """
-    is_valid, resolved_path = validate_path(workspace_path, folder_path_str)
+    is_valid, resolved_path = validate_path(root, folder_path_str)
 
     if not is_valid or resolved_path is None:
         raise ValueError("Invalid path")
@@ -569,8 +562,7 @@ def create_folder_zip(workspace_path: Path, folder_path_str: str) -> Tuple[Path,
         raise ValueError(f"Not a directory: {folder_path_str}")
 
     # Prevent downloading the entire workspace root as a zip
-    workspace_dir = workspace_path / "workspace"
-    if resolved_path.resolve() == workspace_dir.resolve():
+    if resolved_path.resolve() == root.resolve():
         raise ValueError("Cannot download the entire workspace as a zip")
 
     folder_name = resolved_path.name
@@ -580,8 +572,8 @@ def create_folder_zip(workspace_path: Path, folder_path_str: str) -> Tuple[Path,
 
     try:
         with zipfile.ZipFile(temp_zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for root, dirs, files in os.walk(resolved_path):
-                root_path = Path(root)
+            for dirpath, dirs, files in os.walk(resolved_path):
+                root_path = Path(dirpath)
                 # Symlinks are banned from workspaces (see
                 # chat/workspace_symlinks.py); refuse rather than let
                 # ZipFile.write dereference one into the archive.
@@ -614,11 +606,11 @@ def create_folder_zip(workspace_path: Path, folder_path_str: str) -> Tuple[Path,
     return temp_zip_path, folder_name
 
 
-def count_workspace_item_files(workspace_path: Path, relative_path: str) -> Dict:
+def count_workspace_item_files(root: Path, relative_path: str) -> Dict:
     """Get file count info for a file or folder in the workspace.
 
     Args:
-        workspace_path: Base workspace directory path
+        root: Browsable workspace root (the directory the user sees as "/")
         relative_path: Relative path within workspace
 
     Returns:
@@ -628,7 +620,7 @@ def count_workspace_item_files(workspace_path: Path, relative_path: str) -> Dict
         ValueError: If path validation fails
         FileNotFoundError: If path doesn't exist
     """
-    is_valid, resolved_path = validate_path(workspace_path, relative_path)
+    is_valid, resolved_path = validate_path(root, relative_path)
 
     if not is_valid or resolved_path is None:
         raise ValueError("Invalid path")
@@ -652,11 +644,11 @@ def count_workspace_item_files(workspace_path: Path, relative_path: str) -> Dict
     }
 
 
-def delete_workspace_item(workspace_path: Path, relative_path: str) -> Dict:
+def delete_workspace_item(root: Path, relative_path: str) -> Dict:
     """Delete a file or folder from the workspace.
 
     Args:
-        workspace_path: Base workspace directory path
+        root: Browsable workspace root (the directory the user sees as "/")
         relative_path: Relative path within workspace
 
     Returns:
@@ -666,15 +658,14 @@ def delete_workspace_item(workspace_path: Path, relative_path: str) -> Dict:
         ValueError: If path validation fails or attempting to delete workspace root
         FileNotFoundError: If path doesn't exist
     """
-    is_valid, resolved_path = validate_path(workspace_path, relative_path)
+    is_valid, resolved_path = validate_path(root, relative_path)
 
     if not is_valid or resolved_path is None:
         raise ValueError("Invalid path")
 
-    workspace_dir = workspace_path / "workspace"
 
     # Prevent deleting the workspace root itself
-    if resolved_path.resolve() == workspace_dir.resolve():
+    if resolved_path.resolve() == root.resolve():
         raise ValueError("Cannot delete the workspace root directory")
 
     if not resolved_path.exists():

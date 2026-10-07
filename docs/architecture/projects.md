@@ -32,20 +32,18 @@ The `Conversation` model in `db/models.py` has optional `project_id` (FK to `pro
 
 ## Workspace Resolution
 
-The workspace path depends on whether a conversation belongs to a project:
+Two workspace roots exist, each with one resolver in `chat/storage.py`:
 
-- **Standalone conversations**: workspace is at `data/chats/{conversation_id}/workspace/`
-- **Project conversations**: workspace is at `data/projects/{project_id}/workspace/` (shared by all conversations in the project)
+- **Conversation workspace**: `data/chats/{conversation_id}/workspace/` (`ChatStorage.get_conversation_workspace_root()`), for every conversation, standalone or in a project. `create_project_conversation()` creates it up front.
+- **Project workspace**: `data/projects/{project_id}/workspace/workspace/` (`ChatStorage.get_project_workspace_root()`), shared by all conversations in the project.
 
-`ChatStorage.get_workspace_path(conversation_id, project_id=None)` in `chat/storage.py` handles this resolution. If `project_id` is not provided by the caller, the method queries the database via `get_project_for_conversation()` from `db/conversation_store.py` to determine project membership. This auto-detection ensures existing code paths that do not explicitly track project membership still resolve to the correct workspace.
-
-The `_get_workspace_dir()` helper in `chat/gemini_api/tool_handlers/_common.py` delegates to `ChatStorage.get_workspace_path()` and creates the `workspace/` subdirectory if it does not exist.
+The conversation file routes (`resolve_owned_workspace`) and the tool handlers' `_get_workspace_dir()` helper (`chat/gemini_api/tool_handlers/_common.py`, which creates the dir) both resolve to the conversation workspace, project conversations included. `resolve_owned_project_workspace()` in `chat/conversation_access.py` resolves an owned project's workspace root.
 
 ## Converting a Conversation into a Project
 
-A standalone (non-project, non-Slack) conversation can be turned into a new project via **POST `/app/api/projects/from-conversation`** (see [Projects API](../api/projects-api.md)). The endpoint creates the project, moves the conversation's workspace files from `data/chats/{conversation_id}/workspace/` into the project's shared workspace via `ChatStorage.move_conversation_workspace_to_project()` (entry-by-entry, leaving conversation metadata files like `chat_history.json` behind), then flips `conversations.project_id` via `set_conversation_project()`.
+A standalone (non-project, non-Slack) conversation can be turned into a new project via **POST `/app/api/projects/from-conversation`** (see [Projects API](../api/projects-api.md)). The endpoint creates the project and its (empty) project workspace, flips `conversations.project_id` via `set_conversation_project()`, and sets the `converted_from_standalone` flag at the top level of the conversation's `chat_history.json` (`ChatStorage.set_conversation_flag()`). No files move: they stay in the conversation workspace `data/chats/{conversation_id}/workspace/` (created if the conversation never had one).
 
-Files move before the DB pointer flips so workspace resolution never lands on an empty project workspace. Cached SDK sessions are invalidated because project membership changes the system prompt (project guide and skill auto-loads).
+Cached SDK sessions are invalidated because project membership changes the system prompt (project guide and skill auto-loads).
 
 In the frontend, the option appears as "Create Project from Chat" in the top-level conversation entry's dropdown menu in `Sidebar.tsx` (hidden for Slack conversations). It opens `ConvertToProjectModal` (`frontend/src/components/ConvertToProjectModal.tsx`, reusing the `NewProjectModal` styles), which prefills the project name from the conversation title and explains that the workspace files move and the chat becomes the project's first conversation. On success the sidebar refetches projects, drops the conversation from the top-level list, and drills into the new project, auto-selecting the moved conversation.
 
@@ -174,9 +172,6 @@ Per-conversation guides are snapshotted on first message to preserve the exact i
 **Why `ON DELETE CASCADE` on `conversations.project_id`?**
 When a project is deleted, its conversations should be removed as well since they reference a shared workspace that will be deleted. The CASCADE constraint handles this at the database level, preventing orphaned conversation rows.
 
-**Why auto-detect project membership in `get_workspace_path()`?**
-Many code paths (especially in the `chat/gemini_api/` package) call workspace helpers without explicitly tracking whether the conversation belongs to a project. The auto-detection via `get_project_for_conversation()` allows these paths to resolve the correct workspace without being modified. When the caller already knows the `project_id` (e.g., `chat/realtime/socket.py:_handle_send_message`), it can pass it directly to avoid the extra DB query.
-
 **Why store project workspace at `data/projects/{project_id}/workspace/` instead of alongside chats?**
 Separating project workspaces from conversation directories makes the ownership model clear: conversation directories in `data/chats/` contain per-conversation data (chat history, SDK history), while project directories in `data/projects/` contain shared data (workspace files). This prevents confusion about which files are shared vs. conversation-specific.
 
@@ -195,4 +190,4 @@ Project names should be unique per user to avoid confusion in the sidebar and pr
 - The project guide is injected into the system prompt alongside (not replacing) the per-conversation guide
 - Project skills are managed via the Project Skills API (`/app/api/projects/{project_id}/skills`); see [Skill Library Architecture](skill-library.md) for skill constraints
 - Project routines are managed via the Routines API (`/app/api/projects/{project_id}/routines`); routine schedules via the Schedules API (`/app/api/projects/{project_id}/routines/{routine_id}/schedule`); see [Routines Architecture](routines.md) and [Scheduling Architecture](scheduling.md) for constraints
-- `ChatStorage` path helpers (`get_workspace_path()`) auto-detect project membership via a DB query when `project_id` is not passed explicitly
+- Workspace roots come only from `ChatStorage.get_conversation_workspace_root()` / `get_project_workspace_root()`; no caller appends `"workspace"` to a resolver result

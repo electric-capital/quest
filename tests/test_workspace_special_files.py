@@ -41,12 +41,13 @@ def _call_with_timeout(fn, timeout=3.0):
 
 @pytest.fixture
 def workspace_root(tmp_path: Path) -> Path:
-    (tmp_path / "workspace").mkdir()
-    return tmp_path
+    root = tmp_path / "workspace"
+    root.mkdir()
+    return root
 
 
 def test_get_file_content_rejects_fifo(workspace_root: Path):
-    os.mkfifo(workspace_root / "workspace" / "pipe.txt")
+    os.mkfifo(workspace_root / "pipe.txt")
 
     with pytest.raises(ValueError, match="Not a file"):
         _call_with_timeout(lambda: get_file_content(workspace_root, "pipe.txt"))
@@ -56,9 +57,9 @@ def test_get_file_content_rejects_fifo_swapped_in_after_type_check(
     workspace_root: Path, monkeypatch
 ):
     """The descriptor-level S_ISREG check closes the check-then-open race."""
-    target = workspace_root / "workspace" / "notes.md"
+    target = workspace_root / "notes.md"
     target.write_text("hello")
-    fifo = workspace_root / "workspace" / "fifo.tmp"
+    fifo = workspace_root / "fifo.tmp"
     os.mkfifo(fifo)
 
     real_open = os.open
@@ -76,7 +77,7 @@ def test_get_file_content_rejects_fifo_swapped_in_after_type_check(
 
 
 def test_get_file_content_still_reads_regular_files(workspace_root: Path):
-    (workspace_root / "workspace" / "notes.md").write_text("# hi\n", encoding="utf-8")
+    (workspace_root / "notes.md").write_text("# hi\n", encoding="utf-8")
 
     content, name, size = get_file_content(workspace_root, "notes.md")
 
@@ -86,7 +87,7 @@ def test_get_file_content_still_reads_regular_files(workspace_root: Path):
 
 
 def test_create_folder_zip_rejects_fifo_descendant(workspace_root: Path):
-    sub = workspace_root / "workspace" / "sub"
+    sub = workspace_root / "sub"
     sub.mkdir()
     (sub / "ok.txt").write_text("fine")
     os.mkfifo(sub / "pipe.md")

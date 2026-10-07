@@ -99,14 +99,12 @@ async def _resolve_workspace_attachment(
 ) -> dict:
     """Read a file from the conversation workspace for attachment.
 
-    Resolves ``workspace_path`` against the conversation workspace directory
-    (project-aware: standalone conversations use ``data/chats/{conv}/workspace``
-    while project conversations use ``data/projects/{project}/workspace``).
-    Mirrors the path-traversal guards used by
+    Resolves ``workspace_path`` against the conversation workspace root,
+    ``data/chats/{conv}/workspace`` (``ChatStorage.get_conversation_workspace_root``),
+    for standalone and project conversations alike; the shared project
+    workspace is never consulted. Mirrors the path-traversal guards used by
     ``chat.action_request_types._io_attachments.read_workspace_attachments``
-    and the workspace-dir resolution from
-    ``chat.gemini_api.tool_handlers._get_workspace_dir`` so both call sites
-    agree on what counts as a valid workspace path.
+    so both call sites agree on what counts as a valid workspace path.
 
     Args:
         conversation_id: Conversation UUID.
@@ -123,10 +121,8 @@ async def _resolve_workspace_attachment(
     """
     # Lazy import to mirror ``_io_attachments.read_workspace_attachments``
     # and avoid pulling chat-side modules in at module import time.
-    from chat.gemini_api.tool_handlers import (
-        _get_workspace_dir,
-        _sanitize_workspace_filename,
-    )
+    from chat.gemini_api.tool_handlers import _sanitize_workspace_filename
+    from chat.storage import ChatStorage
 
     raw_path = workspace_path or ""
     if not raw_path.strip():
@@ -135,7 +131,8 @@ async def _resolve_workspace_attachment(
             detail="Invalid workspace path: path cannot be empty",
         )
 
-    workspace_dir = await _get_workspace_dir(conversation_id)
+    workspace_dir = ChatStorage.get_conversation_workspace_root(conversation_id)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
     workspace_root = workspace_dir.resolve()
 
     candidate_path = Path(raw_path)

@@ -317,10 +317,9 @@ The backend provides:
    - Provider-agnostic tool definitions in JSON Schema format with per-provider converters
    - See [LLM Provider Abstraction](llm-providers.md) for full details
 
-5. **Workspace Management**: Isolated environments per conversation or shared per project
-   - Standalone conversations get their own workspace directory at `data/chats/{conversation_id}/workspace/`
-   - Project conversations share a workspace at `data/projects/{project_id}/workspace/`
-   - `ChatStorage.get_workspace_path()` auto-detects project membership via DB lookup when `project_id` is not passed explicitly
+5. **Workspace Management**: Isolated environments per conversation, plus a shared one per project
+   - Every conversation (standalone or in a project) gets its own conversation workspace at `data/chats/{conversation_id}/workspace/` (`ChatStorage.get_conversation_workspace_root()`)
+   - Each project additionally has a shared project workspace at `data/projects/{project_id}/workspace/workspace/` (`ChatStorage.get_project_workspace_root()`)
    - LLM session state persists across sessions via `sdk_history.json`
 
 ### Storage Layer

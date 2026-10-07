@@ -77,7 +77,7 @@ The file endpoints keep defense-in-depth guards anyway:
 
 - uploads open the destination leaf with `O_NOFOLLOW` (`_no_follow_opener` in `chat/file_storage.py`, so an existing symlink can never redirect the truncating write outside the workspace)
 - folder zip downloads refuse to archive a folder containing a symlink at any depth (`create_folder_zip`)
-- workspace duplication/moves skip or delete symlinks instead of dereferencing them (`ChatStorage.copy_workspace_files` / `move_conversation_workspace_to_project` in `chat/storage.py`).
+- workspace duplication skips symlinks (and special files) instead of dereferencing them (`ChatStorage.copy_workspace_files(src_root, dst_root)` in `chat/storage.py`).
 
 **Off-thread filesystem work:** the list, preview, folder-zip, info, and delete routes run their sync `chat/file_storage.py` helpers via `asyncio.to_thread`. A sandbox script can plant an arbitrarily large or deep tree in its workspace, and the info/delete `rglob` counts and the zip walk are unbounded, so calling them inline from the `async` handler stalled every other request and WebSocket on the server for the whole walk (finding #279201). The helpers themselves stay synchronous and are unit-tested as such; tests/test_file_routes_offload.py checks each route keeps the loop responsive.
 

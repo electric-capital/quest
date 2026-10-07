@@ -226,20 +226,30 @@ def test_subagent_return_file_list_shape():
 
 @pytest.fixture()
 def _workspaces(tmp_path, monkeypatch):
-    """Two fake conversation workspaces + patched path resolution."""
-    sub_dir = tmp_path / "sub-conv"
-    caller_dir = tmp_path / "caller-conv"
-    (sub_dir / "workspace").mkdir(parents=True)
-    (caller_dir / "workspace").mkdir(parents=True)
+    """Two conversation dirs under a patched CHATS_DIR (real resolvers).
 
-    from chat.storage import ChatStorage
+    The caller conversation is treated as a PROJECT conversation (project
+    lookup patched to ``p1``) to prove returned files still land in its own
+    conversation workspace, never the project workspace.
+    """
+    import chat.storage as storage_mod
 
-    async def _get_workspace_path(conversation_id, project_id=None):
-        return {"sub-conv": sub_dir, "caller-conv": caller_dir}[conversation_id]
+    chats = tmp_path / "chats"
+    projects = tmp_path / "projects"
+    monkeypatch.setattr(storage_mod, "CHATS_DIR", chats)
+    monkeypatch.setattr(storage_mod, "PROJECTS_DIR", projects)
+
+    async def _project_for(conversation_id):
+        return "p1" if conversation_id == "caller-conv" else None
 
     monkeypatch.setattr(
-        ChatStorage, "get_workspace_path", staticmethod(_get_workspace_path),
+        "db.conversation_store.get_project_for_conversation", _project_for,
     )
+
+    sub_dir = chats / "sub-conv"
+    caller_dir = chats / "caller-conv"
+    (sub_dir / "workspace").mkdir(parents=True)
+    (caller_dir / "workspace").mkdir(parents=True)
     return sub_dir, caller_dir
 
 
@@ -345,6 +355,8 @@ def test_subagent_return_execute_copies_files(_workspaces, monkeypatch):
     assert result["success"] is True
     assert result["files_returned"] == [".subagent_responses/report-2.md"]
     assert (dest_dir / "report-2.md").read_text() == "fresh"
+    # The caller is a project conversation; nothing went to the project space.
+    assert not (caller_dir.parent.parent / "projects").exists()
     assert (dest_dir / "report.md").read_text() == "old"
     assert updates == [("run-1", "returned")]
     assert resolved["status"] == "accepted"

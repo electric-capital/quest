@@ -46,9 +46,9 @@ class CreateProjectRequest(BaseModel):
 
 class CreateProjectFromConversationRequest(BaseModel):
     # Deliberately no ``public`` field: converting an existing conversation
-    # moves its (potentially internal-data-bearing) workspace files into the
-    # project, so public projects are creatable only via plain POST /projects
-    # with an empty workspace.
+    # brings its (potentially internal-data-bearing) history and conversation
+    # workspace files into the project, so public projects are creatable only
+    # via plain POST /projects with an empty workspace.
     name: str
     conversation_id: str
 
@@ -123,8 +123,10 @@ async def create_project_from_conversation(
 ):
     """Create a new project seeded from an existing standalone conversation.
 
-    The conversation's workspace files move into the new project's shared
-    workspace and the conversation becomes the project's first conversation.
+    The conversation becomes the project's first conversation. Its files
+    stay in its own conversation workspace (nothing is moved into the new,
+    empty project workspace); the conversation is marked
+    ``converted_from_standalone`` so its system prompt can say so.
     """
     user_id = user["id"]
 
@@ -176,10 +178,6 @@ async def create_project_from_conversation(
     project = await _create_project_checked(user, body.name)
     ChatStorage.create_project_workspace(project["id"])
 
-    # Move files before flipping the DB pointer so the conversation never
-    # resolves to an empty project workspace while its files are in flight.
-    ChatStorage.move_conversation_workspace_to_project(body.conversation_id, project["id"])
-
     updated = await set_conversation_project(user_id, body.conversation_id, project["id"])
     if updated is None:
         # Raced with another request that attached the conversation elsewhere.
@@ -190,6 +188,17 @@ async def create_project_from_conversation(
                 "message": "Conversation was moved by another request",
             },
         )
+
+    # Files stay where they are. Make sure the conversation workspace dir
+    # exists even for a conversation that never wrote a file: its presence
+    # is what tells a post-cutover project conversation from a legacy one
+    # whose earlier files live in the shared project workspace.
+    ChatStorage.get_conversation_workspace_root(body.conversation_id).mkdir(
+        parents=True, exist_ok=True,
+    )
+    ChatStorage.set_conversation_flag(
+        body.conversation_id, "converted_from_standalone", True,
+    )
 
     # Project membership changes the system prompt (project guide + skill
     # auto-loads), so drop any cached chat sessions for this user.

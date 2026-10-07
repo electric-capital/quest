@@ -67,13 +67,14 @@ async def _build_user_message_with_attachments(
     provider,
     wrapped_message: str,
     attachment_specs: list[dict],
-    workspace_path,
+    workspace_root,
     model: str = "",
 ) -> Any:
     """Build a provider-appropriate multimodal user-turn payload.
 
     For each attachment spec ``{workspace_path, mime_type, filename, ...}``:
-    1. Resolve the absolute file path under the conversation workspace.
+    1. Resolve the absolute file path under ``workspace_root`` (the
+       conversation workspace root, where composer attachments are stored).
     2. Call ``provider.upload_file`` to obtain a provider-specific ref.
     3. Convert that ref into a provider-native content part via
        ``provider.make_file_part``.
@@ -95,10 +96,9 @@ async def _build_user_message_with_attachments(
         rel = spec.get("workspace_path") or ""
         mime_type = spec.get("mime_type") or ""
         filename = spec.get("filename") or rel.rsplit("/", 1)[-1]
-        # workspace_path on disk is conversation_dir/workspace/<rel>.
-        abs_path = (workspace_path / "workspace" / rel).resolve()
+        abs_path = (workspace_root / rel).resolve()
         try:
-            abs_path.relative_to((workspace_path / "workspace").resolve())
+            abs_path.relative_to(workspace_root.resolve())
         except ValueError:
             # Path escape attempt -- skip with a text note and continue.
             parts.append(provider.make_text_part(
@@ -1056,11 +1056,9 @@ async def run_conversation_turn(
                 # Multimodal user turn: build a provider-appropriate
                 # composite (text + image parts/blocks) so the model sees
                 # the pasted images alongside the text.
-                conv_workspace_path = await ChatStorage.get_workspace_path(
-                    conversation_id, project_id,
-                )
                 current_message = await _build_user_message_with_attachments(
-                    provider, wrapped_message, attachments, conv_workspace_path,
+                    provider, wrapped_message, attachments,
+                    ChatStorage.get_conversation_workspace_root(conversation_id),
                     model=model,
                 )
             else:

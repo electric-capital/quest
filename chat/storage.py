@@ -4,9 +4,20 @@ Conversation metadata (user ownership, timestamps) is stored in SQLite via
 db/conversation_store.py.  The actual conversation content lives on disk:
 
     data/chats/{conversation_id}/
-        chat_history.json   — message history + guide snapshot
+        chat_history.json   — message history + guide snapshot + per-conversation
+                              notice flags (see get_conversation_flags)
         sdk_history.json    — Gemini SDK session history (API mode only)
-        workspace/          — files uploaded by user or agent
+        workspace/          — the conversation workspace: files uploaded by the
+                              user or written by the agent, for standalone AND
+                              project conversations
+                              (``ChatStorage.get_conversation_workspace_root``)
+
+    data/projects/{project_id}/
+        project.db          — per-project SQLite database
+        workspace/
+            workspace/      — the project workspace shared by every conversation
+                              of the project
+                              (``ChatStorage.get_project_workspace_root``)
 
 User subdirectories (data/chats/{user_id}/) are no longer used after the
 b3f9a1c2d4e5 Alembic migration.
@@ -22,6 +33,14 @@ from typing import List, Dict, Optional
 from config.paths import CHATS_DIR, DOCS_DIR, PROJECTS_DIR
 
 logger = logging.getLogger(__name__)
+
+
+# Server-set, persisted-once booleans at the top level of chat_history.json
+# (see ChatStorage.get_conversation_flags). ``legacy_shared_workspace``: a
+# project conversation whose earlier files live in the shared project
+# workspace; ``converted_from_standalone``: turned into a project's first
+# conversation by POST /projects/from-conversation, files left in place.
+CONVERSATION_NOTICE_FLAGS = ("legacy_shared_workspace", "converted_from_standalone")
 
 
 def utc_timestamp() -> str:
@@ -155,6 +174,20 @@ def _resolve_contained_dir(root: Path, segment: str) -> Path:
     return candidate
 
 
+def _check_contained(root: Path, candidate: Path) -> Path:
+    """Return ``candidate`` unchanged if it resolves under ``root``, else raise.
+
+    Used by the workspace-root resolvers for the fixed segments they append
+    below an already-validated id dir, so a symlinked ``workspace`` entry
+    cannot point a workspace root outside the data tree.
+    """
+    try:
+        candidate.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise InvalidStorageIdError(f"Invalid path: {candidate} escapes {root}") from exc
+    return candidate
+
+
 class ChatStorage:
     """Manages chat conversation storage and retrieval.
 
@@ -207,6 +240,42 @@ class ChatStorage:
     def get_project_db_path(project_id: str) -> Path:
         """Return the per-project SQLite database file path."""
         return ChatStorage.get_project_dir(project_id) / "project.db"
+
+    @staticmethod
+    def get_conversation_workspace_root(conversation_id: str) -> Path:
+        """Return the conversation workspace root ``CHATS_DIR / id / "workspace"``.
+
+        This is the browsable root itself (what the user sees as ``/``) for
+        every conversation, standalone or in a project; callers must not
+        append ``"workspace"`` to it. Inherits the canonical-id and
+        containment checks of ``get_conversation_dir`` and additionally
+        refuses a ``workspace`` entry that resolves outside CHATS_DIR (a
+        planted symlink). The directory is NOT created here.
+
+        Raises:
+            InvalidStorageIdError: non-canonical id or path outside CHATS_DIR.
+        """
+        return _check_contained(
+            CHATS_DIR, ChatStorage.get_conversation_dir(conversation_id) / "workspace",
+        )
+
+    @staticmethod
+    def get_project_workspace_root(project_id: str) -> Path:
+        """Return the project workspace root ``PROJECTS_DIR / id / "workspace" / "workspace"``.
+
+        The browsable root shared by all conversations of the project. The
+        doubled ``workspace/workspace`` is the historical on-disk layout;
+        only this resolver knows about it. Inherits the canonical-id and
+        containment checks of ``get_project_dir`` and additionally refuses
+        a root that resolves outside PROJECTS_DIR (a planted symlink at
+        either ``workspace`` level). The directory is NOT created here.
+
+        Raises:
+            InvalidStorageIdError: non-canonical id or path outside PROJECTS_DIR.
+        """
+        return _check_contained(
+            PROJECTS_DIR, ChatStorage.get_project_dir(project_id) / "workspace" / "workspace",
+        )
 
     @staticmethod
     def get_doc_dir(doc_id: str) -> Path:
@@ -738,32 +807,6 @@ class ChatStorage:
         return new_seq, message
 
     @staticmethod
-    async def get_workspace_path(conversation_id: str, project_id: str | None = None) -> Path:
-        """Return the workspace directory path for a conversation.
-
-        For standalone conversations: data/chats/{conversation_id}/
-        For project conversations: data/projects/{project_id}/workspace/
-
-        The caller should pass the project_id if known. If not provided, this
-        method queries the DB to determine project membership.
-
-        Args:
-            conversation_id: Conversation UUID.
-            project_id: Optional project UUID (avoids a DB lookup if provided).
-
-        Returns:
-            Path to the workspace directory.
-        """
-        if project_id is None:
-            from db.conversation_store import get_project_for_conversation
-            project_id = await get_project_for_conversation(conversation_id)
-
-        if project_id:
-            return ChatStorage.get_project_dir(project_id) / "workspace"
-        else:
-            return ChatStorage.get_conversation_dir(conversation_id)
-
-    @staticmethod
     async def append_structured_messages(
         conversation_id: str,
         messages: List[Dict]
@@ -972,6 +1015,74 @@ class ChatStorage:
                 "guide_snapshot": chat_data.get("guide_snapshot"),
             }
         return None
+
+    # ------------------------------------------------------------------
+    # Per-conversation notice flags (chat_history.json top level)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_conversation_flags(conversation_id: str) -> Dict[str, bool]:
+        """Return the notice flags set on a conversation.
+
+        Reads the top-level ``CONVERSATION_NOTICE_FLAGS`` keys of
+        chat_history.json and returns those that are present, as booleans.
+        A missing or unreadable chat_history.json yields ``{}``.
+
+        These are NOT the user-chosen ``conversations.flags`` opt-in
+        behaviors (chat/conversation_flags.py); they are server-set,
+        persisted-once markers read by the system prompt builder.
+        """
+        chat_file = ChatStorage._get_chat_history_file(conversation_id)
+        if not chat_file.exists():
+            return {}
+        try:
+            with open(chat_file, "r") as f:
+                chat_data = json.load(f)
+        except Exception:
+            return {}
+        if not isinstance(chat_data, dict):
+            return {}
+        return {
+            name: bool(chat_data[name])
+            for name in CONVERSATION_NOTICE_FLAGS
+            if name in chat_data
+        }
+
+    @staticmethod
+    def set_conversation_flag(conversation_id: str, name: str, value: bool) -> None:
+        """Set one notice flag at the top level of chat_history.json.
+
+        Rewrites the file the same way ``append_message`` does, leaving
+        ``messages`` and every other key untouched. Skips the write when the
+        stored value already matches. A missing chat_history.json is a
+        logged no-op: the file is only ever created by the ``create_*``
+        methods, and a flag on a conversation without history has nothing
+        to annotate.
+
+        Concurrency note: same single-event-loop guarantee as
+        ``add_workspace_read_paths`` -- the read-modify-write below must stay
+        fully synchronous so it cannot interleave with a message append.
+
+        Raises:
+            ValueError: ``name`` is not one of ``CONVERSATION_NOTICE_FLAGS``.
+        """
+        if name not in CONVERSATION_NOTICE_FLAGS:
+            raise ValueError(f"Unknown conversation flag: {name!r}")
+        chat_file = ChatStorage._get_chat_history_file(conversation_id)
+        if not chat_file.exists():
+            logger.warning(
+                "set_conversation_flag(%s, %s): no chat_history.json; skipped",
+                conversation_id, name,
+            )
+            return
+        with open(chat_file, "r") as f:
+            chat_data = json.load(f)
+        value = bool(value)
+        if chat_data.get(name) is value:
+            return
+        chat_data[name] = value
+        with open(chat_file, "w") as f:
+            json.dump(chat_data, f, indent=2)
 
     # ------------------------------------------------------------------
     # Loaded skills (per-conversation, manually loaded by user)
@@ -1416,8 +1527,9 @@ class ChatStorage:
     ) -> tuple[str, str]:
         """Create a new conversation within a project.
 
-        Creates the conversation directory and chat_history.json, and inserts
-        a row into the conversations table linked to the project.
+        Creates the conversation directory, its (empty) conversation
+        workspace and chat_history.json, and inserts a row into the
+        conversations table linked to the project.
 
         Args:
             user_id: User's integer ID.
@@ -1433,6 +1545,11 @@ class ChatStorage:
         conversation_id = str(uuid.uuid4())
         conversation_dir = ChatStorage._get_conversation_dir(conversation_id)
         conversation_dir.mkdir(parents=True, exist_ok=True)
+        # The conversation workspace exists from the start for every project
+        # conversation created after the per-conversation-workspace cutover;
+        # its presence is how a turn tells a new conversation from a legacy
+        # one whose earlier files live in the shared project workspace.
+        ChatStorage.get_conversation_workspace_root(conversation_id).mkdir(exist_ok=True)
 
         created_at_str = utc_timestamp()
 
@@ -1471,92 +1588,65 @@ class ChatStorage:
 
     @staticmethod
     def create_project_workspace(project_id: str) -> Path:
-        """Create the workspace directory for a project.
+        """Create the project workspace root (and its parents) for a project.
 
         Args:
             project_id: Project UUID.
 
         Returns:
-            Path to data/projects/{project_id}/workspace/
+            The project workspace root, data/projects/{project_id}/workspace/workspace/
+            (``get_project_workspace_root``).
         """
-        workspace_dir = ChatStorage.get_project_dir(project_id) / "workspace"
-        workspace_dir.mkdir(parents=True, exist_ok=True)
-        return workspace_dir
+        root = ChatStorage.get_project_workspace_root(project_id)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
     @staticmethod
-    def move_conversation_workspace_to_project(conversation_id: str, project_id: str) -> None:
-        """Move a standalone conversation's workspace files into a project.
+    async def copy_workspace_files(src_root: Path, dst_root: Path) -> None:
+        """Copy the contents of one workspace root into another.
 
-        Standalone conversations keep workspace files under
-        data/chats/{conversation_id}/workspace/; project conversations share
-        data/projects/{project_id}/workspace/workspace/. Entries are moved
-        one at a time so any files already in the project workspace are
-        preserved. Conversation metadata files (chat_history.json,
-        loaded_skills.json, ...) live outside the workspace/ subdir and stay
-        behind.
+        Both arguments are browsable roots as returned by
+        ``get_conversation_workspace_root`` / ``get_project_workspace_root``;
+        nothing is appended to them. ``dst_root`` is created if missing and
+        existing entries there are merged into (``dirs_exist_ok``). A missing
+        ``src_root`` is a no-op.
 
-        Args:
-            conversation_id: Conversation UUID.
-            project_id: Destination project UUID.
-        """
-        import shutil
-        from chat.workspace_symlinks import remove_symlinks_under
-        src = ChatStorage._get_conversation_dir(conversation_id) / "workspace"
-        dest = ChatStorage.create_project_workspace(project_id) / "workspace"
-        if not src.is_dir():
-            return
-        # Symlinks are banned from workspaces; delete any straggler (at any
-        # depth) instead of relocating it into the shared project workspace.
-        remove_symlinks_under(src)
-        dest.mkdir(parents=True, exist_ok=True)
-        for entry in src.iterdir():
-            shutil.move(str(entry), str(dest / entry.name))
-        try:
-            src.rmdir()
-        except OSError:
-            # A concurrent write recreated content; leave the leftovers.
-            pass
+        Skipped entries:
 
-    @staticmethod
-    async def copy_workspace_files(src_conversation_id: str, dest_conversation_id: str) -> None:
-        """Copy a conversation's workspace files into another standalone conversation.
-
-        Resolves the source workspace via get_workspace_path (so a source
-        conversation living in a project copies the shared project
-        workspace), then copies the workspace/ subdir contents into
-        data/chats/{dest_conversation_id}/workspace/. Conversation metadata
-        files (chat_history.json, workspace_reads.json, ...) live outside
-        the workspace/ subdir and are not copied. The hidden .responses/
-        dir at the workspace root is skipped too: it holds authed_get/
-        authed_post response bodies tied to the source conversation's tool
-        calls, which the new context-free conversation can't interpret.
+        * the hidden ``.responses/`` dir at the source root: it holds
+          authed_get/authed_post response bodies tied to the source
+          conversation's tool calls, which the destination can't interpret;
+        * symlinks at any depth: they are banned from workspaces (see
+          chat/workspace_symlinks.py) and copytree would otherwise
+          dereference them and copy their host target;
+        * special files (FIFOs, sockets, devices) at any depth: copying a
+          writer-less FIFO would block forever.
 
         Args:
-            src_conversation_id: Conversation UUID to copy files from.
-            dest_conversation_id: Standalone conversation UUID to copy files into.
+            src_root: Workspace root to copy from.
+            dst_root: Workspace root to copy into.
         """
         import asyncio
         import shutil
 
-        src = (await ChatStorage.get_workspace_path(src_conversation_id)) / "workspace"
-        dest = ChatStorage._get_conversation_dir(dest_conversation_id) / "workspace"
-        if not src.is_dir():
+        if not src_root.is_dir():
             return
 
         def _ignore(dir_path, names):
-            # Symlinks are banned from workspaces (see
-            # chat/workspace_symlinks.py); skip any straggler instead of
-            # letting copytree's default dereference copy its host target.
-            ignored = {
-                name for name in names if (Path(dir_path) / name).is_symlink()
-            }
-            if Path(dir_path) == src:
+            ignored = set()
+            for name in names:
+                entry = Path(dir_path) / name
+                if entry.is_symlink():
+                    ignored.add(name)
+                elif not (entry.is_dir() or entry.is_file()):
+                    ignored.add(name)
+            if Path(dir_path) == src_root:
                 ignored.update({".responses"} & set(names))
             return ignored
 
         # Off-thread: workspaces can hold hundreds of MB of files.
         await asyncio.to_thread(
-            shutil.copytree, src, dest, ignore=_ignore, dirs_exist_ok=True
+            shutil.copytree, src_root, dst_root, ignore=_ignore, dirs_exist_ok=True
         )
 
     @staticmethod

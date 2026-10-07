@@ -2,13 +2,15 @@
 
 Workspaces are host-backed directories bind-mounted read-write into the
 script sandbox, and host-side consumers (folder zip downloads, workspace
-duplication and moves, uploads) operate on workspace entries with the
+duplication, uploads) operate on workspace entries with the
 server's privileges -- a symlink in a workspace could redirect their reads
-or writes to arbitrary host paths. The sandbox seccomp profile
+or writes to arbitrary host paths. Both kinds of workspace are covered:
+conversation workspaces (``chats/<id>/workspace/``, standalone and project
+conversations alike) and project workspaces
+(``projects/<id>/workspace/workspace/``). The sandbox seccomp profile
 (chat/gemini_api/sandbox_seccomp.py) blocks creating symlinks at the only
 source; this module removes any that predate that fix (or arrive via a
-restored backup). ``remove_symlinks_under`` is also reused by workspace
-move paths as defense in depth.
+restored backup).
 """
 
 import logging

@@ -11,8 +11,10 @@ the two steps for routes so ownership + path safety travel together:
 * ``require_owned_conversation`` / ``require_owned_project`` -- DB ownership
   lookup, 404 ``conversation_not_found`` / ``not_found`` otherwise. The 404
   shape matches what the routes already returned, so clients see no change.
-* ``resolve_owned_workspace`` / ``resolve_owned_project_dir`` -- the same
-  lookup plus the validated path, in one call.
+* ``resolve_owned_workspace`` / ``resolve_owned_project_workspace`` -- the
+  same lookup plus the validated workspace root (the conversation workspace
+  for any conversation, standalone or in a project; the shared project
+  workspace for a project), in one call.
 
 A non-canonical id never reaches the filesystem: the DB lookup misses first
 (404), and the resolver would reject it anyway.
@@ -62,17 +64,16 @@ async def require_owned_conversation(user_id: int, conversation_id: str) -> dict
 async def resolve_owned_workspace(
     user_id: int, conversation_id: str,
 ) -> tuple[dict, Path]:
-    """Return ``(meta, workspace_path)`` for a conversation the user owns.
+    """Return ``(meta, root)`` for a conversation the user owns.
 
-    ``workspace_path`` is ``ChatStorage.get_workspace_path`` resolved with the
-    row's ``project_id`` (no second DB round-trip). Raises 404 when the
-    conversation does not exist or belongs to someone else.
+    ``root`` is ``ChatStorage.get_conversation_workspace_root`` -- the
+    conversation's own workspace for every conversation, including project
+    conversations (the shared project workspace is reached through
+    ``resolve_owned_project_workspace``). Raises 404 when the conversation
+    does not exist or belongs to someone else.
     """
     meta = await require_owned_conversation(user_id, conversation_id)
-    workspace_path = await ChatStorage.get_workspace_path(
-        conversation_id, meta.get("project_id"),
-    )
-    return meta, workspace_path
+    return meta, ChatStorage.get_conversation_workspace_root(conversation_id)
 
 
 async def require_owned_project(user_id: int, project_id: str) -> dict:
@@ -85,7 +86,13 @@ async def require_owned_project(user_id: int, project_id: str) -> dict:
     return project
 
 
-async def resolve_owned_project_dir(user_id: int, project_id: str) -> tuple[dict, Path]:
-    """Return ``(project, project_dir)`` for a project the user owns, else 404."""
+async def resolve_owned_project_workspace(
+    user_id: int, project_id: str,
+) -> tuple[dict, Path]:
+    """Return ``(project, root)`` for a project the user owns, else 404.
+
+    ``root`` is ``ChatStorage.get_project_workspace_root``, the workspace
+    shared by every conversation of the project.
+    """
     project = await require_owned_project(user_id, project_id)
-    return project, ChatStorage.get_project_dir(project_id)
+    return project, ChatStorage.get_project_workspace_root(project_id)

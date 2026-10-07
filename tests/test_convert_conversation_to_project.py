@@ -1,11 +1,11 @@
 """Tests for converting a standalone conversation into a project.
 
-Covers the two building blocks behind ``POST /projects/from-conversation``:
+Covers ``POST /projects/from-conversation`` and its building blocks:
 
-* ``ChatStorage.move_conversation_workspace_to_project`` -- moves the files
-  under ``data/chats/{id}/workspace/`` into the project's shared
-  ``data/projects/{pid}/workspace/workspace/`` while leaving conversation
-  metadata files (chat_history.json, ...) behind.
+* the route leaves the conversation's files in its own conversation
+  workspace (``data/chats/{id}/workspace/``), creates an empty project
+  workspace, flips ``conversations.project_id`` and sets the
+  ``converted_from_standalone`` notice flag in chat_history.json;
 * ``conversation_store.set_conversation_project`` -- attaches a standalone
   conversation to a project, refusing wrong-owner and already-in-project rows.
 """
@@ -68,24 +68,27 @@ def _isolated_storage(monkeypatch):
     shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+async def _create_user(conv_store_mod, models_mod) -> int:
+    # conv_store_mod.AsyncSessionLocal is the patched test factory.
+    async with conv_store_mod.AsyncSessionLocal() as db:
+        u = models_mod.User(
+            email=f"conv-{uuid.uuid4().hex}@example.com",
+            api_key=f"k-{uuid.uuid4().hex}",
+            name="Convert Tester",
+        )
+        db.add(u)
+        await db.commit()
+        await db.refresh(u)
+        return u.id
+
+
 @pytest.fixture()
 def _seed(_isolated_storage):
     """Create a user, a standalone conversation, and a project row."""
     storage_mod, conv_store_mod, project_store_mod, models_mod = _isolated_storage
 
     async def _create():
-        # conv_store_mod.AsyncSessionLocal is the patched test factory.
-        async with conv_store_mod.AsyncSessionLocal() as db:
-            u = models_mod.User(
-                email=f"conv-{uuid.uuid4().hex}@example.com",
-                api_key=f"k-{uuid.uuid4().hex}",
-                name="Convert Tester",
-            )
-            db.add(u)
-            await db.commit()
-            await db.refresh(u)
-            user_id = u.id
-
+        user_id = await _create_user(conv_store_mod, models_mod)
         conversation_id, _ = await storage_mod.ChatStorage.create_conversation(user_id)
         project = await project_store_mod.create_project(user_id, name="Converted")
         return user_id, conversation_id, project["id"]
@@ -93,40 +96,66 @@ def _seed(_isolated_storage):
     return _run(_create())
 
 
-def test_move_workspace_files_into_project(_isolated_storage, _seed):
+def _convert(user_id: int, conversation_id: str, name: str = "From Chat") -> dict:
+    from chat.project_routes import (
+        CreateProjectFromConversationRequest,
+        create_project_from_conversation,
+    )
+
+    return _run(create_project_from_conversation(
+        CreateProjectFromConversationRequest(name=name, conversation_id=conversation_id),
+        {"id": user_id, "email": "convert@example.com"},
+    ))
+
+
+def test_from_conversation_leaves_files_in_conversation_workspace(_isolated_storage, _seed):
     storage_mod, conv_store_mod, _project_store_mod, _ = _isolated_storage
-    user_id, conversation_id, project_id = _seed
+    user_id, conversation_id, _unused_project_id = _seed
     ChatStorage = storage_mod.ChatStorage
 
-    # Seed workspace files, including a nested directory.
-    conv_dir = ChatStorage._get_conversation_dir(conversation_id)
-    ws = conv_dir / "workspace"
+    _run(ChatStorage.append_message(conversation_id, "user", "hi"))
+    ws = ChatStorage.get_conversation_workspace_root(conversation_id)
     (ws / "sub").mkdir(parents=True)
     (ws / "notes.md").write_text("hello")
     (ws / "sub" / "data.csv").write_text("a,b\n1,2")
 
-    ChatStorage.create_project_workspace(project_id)
-    ChatStorage.move_conversation_workspace_to_project(conversation_id, project_id)
+    project = _convert(user_id, conversation_id)
 
-    dest = storage_mod.PROJECTS_DIR / project_id / "workspace" / "workspace"
-    assert (dest / "notes.md").read_text() == "hello"
-    assert (dest / "sub" / "data.csv").read_text() == "a,b\n1,2"
+    # Nothing moved: the files are still in the conversation workspace.
+    assert (ws / "notes.md").read_text() == "hello"
+    assert (ws / "sub" / "data.csv").read_text() == "a,b\n1,2"
+    # The project workspace exists and is empty.
+    project_root = ChatStorage.get_project_workspace_root(project["id"])
+    assert project_root.is_dir()
+    assert list(project_root.iterdir()) == []
 
-    # Source workspace is gone; conversation metadata stays behind.
-    assert not ws.exists()
-    assert (conv_dir / "chat_history.json").exists()
+    meta = _run(conv_store_mod.get_conversation_meta(user_id, conversation_id))
+    assert meta["project_id"] == project["id"]
+    assert ChatStorage.get_conversation_flags(conversation_id) == {
+        "converted_from_standalone": True,
+    }
+    # The flag write kept the history intact.
+    history = ChatStorage.get_conversation(conversation_id)
+    assert [m["content"] for m in history["messages"]] == ["hi"]
 
 
-def test_move_workspace_noop_without_workspace_dir(_isolated_storage, _seed):
+def test_from_conversation_creates_missing_conversation_workspace(_isolated_storage, _seed):
     storage_mod, _conv_store_mod, _project_store_mod, _ = _isolated_storage
-    _user_id, conversation_id, project_id = _seed
+    user_id, conversation_id, _unused_project_id = _seed
     ChatStorage = storage_mod.ChatStorage
 
-    # No workspace/ subdir exists for a fresh conversation -- must not raise.
-    ChatStorage.move_conversation_workspace_to_project(conversation_id, project_id)
+    ws = ChatStorage.get_conversation_workspace_root(conversation_id)
+    assert not ws.exists()  # a fresh standalone conversation has none yet
+
+    _convert(user_id, conversation_id)
+
+    assert ws.is_dir()
+    assert ChatStorage.get_conversation_flags(conversation_id) == {
+        "converted_from_standalone": True,
+    }
 
 
-def test_set_conversation_project_and_workspace_resolution(_isolated_storage, _seed):
+def test_set_conversation_project_keeps_conversation_workspace(_isolated_storage, _seed):
     storage_mod, conv_store_mod, _project_store_mod, _ = _isolated_storage
     user_id, conversation_id, project_id = _seed
     ChatStorage = storage_mod.ChatStorage
@@ -140,9 +169,10 @@ def test_set_conversation_project_and_workspace_resolution(_isolated_storage, _s
     meta = _run(conv_store_mod.get_conversation_meta(user_id, conversation_id))
     assert meta["project_id"] == project_id
 
-    # Workspace resolution now points at the project's shared workspace.
-    ws_path = _run(ChatStorage.get_workspace_path(conversation_id))
-    assert ws_path == storage_mod.PROJECTS_DIR / project_id / "workspace"
+    # Project membership does not change where the conversation's files live.
+    assert ChatStorage.get_conversation_workspace_root(conversation_id) == (
+        storage_mod.CHATS_DIR / conversation_id / "workspace"
+    )
 
 
 def test_set_conversation_project_refuses_wrong_owner_and_reattach(_isolated_storage, _seed):
@@ -166,3 +196,42 @@ def test_set_conversation_project_refuses_wrong_owner_and_reattach(_isolated_sto
     )) is None
     meta = _run(conv_store_mod.get_conversation_meta(user_id, conversation_id))
     assert meta["project_id"] == project_id
+
+
+def test_create_project_conversation_creates_conversation_workspace(_isolated_storage, _seed):
+    storage_mod, conv_store_mod, _project_store_mod, _ = _isolated_storage
+    user_id, _conversation_id, project_id = _seed
+    ChatStorage = storage_mod.ChatStorage
+
+    cid, _ = _run(ChatStorage.create_project_conversation(user_id, project_id))
+
+    ws = ChatStorage.get_conversation_workspace_root(cid)
+    assert ws == storage_mod.CHATS_DIR / cid / "workspace"
+    assert ws.is_dir() and list(ws.iterdir()) == []
+    assert ChatStorage.get_conversation_flags(cid) == {}
+
+
+def test_duplicate_workspace_of_project_conversation_copies_only_its_files(
+    _isolated_storage, _seed,
+):
+    storage_mod, _conv_store_mod, _project_store_mod, _ = _isolated_storage
+    user_id, _conversation_id, project_id = _seed
+    ChatStorage = storage_mod.ChatStorage
+    from chat.routes.conversations import duplicate_conversation_workspace
+
+    src, _ = _run(ChatStorage.create_project_conversation(user_id, project_id))
+    src_root = ChatStorage.get_conversation_workspace_root(src)
+    (src_root / "mine.txt").write_text("conversation file")
+    (src_root / ".responses").mkdir()
+    (src_root / ".responses" / "blob.json").write_text("{}")
+    project_root = ChatStorage.create_project_workspace(project_id)
+    (project_root / "shared.txt").write_text("project file")
+
+    result = _run(duplicate_conversation_workspace(
+        src, {"id": user_id, "email": "convert@example.com"},
+    ))
+
+    dst_root = ChatStorage.get_conversation_workspace_root(result["id"])
+    assert result["project_id"] is None
+    assert sorted(p.name for p in dst_root.iterdir()) == ["mine.txt"]
+    assert (dst_root / "mine.txt").read_text() == "conversation file"

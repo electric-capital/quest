@@ -1199,9 +1199,11 @@ async def _load_workspace_image(caller: Caller, workspace_path: str) -> tuple[by
         # Path guards only (absolute / '..' / containment / exists / regular);
         # the doc-specific size cap is checked on the descriptor below, so
         # the error names the 5 MB image limit, not the 50 MB upload cap.
+        # Conversation workspace only (project conversations included);
+        # the shared project workspace is never searched.
         path = await resolve_workspace_file(
             caller.conversation_id,
-            caller.project_id,
+            None,
             workspace_path,
             max_size_bytes=sys.maxsize,
         )
