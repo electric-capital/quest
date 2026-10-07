@@ -5,17 +5,23 @@
  * open a small dropdown, single-key hints act while it is open, and Rename
  * swaps the title for an inline input. Items follow the viewer's access
  * flags: Rename (can_rename), History (can_edit, view mode only: earlier
- * versions may hold text the owner removed before sharing), the two
- * downloads (always), Delete (can_delete, behind a confirm). There is no
- * mode switch: user docs are always private and a project doc takes its
- * project's mode (`access.can_switch_mode` is always false).
+ * versions may hold text the owner removed before sharing), the "Require
+ * approval for agent writes" checkbox (can_require_approval, owner only:
+ * flips the doc's `require_approval` switch through the rename endpoint, so
+ * every change a conversation proposes goes through a write_doc approval
+ * card even on an unshared doc; the menu stays open so the new state is
+ * visible), the two downloads (always), Delete (can_delete, behind a
+ * confirm). There is no mode switch: user docs are always private and a
+ * project doc takes its project's mode (`access.can_switch_mode` is always
+ * false).
  *
  * Beside the title sit the mode badge (a public doc only, see utils/docMode),
  * a folder chip for a project doc (a link to that project's docs when the
  * project is the viewer's own, plain text for a doc shared from someone
- * else's project), and a share chip: for the owner of a shared doc, "Shared
+ * else's project), a share chip: for the owner of a shared doc, "Shared
  * with N people" / "Shared with everyone" opening the Share dialog; for a
- * recipient, who shared it and whether they can edit. On the right, the
+ * recipient, who shared it and whether they can edit; and, while the
+ * switch is on, an "Approval required" chip for every viewer. On the right, the
  * action buttons: Edit (can_edit, view mode only), Share (can_share) and
  * the Show source / Show rendered toggle (view mode only). Edit and Share
  * sit there rather than in the dropdown because they are the two actions
@@ -38,6 +44,9 @@ import {
   Folder,
   History,
   Pencil,
+  ShieldCheck,
+  Square,
+  SquareCheck,
   Trash2,
   Users,
 } from 'lucide-react';
@@ -62,6 +71,13 @@ import './DocHeader.css';
 const TITLE_MAX_LENGTH = 200;
 const NOTICE_MS = 5000;
 const STALE_RENAME_NOTICE = 'This doc changed elsewhere; the title was reloaded.';
+const REQUIRE_APPROVAL_ON_NOTICE = 'Agents now need your approval before changing this doc.';
+const REQUIRE_APPROVAL_OFF_NOTICE = 'Agents can change this doc without approval again.';
+/** The chip and the checkbox's tooltip, for every viewer. */
+export const REQUIRE_APPROVAL_CHIP_TITLE =
+  "Conversations need the owner's approval before changing this doc.";
+const REQUIRE_APPROVAL_PUBLIC_HINT =
+  'Public-project conversations cannot open approval cards, so this leaves the doc read-only for them.';
 /** Rename rejections the user fixes by editing the typed title. */
 const KEEP_EDITING_ERRORS = new Set(['duplicate_title', 'invalid_title']);
 
@@ -108,7 +124,8 @@ export function DocHeader({
   // versions may hold text the owner removed before sharing.
   const canShowHistory = Boolean(onShowHistory) && doc.access.can_edit && mode === 'view';
   const canShare = Boolean(onShare) && doc.access.can_share;
-  const hasPrimaryItems = canRename || canShowHistory;
+  const canRequireApproval = doc.access.can_require_approval;
+  const hasPrimaryItems = canRename || canShowHistory || canRequireApproval;
   const showSourceToggle = mode === 'view';
   const shareSummary = ownerShareSummary(doc) ?? recipientShareSummary(doc);
 
@@ -135,6 +152,7 @@ export function DocHeader({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [approvalSaving, setApprovalSaving] = useState(false);
 
   // A doc shared from someone else's project: that project is not in the
   // viewer's list, so the chip is plain text (its docs list would 404).
@@ -230,6 +248,25 @@ export function DocHeader({
     [cancelRename, doc.id, doc.title, doc.updated_at, onRowApplied, renameValue, showNotice],
   );
 
+  // The checkbox sends the wanted value without the concurrency token: a
+  // body edit landing meanwhile is no reason to refuse a settings flip, and
+  // the same value twice is a no-op server-side.
+  const toggleRequireApproval = useCallback(async () => {
+    if (!canRequireApproval || approvalSaving) return;
+    const next = !doc.require_approval;
+    setNotice(null);
+    setApprovalSaving(true);
+    try {
+      const row = await updateDoc(doc.id, { require_approval: next });
+      onRowApplied(row);
+      showNotice(row.require_approval ? REQUIRE_APPROVAL_ON_NOTICE : REQUIRE_APPROVAL_OFF_NOTICE);
+    } catch (err) {
+      showNotice(errorMessage(err, 'Failed to change the approval setting.'));
+    } finally {
+      setApprovalSaving(false);
+    }
+  }, [approvalSaving, canRequireApproval, doc.id, doc.require_approval, onRowApplied, showNotice]);
+
   const openDelete = useCallback(() => {
     if (!canDelete) return;
     setMenuOpen(false);
@@ -275,12 +312,16 @@ export function DocHeader({
       const key = e.key.toLowerCase();
       if (key === 'r' && canRename) { e.preventDefault(); startRename(); }
       else if (key === 'h' && canShowHistory) { e.preventDefault(); runHistory(); }
+      else if (key === 'a' && canRequireApproval) { e.preventDefault(); void toggleRequireApproval(); }
       else if (key === 'd' && canDelete) { e.preventDefault(); openDelete(); }
       else if (key === 'escape') { setMenuOpen(false); }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [menuOpen, canRename, canShowHistory, canDelete, startRename, runHistory, openDelete]);
+  }, [
+    menuOpen, canRename, canShowHistory, canRequireApproval, canDelete,
+    startRename, runHistory, toggleRequireApproval, openDelete,
+  ]);
 
   const closeMenu = () => setMenuOpen(false);
 
@@ -341,6 +382,28 @@ export function DocHeader({
                     <span className="doc-header-menu-key">H</span>
                   </button>
                 )}
+                {canRequireApproval && (
+                  <button
+                    type="button"
+                    className="doc-header-menu-item doc-header-menu-item--checkbox"
+                    role="menuitemcheckbox"
+                    aria-checked={doc.require_approval}
+                    aria-busy={approvalSaving}
+                    disabled={approvalSaving}
+                    onClick={() => void toggleRequireApproval()}
+                    title={
+                      doc.mode === 'public'
+                        ? `${REQUIRE_APPROVAL_CHIP_TITLE} ${REQUIRE_APPROVAL_PUBLIC_HINT}`
+                        : REQUIRE_APPROVAL_CHIP_TITLE
+                    }
+                  >
+                    {doc.require_approval
+                      ? <SquareCheck size={16} className="doc-header-menu-icon" aria-hidden="true" />
+                      : <Square size={16} className="doc-header-menu-icon" aria-hidden="true" />}
+                    <span>Require approval for agent writes</span>
+                    <span className="doc-header-menu-key">A</span>
+                  </button>
+                )}
                 {hasPrimaryItems && <div className="doc-header-menu-separator" role="separator" />}
                 <a
                   className="doc-header-menu-item"
@@ -381,9 +444,18 @@ export function DocHeader({
             )}
           </div>
 
-          {(showModeBadge || doc.project_id || shareSummary) && (
+          {(showModeBadge || doc.project_id || shareSummary || doc.require_approval) && (
             <div className="doc-header-meta">
               {showModeBadge && <DocModeBadge mode={doc.mode} />}
+              {doc.require_approval && (
+                <span
+                  className="doc-header-project-chip doc-header-chip--static doc-header-approval-chip"
+                  title={REQUIRE_APPROVAL_CHIP_TITLE}
+                >
+                  <ShieldCheck size={12} strokeWidth={2.25} aria-hidden="true" />
+                  <span className="doc-header-project-name">Approval required</span>
+                </span>
+              )}
               {doc.project_id && project && (
                 <Link
                   to={docsListPath(doc.project_id)}

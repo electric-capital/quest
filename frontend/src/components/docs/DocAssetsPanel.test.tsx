@@ -107,6 +107,7 @@ describe('DocAssetsPanel', () => {
     const DELETED = {
       deleted: true,
       asset_count: 2,
+      require_approval: false,
       updated_at: '2026-10-06T10:00:30',
       previous_updated_at: '2026-10-06T10:00:00',
     };

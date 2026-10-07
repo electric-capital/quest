@@ -47,6 +47,7 @@ from chat.docs.access import (
 )
 from chat.docs.constants import doc_not_found_message, docs_disabled_message
 from chat.docs.service import (
+    APPROVAL_REQUIRED_BY_OWNER_MESSAGE,
     APPROVAL_REQUIRED_MESSAGE,
     Caller,
     DocApprovalRequired,
@@ -650,6 +651,38 @@ class TestAddImage:
 class TestApproval:
     def _shared(self, docs_env, permission="read"):
         return seed_doc(docs_env, content="alpha beta\n", shares=[("bob", permission)])
+
+    def test_owner_require_approval_gates_an_unshared_doc(self, docs_env):
+        """Rule 7: the switch turns the owner's free write into the approval
+        handoff, with the switch's own wording; off again, the write lands."""
+        from chat.docs.access import APPROVAL_REQUIRED_WRITE_NOTE
+
+        doc = seed_doc(docs_env, content="alpha beta\n")
+        caller = make_caller(docs_env)
+        _run(docs_env.doc_store.update_doc_metadata(doc["id"], require_approval=True))
+        listed = _run(svc().read_doc(caller, doc["id"]))
+        assert listed["writable"] == "approval"
+        assert listed["write_note"] == APPROVAL_REQUIRED_WRITE_NOTE
+
+        with pytest.raises(DocApprovalRequired) as exc:
+            _run(svc().edit_doc(caller, doc["id"], "alpha", "ALPHA"))
+        assert str(exc.value) == APPROVAL_REQUIRED_BY_OWNER_MESSAGE
+        assert exc.value.suggested_request["params"]["operation"] == "edit"
+        assert body(doc["id"]) == "alpha beta\n"
+
+        # The approved card's path (bypass_approval) still writes.
+        result = _run(svc().apply_write_operation(
+            caller, doc["id"], "edit",
+            {"old_string": "alpha", "new_string": "ALPHA", "replace_all": False},
+            write_source="action_request:1", bypass_approval=True,
+        ))
+        assert result["replaced"] == 1
+        assert body(doc["id"]) == "ALPHA beta\n"
+
+        _run(docs_env.doc_store.update_doc_metadata(doc["id"], require_approval=False))
+        assert _run(svc().read_doc(caller, doc["id"]))["writable"] == "free"
+        _run(svc().append_to_doc(caller, doc["id"], "gamma"))
+        assert body(doc["id"]).endswith("gamma\n")
 
     def test_owner_gets_approval_required_payloads(self, docs_env):
         doc = self._shared(docs_env)

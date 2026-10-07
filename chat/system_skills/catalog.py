@@ -930,9 +930,10 @@ public docs of their own project, with `create_doc(target="project")`;
 `target="user"` is refused there.
 
 `list_docs` and `read_doc` report the verdict for each doc in `writable`:
-`free` (the write tools work directly), `approval` (a shared private doc:
-changes go through a `write_doc` action request) or `denied` (read-only
-here; `write_note` says why). The rules behind it:
+`free` (the write tools work directly), `approval` (a shared private doc,
+or a doc whose owner requires approval for every change: changes go
+through a `write_doc` action request) or `denied` (read-only here;
+`write_note` says why). The rules behind it:
 
 - **The user's own private doc that is not shared with anyone**: written
   freely.
@@ -940,6 +941,13 @@ here; `write_note` says why). The rules behind it:
   change needs the user's approval through a `write_doc` action request --
   for the owner and for people with write access alike. With a read-only
   share: "{doc_access.DENY_READ_ONLY_SHARE}"
+- **A doc whose owner switched on "Require approval for agent writes"**
+  (in the doc's header menu): every change needs approval through a
+  `write_doc` action request, even the owner's own unshared doc
+  (`write_note`: "{doc_access.APPROVAL_REQUIRED_WRITE_NOTE}"). On a public
+  doc this leaves the agent read-only, because public-project
+  conversations cannot open approval cards:
+  "{doc_access.DENY_PUBLIC_APPROVAL_REQUIRED}"
 - **Public docs** (the docs of a public project) are read and written
   only from that project's conversations (by the owner and people with
   write access); every other conversation never sees them. The Quest web
@@ -962,7 +970,7 @@ ambiguous, re-read the doc and retry with the exact current text (or a
 longer, unique excerpt). `append_to_doc` and `add_doc_image` need no read:
 they overwrite nothing.
 
-### Shared private docs: the approval handoff
+### Shared and approval-required docs: the approval handoff
 
 When a write tool returns
 
@@ -1003,8 +1011,10 @@ rejected: call the tool directly) or `denied`. In `list_docs` /
 "{doc_access.APPROVAL_WRITE_NOTE}".
 
 **Slack-driven conversations cannot open approval cards**, so a write to a
-shared private doc fails there ("{doc_access.DENY_SLACK_NEEDS_APPROVAL}").
-Tell the user; free writes still work in Slack.
+shared private doc fails there ("{doc_access.DENY_SLACK_NEEDS_APPROVAL}"),
+and so does one to a doc whose owner requires approval
+("{doc_access.DENY_SLACK_APPROVAL_REQUIRED}"). Tell the user; free writes
+still work in Slack.
 
 ### Images
 

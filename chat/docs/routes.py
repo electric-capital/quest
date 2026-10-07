@@ -21,7 +21,7 @@ doc dict plus
 - ``access``: ``write`` (the UI verdict), ``can_edit`` (``write ==
   "free"``: owner or write share -- content edits, image upload, restore),
   ``can_rename`` / ``can_delete`` / ``can_share`` / ``can_delete_assets``
-  (owner only), ``can_switch_mode`` (always false);
+  / ``can_require_approval`` (owner only), ``can_switch_mode`` (always false);
 - ``shared_with_me`` (the caller is not the owner) and ``permission``
   (the caller's effective share, ``read`` / ``write``; null for the owner);
 - ``owner {id, name, email}`` -- for non-owners only (null for the owner);
@@ -79,7 +79,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 from starlette.background import BackgroundTask
 
 from chat.auth import get_current_user_cookie_or_apikey_checked
@@ -130,6 +130,9 @@ class CreateDocRequest(BaseModel):
 class UpdateDocRequest(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
+    # The owner's require-approval switch (access rule 7); strict so a
+    # string never flips it.
+    require_approval: Optional[StrictBool] = None
     expected_updated_at: Optional[str] = None
 
 
@@ -298,6 +301,7 @@ def _doc_row(
         "can_edit": access.write == "free",
         "can_share": is_owner,
         "can_delete_assets": is_owner,
+        "can_require_approval": is_owner,
         "write": access.write,
     }
     return row
@@ -777,7 +781,13 @@ async def update_ui_doc(
     body: UpdateDocRequest,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """Rename and/or change the description (owner only).
+    """Rename, change the description and/or flip ``require_approval`` (owner only).
+
+    ``require_approval`` is the owner's switch that makes every
+    model-initiated write a ``write_doc`` approval card (access rule 7);
+    like a rename, flipping it bumps ``updated_at`` and publishes the two
+    events, so open viewers re-fetch and conversations get the new verdict
+    on their next write.
 
     ``expected_updated_at`` is the optimistic-concurrency token: a mismatch
     is a flat 409 ``stale_update`` carrying the ``current`` row. 409
@@ -787,7 +797,7 @@ async def update_ui_doc(
     """
     _require_docs_enabled(user)
     doc, _access = await _get_doc_for_ui(user, doc_id)
-    _require_owner(user, doc, "rename it")
+    _require_owner(user, doc, "change it")
     try:
         title, description = doc_service.validate_doc_metadata(
             body.title, body.description,
@@ -796,6 +806,7 @@ async def update_ui_doc(
             doc["id"],
             title=title,
             description=description,
+            require_approval=body.require_approval,
             expected_updated_at=body.expected_updated_at,
         )
     except doc_service.DocRequestError as exc:

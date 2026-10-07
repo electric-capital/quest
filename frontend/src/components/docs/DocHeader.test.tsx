@@ -35,6 +35,7 @@ function row(overrides: Partial<Doc> = {}): Doc {
     mode: 'private',
     content_size: 10,
     asset_count: 0,
+    require_approval: false,
     last_write_source: 'ui',
     created_at: '2026-10-01T00:00:00',
     updated_at: '2026-10-02T00:00:00',
@@ -45,7 +46,7 @@ function row(overrides: Partial<Doc> = {}): Doc {
     owner: null,
     last_write_user: null,
     // can_switch_mode is always false from the server in v1.
-    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true },
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true, can_require_approval: true },
     shares: [],
     ...overrides,
   };
@@ -59,7 +60,7 @@ const OWNER_USER_DOC = detail();
 const OWNER_PROJECT_DOC = detail({
   project_id: 'p1',
   scope: 'project',
-  access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true },
+  access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true, can_require_approval: true },
 });
 const NON_OWNER_DOC = detail({
   owner_id: 2,
@@ -69,7 +70,7 @@ const NON_OWNER_DOC = detail({
   owner: { id: 2, name: 'Bea', email: 'bea@example.com' },
   last_write_source: null,
   shares: undefined,
-  access: { can_rename: false, can_switch_mode: false, can_delete: false, write: 'approval', can_edit: false, can_share: false, can_delete_assets: false },
+  access: { can_rename: false, can_switch_mode: false, can_delete: false, write: 'approval', can_edit: false, can_share: false, can_delete_assets: false, can_require_approval: false },
 });
 
 function renderHeader(doc: DocDetail, props: Partial<React.ComponentProps<typeof DocHeader>> = {}) {
@@ -118,6 +119,9 @@ describe('DocHeader', () => {
         'DeleteD',
       ]);
       expect(within(menu).queryByText(/share|history|edit/i)).toBeNull();
+      // The require-approval checkbox sits in the primary group, unchecked.
+      const checkbox = within(menu).getByRole('menuitemcheckbox', { name: /Require approval for agent writes/ });
+      expect(checkbox.getAttribute('aria-checked')).toBe('false');
     });
 
     it('owner of a project doc gets the same items, and a folder chip to the project docs', () => {
@@ -138,7 +142,7 @@ describe('DocHeader', () => {
         OWNER_PROJECT_DOC,
         detail({ project_id: 'p1', scope: 'project', mode: 'public' }),
         // A stale can_switch_mode: true (the server always sends false in v1).
-        detail({ access: { can_rename: true, can_switch_mode: true, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true } }),
+        detail({ access: { can_rename: true, can_switch_mode: true, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true, can_require_approval: true } }),
       ];
       for (const doc of docs) {
         renderHeader(doc);
@@ -155,6 +159,7 @@ describe('DocHeader', () => {
       renderHeader(NON_OWNER_DOC);
       const menu = openMenu();
       expect(menuItemLabels(menu)).toEqual(['Download Markdown', 'Download with images (.zip)']);
+      expect(within(menu).queryByRole('menuitemcheckbox')).toBeNull();
       const [md, zip] = within(menu).getAllByRole('menuitem');
       expect(md.getAttribute('href')).toBe('/app/api/docs/d1/download?format=md');
       expect(md.hasAttribute('download')).toBe(true);
@@ -168,6 +173,64 @@ describe('DocHeader', () => {
       fireEvent.keyDown(document, { key: 'd' });
       expect(screen.queryByRole('textbox')).toBeNull();
       expect(screen.queryByRole('dialog')).toBeNull();
+    });
+  });
+
+  describe('require approval for agent writes', () => {
+    it('flips the switch through the rename endpoint without the concurrency token, keeps the menu open and applies the row', async () => {
+      const updated = row({ require_approval: true, updated_at: '2026-10-03T00:00:00' });
+      mocks.updateDoc.mockResolvedValueOnce(updated);
+      const { onRowApplied } = renderHeader(OWNER_USER_DOC);
+      const menu = openMenu();
+      const checkbox = within(menu).getByRole('menuitemcheckbox', { name: /Require approval/ });
+      await act(async () => {
+        fireEvent.click(checkbox);
+      });
+      expect(mocks.updateDoc).toHaveBeenCalledWith('d1', { require_approval: true });
+      expect(onRowApplied).toHaveBeenCalledWith(updated);
+      expect(screen.getByRole('menu')).toBeTruthy();
+      expect(screen.getByRole('status').textContent).toBe(
+        'Agents now need your approval before changing this doc.',
+      );
+    });
+
+    it('shows the checked state and the chip while the switch is on, and turns it off again', async () => {
+      const on = detail({ require_approval: true });
+      const off = row({ require_approval: false });
+      mocks.updateDoc.mockResolvedValueOnce(off);
+      const { onRowApplied } = renderHeader(on);
+      expect(screen.getByTitle("Conversations need the owner's approval before changing this doc.").textContent)
+        .toBe('Approval required');
+      const menu = openMenu();
+      const checkbox = within(menu).getByRole('menuitemcheckbox', { name: /Require approval/ });
+      expect(checkbox.getAttribute('aria-checked')).toBe('true');
+      await act(async () => {
+        fireEvent.keyDown(document, { key: 'a' });
+      });
+      expect(mocks.updateDoc).toHaveBeenCalledWith('d1', { require_approval: false });
+      expect(onRowApplied).toHaveBeenCalledWith(off);
+      expect(screen.getByRole('status').textContent).toBe(
+        'Agents can change this doc without approval again.',
+      );
+    });
+
+    it('a recipient sees the chip but has no checkbox and the A key does nothing', () => {
+      renderHeader(detail({ ...NON_OWNER_DOC, require_approval: true }));
+      expect(screen.getByText('Approval required')).toBeTruthy();
+      openMenu();
+      fireEvent.keyDown(document, { key: 'a' });
+      expect(mocks.updateDoc).not.toHaveBeenCalled();
+    });
+
+    it('reports a failed flip in the notice and leaves the row alone', async () => {
+      mocks.updateDoc.mockRejectedValueOnce(new ApiClientError('nope', 403, 'forbidden'));
+      const { onRowApplied } = renderHeader(OWNER_USER_DOC);
+      const menu = openMenu();
+      await act(async () => {
+        fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: /Require approval/ }));
+      });
+      expect(onRowApplied).not.toHaveBeenCalled();
+      expect(screen.getByRole('status').textContent).toBe('nope');
     });
   });
 

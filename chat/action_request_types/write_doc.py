@@ -73,6 +73,7 @@ SERVER_INJECTED_KEYS = frozenset(
         "doc_mode",
         "doc_scope",
         "share_summary",
+        "require_approval",
         "image_preview",
     }
 )
@@ -282,6 +283,8 @@ class WriteDocHandler(ActionRequestHandler):
             fields.append({"key": "Scope", "value": str(params["doc_scope"])})
         if params.get("share_summary"):
             fields.append({"key": "Shares", "value": str(params["share_summary"])})
+        if params.get("require_approval") is True:
+            fields.append({"key": "Approval", "value": "required by the owner for every change"})
 
         label = _OPERATION_LABELS.get(operation) if isinstance(operation, str) else None
         if label is None:

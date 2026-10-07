@@ -70,7 +70,7 @@ function ago(ms: number): string {
 }
 
 const READ_ONLY_ACCESS: DocDetail['access'] = {
-  can_rename: false, can_switch_mode: false, can_delete: false, write: 'approval', can_edit: false, can_share: false, can_delete_assets: false,
+  can_rename: false, can_switch_mode: false, can_delete: false, write: 'approval', can_edit: false, can_share: false, can_delete_assets: false, can_require_approval: false,
 };
 
 function doc(overrides: Partial<DocDetail> = {}): DocDetail {
@@ -83,6 +83,7 @@ function doc(overrides: Partial<DocDetail> = {}): DocDetail {
     mode: 'private',
     content_size: 40,
     asset_count: 1,
+    require_approval: false,
     last_write_source: 'ui:1',
     created_at: '2026-10-01T00:00:00',
     updated_at: TOKEN,
@@ -92,7 +93,7 @@ function doc(overrides: Partial<DocDetail> = {}): DocDetail {
     permission: null,
     owner: null,
     last_write_user: null,
-    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true },
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true, can_require_approval: true },
     shares: [],
     content: '# Current plan\n\n![chart](assets/chart.png)',
     last_write_conversation: null,

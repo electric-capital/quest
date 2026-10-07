@@ -36,6 +36,7 @@ function doc(id: string, overrides: Partial<Doc> = {}): Doc {
     mode: 'private',
     content_size: 0,
     asset_count: 0,
+    require_approval: false,
     last_write_source: 'ui',
     created_at: '2026-10-01T00:00:00',
     updated_at: '2026-10-01T00:00:00',
@@ -45,7 +46,7 @@ function doc(id: string, overrides: Partial<Doc> = {}): Doc {
     permission: null,
     owner: null,
     last_write_user: null,
-    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true },
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true, can_require_approval: true },
     ...overrides,
   };
 }

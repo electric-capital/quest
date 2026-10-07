@@ -105,6 +105,7 @@ async def doc_precard_check(
     validated_params["doc_mode"] = doc["mode"]
     validated_params["doc_scope"] = "project" if doc.get("project_id") else "user"
     validated_params["share_summary"] = share_summary(doc.get("shares") or [])
+    validated_params["require_approval"] = bool(doc.get("require_approval", False))
 
     current_body = preview["current_body"]
     new_body = preview["new_body"]

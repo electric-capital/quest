@@ -12,11 +12,14 @@ import itertools
 import pytest
 
 from chat.docs.access import (
+    APPROVAL_REQUIRED_WRITE_NOTE,
     APPROVAL_WRITE_NOTE,
     DENY_INFERENCE_API,
+    DENY_PUBLIC_APPROVAL_REQUIRED,
     DENY_PUBLIC_DOC_FROM_PRIVATE,
     DENY_READ_ONLY_SHARE,
     DENY_SCRIPT,
+    DENY_SLACK_APPROVAL_REQUIRED,
     DENY_SLACK_NEEDS_APPROVAL,
     DENY_SUB_AGENT,
     DENY_UI_READ_ONLY,
@@ -62,6 +65,10 @@ def _doc(mode, shares=(), *, project_id=None, owner_id=OWNER):
 
 FREE = DocAccess(visible=True, can_read=True, write="free", deny_reason=None)
 AR = DocAccess(visible=True, can_read=True, write="approval", deny_reason=None)
+# The owner's require-approval switch produced the approval (rule 7).
+AR_REQ = DocAccess(
+    visible=True, can_read=True, write="approval", deny_reason=None, required_by_owner=True,
+)
 H = HIDDEN
 
 
@@ -553,6 +560,7 @@ def test_owner_with_only_an_unknown_permission_row_still_needs_approval():
 def test_write_note_mapping():
     assert write_note(FREE) is None
     assert write_note(AR) == APPROVAL_WRITE_NOTE
+    assert write_note(AR_REQ) == APPROVAL_REQUIRED_WRITE_NOTE
     assert write_note(RO(DENY_READ_ONLY_SHARE)) == DENY_READ_ONLY_SHARE
     assert write_note(RO(DENY_PUBLIC_DOC_FROM_PRIVATE)) == DENY_PUBLIC_DOC_FROM_PRIVATE
     assert write_note(HIDDEN) is None
@@ -612,3 +620,122 @@ def test_deny_reason_texts_are_pinned():
     )
     assert DENY_UI_READ_ONLY == "You have read-only access to this doc."
     assert APPROVAL_WRITE_NOTE == "shared private doc: use create_action_request(write_doc)"
+    assert DENY_SLACK_APPROVAL_REQUIRED == (
+        "The owner requires approval for every change to this doc, and "
+        "Slack-driven conversations cannot open approval cards. Continue from "
+        "the Quest web UI."
+    )
+    assert DENY_PUBLIC_APPROVAL_REQUIRED == (
+        "The owner requires approval for every change to this doc, and "
+        "public-project conversations cannot open approval cards."
+    )
+    assert APPROVAL_REQUIRED_WRITE_NOTE == (
+        "owner requires approval for every change: use create_action_request(write_doc)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Rule 7: the owner's require-approval switch
+# ---------------------------------------------------------------------------
+
+
+def _with_switch(verdict, column):
+    """What a cell becomes once ``require_approval`` is on.
+
+    Every Free verdict a conversation would get becomes Approval (marked
+    ``required_by_owner``), a share-based Approval keeps the verdict but
+    takes the switch's wording, Slack and public conversations (no cards)
+    are denied with the switch's reasons, and every other cell -- reads,
+    Hidden, the read-only run kinds and the UI -- is untouched.
+    """
+    _uid, is_public, run_kind, _pid = COLUMNS[column]
+    if run_kind == "ui" or run_kind in READ_ONLY_RUN_KINDS:
+        return verdict
+    if verdict == AR:
+        return AR_REQ
+    if verdict == RO(DENY_SLACK_NEEDS_APPROVAL):
+        return RO(DENY_SLACK_APPROVAL_REQUIRED)
+    if verdict == FREE:
+        if run_kind == "slack":
+            return RO(DENY_SLACK_APPROVAL_REQUIRED)
+        if is_public:
+            return RO(DENY_PUBLIC_APPROVAL_REQUIRED)
+        return AR_REQ
+    return verdict
+
+
+@pytest.mark.parametrize(
+    "row,column",
+    [(r, c) for r in DOC_ROWS for c in COLUMNS],
+)
+def test_matrix_cell_with_require_approval(row, column):
+    user_id, is_public, run_kind, project_id = COLUMNS[column]
+    doc = {**DOC_ROWS[row], "require_approval": True}
+    access = resolve_doc_access(
+        doc, user_id=user_id, is_public=is_public, project_id=project_id, run_kind=run_kind,
+    )
+    assert access == _with_switch(EXPECTED[row][column], column), (row, column)
+
+
+def test_require_approval_changes_the_expected_cells_only():
+    """The derivation above touches exactly the conversation columns' Free
+    and Approval cells (sanity check on the helper, so a silent no-op
+    cannot pass the matrix test)."""
+    changed = {
+        (row, column)
+        for row in DOC_ROWS for column in COLUMNS
+        if _with_switch(EXPECTED[row][column], column) != EXPECTED[row][column]
+    }
+    assert ("private_unshared", "owner_private") in changed
+    assert ("private_unshared", "owner_slack") in changed
+    assert ("private_shared_write", "recipient_private") in changed
+    assert ("public_unshared", "owner_public") in changed
+    assert ("public_shared_write", "recipient_public") in changed
+    assert ("private_unshared", "ui_owner") not in changed
+    assert ("private_shared_read", "recipient_private") not in changed
+    assert ("private_unshared", "owner_sub_agent") not in changed
+    assert ("public_unshared", "owner_private") not in changed
+    for row, column in changed:
+        _uid, _pub, run_kind, _pid = COLUMNS[column]
+        assert run_kind in ("top_level", "slack")
+
+
+def test_require_approval_owner_unshared_private_doc():
+    doc = {**_doc("private"), "require_approval": True}
+    access = resolve_doc_access(
+        doc, user_id=OWNER, is_public=False, project_id=None, run_kind="top_level",
+    )
+    assert access == AR_REQ
+    assert access.required_by_owner is True
+    assert write_note(access) == APPROVAL_REQUIRED_WRITE_NOTE
+    # The UI (a person editing) is never approval-gated.
+    assert resolve_doc_access(
+        doc, user_id=OWNER, is_public=False, project_id=None, run_kind="ui",
+    ) == FREE
+
+
+def test_require_approval_off_or_absent_is_the_plain_matrix():
+    for value in (False, 0, None):
+        doc = {**_doc("private"), "require_approval": value}
+        assert resolve_doc_access(
+            doc, user_id=OWNER, is_public=False, project_id=None, run_kind="top_level",
+        ) == FREE
+    assert "require_approval" not in _doc("private")
+    assert resolve_doc_access(
+        _doc("private"), user_id=OWNER, is_public=False, project_id=None, run_kind="top_level",
+    ) == FREE
+
+
+def test_required_by_owner_only_on_approval_verdicts():
+    for write, deny in (("free", None), ("denied", "x")):
+        with pytest.raises(ValueError):
+            DocAccess(
+                visible=True, can_read=True, write=write, deny_reason=deny,
+                required_by_owner=True,
+            )
+    with pytest.raises(ValueError):
+        DocAccess(
+            visible=False, can_read=False, write="denied", deny_reason=None,
+            required_by_owner=True,
+        )
+    assert AR_REQ != AR

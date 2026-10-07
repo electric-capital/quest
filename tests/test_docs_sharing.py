@@ -186,7 +186,9 @@ def access_changed(doc_id, *user_ids):
     ]
 
 
-OWNER_ONLY_FLAGS = ("can_rename", "can_delete", "can_share", "can_delete_assets")
+OWNER_ONLY_FLAGS = (
+    "can_rename", "can_delete", "can_share", "can_delete_assets", "can_require_approval",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +470,7 @@ class TestRows:
         assert row["access"] == {
             "can_rename": False, "can_switch_mode": False, "can_delete": False,
             "can_edit": False, "can_share": False, "can_delete_assets": False,
-            "write": "denied",
+            "can_require_approval": False, "write": "denied",
         }
 
     def test_write_share_recipient(self, docs_env):
@@ -505,7 +507,7 @@ class TestRows:
         assert row["access"] == {
             "can_rename": True, "can_switch_mode": False, "can_delete": True,
             "can_edit": True, "can_share": True, "can_delete_assets": True,
-            "write": "free",
+            "can_require_approval": True, "write": "free",
         }
 
     @pytest.mark.parametrize("source", [

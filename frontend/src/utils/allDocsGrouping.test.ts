@@ -20,6 +20,7 @@ function doc(overrides: Partial<Doc> & { id: string }): Doc {
     mode: 'private',
     content_size: 0,
     asset_count: 0,
+    require_approval: false,
     last_write_source: 'ui',
     created_at: '2026-01-01T00:00:00',
     updated_at: '2026-01-01T00:00:00',
@@ -29,7 +30,7 @@ function doc(overrides: Partial<Doc> & { id: string }): Doc {
     permission: null,
     owner: null,
     last_write_user: null,
-    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true },
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true, can_require_approval: true },
     ...overrides,
   };
 }
@@ -211,7 +212,7 @@ describe('docScopeLabel', () => {
   });
 
   it('says "Shared by <owner>" for a doc shared with the viewer, project docs included', () => {
-    const readerAccess = { can_rename: false, can_switch_mode: false, can_delete: false, write: 'denied' as const, can_edit: false, can_share: false, can_delete_assets: false };
+    const readerAccess = { can_rename: false, can_switch_mode: false, can_delete: false, write: 'denied' as const, can_edit: false, can_share: false, can_delete_assets: false, can_require_approval: false };
     const shared = doc({
       id: 's',
       owner_id: 2,

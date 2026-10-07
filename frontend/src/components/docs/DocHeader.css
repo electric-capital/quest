@@ -29,7 +29,10 @@
 .doc-header-unit {
   position: relative;
   flex: 0 1 auto;
-  min-width: 0;
+  /* Keep a readable stub of the title before the chips start wrapping:
+     with several chips (approval, project, share) the unit would otherwise
+     shrink to a single letter. */
+  min-width: min(11rem, 100%);
   max-width: 100%;
   /* Pull the button's hover padding into the gutter so the title text lines
      up with the doc body below. */
@@ -113,7 +116,9 @@
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  flex-shrink: 0;
+  /* Shrinks (chips wrap onto a second line) once the title is at its
+     minimum, instead of squeezing the title. */
+  flex: 0 1 auto;
   gap: 0.375rem;
   min-width: 0;
 }
@@ -254,6 +259,24 @@
   padding-left: 1.5rem;
   color: var(--text-muted);
   font-size: 0.8125rem;
+}
+
+/* The "Require approval for agent writes" checkbox item. */
+.doc-header-menu-item--checkbox[aria-checked="true"] .doc-header-menu-icon {
+  color: var(--accent);
+}
+
+.doc-header-menu-item--checkbox:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.doc-header-approval-chip .doc-header-project-name {
+  color: var(--accent-text);
+}
+
+.doc-header-approval-chip svg {
+  color: var(--accent);
 }
 
 .doc-header-menu-separator {
