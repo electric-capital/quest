@@ -885,7 +885,15 @@ def _copy_regular_file(
     """
     src_root_resolved = src_root.resolve()
     dst_root_resolved = dst_root.resolve()
-    fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            # Swapped for a symlink after planning.
+            raise CopyEntryError(
+                "not_a_regular_file", f"'{src.name}' is not a regular file"
+            ) from exc
+        raise
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
@@ -905,11 +913,16 @@ def _copy_regular_file(
                 os.path.dirname(_fd_realpath(tmp_fd, tmp_name)),
                 dst_root_resolved, "invalid_path", f"Destination of '{dst.name}'",
             )
-            with os.fdopen(tmp_fd, "wb") as out, os.fdopen(fd, "rb") as inp:
-                tmp_fd = fd = -1  # ownership passed to the file objects
-                shutil.copyfileobj(inp, out, 1024 * 1024)
-            os.chmod(tmp_name, stat.S_IMODE(st.st_mode) & 0o777)
-            os.utime(tmp_name, ns=(st.st_atime_ns, st.st_mtime_ns))
+            out = os.fdopen(tmp_fd, "wb")
+            tmp_fd = -1  # ownership passed to ``out``
+            with out:
+                inp = os.fdopen(fd, "rb")
+                fd = -1  # ownership passed to ``inp``
+                with inp:
+                    shutil.copyfileobj(inp, out, 1024 * 1024)
+                out.flush()
+                os.fchmod(out.fileno(), stat.S_IMODE(st.st_mode) & 0o777)
+                os.utime(out.fileno(), ns=(st.st_atime_ns, st.st_mtime_ns))
             if exclusive:
                 _link_exclusive(tmp_name, dst)
             else:

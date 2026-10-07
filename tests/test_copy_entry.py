@@ -437,6 +437,19 @@ class TestHardening:
         assert _code(exc) == "not_a_regular_file"
         assert list(dst.iterdir()) == []
 
+    def test_copy_regular_file_on_swapped_symlink_leaf(self, spaces):
+        # A file swapped for a symlink after planning: O_NOFOLLOW's ELOOP
+        # maps to not_a_regular_file (400), not a bare OSError (500).
+        src, dst = spaces
+        (src / "real.txt").write_text("x")
+        (src / "link.txt").symlink_to(src / "real.txt")
+        with pytest.raises(CopyEntryError) as exc:
+            fs._copy_regular_file(
+                src / "link.txt", dst / "link.txt", src_root=src, dst_root=dst,
+            )
+        assert _code(exc) == "not_a_regular_file"
+        assert list(dst.iterdir()) == []
+
     def test_source_fd_outside_root_refused(self, spaces, tmp_path):
         # Simulates a source dir swapped for a symlink after planning: the
         # opened descriptor really points outside the source root.

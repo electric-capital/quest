@@ -85,7 +85,7 @@ Endpoints under `/app/api/conversations/{conversation_id}/files`:
 - 400 `invalid_path` / `invalid_destination` / `not_a_regular_file`, 404 `not_found` (missing source), 409 `destination_exists` (without `overwrite`, or a destination that appeared concurrently);
 - 500 `copy_failed` -- an I/O error while copying (e.g. disk full); both `file_list_changed` scopes are still published since part of a merge may have been written.
 
-A move whose copy completed but whose source removal failed is not an error: the route returns 200 with `moved: false` (the failure is logged) and the source stays in place.
+A move whose copy completed but whose source removal failed is not an error: the route returns 200 with `moved: false` (the failure is logged); the source may be partly removed, since files are deleted one at a time.
 
 A separate composer-attachment upload route, `POST /app/api/conversations/{id}/composer-attachments`, persists clipboard-pasted images (PNG/JPEG only) into `workspace/pasted/<attachment_id>.<ext>` ahead of the next `send_message` WS frame. It is documented under [Chat API -- Composer Attachments](chat-api.md#composer-attachments) rather than here because the lifecycle is tied to the composer/send path, not the generic file browser.
 
