@@ -22,7 +22,11 @@ from typing import Optional
 from sqlalchemy import Select, case, func, literal, select
 
 from db.engine import AsyncSessionLocal
-from db.llm_pricing import LONG_CONTEXT_THRESHOLD, estimate_cost_usd
+from db.llm_pricing import (
+    LONG_CONTEXT_THRESHOLD,
+    estimate_cost_usd,
+    long_context_threshold_overrides,
+)
 from db.models import (
     ApiCallType,
     LlmCallAnthropic,
@@ -323,7 +327,7 @@ async def get_usage_by_model_for_conversations(
     (Gemini: ``prompt_token_count``; Anthropic: ``input_tokens +
     cache_read_input_tokens + cache_creation_input_tokens``). The grouped
     query therefore also groups on a per-call long-context flag (context >
-    ``LONG_CONTEXT_THRESHOLD``), prices each same-tier bucket via
+    the model's ``long_context_threshold``), prices each same-tier bucket via
     ``db/llm_pricing.py`` (cost is linear in the token fields within a
     tier), and merges the buckets back into one entry per model.
 
@@ -1063,9 +1067,18 @@ async def _collect_usage_buckets(
             context_size = sum(
                 func.coalesce(getattr(row_cls, field), 0) for field in ctx_fields
             )
-            long_context = case(
-                (context_size > LONG_CONTEXT_THRESHOLD, 1), else_=0
+            # Tier threshold per row: the model is a group column, so a
+            # per-model CASE keeps every bucket single-tier.
+            overrides = long_context_threshold_overrides(provider)
+            threshold = (
+                case(
+                    *((row_cls.model == model_id, limit)
+                      for model_id, limit in overrides.items()),
+                    else_=LONG_CONTEXT_THRESHOLD,
+                )
+                if overrides else LONG_CONTEXT_THRESHOLD
             )
+            long_context = case((context_size > threshold, 1), else_=0)
             if cost_spec is not None:
                 # Rows carrying a provider-reported amount are bucketed
                 # apart from the ones that must be estimated, so a mixed

@@ -354,9 +354,10 @@ def get_system_prompt(
         nested_subagents_note = (
             "\n- **Nested sub-agents (enabled for this conversation):** the "
             "sub-agents you spawn MAY themselves spawn ONE 2nd-level sub-agent "
-            "via `agent_task_nested`, but only on `claude-haiku-4.5` or "
-            "`gemini-3.5-flash-lite`, for cheap leaf work (counting, "
-            "retrieval, simple distillation). 2nd-level sub-agents cannot spawn "
+            "via `agent_task_nested`, but only on `claude-haiku-5-5`, "
+            "`claude-haiku-4.5` or `gemini-3.5-flash-lite`, for cheap leaf "
+            "work (counting, retrieval, simple distillation). 2nd-level "
+            "sub-agents cannot spawn "
             "any further. Prefer delegating the deepest fan-out to your "
             "1st-level sub-agents and let them spin up leaf agents as needed."
         )
@@ -397,7 +398,7 @@ You have thirteen tools available:
 4. **load_gmail_attachment(message_id, attachment_id, filename?, mime_type?, account?)** -- Fetch a Gmail attachment and upload it for analysis. Use this to read PDF, image, or other file attachments from Gmail messages. Requires Google Services to be connected. (Load `system:gmail` for the full attachment workflow.)
 5. **agent_task(name, prompt, description, model?)** -- Spawn a sub-agent to work on a specific task. The sub-agent has access to the same APIs and workspace files. Use this to delegate independent tasks like research, analysis, or multi-step API interactions. The sub-agent will work silently and return its findings. Optionally specify a model (e.g., 'gemini-3.8-flash' for simpler tasks, or 'gemini-3.5-flash-lite' for the simplest/cheapest tasks) -- defaults to your current model if omitted. If you need to run multiple independent sub-agent tasks, use agent_task_parallel instead.
 6. **agent_task_parallel(tasks)** -- Spawn multiple sub-agents to work on tasks in parallel (maximum {MAX_PARALLEL_TASKS} per call). All sub-agents run concurrently and the tool returns when all have completed. Each task needs an 'id' (to identify results), 'name', 'prompt', 'description', and optional 'model'. Use this instead of multiple sequential agent_task calls when the tasks are independent of each other.
-7. **agent_task_parallel_template(prompt_template, model, agents)** -- Batch-spawn sub-agents from a single prompt template. The prompt_template uses {{var}}-style placeholders that are filled from each agent's variable dict. The model is set once for the entire batch and must be a cheaper model (claude-haiku-4.5, claude-sonnet-4-6, gemini-3.5-flash-lite, gemini-3.6-flash, gemini-3.7-flash, or gemini-3.8-flash). Each agent dict must include 'name' plus any template variables. Maximum {MAX_PARALLEL_TEMPLATE_TASKS} agents per call. Use this instead of agent_task_parallel when all sub-agents share the same prompt structure but differ only in specific parameters -- it saves output tokens by avoiding prompt repetition.
+7. **agent_task_parallel_template(prompt_template, model, agents)** -- Batch-spawn sub-agents from a single prompt template. The prompt_template uses {{var}}-style placeholders that are filled from each agent's variable dict. The model is set once for the entire batch and must be a cheaper model (claude-haiku-4.5, claude-haiku-5-5, claude-sonnet-4-6, gemini-3.5-flash-lite, gemini-3.6-flash, gemini-3.7-flash, or gemini-3.8-flash). Each agent dict must include 'name' plus any template variables. Maximum {MAX_PARALLEL_TEMPLATE_TASKS} agents per call. Use this instead of agent_task_parallel when all sub-agents share the same prompt structure but differ only in specific parameters -- it saves output tokens by avoiding prompt repetition.
 8. **create_action_request(request_type, params, reasoning)** -- Create an action request for the user to approve. Used for sending messages, scheduling calendar events, editing spreadsheets, or other write operations in connected services. This call BLOCKS until the user approves, revises, or stops the request; the return value carries the verdict and any revise feedback directly (a Stop halts the conversation, and the call returns with `verdict: "stopped"` only once the user sends a new message, which arrives in the same turn). You MAY issue several `create_action_request` calls in one response (parallel tool calls) when the actions are independent -- each renders its own card, and your turn resumes only once the user has resolved every card, with each call's verdict returned on its own tool result. Load the `system:action_requests` skill for the full reference of supported request types and their param shapes.
 9. **run_script(path, args?, timeout?)** -- Run a script from the workspace inside a sandboxed container with Python 3.12. Returns stdout, stderr, exit code. Default timeout is 120 seconds (max 300). For full usage patterns, load the `system:workspace` skill.
 10. **run_python(script, args?, timeout?)** -- Run inline Python in the same sandboxed container. For one-off tasks (no file written). For full usage patterns, load the `system:workspace` skill.
@@ -446,6 +447,7 @@ Model selection for sub-agents:
 - Use `gemini-3.7-flash` (Gemini 3.7 Flash) as a recent Flash-class model, served via Vertex AI with a 1M context window. Suitable for the same retrieval/summarization workloads as the other Flash models, with strong agentic and coding performance.
 - Use `gemini-3.8-flash` (Gemini 3.8 Flash) as the newest Flash-class model, served via Vertex AI with a 1M context window. Suitable for the same retrieval/summarization workloads as the other Flash models, with the strongest agentic, coding, and long-horizon multi-step performance of the Flash family.
 - Use `claude-haiku-4.5` (Claude Haiku) as an alternative for fast, cost-effective tasks. Haiku has a smaller context window (200K tokens) than Gemini models, so it is best for focused tasks rather than ones requiring very long context.
+- Use `claude-haiku-5-5` (Claude Haiku 5.5) for fast, high-volume, cost-effective tasks: retrieval, classification, extraction, and summarization. Haiku 5.5 is the newest and cheapest Anthropic model, more capable than Haiku 4.5, with a 1M context window; its price per token rises once a single call's prompt passes 100K tokens, so it is cheapest on focused tasks.
 - Use `claude-sonnet-4-6` (Claude Sonnet) for tasks requiring moderate reasoning capability. More capable than Haiku but still cost-effective compared to Pro. Good for analysis, summarization, and multi-step tasks that benefit from stronger reasoning. Has a 200K context window.
 - Use `claude-opus-4-6` (Claude Opus 4.6) for demanding reasoning, coding, and analysis tasks. Opus 4.6 is a highly capable Anthropic model, ideal for complex multi-step problems, nuanced judgment, and tasks requiring high quality output. Has a 200K context window.
 - Use `claude-opus-4-7` (Claude Opus 4.7) for demanding reasoning, coding, and analysis tasks. Opus 4.7 is a highly capable Anthropic model, ideal for complex multi-step problems, nuanced judgment, and tasks requiring high quality output. Has a 200K context window.
@@ -995,13 +997,13 @@ def get_sub_agent_system_prompt(
             "\n11. **agent_task_nested(name, prompt, description, model)** -- Spawn ONE "
             "2nd-level (nested) sub-agent for a cheap leaf task (counting, retrieval, "
             "simple distillation). The `model` is REQUIRED and must be "
-            "'claude-haiku-4.5' or 'gemini-3.5-flash-lite'. The nested "
+            "'claude-haiku-5-5', 'claude-haiku-4.5' or 'gemini-3.5-flash-lite'. The nested "
             "sub-agent cannot spawn any further sub-agents."
         )
         spawning_rule = (
             "- **You MAY spawn ONE tier of 2nd-level sub-agents** via "
             "`agent_task_nested(name, prompt, description, model)`, restricted to "
-            "the models `claude-haiku-4.5` or `gemini-3.5-flash-lite`. Use "
+            "the models `claude-haiku-5-5`, `claude-haiku-4.5` or `gemini-3.5-flash-lite`. Use "
             "this sparingly for cheap leaf work you want to fan out (counting, "
             "retrieval, simple distillation) so you don't fill your own context "
             "window. Those 2nd-level sub-agents are leaves: they CANNOT spawn any "

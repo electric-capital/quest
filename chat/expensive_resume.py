@@ -100,14 +100,14 @@ def _estimate_resume_cost_usd(
     the resume itself, before the model writes a word. None when the model
     has no pricing entry.
     """
-    from db.llm_pricing import LONG_CONTEXT_THRESHOLD, estimate_cost_usd
+    from db.llm_pricing import estimate_cost_usd, long_context_threshold
     if provider == "anthropic":
         metrics = {"cache_creation_input_tokens": context_tokens}
     else:
         metrics = {"prompt_token_count": context_tokens}
     cost = estimate_cost_usd(
         provider, model, metrics,
-        long_context=context_tokens > LONG_CONTEXT_THRESHOLD,
+        long_context=context_tokens > long_context_threshold(provider, model),
     )
     return round(cost, 2) if cost is not None else None
 

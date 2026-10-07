@@ -89,6 +89,7 @@ SUB_AGENT_CONTEXT_WARNING_THRESHOLD = 0.75  # Fraction of max context at which t
 
 TEMPLATE_BATCH_ALLOWED_MODELS = {
     "claude-haiku-4.5",
+    "claude-haiku-5-5",
     "claude-sonnet-4-6",
     "gemini-3.5-flash-lite",
     "gemini-3.6-flash",
@@ -110,7 +111,7 @@ SUB_AGENT_DISALLOWED_MODELS = {
 
 # Models a 2nd-level (nested) sub-agent may use, when the per-conversation
 # ``nested_subagents`` flag is enabled. 2nd-level sub-agents are restricted to
-# the two cheapest/fastest models -- Claude Haiku and Gemini Flash Lite -- for
+# the cheapest/fastest models -- Claude Haiku and Gemini Flash Lite -- for
 # cheap leaf work (counting, retrieval, simple distillation), and they cannot
 # spawn any further sub-agents. Enforced both in the nested-spawn dispatch
 # branch and as a defense-in-depth guard at the top of _run_sub_agent(level=2).
@@ -118,6 +119,7 @@ SUB_AGENT_DISALLOWED_MODELS = {
 # SUB_AGENT_DISALLOWED_MODELS.)
 NESTED_SUB_AGENT_ALLOWED_MODELS = {
     "claude-haiku-4.5",
+    "claude-haiku-5-5",
     "gemini-3.5-flash-lite",
 }
 

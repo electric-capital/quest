@@ -99,6 +99,7 @@ This document provides a high-level overview of the Quest architecture, explaini
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │  Anthropic Claude on Vertex AI (anthropic[vertex] SDK)  │   │
 │  │  - claude-haiku-4.5 (claude-haiku-4-5 on Vertex)        │   │
+│  │  - claude-haiku-5-5 (claude-haiku-5-5 on Vertex, 1M)    │   │
 │  │  - claude-sonnet-4-6 (claude-sonnet-4-6 on Vertex)      │   │
 │  │  - claude-opus-4-6 (claude-opus-4-6 on Vertex)          │   │
 │  │  - claude-opus-4-7 (claude-opus-4-7 on Vertex)          │   │
@@ -384,7 +385,7 @@ alembic.ini                       # Alembic migration configuration
 
 Conversations run through the direct SDK integration in `chat/gemini_api/` (see [Gemini API Integration](gemini-api.md)) on top of the multi-provider abstraction in `chat/llm/` (see [LLM Provider Abstraction](llm-providers.md)):
 
-- **Model**: User-selectable per conversation via UI dropdown (`gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`, `claude-haiku-4.5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-sonnet-5-5`, `claude-opus-5`, or `claude-opus-5-5`); after the first message, switching is restricted to models from the same provider. `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-flash-lite-preview`, and `gemini-3.5-flash` are deprecated: hidden from the dropdown for new picks but still runnable by conversations/routines that already use them
+- **Model**: User-selectable per conversation via UI dropdown (`gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`, `claude-haiku-4.5`, `claude-haiku-5-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-sonnet-5-5`, `claude-opus-5`, or `claude-opus-5-5`); after the first message, switching is restricted to models from the same provider. `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-flash-lite-preview`, and `gemini-3.5-flash` are deprecated: hidden from the dropdown for new picks but still runnable by conversations/routines that already use them
 - **Vertex AI**: All models (Anthropic and Gemini) run on Vertex AI and use Google Cloud Application Default Credentials
 
 **Configuration System**:

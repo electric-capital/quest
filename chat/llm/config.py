@@ -142,6 +142,32 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "max_input_tokens": 200_000,
         "max_output_tokens": 8_192,
     },
+    # Released 2026-10-07. Haiku 4.5's successor: 1M input / 128K output
+    # (vs 200K / 8K) on the newer tokenizer (~30% more tokens for the same
+    # text), priced by prompt length -- see db/llm_pricing.py. First Haiku
+    # with adaptive thinking + effort; thinking is on by default, so
+    # ``thinking_effort`` is pinned at the model's own "medium" default
+    # rather than left to the API. Sampling params and assistant prefill
+    # 400 (the provider sends neither). A forced ``tool_choice`` is
+    # accepted but skips thinking; the provider only uses auto. Its
+    # thinking blocks are bound to the producing account and the request
+    # prefix, like Opus 5.5 / Sonnet 5.5.
+    "claude-haiku-5-5": {
+        "provider": "anthropic",
+        "display_name": "Claude Haiku 5.5",
+        "vertex_model_id": "claude-haiku-5-5",
+        "vertex_region": "global",
+        "max_input_tokens": 1_000_000,
+        "max_output_tokens": 128_000,
+        "thinking_effort": "medium",
+        # New to Haiku: safety classifiers (cyber, frontier_llm, bio,
+        # general_harms) that can decline a request. Anthropic runs no
+        # server-side fallback for Haiku 5.5, so the client-side chain
+        # falls back to Haiku 4.5, which runs none of these classifiers.
+        # Haiku 4.5's window is 200K, so a decline on a longer
+        # conversation surfaces as a provider error instead.
+        "refusal_fallback_models": ["claude-haiku-4.5"],
+    },
     "claude-sonnet-4-6": {
         "provider": "anthropic",
         "display_name": "Claude Sonnet 4.6",

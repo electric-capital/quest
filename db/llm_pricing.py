@@ -13,6 +13,8 @@ ESTIMATE, not billing truth:
 - Claude Sonnet 5's launch $2/$10 promo became its standard list rate
   (the scheduled 2026-09-01 increase to $3/$15 was cancelled; checked
   2026-09-28). Sonnet 5.5 launched at the same $2/$10.
+- Claude Haiku 5.5 is priced by prompt length: $0.10/$0.50 up to 100K
+  prompt tokens, $0.50/$2.50 above (checked 2026-10-07).
 - Gemini 3.6/3.7/3.8 Flash have an introductory $0.75/$3.75 promo through
   2026-12-31; the table carries the standard $1.50/$7.50 list rate, so
   estimates run high until the promo ends.
@@ -20,16 +22,19 @@ ESTIMATE, not billing truth:
   per-call token rates.
 
 Tier pricing: models with a ``long_context`` block bill at higher rates when
-a single call's context exceeds ``LONG_CONTEXT_THRESHOLD`` tokens (Gemini:
+a single call's context exceeds the model's threshold (Gemini:
 ``prompt_token_count``; Anthropic: input + cache_read + cache_creation).
-Every tier-priced model today keys on the same 200K threshold; a future
-model with a different threshold needs a per-entry override AND a matching
-change to the grouped read query in ``db/llm_call_store.py``.
+The threshold is ``LONG_CONTEXT_THRESHOLD`` unless the entry overrides it
+with ``long_context_threshold`` (Claude Haiku 5.5: 100K). Resolve it with
+:func:`long_context_threshold`; the grouped read query in
+``db/llm_call_store.py`` builds its per-call tier flag from
+:func:`long_context_threshold_overrides`.
 """
 
 from typing import Optional
 
-# Per-call context size above which a model's ``long_context`` rates apply.
+# Default per-call context size above which a model's ``long_context`` rates
+# apply (an entry's ``long_context_threshold`` overrides it).
 LONG_CONTEXT_THRESHOLD = 200_000
 
 # Gemini rates per 1M tokens. ``cache_read`` is the rate for
@@ -52,10 +57,16 @@ _GEMINI_PRICING: dict[str, dict] = {
 # Anthropic rates per 1M tokens. Cache rates derive from the input rate via
 # the standard multipliers below (read 0.1x; write 1.25x for 5m TTL, 2x for
 # 1h TTL). An entry may override the read multiplier with ``cache_read_mult``
-# (Opus 5.5 reads cache at 0.05x its input rate, checked 2026-09-22). No
-# current Claude model carries a long-context premium.
+# (Opus 5.5 reads cache at 0.05x its input rate, checked 2026-09-22). The
+# multipliers apply to the tier's input rate, so a ``long_context`` block
+# only needs input/output.
 _ANTHROPIC_PRICING: dict[str, dict] = {
     "claude-haiku-4.5": {"input": 1.00, "output": 5.00},
+    "claude-haiku-5-5": {
+        "input": 0.10, "output": 0.50,
+        "long_context_threshold": 100_000,
+        "long_context": {"input": 0.50, "output": 2.50},
+    },
     "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
     "claude-sonnet-5": {"input": 2.00, "output": 10.00},
     "claude-sonnet-5-5": {"input": 2.00, "output": 10.00},
@@ -109,6 +120,27 @@ def _openrouter_entry(model: str) -> Optional[dict]:
     return _OPENROUTER_PRICING.get(wire_id)
 
 
+_STATIC_PRICING: dict[str, dict[str, dict]] = {
+    "gemini": _GEMINI_PRICING,
+    "anthropic": _ANTHROPIC_PRICING,
+}
+
+
+def long_context_threshold(provider: str, model: str) -> int:
+    """Per-call context size above which ``model``'s long-context rates apply."""
+    entry = _STATIC_PRICING.get(provider, {}).get(model) or {}
+    return entry.get("long_context_threshold", LONG_CONTEXT_THRESHOLD)
+
+
+def long_context_threshold_overrides(provider: str) -> dict[str, int]:
+    """Models of ``provider`` whose threshold differs from the default."""
+    return {
+        model: entry["long_context_threshold"]
+        for model, entry in _STATIC_PRICING.get(provider, {}).items()
+        if "long_context_threshold" in entry
+    }
+
+
 def _rates_for(entry: dict, long_context: bool) -> dict:
     if long_context and "long_context" in entry:
         return entry["long_context"]
@@ -133,7 +165,8 @@ def estimate_cost_usd(
         provider: "gemini", "anthropic", or "openrouter".
         model: Model id as recorded in the llm_calls_* rows (registry id).
         metrics: Native usage fields for one call or a same-tier sum.
-        long_context: Whether these calls exceeded LONG_CONTEXT_THRESHOLD.
+        long_context: Whether these calls exceeded the model's
+            :func:`long_context_threshold`.
 
     Returns:
         Estimated USD cost, or None when the model has no pricing entry

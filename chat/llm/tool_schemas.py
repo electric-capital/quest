@@ -24,6 +24,7 @@ MAX_PARALLEL_TEMPLATE_TASKS = 20
 
 TEMPLATE_BATCH_ALLOWED_MODELS = {
     "claude-haiku-4.5",
+    "claude-haiku-5-5",
     "claude-sonnet-4-6",
     "gemini-3.5-flash-lite",
     "gemini-3.6-flash",
@@ -36,6 +37,7 @@ TEMPLATE_BATCH_ALLOWED_MODELS = {
 # circular import as the constants above; keep the two in sync.
 NESTED_SUB_AGENT_ALLOWED_MODELS = {
     "claude-haiku-4.5",
+    "claude-haiku-5-5",
     "gemini-3.5-flash-lite",
 }
 
@@ -2091,7 +2093,7 @@ _AGENT_TASK: ToolSpec = {
                 "description": (
                     "Optional: the model for this sub-agent to use. "
                     "If omitted, the sub-agent uses the same model as you. "
-                    "Valid values: 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.8-flash', 'claude-haiku-4.5', 'claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-sonnet-5-5', 'claude-opus-5', 'claude-opus-5-5'. "
+                    "Valid values: 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.8-flash', 'claude-haiku-4.5', 'claude-haiku-5-5', 'claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-sonnet-5-5', 'claude-opus-5', 'claude-opus-5-5'. "
                     "Gemini 3.1 Pro ('gemini-3.1-pro-preview') is NOT available to sub-agents. "
                     "Use a faster/cheaper model for simple tasks like data retrieval, "
                     "and a more capable model for complex analysis or reasoning."
@@ -2150,7 +2152,7 @@ _AGENT_TASK_PARALLEL: ToolSpec = {
                             "description": (
                                 "Optional: the model for this sub-agent to use. "
                                 "If omitted, the sub-agent uses the same model as you. "
-                                "Valid values: 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.8-flash', 'claude-haiku-4.5', 'claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-sonnet-5-5', 'claude-opus-5', 'claude-opus-5-5'. "
+                                "Valid values: 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.8-flash', 'claude-haiku-4.5', 'claude-haiku-5-5', 'claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-sonnet-5-5', 'claude-opus-5', 'claude-opus-5-5'. "
                                 "Gemini 3.1 Pro ('gemini-3.1-pro-preview') is NOT available to sub-agents. "
                                 "Use a faster/cheaper model for simple tasks like data retrieval."
                             ),
@@ -2174,7 +2176,7 @@ _AGENT_TASK_PARALLEL_TEMPLATE: ToolSpec = {
         "Batch-spawn sub-agents from a single prompt template. The prompt_template "
         "uses {var}-style placeholders that are filled from each agent's variable "
         "dict. The model is set once for the entire batch and must be a cheaper model "
-        "(claude-haiku-4.5, claude-sonnet-4-6, gemini-3.5-flash-lite, gemini-3.6-flash, gemini-3.7-flash, or gemini-3.8-flash). "
+        "(claude-haiku-4.5, claude-haiku-5-5, claude-sonnet-4-6, gemini-3.5-flash-lite, gemini-3.6-flash, gemini-3.7-flash, or gemini-3.8-flash). "
         "Each agent dict must include 'name' plus any template variables. "
         f"Maximum {MAX_PARALLEL_TEMPLATE_TASKS} agents per call. Use this instead of "
         "agent_task_parallel when all sub-agents share the same prompt structure but "
@@ -2201,7 +2203,7 @@ _AGENT_TASK_PARALLEL_TEMPLATE: ToolSpec = {
                 "type": "string",
                 "description": (
                     "The model for ALL sub-agents in this batch. Required. Must be "
-                    "one of: 'claude-haiku-4.5', 'claude-sonnet-4-6', 'gemini-3.5-flash-lite', "
+                    "one of: 'claude-haiku-4.5', 'claude-haiku-5-5', 'claude-sonnet-4-6', 'gemini-3.5-flash-lite', "
                     "'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.8-flash'. Template batching is designed "
                     "for high-volume tasks using cheaper models."
                 ),
@@ -2254,7 +2256,7 @@ _AGENT_TASK_NESTED: ToolSpec = {
         "that you want to fan out without filling your own context window. "
         "The nested sub-agent returns its findings as text. The `model` "
         "parameter is REQUIRED and must be one of "
-        "'claude-haiku-4.5' or 'gemini-3.5-flash-lite' (the only "
+        "'claude-haiku-5-5', 'claude-haiku-4.5' or 'gemini-3.5-flash-lite' (the only "
         "models permitted for 2nd-level sub-agents)."
     ),
     "parameters": {
@@ -2276,7 +2278,8 @@ _AGENT_TASK_NESTED: ToolSpec = {
                 "type": "string",
                 "description": (
                     "REQUIRED: the model for the nested (2nd-level) sub-agent. "
-                    "Must be one of 'claude-haiku-4.5' (Claude Haiku) or "
+                    "Must be one of 'claude-haiku-5-5' (Claude Haiku 5.5), "
+                    "'claude-haiku-4.5' (Claude Haiku 4.5) or "
                     "'gemini-3.5-flash-lite' (Gemini Flash-Lite). No "
                     "other model is permitted for 2nd-level sub-agents."
                 ),
