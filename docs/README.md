@@ -22,6 +22,9 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 
 ## Quick Links
 
+### Specs
+- [Separate conversation and project workspaces](specs/00009-project-conversation-workspaces.md) - Spec (not yet built): per-conversation workspace for project chats beside the shared project workspace, project file tools, copy tools, two file cards
+
 ### Architecture Documentation
 - [System Architecture Overview](architecture/overview.md) - High-level architecture and component interaction
 - [Auth Submodule](architecture/auth.md) - OAuth flows, session management, and credential handling (`auth/` package)
