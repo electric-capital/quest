@@ -77,7 +77,9 @@ from db import doc_store
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "APPROVAL_REQUIRED_BY_OWNER_MESSAGE",
     "APPROVAL_REQUIRED_MESSAGE",
+    "approval_required_message",
     "DOC_SCOPES",
     "WRITE_OPERATIONS",
     "Caller",
@@ -105,11 +107,23 @@ DOC_SCOPES = ("user", "project", "all")
 WRITE_OPERATIONS = ("edit", "append", "add_image")
 IMAGE_PLACEMENTS = ("append", "none")
 
-# spec 6.2: the message of every approval_required tool result.
+# spec 6.2: the message of every approval_required tool result (the second
+# wording when the owner's require-approval switch produced the verdict).
 APPROVAL_REQUIRED_MESSAGE = (
     'This doc is shared; propose the change with '
     'create_action_request(request_type="write_doc", ...)'
 )
+APPROVAL_REQUIRED_BY_OWNER_MESSAGE = (
+    'The owner requires approval for every change to this doc; propose the '
+    'change with create_action_request(request_type="write_doc", ...)'
+)
+
+
+def approval_required_message(access: DocAccess) -> str:
+    """The ``approval_required`` message for an ``approval`` verdict."""
+    if access.required_by_owner:
+        return APPROVAL_REQUIRED_BY_OWNER_MESSAGE
+    return APPROVAL_REQUIRED_MESSAGE
 
 # Only conversations create docs (creation is never gated, so Slack runs
 # may create too); the read-only run kinds get their access.py deny text.
@@ -1335,7 +1349,7 @@ async def apply_write_operation(
         # body fails now instead of after the model forwarded the request.
         await _compute_preview(caller, doc, access, operation, clean)
         raise DocApprovalRequired(
-            APPROVAL_REQUIRED_MESSAGE,
+            approval_required_message(access),
             _suggested_request(operation, doc["id"], clean),
         )
     source = _write_source_or_default(write_source, caller)
@@ -1350,7 +1364,7 @@ async def apply_write_operation(
             )
             if fresh_access.write == "approval" and not bypass_approval:
                 raise DocApprovalRequired(
-                    APPROVAL_REQUIRED_MESSAGE,
+                    approval_required_message(fresh_access),
                     _suggested_request(operation, fresh_doc["id"], fresh_clean),
                 )
             return await _WRITERS[operation](caller, fresh_doc, fresh_clean, source)

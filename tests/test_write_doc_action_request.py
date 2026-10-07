@@ -46,7 +46,7 @@ from tests.test_docs_service import (  # noqa: F401  (docs_env is a fixture)
 SHARED_BODY = "alpha beta\ngamma\n"
 INJECTED = (
     "content_diff", "current_title", "doc_mode", "doc_scope",
-    "share_summary", "image_preview",
+    "share_summary", "require_approval", "image_preview",
 )
 
 
@@ -270,6 +270,7 @@ class TestToolPayloadRoundTrip:
         assert validated["doc_mode"] == "private"
         assert validated["doc_scope"] == "user"
         assert validated["share_summary"] == "shared with 1 user"
+        assert validated["require_approval"] is False
         assert validated["content_diff"] == build_content_diff(
             SHARED_BODY, "ALPHA beta\ngamma\n",
         )
@@ -438,6 +439,23 @@ class TestPrecard:
         with pytest.raises(ValueError) as exc:
             propose(make_caller(docs_env), append_params(doc["id"]))
         assert str(exc.value) == docs_disabled_message()
+
+    def test_require_approval_doc_gets_a_card_without_shares(self, docs_env):
+        """Rule 7: the owner's unshared doc is proposable once the switch is
+        on; the pre-card injects the flag (and an empty share summary) so
+        the card can say why approval is needed."""
+        doc = seed_doc(docs_env, content=SHARED_BODY)
+        _run(docs_env.doc_store.update_doc_metadata(doc["id"], require_approval=True))
+        caller = make_caller(docs_env)
+        read(caller, doc["id"])
+        params = propose(caller, edit_params(doc["id"]))
+        assert params["require_approval"] is True
+        assert params["share_summary"] == ""
+        assert params["content_diff"]["added"] == 1
+        # A model-supplied copy never survives validate_params.
+        assert "require_approval" not in handler().validate_params(
+            {**edit_params(doc["id"]), "require_approval": True},
+        )
 
     def test_share_summary(self):
         from chat.action_request_types.doc_precard import share_summary
@@ -615,6 +633,14 @@ def _preview(params):
 
 
 class TestPreviewAndLabels:
+    def test_require_approval_line(self):
+        fields = _preview({
+            **edit_params("d"), "current_title": "Notes", "require_approval": True,
+        })
+        assert {"key": "Approval", "value": "required by the owner for every change"} in fields
+        fields = _preview({**edit_params("d"), "current_title": "Notes"})
+        assert all(f["key"] != "Approval" for f in fields)
+
     DIFF = {
         "added": 1, "removed": 1,
         "lines": [

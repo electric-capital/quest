@@ -56,6 +56,18 @@ Rules layered on the matrix, applied in this order:
    check, not part of this matrix; no doc's mode can be switched.
 6. Slack-driven runs cannot open action requests, so an Approval verdict
    becomes a denial there.
+7. The owner's **require approval** switch (``docs.require_approval``,
+   the "Require approval for agent writes" checkbox in the doc header
+   menu): every Free verdict a *conversation* would get becomes Approval
+   (``required_by_owner=True`` on the verdict, so the notes say why) --
+   the owner's unshared private doc included. Where no approval card can
+   be opened the write is denied instead: Slack-driven runs
+   (``DENY_SLACK_APPROVAL_REQUIRED``) and public-project conversations,
+   which have no action requests at all (``DENY_PUBLIC_APPROVAL_REQUIRED``
+   -- so on a public doc the switch makes the doc read-only for the
+   agent). Read verdicts, Hidden cells, the read-only run kinds and the
+   ``ui`` column (a person editing is never approval-gated, invariant 5)
+   are unchanged.
 
 Taint (invariant 1): a private conversation never gets a non-denied write
 verdict on a public doc, and a conversation only creates docs in its own
@@ -75,11 +87,14 @@ from typing import Any, Literal
 from chat.docs.constants import DOC_MODES
 
 __all__ = [
+    "APPROVAL_REQUIRED_WRITE_NOTE",
     "APPROVAL_WRITE_NOTE",
     "DENY_INFERENCE_API",
+    "DENY_PUBLIC_APPROVAL_REQUIRED",
     "DENY_PUBLIC_DOC_FROM_PRIVATE",
     "DENY_READ_ONLY_SHARE",
     "DENY_SCRIPT",
+    "DENY_SLACK_APPROVAL_REQUIRED",
     "DENY_SLACK_NEEDS_APPROVAL",
     "DENY_SUB_AGENT",
     "DENY_UI_READ_ONLY",
@@ -124,9 +139,21 @@ DENY_SLACK_NEEDS_APPROVAL = (
     "This doc is shared, so changes need an approval card, which Slack-driven "
     "conversations cannot open. Continue from the Quest web UI."
 )
+DENY_SLACK_APPROVAL_REQUIRED = (
+    "The owner requires approval for every change to this doc, and "
+    "Slack-driven conversations cannot open approval cards. Continue from "
+    "the Quest web UI."
+)
+DENY_PUBLIC_APPROVAL_REQUIRED = (
+    "The owner requires approval for every change to this doc, and "
+    "public-project conversations cannot open approval cards."
+)
 DENY_UI_READ_ONLY = "You have read-only access to this doc."
 
 APPROVAL_WRITE_NOTE = "shared private doc: use create_action_request(write_doc)"
+APPROVAL_REQUIRED_WRITE_NOTE = (
+    "owner requires approval for every change: use create_action_request(write_doc)"
+)
 
 _READ_ONLY_REASONS = {
     "sub_agent": DENY_SUB_AGENT,
@@ -146,12 +173,17 @@ class DocAccess:
     ``visible=False`` means "behave as if the doc does not exist"; such a
     verdict grants nothing and carries no ``deny_reason``. ``deny_reason``
     is set exactly when a visible doc's write verdict is ``"denied"``.
+    ``required_by_owner`` marks an ``"approval"`` verdict that the owner's
+    require-approval switch produced (rule 7) -- the only difference is the
+    wording of the notes the model sees (:func:`write_note`); it is never
+    set on any other verdict.
     """
 
     visible: bool
     can_read: bool
     write: WriteVerdict
     deny_reason: str | None
+    required_by_owner: bool = False
 
     def __post_init__(self) -> None:
         if self.write not in WRITE_VERDICTS:
@@ -162,11 +194,16 @@ class DocAccess:
             raise ValueError("a hidden doc grants nothing and carries no deny_reason")
         if self.visible and (self.deny_reason is not None) != (self.write == "denied"):
             raise ValueError("deny_reason is set exactly when a visible doc's write is denied")
+        if self.required_by_owner and self.write != "approval":
+            raise ValueError("required_by_owner is set only on an approval verdict")
 
 
 HIDDEN = DocAccess(visible=False, can_read=False, write="denied", deny_reason=None)
 _FREE = DocAccess(visible=True, can_read=True, write="free", deny_reason=None)
 _APPROVAL = DocAccess(visible=True, can_read=True, write="approval", deny_reason=None)
+_APPROVAL_REQUIRED = DocAccess(
+    visible=True, can_read=True, write="approval", deny_reason=None, required_by_owner=True,
+)
 
 
 def _read_only(reason: str) -> DocAccess:
@@ -243,6 +280,8 @@ def resolve_doc_access(
     is_owner = doc["owner_id"] == user_id
     share = None if is_owner else effective_share(doc, user_id)
     is_shared = len(_shares(doc)) > 0
+    # Rule 7. Absent on a hand-built dict = off, like a fresh row.
+    require_approval = bool(doc.get("require_approval", False))
 
     # 2. No relationship at all.
     if not is_owner and share is None:
@@ -268,11 +307,23 @@ def resolve_doc_access(
     if mode == "public":
         if not is_public:
             return _read_only(DENY_PUBLIC_DOC_FROM_PRIVATE)
-        return _FREE if may_write else _read_only(DENY_READ_ONLY_SHARE)
+        if not may_write:
+            return _read_only(DENY_READ_ONLY_SHARE)
+        if require_approval:
+            # Rule 7: public conversations have no action requests, so the
+            # owner's switch leaves the agent read-only here.
+            return _read_only(DENY_PUBLIC_APPROVAL_REQUIRED)
+        return _FREE
 
     # Private doc in a private conversation (step 4 hid it from public ones).
     if not may_write:
         return _read_only(DENY_READ_ONLY_SHARE)
+    if require_approval:
+        # Rule 7, before the matrix: the switch wins over "unshared = free"
+        # and over the share-based approval (its wording names the switch).
+        if run_kind == "slack":
+            return _read_only(DENY_SLACK_APPROVAL_REQUIRED)
+        return _APPROVAL_REQUIRED
     if is_owner and not is_shared:
         return _FREE
     if run_kind == "slack":
@@ -285,7 +336,7 @@ def write_note(access: DocAccess) -> str | None:
     if access.write == "free":
         return None
     if access.write == "approval":
-        return APPROVAL_WRITE_NOTE
+        return APPROVAL_REQUIRED_WRITE_NOTE if access.required_by_owner else APPROVAL_WRITE_NOTE
     return access.deny_reason
 
 

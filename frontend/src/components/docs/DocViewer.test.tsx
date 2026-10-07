@@ -67,6 +67,7 @@ function doc(overrides: Partial<DocDetail> = {}): DocDetail {
     mode: 'private',
     content_size: 30,
     asset_count: 1,
+    require_approval: false,
     last_write_source: 'ui',
     created_at: '2026-10-01T00:00:00',
     updated_at: new Date(Date.now() - 5 * 60 * 1000).toISOString().replace('Z', ''),
@@ -76,7 +77,7 @@ function doc(overrides: Partial<DocDetail> = {}): DocDetail {
     permission: null,
     owner: null,
     last_write_user: null,
-    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true },
+    access: { can_rename: true, can_switch_mode: false, can_delete: true, write: 'free', can_edit: true, can_share: true, can_delete_assets: true, can_require_approval: true },
     shares: [],
     content: '# Plan\n\n![chart](assets/chart.png)',
     last_write_conversation: null,
@@ -196,6 +197,7 @@ describe('DocViewer', () => {
     setView({
       doc: doc({
         asset_count: 2,
+        require_approval: false,
         assets: [
           { name: 'chart.png', size: 2048, mime: 'image/png' },
           { name: 'photo.jpg', size: 300, mime: 'image/jpeg' },
@@ -289,7 +291,7 @@ describe('DocViewer', () => {
       const base = doc();
       setView({
         doc: doc({
-          access: { ...base.access, can_rename: false, can_delete: false, can_share: false, can_delete_assets: false },
+          access: { ...base.access, can_rename: false, can_delete: false, can_share: false, can_delete_assets: false, can_require_approval: false },
           shared_with_me: true,
           permission: 'write',
         }),

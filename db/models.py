@@ -1419,6 +1419,14 @@ class Doc(Base):
         String(80), nullable=True, default=None
     )
 
+    # Owner's switch: every model-initiated write needs a write_doc approval
+    # card, even where the access matrix would allow a free write (the
+    # owner's unshared private doc). Human UI edits are unaffected. See
+    # chat/docs/access.py rule 7.
+    require_approval: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
+
     # Timestamps; updated_at doubles as the optimistic-concurrency token.
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)

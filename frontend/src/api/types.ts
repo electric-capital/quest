@@ -912,6 +912,8 @@ export interface DocAccess {
   can_share: boolean;
   // Delete images from assets/ (owner only).
   can_delete_assets: boolean;
+  // Flip the doc's `require_approval` switch (owner only).
+  can_require_approval: boolean;
 }
 
 /**
@@ -948,6 +950,10 @@ export interface Doc {
   // 'ui', 'conversation:<id>', 'action_request:<id>', or null (always null
   // for non-owners).
   last_write_source: string | null;
+  // The owner's "Require approval for agent writes" switch: every change a
+  // conversation proposes goes through a write_doc approval card, even on
+  // the owner's own unshared doc. Human edits in the UI are unaffected.
+  require_approval: boolean;
   // Naive-UTC ISO strings (no 'Z'; parse with parseUTCTimestamp).
   // `updated_at` doubles as the optimistic-concurrency token.
   created_at: string;
@@ -1100,6 +1106,8 @@ export interface CreateDocRequest {
 export interface UpdateDocRequest {
   title?: string;
   description?: string;
+  // The owner's require-approval switch (see Doc.require_approval).
+  require_approval?: boolean;
   // Optimistic-concurrency token (the row's updated_at as loaded). A
   // mismatch rejects with a flat 409 stale_update carrying `current`.
   expected_updated_at?: string;

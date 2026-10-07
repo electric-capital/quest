@@ -148,6 +148,7 @@ def _doc_to_dict(doc: Doc, shares: Optional[Iterable[DocShare]] = None) -> dict:
 
         {"id", "owner_id", "project_id", "title", "description", "mode",
          "content_size", "asset_count", "last_write_source",
+         "require_approval",                    # bool, owner's switch
          "created_at", "updated_at",            # ISO strings
          "shares": [{"id", "user_id", "permission", "created_at"}]}
 
@@ -164,6 +165,7 @@ def _doc_to_dict(doc: Doc, shares: Optional[Iterable[DocShare]] = None) -> dict:
         "content_size": doc.content_size,
         "asset_count": doc.asset_count,
         "last_write_source": doc.last_write_source,
+        "require_approval": bool(doc.require_approval),
         "created_at": _iso(doc.created_at),
         "updated_at": _iso(doc.updated_at),
     }
@@ -451,9 +453,17 @@ async def update_doc_metadata(
     *,
     title: Optional[str] = None,
     description: Optional[str] = None,
+    require_approval: Optional[bool] = None,
     expected_updated_at: Optional[str] = None,
 ) -> Optional[dict]:
-    """Rename a doc and/or change its description.
+    """Rename a doc, change its description and/or flip ``require_approval``.
+
+    ``require_approval`` (a real bool; anything else raises
+    :class:`DocValidationError`) is the owner's switch that turns every
+    model-initiated write into a ``write_doc`` approval card (access rule
+    7). Flipping it bumps ``updated_at`` like a rename does: open viewers
+    re-fetch on the newer token and conversations resolve the new verdict
+    on their next write (the access rule reads the live row).
 
     ``expected_updated_at`` is the optimistic-concurrency token: when given
     it must equal the row's current ``updated_at`` ISO string, else
@@ -472,6 +482,8 @@ async def update_doc_metadata(
     clean_description = (
         _validate_description(description) if description is not None else None
     )
+    if require_approval is not None and not isinstance(require_approval, bool):
+        raise DocValidationError("require_approval must be a boolean.")
 
     async with AsyncSessionLocal() as db:
         doc = await db.get(Doc, doc_id)
@@ -498,6 +510,9 @@ async def update_doc_metadata(
             changed = True
         if clean_description is not None and clean_description != doc.description:
             doc.description = clean_description
+            changed = True
+        if require_approval is not None and require_approval != bool(doc.require_approval):
+            doc.require_approval = require_approval
             changed = True
 
         if changed:

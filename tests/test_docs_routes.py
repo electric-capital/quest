@@ -58,7 +58,7 @@ NO_SWITCH_ACCESS = {"can_rename": True, "can_switch_mode": False, "can_delete": 
 # The owner's full access block (Phase 3 sharing / editing flags).
 OWNER_ACCESS = {
     **NO_SWITCH_ACCESS, "can_edit": True, "can_share": True,
-    "can_delete_assets": True, "write": "free",
+    "can_delete_assets": True, "can_require_approval": True, "write": "free",
 }
 # The owner-view row fields Phase 3 added (no recipient names to resolve).
 OWNER_ROW_EXTRAS = {
@@ -403,7 +403,8 @@ class TestGet:
         assert row["access"] == {
             "can_rename": False, "can_switch_mode": False,
             "can_delete": False, "can_edit": False, "can_share": False,
-            "can_delete_assets": False, "write": "denied",
+            "can_delete_assets": False, "can_require_approval": False,
+            "write": "denied",
         }
         row = client(docs_env, "carol").get(f"/app/api/docs/{doc['id']}").json()
         assert row["access"]["write"] == "free"
@@ -574,6 +575,43 @@ class TestRename:
             (alice, "doc_list_changed"), (alice, "doc_changed"),
         ])
         assert docs_env.published[1][1]["updated_at"] == row["updated_at"]
+
+    def test_owner_flips_require_approval(self, docs_env):
+        doc = seed_doc(docs_env, "Sensitive")
+        assert doc["require_approval"] is False
+        resp = client(docs_env).put(f"/app/api/docs/{doc['id']}", json={
+            "require_approval": True, "expected_updated_at": doc["updated_at"],
+        })
+        assert resp.status_code == 200
+        row = resp.json()
+        assert row["require_approval"] is True
+        assert row["title"] == "Sensitive"
+        assert row["updated_at"] != doc["updated_at"]
+        assert row["access"]["can_require_approval"] is True
+        # The UI verdict is untouched: a person editing is never gated.
+        assert row["access"]["write"] == "free" and row["access"]["can_edit"] is True
+        alice = uid(docs_env, "alice")
+        assert sorted(event_types(docs_env)) == sorted([
+            (alice, "doc_list_changed"), (alice, "doc_changed"),
+        ])
+        assert _run(docs_env.doc_store.get_doc(doc["id"]))["require_approval"] is True
+        # Off again; a string is not a bool (422 from the strict field).
+        off = client(docs_env).put(f"/app/api/docs/{doc['id']}", json={"require_approval": False})
+        assert off.status_code == 200 and off.json()["require_approval"] is False
+        bad = client(docs_env).put(f"/app/api/docs/{doc['id']}", json={"require_approval": "yes"})
+        assert bad.status_code == 422
+        assert _run(docs_env.doc_store.get_doc(doc["id"]))["require_approval"] is False
+
+    def test_require_approval_is_owner_only(self, docs_env):
+        doc = seed_doc(docs_env, "Shared", shares=[("bob", "write")])
+        resp = client(docs_env, "bob").put(
+            f"/app/api/docs/{doc['id']}", json={"require_approval": True},
+        )
+        assert resp.status_code == 403
+        assert detail(resp)["error"] == "forbidden"
+        row = client(docs_env, "bob").get(f"/app/api/docs/{doc['id']}").json()
+        assert row["access"]["can_require_approval"] is False
+        assert row["require_approval"] is False
 
     def test_noop_keeps_token_and_publishes_nothing(self, docs_env):
         doc = seed_doc(docs_env, "Same")

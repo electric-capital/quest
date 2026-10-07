@@ -432,6 +432,13 @@ class TestTiers:
         refused = _dispatch(docs_env, "append_to_doc", {"doc_id": shared["id"], "content": "b"},
                             is_slack=True)
         assert refused == {"error": DENY_SLACK_NEEDS_APPROVAL}
+        # The owner's require-approval switch denies in Slack too (no cards).
+        from chat.docs.access import DENY_SLACK_APPROVAL_REQUIRED
+
+        _run(docs_env.doc_store.update_doc_metadata(own["id"], require_approval=True))
+        refused = _dispatch(docs_env, "append_to_doc", {"doc_id": own["id"], "content": "c"},
+                            is_slack=True)
+        assert refused == {"error": DENY_SLACK_APPROVAL_REQUIRED}
 
     def test_script_bridge(self, docs_env):
         from chat.gemini_api.script_tool_call import (

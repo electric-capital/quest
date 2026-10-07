@@ -65,6 +65,7 @@ function doc(overrides: Partial<DocDetail> = {}): DocDetail {
     mode: 'private',
     content_size: 13,
     asset_count: 0,
+    require_approval: false,
     last_write_source: 'ui',
     created_at: '2026-10-01T00:00:00',
     updated_at: T1,
@@ -76,7 +77,7 @@ function doc(overrides: Partial<DocDetail> = {}): DocDetail {
     last_write_user: null,
     access: {
       can_rename: true, can_switch_mode: false, can_delete: true, write: 'free',
-      can_edit: true, can_share: true, can_delete_assets: true,
+      can_edit: true, can_share: true, can_delete_assets: true, can_require_approval: true,
     },
     shares: [],
     content: 'Original body',

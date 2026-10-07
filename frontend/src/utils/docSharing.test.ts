@@ -24,7 +24,7 @@ const OWNER_ACCESS: Doc['access'] = {
   write: 'free',
   can_edit: true,
   can_share: true,
-  can_delete_assets: true,
+  can_delete_assets: true, can_require_approval: true,
 };
 
 const READER_ACCESS: Doc['access'] = {
@@ -34,7 +34,7 @@ const READER_ACCESS: Doc['access'] = {
   write: 'denied',
   can_edit: false,
   can_share: false,
-  can_delete_assets: false,
+  can_delete_assets: false, can_require_approval: false,
 };
 
 function doc(overrides: Partial<Doc> = {}): Doc {
@@ -47,6 +47,7 @@ function doc(overrides: Partial<Doc> = {}): Doc {
     mode: 'private',
     content_size: 0,
     asset_count: 0,
+    require_approval: false,
     last_write_source: null,
     created_at: '2026-10-01T00:00:00',
     updated_at: '2026-10-01T00:00:00',

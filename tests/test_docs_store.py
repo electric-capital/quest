@@ -118,10 +118,11 @@ class TestCreate:
         )
         assert set(doc) == {
             "id", "owner_id", "project_id", "title", "description", "mode",
-            "content_size", "asset_count", "last_write_source", "created_at",
-            "updated_at", "shares",
+            "content_size", "asset_count", "last_write_source",
+            "require_approval", "created_at", "updated_at", "shares",
         }
         assert doc["title"] == "Plan"
+        assert doc["require_approval"] is False
         assert doc["description"] == "why"
         assert doc["owner_id"] == env["alice"]
         assert doc["project_id"] is None
@@ -302,6 +303,29 @@ class TestUpdateMetadata:
         doc = _create(env, title="Same")
         again = _run(store.update_doc_metadata(doc["id"], title=" Same "))
         assert again["updated_at"] == doc["updated_at"]
+
+    def test_require_approval_flip(self, env):
+        store = env["store"]
+        doc = _create(env, title="Sensitive")
+        assert doc["require_approval"] is False
+        on = _run(store.update_doc_metadata(
+            doc["id"], require_approval=True, expected_updated_at=doc["updated_at"],
+        ))
+        assert on["require_approval"] is True
+        assert on["updated_at"] != doc["updated_at"]
+        assert on["title"] == "Sensitive"
+        assert _run(store.get_doc(doc["id"]))["require_approval"] is True
+        # Same value again: a no-op keeps the token.
+        same = _run(store.update_doc_metadata(doc["id"], require_approval=True))
+        assert same["updated_at"] == on["updated_at"]
+        off = _run(store.update_doc_metadata(doc["id"], require_approval=False))
+        assert off["require_approval"] is False
+        assert off["updated_at"] != on["updated_at"]
+        # None leaves it alone; non-bools are refused.
+        assert _run(store.update_doc_metadata(doc["id"], title="Renamed"))["require_approval"] is False
+        for bad in ("true", 1, "yes"):
+            with pytest.raises(store.DocValidationError):
+                _run(store.update_doc_metadata(doc["id"], require_approval=bad))
 
     def test_stale_token(self, env):
         store = env["store"]

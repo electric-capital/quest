@@ -346,6 +346,7 @@ A composite unique index `ix_skill_shares_skill_id_user_id` on `(skill_id, user_
 
 - `docs.owner_id` cascades with the user and the nullable `docs.project_id` cascades with the project (NULL = a user doc).
 - `docs.mode` is always `private` for a user doc (`doc_store.create_doc()` refuses a public one; migration `e1b7c4d9a2f6` flipped the leftovers); a project doc copies `projects.public`.
+- `docs.require_approval` (migration `a9c2e7f4b1d3`, default false) is the owner's switch that makes every model-initiated write an approval card (access rule 7 in `chat/docs/access.py`).
 - `doc_shares.user_id` NULL means everyone on the install; the partial unique index `ix_doc_shares_everyone` allows one such row per doc.
 - Title uniqueness (case-insensitive per owner, project and mode) is enforced in `db/doc_store.py`, not by an index.
 
