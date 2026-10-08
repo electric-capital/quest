@@ -56,7 +56,9 @@ directory dev-config.json (``inference_credentials: {"<instance_id>":
 ``openrouter`` instance without any migration: :func:`load_inference_config`
 synthesizes an instance entry for every credential file that has none, of
 the key-holding kind the file stem starts with (``fireworks-2.json`` -> a
-``fireworks`` instance; anything else an OpenRouter one).
+``fireworks`` instance; anything else an OpenRouter one), seeded from the
+file's optional ``models`` list so a pre-baked instance can come up with
+ready-to-pick models.
 
 This module sticks to the Python standard library (mirroring
 ``config/service_credentials.py``) so it can be imported early and from the
@@ -571,8 +573,11 @@ def _synthesize_missing_instances(config: dict) -> bool:
     the file stem (:func:`kind_for_credential_file`).
 
     The legacy ``openrouter`` instance is seeded with the models the old
-    fixed registry served; other ids start with an empty model list for the
-    admin to fill. Returns True when anything was added.
+    fixed registry served; any credential file may carry an optional
+    ``models`` list (wire ids or full model entries, the dev-config
+    pre-baking format for a ready-to-use local instance) that seeds the
+    new entry's model list; otherwise the list starts empty for the admin
+    to fill. Returns True when anything was added.
     """
     known = {inst["id"] for inst in config["instances"]}
     added = False
@@ -581,6 +586,21 @@ def _synthesize_missing_instances(config: dict) -> bool:
             continue
         legacy = instance_id == LEGACY_OPENROUTER_INSTANCE_ID
         kind = kind_for_credential_file(instance_id)
+        credentials = read_inference_credentials(instance_id) or {}
+        seeded = credentials.get("models")
+        if isinstance(seeded, list) and seeded:
+            # Normalize here too: the returned config is used before the
+            # persisted (normalized) copy is ever re-read.
+            models, seen = [], set()
+            for raw in seeded:
+                model = normalize_instance_model(raw)
+                if model is not None and model["id"] not in seen:
+                    seen.add(model["id"])
+                    models.append(model)
+        elif legacy:
+            models = copy.deepcopy(_LEGACY_OPENROUTER_MODELS)
+        else:
+            models = []
         config["instances"].append({
             "id": instance_id,
             "kind": kind,
@@ -588,7 +608,7 @@ def _synthesize_missing_instances(config: dict) -> bool:
                 INSTANCE_KINDS[kind]["label"] if legacy or instance_id == kind
                 else f"{INSTANCE_KINDS[kind]['label']} ({instance_id})"
             ),
-            "models": copy.deepcopy(_LEGACY_OPENROUTER_MODELS) if legacy else [],
+            "models": models,
         })
         logger.info(
             "Synthesized inference provider instance %r from its credential file",

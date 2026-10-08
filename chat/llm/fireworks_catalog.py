@@ -3,31 +3,42 @@ snapshots.
 
 Fireworks (https://fireworks.ai) serves open-weight models behind an
 OpenAI-compatible chat-completions API (``https://api.fireworks.ai/inference/v1``;
-the ``fireworks`` instance kind in config/inference_providers.py). Its
-public serverless catalog is the model list of the shared ``fireworks``
-account, ``GET https://api.fireworks.ai/v1/accounts/fireworks/models``
-(the management API -- a different path prefix from inference), which
-unlike OpenRouter's list REQUIRES a bearer API key, so the catalog is
-fetched with the instance's own stored key. Each entry carries the resource
-name that doubles as the wire id (``accounts/fireworks/models/<name>``), a
-display name, the context window, tool / image support flags and, under
-``serverlessModes[].skuInfos``, the per-1M-token prices.
+the ``fireworks`` instance kind in config/inference_providers.py). The
+catalog is built from two authenticated endpoints (both need the instance's
+bearer API key -- unlike OpenRouter's public list):
 
-Settings > Inference Providers uses it the same two ways as the OpenRouter
-catalog: the "Add model" typeahead on a Fireworks card searches it
-(``GET /admin/inference-providers/instances/<id>/catalog?q=``), and when a
-model is added the admin endpoint snapshots its metadata
+- ``GET /inference/v1/models`` (OpenAI-style ``{"data": [...]}``) is the
+  authoritative list of ids the key can call serverlessly: the shared
+  ``accounts/fireworks/models/<name>`` models, the ``accounts/fireworks/
+  routers/<name>`` speed/cost routers and the ``auto`` / ``firerouter/auto``
+  meta-routers, each with ``supports_chat`` / ``supports_tools`` /
+  ``supports_image_input`` flags, ``context_length`` and a ``kind``
+  (``HF_BASE_MODEL``, ``ROUTER``, ``EMBEDDING_MODEL``...). Embedding /
+  reranker models (``kind: EMBEDDING_MODEL``, which Fireworks still marks
+  ``supports_chat``) and entries without chat support are dropped; routers
+  are kept and flagged.
+- ``GET /v1/accounts/fireworks/models`` (the management API, paginated) is
+  consulted best-effort for the human ``displayName`` and the
+  ``deprecationDate`` of the shared models; a failure there only costs the
+  friendly names. It exposes no pricing (``serverlessModes`` is empty on
+  every public entry, checked 2026-10-08), so Fireworks snapshots carry
+  ``pricing: None`` and the cost reports show "no estimate" for them.
+
+Settings > Inference Providers uses the result the same two ways as the
+OpenRouter catalog: the "Add model" typeahead on a Fireworks card searches
+it (``GET /admin/inference-providers/instances/<id>/catalog?q=``), and when
+a model is added the admin endpoint snapshots its metadata
 (:func:`openrouter_catalog.catalog_snapshot`, which applies unchanged
 because the entries share the OpenRouter row shape) into the instance
 config so nothing at request time depends on the catalog.
 
 The normalized list is cached in ``data/fireworks_catalog.json`` for
-:data:`CATALOG_TTL_SECONDS` (the catalog is the same public list for every
+:data:`CATALOG_TTL_SECONDS` (the serverless list is the same for every
 key, so one cache serves every Fireworks instance); a failed fetch keeps
 serving the stale cache -- or an empty list when there never was one --
 with the error reported alongside, so the UI falls back to custom-id entry
 (a dedicated deployment's ``accounts/<account>/deployments/<id>`` id is
-always a custom id: the public catalog does not list it).
+always a custom id: the serverless list does not include it).
 """
 
 import datetime
@@ -44,15 +55,14 @@ from config.paths import FIREWORKS_CATALOG_FILE
 
 logger = logging.getLogger(__name__)
 
-CATALOG_URL = "https://api.fireworks.ai/v1/accounts/fireworks/models"
+INFERENCE_MODELS_URL = "https://api.fireworks.ai/inference/v1/models"
+MANAGEMENT_MODELS_URL = "https://api.fireworks.ai/v1/accounts/fireworks/models"
 CATALOG_TTL_SECONDS = 24 * 60 * 60
 FETCH_TIMEOUT_SECONDS = 15
-# Largest page the API allows; a bound on pages keeps a runaway
+# Largest page the management API allows; a bound on pages keeps a runaway
 # ``nextPageToken`` from looping forever.
 PAGE_SIZE = 200
 MAX_PAGES = 25
-
-_PER_MILLION = 1_000_000
 
 
 class FireworksCatalogError(RuntimeError):
@@ -65,68 +75,20 @@ def _positive_int(value) -> int | None:
     return int(value)
 
 
-def _money_to_float(amount) -> float | None:
-    """``{"units": "0", "nanos": 90000}`` (Google ``Money``) -> 0.00009."""
-    if not isinstance(amount, dict):
-        return None
-    units = amount.get("units", 0)
-    nanos = amount.get("nanos", 0)
-    try:
-        value = float(units or 0) + float(nanos or 0) / 1_000_000_000
-    except (TypeError, ValueError):
-        return None
-    return value if value >= 0 else None
+def _is_router(raw: dict, wire_id: str) -> bool:
+    kind = raw.get("kind")
+    if isinstance(kind, str) and kind:
+        return kind == "ROUTER"
+    return "/routers/" in wire_id or wire_id.endswith("/auto") or wire_id == "auto"
 
 
-def _unit_multiplier(unit) -> float | None:
-    """Scale an SKU's unit to $/1M tokens; None for non-token units."""
-    text = str(unit or "").strip().lower().replace(",", "")
-    if not text or "token" not in text:
-        return None
-    if text.startswith("1m") or text.startswith("1000000"):
-        return 1.0
-    if text.startswith("1k") or text.startswith("1000 "):
-        return 1000.0
-    if text.startswith("1 ") or text == "token" or text == "tokens":
-        return float(_PER_MILLION)
-    return None
-
-
-def _pricing_from_sku_infos(sku_infos) -> dict | None:
-    """Map Fireworks' SKU rows onto the ``{prompt, completion, cache_read?}``
-    snapshot shape ($/1M tokens).
-
-    SKUs are free-text names such as ``LLM input tokens (uncached)``, ``LLM
-    input tokens (cached)`` and ``LLM output tokens``; matched by keyword so
-    a renamed SKU degrades to "no pricing" rather than a wrong number.
-    """
-    if not isinstance(sku_infos, list):
-        return None
-    prompt = completion = cache_read = None
-    for info in sku_infos:
-        if not isinstance(info, dict):
-            continue
-        sku = str(info.get("sku") or "").lower()
-        multiplier = _unit_multiplier(info.get("unit"))
-        amount = _money_to_float(info.get("amount"))
-        if multiplier is None or amount is None or "token" not in sku:
-            continue
-        rate = amount * multiplier
-        if "output" in sku or "completion" in sku:
-            if completion is None:
-                completion = rate
-        elif "input" in sku or "prompt" in sku:
-            if "cached" in sku and "uncached" not in sku:
-                if cache_read is None:
-                    cache_read = rate
-            elif prompt is None:
-                prompt = rate
-    if prompt is None or completion is None:
-        return None
-    pricing = {"prompt": prompt, "completion": completion}
-    if cache_read is not None:
-        pricing["cache_read"] = cache_read
-    return pricing
+def friendly_name(wire_id: str, router: bool = False) -> str:
+    """A readable default name for an id the management list does not name:
+    the last path segment, ``accounts/fireworks/routers/glm-5p3-fast`` ->
+    ``glm-5p3-fast (router)`` / ``firerouter/auto`` -> ``auto (router)``
+    for routers."""
+    base = wire_id.strip().rsplit("/", 1)[-1]
+    return f"{base} (router)" if router else base
 
 
 def _deprecated(raw: dict, today: datetime.date) -> bool:
@@ -144,58 +106,57 @@ def _deprecated(raw: dict, today: datetime.date) -> bool:
         return False
 
 
-def _normalize_entry(raw, today: datetime.date | None = None) -> dict | None:
-    """Keep the fields the typeahead and snapshots use; None when the entry
-    is unusable or not serverless-callable (not READY, no serverless mode,
-    deprecated)."""
+def _normalize_entry(raw, details: dict | None = None, today: datetime.date | None = None) -> dict | None:
+    """Normalize one ``/inference/v1/models`` entry; None when unusable or
+    not a chat model.
+
+    ``details`` maps a resource name to its management-list entry, used for
+    the display name and the deprecation date (a deprecated model is
+    dropped). ``context_length`` prefers the inference list's figure, then
+    the management entry's ``contextLength``.
+    """
     if not isinstance(raw, dict):
         return None
-    wire_id = raw.get("name")
+    wire_id = raw.get("id")
     if not isinstance(wire_id, str) or not wire_id.strip():
         return None
     wire_id = wire_id.strip()
-    state = raw.get("state")
-    if isinstance(state, str) and state and state != "READY":
+    if raw.get("supports_chat") is False or raw.get("kind") == "EMBEDDING_MODEL":
         return None
-    serverless_modes = raw.get("serverlessModes")
-    serverless_modes = serverless_modes if isinstance(serverless_modes, list) else []
-    if not raw.get("supportsServerless") and not serverless_modes:
+    detail = (details or {}).get(wire_id)
+    detail = detail if isinstance(detail, dict) else {}
+    if _deprecated(detail, today or datetime.date.today()):
         return None
-    if _deprecated(raw, today or datetime.date.today()):
-        return None
-
-    pricing = None
-    for mode in serverless_modes:
-        if isinstance(mode, dict):
-            pricing = _pricing_from_sku_infos(mode.get("skuInfos"))
-            if pricing is not None:
-                break
 
     # Same convention as self-hosted discovery: the typeahead flags a model
     # whose capabilities lack "tools" and renders the context itself.
     capabilities: list[str] = []
-    if raw.get("supportsTools"):
+    if raw.get("supports_tools") or detail.get("supportsTools"):
         capabilities.append("tools")
-    if raw.get("supportsImageInput"):
+    if raw.get("supports_image_input") or detail.get("supportsImageInput"):
         capabilities.append("vision")
-    context_length = _positive_int(raw.get("contextLength"))
+    context_length = _positive_int(raw.get("context_length")) or _positive_int(detail.get("contextLength"))
     bits = ["vision"] if "vision" in capabilities else []
-    name = raw.get("displayName")
+    router = _is_router(raw, wire_id)
+    if router:
+        bits.append("router")
+    name = detail.get("displayName")
     return {
         "id": wire_id,
-        "name": name.strip() if isinstance(name, str) and name.strip() else wire_id.rsplit("/", 1)[-1],
+        "name": name.strip() if isinstance(name, str) and name.strip() else friendly_name(wire_id, router),
         "context_length": context_length,
         # Fireworks publishes no per-model output cap; the request uses the
         # conservative default (DEFAULT_INSTANCE_MAX_OUTPUT_TOKENS).
         "max_completion_tokens": None,
-        "pricing": pricing,
+        # No API exposes serverless prices (see module docstring).
+        "pricing": None,
         "detail": " · ".join(bits),
         "capabilities": capabilities,
     }
 
 
 def _cached_entry(raw) -> dict | None:
-    """Validate one ALREADY-normalized cache entry (prices per 1M)."""
+    """Validate one ALREADY-normalized cache entry."""
     if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not raw["id"]:
         return None
     pricing = raw.get("pricing")
@@ -250,17 +211,15 @@ def _write_cache(cache: dict) -> None:
         raise
 
 
-def _fetch_page(api_key: str, page_token: str | None) -> dict:
-    query = {"pageSize": PAGE_SIZE}
-    if page_token:
-        query["pageToken"] = page_token
+def _get_json(url: str, api_key: str):
+    """GET ``url`` with the bearer key; raises :class:`FireworksCatalogError`
+    with the Fireworks ``error.message`` (or the status) on failure."""
     request = urllib.request.Request(
-        f"{CATALOG_URL}?{urllib.parse.urlencode(query)}",
-        headers={"Accept": "application/json", "Authorization": f"Bearer {api_key}"},
+        url, headers={"Accept": "application/json", "Authorization": f"Bearer {api_key}"},
     )
     try:
         with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
-            payload = json.load(response)
+            return json.load(response)
     except urllib.error.HTTPError as exc:
         body = ""
         try:
@@ -271,7 +230,10 @@ def _fetch_page(api_key: str, page_token: str | None) -> dict:
         if body:
             try:
                 parsed = json.loads(body)
-                detail = str((parsed.get("error") or {}).get("message") or "") if isinstance(parsed, dict) else ""
+                error = parsed.get("error") if isinstance(parsed, dict) else None
+                detail = str(error.get("message") or "") if isinstance(error, dict) else ""
+                if not detail and isinstance(parsed, dict):
+                    detail = str(parsed.get("message") or "")
             except ValueError:
                 detail = ""
             detail = detail or body[:200]
@@ -280,33 +242,65 @@ def _fetch_page(api_key: str, page_token: str | None) -> dict:
         ) from exc
     except (urllib.error.URLError, OSError, ValueError, TimeoutError) as exc:
         raise FireworksCatalogError(str(exc) or exc.__class__.__name__) from exc
-    if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
-        raise FireworksCatalogError("Unexpected catalog response shape")
-    return payload
+
+
+def fetch_inference_models(api_key: str) -> list[dict]:
+    """The raw ``/inference/v1/models`` entries (raises on failure)."""
+    payload = _get_json(INFERENCE_MODELS_URL, api_key)
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        raise FireworksCatalogError("Unexpected model list response shape")
+    return [m for m in data if isinstance(m, dict)]
+
+
+def fetch_model_details(api_key: str) -> dict[str, dict]:
+    """The management list of the shared ``fireworks`` account keyed by
+    resource name (raises on failure). Follows ``nextPageToken`` until the
+    list ends or :data:`MAX_PAGES` is reached."""
+    details: dict[str, dict] = {}
+    page_token: str | None = None
+    for _ in range(MAX_PAGES):
+        query: dict = {"pageSize": PAGE_SIZE}
+        if page_token:
+            query["pageToken"] = page_token
+        payload = _get_json(f"{MANAGEMENT_MODELS_URL}?{urllib.parse.urlencode(query)}", api_key)
+        models = payload.get("models") if isinstance(payload, dict) else None
+        if not isinstance(models, list):
+            raise FireworksCatalogError("Unexpected catalog response shape")
+        for raw in models:
+            if isinstance(raw, dict) and isinstance(raw.get("name"), str):
+                details[raw["name"]] = raw
+        page_token = payload.get("nextPageToken") or None
+        if not page_token:
+            break
+    return details
 
 
 def fetch_catalog(api_key: str) -> list[dict]:
     """Download and normalize the live serverless catalog (blocking; raises
-    :class:`FireworksCatalogError` on failure). Follows ``nextPageToken``
-    until the list ends or :data:`MAX_PAGES` is reached."""
+    :class:`FireworksCatalogError` on failure).
+
+    The inference list is required; the management list is best effort
+    (its failure is logged and the entries keep their derived names).
+    """
     if not api_key:
         raise FireworksCatalogError("No API key saved yet.")
+    raw_models = fetch_inference_models(api_key)
+    try:
+        details = fetch_model_details(api_key)
+    except FireworksCatalogError as exc:
+        logger.info("Fireworks model details unavailable, using derived names: %s", exc)
+        details = {}
     today = datetime.date.today()
     models: list[dict] = []
     seen: set[str] = set()
-    page_token: str | None = None
-    for _ in range(MAX_PAGES):
-        payload = _fetch_page(api_key, page_token)
-        for raw in payload["models"]:
-            entry = _normalize_entry(raw, today)
-            if entry is not None and entry["id"] not in seen:
-                seen.add(entry["id"])
-                models.append(entry)
-        page_token = payload.get("nextPageToken") or None
-        if not page_token:
-            break
+    for raw in raw_models:
+        entry = _normalize_entry(raw, details, today)
+        if entry is not None and entry["id"] not in seen:
+            seen.add(entry["id"])
+            models.append(entry)
     if not models:
-        raise FireworksCatalogError("Catalog response listed no serverless models")
+        raise FireworksCatalogError("Model list contained no chat models")
     models.sort(key=lambda m: m["id"])
     return models
 

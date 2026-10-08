@@ -5,9 +5,9 @@ Covers the registry entry and credential-file bootstrap in
 of ``OpenRouterProvider`` (Fireworks base URL, bearer key, no OpenRouter
 extras), model resolution / backend label / pricing through the shared
 instance machinery, the catalog module ``chat/llm/fireworks_catalog.py``
-(normalization of the ``accounts/fireworks/models`` list shape incl. SKU
-pricing, pagination, caching and error degradation against a stubbed
-``urllib``), and the admin endpoint behaviour (kinds listing, per-instance
+(normalization of the ``/inference/v1/models`` list merged with the
+management list's names / deprecation dates, pagination, caching and error
+degradation against a stubbed ``urllib``), and the admin endpoint behaviour (kinds listing, per-instance
 catalog route, snapshots on add). No network: every HTTP call is stubbed.
 """
 
@@ -39,40 +39,32 @@ def _fireworks(instance_id="fireworks", models=()):
     return {"id": instance_id, "kind": "fireworks", "label": "Fireworks", "models": list(models)}
 
 
-def _money(dollars: float) -> dict:
-    units = int(dollars)
-    return {"currencyCode": "USD", "units": str(units), "nanos": round((dollars - units) * 1_000_000_000)}
+def _inf(wire_id, *, chat=True, tools=True, image=False, context=131072, kind="HF_BASE_MODEL"):
+    """One entry shaped like ``GET /inference/v1/models``."""
+    return {
+        "id": wire_id, "object": "model", "owned_by": "fireworks", "created": 1781214748,
+        "kind": kind, "supports_chat": chat, "supports_tools": tools,
+        "supports_image_input": image, "context_length": context,
+    }
 
 
-def _raw_model(name, *, display=None, context=131072, tools=True, image=False, state="READY",
-               serverless=True, prices=(0.9, 0.09, 0.9), deprecation=None, unit="1M tokens"):
+def _mgmt(name, *, display=None, context=131072, tools=True, image=False, deprecation=None):
     """One entry shaped like ``GET /v1/accounts/fireworks/models``."""
     entry = {
-        "name": name,
-        "displayName": display,
-        "state": state,
-        "kind": "HF_BASE_MODEL",
-        "public": True,
-        "contextLength": context,
-        "supportsTools": tools,
-        "supportsImageInput": image,
-        "supportsServerless": serverless,
-        "conversationConfig": {"style": "chatml"},
+        "name": name, "displayName": display, "state": "READY", "kind": "HF_BASE_MODEL",
+        "public": True, "contextLength": context, "supportsTools": tools,
+        "supportsImageInput": image, "supportsServerless": True, "serverlessModes": [],
     }
     if deprecation:
         entry["deprecationDate"] = deprecation
-    if serverless and prices:
-        prompt, cached, completion = prices
-        entry["serverlessModes"] = [{
-            "name": f"{name}/serverlessModes/default",
-            "skuInfos": [
-                {"sku": "LLM input tokens (uncached)", "amount": _money(prompt), "unit": unit},
-                {"sku": "LLM input tokens (cached)", "amount": _money(cached), "unit": unit},
-                {"sku": "LLM output tokens", "amount": _money(completion), "unit": unit},
-                {"sku": "Something per hour", "amount": _money(5), "unit": "hour"},
-            ],
-        }]
     return entry
+
+
+def _catalog_entry(wire_id, name, *, context=131072, capabilities=("tools",), detail=""):
+    return {
+        "id": wire_id, "name": name, "context_length": context, "max_completion_tokens": None,
+        "pricing": None, "detail": detail, "capabilities": list(capabilities),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +129,37 @@ def test_prebaked_fireworks_credential_file_bootstraps_fireworks_instance():
     instances = {inst["id"]: inst for inst in ip.list_instances()}
     assert instances["openrouter"]["kind"] == "openrouter"
     assert instances["openrouter"]["models"]
+
+
+def test_prebaked_credential_file_seeds_models():
+    """The dev-config entry may carry ``models`` (ids or full entries) so a
+    local deploy comes up with ready-to-pick Fireworks models."""
+    ip.write_inference_credentials("fireworks", {
+        "api_key": "fw_secret",
+        "models": [
+            "accounts/fireworks/models/kimi-k3",
+            {"id": "accounts/fireworks/models/deepseek-v4p1-flash", "name": "DeepSeek V4.1 Flash",
+             "context_length": 1048576},
+            {"id": "accounts/fireworks/models/kimi-k3"},  # duplicate dropped
+            "",  # unusable dropped
+        ],
+    })
+    instance = ip.get_instance("fireworks")
+    assert instance["kind"] == "fireworks"
+    assert [m["id"] for m in instance["models"]] == [
+        "accounts/fireworks/models/kimi-k3", "accounts/fireworks/models/deepseek-v4p1-flash",
+    ]
+    assert instance["models"][0]["name"] == "accounts/fireworks/models/kimi-k3"
+    assert instance["models"][1]["name"] == "DeepSeek V4.1 Flash"
+    assert instance["models"][1]["context_length"] == 1048576 and instance["models"][1]["enabled"] is True
+    # The seed is consulted only while the instance has no config entry
+    ip.upsert_instance({**instance, "models": []})
+    assert ip.get_instance("fireworks")["models"] == []
+    # The key itself is unaffected by the extra field
+    assert ip.effective_api_key("fireworks") == ("fw_secret", "store")
+    # A legacy openrouter file without a seed keeps its historical models
+    ip.write_inference_credentials("openrouter", {"api_key": "sk-or", "models": []})
+    assert ip.get_instance("openrouter")["models"]
 
 
 # ---------------------------------------------------------------------------
@@ -240,56 +263,65 @@ def test_provider_singleton_per_fireworks_instance(monkeypatch):
 # Catalog module
 # ---------------------------------------------------------------------------
 
-def test_normalize_entry_shape_and_pricing():
-    raw = _raw_model(
-        "accounts/fireworks/models/deepseek-v3p1", display="DeepSeek V3.1",
-        context=163840, tools=True, image=True, prices=(0.56, 0.056, 1.68),
-    )
-    entry = fw._normalize_entry(raw)
+def test_normalize_entry_shape():
+    details = {"accounts/fireworks/models/kimi-k3": _mgmt(
+        "accounts/fireworks/models/kimi-k3", display="Kimi K3", context=1048576, image=True,
+    )}
+    entry = fw._normalize_entry(_inf("accounts/fireworks/models/kimi-k3", image=True, context=1048576), details)
     assert entry == {
-        "id": "accounts/fireworks/models/deepseek-v3p1",
-        "name": "DeepSeek V3.1",
-        "context_length": 163840,
+        "id": "accounts/fireworks/models/kimi-k3",
+        "name": "Kimi K3",
+        "context_length": 1048576,
         "max_completion_tokens": None,
-        "pricing": {"prompt": pytest.approx(0.56), "completion": pytest.approx(1.68),
-                    "cache_read": pytest.approx(0.056)},
+        "pricing": None,
         "detail": "vision",
         "capabilities": ["tools", "vision"],
     }
-    # No display name: the last path segment; no tools: flagged by the typeahead
-    plain = fw._normalize_entry(_raw_model("accounts/fireworks/models/x-7b", tools=False, prices=None))
+    # No management entry: derived name; routers (by ``kind``, or by id
+    # shape when the kind is missing) flagged; no tools flagged
+    router = fw._normalize_entry(_inf("accounts/fireworks/routers/glm-5p3-fast", kind="ROUTER"), {})
+    assert router["name"] == "glm-5p3-fast (router)" and router["detail"] == "router"
+    auto = fw._normalize_entry(_inf("firerouter/auto", context=None, kind="ROUTER"), {})
+    assert auto["name"] == "auto (router)" and auto["context_length"] is None
+    bare = fw._normalize_entry(_inf("auto", kind=None), None)
+    assert bare["name"] == "auto (router)"
+    not_router = fw._normalize_entry(_inf("accounts/fireworks/models/auto-pilot"), {})
+    assert not_router["name"] == "auto-pilot" and not_router["detail"] == ""
+    plain = fw._normalize_entry(_inf("accounts/fireworks/models/x-7b", tools=False), {})
     assert plain["name"] == "x-7b" and plain["capabilities"] == [] and plain["pricing"] is None
-    # Per-1K SKUs scale to $/1M; an unknown unit yields no pricing
-    per_k = fw._normalize_entry(_raw_model("accounts/fireworks/models/k", prices=(0.001, 0.0001, 0.002), unit="1K tokens"))
-    assert per_k["pricing"] == {"prompt": pytest.approx(1.0), "completion": pytest.approx(2.0),
-                                "cache_read": pytest.approx(0.1)}
-    odd = fw._normalize_entry(_raw_model("accounts/fireworks/models/o", unit="widget"))
-    assert odd["pricing"] is None
+    # Context falls back to the management entry; capability flags merge
+    merged = fw._normalize_entry(
+        _inf("accounts/fireworks/models/m", context=None, tools=False),
+        {"accounts/fireworks/models/m": _mgmt("accounts/fireworks/models/m", context=65536, tools=True)},
+    )
+    assert merged["context_length"] == 65536 and merged["capabilities"] == ["tools"]
 
 
 def test_normalize_entry_filters_unusable_models():
-    assert fw._normalize_entry("nope") is None
-    assert fw._normalize_entry({"displayName": "no name"}) is None
-    assert fw._normalize_entry(_raw_model("accounts/fireworks/models/up", state="UPLOADING")) is None
-    assert fw._normalize_entry(_raw_model("accounts/fireworks/models/ded", serverless=False)) is None
-    # supportsServerless missing but a serverless mode present still counts
-    raw = _raw_model("accounts/fireworks/models/m")
-    del raw["supportsServerless"]
-    assert fw._normalize_entry(raw) is not None
     import datetime
+
+    assert fw._normalize_entry("nope") is None
+    assert fw._normalize_entry({"object": "model"}) is None
+    # Embedding / reranker models are not chat models (Fireworks marks them
+    # supports_chat anyway, so the kind decides)
+    assert fw._normalize_entry(_inf("accounts/fireworks/models/qwen3-embedding-8b", chat=False)) is None
+    assert fw._normalize_entry(_inf("accounts/fireworks/models/qwen3-reranker-8b", kind="EMBEDDING_MODEL", tools=False)) is None
     today = datetime.date(2026, 10, 8)
     past = {"year": 2026, "month": 10, "day": 8}
     future = {"year": 2027, "month": 1, "day": 1}
-    assert fw._normalize_entry(_raw_model("accounts/fireworks/models/old", deprecation=past), today) is None
-    assert fw._normalize_entry(_raw_model("accounts/fireworks/models/new", deprecation=future), today) is not None
-    assert fw._normalize_entry(_raw_model("accounts/fireworks/models/bad", deprecation={"year": "x"}), today) is not None
+    name = "accounts/fireworks/models/old"
+    assert fw._normalize_entry(_inf(name), {name: _mgmt(name, deprecation=past)}, today) is None
+    assert fw._normalize_entry(_inf(name), {name: _mgmt(name, deprecation=future)}, today) is not None
+    assert fw._normalize_entry(_inf(name), {name: _mgmt(name, deprecation={"year": "x"})}, today) is not None
 
 
 @pytest.fixture
 def fake_urlopen(monkeypatch):
-    """Stub ``urllib.request.urlopen`` with canned page responses keyed by
-    ``pageToken``; records every request (URL + headers)."""
-    pages: dict[str | None, object] = {}
+    """Stub ``urllib.request.urlopen`` with canned responses: ``routes``
+    maps ``"inference"`` to the ``/inference/v1/models`` payload and a
+    management ``pageToken`` (None for the first page) to that page's
+    payload; an Exception value is raised instead. Records every request."""
+    routes: dict[object, object] = {}
     seen: list[urllib.request.Request] = []
 
     class _Response(io.BytesIO):
@@ -302,74 +334,93 @@ def fake_urlopen(monkeypatch):
     def urlopen(request, timeout=None):
         seen.append(request)
         from urllib.parse import parse_qs, urlparse
-        token = parse_qs(urlparse(request.full_url).query).get("pageToken", [None])[0]
-        target = pages.get(token)
+        if request.full_url.startswith(fw.INFERENCE_MODELS_URL):
+            key: object = "inference"
+        else:
+            key = parse_qs(urlparse(request.full_url).query).get("pageToken", [None])[0]
+        target = routes.get(key, KeyError(f"unexpected request {request.full_url}"))
         if isinstance(target, Exception):
             raise target
-        if target is None:
-            raise AssertionError(f"unexpected page token {token!r}")
         return _Response(json.dumps(target).encode())
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
-    return pages, seen
+    return routes, seen
 
 
-def test_fetch_catalog_paginates_with_bearer_key(fake_urlopen):
-    pages, seen = fake_urlopen
-    pages[None] = {
-        "models": [_raw_model("accounts/fireworks/models/b"), _raw_model("accounts/fireworks/models/a")],
+def test_fetch_catalog_merges_lists_and_paginates(fake_urlopen):
+    routes, seen = fake_urlopen
+    routes["inference"] = {"data": [
+        _inf("accounts/fireworks/models/b"),
+        _inf("accounts/fireworks/models/a", image=True),
+        _inf("accounts/fireworks/routers/a-fast", kind="ROUTER"),
+        _inf("accounts/fireworks/models/embed", kind="EMBEDDING_MODEL"),
+        _inf("accounts/fireworks/models/a"),  # duplicate dropped
+        "junk",
+    ]}
+    routes[None] = {
+        "models": [_mgmt("accounts/fireworks/models/b", display="Model B"), _mgmt("accounts/fireworks/models/zzz")],
         "nextPageToken": "p2", "totalSize": 3,
     }
-    pages["p2"] = {
-        "models": [_raw_model("accounts/fireworks/models/a"), _raw_model("accounts/fireworks/models/c")],
-        "nextPageToken": "",
-    }
+    routes["p2"] = {"models": [_mgmt("accounts/fireworks/models/a", display="Model A")], "nextPageToken": ""}
     models = fw.fetch_catalog("fw_secret")
-    assert [m["id"] for m in models] == [
-        "accounts/fireworks/models/a", "accounts/fireworks/models/b", "accounts/fireworks/models/c",
+    assert [(m["id"], m["name"]) for m in models] == [
+        ("accounts/fireworks/models/a", "Model A"),
+        ("accounts/fireworks/models/b", "Model B"),
+        ("accounts/fireworks/routers/a-fast", "a-fast (router)"),
     ]
-    assert len(seen) == 2
+    assert models[0]["capabilities"] == ["tools", "vision"]
+    assert len(seen) == 3
     for request in seen:
-        assert request.full_url.startswith(fw.CATALOG_URL + "?")
-        assert "pageSize=200" in request.full_url
         assert request.get_header("Authorization") == "Bearer fw_secret"
-    assert "pageToken=p2" in seen[1].full_url
+    assert seen[0].full_url == fw.INFERENCE_MODELS_URL
+    assert "pageSize=200" in seen[1].full_url and "pageToken=p2" in seen[2].full_url
+
+
+def test_fetch_catalog_survives_missing_details(fake_urlopen):
+    routes, _seen = fake_urlopen
+    routes["inference"] = {"data": [_inf("accounts/fireworks/models/kimi-k3")]}
+    body = json.dumps({"code": 7, "message": "forbidden"}).encode()
+    routes[None] = urllib.error.HTTPError(fw.MANAGEMENT_MODELS_URL, 403, "Forbidden", {}, io.BytesIO(body))
+    models = fw.fetch_catalog("fw_secret")
+    assert [(m["id"], m["name"]) for m in models] == [("accounts/fireworks/models/kimi-k3", "kimi-k3")]
 
 
 def test_fetch_catalog_errors(fake_urlopen):
-    pages, _seen = fake_urlopen
+    routes, _seen = fake_urlopen
     with pytest.raises(fw.FireworksCatalogError, match="No API key"):
         fw.fetch_catalog("")
-    body = json.dumps({"error": {"message": "You must provide an API key.", "code": "UNAUTHORIZED"}}).encode()
-    pages[None] = urllib.error.HTTPError(fw.CATALOG_URL, 401, "Unauthorized", {}, io.BytesIO(body))
-    with pytest.raises(fw.FireworksCatalogError, match="HTTP 401: You must provide an API key."):
+    body = json.dumps({"error": {"message": "The API key you provided is invalid.", "code": "UNAUTHORIZED"}}).encode()
+    routes["inference"] = urllib.error.HTTPError(fw.INFERENCE_MODELS_URL, 401, "Unauthorized", {}, io.BytesIO(body))
+    with pytest.raises(fw.FireworksCatalogError, match="HTTP 401: The API key you provided is invalid."):
         fw.fetch_catalog("bad")
-    pages[None] = {"data": []}
-    with pytest.raises(fw.FireworksCatalogError, match="Unexpected catalog response shape"):
+    routes["inference"] = {"models": []}
+    with pytest.raises(fw.FireworksCatalogError, match="Unexpected model list response shape"):
         fw.fetch_catalog("k")
-    pages[None] = {"models": [_raw_model("accounts/fireworks/models/x", serverless=False)]}
-    with pytest.raises(fw.FireworksCatalogError, match="no serverless models"):
+    routes["inference"] = {"data": [_inf("accounts/fireworks/models/x", chat=False)]}
+    routes[None] = {"models": []}
+    with pytest.raises(fw.FireworksCatalogError, match="no chat models"):
         fw.fetch_catalog("k")
-    pages[None] = urllib.error.URLError("dns down")
+    routes["inference"] = urllib.error.URLError("dns down")
     with pytest.raises(fw.FireworksCatalogError, match="dns down"):
         fw.fetch_catalog("k")
 
 
 def test_get_catalog_caches_and_degrades(fake_urlopen, monkeypatch):
-    pages, seen = fake_urlopen
-    pages[None] = {"models": [_raw_model("accounts/fireworks/models/a", display="A")]}
+    routes, seen = fake_urlopen
+    routes["inference"] = {"data": [_inf("accounts/fireworks/models/a")]}
+    routes[None] = {"models": [_mgmt("accounts/fireworks/models/a", display="A")]}
     first = fw.get_catalog("fw_secret")
     assert first["stale"] is False and first["error"] is None
-    assert [m["id"] for m in first["models"]] == ["accounts/fireworks/models/a"]
+    assert [(m["id"], m["name"]) for m in first["models"]] == [("accounts/fireworks/models/a", "A")]
     assert fw.FIREWORKS_CATALOG_FILE.exists()
     # Fresh cache: served without a fetch, even without a key
-    pages[None] = AssertionError("must not fetch")
+    routes["inference"] = AssertionError("must not fetch")
     cached = fw.get_catalog(None)
     assert cached["models"] == first["models"] and cached["stale"] is False
-    assert len(seen) == 1
+    assert len(seen) == 2
     # Expired cache + failing fetch: stale cache with the error alongside
     monkeypatch.setattr(fw, "CATALOG_TTL_SECONDS", 0)
-    pages[None] = urllib.error.URLError("offline")
+    routes["inference"] = urllib.error.URLError("offline")
     stale = fw.get_catalog("fw_secret")
     assert stale["stale"] is True and "offline" in stale["error"]
     assert [m["id"] for m in stale["models"]] == ["accounts/fireworks/models/a"]
@@ -379,16 +430,17 @@ def test_get_catalog_caches_and_degrades(fake_urlopen, monkeypatch):
     assert empty == {"fetched_at": None, "models": [], "stale": True, "error": "No API key saved yet."}
     # ``refresh`` re-fetches a fresh cache
     monkeypatch.setattr(fw, "CATALOG_TTL_SECONDS", 3600)
-    pages[None] = {"models": [_raw_model("accounts/fireworks/models/b")]}
+    routes["inference"] = {"data": [_inf("accounts/fireworks/models/b")]}
     fw.get_catalog("fw_secret")
-    pages[None] = {"models": [_raw_model("accounts/fireworks/models/c")]}
+    routes["inference"] = {"data": [_inf("accounts/fireworks/models/c")]}
     assert [m["id"] for m in fw.get_catalog("fw_secret")["models"]] == ["accounts/fireworks/models/b"]
     assert [m["id"] for m in fw.get_catalog("fw_secret", refresh=True)["models"]] == ["accounts/fireworks/models/c"]
 
 
 def test_cache_round_trip_keeps_shape(fake_urlopen):
-    pages, _seen = fake_urlopen
-    pages[None] = {"models": [_raw_model("accounts/fireworks/models/a", display="A", image=True)]}
+    routes, _seen = fake_urlopen
+    routes["inference"] = {"data": [_inf("accounts/fireworks/models/a", image=True)]}
+    routes[None] = {"models": [_mgmt("accounts/fireworks/models/a", display="A")]}
     fetched = fw.get_catalog("k")["models"]
     cached = fw._read_cache()["models"]
     assert cached == fetched
@@ -403,14 +455,13 @@ def test_search_and_snapshot_apply_to_fireworks_entries():
     from chat.llm.openrouter_catalog import catalog_snapshot, search_catalog
 
     models = [
-        fw._normalize_entry(_raw_model("accounts/fireworks/models/llama-v3p1-8b-instruct", display="Llama 3.1 8B")),
-        fw._normalize_entry(_raw_model("accounts/fireworks/models/deepseek-v3p1", display="DeepSeek V3.1")),
+        _catalog_entry("accounts/fireworks/models/kimi-k3", "Kimi K3", context=1048576),
+        _catalog_entry("accounts/fireworks/models/deepseek-v4p1-flash", "DeepSeek V4.1 Flash"),
     ]
-    assert [m["id"] for m in search_catalog(models, "deepseek")] == ["accounts/fireworks/models/deepseek-v3p1"]
-    assert [m["id"] for m in search_catalog(models, "llama 3.1")] == ["accounts/fireworks/models/llama-v3p1-8b-instruct"]
-    snapshot = catalog_snapshot(models, "accounts/fireworks/models/deepseek-v3p1")
-    assert snapshot["name"] == "DeepSeek V3.1" and snapshot["context_length"] == 131072
-    assert snapshot["pricing"]["prompt"] == pytest.approx(0.9)
+    assert [m["id"] for m in search_catalog(models, "deepseek")] == ["accounts/fireworks/models/deepseek-v4p1-flash"]
+    assert [m["id"] for m in search_catalog(models, "kimi k3")] == ["accounts/fireworks/models/kimi-k3"]
+    snapshot = catalog_snapshot(models, "accounts/fireworks/models/kimi-k3")
+    assert snapshot == {"name": "Kimi K3", "context_length": 1048576, "max_completion_tokens": None, "pricing": None}
     assert catalog_snapshot(models, "accounts/me/deployments/abc") is None
 
 
@@ -470,10 +521,9 @@ def test_admin_update_fireworks_models_snapshot_from_catalog(admin, monkeypatch)
     def fake_get_catalog(api_key, refresh=False):
         calls.append((api_key, refresh))
         return {
-            "models": [fw._normalize_entry(_raw_model(
-                "accounts/fireworks/models/deepseek-v3p1", display="DeepSeek V3.1",
-                context=163840, prices=(0.56, 0.056, 1.68),
-            ))],
+            "models": [_catalog_entry(
+                "accounts/fireworks/models/deepseek-v3p1", "DeepSeek V3.1", context=163840,
+            )],
             "fetched_at": time.time(), "stale": False, "error": None,
         }
 
@@ -494,11 +544,10 @@ def test_admin_update_fireworks_models_snapshot_from_catalog(admin, monkeypatch)
     assert rows["accounts/me/deployments/abc"]["display_name"] == "My deployment"
     assert rows["accounts/me/deployments/abc"]["max_input_tokens"] == ip.DEFAULT_INSTANCE_CONTEXT_LENGTH
     stored = {m["id"]: m for m in ip.get_instance("fireworks")["models"]}
-    assert stored["accounts/fireworks/models/deepseek-v3p1"]["pricing"] == {
-        "prompt": pytest.approx(0.56), "completion": pytest.approx(1.68), "cache_read": pytest.approx(0.056),
-    }
+    # Fireworks exposes no prices: snapshots carry none ("no estimate")
+    assert stored["accounts/fireworks/models/deepseek-v3p1"]["pricing"] is None
     assert stored["accounts/me/deployments/abc"]["pricing"] is None
-    assert ip.instance_model_pricing("accounts/fireworks/models/deepseek-v3p1")["completion"] == pytest.approx(1.68)
+    assert ip.instance_model_pricing("accounts/fireworks/models/deepseek-v3p1") is None
 
 
 def test_admin_instance_catalog_for_fireworks(admin, monkeypatch):
@@ -508,8 +557,8 @@ def test_admin_instance_catalog_for_fireworks(admin, monkeypatch):
         calls.append((api_key, refresh))
         return {
             "models": [
-                fw._normalize_entry(_raw_model("accounts/fireworks/models/deepseek-v3p1", display="DeepSeek")),
-                fw._normalize_entry(_raw_model("accounts/fireworks/models/llama-v3p1-8b-instruct", display="Llama")),
+                _catalog_entry("accounts/fireworks/models/deepseek-v3p1", "DeepSeek"),
+                _catalog_entry("accounts/fireworks/models/llama-v3p1-8b-instruct", "Llama"),
             ],
             "fetched_at": time.time(), "stale": True, "error": "HTTP 401: nope",
         }

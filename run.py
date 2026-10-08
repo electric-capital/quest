@@ -90,9 +90,13 @@ LOCAL_RUNS_KEEP = 5
 #                           up pre-configured in every local instance. The
 #                           id picks the kind: "openrouter" is the legacy
 #                           instance seeded with the historical curated
-#                           models, "fireworks" (or "fireworks-2", ...) an
-#                           empty Fireworks AI instance, any other id an
-#                           empty OpenRouter instance.
+#                           models, "fireworks" (or "fireworks-2", ...) a
+#                           Fireworks AI instance, any other id an
+#                           OpenRouter instance. An entry may carry a
+#                           "models" list (wire ids, or full entries with
+#                           name/context_length/pricing) beside "api_key"
+#                           to seed the instance's model list, so a local
+#                           deploy comes up with ready-to-pick models.
 #   oauth_hostname          Hostname exported as QUEST_OAUTH_HOSTNAME so
 #                           OAuth callback URLs use it instead of the raw
 #                           request host (Google rejects private-IP
