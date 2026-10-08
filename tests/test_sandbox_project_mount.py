@@ -211,6 +211,20 @@ class TestHandlersMountAndPublish:
         assert result["exit_code"] == 1
         assert [e[1] for e in stub["events"]] == ["conversation", "project"]
 
+    def test_timeout_still_publishes_both_scopes(
+        self, stub, handler, public, monkeypatch,
+    ):
+        async def _timeout(coro, timeout):
+            coro.close()
+            raise asyncio.TimeoutError
+        monkeypatch.setattr(sandbox_mod.asyncio, "wait_for", _timeout)
+        result = _call(handler, project_id="proj-1", public=public)
+        assert result["timed_out"] is True
+        assert stub["events"] == [
+            (7, "conversation", "conv-1", "proj-1"),
+            (7, "project", "conv-1", "proj-1"),
+        ]
+
     def test_missing_image_publishes_nothing(self, stub, handler, public):
         stub["process"] = _FakeProcess(
             returncode=125, stderr=b"Error: image not known",
