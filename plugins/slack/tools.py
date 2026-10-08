@@ -740,7 +740,8 @@ SEND_SLACK_DM_TO_SELF_TOOL = PluginTool(
             "Send a Slack DM to the user themselves, delivered by the "
             "Quest bot -- no approval needed. The right choice for 'send "
             "me a reminder' / 'DM me' style requests, notifications, and "
-            "scheduled routines. Optionally attaches workspace files. "
+            "scheduled routines. Optionally attaches files from this "
+            "conversation's workspace. "
             "Requires the user to have connected their Slack account."
         ),
         "parameters": {
@@ -758,9 +759,13 @@ SEND_SLACK_DM_TO_SELF_TOOL = PluginTool(
                     "type": "array",
                     "items": {"type": "string"},
                     "description": (
-                        "Optional workspace-relative paths of files to "
-                        "attach (max 10 files, 50 MB each). The files are "
-                        "uploaded to the DM alongside the message."
+                        "Optional paths, relative to this conversation's "
+                        "workspace, of files to attach (max 10 files, 50 MB "
+                        "each). The files are uploaded to the DM alongside "
+                        "the message. Project files must be copied into this "
+                        "conversation's workspace first (in a project "
+                        "conversation: `copy_file` from `proj://` to "
+                        "`chat://`)."
                     ),
                 },
                 "intent_message": {

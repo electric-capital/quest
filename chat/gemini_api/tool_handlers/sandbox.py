@@ -20,7 +20,8 @@ from chat.gemini_api.sandbox_runtime import get_sandbox_runtime
 from chat.gemini_api.sandbox_seccomp import get_sandbox_seccomp_profile_path
 from chat.sandbox_tokens import TOKEN_GRACE_SECONDS, sandbox_token_lease
 from chat.gemini_api.tool_handlers._common import (
-    _get_workspace_dir,
+    conversation_workspace_dir,
+    project_workspace_dir,
     _publish_file_list_changed,
 )
 
@@ -33,10 +34,20 @@ def _build_script_podman_cmd(
     sandbox_token: str,
     public: bool = False,
     interactive: bool = False,
+    project_dir=None,
 ) -> list[str]:
     """Build the ``podman run`` argv for a sandboxed script execution.
 
-    Two profiles share the resource limits, workspace mount, the
+    Mounts: the conversation workspace at ``/workspace`` (``:Z``, private
+    SELinux relabel -- only this conversation's containers use it; also the
+    working directory) in every conversation, plus, for project
+    conversations, the project workspace at ``/project`` with the SHARED
+    ``:z`` relabel, since sibling conversations of one project can run
+    containers concurrently against the same host directory. Both mounts
+    are writable. With ``project_dir=None`` (standalone conversations) the
+    argv is exactly the single-mount one.
+
+    Two profiles share the resource limits, workspace mounts, the
     root-entrypoint privilege-drop choreography (--user=0:0 +
     NET_ADMIN/SETPCAP so the entrypoint can install iptables rules, then
     setpriv down to QUEST_RUN_UID/GID), and the no-symlink seccomp profile
@@ -70,12 +81,15 @@ def _build_script_podman_cmd(
     otherwise bypass it.
 
     Args:
-        workspace_dir: Host path mounted read-write at /workspace.
+        workspace_dir: Conversation workspace root, mounted read-write at
+            /workspace.
         exec_cmd: Command argv to run inside the container.
         sandbox_token: Ephemeral sandbox token minted for this run (see
             chat/sandbox_tokens.py). Ignored in the public profile.
         public: Select the public (internet-enabled) profile.
         interactive: Add ``-i`` (stdin piping, used by run_python).
+        project_dir: Project workspace root, mounted read-write at /project
+            (``:z``); ``None`` outside project conversations (no mount).
 
     Returns:
         Full podman argv list.
@@ -137,6 +151,10 @@ def _build_script_podman_cmd(
         "--cap-add=SETPCAP",
         f"--security-opt=seccomp={get_sandbox_seccomp_profile_path()}",
         "-v", f"{workspace_dir}:/workspace:Z",
+    ]
+    if project_dir is not None:
+        cmd += ["-v", f"{project_dir}:/project:z"]
+    cmd += [
         "-w", "/workspace",
         "--memory=512m",
         "--cpus=1",
@@ -160,6 +178,17 @@ def _build_script_podman_cmd(
         *exec_cmd,
     ]
     return cmd
+
+
+def _publish_mount_changes(
+    user_id: int, conversation_id: str, project_id: str | None,
+) -> None:
+    """Publish ``file_list_changed`` for every workspace the container had
+    mounted: the conversation scope always, the project scope too in
+    project conversations (``/project`` was writable)."""
+    _publish_file_list_changed(user_id, "conversation", conversation_id, project_id)
+    if project_id:
+        _publish_file_list_changed(user_id, "project", conversation_id, project_id)
 
 
 def _script_runner_image_error(public: bool) -> str:
@@ -189,7 +218,9 @@ async def _handle_run_script(
     """Run a script from the workspace inside an ephemeral Podman container.
 
     The default (restricted) profile uses the quest-script-runner image
-    (Python 3.12), mounts the workspace read-write, and uses slirp4netns
+    (Python 3.12), mounts the conversation workspace read-write at
+    /workspace (and the project workspace at /project in project
+    conversations), and uses slirp4netns
     networking which blocks all external network access. The container's
     entrypoint runs a socat forwarder so scripts can reach the sandbox tool
     API at localhost (port from QUEST_PORT). A per-run ephemeral sandbox
@@ -206,10 +237,14 @@ async def _handle_run_script(
     Args:
         user_id: User's integer ID.
         conversation_id: Conversation UUID.
-        path: Relative path to the script within the workspace.
+        path: Relative path to the script within the CONVERSATION
+            workspace (never the project workspace; a project script is
+            copied over first or run from run_python).
         args: Optional command-line arguments to pass to the script.
         timeout: Execution timeout in seconds (default 60, max 150).
-        project_id: Optional project UUID for project-aware workspace resolution.
+        project_id: Project UUID for project conversations (mounts the
+            project workspace at /project and adds the project-scope
+            file_list_changed event); None for standalone conversations.
         public: Run in the public-project sandbox profile (internet-enabled,
             no proxy bridge, no API key; see _build_script_podman_cmd).
 
@@ -217,8 +252,12 @@ async def _handle_run_script(
         JSON string with path, exit_code, stdout, stderr, timed_out, and truncated.
     """
     try:
-        # Resolve workspace directory
-        workspace_dir = await _get_workspace_dir(conversation_id, project_id=project_id)
+        # Resolve the workspace mounts. ``path`` resolves only inside the
+        # conversation workspace; the project workspace is just mounted.
+        workspace_dir = await conversation_workspace_dir(conversation_id)
+        project_dir = (
+            await project_workspace_dir(project_id) if project_id else None
+        )
 
         # Validate the path (same pattern as _handle_get_workspace_file)
         clean_path = path.lstrip("/").lstrip("\\")
@@ -234,6 +273,15 @@ async def _handle_run_script(
             return json.dumps({"error": "Invalid path: outside workspace directory"})
 
         if not file_path.exists():
+            if project_id:
+                return json.dumps({
+                    "error": (
+                        f"File not found: {path}. run_script takes "
+                        "conversation-workspace paths; copy the script in "
+                        "with copy_file from proj:// to chat://, or run it "
+                        "from run_python"
+                    )
+                })
             return json.dumps({"error": f"File not found: {path}"})
 
         if not file_path.is_file():
@@ -273,6 +321,7 @@ async def _handle_run_script(
             # profiles).
             podman_cmd = _build_script_podman_cmd(
                 workspace_dir, exec_cmd, sandbox_token, public=public,
+                project_dir=project_dir,
             )
             try:
                 process = await asyncio.create_subprocess_exec(
@@ -313,10 +362,10 @@ async def _handle_run_script(
             return _script_runner_image_error(public)
 
         # The container could have written zero or many files via the
-        # ``:Z`` workspace mount; we cannot cheaply diff so emit
+        # ``:Z`` / ``:z`` mounts; we cannot cheaply diff so emit
         # unconditionally and let the FE silent-fetch be a no-op when nothing
         # actually changed.
-        _publish_file_list_changed(user_id, conversation_id, project_id)
+        _publish_mount_changes(user_id, conversation_id, project_id)
 
         return json.dumps({
             "path": clean_path,
@@ -358,7 +407,9 @@ async def _handle_run_python(
         script: Python script content to execute.
         args: Optional command-line arguments (accessible via sys.argv).
         timeout: Execution timeout in seconds (default 60, max 150).
-        project_id: Optional project UUID for project-aware workspace resolution.
+        project_id: Project UUID for project conversations (mounts the
+            project workspace at /project and adds the project-scope
+            file_list_changed event); None for standalone conversations.
         public: Run in the public-project sandbox profile (internet-enabled,
             no proxy bridge, no API key; see _build_script_podman_cmd).
 
@@ -366,8 +417,11 @@ async def _handle_run_python(
         JSON string with exit_code, stdout, stderr, timed_out, and truncated.
     """
     try:
-        # Resolve workspace directory (still needed for the volume mount)
-        workspace_dir = await _get_workspace_dir(conversation_id, project_id=project_id)
+        # Resolve the workspace mounts (no file is read from them here)
+        workspace_dir = await conversation_workspace_dir(conversation_id)
+        project_dir = (
+            await project_workspace_dir(project_id) if project_id else None
+        )
 
         # Clamp timeout
         clamped_timeout = timeout if timeout is not None else SCRIPT_RUNNER_TIMEOUT
@@ -392,7 +446,7 @@ async def _handle_run_python(
             # _handle_run_script, plus -i for stdin piping)
             podman_cmd = _build_script_podman_cmd(
                 workspace_dir, exec_cmd, sandbox_token, public=public,
-                interactive=True,
+                interactive=True, project_dir=project_dir,
             )
             try:
                 process = await asyncio.create_subprocess_exec(
@@ -434,10 +488,10 @@ async def _handle_run_python(
         if exit_code == 125 and "image not known" in stderr_str.lower():
             return _script_runner_image_error(public)
 
-        # See _handle_run_script: the inline script may have written workspace
-        # files via the :Z mount, so emit unconditionally after the container
+        # See _handle_run_script: the inline script may have written files
+        # via either mount, so emit unconditionally after the container
         # exits.
-        _publish_file_list_changed(user_id, conversation_id, project_id)
+        _publish_mount_changes(user_id, conversation_id, project_id)
 
         return json.dumps({
             "exit_code": exit_code,

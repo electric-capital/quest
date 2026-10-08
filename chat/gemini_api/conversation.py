@@ -197,8 +197,8 @@ def _wrap_message_with_metadata(
         clean_names = [n for n in attached_filenames if isinstance(n, str) and n]
         if clean_names:
             metadata_lines.append(
-                "Files attached to this message (in the workspace, readable via "
-                "your file tools): " + ", ".join(clean_names)
+                "Files attached to this message (in this chat's workspace, "
+                "readable via your file tools): " + ", ".join(clean_names)
             )
     metadata_lines.append("</message_metadata>")
 
@@ -364,6 +364,106 @@ def _stopped_action_request_result(response: dict, message: str) -> dict:
     return out
 
 
+async def _read_chat_history(conversation_id: str) -> dict | None:
+    """Read and parse chat_history.json once for the turn-start lookups.
+
+    The read + parse runs in a worker thread (the file grows with the
+    transcript). A failed threaded read -- e.g. a parse error from catching
+    a concurrent writer mid-write -- is retried once synchronously on the
+    event loop, where every chat_history.json writer runs, so that read can
+    never see a torn file; a genuinely corrupt file raises from there, as
+    as a direct read always did.
+    """
+    try:
+        return await asyncio.to_thread(ChatStorage.get_conversation, conversation_id)
+    except Exception:
+        logger.debug(
+            "Threaded chat_history.json read failed for %s; retrying on the loop",
+            conversation_id, exc_info=True,
+        )
+        return ChatStorage.get_conversation(conversation_id)
+
+
+def _resolve_workspace_notice_flags(
+    user_id: int,
+    conversation_id: str,
+    project_id: str | None,
+    chat_data: dict | None,
+) -> dict[str, bool]:
+    """Run legacy-workspace detection and return the conversation's notice flags.
+
+    ``chat_data`` is the turn's already-parsed chat_history.json
+    (``_read_chat_history``), so detection costs no extra read.
+
+    Standalone conversations (``project_id`` None) are never touched and
+    get ``{}``. For a project conversation this:
+
+    * makes sure the conversation workspace dir exists;
+    * on the first turn without the ``own_workspace`` marker, decides once
+      whether the conversation is a legacy project conversation -- one with
+      at least one assistant message, whose earlier files may therefore
+      live in the shared project workspace -- and if so sets
+      ``legacy_shared_workspace``; either way ``own_workspace`` is then set
+      (one compare-and-set ``set_conversation_flags`` rewrite on the event
+      loop, skipped when a fresh read already shows ``own_workspace``) so the
+      check never runs again (see ``chat.storage.CONVERSATION_NOTICE_FLAGS``
+      for why the workspace dir's presence is not the signal);
+    * returns the flags (``legacy_shared_workspace`` /
+      ``converted_from_standalone`` / ``own_workspace``) for the prompt
+      builders.
+
+    A turn that newly sets ``legacy_shared_workspace`` also drops the
+    in-memory chat session, which still carries the previous system
+    prompt; the session is rebuilt from sdk_history.json with the new one.
+
+    Never raises: the flags are advisory, so any failure is logged and the
+    flags read so far (possibly ``{}``) are returned.
+    """
+    if not project_id:
+        return {}
+    flags: dict[str, bool] = {}
+    try:
+        ChatStorage.get_conversation_workspace_root(conversation_id).mkdir(
+            parents=True, exist_ok=True,
+        )
+        flags = ChatStorage.conversation_flags_from(chat_data)
+        if flags.get("own_workspace"):
+            return flags
+        messages = chat_data.get("messages") if isinstance(chat_data, dict) else None
+        updates = {"own_workspace": True}
+        if any(
+            isinstance(m, dict) and m.get("role") == "assistant"
+            for m in (messages or [])
+        ):
+            updates["legacy_shared_workspace"] = True
+        # Compare-and-set against a fresh read: a from-conversation (or a
+        # concurrent turn) that set own_workspace after the turn-start read
+        # wins, so a converted chat is never flagged legacy.
+        wrote = ChatStorage.set_conversation_flags(
+            conversation_id, updates, only_if_unset="own_workspace",
+        )
+        if not wrote:
+            # Lost the race (or nothing to annotate): report what is on disk
+            # now, e.g. a just-set converted_from_standalone.
+            return ChatStorage.get_conversation_flags(conversation_id)
+        flags.update(updates)
+        if updates.get("legacy_shared_workspace"):
+            # The cached session was built with a prompt that lacks the
+            # legacy note; force a rebuild on this turn.
+            from chat.gemini_api.session import remove_chat_session
+            remove_chat_session(user_id, conversation_id)
+            logger.info(
+                "Conversation %s detected as a legacy project conversation "
+                "(earlier files in the shared project workspace)", conversation_id,
+            )
+    except Exception:
+        logger.warning(
+            "Workspace notice-flag detection failed for conversation %s",
+            conversation_id, exc_info=True,
+        )
+    return flags
+
+
 async def run_conversation_turn(
     app,
     user: dict[str, Any],
@@ -407,7 +507,10 @@ async def run_conversation_turn(
             Required for any caller that wants to flush ``chat_history.json``
             incrementally or persist a partial transcript on cancel.
         guide_id: Optional guide ID for this conversation.
-        project_id: Optional project ID for project-aware workspace resolution.
+        project_id: Optional project ID. Set for a project conversation: it
+            gets the project-only tools, the project workspace next to its own
+            conversation workspace, and legacy-workspace detection (see
+            ``_resolve_workspace_notice_flags``).
         flags: Optional per-conversation flags (e.g. ["nested_subagents"]) read
             from the conversation row by the caller. NULL/empty means no flags.
             The ``nested_subagents`` flag enables 1st-level sub-agents to spawn
@@ -539,8 +642,12 @@ async def run_conversation_turn(
         from db.guide_store import get_guide
         custom_prompt = ""
 
+        # chat_history.json is read ONCE here; both the guide snapshot and
+        # the workspace notice flags (below) are derived from it.
+        chat_history_data = await _read_chat_history(conversation_id)
+
         # Check if this conversation already has a snapshotted guide
-        existing_snapshot = ChatStorage.get_guide_snapshot(conversation_id)
+        existing_snapshot = ChatStorage.guide_snapshot_from(chat_history_data)
         if is_user_subagent:
             pass
         elif not guides_enabled_for(user["email"]):
@@ -684,6 +791,15 @@ async def run_conversation_turn(
                     conversation_id, [s["id"] for s in loaded_skills]
                 )
 
+        # Project conversations only: legacy-workspace detection plus the
+        # notice flags the prompt builders render (never raises).
+        notice_flags = _resolve_workspace_notice_flags(
+            user["id"], conversation_id, project_id, chat_history_data,
+        )
+        del chat_history_data  # don't hold the parsed transcript all turn
+        legacy_shared_workspace = bool(notice_flags.get("legacy_shared_workspace"))
+        converted_from_standalone = bool(notice_flags.get("converted_from_standalone"))
+
         from api.instructions import get_user_connected_services
         connected_services = get_user_connected_services(user)
         is_slack_origin = origin == "slack"
@@ -728,6 +844,8 @@ async def run_conversation_turn(
                 # The public prompt has no connected-services gating, so
                 # the Quest Docs gate is passed explicitly.
                 docs_enabled=docs_enabled_for(user["email"]),
+                legacy_shared_workspace=legacy_shared_workspace,
+                converted_from_standalone=converted_from_standalone,
             )
         else:
             system_prompt = get_system_prompt(
@@ -743,6 +861,8 @@ async def run_conversation_turn(
                 is_slack=is_slack_origin,
                 nested_subagents=nested_subagents,
                 is_routine=bool(routine_id),
+                legacy_shared_workspace=legacy_shared_workspace,
+                converted_from_standalone=converted_from_standalone,
             )
         ChatStorage.set_system_prompt(conversation_id, system_prompt)
         # Always load saved SDK history from disk so it's available as a
@@ -844,6 +964,7 @@ async def run_conversation_turn(
             on_event=on_event,
             structured_messages=structured_messages,
             usage_acc=usage_acc,
+            workspace_notice_flags=notice_flags,
         )
 
         wrapped_message = _wrap_message_with_metadata(

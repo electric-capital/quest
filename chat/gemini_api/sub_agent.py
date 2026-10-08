@@ -59,6 +59,7 @@ async def _run_sub_agent(
     on_event: Callable[[dict], Awaitable[None]] | None = None,
     parent_tool_id: str | None = None,
     nested_enabled: bool = False,
+    workspace_notice_flags: dict[str, bool] | None = None,
     level: int = 1,
     nested_parent_id: str | None = None,
 ) -> str:
@@ -90,12 +91,19 @@ async def _run_sub_agent(
         agent_name: Display name for this sub-agent.
         prompt: The task prompt to send to the sub-agent.
         custom_prompt: Optional user custom system prompt.
-        project_id: Optional project UUID for project-aware workspace resolution.
+        project_id: Optional project UUID (the parent's). Set in a project
+            conversation: the sub-agent then gets the project-only tools, the
+            project workspace and (with ``workspace_notice_flags``) the
+            parent's legacy / converted prompt notes.
         project_guide: Optional project-specific instructions.
         usage_accumulator: Optional dict to accumulate usage across turns.
         nested_enabled: Whether the conversation's ``nested_subagents`` flag is
             on. Only meaningful at ``level == 1``; a 1st-level sub-agent then
             gets the nested-spawn tool and the can-nest prompt copy.
+        workspace_notice_flags: The parent conversation's workspace notice
+            flags (``RunContext.workspace_notice_flags``): drive the legacy /
+            converted notes in the prompt of a project conversation's
+            sub-agent. Passed through to a nested sub-agent unchanged.
         level: Sub-agent nesting depth. 1 = spawned by the top-level agent;
             2 = spawned by a 1st-level sub-agent (a leaf agent that cannot
             spawn further and is restricted to NESTED_SUB_AGENT_ALLOWED_MODELS).
@@ -182,6 +190,10 @@ async def _run_sub_agent(
         custom_prompt = user.get("settings", {}).get("custom_system_prompt", "")
     from api.instructions import get_user_connected_services
     connected_services = get_user_connected_services(user)
+    # The sub-agent shares the parent's conversation: its prompt carries the
+    # parent's workspace notice flags (resolved once by run_conversation_turn
+    # and threaded down via RunContext). Project conversations only.
+    notice_flags = (workspace_notice_flags or {}) if project_id else {}
     system_prompt = get_sub_agent_system_prompt(
         agent_name, user["api_key"],
         base_url=get_proxy_base_url(),
@@ -193,6 +205,8 @@ async def _run_sub_agent(
         skills_content=skills_content,
         has_project=bool(project_id),
         can_nest=can_nest,
+        legacy_shared_workspace=bool(notice_flags.get("legacy_shared_workspace")),
+        converted_from_standalone=bool(notice_flags.get("converted_from_standalone")),
     )
 
     # Choose the tool tier: only a 1st-level sub-agent with the flag on gets the
@@ -462,6 +476,7 @@ async def _run_sub_agent(
                                 on_event=on_event,
                                 parent_tool_id=parent_tool_id,
                                 nested_enabled=nested_enabled,
+                                workspace_notice_flags=workspace_notice_flags,
                                 level=2,
                                 nested_parent_id=nested_agent_id,
                             )
@@ -701,6 +716,7 @@ async def _run_parallel_sub_agents(
     on_event: Callable[[dict], Awaitable[None]] | None = None,
     parent_tool_id: str | None = None,
     nested_enabled: bool = False,
+    workspace_notice_flags: dict[str, bool] | None = None,
 ) -> str:
     """Run multiple sub-agent tasks in parallel and return combined results.
 
@@ -722,7 +738,9 @@ async def _run_parallel_sub_agents(
         tasks: List of task specification dicts, each with 'id', 'name',
                'prompt', 'description', and optional 'model'.
         custom_prompt: Optional user custom system prompt.
-        project_id: Optional project UUID for project-aware workspace resolution.
+        project_id: Optional project UUID (the parent's), passed to every
+            sub-agent (see ``_run_sub_agent``), as is
+            ``workspace_notice_flags``.
         project_guide: Optional project-specific instructions.
         usage_accumulator: Optional dict to accumulate usage.
 
@@ -820,6 +838,7 @@ async def _run_parallel_sub_agents(
                 on_event=on_event,
                 parent_tool_id=parent_tool_id,
                 nested_enabled=nested_enabled,
+                workspace_notice_flags=workspace_notice_flags,
                 level=1,
             )
             return task_id, {
@@ -892,6 +911,7 @@ async def _run_parallel_sub_agents_template(
     on_event: Callable[[dict], Awaitable[None]] | None = None,
     parent_tool_id: str | None = None,
     nested_enabled: bool = False,
+    workspace_notice_flags: dict[str, bool] | None = None,
 ) -> str:
     """Run template-based parallel sub-agents and return combined results.
 
@@ -992,4 +1012,5 @@ async def _run_parallel_sub_agents_template(
         on_event=on_event,
         parent_tool_id=parent_tool_id,
         nested_enabled=nested_enabled,
+        workspace_notice_flags=workspace_notice_flags,
     )

@@ -588,6 +588,7 @@ class TestScriptToolCallBridge:
             "get_response_content", "get_workspace_file", "write_workspace_file",
             "edit_workspace_file", "list_workspace_files", "download_drive_file",
             "github_get_job_log", "authed_get", "authed_post",
+            "list_files", "read_file", "write_file", "edit_file", "copy_file",
         ):
             assert name not in SCRIPT_TOOL_CALL_ALLOWLIST, name
 

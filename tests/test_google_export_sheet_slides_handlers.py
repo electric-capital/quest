@@ -66,10 +66,10 @@ def _patch_workspace(tmp_path: Path):
         return ws
 
     with patch(
-        "chat.gemini_api.tool_handlers.drive._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.drive.conversation_workspace_dir",
         new=fake_workspace,
     ), patch(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         new=fake_workspace,
     ):
         yield
@@ -181,7 +181,7 @@ class TestSheetHappyPath:
         assert result["document_title"] == "Budget 2026"
         assert "Google Sheet" in result["message"]
         assert (ws / "Budget 2026.xlsx").read_bytes() == b"PK\x03\x04 xlsx"
-        publish.assert_called_once_with(USER["id"], "conv-1", None)
+        publish.assert_called_once_with(USER["id"], "conversation", "conv-1", None)
 
         assert len(req.calls) == 2
         meta_url, meta_kwargs = req.calls[0]

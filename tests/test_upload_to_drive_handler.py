@@ -284,7 +284,7 @@ def test_execute_uploads_workspace_file(tmp_path, monkeypatch):
         return workspace_dir
 
     monkeypatch.setattr(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         _fake_workspace_dir,
     )
 
@@ -334,7 +334,7 @@ def test_execute_uses_filename_override(tmp_path, monkeypatch):
         return workspace_dir
 
     monkeypatch.setattr(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         _fake_workspace_dir,
     )
 
@@ -374,7 +374,7 @@ def test_execute_missing_file_raises(tmp_path, monkeypatch):
         return workspace_dir
 
     monkeypatch.setattr(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         _fake_workspace_dir,
     )
 
@@ -397,7 +397,7 @@ def test_execute_drive_error_raises(tmp_path, monkeypatch):
         return workspace_dir
 
     monkeypatch.setattr(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         _fake_workspace_dir,
     )
 
@@ -436,7 +436,7 @@ def test_execute_creates_folder_then_uploads(tmp_path, monkeypatch):
         return workspace_dir
 
     monkeypatch.setattr(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         _fake_workspace_dir,
     )
 
@@ -499,7 +499,7 @@ def test_execute_folder_creation_failure_skips_upload(tmp_path, monkeypatch):
         return workspace_dir
 
     monkeypatch.setattr(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         _fake_workspace_dir,
     )
 
@@ -543,7 +543,7 @@ def test_execute_upload_failure_after_folder_creation_mentions_folder_id(tmp_pat
         return workspace_dir
 
     monkeypatch.setattr(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         _fake_workspace_dir,
     )
 
@@ -723,7 +723,7 @@ def test_execute_uploads_multiple_files(tmp_path, monkeypatch):
         return workspace_dir
 
     monkeypatch.setattr(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         _fake_workspace_dir,
     )
 
@@ -788,7 +788,7 @@ def test_execute_single_entry_files_returns_list_shape(tmp_path, monkeypatch):
         return workspace_dir
 
     monkeypatch.setattr(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         _fake_workspace_dir,
     )
 
@@ -827,7 +827,7 @@ def test_execute_missing_file_fails_batch_before_any_upload(tmp_path, monkeypatc
         return workspace_dir
 
     monkeypatch.setattr(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         _fake_workspace_dir,
     )
 
@@ -878,7 +878,7 @@ def test_execute_mid_batch_failure_lists_uploaded_files(tmp_path, monkeypatch):
         return workspace_dir
 
     monkeypatch.setattr(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         _fake_workspace_dir,
     )
 
@@ -929,7 +929,7 @@ def test_execute_mid_batch_failure_mentions_created_folder(tmp_path, monkeypatch
         return workspace_dir
 
     monkeypatch.setattr(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         _fake_workspace_dir,
     )
 

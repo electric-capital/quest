@@ -198,7 +198,9 @@ Uploads one or more files from the conversation workspace to Drive
 **as-is** (the raw bytes are stored; no conversion to a Google Doc). The
 files must already exist in the workspace -- write them with
 `write_workspace_file` or download them first (e.g. `download_drive_file`,
-a script, etc.).
+a script, etc.). Project files must be copied into this conversation's
+workspace first (in a project conversation: `copy_file` from `proj://` to
+`chat://`).
 
 **Batch your uploads.** Every `create_action_request` call is a round
 trip for the user (they must click Approve on each card). When several

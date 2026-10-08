@@ -60,14 +60,14 @@ GEMINI_VERTEX_MODEL = "gemini-3.5-flash"
 
 
 def _patch_workspace_dir(tmp_path: Path):
-    """Patch ``_get_workspace_dir`` so handlers operate under ``tmp_path``."""
+    """Patch ``conversation_workspace_dir`` so handlers operate under ``tmp_path``."""
     async def fake_workspace(*args, **kwargs):
         ws = tmp_path / "workspace"
         ws.mkdir(parents=True, exist_ok=True)
         return ws
 
     return patch(
-        "chat.gemini_api.tool_handlers.workspace._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.workspace.conversation_workspace_dir",
         new=fake_workspace,
     )
 
@@ -227,7 +227,7 @@ class TestGetWorkspaceFilePdf:
         assert parsed["uploaded"] is True
         assert len(extra_parts) == 1
         provider.upload_file.assert_awaited_once()
-        assert _read_paths() == ["small.pdf"]
+        assert _read_paths() == ["small.pdf", "chat://small.pdf"]
 
     def test_file_exactly_at_limit_passes(self, workspace):
         # Strict > comparison: a file of exactly the cap is allowed.
@@ -298,7 +298,7 @@ class TestGetWorkspaceFileText:
         assert parsed["content"] == "x" * size
         assert "inline" in parsed["note"]
         assert extra_parts == []
-        assert _read_paths() == ["medium.csv"]
+        assert _read_paths() == ["medium.csv", "chat://medium.csv"]
 
     def test_small_text_file_untouched(self, workspace):
         workspace.mkdir(parents=True, exist_ok=True)

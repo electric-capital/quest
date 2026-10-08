@@ -201,10 +201,10 @@ async def create_project_from_conversation(
     # The flags are advisory (system prompt notice + legacy detection); a
     # failure to write them must never turn a completed conversion into a 500.
     try:
-        ChatStorage.set_conversation_flag(
-            body.conversation_id, "converted_from_standalone", True,
+        ChatStorage.set_conversation_flags(
+            body.conversation_id,
+            {"converted_from_standalone": True, "own_workspace": True},
         )
-        ChatStorage.set_conversation_flag(body.conversation_id, "own_workspace", True)
     except Exception:
         logger.warning(
             "from-conversation: failed to set notice flags on %s",

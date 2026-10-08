@@ -65,10 +65,10 @@ def _patched_conversation(monkeypatch):
     import api.instructions as instructions
     monkeypatch.setattr(instructions, "get_user_connected_services", lambda _u: {})
 
-    monkeypatch.setattr(
-        conv_mod.ChatStorage, "get_guide_snapshot",
-        staticmethod(lambda _cid: {"guide_snapshot": {"content": "guide"}}),
-    )
+    async def _fake_history(_cid):
+        return {"guide_id": "g", "guide_snapshot": {"content": "guide"}}
+
+    monkeypatch.setattr(conv_mod, "_read_chat_history", _fake_history)
     monkeypatch.setattr(
         conv_mod.ChatStorage, "set_system_prompt",
         staticmethod(lambda *a, **kw: None),

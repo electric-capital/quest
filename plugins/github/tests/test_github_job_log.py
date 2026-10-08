@@ -114,12 +114,12 @@ def _patch_signed_url_client(captured_calls: list, status_code: int, body: bytes
 
 
 def _patch_workspace_dir(tmp_path: Path):
-    """Patch ``_get_workspace_dir`` so the handler writes to tmp_path."""
+    """Patch ``conversation_workspace_dir`` so the handler writes to tmp_path."""
     async def fake_workspace(*args, **kwargs):
         return tmp_path
 
     return patch(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         side_effect=fake_workspace,
     )
 

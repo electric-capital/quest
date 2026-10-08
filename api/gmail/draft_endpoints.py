@@ -96,6 +96,7 @@ async def _resolve_workspace_attachment(
     conversation_id: str,
     workspace_path: str,
     filename_override: Optional[str] = None,
+    project_id: Optional[str] = None,
 ) -> dict:
     """Read a file from the conversation workspace for attachment.
 
@@ -112,6 +113,9 @@ async def _resolve_workspace_attachment(
         filename_override: Optional filename to use for the attachment.
             Sanitized via ``_sanitize_workspace_filename``; falls back to the
             resolved file's basename if the override sanitizes to empty.
+        project_id: The conversation's project, if any. Never changes the
+            root; only adds the copy-first hint (``copy_file`` from
+            ``proj://`` to ``chat://``) to a not-found error.
 
     Returns:
         Dict with keys: data (bytes), filename (str), mime_type (str).
@@ -122,6 +126,7 @@ async def _resolve_workspace_attachment(
     # Lazy import to mirror ``_io_attachments.read_workspace_attachments``
     # and avoid pulling chat-side modules in at module import time.
     from chat.gemini_api.tool_handlers import _sanitize_workspace_filename
+    from chat.gemini_api.tool_handlers.file_paths import PROJECT_COPY_FIRST_SUFFIX
     from chat.storage import ChatStorage
 
     raw_path = workspace_path or ""
@@ -168,7 +173,10 @@ async def _resolve_workspace_attachment(
     if not file_path.exists():
         raise HTTPException(
             status_code=404,
-            detail=f"Workspace file not found: {raw_path}",
+            detail=(
+                f"Workspace file not found: {raw_path}"
+                + (PROJECT_COPY_FIRST_SUFFIX if project_id else "")
+            ),
         )
     if not file_path.is_file():
         raise HTTPException(
@@ -271,6 +279,7 @@ async def _resolve_request_attachments(
             status_code=400,
             detail="conversation_id is required when using workspace attachments",
         )
+    project_id = None
     if has_workspace:
         # conversation_id is trusted when injected by in-process route
         # dispatch, but these routes are also registered directly on the
@@ -278,7 +287,8 @@ async def _resolve_request_attachments(
         # Without this check a user could attach files from another user's
         # workspace by passing that conversation id (security finding
         # #279216).
-        await require_owned_conversation(user["id"], conversation_id)
+        meta = await require_owned_conversation(user["id"], conversation_id)
+        project_id = meta.get("project_id") if isinstance(meta, dict) else None
 
     resolved_attachments = []
     for att in attachments:
@@ -301,6 +311,7 @@ async def _resolve_request_attachments(
                 conversation_id,
                 att.workspace_path,
                 att.filename,
+                project_id=project_id,
             )
         elif att.type == "gmail":
             if not att.message_id or not att.attachment_id:

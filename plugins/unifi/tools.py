@@ -482,7 +482,7 @@ def _resolve_snapshot_destination(workspace_root: Path, path_arg: str | None,
 
 async def _tool_get_camera_snapshot(ctx, args: dict):
     from chat.gemini_api.tool_handlers import (
-        _get_workspace_dir,
+        conversation_workspace_dir,
         _publish_file_list_changed,
     )
 
@@ -525,7 +525,7 @@ async def _tool_get_camera_snapshot(ctx, args: dict):
 
     now = datetime.now(timezone.utc)
     workspace_root = (
-        await _get_workspace_dir(ctx.conversation_id, project_id=ctx.project_id)
+        await conversation_workspace_dir(ctx.conversation_id)
     ).resolve()
     destination = _resolve_snapshot_destination(
         workspace_root, _arg_str(args.get("path")),
@@ -538,7 +538,9 @@ async def _tool_get_camera_snapshot(ctx, args: dict):
         destination.write_bytes(data)
     except Exception as exc:
         return _error("workspace_write_failed", f"Failed to save snapshot to workspace: {exc}")
-    _publish_file_list_changed(ctx.user["id"], ctx.conversation_id, ctx.project_id)
+    _publish_file_list_changed(
+        ctx.user["id"], "conversation", ctx.conversation_id, ctx.project_id,
+    )
 
     rel_written = destination.relative_to(workspace_root).as_posix()
     mime_type = "image/jpeg" if "jpeg" in content_type.lower() or "jpg" in content_type.lower() else (

@@ -67,10 +67,10 @@ def _patch_workspace(tmp_path: Path):
     # resolver -- which happened to pass or fail depending on whichever DB
     # engine binding earlier tests left behind.
     with patch(
-        "chat.gemini_api.tool_handlers.drive._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.drive.conversation_workspace_dir",
         new=fake_workspace,
     ), patch(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         new=fake_workspace,
     ):
         yield
@@ -175,7 +175,7 @@ class TestHappyPath:
         assert result["size_bytes"] == len(b"%PDF-1.7 fake")
         assert "get_workspace_file" in result["message"]
         assert (ws / "Q3 Report.pdf").read_bytes() == b"%PDF-1.7 fake"
-        publish.assert_called_once_with(USER["id"], "conv-1", None)
+        publish.assert_called_once_with(USER["id"], "conversation", "conv-1", None)
 
         # Two upstream calls: metadata (JSON) then export (raw).
         assert len(req.calls) == 2
@@ -230,7 +230,7 @@ class TestHappyPath:
 
     def test_project_id_forwarded_to_publish(self, tmp_path):
         _result, _req, publish, _ws = _export(tmp_path, project_id="proj-9")
-        publish.assert_called_once_with(USER["id"], "conv-1", "proj-9")
+        publish.assert_called_once_with(USER["id"], "conversation", "conv-1", "proj-9")
 
 
 # ---------------------------------------------------------------------------

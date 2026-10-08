@@ -6,12 +6,14 @@ drafts, plugin file-download tools) import the shared workspace helpers
 from here too, so every handler and helper is re-exported below.
 
 Tests that patch a helper must target the module that *uses* it (e.g.
-``chat.gemini_api.tool_handlers.workspace._get_workspace_dir``), not this
+``chat.gemini_api.tool_handlers.workspace.conversation_workspace_dir``), not this
 package -- the re-export is a separate binding.
 """
 
 from chat.gemini_api.tool_handlers._common import (
-    _get_workspace_dir,
+    conversation_workspace_dir,
+    project_workspace_dir,
+    _no_project_result,
     _publish_file_list_changed,
     _parse_content_disposition_filename,
     _sanitize_workspace_filename,
@@ -26,6 +28,19 @@ from chat.gemini_api.tool_handlers.workspace import (
     _handle_load_gmail_attachment,
     _handle_write_workspace_file,
     _handle_edit_workspace_file,
+    _handle_list_files,
+    _handle_read_file,
+    _handle_write_file,
+    _handle_edit_file,
+    resolve_space_root,
+)
+from chat.gemini_api.tool_handlers.workspace_copy import _handle_copy_file
+from chat.gemini_api.tool_handlers.file_paths import (
+    SPACE_CHAT,
+    SPACE_PROJECT,
+    SpacePathError,
+    format_space_path,
+    parse_space_path,
 )
 from chat.gemini_api.tool_handlers.drive import (
     GOOGLE_DOC_EXPORT_FORMATS,
@@ -85,7 +100,9 @@ from chat.gemini_api.tool_handlers.docs import (
 )
 
 __all__ = [
-    "_get_workspace_dir",
+    "conversation_workspace_dir",
+    "project_workspace_dir",
+    "_no_project_result",
     "_publish_file_list_changed",
     "_parse_content_disposition_filename",
     "_sanitize_workspace_filename",
@@ -96,6 +113,17 @@ __all__ = [
     "_handle_load_gmail_attachment",
     "_handle_write_workspace_file",
     "_handle_edit_workspace_file",
+    "_handle_list_files",
+    "_handle_read_file",
+    "_handle_write_file",
+    "_handle_edit_file",
+    "_handle_copy_file",
+    "resolve_space_root",
+    "SPACE_CHAT",
+    "SPACE_PROJECT",
+    "SpacePathError",
+    "format_space_path",
+    "parse_space_path",
     "GOOGLE_DOC_EXPORT_FORMATS",
     "GOOGLE_SHEET_EXPORT_FORMATS",
     "GOOGLE_SLIDES_EXPORT_FORMATS",

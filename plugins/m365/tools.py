@@ -352,7 +352,7 @@ async def _resolve_workspace_attachment(ctx, workspace_path: str,
                                         filename_override: str | None) -> dict:
     """Read a conversation-workspace file for attachment (path-guarded)."""
     from chat.gemini_api.tool_handlers import (
-        _get_workspace_dir,
+        conversation_workspace_dir,
         _sanitize_workspace_filename,
     )
 
@@ -366,7 +366,7 @@ async def _resolve_workspace_attachment(ctx, workspace_path: str,
         raise _DraftError("workspace_path is required for workspace attachments.")
 
     workspace_root = (
-        await _get_workspace_dir(ctx.conversation_id, project_id=ctx.project_id)
+        await conversation_workspace_dir(ctx.conversation_id)
     ).resolve()
 
     candidate = Path(raw_path)
@@ -384,7 +384,11 @@ async def _resolve_workspace_attachment(ctx, workspace_path: str,
             "outside the conversation workspace."
         )
     if not file_path.is_file():
-        raise _DraftError(f"Workspace file not found: {raw_path}")
+        from chat.gemini_api.tool_handlers.file_paths import (
+            PROJECT_COPY_FIRST_SUFFIX,
+        )
+        hint = PROJECT_COPY_FIRST_SUFFIX if ctx.project_id else ""
+        raise _DraftError(f"Workspace file not found: {raw_path}{hint}")
 
     filename = None
     if filename_override:
@@ -815,7 +819,7 @@ def _resolve_save_destination(workspace_root: Path, path_arg: str | None,
 
 async def _handle_save_mail_attachment(ctx, args: dict) -> str:
     from chat.gemini_api.tool_handlers import (
-        _get_workspace_dir,
+        conversation_workspace_dir,
         _publish_file_list_changed,
         _sanitize_workspace_filename,
     )
@@ -864,7 +868,7 @@ async def _handle_save_mail_attachment(ctx, args: dict) -> str:
     data = value_resp.content
 
     workspace_root = (
-        await _get_workspace_dir(ctx.conversation_id, project_id=ctx.project_id)
+        await conversation_workspace_dir(ctx.conversation_id)
     ).resolve()
     default_filename = (
         _sanitize_workspace_filename(meta.get("name") or "") or "attachment.bin"
@@ -881,7 +885,9 @@ async def _handle_save_mail_attachment(ctx, args: dict) -> str:
     except Exception as exc:
         return _error(f"Failed to save attachment to workspace: {exc}")
 
-    _publish_file_list_changed(ctx.user["id"], ctx.conversation_id, ctx.project_id)
+    _publish_file_list_changed(
+        ctx.user["id"], "conversation", ctx.conversation_id, ctx.project_id,
+    )
 
     rel_written = destination.relative_to(workspace_root).as_posix()
     return json.dumps({
@@ -1028,8 +1034,11 @@ CREATE_MAIL_DRAFT_TOOL = PluginTool(
             "reply_to_message_id / forward_of_message_id (pass the GRAPH "
             "message id, not the Message-ID header; Exchange preserves the "
             "conversation threading automatically, and forwards copy the "
-            "original attachments), and attachments from the conversation "
-            "workspace or from other Outlook messages. NOTE: for replies "
+            "original attachments), and attachments from this "
+            "conversation's workspace or from other Outlook messages. "
+            "Project files must be copied into this conversation's "
+            "workspace first (in a project conversation: `copy_file` from "
+            "`proj://` to `chat://`). NOTE: for replies "
             "and forwards the composed body REPLACES the auto-quoted "
             "original -- include quoted text in the body yourself if "
             "wanted. Total attachment size limit 25MB."
@@ -1099,16 +1108,22 @@ CREATE_MAIL_DRAFT_TOOL = PluginTool(
                                 "type": "string",
                                 "enum": ["workspace", "outlook"],
                                 "description": (
-                                    "'workspace' for conversation-workspace "
-                                    "files, 'outlook' for attachments from "
-                                    "an existing Outlook message."
+                                    "'workspace' for files in this "
+                                    "conversation's workspace, 'outlook' "
+                                    "for attachments from an existing "
+                                    "Outlook message."
                                 ),
                             },
                             "workspace_path": {
                                 "type": "string",
                                 "description": (
-                                    "Workspace-relative file path (required "
-                                    "when type='workspace')."
+                                    "Path relative to this conversation's "
+                                    "workspace (required when "
+                                    "type='workspace'). Project files must "
+                                    "be copied into this conversation's "
+                                    "workspace first (in a project "
+                                    "conversation: `copy_file` from "
+                                    "`proj://` to `chat://`)."
                                 ),
                             },
                             "message_id": {
@@ -1217,8 +1232,8 @@ SAVE_MAIL_ATTACHMENT_TOOL = PluginTool(
     spec={
         "name": "m365_save_mail_attachment",
         "description": (
-            "Download a file attachment from an Outlook message into the "
-            "conversation workspace (default folder "
+            "Download a file attachment from an Outlook message into "
+            "this conversation's workspace (default folder "
             "'outlook-attachments/'; override with 'path'). Get the "
             "attachment_id from the '## Attachments' section of "
             "m365_get_mail_messages. Read the saved file afterwards with "
@@ -1240,7 +1255,8 @@ SAVE_MAIL_ATTACHMENT_TOOL = PluginTool(
                 "path": {
                     "type": "string",
                     "description": (
-                        "Optional workspace-relative destination. A trailing "
+                        "Optional destination relative to this "
+                        "conversation's workspace. A trailing "
                         "'/' (or an existing directory) means 'put the "
                         "original filename inside this directory'; otherwise "
                         "the value is the full file path. Defaults to "

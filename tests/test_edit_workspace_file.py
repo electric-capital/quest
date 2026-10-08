@@ -52,14 +52,14 @@ CONV_ID = "conv-edit-1"
 
 
 def _patch_workspace_dir(tmp_path: Path):
-    """Patch ``_get_workspace_dir`` so handlers operate under ``tmp_path``."""
+    """Patch ``conversation_workspace_dir`` so handlers operate under ``tmp_path``."""
     async def fake_workspace(*args, **kwargs):
         ws = tmp_path / "workspace"
         ws.mkdir(parents=True, exist_ok=True)
         return ws
 
     return patch(
-        "chat.gemini_api.tool_handlers.workspace._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.workspace.conversation_workspace_dir",
         new=fake_workspace,
     )
 
@@ -123,7 +123,7 @@ class TestHappyPath:
         new_content = (workspace / "report.md").read_text(encoding="utf-8")
         assert new_content == "alpha BETA gamma\n"
         assert parsed["size_bytes"] == len(new_content.encode("utf-8"))
-        publish_mock.assert_called_once_with(USER_ID, CONV_ID, None)
+        publish_mock.assert_called_once_with(USER_ID, "conversation", CONV_ID, None)
 
     def test_empty_new_string_deletes_match(self, workspace):
         _make_file(workspace, "a.txt", "keep DELETE keep")
@@ -144,7 +144,7 @@ class TestHappyPath:
             result = _edit("a.txt", "one", "1")
 
         assert json.loads(result)["status"] == "edited"
-        assert ChatStorage.get_workspace_read_paths(CONV_ID) == ["a.txt"]
+        assert ChatStorage.get_workspace_read_paths(CONV_ID) == ["a.txt", "chat://a.txt"]
 
         # A previous successful edit licenses another edit.
         with patch("chat.gemini_api.tool_handlers.workspace._publish_file_list_changed"):
@@ -187,7 +187,7 @@ class TestReadBeforeEditGate:
         ))
         assert "error" not in json.loads(read_result)
         assert extra == []
-        assert ChatStorage.get_workspace_read_paths(CONV_ID) == ["notes.txt"]
+        assert ChatStorage.get_workspace_read_paths(CONV_ID) == ["notes.txt", "chat://notes.txt"]
 
         with patch("chat.gemini_api.tool_handlers.workspace._publish_file_list_changed"):
             result = _edit("notes.txt", "world", "there")
@@ -200,8 +200,9 @@ class TestReadBeforeEditGate:
                 USER_ID, CONV_ID, "out/data.csv", "a,b\n1,2\n",
             ))
             assert json.loads(write_result)["status"] == "written"
+            # Bare key + the chat:// key of the space-aware tools.
             assert ChatStorage.get_workspace_read_paths(CONV_ID) == [
-                str(Path("out/data.csv")),
+                str(Path("out/data.csv")), "chat://out/data.csv",
             ]
 
             result = _edit("out/data.csv", "1,2", "3,4")
@@ -239,7 +240,7 @@ class TestReadBeforeEditGate:
             MagicMock(), USER_ID, CONV_ID, "./a.txt",
         ))
         assert "error" not in json.loads(read_result)
-        assert ChatStorage.get_workspace_read_paths(CONV_ID) == ["a.txt"]
+        assert ChatStorage.get_workspace_read_paths(CONV_ID) == ["a.txt", "chat://a.txt"]
 
         with patch("chat.gemini_api.tool_handlers.workspace._publish_file_list_changed"):
             result = _edit("a.txt", "y", "Y")
