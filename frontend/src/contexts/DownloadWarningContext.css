@@ -8,6 +8,37 @@
   overflow-wrap: anywhere;
 }
 
+/* What the sanitized image copy keeps and drops. */
+.doc-dialog-body p.download-warning-sanitized {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgb(var(--accent-rgb) / 0.35);
+  border-radius: 6px;
+  background-color: rgb(var(--accent-rgb) / 0.08);
+  color: var(--text);
+}
+
+/* The "I know what I am doing" checkbox of the original-file confirm. */
+.doc-dialog-body .download-warning-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin-top: 0.25rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid rgba(211, 47, 47, 0.4);
+  border-radius: 6px;
+  background-color: rgba(211, 47, 47, 0.1);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.download-warning-ack input {
+  flex-shrink: 0;
+  margin: 0.25rem 0 0;
+  accent-color: #d32f2f;
+}
+
 /* The do-not-run paragraph of a severe (code / executable) warning. */
 .doc-dialog-body p.download-warning-severe {
   padding: 0.5rem 0.75rem;

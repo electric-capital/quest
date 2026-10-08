@@ -105,6 +105,22 @@
   color: var(--text);
 }
 
+/* Three actions do not fit the 460px dialog on one row. */
+.doc-dialog:has(.doc-dialog-secondary) {
+  width: 560px;
+}
+
+/* The optional neutral third action: outlined like Cancel. */
+.doc-dialog-secondary {
+  border: 1px solid var(--border-strong);
+  background: none;
+  color: var(--text);
+}
+
+.doc-dialog-secondary:hover:not(:disabled) {
+  background-color: var(--hover);
+}
+
 .doc-dialog-confirm {
   border: 1px solid transparent;
 }

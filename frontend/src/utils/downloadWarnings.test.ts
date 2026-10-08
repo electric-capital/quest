@@ -73,4 +73,15 @@ describe('getDownloadWarning', () => {
     expect(getDownloadWarning({ name: 'notes.txt', kind: 'folder' })?.category).toBe('archive');
     expect(getDownloadWarning({ name: 'reports', kind: 'folder' })?.category).toBe('archive');
   });
+
+  it('offers the image sanitizer for the raster formats the server rewrites only', () => {
+    for (const name of ['chart.png', 'photo.jpg', 'photo.JPEG', 'anim.gif', 'pic.webp']) {
+      expect(getDownloadWarning({ name, kind: 'file' })?.sanitizer).toBe('image');
+    }
+    // Images the server cannot rewrite warn without the offer.
+    for (const name of ['scan.tiff', 'icon.ico', 'raw.heic', 'layers.psd', 'logo.svg']) {
+      expect(getDownloadWarning({ name, kind: 'file' })?.sanitizer).toBeUndefined();
+    }
+    expect(getDownloadWarning({ name: 'pictures', kind: 'folder' })?.sanitizer).toBeUndefined();
+  });
 });

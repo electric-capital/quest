@@ -290,7 +290,7 @@ describe('project-card downloads', () => {
     expect(mocks.downloadFile).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Acknowledge and Download' }));
-    await waitFor(() => expect(mocks.downloadFile).toHaveBeenCalledWith(PROJECT, '/report.html'));
+    await waitFor(() => expect(mocks.downloadFile).toHaveBeenCalledWith(PROJECT, '/report.html', 'original'));
     expect(mocks.saveBlobToDisk).toHaveBeenCalledWith({ url: 'blob:x', filename: 'report.html' });
   });
 

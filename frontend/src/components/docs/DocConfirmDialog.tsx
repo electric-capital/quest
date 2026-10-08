@@ -28,6 +28,14 @@ export interface DocConfirmDialogProps {
   tone?: DocConfirmTone;
   busy: boolean;
   error: string | null;
+  /** Keeps the confirm button disabled until a condition in the body is met. */
+  confirmDisabled?: boolean;
+  /**
+   * An optional third, neutral action between Cancel and confirm (the
+   * download warning's "Download Original..."). Rendered only with a label.
+   */
+  secondaryLabel?: string;
+  onSecondary?: () => void;
   onConfirm: () => void;
   onClose: () => void;
 }
@@ -41,6 +49,9 @@ export function DocConfirmDialog({
   tone = 'default',
   busy,
   error,
+  confirmDisabled = false,
+  secondaryLabel,
+  onSecondary,
   onConfirm,
   onClose,
 }: DocConfirmDialogProps) {
@@ -93,11 +104,21 @@ export function DocConfirmDialog({
         >
           Cancel
         </button>
+        {secondaryLabel && (
+          <button
+            type="button"
+            className="doc-dialog-button doc-dialog-secondary"
+            onClick={onSecondary}
+            disabled={busy}
+          >
+            {secondaryLabel}
+          </button>
+        )}
         <button
           type="button"
           className={`doc-dialog-button doc-dialog-confirm doc-dialog-confirm--${tone}`}
           onClick={onConfirm}
-          disabled={busy}
+          disabled={busy || confirmDisabled}
         >
           {busy && busyLabel ? busyLabel : confirmLabel}
         </button>

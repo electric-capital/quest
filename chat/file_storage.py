@@ -511,6 +511,51 @@ def get_file_content(root: Path, file_path_str: str) -> Tuple[str, str, int]:
     return content, resolved_path.name, size
 
 
+def read_file_bytes(root: Path, file_path_str: str) -> Tuple[bytes, str]:
+    """Read a whole workspace file into memory (the sanitized download).
+
+    Same path and regular-file contract as ``get_file_content`` -- the
+    non-blocking ``O_NOFOLLOW`` open plus the ``S_ISREG`` re-check on the
+    descriptor, so a sandbox-planted FIFO or symlink can neither stall the
+    event loop nor redirect the read -- without the viewable-extension and
+    preview-size limits. Files over ``MAX_FILE_SIZE`` (the upload cap) are
+    refused.
+
+    Returns ``(data, filename)``; ``ValueError`` on an invalid path or a
+    non-regular file, ``FileNotFoundError`` when the file is missing.
+    """
+    is_valid, resolved_path = validate_path(root, file_path_str)
+
+    if not is_valid or resolved_path is None:
+        raise ValueError("Invalid path")
+
+    if not resolved_path.exists():
+        raise FileNotFoundError(f"File not found: {file_path_str}")
+
+    if not resolved_path.is_file():
+        raise ValueError(f"Not a file: {file_path_str}")
+
+    fd = os.open(resolved_path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError(f"Not a file: {file_path_str}")
+        if st.st_size > MAX_FILE_SIZE:
+            raise ValueError(
+                f"This file is too large to sanitize "
+                f"({st.st_size / (1024 * 1024):.1f} MB, limit "
+                f"{MAX_FILE_SIZE // (1024 * 1024)} MB)"
+            )
+        with os.fdopen(fd, "rb") as f:
+            fd = -1  # ownership passed to the file object
+            data = f.read()
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+    return data, resolved_path.name
+
+
 def get_file_download(root: Path, file_path_str: str) -> Tuple[Path, str]:
     """Get a file path for download.
 

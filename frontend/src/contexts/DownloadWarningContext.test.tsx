@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ModalShell } from '../components/ModalShell';
 import { useWorkspaceDownload } from '../hooks/useWorkspaceDownload';
-import { DownloadWarningProvider, useDownloadWarning } from './DownloadWarningContext';
+import { DownloadWarningProvider, useDownloadWarning, type DownloadDecision } from './DownloadWarningContext';
 
 const mocks = vi.hoisted(() => ({
   downloadFile: vi.fn(),
@@ -19,7 +19,7 @@ vi.mock('../api/fileApi', () => ({
 
 /** Exposes confirmDownload to the test and records every verdict. */
 function ConfirmProbe({ verdicts, name, kind = 'file' }: {
-  verdicts: boolean[];
+  verdicts: DownloadDecision[];
   name: string;
   kind?: 'file' | 'folder';
 }) {
@@ -32,7 +32,7 @@ function ConfirmProbe({ verdicts, name, kind = 'file' }: {
 }
 
 function renderProbe(name: string, kind: 'file' | 'folder' = 'file') {
-  const verdicts: boolean[] = [];
+  const verdicts: DownloadDecision[] = [];
   render(
     <DownloadWarningProvider>
       <ConfirmProbe verdicts={verdicts} name={name} kind={kind} />
@@ -53,11 +53,11 @@ describe('DownloadWarningProvider', () => {
   it('resolves plain-text downloads at once without a dialog', async () => {
     const verdicts = renderProbe('notes.txt');
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
-    await waitFor(() => expect(verdicts).toEqual([true]));
+    await waitFor(() => expect(verdicts).toEqual(['original']));
     expect(dialog()).toBeNull();
   });
 
-  it('opens the warning for a sensitive type and resolves true on Acknowledge and Download', async () => {
+  it("opens the warning for a sensitive type and resolves 'original' on Acknowledge and Download", async () => {
     const verdicts = renderProbe('report.html');
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
 
@@ -67,15 +67,15 @@ describe('DownloadWarningProvider', () => {
     expect(verdicts).toEqual([]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Acknowledge and Download' }));
-    await waitFor(() => expect(verdicts).toEqual([true]));
+    await waitFor(() => expect(verdicts).toEqual(['original']));
     expect(dialog()).toBeNull();
   });
 
-  it('resolves false on Cancel', async () => {
-    const verdicts = renderProbe('photo.png');
+  it("resolves 'cancel' on Cancel", async () => {
+    const verdicts = renderProbe('summary.pdf');
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    await waitFor(() => expect(verdicts).toEqual([false]));
+    await waitFor(() => expect(verdicts).toEqual(['cancel']));
     expect(dialog()).toBeNull();
   });
 
@@ -108,10 +108,10 @@ describe('DownloadWarningProvider', () => {
   });
 
   it('shows the warning on every download, with no memory of earlier acknowledgements', async () => {
-    const verdicts = renderProbe('photo.png');
+    const verdicts = renderProbe('summary.pdf');
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
     fireEvent.click(screen.getByRole('button', { name: 'Acknowledge and Download' }));
-    await waitFor(() => expect(verdicts).toEqual([true]));
+    await waitFor(() => expect(verdicts).toEqual(['original']));
 
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
     expect(dialog()).toBeTruthy();
@@ -120,7 +120,7 @@ describe('DownloadWarningProvider', () => {
   it('Escape cancels the warning alone, leaving a modal underneath it open', async () => {
     // A ModalShell host (the file viewer) with its own document-level Escape.
     const hostClose = vi.fn();
-    const verdicts: boolean[] = [];
+    const verdicts: DownloadDecision[] = [];
     render(
       <DownloadWarningProvider>
         <ModalShell isOpen onClose={hostClose} overlayClassName="host">
@@ -132,7 +132,7 @@ describe('DownloadWarningProvider', () => {
     expect(dialog()).toBeTruthy();
 
     fireEvent.keyDown(document.body, { key: 'Escape' });
-    await waitFor(() => expect(verdicts).toEqual([false]));
+    await waitFor(() => expect(verdicts).toEqual(['cancel']));
     expect(dialog()).toBeNull();
     expect(hostClose).not.toHaveBeenCalled();
 
@@ -142,7 +142,7 @@ describe('DownloadWarningProvider', () => {
   });
 
   it('a second request while one is open cancels the first and takes the dialog over', async () => {
-    const verdicts: boolean[] = [];
+    const verdicts: DownloadDecision[] = [];
     render(
       <DownloadWarningProvider>
         <ConfirmProbe verdicts={verdicts} name="first.pdf" />
@@ -152,12 +152,86 @@ describe('DownloadWarningProvider', () => {
     const [askFirst, askSecond] = screen.getAllByRole('button', { name: 'Ask' });
     fireEvent.click(askFirst);
     fireEvent.click(askSecond);
-    await waitFor(() => expect(verdicts).toEqual([false]));
+    await waitFor(() => expect(verdicts).toEqual(['cancel']));
     expect(screen.queryByText('first.pdf')).toBeNull();
     expect(screen.getByText('second.zip')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Acknowledge and Download' }));
-    await waitFor(() => expect(verdicts).toEqual([false, true]));
+    await waitFor(() => expect(verdicts).toEqual(['cancel', 'original']));
+  });
+});
+
+describe('DownloadWarningProvider -- sanitizable images', () => {
+  afterEach(cleanup);
+
+  const imageDialog = () => screen.queryByRole('dialog', { name: 'This image may carry hidden data' });
+  const originalDialog = () => screen.queryByRole('dialog', { name: 'Download the original file?' });
+
+  it('leads with the sanitized copy and resolves sanitized on the primary button', async () => {
+    const verdicts = renderProbe('chart.png');
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+
+    expect(imageDialog()).toBeTruthy();
+    expect(screen.getByText(/keeps the picture exactly as it is/)).toBeTruthy();
+    expect(screen.getByText(/"Generated with Quest" tag/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Acknowledge and Download' })).toBeNull();
+    const primary = screen.getByRole('button', { name: 'Download Sanitized Copy' });
+    expect(primary.className).toContain('doc-dialog-confirm--default');
+
+    fireEvent.click(primary);
+    await waitFor(() => expect(verdicts).toEqual(['sanitized']));
+    expect(imageDialog()).toBeNull();
+  });
+
+  it('hands out the original only after the checkbox on the second dialog is ticked', async () => {
+    const verdicts = renderProbe('photo.jpeg');
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Download Original…' }));
+
+    expect(imageDialog()).toBeNull();
+    expect(originalDialog()).toBeTruthy();
+    expect(screen.getByText('photo.jpeg')).toBeTruthy();
+    const confirm = screen.getByRole('button', { name: 'Download Original' });
+    expect(confirm.className).toContain('doc-dialog-confirm--danger');
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(confirm);
+    expect(verdicts).toEqual([]);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /I know what I am doing/ }));
+    expect((confirm as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(verdicts).toEqual(['original']));
+    expect(originalDialog()).toBeNull();
+  });
+
+  it('Cancel and Escape on the original confirm return to the warning with the checkbox cleared', async () => {
+    const verdicts = renderProbe('anim.gif');
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Download Original…' }));
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(originalDialog()).toBeNull();
+    expect(imageDialog()).toBeTruthy();
+    expect(verdicts).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download Original…' }));
+    expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(originalDialog()).toBeNull();
+    expect(imageDialog()).toBeTruthy();
+
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await waitFor(() => expect(verdicts).toEqual(['cancel']));
+    expect(imageDialog()).toBeNull();
+  });
+
+  it('keeps the plain warning for images the server cannot rewrite', () => {
+    renderProbe('scan.tiff');
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+    expect(screen.getByRole('dialog', { name: 'This download may carry hidden data' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Acknowledge and Download' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Download Original…' })).toBeNull();
   });
 });
 
@@ -187,16 +261,16 @@ describe('useWorkspaceDownload', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Download' }));
     await waitFor(() => expect(results).toEqual([true]));
-    expect(mocks.downloadFile).toHaveBeenCalledWith('conv-1', 'out/notes.txt');
+    expect(mocks.downloadFile).toHaveBeenCalledWith('conv-1', 'out/notes.txt', 'original');
     expect(mocks.saveBlobToDisk).toHaveBeenCalledWith({ url: 'blob:1', filename: 'notes.txt' });
   });
 
   it('does not fetch a sensitive file until the warning is acknowledged, and never after Cancel', async () => {
-    mocks.downloadFile.mockResolvedValue({ url: 'blob:2', filename: 'chart.png' });
+    mocks.downloadFile.mockResolvedValue({ url: 'blob:2', filename: 'deck.pptx' });
     const results: boolean[] = [];
     render(
       <DownloadWarningProvider>
-        <DownloadProbe path="charts/chart.png" results={results} />
+        <DownloadProbe path="slides/deck.pptx" results={results} />
       </DownloadWarningProvider>,
     );
     const button = screen.getByRole('button', { name: 'Download' });
@@ -213,7 +287,24 @@ describe('useWorkspaceDownload', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Acknowledge and Download' }));
     });
     await waitFor(() => expect(results).toEqual([false, true]));
-    expect(mocks.downloadFile).toHaveBeenCalledWith('conv-1', 'charts/chart.png');
-    expect(mocks.saveBlobToDisk).toHaveBeenCalledWith({ url: 'blob:2', filename: 'chart.png' });
+    expect(mocks.downloadFile).toHaveBeenCalledWith('conv-1', 'slides/deck.pptx', 'original');
+    expect(mocks.saveBlobToDisk).toHaveBeenCalledWith({ url: 'blob:2', filename: 'deck.pptx' });
+  });
+
+  it('fetches the sanitized copy of an image when the user picks it', async () => {
+    mocks.downloadFile.mockResolvedValue({ url: 'blob:3', filename: 'chart.png' });
+    const results: boolean[] = [];
+    render(
+      <DownloadWarningProvider>
+        <DownloadProbe path="charts/chart.png" results={results} />
+      </DownloadWarningProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Download Sanitized Copy' }));
+    });
+    await waitFor(() => expect(results).toEqual([true]));
+    expect(mocks.downloadFile).toHaveBeenCalledWith('conv-1', 'charts/chart.png', 'sanitized');
+    expect(mocks.saveBlobToDisk).toHaveBeenCalledWith({ url: 'blob:3', filename: 'chart.png' });
   });
 });

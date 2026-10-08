@@ -17,10 +17,11 @@ from pathlib import Path
 
 import httpx
 from fastapi import HTTPException, Depends, APIRouter, UploadFile, File, Query, Form
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 from typing import List, Optional
+from urllib.parse import quote
 from chat.realtime import bus, events as realtime_events
 from chat.conversation_access import (
     resolve_owned_project_workspace,
@@ -33,6 +34,7 @@ from chat.file_storage import (
     save_uploaded_file_with_path,
     get_file_download,
     get_file_content,
+    read_file_bytes,
     create_folder_zip,
     delete_workspace_item,
     count_workspace_item_files,
@@ -42,6 +44,7 @@ from chat.file_storage import (
     is_scratch_source,
     MAX_FILE_SIZE
 )
+from chat.image_sanitizer import ImageSanitizeError, sanitize_image
 from auth.google_credentials import make_authenticated_request
 
 
@@ -250,6 +253,46 @@ def _download(root: Path, path: str) -> FileResponse:
         path=file_path,
         filename=filename,
         media_type="application/octet-stream"
+    )
+
+
+def _sanitize_in_thread(root: Path, path: str) -> tuple[bytes, str, str]:
+    """Read + sanitize, run under ``asyncio.to_thread``: ``(data, mime, name)``."""
+    data, filename = read_file_bytes(root, path)
+    content, mime = sanitize_image(data)
+    return content, mime, filename
+
+
+async def _download_sanitized(root: Path, path: str) -> Response:
+    """Serve a metadata-stripped copy of a raster image as an attachment.
+
+    The copy is built in memory by ``chat.image_sanitizer`` (format picked
+    by magic bytes, pixel data untouched) and never written to the
+    workspace. 400 ``unsanitizable_image`` when the file is not a PNG /
+    JPEG / GIF / WebP or its container is malformed.
+    """
+    with _file_errors():
+        # Inside the path-error mapping: ImageSanitizeError IS a ValueError
+        # and must not be reported as ``invalid_path``.
+        try:
+            content, mime, filename = await asyncio.to_thread(
+                _sanitize_in_thread, root, path
+            )
+        except ImageSanitizeError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "unsanitizable_image", "message": str(e)},
+            )
+    # Always an attachment: this copy exists to be saved, never embedded.
+    ascii_name = filename.encode("ascii", "replace").decode("ascii").replace('"', "")
+    disposition = (
+        f'attachment; filename="{ascii_name}"; '
+        f"filename*=utf-8''{quote(filename)}"
+    )
+    return Response(
+        content=content,
+        media_type=mime,
+        headers={"Content-Disposition": disposition},
     )
 
 
@@ -586,6 +629,21 @@ async def download_file(
     return _download(root, path)
 
 
+@router.get("/conversations/{conversation_id}/files/download-sanitized")
+async def download_sanitized_file(
+    conversation_id: str,
+    path: str = Query(..., description="Image path within workspace"),
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked)
+):
+    """Download a metadata-stripped copy of a conversation-workspace image.
+
+    PNG / JPEG / GIF / WebP only (by magic bytes); 400
+    ``unsanitizable_image`` otherwise. See ``chat.image_sanitizer``.
+    """
+    _meta, root = await resolve_owned_workspace(user["id"], conversation_id)
+    return await _download_sanitized(root, path)
+
+
 @router.get("/conversations/{conversation_id}/files/download-folder")
 async def download_folder_as_zip(
     conversation_id: str,
@@ -842,6 +900,17 @@ async def download_project_file(
     """Download a project-workspace file (raster images inline)."""
     _project, root = await resolve_owned_project_workspace(user["id"], project_id)
     return _download(root, path)
+
+
+@router.get("/projects/{project_id}/files/download-sanitized")
+async def download_sanitized_project_file(
+    project_id: str,
+    path: str = Query(..., description="Image path within the project workspace"),
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Download a metadata-stripped copy of a project-workspace image."""
+    _project, root = await resolve_owned_project_workspace(user["id"], project_id)
+    return await _download_sanitized(root, path)
 
 
 @router.get("/projects/{project_id}/files/download-folder")

@@ -340,14 +340,23 @@ export function saveBlobToDisk({ url, filename }: { url: string; filename: strin
 }
 
 /**
+ * Which copy of a workspace file a download fetches: the file as stored, or
+ * the metadata-stripped rewrite the server builds for raster images
+ * (`/download-sanitized`, see chat/image_sanitizer.py -- 400
+ * `unsanitizable_image` for anything that is not a PNG/JPEG/GIF/WebP).
+ */
+export type DownloadVariant = 'original' | 'sanitized';
+
+/**
  * Download a file from the workspace
  * Returns a blob URL that can be used for download
  */
 export async function downloadFile(
   target: FileTarget,
-  filePath: string
+  filePath: string,
+  variant: DownloadVariant = 'original',
 ): Promise<{ url: string; filename: string }> {
-  const url = routeUrl(target, '/download');
+  const url = routeUrl(target, variant === 'sanitized' ? '/download-sanitized' : '/download');
   url.searchParams.set('path', filePath);
   return fetchBlob(url, filePath.split('/').pop() || 'download');
 }
@@ -454,8 +463,12 @@ export function projectFileDownloadUrl(projectId: string, filePath: string): str
   return fileDownloadUrl(projectSource(projectId), filePath);
 }
 
-export function downloadProjectFile(projectId: string, filePath: string): Promise<{ url: string; filename: string }> {
-  return downloadFile(projectSource(projectId), filePath);
+export function downloadProjectFile(
+  projectId: string,
+  filePath: string,
+  variant: DownloadVariant = 'original',
+): Promise<{ url: string; filename: string }> {
+  return downloadFile(projectSource(projectId), filePath, variant);
 }
 
 export function downloadProjectFolder(projectId: string, folderPath: string): Promise<{ url: string; filename: string }> {

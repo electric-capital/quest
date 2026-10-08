@@ -46,6 +46,9 @@ packages = ["."]
 [dependency-groups]
 dev = [
     "honcho>=2.0.0",
+    # Test-only: builds image fixtures with metadata and independently
+    # decodes chat/image_sanitizer.py output (the sanitizer itself is stdlib)
+    "pillow>=12.3.0",
     "pytest>=8.0.0",
 ]
 

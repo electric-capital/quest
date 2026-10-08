@@ -17,6 +17,11 @@
  * inert data is silent, markup that a viewer renders (and whose references
  * it fetches, e.g. a markdown image URL) warns, and source code is its own
  * severe category because the real hazard is running it.
+ *
+ * For the raster formats the server can rewrite (`SANITIZABLE_IMAGE_EXTENSIONS`,
+ * see chat/image_sanitizer.py) the warning additionally offers a sanitized
+ * copy -- pixels kept, every other part of the file dropped -- and the original
+ * only behind a second, explicit acknowledgement.
  */
 
 export type DownloadWarningCategory =
@@ -40,6 +45,12 @@ export interface DownloadWarning {
    * and uses the danger tone.
    */
   severity: 'warning' | 'severe';
+  /**
+   * Set when the server offers a metadata-stripped copy of this file
+   * (`GET .../files/download-sanitized`): the dialog then leads with
+   * "Download Sanitized Copy" and gates the original behind a second confirm.
+   */
+  sanitizer?: 'image';
 }
 
 export interface DownloadTarget {
@@ -102,6 +113,18 @@ const CATEGORY_DETAILS: Record<DownloadWarningCategory, string> = {
 
 const SEVERE_CATEGORIES: ReadonlySet<DownloadWarningCategory> = new Set(['code', 'executable']);
 
+/**
+ * The raster formats chat/image_sanitizer.py rewrites. Hand-mirrored: the
+ * server picks the format by magic bytes and 400s anything else, so a file
+ * named .png that is not a PNG fails the sanitized fetch rather than
+ * silently downloading.
+ */
+export const SANITIZABLE_IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
+
+/** What the sanitized copy keeps and drops, for the dialog. */
+export const SANITIZED_IMAGE_EXPLANATION =
+  'A sanitized copy keeps the picture exactly as it is -- every pixel, no re-encoding -- and drops everything else in the file: EXIF, XMP, colour profiles, text chunks, comments, unknown blocks and any bytes after the end of the image. Its only metadata is a "Generated with Quest" tag.';
+
 /** Lower-cased extension without the dot, or '' when the name has none. */
 function extensionOf(name: string): string {
   const base = name.split('/').pop() ?? name;
@@ -124,11 +147,14 @@ function categoryForExtension(ext: string): DownloadWarningCategory | null {
  * the file type needs none.
  */
 export function getDownloadWarning(target: DownloadTarget): DownloadWarning | null {
-  const category = target.kind === 'folder' ? 'archive' : categoryForExtension(extensionOf(target.name));
+  const ext = target.kind === 'folder' ? '' : extensionOf(target.name);
+  const category = target.kind === 'folder' ? 'archive' : categoryForExtension(ext);
   if (category === null) return null;
-  return {
+  const warning: DownloadWarning = {
     category,
     detail: CATEGORY_DETAILS[category],
     severity: SEVERE_CATEGORIES.has(category) ? 'severe' : 'warning',
   };
+  if (category === 'image' && SANITIZABLE_IMAGE_EXTENSIONS.has(ext)) warning.sanitizer = 'image';
+  return warning;
 }
