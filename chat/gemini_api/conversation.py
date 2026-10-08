@@ -372,11 +372,15 @@ async def _read_chat_history(conversation_id: str) -> dict | None:
     a concurrent writer mid-write -- is retried once synchronously on the
     event loop, where every chat_history.json writer runs, so that read can
     never see a torn file; a genuinely corrupt file raises from there, as
-    the previous direct ``get_guide_snapshot`` call did.
+    as a direct read always did.
     """
     try:
         return await asyncio.to_thread(ChatStorage.get_conversation, conversation_id)
     except Exception:
+        logger.debug(
+            "Threaded chat_history.json read failed for %s; retrying on the loop",
+            conversation_id, exc_info=True,
+        )
         return ChatStorage.get_conversation(conversation_id)
 
 
@@ -400,7 +404,8 @@ def _resolve_workspace_notice_flags(
       at least one assistant message, whose earlier files may therefore
       live in the shared project workspace -- and if so sets
       ``legacy_shared_workspace``; either way ``own_workspace`` is then set
-      (one ``set_conversation_flags`` rewrite, on the event loop) so the
+      (one compare-and-set ``set_conversation_flags`` rewrite on the event
+      loop, skipped when a fresh read already shows ``own_workspace``) so the
       check never runs again (see ``chat.storage.CONVERSATION_NOTICE_FLAGS``
       for why the workspace dir's presence is not the signal);
     * returns the flags (``legacy_shared_workspace`` /
@@ -431,7 +436,16 @@ def _resolve_workspace_notice_flags(
             for m in (messages or [])
         ):
             updates["legacy_shared_workspace"] = True
-        ChatStorage.set_conversation_flags(conversation_id, updates)
+        # Compare-and-set against a fresh read: a from-conversation (or a
+        # concurrent turn) that set own_workspace after the turn-start read
+        # wins, so a converted chat is never flagged legacy.
+        wrote = ChatStorage.set_conversation_flags(
+            conversation_id, updates, only_if_unset="own_workspace",
+        )
+        if not wrote:
+            # Lost the race (or nothing to annotate): report what is on disk
+            # now, e.g. a just-set converted_from_standalone.
+            return ChatStorage.get_conversation_flags(conversation_id)
         flags.update(updates)
         if updates.get("legacy_shared_workspace"):
             # The cached session was built with a prompt that lacks the

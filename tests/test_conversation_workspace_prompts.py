@@ -207,9 +207,7 @@ class TestLegacyDetection:
         assert (1, "c1") in session_mod._active_chats
 
     def test_missing_history_is_harmless(self, chats_dir):
-        assert _detect("c1", "p1") == {
-            "own_workspace": True,
-        }
+        assert _detect("c1", "p1") == {}
         assert not (chats_dir / "c1" / "chat_history.json").exists()
 
     def test_one_rewrite_on_detection(self, chats_dir, monkeypatch):
@@ -219,15 +217,48 @@ class TestLegacyDetection:
         real = conv_mod.ChatStorage.set_conversation_flags
         calls = []
 
-        def _spy(cid, flags):
-            calls.append(dict(flags))
-            real(cid, flags)
+        def _spy(cid, flags, only_if_unset=None):
+            calls.append((dict(flags), only_if_unset))
+            return real(cid, flags, only_if_unset=only_if_unset)
 
         monkeypatch.setattr(
             conv_mod.ChatStorage, "set_conversation_flags", staticmethod(_spy),
         )
         _detect("c1", "p1")
-        assert calls == [{"own_workspace": True, "legacy_shared_workspace": True}]
+        assert calls == [
+            ({"own_workspace": True, "legacy_shared_workspace": True}, "own_workspace"),
+        ]
+
+    def test_compare_and_set_loses_to_concurrent_conversion(self, chats_dir, monkeypatch):
+        """from-conversation sets its flags after the turn-start read: the
+        stale read must not get the chat flagged legacy."""
+        path = _write_history(chats_dir, "c1", {
+            "id": "c1", "project_id": "p1", "messages": [_USER_MSG, _ASSISTANT_MSG],
+        })
+        stale = _storage().ChatStorage.get_conversation("c1")
+        _storage().ChatStorage.set_conversation_flags(
+            "c1", {"converted_from_standalone": True, "own_workspace": True},
+        )
+        monkeypatch.setitem(session_mod._active_chats, (1, "c1"), ("m", object()))
+        flags = conv_mod._resolve_workspace_notice_flags(1, "c1", "p1", stale)
+        assert flags == {"converted_from_standalone": True, "own_workspace": True}
+        assert "legacy_shared_workspace" not in _history(path)
+        assert (1, "c1") in session_mod._active_chats  # nothing written, kept
+
+    def test_compare_and_set_storage_contract(self, chats_dir):
+        cs = _storage().ChatStorage
+        _write_history(chats_dir, "c1", {"id": "c1", "messages": []})
+        assert cs.set_conversation_flags(
+            "c1", {"own_workspace": True}, only_if_unset="own_workspace",
+        ) is True
+        assert cs.set_conversation_flags(
+            "c1", {"legacy_shared_workspace": True}, only_if_unset="own_workspace",
+        ) is False
+        assert cs.get_conversation_flags("c1") == {"own_workspace": True}
+        assert cs.set_conversation_flags("c1", {"own_workspace": True}) is False
+        assert cs.set_conversation_flags("nope", {"own_workspace": True}) is False
+        with pytest.raises(ValueError):
+            cs.set_conversation_flags("c1", {}, only_if_unset="bogus")
 
     def test_failure_never_raises(self, chats_dir, monkeypatch):
         def _boom(_data):
@@ -333,8 +364,7 @@ def _without_allowed_mentions(prompt: str) -> str:
     """
     lines = [
         line for line in prompt.splitlines()
-        if not line.lstrip().startswith(("9. **run_script", "10. **run_python",
-                                         "5. **run_script", "6. **run_python"))
+        if "**run_script(" not in line and "**run_python(" not in line
     ]
     return "\n".join(lines).replace(COPY_SENTENCE, "")
 
@@ -612,6 +642,233 @@ def test_run_sub_agent_passes_parent_flags(chats_dir, monkeypatch, project_id):
     assert (LEGACY_NOTE in prompt) is (project_id is not None)
     assert (CONVERTED_NOTE in prompt) is (project_id is not None)
     assert (TWO_SPACES in prompt) is (project_id is not None)
+
+
+# ---------------------------------------------------------------------------
+# _read_chat_history: threaded read with a synchronous retry
+# ---------------------------------------------------------------------------
+
+
+class TestReadChatHistory:
+    def test_retries_on_the_loop_after_a_failed_threaded_read(self, chats_dir, monkeypatch):
+        _write_history(chats_dir, "c1", {"id": "c1", "messages": [_USER_MSG]})
+        real = conv_mod.ChatStorage.get_conversation
+        calls = []
+
+        def _flaky(cid):
+            calls.append(cid)
+            if len(calls) == 1:
+                raise json.JSONDecodeError("torn", "", 0)
+            return real(cid)
+
+        monkeypatch.setattr(conv_mod.ChatStorage, "get_conversation", staticmethod(_flaky))
+        data = asyncio.run(conv_mod._read_chat_history("c1"))
+        assert data["messages"] == [_USER_MSG]
+        assert calls == ["c1", "c1"]
+
+    def test_corrupt_file_still_raises(self, chats_dir):
+        (chats_dir / "c1").mkdir(parents=True)
+        (chats_dir / "c1" / "chat_history.json").write_text("{not json")
+        with pytest.raises(json.JSONDecodeError):
+            asyncio.run(conv_mod._read_chat_history("c1"))
+
+    def test_missing_file_is_none(self, chats_dir):
+        assert asyncio.run(conv_mod._read_chat_history("c1")) is None
+
+
+# ---------------------------------------------------------------------------
+# Guide snapshot resolution through run_conversation_turn (real files)
+# ---------------------------------------------------------------------------
+
+
+def _guide_turn(monkeypatch, *, gate_open, guide_id=None):
+    captured: dict = {}
+
+    def _capture(*_a, **kw):
+        captured.update(kw)
+        return "system prompt"
+
+    _patch_turn_collaborators(monkeypatch, public=False)
+    monkeypatch.setattr(conv_mod, "get_system_prompt", _capture)
+    monkeypatch.setattr(conv_mod, "get_or_create_chat", lambda *a, **kw: object())
+    import config.feature_gates as feature_gates
+    monkeypatch.setattr(feature_gates, "guides_enabled_for", lambda _email: gate_open)
+    import db.guide_store as guide_store
+    monkeypatch.setattr(guide_store, "get_guide", AsyncMock(return_value={
+        "id": "g-new", "name": "New guide", "content": "NEW GUIDE TEXT",
+    }))
+
+    async def _on_event(_e):
+        return None
+
+    asyncio.run(conv_mod.run_conversation_turn(
+        app=None, user=_TURN_USER, message="again", conversation_id="c1",
+        timezone="UTC", model="fake", on_event=_on_event, project_id="p1",
+        guide_id=guide_id,
+    ))
+    return captured
+
+
+class TestGuideSnapshotThroughTurn:
+    def test_existing_snapshot_wins(self, chats_dir, monkeypatch):
+        _write_history(chats_dir, "c1", {
+            "id": "c1", "project_id": "p1", "own_workspace": True,
+            "guide_id": "g-old",
+            "guide_snapshot": {"name": "Old", "content": "OLD GUIDE TEXT"},
+            "messages": [_USER_MSG],
+        })
+        captured = _guide_turn(monkeypatch, gate_open=True, guide_id="g-new")
+        assert captured["custom_system_prompt"] == "OLD GUIDE TEXT"
+
+    def test_gate_closed_ignores_snapshot(self, chats_dir, monkeypatch):
+        _write_history(chats_dir, "c1", {
+            "id": "c1", "project_id": "p1", "own_workspace": True,
+            "guide_id": "g-old",
+            "guide_snapshot": {"name": "Old", "content": "OLD GUIDE TEXT"},
+            "messages": [_USER_MSG],
+        })
+        captured = _guide_turn(monkeypatch, gate_open=False, guide_id="g-new")
+        assert captured["custom_system_prompt"] == ""
+
+    def test_explicit_guide_survives_legacy_flag_write(self, chats_dir, monkeypatch):
+        # The guide snapshot is written between the turn-start read and the
+        # flag write; the flag write re-reads, so neither clobbers the other.
+        path = _write_history(chats_dir, "c1", {
+            "id": "c1", "project_id": "p1", "messages": [_USER_MSG, _ASSISTANT_MSG],
+        })
+        captured = _guide_turn(monkeypatch, gate_open=True, guide_id="g-new")
+        assert captured["custom_system_prompt"] == "NEW GUIDE TEXT"
+        assert captured["legacy_shared_workspace"] is True
+        data = _history(path)
+        assert data["guide_id"] == "g-new"
+        assert data["guide_snapshot"]["content"] == "NEW GUIDE TEXT"
+        assert data["legacy_shared_workspace"] is True
+        assert data["own_workspace"] is True
+
+
+# ---------------------------------------------------------------------------
+# RunContext.workspace_notice_flags reaches every spawn path
+# ---------------------------------------------------------------------------
+
+_FLAGS = {"own_workspace": True, "legacy_shared_workspace": True}
+
+
+def _ctx_with_flags():
+    from chat.gemini_api.run_context import RunContext
+    from chat.gemini_api.usage import UsageAccumulator
+
+    return RunContext(
+        app=None, user=dict(_TURN_USER, settings={}), conversation_id="c1",
+        timezone="UTC", model="claude-haiku-4.5", origin="web",
+        project_id="p1", routine_id=None, slack_context=None,
+        provider=MagicMock(), provider_name="anthropic", chat=object(),
+        is_slack_origin=False, is_user_subagent=False, is_inference_api=False,
+        is_public=False, nested_subagents=True, user_subagents_enabled=False,
+        user_subagents_gate_open=False, subagent_run=None, subagent_caller=None,
+        custom_prompt="", resolved_project_guide="", resolved_skills_content="",
+        on_event=AsyncMock(), structured_messages=[], usage_acc=UsageAccumulator(),
+        workspace_notice_flags=_FLAGS,
+    )
+
+
+@pytest.mark.parametrize("arm,args", [
+    ("_handle_agent_task_parallel", {"tasks": [
+        {"id": "t1", "name": "A", "prompt": "go", "description": "d"},
+    ]}),
+    ("_handle_agent_task_parallel_template", {
+        "prompt_template": "do {x}", "model": "claude-haiku-4.5",
+        "agents": [{"name": "A", "x": "1"}],
+    }),
+])
+def test_parallel_spawn_arms_forward_flags(monkeypatch, arm, args):
+    from chat.gemini_api import sub_agent as sub_agent_mod
+    from chat.gemini_api import turn_tools
+
+    seen = []
+
+    async def _fake_run_sub_agent(**kw):
+        seen.append(kw.get("workspace_notice_flags"))
+        return "done"
+
+    monkeypatch.setattr(sub_agent_mod, "_run_sub_agent", _fake_run_sub_agent)
+    call = turn_tools.ToolCall(name=arm, key=arm, tool_id="tid", raw_tool_id="tid", args=args)
+    asyncio.run(getattr(turn_tools, arm)(_ctx_with_flags(), call, turn_tools.TurnState()))
+    assert seen == [_FLAGS]
+
+
+def test_agent_task_arm_forwards_flags(monkeypatch):
+    from chat.gemini_api import turn_tools
+
+    seen = []
+
+    async def _fake_run_sub_agent(**kw):
+        seen.append(kw.get("workspace_notice_flags"))
+        return "done"
+
+    monkeypatch.setattr(turn_tools, "_run_sub_agent", _fake_run_sub_agent)
+    call = turn_tools.ToolCall(
+        name="agent_task", key="agent_task", tool_id="tid", raw_tool_id="tid",
+        args={"name": "A", "prompt": "go", "description": "d"},
+    )
+    asyncio.run(turn_tools._handle_agent_task(_ctx_with_flags(), call, turn_tools.TurnState()))
+    assert seen == [_FLAGS]
+
+
+def test_nested_spawn_forwards_flags(monkeypatch):
+    """A 1st-level sub-agent passes the flags on to its nested sub-agent."""
+    from chat.gemini_api import sub_agent as sub_agent_mod
+    from chat.llm.base import StreamEvent
+
+    real = sub_agent_mod._run_sub_agent
+    seen = []
+
+    async def _spy(**kw):
+        seen.append((kw.get("level"), kw.get("workspace_notice_flags")))
+        if kw.get("level") == 2:
+            return "nested done"
+        return await real(**kw)
+
+    monkeypatch.setattr(sub_agent_mod, "_run_sub_agent", _spy)
+    provider = _fake_provider()
+    usage = MagicMock()
+    usage.input_tokens = usage.output_tokens = usage.cached_tokens = 0
+    usage.cache_creation_tokens = usage.cache_read_tokens = 0
+    provider.get_usage.return_value = usage
+    provider.format_tool_results = MagicMock(side_effect=lambda _s, r: r)
+    turns = [
+        [StreamEvent(type="tool_call", tool_name="agent_task_nested", tool_id="n1",
+                     tool_args={"name": "Leaf", "prompt": "count", "description": "d",
+                                "model": "claude-haiku-4.5"})],
+        [StreamEvent(type="tool_call", tool_name="agent_task_response", tool_id="r1",
+                     tool_args={"response": "ok"})],
+    ]
+    state = {"n": 0}
+
+    async def _stream(_session, _message):
+        i = state["n"]
+        state["n"] += 1
+        for ev in turns[i] if i < len(turns) else []:
+            yield ev
+
+    provider.send_message_stream = _stream
+    with patch(
+        "chat.gemini_api.sub_agent.record_api_call", new=AsyncMock()
+    ), patch(
+        "api.instructions.get_user_connected_services", return_value={}
+    ), patch(
+        "chat.gemini_api.sub_agent.compute_new_input_tokens", return_value=0
+    ), patch(
+        "chat.gemini_api.sub_agent.compute_total_context_tokens", return_value=0
+    ), patch(
+        "chat.gemini_api.sub_agent.get_provider_instance", return_value=provider,
+    ):
+        asyncio.run(_spy(
+            app=MagicMock(), provider=provider, user=dict(_TURN_USER, settings={}),
+            conversation_id="c1", timezone="UTC", model="claude-haiku-4.5",
+            agent_name="A", prompt="go", project_id="p1", nested_enabled=True,
+            level=1, workspace_notice_flags=_FLAGS,
+        ))
+    assert (2, _FLAGS) in seen
 
 
 def test_attached_filenames_sentence():

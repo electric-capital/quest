@@ -1035,22 +1035,6 @@ class ChatStorage:
             }
         return None
 
-    @staticmethod
-    def get_guide_snapshot(
-        conversation_id: str,
-    ) -> Optional[Dict]:
-        """Get the guide snapshot from a conversation.
-
-        Args:
-            conversation_id: Conversation UUID.
-
-        Returns:
-            Dict with 'guide_id' and 'guide_snapshot' keys, or None if not set.
-        """
-        return ChatStorage.guide_snapshot_from(
-            ChatStorage.get_conversation(conversation_id)
-        )
-
     # ------------------------------------------------------------------
     # Per-conversation notice flags (chat_history.json top level)
     # ------------------------------------------------------------------
@@ -1100,8 +1084,18 @@ class ChatStorage:
         ChatStorage.set_conversation_flags(conversation_id, {name: value})
 
     @staticmethod
-    def set_conversation_flags(conversation_id: str, flags: Dict[str, bool]) -> None:
+    def set_conversation_flags(
+        conversation_id: str,
+        flags: Dict[str, bool],
+        only_if_unset: Optional[str] = None,
+    ) -> bool:
         """Set several notice flags at the top level of chat_history.json.
+
+        ``only_if_unset`` makes it a compare-and-set: the file is re-read
+        and nothing is written when that flag is already truthy there
+        (e.g. legacy detection's ``own_workspace`` guard, which must lose to
+        a concurrent from-conversation that set it after the turn-start
+        read). Returns True iff the file was rewritten.
 
         One read-modify-write for all of ``flags``, rewriting the file the
         same way ``append_message`` does and leaving ``messages`` and every
@@ -1123,7 +1117,7 @@ class ChatStorage:
             ValueError: a key is not one of ``CONVERSATION_NOTICE_FLAGS``
                 (checked before anything is read or written).
         """
-        for name in flags:
+        for name in list(flags) + ([only_if_unset] if only_if_unset else []):
             if name not in CONVERSATION_NOTICE_FLAGS:
                 raise ValueError(f"Unknown conversation flag: {name!r}")
         names = ", ".join(flags)
@@ -1133,7 +1127,7 @@ class ChatStorage:
                 "set_conversation_flags(%s, %s): no chat_history.json; skipped",
                 conversation_id, names,
             )
-            return
+            return False
         try:
             with open(chat_file, "r") as f:
                 chat_data = json.load(f)
@@ -1142,13 +1136,15 @@ class ChatStorage:
                 "set_conversation_flags(%s, %s): unreadable chat_history.json; skipped",
                 conversation_id, names, exc_info=True,
             )
-            return
+            return False
         if not isinstance(chat_data, dict):
             logger.warning(
                 "set_conversation_flags(%s, %s): chat_history.json is not an object; skipped",
                 conversation_id, names,
             )
-            return
+            return False
+        if only_if_unset and chat_data.get(only_if_unset):
+            return False
         changed = False
         for name, value in flags.items():
             value = bool(value)
@@ -1156,9 +1152,10 @@ class ChatStorage:
                 chat_data[name] = value
                 changed = True
         if not changed:
-            return
+            return False
         with open(chat_file, "w") as f:
             json.dump(chat_data, f, indent=2)
+        return True
 
     # ------------------------------------------------------------------
     # Loaded skills (per-conversation, manually loaded by user)

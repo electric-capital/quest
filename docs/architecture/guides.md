@@ -61,7 +61,7 @@ When the first message of a conversation carries an explicit `guide_id` (routine
 - `guide_id`: UUID of the guide that was used
 - `guide_snapshot`: Object with `name` and `content` keys
 
-**Snapshot persistence** is handled by `ChatStorage.set_guide_snapshot()` and `ChatStorage.get_guide_snapshot()` in `chat/storage.py`. The `set_guide_snapshot()` method is idempotent -- it only writes if no snapshot exists yet.
+**Snapshot persistence** is handled by `ChatStorage.set_guide_snapshot()` and `ChatStorage.guide_snapshot_from()` (applied to the turn-start `chat_history.json` read) in `chat/storage.py`. The `set_guide_snapshot()` method is idempotent -- it only writes if no snapshot exists yet.
 
 ## Guide Resolution Flow
 
