@@ -706,8 +706,9 @@ def test_admin_list_shape(admin_routes, health_store):
     result = _run(admin_routes.admin_list_inference_providers(user=ADMIN_USER))
     assert "sk-or-secret" not in json.dumps(result)
     assert result["kinds"] == [
-        {"kind": "openrouter", "label": "OpenRouter", "endpoint": False},
-        {"kind": "local", "label": "Self-hosted", "endpoint": True},
+        {"kind": "openrouter", "label": "OpenRouter", "endpoint": False, "catalog": "openrouter"},
+        {"kind": "fireworks", "label": "Fireworks AI", "endpoint": False, "catalog": "fireworks"},
+        {"kind": "local", "label": "Self-hosted", "endpoint": True, "catalog": "server"},
     ]
     assert [t["id"] for t in result["api_types"]] == ["openai", "ollama"]
 

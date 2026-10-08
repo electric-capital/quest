@@ -1678,14 +1678,15 @@ export interface VertexProviderStatus {
   models: InferenceModelInfo[];
 }
 
-// One admin-configured provider instance (an OpenRouter configuration or a
-// self-hosted inference server)
+// One admin-configured provider instance (an OpenRouter or Fireworks AI
+// configuration, or a self-hosted inference server)
 export interface InferenceInstanceStatus {
   id: string;
   kind: string;
   kind_label: string;
   label: string;
-  // Usable at all: a stored key (OpenRouter) or a server URL (self-hosted)
+  // Usable at all: a stored key (OpenRouter, Fireworks) or a server URL
+  // (self-hosted)
   configured: boolean;
   // "store" = key file in the data directory, null = no key yet
   source: 'store' | null;
@@ -1706,11 +1707,24 @@ export interface InferenceApiType {
   description: string;
 }
 
+// Where a kind's "Add model" typeahead looks: the shared OpenRouter
+// catalog, the instance's own key-fetched Fireworks catalog, or the
+// self-hosted server's live model list
+export type InferenceCatalogSource = 'openrouter' | 'fireworks' | 'server';
+
+export interface InferenceInstanceKind {
+  kind: string;
+  label: string;
+  // Carries its own base URL + API type (self-hosted server)
+  endpoint: boolean;
+  catalog: InferenceCatalogSource;
+}
+
 export interface InferenceProvidersListResponse {
   vertex: VertexProviderStatus;
   instances: InferenceInstanceStatus[];
-  // Instance kinds an admin can add (`endpoint` = carries its own base URL)
-  kinds: { kind: string; label: string; endpoint: boolean }[];
+  // Instance kinds an admin can add
+  kinds: InferenceInstanceKind[];
   api_types: InferenceApiType[];
 }
 
@@ -1736,20 +1750,22 @@ export interface InferenceInstanceUpdate {
   models?: { id: string; enabled: boolean; name?: string; context_length?: number }[];
 }
 
-// One OpenRouter catalog entry (typeahead candidate)
+// One catalog entry (typeahead candidate) -- the OpenRouter row shape,
+// shared by the Fireworks catalog and self-hosted discovery
 export interface OpenRouterCatalogModel {
   id: string;
   name: string;
   context_length: number | null;
   max_completion_tokens: number | null;
   pricing: { prompt: number; completion: number; cache_read?: number } | null;
-  // Self-hosted discovery only: server-reported summary (family, size,
-  // quantization) and capabilities (e.g. "tools")
+  // Self-hosted discovery / Fireworks only: a short summary (family, size,
+  // quantization / "tools · vision · 128K ctx") and capabilities
   detail?: string;
   capabilities?: string[] | null;
 }
 
-// Models a self-hosted instance's server reports right now (not cached)
+// An instance's own catalog: the models a self-hosted server reports right
+// now (not cached) or the Fireworks serverless catalog (cached)
 export interface InstanceCatalogResponse {
   models: OpenRouterCatalogModel[];
   error: string | null;

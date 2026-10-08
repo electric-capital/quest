@@ -455,7 +455,7 @@ def get_backend_for_model(model_id: str) -> str | None:
 
     Vertex-served models (all Gemini and Anthropic models) resolve to
     ``"vertex"``; instance-served models to their kind's backend label
-    (``"openrouter"``, ``"local"``). Historical analytics rows recorded under ``"genapi"``
+    (``"openrouter"``, ``"fireworks"``, ``"local"``). Historical analytics rows recorded under ``"genapi"``
     keep that label in the DB. ``None`` for unknown models so callers can
     record without raising.
     """

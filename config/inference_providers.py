@@ -18,11 +18,14 @@ Providers:
   provider kind (:data:`INSTANCE_KINDS`) with an admin-chosen label and its
   own admin-chosen model list. ``openrouter`` instances hold an API key and
   pick models from the OpenRouter catalog (or a typed custom id);
-  ``local`` instances point at a self-hosted inference server (``base_url``
-  + ``api_type``, optional key) and pick models from what that server
-  reports (``chat/llm/local_catalog.py``). Several instances of the same
-  kind can coexist (e.g. a personal and a team OpenRouter key with
-  different curated models, or a llama.cpp box and an Ollama box).
+  ``fireworks`` instances hold a Fireworks AI API key and pick models from
+  Fireworks' serverless catalog (``chat/llm/fireworks_catalog.py``, fetched
+  with that key); ``local`` instances point at a self-hosted inference
+  server (``base_url`` + ``api_type``, optional key) and pick models from
+  what that server reports (``chat/llm/local_catalog.py``). Several
+  instances of the same kind can coexist (e.g. a personal and a team
+  OpenRouter key with different curated models, or a llama.cpp box and an
+  Ollama box).
 
 **Qualified model ids.** Models served by an instance are identified
 everywhere (``conversations.model``, ``routines.model``, user defaults, the
@@ -51,7 +54,9 @@ file stem, which is what lets ``run.py`` pre-bake keys from the parent
 directory dev-config.json (``inference_credentials: {"<instance_id>":
 {"api_key": ...}}``) and what makes the legacy ``openrouter.json`` file the
 ``openrouter`` instance without any migration: :func:`load_inference_config`
-synthesizes an instance entry for every credential file that has none.
+synthesizes an instance entry for every credential file that has none, of
+the key-holding kind the file stem starts with (``fireworks-2.json`` -> a
+``fireworks`` instance; anything else an OpenRouter one).
 
 This module sticks to the Python standard library (mirroring
 ``config/service_credentials.py``) so it can be imported early and from the
@@ -83,19 +88,26 @@ logger = logging.getLogger(__name__)
 # the cost-analytics transport label recorded on llm_calls_* rows, ``hint``
 # the API-key input placeholder, ``key_required`` whether the instance is
 # unusable without a stored key (a self-hosted server usually has none:
-# the key is optional and sent as a bearer token only when set), and
+# the key is optional and sent as a bearer token only when set),
 # ``endpoint`` whether the instance carries its own ``base_url`` +
-# ``api_type`` (self-hosted servers) instead of a fixed upstream.
+# ``api_type`` (self-hosted servers) instead of a fixed upstream,
+# ``upstream_url`` that fixed upstream's OpenAI-compatible base URL (None
+# for endpoint kinds), and ``catalog`` where the admin "Add model"
+# typeahead gets its candidates: ``openrouter`` = the shared public
+# OpenRouter list (chat/llm/openrouter_catalog.py, no key needed),
+# ``fireworks`` = Fireworks' serverless catalog fetched with the instance's
+# own key (chat/llm/fireworks_catalog.py), ``server`` = live discovery
+# against the instance's server (chat/llm/local_catalog.py).
 #
-# Both kinds run on the ``openrouter`` LLMProvider family -- the OpenAI
+# Every kind runs on the ``openrouter`` LLMProvider family -- the OpenAI
 # chat-completions message format, history shape and analytics table
-# (``llm_calls_openrouter``) -- because every self-hosted server speaks
-# that protocol (llama.cpp, vLLM, LM Studio, LocalAI, Ollama's ``/v1``
-# shim...). The transport differs per instance: the ``openai`` API type
-# goes through the openai SDK with the instance's base URL, the ``ollama``
-# API type through Ollama's native ``/api/chat`` (chat/llm/ollama_provider.py)
-# so the per-request context window can be set. ``backend`` tells the two
-# apart on analytics rows.
+# (``llm_calls_openrouter``) -- because Fireworks and every self-hosted
+# server speak that protocol (llama.cpp, vLLM, LM Studio, LocalAI, Ollama's
+# ``/v1`` shim...). The transport differs per instance: fixed upstreams and
+# the ``openai`` API type go through the openai SDK with the kind's or the
+# instance's base URL, the ``ollama`` API type through Ollama's native
+# ``/api/chat`` (chat/llm/ollama_provider.py) so the per-request context
+# window can be set. ``backend`` tells the kinds apart on analytics rows.
 INSTANCE_KINDS: dict[str, dict] = {
     "openrouter": {
         "label": "OpenRouter",
@@ -104,6 +116,25 @@ INSTANCE_KINDS: dict[str, dict] = {
         "backend": "openrouter",
         "key_required": True,
         "endpoint": False,
+        "upstream_url": "https://openrouter.ai/api/v1",
+        "catalog": "openrouter",
+    },
+    # Fireworks AI (https://fireworks.ai): serverless open-weight models
+    # behind an OpenAI-compatible API at api.fireworks.ai/inference/v1,
+    # authenticated by an API key created in the Fireworks dashboard
+    # (Settings > API keys, or ``firectl api-key create``) and sent as a
+    # bearer token. Wire ids are Fireworks resource names such as
+    # ``accounts/fireworks/models/deepseek-v3p1`` (serverless) or
+    # ``accounts/<account>/deployments/<id>`` (a dedicated deployment).
+    "fireworks": {
+        "label": "Fireworks AI",
+        "hint": "fw_...",
+        "provider": "openrouter",
+        "backend": "fireworks",
+        "key_required": True,
+        "endpoint": False,
+        "upstream_url": "https://api.fireworks.ai/inference/v1",
+        "catalog": "fireworks",
     },
     "local": {
         "label": "Self-hosted",
@@ -112,6 +143,8 @@ INSTANCE_KINDS: dict[str, dict] = {
         "backend": "local",
         "key_required": False,
         "endpoint": True,
+        "upstream_url": None,
+        "catalog": "server",
     },
 }
 
@@ -516,9 +549,26 @@ def _read_config_file() -> dict | None:
     return config
 
 
+def kind_for_credential_file(instance_id: str) -> str:
+    """The kind a credential file with no config entry is synthesized as.
+
+    A stem that is a key-holding kind name, or that kind name plus a
+    ``-<n>`` suffix (the ids :func:`new_instance_id` generates), belongs to
+    that kind -- so a dev-config ``inference_credentials: {"fireworks":
+    {...}}`` entry comes up as a Fireworks instance. Anything else is an
+    OpenRouter instance, the only kind that existed before instances did.
+    """
+    head = instance_id.split("-", 1)[0]
+    spec = INSTANCE_KINDS.get(head)
+    if spec is not None and not spec["endpoint"] and spec["key_required"]:
+        return head
+    return "openrouter"
+
+
 def _synthesize_missing_instances(config: dict) -> bool:
-    """Add an ``openrouter``-kind instance for every credential file without
-    a config entry (legacy single-key layout, dev-config pre-baking).
+    """Add an instance for every credential file without a config entry
+    (legacy single-key layout, dev-config pre-baking), of the kind named by
+    the file stem (:func:`kind_for_credential_file`).
 
     The legacy ``openrouter`` instance is seeded with the models the old
     fixed registry served; other ids start with an empty model list for the
@@ -530,12 +580,13 @@ def _synthesize_missing_instances(config: dict) -> bool:
         if instance_id in known:
             continue
         legacy = instance_id == LEGACY_OPENROUTER_INSTANCE_ID
+        kind = kind_for_credential_file(instance_id)
         config["instances"].append({
             "id": instance_id,
-            "kind": "openrouter",
+            "kind": kind,
             "label": (
-                INSTANCE_KINDS["openrouter"]["label"] if legacy
-                else f"{INSTANCE_KINDS['openrouter']['label']} ({instance_id})"
+                INSTANCE_KINDS[kind]["label"] if legacy or instance_id == kind
+                else f"{INSTANCE_KINDS[kind]['label']} ({instance_id})"
             ),
             "models": copy.deepcopy(_LEGACY_OPENROUTER_MODELS) if legacy else [],
         })

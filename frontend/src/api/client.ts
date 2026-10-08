@@ -884,14 +884,18 @@ export function searchOpenRouterCatalog(
   });
 }
 
-/** Models a self-hosted instance's server reports right now (live, uncached). */
+/**
+ * An instance's own model catalog: what a self-hosted server reports right
+ * now (live, uncached) or the Fireworks serverless catalog fetched with the
+ * instance's key (cached; `refresh` re-fetches).
+ */
 export function searchInstanceCatalog(
   instanceId: string,
   q: string,
-  options: { limit?: number } = {},
+  options: { limit?: number; refresh?: boolean } = {},
 ): Promise<InstanceCatalogResponse> {
   return apiGet(endpoints.adminInferenceInstanceCatalog(instanceId), {
-    query: { q, limit: options.limit },
+    query: { q, limit: options.limit, refresh: options.refresh || undefined },
   });
 }
 

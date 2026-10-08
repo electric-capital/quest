@@ -88,9 +88,11 @@ LOCAL_RUNS_KEEP = 5
 #                           unless that file already exists, so API-key LLM
 #                           instances (Settings > Inference Providers) come
 #                           up pre-configured in every local instance. The
-#                           id "openrouter" is the legacy instance seeded
-#                           with the historical curated models; any other
-#                           id becomes an empty OpenRouter instance.
+#                           id picks the kind: "openrouter" is the legacy
+#                           instance seeded with the historical curated
+#                           models, "fireworks" (or "fireworks-2", ...) an
+#                           empty Fireworks AI instance, any other id an
+#                           empty OpenRouter instance.
 #   oauth_hostname          Hostname exported as QUEST_OAUTH_HOSTNAME so
 #                           OAuth callback URLs use it instead of the raw
 #                           request host (Google rejects private-IP
@@ -547,7 +549,7 @@ def print_local_service_summary(project_root: Path, data_dir: Path) -> None:
     checks = [
         ("Anthropic on Vertex (Claude models)", bool(anthropic_project)),
         ("Gemini on Vertex (all Gemini models)", bool(gemini_vertex_project)),
-        ("Provider instances (OpenRouter keys / self-hosted servers)", openrouter_configured),
+        ("Provider instances (OpenRouter / Fireworks keys, self-hosted servers)", openrouter_configured),
         ("Google OAuth (login + Google services)", google_oauth_configured),
         ("Slack", _service_configured("slack", creds.get("slack"))),
         ("GitHub OAuth", _service_configured("github", creds.get("github"))),
