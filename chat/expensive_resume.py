@@ -177,12 +177,13 @@ async def check_expensive_resume(
     """
     try:
         # Project conversations never warn: the card's alternatives don't
-        # apply there (the workspace lives at the project level, so
-        # Duplicate Workspace would copy nothing, and Create Project from
-        # Chat is rejected upstream). The cheap in-project alternative --
-        # starting a new conversation against the shared workspace -- is
-        # already the product's recommended pattern; a project-aware
-        # variant of the warning can add that option later.
+        # fit there (Duplicate Workspace would copy only this chat's own
+        # files into a standalone chat, leaving the project behind, and
+        # Create Project from Chat is rejected upstream). The cheap
+        # in-project alternative -- starting a new conversation in the
+        # project, which shares its project files -- is already the
+        # product's recommended pattern; a project-aware variant of the
+        # warning can add that option later.
         if meta.get("project_id"):
             return None
 
