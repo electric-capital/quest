@@ -52,14 +52,14 @@ CONV_ID = "conv-edit-1"
 
 
 def _patch_workspace_dir(tmp_path: Path):
-    """Patch ``_get_workspace_dir`` so handlers operate under ``tmp_path``."""
+    """Patch ``conversation_workspace_dir`` so handlers operate under ``tmp_path``."""
     async def fake_workspace(*args, **kwargs):
         ws = tmp_path / "workspace"
         ws.mkdir(parents=True, exist_ok=True)
         return ws
 
     return patch(
-        "chat.gemini_api.tool_handlers.workspace._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.workspace.conversation_workspace_dir",
         new=fake_workspace,
     )
 
@@ -123,7 +123,7 @@ class TestHappyPath:
         new_content = (workspace / "report.md").read_text(encoding="utf-8")
         assert new_content == "alpha BETA gamma\n"
         assert parsed["size_bytes"] == len(new_content.encode("utf-8"))
-        publish_mock.assert_called_once_with(USER_ID, CONV_ID, None)
+        publish_mock.assert_called_once_with(USER_ID, "conversation", CONV_ID, None)
 
     def test_empty_new_string_deletes_match(self, workspace):
         _make_file(workspace, "a.txt", "keep DELETE keep")

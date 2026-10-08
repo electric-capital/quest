@@ -6,7 +6,7 @@ import json
 import urllib.parse
 
 from chat.gemini_api.tool_handlers._common import (
-    _get_workspace_dir,
+    conversation_workspace_dir,
     _publish_file_list_changed,
     _sanitize_workspace_filename,
 )
@@ -35,7 +35,8 @@ async def _handle_download_drive_file(
         file_id: Google Drive file ID.
         filename: Optional filename override.  When None, the original
             filename from Drive metadata is used.
-        project_id: Optional project UUID for workspace resolution.
+        project_id: Carried on the file_list_changed event only; the file
+            always lands in the conversation workspace.
 
     Returns:
         JSON string with the result (success with filename and path,
@@ -87,7 +88,7 @@ async def _handle_download_drive_file(
     content_type = download_result.headers.get("content-type", "application/octet-stream")
 
     # --- Step 3: Save to workspace ---
-    workspace_dir = await _get_workspace_dir(conversation_id, project_id=project_id)
+    workspace_dir = await conversation_workspace_dir(conversation_id)
 
     # Sanitize filename: strip path separators to prevent traversal
     clean_filename = filename.replace("/", "_").replace("\\", "_").strip()
@@ -108,7 +109,7 @@ async def _handle_download_drive_file(
     except Exception as e:
         return json.dumps({"error": f"Failed to save file to workspace: {e}"})
 
-    _publish_file_list_changed(user["id"], conversation_id, project_id)
+    _publish_file_list_changed(user["id"], "conversation", conversation_id, project_id)
     return json.dumps({
         "status": "success",
         "filename": clean_filename,
@@ -399,7 +400,7 @@ async def _export_workspace_file(
     content_type = export_result.headers.get("content-type", export_mime)
 
     # --- Step 3: Save to workspace ---------------------------------------
-    workspace_dir = await _get_workspace_dir(conversation_id, project_id=project_id)
+    workspace_dir = await conversation_workspace_dir(conversation_id)
 
     if filename:
         clean_filename = _sanitize_workspace_filename(filename)
@@ -422,7 +423,7 @@ async def _export_workspace_file(
     except Exception as e:
         return json.dumps({"error": f"Failed to save file to workspace: {e}"})
 
-    _publish_file_list_changed(user["id"], conversation_id, project_id)
+    _publish_file_list_changed(user["id"], "conversation", conversation_id, project_id)
     return json.dumps({
         "status": "success",
         "filename": clean_filename,
@@ -459,7 +460,8 @@ async def _handle_google_export_doc(
             exact export MIME type.
         filename: Optional workspace filename override. When None, the
             Doc's title plus the format's extension is used.
-        project_id: Optional project UUID for workspace resolution.
+        project_id: Carried on the file_list_changed event only; the file
+            always lands in the conversation workspace.
 
     Returns:
         JSON string: success receipt (filename, size, format, mime) or an
@@ -491,7 +493,8 @@ async def _handle_google_export_sheet(
             ``csv`` / ``tsv`` carry the first tab only.
         filename: Optional workspace filename override. When None, the
             spreadsheet's title plus the format's extension is used.
-        project_id: Optional project UUID for workspace resolution.
+        project_id: Carried on the file_list_changed event only; the file
+            always lands in the conversation workspace.
 
     Returns:
         JSON string: success receipt (filename, size, format, mime) or an
@@ -523,7 +526,8 @@ async def _handle_google_export_slides(
             type. The image formats render the first slide only.
         filename: Optional workspace filename override. When None, the
             deck's title plus the format's extension is used.
-        project_id: Optional project UUID for workspace resolution.
+        project_id: Carried on the file_list_changed event only; the file
+            always lands in the conversation workspace.
 
     Returns:
         JSON string: success receipt (filename, size, format, mime) or an

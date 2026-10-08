@@ -226,7 +226,7 @@ def body(doc_id):
 
 
 def workspace_dir(env, caller):
-    # Mirrors tool_handlers._get_workspace_dir(): the conversation workspace
+    # Mirrors tool_handlers.conversation_workspace_dir(): the conversation workspace
     # root for every conversation, project conversations included.
     path = env.dirs["chats"] / caller.conversation_id / "workspace"
     path.mkdir(parents=True, exist_ok=True)

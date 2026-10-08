@@ -62,14 +62,14 @@ def _make_response(
 
 
 def _patch_workspace_dir(tmp_path: Path):
-    """Patch ``_get_workspace_dir`` so the handler writes to ``tmp_path``."""
+    """Patch ``conversation_workspace_dir`` so the handler writes to ``tmp_path``."""
     async def fake_workspace(*args, **kwargs):
         ws = tmp_path / "workspace"
         ws.mkdir(parents=True, exist_ok=True)
         return ws
 
     return patch(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.conversation_workspace_dir",
         new=fake_workspace,
     )
 
@@ -129,7 +129,7 @@ class TestOutputFileHappyPath:
         assert written.exists()
         assert written.read_bytes() == body
 
-        publish_mock.assert_called_once_with(USER["id"], "conv-1", None)
+        publish_mock.assert_called_once_with(USER["id"], "conversation", "conv-1", None)
 
     def test_writes_into_subdirectory(self, tmp_path):
         body = b"hello"

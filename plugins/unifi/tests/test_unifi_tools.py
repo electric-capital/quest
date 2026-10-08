@@ -298,7 +298,7 @@ class TestSnapshot:
         async def _dir(conversation_id, project_id=None):
             return root
 
-        with patch.object(tool_handlers, "_get_workspace_dir", _dir), \
+        with patch.object(tool_handlers, "conversation_workspace_dir", _dir), \
                 patch.object(tool_handlers, "_publish_file_list_changed") as published:
             yield root, published
 
@@ -315,7 +315,7 @@ class TestSnapshot:
         assert parts == [{"part": {"ref": str(root / out["path"])}}]
         assert provider.uploads[0]["mime_type"] == "image/jpeg"
         assert f"![Front Door]({out['path']})" in out["message"]
-        published.assert_called_once_with(7, "conv-1", None)
+        published.assert_called_once_with(7, "conversation", "conv-1", None)
         snapshot_calls = [c for c in controller.calls if c[1].endswith("/snapshot")]
         assert snapshot_calls == [("GET", "/proxy/protect/integration/v1/cameras/cam-1/snapshot")]
 

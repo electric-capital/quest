@@ -161,6 +161,17 @@ def reject_unknown_rename_link_attachment_keys(params: dict, key: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _project_copy_hint(project_id: str | None) -> str:
+    """Suffix for a not-found error in a project conversation: paths name
+    this conversation's workspace, never the shared project workspace."""
+    if not project_id:
+        return ""
+    return (
+        " (paths are in this conversation's workspace; project files must "
+        "be copied into it first with copy_project_file)"
+    )
+
+
 async def resolve_workspace_file(
     conversation_id: str | None,
     project_id: str | None,
@@ -184,9 +195,10 @@ async def resolve_workspace_file(
 
     ``conversation_id`` is required (workspace resolution needs it); a
     ``None`` value raises ``RuntimeError``, mirroring
-    :func:`read_workspace_attachments`. ``project_id`` is ignored: every
-    conversation, project conversations included, resolves to its own
-    conversation workspace (``ChatStorage.get_conversation_workspace_root``).
+    :func:`read_workspace_attachments`. ``project_id`` never changes the
+    root: every conversation, project conversations included, resolves to
+    its own conversation workspace (``conversation_workspace_dir``); it only
+    adds the ``copy_project_file`` hint to a not-found error.
     """
     if not conversation_id:
         raise RuntimeError(
@@ -195,11 +207,9 @@ async def resolve_workspace_file(
 
     # Lazy import to avoid a circular dependency: tool_handlers itself
     # imports from chat.storage and various API helpers.
-    from chat.gemini_api.tool_handlers import _get_workspace_dir
+    from chat.gemini_api.tool_handlers import conversation_workspace_dir
 
-    workspace_dir = await _get_workspace_dir(
-        conversation_id, project_id=project_id,
-    )
+    workspace_dir = await conversation_workspace_dir(conversation_id)
     workspace_root = workspace_dir.resolve()
 
     candidate_path = Path(raw_path)
@@ -226,7 +236,10 @@ async def resolve_workspace_file(
         )
 
     if not file_path.exists():
-        raise RuntimeError(f"File not found in workspace: {raw_path}")
+        raise RuntimeError(
+            f"File not found in workspace: {raw_path}"
+            + _project_copy_hint(project_id)
+        )
     if not file_path.is_file():
         raise RuntimeError(f"Path is not a regular file: {raw_path}")
 
@@ -298,9 +311,11 @@ async def read_workspace_attachments(
     Args:
         conversation_id: Conversation UUID for workspace resolution.
             Required when at least one attachment is supplied.
-        project_id: Accepted for call-site compatibility and ignored:
-            attachments always resolve against the conversation workspace
-            root (``_get_workspace_dir``), project conversations included.
+        project_id: Never changes the root: attachments always resolve
+            against the conversation workspace root
+            (``conversation_workspace_dir``), project conversations
+            included; only adds the ``copy_project_file`` hint to a
+            not-found error.
         attachments: Pre-validated entries from
             :func:`validate_attachments_param` -- each has a ``path``
             and an optional ``filename`` override.
@@ -316,13 +331,11 @@ async def read_workspace_attachments(
     # Lazy import to avoid a circular dependency: tool_handlers itself
     # imports from chat.storage and various API helpers.
     from chat.gemini_api.tool_handlers import (
-        _get_workspace_dir,
+        conversation_workspace_dir,
         _sanitize_workspace_filename,
     )
 
-    workspace_dir = await _get_workspace_dir(
-        conversation_id, project_id=project_id,
-    )
+    workspace_dir = await conversation_workspace_dir(conversation_id)
     workspace_root = workspace_dir.resolve()
 
     out: list[tuple[str, bytes, str]] = []
@@ -354,6 +367,7 @@ async def read_workspace_attachments(
         if not file_path.exists():
             raise RuntimeError(
                 f"Attachment file not found in workspace: {raw_path}"
+                + _project_copy_hint(project_id)
             )
         if not file_path.is_file():
             raise RuntimeError(

@@ -2,22 +2,20 @@
 the package (authed_get, Gmail drafts, plugin file-download tools).
 """
 
+import json
 import logging
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
-async def _get_workspace_dir(conversation_id: str, project_id: str | None = None) -> Path:
+async def conversation_workspace_dir(conversation_id: str) -> Path:
     """Return the conversation workspace root, creating it if missing.
 
-    Resolves to ``ChatStorage.get_conversation_workspace_root`` for EVERY
-    conversation, project conversations included, so tools and the HTTP
-    file routes agree on where a conversation's files live. ``project_id``
-    is accepted for call-site compatibility and ignored; the shared project
-    workspace is not reachable through this helper. Phase 2 of the
-    per-conversation-workspace change replaces it with explicit
-    conversation / project workspace helpers.
+    ``ChatStorage.get_conversation_workspace_root`` for EVERY conversation,
+    standalone or in a project: the default target of every file-producing
+    tool, and what the conversation file routes and ``/workspace`` in the
+    sandbox see.
     """
     from chat.storage import ChatStorage
     workspace_dir = ChatStorage.get_conversation_workspace_root(conversation_id)
@@ -25,17 +23,50 @@ async def _get_workspace_dir(conversation_id: str, project_id: str | None = None
     return workspace_dir
 
 
+async def project_workspace_dir(project_id: str) -> Path:
+    """Return the project workspace root, creating it if missing.
+
+    ``ChatStorage.get_project_workspace_root``: the workspace shared by all
+    conversations of the project, reached only through the project file
+    tools, the copy tools, ``/project`` in the sandbox and the project file
+    routes.
+    """
+    from chat.storage import ChatStorage
+    workspace_dir = ChatStorage.get_project_workspace_root(project_id)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    return workspace_dir
+
+
+def _not_a_project_conversation_result() -> str:
+    """Structured refusal of a project file / copy tool outside a project.
+
+    The tools are only offered in project conversations; this guards a
+    call that reaches dispatch anyway (stale schema, hallucinated name).
+    """
+    return json.dumps({
+        "error": (
+            "This conversation is not part of a project, so it has no "
+            "project files. Use the *_workspace_file tools for this "
+            "conversation's workspace."
+        ),
+        "code": "not_a_project_conversation",
+    })
+
+
 def _publish_file_list_changed(
     user_id: int,
-    conversation_id: str,
+    scope: str,
+    conversation_id: str | None,
     project_id: str | None,
 ) -> None:
     """Best-effort: notify the user's WS subscribers that a workspace
     listing has changed so the file browser can silent-refresh.
 
-    Always ``scope="conversation"``: tool writes land in the conversation
-    workspace (see ``_get_workspace_dir``), even in project conversations.
-    ``project_id`` is still carried on the event.
+    ``scope`` is the workspace that changed, set explicitly by the caller:
+    ``"conversation"`` for the conversation workspace (every tool write by
+    default) and ``"project"`` for the project workspace (project file and
+    copy tools), whose events reach every sibling conversation's tab.
+    Same argument order as the ``chat.file_routes`` helper.
     """
     try:
         from chat.realtime import bus, events as realtime_events
@@ -44,14 +75,14 @@ def _publish_file_list_changed(
             realtime_events.make_file_list_changed(
                 conversation_id=conversation_id,
                 project_id=project_id,
-                scope="conversation",
+                scope=scope,
             ),
         )
     except Exception:
         logger.debug(
             "[tool_handlers] publish file_list_changed failed "
-            "(user_id=%s, conversation_id=%s)",
-            user_id, conversation_id, exc_info=True,
+            "(user_id=%s, scope=%s, conversation_id=%s, project_id=%s)",
+            user_id, scope, conversation_id, project_id, exc_info=True,
         )
 
 

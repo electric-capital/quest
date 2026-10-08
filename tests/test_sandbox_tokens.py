@@ -348,7 +348,7 @@ class TestSandboxHandlersMintPerRunTokens:
         async def _ws(conversation_id, project_id=None):
             return tmp_path
 
-        monkeypatch.setattr(sandbox_mod, "_get_workspace_dir", _ws)
+        monkeypatch.setattr(sandbox_mod, "conversation_workspace_dir", _ws)
         monkeypatch.setattr(
             sandbox_mod, "_publish_file_list_changed", lambda *a, **k: None,
         )
@@ -534,7 +534,7 @@ class TestRestrictedLeases:
 
         async def _ws(conversation_id, project_id=None):
             return tmp_path
-        monkeypatch.setattr(sandbox_mod, "_get_workspace_dir", _ws)
+        monkeypatch.setattr(sandbox_mod, "conversation_workspace_dir", _ws)
         monkeypatch.setattr(sandbox_mod, "_publish_file_list_changed", lambda *a, **k: None)
         monkeypatch.setattr(
             sandbox_mod, "get_sandbox_seccomp_profile_path",

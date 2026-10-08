@@ -50,7 +50,7 @@ async def _handle_github_get_job_log(ctx, args: dict) -> str:
     from chat.gemini_api.authed_get import _make_authed_request
     from chat.gemini_api.constants import AUTHED_GET_SIZE_LIMIT
     from chat.gemini_api.tool_handlers import (
-        _get_workspace_dir,
+        conversation_workspace_dir,
         _publish_file_list_changed,
     )
 
@@ -191,9 +191,7 @@ async def _handle_github_get_job_log(ctx, args: dict) -> str:
 
     # --- Step 3: persist to workspace ------------------------------------
     try:
-        workspace_dir = await _get_workspace_dir(
-            ctx.conversation_id, project_id=ctx.project_id,
-        )
+        workspace_dir = await conversation_workspace_dir(ctx.conversation_id)
     except Exception as exc:
         return json.dumps({
             "error": f"Failed to resolve workspace directory: {exc}",
@@ -269,7 +267,9 @@ async def _handle_github_get_job_log(ctx, args: dict) -> str:
             "error": f"Failed to save job log to workspace: {exc}",
         })
 
-    _publish_file_list_changed(ctx.user["id"], ctx.conversation_id, ctx.project_id)
+    _publish_file_list_changed(
+        ctx.user["id"], "conversation", ctx.conversation_id, ctx.project_id,
+    )
 
     # Workspace-relative path as a forward-slash string for the model.
     rel_written = file_path.relative_to(workspace_root).as_posix()

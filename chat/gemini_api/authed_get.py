@@ -933,7 +933,7 @@ async def _handle_authed_get_to_file(
     The user opted in by passing ``output_file``.
     """
     from chat.gemini_api.tool_handlers import (
-        _get_workspace_dir,
+        conversation_workspace_dir,
         _publish_file_list_changed,
         _sanitize_workspace_filename,
     )
@@ -980,9 +980,7 @@ async def _handle_authed_get_to_file(
     status_code = response.status_code
 
     try:
-        workspace_dir = await _get_workspace_dir(
-            conversation_id, project_id=project_id,
-        )
+        workspace_dir = await conversation_workspace_dir(conversation_id)
     except Exception as exc:
         return json.dumps({
             "error": f"Failed to resolve workspace directory: {exc}",
@@ -1053,7 +1051,9 @@ async def _handle_authed_get_to_file(
         })
 
     if user is not None:
-        _publish_file_list_changed(user["id"], conversation_id, project_id)
+        _publish_file_list_changed(
+            user["id"], "conversation", conversation_id, project_id,
+        )
 
     rel_written = file_path.relative_to(workspace_root).as_posix()
     bytes_written = len(content)
@@ -1105,7 +1105,7 @@ async def handle_authed_get(
         project_id: Project UUID (kept for API consistency).
         output_file: Optional workspace-relative path. When set, the
             response body is written under the hidden ``.responses/``
-            subdirectory of the conversation / project workspace (the path
+            subdirectory of this conversation's workspace (the path
             is re-rooted there) and a small JSON receipt is returned instead
             of the body. A collision errors out rather than overwriting an
             existing file. The size gate and ``force_large_response`` blob

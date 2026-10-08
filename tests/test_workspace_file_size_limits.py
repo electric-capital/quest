@@ -60,14 +60,14 @@ GEMINI_VERTEX_MODEL = "gemini-3.5-flash"
 
 
 def _patch_workspace_dir(tmp_path: Path):
-    """Patch ``_get_workspace_dir`` so handlers operate under ``tmp_path``."""
+    """Patch ``conversation_workspace_dir`` so handlers operate under ``tmp_path``."""
     async def fake_workspace(*args, **kwargs):
         ws = tmp_path / "workspace"
         ws.mkdir(parents=True, exist_ok=True)
         return ws
 
     return patch(
-        "chat.gemini_api.tool_handlers.workspace._get_workspace_dir",
+        "chat.gemini_api.tool_handlers.workspace.conversation_workspace_dir",
         new=fake_workspace,
     )
 

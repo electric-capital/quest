@@ -267,31 +267,39 @@ class TestRootContainment:
         assert _cs().get_project_workspace_root("Q") == victim
 
 
-
 # ---------------------------------------------------------------------------
-# Phase-1 tool-side resolution
+# Tool-side resolution (conversation_workspace_dir / project_workspace_dir)
 # ---------------------------------------------------------------------------
 
 
 class TestToolWorkspaceDir:
-    def test_project_conversation_resolves_to_conversation_root(self, roots):
-        from chat.gemini_api.tool_handlers._common import _get_workspace_dir
+    def test_conversation_dir_is_conversation_root(self, roots):
+        from chat.gemini_api.tool_handlers._common import conversation_workspace_dir
 
         chats, projects = roots
-        path = _run(_get_workspace_dir("conv", project_id="proj"))
+        path = _run(conversation_workspace_dir("conv"))
         assert path == chats / "conv" / "workspace" and path.is_dir()
         assert not projects.exists()
-        assert _run(_get_workspace_dir("conv")) == path
 
-    def test_file_list_changed_scope_is_conversation(self, roots, monkeypatch):
+    def test_project_dir_is_project_root(self, roots):
+        from chat.gemini_api.tool_handlers._common import project_workspace_dir
+
+        chats, projects = roots
+        path = _run(project_workspace_dir("proj"))
+        assert path == projects / "proj" / "workspace" / "workspace" and path.is_dir()
+        assert not chats.exists()
+
+    def test_file_list_changed_scope_is_explicit(self, roots, monkeypatch):
         from chat.gemini_api.tool_handlers import _common
         from chat.realtime import bus
 
         published = []
         monkeypatch.setattr(bus, "publish_to_user", lambda uid, ev: published.append(ev))
-        _common._publish_file_list_changed(1, "conv", "proj")
-        _common._publish_file_list_changed(1, "solo", None)
+        _common._publish_file_list_changed(1, "conversation", "conv", "proj")
+        _common._publish_file_list_changed(1, "project", "conv", "proj")
+        _common._publish_file_list_changed(1, "conversation", "solo", None)
         assert [(e["scope"], e["conversation_id"], e["project_id"]) for e in published] == [
             ("conversation", "conv", "proj"),
+            ("project", "conv", "proj"),
             ("conversation", "solo", None),
         ]

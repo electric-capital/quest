@@ -20,7 +20,7 @@ from chat.gemini_api.sandbox_runtime import get_sandbox_runtime
 from chat.gemini_api.sandbox_seccomp import get_sandbox_seccomp_profile_path
 from chat.sandbox_tokens import TOKEN_GRACE_SECONDS, sandbox_token_lease
 from chat.gemini_api.tool_handlers._common import (
-    _get_workspace_dir,
+    conversation_workspace_dir,
     _publish_file_list_changed,
 )
 
@@ -218,7 +218,7 @@ async def _handle_run_script(
     """
     try:
         # Resolve workspace directory
-        workspace_dir = await _get_workspace_dir(conversation_id, project_id=project_id)
+        workspace_dir = await conversation_workspace_dir(conversation_id)
 
         # Validate the path (same pattern as _handle_get_workspace_file)
         clean_path = path.lstrip("/").lstrip("\\")
@@ -316,7 +316,7 @@ async def _handle_run_script(
         # ``:Z`` workspace mount; we cannot cheaply diff so emit
         # unconditionally and let the FE silent-fetch be a no-op when nothing
         # actually changed.
-        _publish_file_list_changed(user_id, conversation_id, project_id)
+        _publish_file_list_changed(user_id, "conversation", conversation_id, project_id)
 
         return json.dumps({
             "path": clean_path,
@@ -367,7 +367,7 @@ async def _handle_run_python(
     """
     try:
         # Resolve workspace directory (still needed for the volume mount)
-        workspace_dir = await _get_workspace_dir(conversation_id, project_id=project_id)
+        workspace_dir = await conversation_workspace_dir(conversation_id)
 
         # Clamp timeout
         clamped_timeout = timeout if timeout is not None else SCRIPT_RUNNER_TIMEOUT
@@ -437,7 +437,7 @@ async def _handle_run_python(
         # See _handle_run_script: the inline script may have written workspace
         # files via the :Z mount, so emit unconditionally after the container
         # exits.
-        _publish_file_list_changed(user_id, conversation_id, project_id)
+        _publish_file_list_changed(user_id, "conversation", conversation_id, project_id)
 
         return json.dumps({
             "exit_code": exit_code,

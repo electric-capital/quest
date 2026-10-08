@@ -33,6 +33,12 @@ from chat.gemini_api.tool_handlers import (
     _handle_load_gmail_attachment,
     _handle_write_workspace_file,
     _handle_edit_workspace_file,
+    _handle_list_project_files,
+    _handle_get_project_file,
+    _handle_write_project_file,
+    _handle_edit_project_file,
+    _handle_copy_file_to_project,
+    _handle_copy_project_file,
     _handle_download_drive_file,
     _handle_google_export_doc,
     _handle_google_export_sheet,
@@ -247,6 +253,57 @@ async def _tool_edit_workspace_file(ctx: ToolContext, args: dict) -> str:
         args.get("old_string", ""), args.get("new_string", ""),
         replace_all=_as_bool(args.get("replace_all")),
         project_id=ctx.project_id,
+    )
+
+
+# Project file + copy tools (devplan 00009 6.2 / 6.3). Offered only in
+# project conversations; without ctx.project_id the handlers return a
+# structured ``not_a_project_conversation`` error instead of raising.
+
+
+async def _tool_list_project_files(ctx: ToolContext, args: dict) -> str:
+    return await _handle_list_project_files(
+        ctx.user["id"], ctx.conversation_id, ctx.project_id,
+    )
+
+
+async def _tool_get_project_file(ctx: ToolContext, args: dict) -> tuple[str, list]:
+    return await _handle_get_project_file(
+        ctx.provider, ctx.user["id"], ctx.conversation_id, args.get("path", ""),
+        ctx.project_id, model=ctx.model,
+    )
+
+
+async def _tool_write_project_file(ctx: ToolContext, args: dict) -> str:
+    return await _handle_write_project_file(
+        ctx.user["id"], ctx.conversation_id, args.get("path", ""),
+        args.get("content", ""), ctx.project_id,
+    )
+
+
+async def _tool_edit_project_file(ctx: ToolContext, args: dict) -> str:
+    return await _handle_edit_project_file(
+        ctx.user["id"], ctx.conversation_id, args.get("path", ""),
+        args.get("old_string", ""), args.get("new_string", ""),
+        ctx.project_id, replace_all=_as_bool(args.get("replace_all")),
+    )
+
+
+async def _tool_copy_file_to_project(ctx: ToolContext, args: dict) -> str:
+    return await _handle_copy_file_to_project(
+        ctx.user["id"], ctx.conversation_id, ctx.project_id,
+        args.get("path", ""), dest=args.get("dest"),
+        overwrite=_as_bool(args.get("overwrite")),
+        include_hidden=_as_bool(args.get("include_hidden")),
+    )
+
+
+async def _tool_copy_project_file(ctx: ToolContext, args: dict) -> str:
+    return await _handle_copy_project_file(
+        ctx.user["id"], ctx.conversation_id, ctx.project_id,
+        args.get("path", ""), dest=args.get("dest"),
+        overwrite=_as_bool(args.get("overwrite")),
+        include_hidden=_as_bool(args.get("include_hidden")),
     )
 
 
@@ -531,6 +588,12 @@ TOOL_CALL_HANDLERS: dict[str, ToolHandler] = {
     "get_workspace_file": _tool_get_workspace_file,
     "write_workspace_file": _tool_write_workspace_file,
     "edit_workspace_file": _tool_edit_workspace_file,
+    "list_project_files": _tool_list_project_files,
+    "get_project_file": _tool_get_project_file,
+    "write_project_file": _tool_write_project_file,
+    "edit_project_file": _tool_edit_project_file,
+    "copy_file_to_project": _tool_copy_file_to_project,
+    "copy_project_file": _tool_copy_project_file,
     "memory_search": _tool_memory_search,
     "memory_list": _tool_memory_list,
     "wait_for_handles": _tool_wait_for_handles_stub,
@@ -572,6 +635,12 @@ DIRECT_TOOL_HANDLERS: dict[str, ToolHandler] = {
     "get_workspace_file": _tool_get_workspace_file,
     "load_gmail_attachment": _tool_load_gmail_attachment,
     "write_workspace_file": _tool_write_workspace_file,
+    "list_project_files": _tool_list_project_files,
+    "get_project_file": _tool_get_project_file,
+    "write_project_file": _tool_write_project_file,
+    "edit_project_file": _tool_edit_project_file,
+    "copy_file_to_project": _tool_copy_file_to_project,
+    "copy_project_file": _tool_copy_project_file,
     "memory_search": _tool_memory_search,
     "memory_list": _tool_memory_list,
     "list_skills": _tool_list_skills,
@@ -690,7 +759,10 @@ async def _dispatch_tool_call(
         timezone: User's IANA timezone string.
         tool_name: Name of the tool to execute.
         args: Tool call arguments (intent_message already popped).
-        project_id: Optional project UUID for project-aware workspace resolution.
+        project_id: The conversation's project UUID, or None for a
+            standalone conversation. Gates the project file / copy tools and
+            project_db_query; workspace tools always use the conversation
+            workspace.
         model: The LLM model ID string (for large result logging).
         is_sub_agent: Whether the caller is a sub-agent (for large result logging).
         agent_name: Sub-agent display name (for large result logging).
@@ -829,7 +901,12 @@ async def _dispatch_tool_call_inner(
         if not inner_tool_name:
             result = json.dumps({"error": "tool_call requires a 'tool_name' parameter."})
         elif inner_tool_name not in TOOL_CALL_REGISTRY:
-            available = ", ".join(sorted(TOOL_CALL_REGISTRY.keys()))
+            # Never advertise the project-only tools outside a project.
+            from chat.llm.tool_schemas import PROJECT_ONLY_TOOL_CALL_TOOLS
+            names = TOOL_CALL_REGISTRY.keys()
+            if not project_id:
+                names = [n for n in names if n not in PROJECT_ONLY_TOOL_CALL_TOOLS]
+            available = ", ".join(sorted(names))
             result = json.dumps({"error": f"Unknown tool: '{inner_tool_name}'. Available dynamic tools: {available}."})
         elif not isinstance(inner_args, dict):
             result = json.dumps({"error": "tool_call 'arguments' must be a JSON object."})
