@@ -44,7 +44,7 @@ Both tools are defined in `chat/llm/tool_schemas.py` as part of `BASE_TOOLS`. `r
 | conversation workspace -> `/workspace` (`-w /workspace`) | every conversation | `:Z` (private: only this conversation's containers use it) |
 | project workspace -> `/project` | project conversations only (`project_dir` from `project_workspace_dir()`) | `:z` (shared: sibling conversations of one project can run containers against it concurrently) |
 
-Both are writable, so `shutil.copy('/workspace/out.pdf', '/project/out.pdf')` promotes a file into the project workspace from a script. Standalone conversations pass `project_dir=None` and get exactly the single-mount argv. The images and entrypoints need nothing path-specific for `/project`: `WORKDIR /workspace` stays, the bind mount creates `/project`, and the entrypoints only install network rules and drop privileges (no chown or relabel of either path).
+Both are writable, so `shutil.copy('/workspace/out.pdf', '/project/out.pdf')` promotes a file into the project workspace from a script. The relabels differ because SELinux `:Z` gives the mount a private per-container label, which on a directory shared by concurrently running sibling conversations would relabel it out from under the other containers; the conversation workspace belongs to one conversation, so it keeps the stricter private label. `run_script`'s `path` still resolves only inside the conversation workspace (one path grammar for every non-file-tool path), so a project script is copied over first or started from `run_python` (`subprocess.run(["python3", "/project/etl.py"])`). Standalone conversations pass `project_dir=None` and get exactly the single-mount argv. The images and entrypoints need nothing path-specific for `/project`: `WORKDIR /workspace` stays, the bind mount creates `/project`, and the entrypoints only install network rules and drop privileges (no chown or relabel of either path).
 
 ## Container Environment
 
@@ -123,7 +123,7 @@ Both Podman images (restricted + public) are automatically built (or rebuilt) at
 ## Design Decisions
 
 **Why two tools (`run_script` vs `run_python`)?**
-`run_python` avoids creating throwaway `.py` files in the workspace for one-off tasks (quick calculations, data transformations, format conversions). `run_script` via `write_workspace_file` is better for reusable scripts that the user may want to keep, inspect, or re-run.
+`run_python` avoids creating throwaway `.py` files in the workspace for one-off tasks (quick calculations, data transformations, format conversions). `run_script` via `write_workspace_file` (`write_file` on a `chat://` path in a project conversation) is better for reusable scripts that the user may want to keep, inspect, or re-run.
 
 **Why Podman instead of Docker?**
 Podman runs rootless containers with `--userns=keep-id`, which maps the container user to the host user for correct file ownership on the mounted workspace. This avoids the root-owned file permission issues common with Docker volume mounts.

@@ -39,7 +39,7 @@ Write-shaped paths (`files/{id}/copy`, `files/{id}/watch`, `changes/watch`, `dri
 
 ## File Content Downloads (via `download_drive_file`)
 
-Binary file content downloads use the `download_drive_file` tool call, which downloads the file to the conversation workspace. The LLM can then read or analyze the file using `get_workspace_file`.
+Binary file content downloads use the `download_drive_file` tool call, which downloads the file to the conversation workspace (also in a project conversation). The LLM can then read or analyze the file using `get_workspace_file` (`read_file` with a `chat://` path in a project conversation).
 
 **Implementation:** `_handle_download_drive_file()` in `chat/gemini_api/tool_handlers/drive.py`. Fetches file metadata first (to determine filename if not provided), then downloads binary content via `_make_authed_request()` with `alt=media` and `raw_response=True`, and saves to the conversation workspace directory. See that function for tool parameters.
 
@@ -77,7 +77,7 @@ Unlike "Save to Drive" (markdown-only, converted to a native Google Doc), this u
 - the `folder_id` / `folder_name` / `folder_url` result extension when a folder was created, and
 - the partial-batch / duplicate-folder recovery error shape on mid-batch failure.
 
-Every file is pre-flight resolved (traversal guards + size cap) via `resolve_workspace_file()` in `chat/action_request_types/_io_attachments.py` before any Drive mutation; bytes are then read one file at a time via `read_resolved_file_bytes()`.
+Paths are conversation-workspace paths only; in a project conversation a project file must first be copied in (`copy_file` from `proj://` to `chat://`), and a not-found error says so (`PROJECT_COPY_FIRST_SUFFIX`, `chat/workspace_hints.py`). Every file is pre-flight resolved (traversal guards + size cap) via `resolve_workspace_file()` in `chat/action_request_types/_io_attachments.py` before any Drive mutation; bytes are then read one file at a time via `read_resolved_file_bytes()`.
 
 ## Drive Folder Creation (via `create_drive_folder` Action Request)
 

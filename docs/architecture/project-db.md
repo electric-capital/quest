@@ -25,12 +25,13 @@ Each project can have a dedicated SQLite database that persists across all conve
 
 ## Storage Layout
 
-The project database file sits inside the project's data directory, alongside the shared workspace:
+The project database file sits inside the project's data directory, alongside the project workspace:
 
 ```
 data/projects/{project_id}/
 ├── project.db        # Per-project SQLite database (created lazily)
-└── workspace/        # Shared workspace for all project conversations
+└── workspace/
+    └── workspace/    # Project workspace shared by all project conversations (proj://, /project)
 ```
 
 The database is separate from the workspace so that workspace file operations (listing, reading, writing) do not interact with it. Since the database lives under `data/projects/{project_id}/`, it is automatically cleaned up when a project is deleted via the existing `shutil.rmtree` in `ChatStorage.delete_project_dir()` in `chat/storage.py`.
@@ -101,7 +102,7 @@ When no project is associated with the conversation, `RightPanel` renders only t
 ## Design Decisions
 
 **Why a per-project database instead of per-conversation?**
-Projects are designed for related work that builds on itself across conversations. A shared database follows the same philosophy as the shared workspace -- data stored in one conversation is immediately queryable in the next. This enables use cases like tracking tasks, logging entries, or building datasets incrementally across multiple conversations.
+Projects are designed for related work that builds on itself across conversations. A shared database follows the same philosophy as the project workspace -- data stored in one conversation is immediately queryable in the next. Like the project workspace (and unlike each conversation's own workspace), it is reached only on purpose, through `project_db_query`. This enables use cases like tracking tasks, logging entries, or building datasets incrementally across multiple conversations.
 
 **Why `aiosqlite` instead of the existing SQLAlchemy async sessions?**
 The project database is user-controlled (arbitrary schema, arbitrary queries) rather than application-managed. SQLAlchemy's ORM and migration tooling add no value here. `aiosqlite` provides native async SQLite I/O without thread pool overhead, matching the handler's async execution model.

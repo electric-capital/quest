@@ -204,8 +204,9 @@ The frontend is a modern single-page application built with:
   - Upload files and folders via drag-and-drop (folders recursively traversed via `directoryTraversal.ts`), upload files via Upload Files button, create new folders in the current path via New Folder button (opens `NewFolderModal`), download files, download folders as zip
   - Inline viewing of text files (`.md`, `.py`, `.txt`), images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp`, `.bmp`, `.ico`, `.avif`), and PDFs (`.pdf`, via the pdf.js-based `PdfViewer` with thumbnail rail) via FileViewerModal, with Save to Drive for `.md` files
   - Folder navigation with back/forward/up buttons
-  - Per-conversation path state via `FileBrowserStateContext`
-  - Auto-refresh on `file_list_changed` per-user globals (emitted by workspace-mutating tools and REST routes), filtered by active conversation / project, with a 200ms debounce
+  - One card per file space (`source` prop): Chat Files (the conversation workspace) and, in project conversations and the home composer drilled into a project, Project Files (the project workspace; the drilled home composer shows Project Files + Tables without Chat Files), with Copy / Move between them
+  - Per-space path and show-hidden state via `FileBrowserStateContext`
+  - Auto-refresh on `file_list_changed` per-user globals (emitted by workspace-mutating tools and REST routes), filtered by the card's own space (`scope` + conversation / project id), with a 200ms debounce
   - Structured error display for partial upload failures
 - **API Client**: Type-safe REST API functions
 
@@ -334,7 +335,8 @@ data/
 │   └── large_tool_results.jsonl  # Tool call results exceeding 2048 bytes (JSONL format, rotating, 50MB max, 3 backups)
 ├── projects/
 │   └── {project_id}/
-│       └── workspace/           # Shared workspace for all conversations in a project
+│       └── workspace/
+│           └── workspace/       # Project workspace shared by all conversations in a project
 └── chats/
     └── {conversation_id}/       # Per-conversation directory (flat layout, one folder per UUID)
         ├── chat_history.json    # Messages and metadata (includes project_id for project conversations)
@@ -376,7 +378,7 @@ alembic.ini                       # Alembic migration configuration
 - SQLite for user data, memories, guides, projects, routines, routine schedules, conversation metadata, and action requests (transactional writes, indexed API key lookups, FTS5 for memory search, no separate server)
 - JSON files for chat message history (append-heavy, per-conversation isolation)
 - Flat `data/chats/{conversation_id}/` layout: ownership and timing tracked in SQLite `conversations` table instead of being derived from the directory hierarchy; `ChatStorage` path helpers no longer accept `user_id`
-- Workspace isolation per conversation (project conversations included), plus a shared project workspace reached via the project file routes (see [Projects Architecture](projects.md))
+- Workspace isolation per conversation (project conversations included), plus a shared project workspace used on purpose: `proj://` file-tool paths, the `/project` sandbox mount, the project file routes and the Project Files card (see [Projects Architecture](projects.md#workspace-resolution))
 - Preserved Gemini state (session files, settings)
 - UTC timestamps with explicit "Z" suffix for consistent timezone handling (see `utc_timestamp()` in `chat/storage.py`)
 
@@ -497,7 +499,7 @@ Top-level agents have access to:
 
 Sequential `agent_task` calls within a single model response are capped at `MAX_AGENT_TASKS_PER_TURN = 10` (returns error directing use of `agent_task_parallel`); sub-agents have `agent_task_response` for returning results. All limit constants are defined in `chat/gemini_api/constants.py`. Sub-agent spawn/completion, internal tool calls, and termination are all logged at INFO level with structured prefixes (`[agent_task]`, `[agent_task_parallel]`, `[sub-agent:<name>]`) and include `user=<email>` for per-user filtering.
 
-The workspace file tools allow the model to list, read, write, and edit files in the conversation workspace; binary/large files are uploaded via the provider's `upload_file()` method for native analysis (Gemini uses the File Upload API; Anthropic base64-encodes supported images and PDFs inline).
+The workspace file tools allow the model to list, read, write, and edit files in the conversation workspace (in project conversations the five scheme-qualified tools `list_files` / `read_file` / `write_file` / `edit_file` / `copy_file` replace them, addressing `chat://` or `proj://`, see [Conversation Loop -- Scheme-Qualified File Tools](gemini-api.md#scheme-qualified-file-tools)); binary/large files are uploaded via the provider's `upload_file()` method for native analysis (Gemini uses the File Upload API; Anthropic base64-encodes supported images and PDFs inline).
 
 `write_workspace_file` creates/overwrites text files with path traversal protection and a 1MB size limit; `edit_workspace_file` performs exact string replacement on existing text files with the same protections plus a read-before-edit gate tracked in a per-conversation `workspace_reads.json` sidecar (see [Conversation Loop and Tool Integration](gemini-api.md)).
 
@@ -668,8 +670,9 @@ Auto-Refresh on Workspace Mutation:
 2. Backend publishes file_list_changed via bus.publish_to_user, carrying
    conversation_id, project_id, and scope ("project" or "conversation")
 3. PersistentWebSocket forwards the per-user global to onGlobalEvent listeners
-4. FileBrowser filters by active conversation (scope="conversation") or
-   active project (scope="project"), debounces 200ms, then calls silentRefresh()
+4. Each FileBrowser card filters by its own space (Chat Files: scope="conversation"
+   + conversation_id; Project Files: scope="project" + project_id), debounces 200ms,
+   then calls silentRefresh()
 5. useFileBrowser hook fetches updated file list (stale-while-revalidate)
 ```
 
@@ -924,7 +927,7 @@ System instructions are filtered based on the user's connected services. Only do
    - Users can log out or delete their account via the Settings panel ("Sign Out" section)
 
 3. **Workspace Isolation**: Each conversation has isolated filesystem
-   - Prevents cross-conversation data leakage
+   - Prevents cross-conversation data leakage; the only shared space is a project's own project workspace, reached explicitly (`proj://`, `/project`, Project Files)
    - User-level directory segregation
    - Script-runner container volume mounts enforce boundaries
 

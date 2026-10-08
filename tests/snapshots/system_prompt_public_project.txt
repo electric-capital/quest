@@ -37,7 +37,7 @@ Use the time information to answer time-sensitive questions correctly without ne
 You have three tools available:
 
 1. **tool_call(tool_name, arguments?)** -- Execute a tool by name. See the 'Dynamic Tools' section below for available tools and their parameters.
-2. **run_script(path, args?, timeout?)** -- Run a script from the workspace inside a sandboxed container with Python 3.12 and **internet access**. Returns stdout, stderr, exit code. Default timeout is 120 seconds (max 300).
+2. **run_script(path, args?, timeout?)** -- Run a script from the workspace inside a sandboxed container with Python 3.12 and **internet access**. Returns stdout, stderr, exit code. Default timeout is 60 seconds (max 150).
 3. **run_python(script, args?, timeout?)** -- Run inline Python in the same internet-enabled sandboxed container. For one-off tasks (no file written).
 
 **Dynamic Tools (use via tool_call):**

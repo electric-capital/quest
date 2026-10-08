@@ -99,7 +99,7 @@ Deliberately not built: a working mode switch (spec 4.2's user-doc switch and 8.
 | Code | Status | Raised by |
 |------|--------|-----------|
 | `docs_disabled` | 403 | every route, gate closed for the user |
-| `doc_not_found` | 404 | per-doc routes; missing docs, hidden docs and docs of a gated-off public project (viewer's or owner's gate) get identical bodies |
+| `doc_not_found` | 404 | per-doc routes; missing and hidden docs get identical bodies |
 | `forbidden` | 403 | rename / mode route / delete / share management / image delete on a visible doc the user does not own; content save / image upload / every history route for a read-only viewer |
 | `project_not_found` | 404 | list or create with a `project_id` that is not the user's visible project |
 | `invalid_cursor` | 400 | list with a malformed `cursor` |

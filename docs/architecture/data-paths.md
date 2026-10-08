@@ -33,7 +33,7 @@ The data directory defaults to `PROJECT_ROOT / "data"` but can be overridden by 
 | `DATA_DIR` | `PROJECT_ROOT / "data"` | Root of all persistent application data |
 | `DATABASE_PATH` | `DATA_DIR / "quest.db"` | SQLite database file |
 | `CHATS_DIR` | `DATA_DIR / "chats"` | Per-conversation directories |
-| `PROJECTS_DIR` | `DATA_DIR / "projects"` | Per-project directories (shared workspaces) |
+| `PROJECTS_DIR` | `DATA_DIR / "projects"` | Per-project directories (project workspace, `project.db`) |
 | `DOCS_DIR` | `DATA_DIR / "docs"` | Per-doc directories (`doc.md`, `assets/`, `revisions/`; see [Quest Docs](quest-docs.md)) |
 | `SECRET_KEY_FILE` | `DATA_DIR / "secret_key"` | Cookie signing key file |
 | `LOG_DIR` | `DATA_DIR / "logs"` | Application log files |
@@ -57,20 +57,20 @@ Every resolver enforces two checks and raises `InvalidStorageIdError` (a `ValueE
 1. **Canonical id** -- the id must be a single path segment (`Path(id).name == id`): empty, `.`, `..`, embedded separators (`<id>/workspace/cache` -- the vector in security finding #279217) and absolute paths are rejected. No id format beyond that is enforced (UUIDs in production, short names in fixtures).
 2. **Containment** -- the joined path must resolve under the root, which catches a planted `CHATS_DIR/<id>` symlink pointing outside the tree (dangling ones included); the two workspace-root resolvers re-check the full root against the resolved id dir itself (`CHATS_DIR/<id>` / `PROJECTS_DIR/<id>`), so a symlinked `workspace` segment below a real id dir is refused too -- including one pointing at another conversation's or project's workspace (`chats/A/workspace -> chats/B/workspace`). A symlinked data directory itself is fine because the root is resolved first. The plain join, not the resolved path, is what gets returned.
 
-The workspace roots are what `chat/file_storage.py` functions take (`validate_path(root, rel)` and friends); no caller appends `"workspace"` to a resolver result.
+The workspace roots are what `chat/file_storage.py` functions take (`validate_path(root, rel)`, `copy_entry(src_root, ..., dst_root, ...)` and friends); no caller appends `"workspace"` to a resolver result. There is no resolver that picks a space for the caller: a project conversation has both roots, and every caller names the one it means (the former `get_workspace_path()`, which returned the project workspace for project conversations, and `resolve_owned_project_dir()` no longer exist). The tool handlers reach the roots through `conversation_workspace_dir()` / `project_workspace_dir()` in `chat/gemini_api/tool_handlers/_common.py`, thin wrappers that also create the dir.
 
 The resolvers deliberately know nothing about users: schedulers, migrations, the Slack runtime and cross-user subagents resolve paths with no "current user". Ownership is a separate, composable guard for request-serving code in `chat/conversation_access.py`:
 
 | Accessor | Behaviour |
 |----------|-----------|
 | `require_owned_conversation(user_id, conversation_id)` | `get_conversation_meta` lookup; 404 `conversation_not_found` when missing or another user's |
-| `resolve_owned_workspace(user_id, conversation_id)` | The above plus `get_conversation_workspace_root` (also for project conversations); returns `(meta, root)` |
+| `resolve_owned_workspace(user_id, conversation_id)` | The above plus `get_conversation_workspace_root`; returns `(meta, root)`. Always the conversation's own workspace, project conversations included -- the conversation file routes never serve the project workspace |
 | `require_owned_project(user_id, project_id)` | `get_project` lookup; 404 `not_found` otherwise |
-| `resolve_owned_project_workspace(user_id, project_id)` | The above plus `get_project_workspace_root`; returns `(project, root)` |
+| `resolve_owned_project_workspace(user_id, project_id)` | The above plus `get_project_workspace_root`; returns `(project, root)`. Used by the `/projects/{project_id}/files...` routes and, with the conversation's `project_id`, by the copy-to-project / copy-from-project routes (ownership 404 only) |
 
 Routes that serve conversation- or project-scoped files go through these accessors rather than calling the store and the resolver separately:
 
-- the file browser routes (`chat/file_routes.py`),
+- the file browser routes (`chat/file_routes.py`: conversation routes, the project file mirror and the copy routes),
 - the conversation routes (`chat/routes/conversations.py`),
 - the project-table routes (`chat/project_db_routes.py`),
 - the Gmail Simple URL-lookup routes, and

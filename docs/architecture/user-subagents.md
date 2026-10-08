@@ -76,9 +76,12 @@ before anything comes back. Registry-level pieces: two new
 5. **Resolution (target side)** via the standard
    `POST /action-requests/{id}/resolve`:
    - **Approve** — `execute()` re-verifies the files, copies them into
-     the caller conversation's workspace under `.subagent_responses/`
-     (no-clobber `-2`/`-3` suffixing; `file_list_changed` published to
-     the caller), marks the run `returned`, and resolves the caller
+     the caller conversation's own conversation workspace under
+     `.subagent_responses/` (no-clobber `-2`/`-3` suffixing; conversation-
+     scope `file_list_changed` published to the caller) -- never the
+     caller's project workspace, even when the caller is a project
+     conversation (`copy_file` also refuses that dir as a source toward
+     `proj://`), marks the run `returned`, and resolves the caller
      handle `accepted` with `{status: "returned", response, files,
      from_user}` — waking the caller conversation via
      `maybe_kick_resume`. The resumed subagent-side tool result tells the

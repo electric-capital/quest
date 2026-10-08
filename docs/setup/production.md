@@ -364,7 +364,7 @@ All log output uses a unified format configured in `chat/logging_config.py` (dic
 ## Backup
 
 What to back up:
-- `data/` -- SQLite database, secret key, `encryption_key.json` (useless without the password, but the database is useless without it), chat histories, project workspaces
+- `data/` -- SQLite database, secret key, `encryption_key.json` (useless without the password, but the database is useless without it), chat histories, conversation and project workspaces
 - The encryption password itself, in your secret manager -- it is not in `data/`
 - `server_credentials.json` -- production credentials
 - `twitter_credentials.json` -- Twitter/X credentials (if configured)

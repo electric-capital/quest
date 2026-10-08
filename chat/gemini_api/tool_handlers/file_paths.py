@@ -44,7 +44,7 @@ class SpacePathError(ValueError):
 
 
 def parse_space_path(raw, *, allow_root: bool) -> tuple[str, str]:
-    """Split ``chat://a/b`` / ``proj://a/b`` into ``(space, rel)``.
+    r"""Split ``chat://a/b`` / ``proj://a/b`` into ``(space, rel)``.
 
     ``rel`` is a normalised POSIX path relative to the space root: empty
     and ``.`` segments and a trailing ``/`` are dropped. ``""`` (the space

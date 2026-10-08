@@ -476,6 +476,32 @@ def test_snapshots_capture_the_project_text():
     assert TWO_SPACES not in standalone
 
 
+def test_prompts_state_the_script_runner_timeouts():
+    """The run_script timeout the prompts quote is the one the sandbox
+    enforces (and the one the run_script / run_python schemas state)."""
+    from chat.gemini_api.constants import (
+        SCRIPT_RUNNER_MAX_TIMEOUT,
+        SCRIPT_RUNNER_TIMEOUT,
+    )
+    from chat.llm.tool_schemas import BASE_TOOLS
+
+    expected = (
+        f"Default timeout is {SCRIPT_RUNNER_TIMEOUT} seconds "
+        f"(max {SCRIPT_RUNNER_MAX_TIMEOUT})."
+    )
+    prompts = _render_snapshots()
+    for name in ("standalone_standard", "project_standard", "public_project"):
+        assert expected in prompts[name], name
+        assert "120 seconds" not in prompts[name], name
+
+    schema_text = (
+        f"(default {SCRIPT_RUNNER_TIMEOUT}, max {SCRIPT_RUNNER_MAX_TIMEOUT})"
+    )
+    specs = {spec["name"]: spec for spec in BASE_TOOLS}
+    for tool in ("run_script", "run_python"):
+        assert schema_text in json.dumps(specs[tool]), tool
+
+
 # ---------------------------------------------------------------------------
 # Threading the flags into the builders
 # ---------------------------------------------------------------------------
