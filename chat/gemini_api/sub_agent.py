@@ -90,7 +90,9 @@ async def _run_sub_agent(
         agent_name: Display name for this sub-agent.
         prompt: The task prompt to send to the sub-agent.
         custom_prompt: Optional user custom system prompt.
-        project_id: Optional project UUID for project-aware workspace resolution.
+        project_id: Optional project UUID (the parent's). Set in a project
+            conversation: the sub-agent then gets the project-only tools, the
+            project workspace and the parent's workspace notice flags.
         project_guide: Optional project-specific instructions.
         usage_accumulator: Optional dict to accumulate usage across turns.
         nested_enabled: Whether the conversation's ``nested_subagents`` flag is
@@ -182,6 +184,19 @@ async def _run_sub_agent(
         custom_prompt = user.get("settings", {}).get("custom_system_prompt", "")
     from api.instructions import get_user_connected_services
     connected_services = get_user_connected_services(user)
+    # The sub-agent shares the parent's conversation, so it gets the
+    # parent's workspace notice flags (already resolved by the parent's
+    # turn in run_conversation_turn). Project conversations only.
+    notice_flags: dict[str, bool] = {}
+    if project_id:
+        from chat.storage import ChatStorage
+        try:
+            notice_flags = ChatStorage.get_conversation_flags(conversation_id)
+        except Exception:
+            logger.warning(
+                "[sub-agent:%s] could not read notice flags (conversation=%s)",
+                agent_name, conversation_id, exc_info=True,
+            )
     system_prompt = get_sub_agent_system_prompt(
         agent_name, user["api_key"],
         base_url=get_proxy_base_url(),
@@ -193,6 +208,8 @@ async def _run_sub_agent(
         skills_content=skills_content,
         has_project=bool(project_id),
         can_nest=can_nest,
+        legacy_shared_workspace=bool(notice_flags.get("legacy_shared_workspace")),
+        converted_from_standalone=bool(notice_flags.get("converted_from_standalone")),
     )
 
     # Choose the tool tier: only a 1st-level sub-agent with the flag on gets the
@@ -722,7 +739,8 @@ async def _run_parallel_sub_agents(
         tasks: List of task specification dicts, each with 'id', 'name',
                'prompt', 'description', and optional 'model'.
         custom_prompt: Optional user custom system prompt.
-        project_id: Optional project UUID for project-aware workspace resolution.
+        project_id: Optional project UUID (the parent's), passed to every
+            sub-agent (see ``_run_sub_agent``).
         project_guide: Optional project-specific instructions.
         usage_accumulator: Optional dict to accumulate usage.
 

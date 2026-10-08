@@ -48,6 +48,68 @@ Public docs the user owns or was given write access to are written directly, wit
 """
 
 
+# Project conversations have two file spaces (spec 00009 section 6.4): their
+# own conversation workspace and the project workspace shared by every
+# conversation of the project. Shown in project conversations ONLY -- the
+# standard, sub-agent and public-project prompts all splice it into their
+# project section, so a standalone conversation's prompt is unchanged.
+_TWO_FILE_SPACES_SECTION = (
+    "\n**Two file spaces:** This conversation has its own workspace (`/workspace` "
+    "in scripts, the `*_workspace_file` tools) and the project has a shared "
+    "workspace (`/project` in scripts, the `*_project_file` tools: "
+    "`list_project_files`, `get_project_file`, `write_project_file`, "
+    "`edit_project_file`). Everything you produce goes to the conversation "
+    "workspace by default: drafts, downloads, intermediate data, scripts, API "
+    "responses. Put a file in the project workspace only when it is a finished "
+    "deliverable that later conversations in this project should find, or when "
+    "the user asks. Read project files with `list_project_files` / "
+    "`get_project_file`; move finished work with `copy_file_to_project` (from a "
+    "script: `shutil.copy('/workspace/out.pdf', '/project/out.pdf')`). "
+    "Attachments, inline images and `run_script` take conversation paths only: "
+    "`copy_project_file` first. To run a script kept in the project workspace, "
+    "copy it over or start it from `run_python` "
+    "(`subprocess.run([\"python3\", \"/project/etl.py\"])`).\n"
+)
+
+# Per-conversation notices (chat_history.json flags, see
+# chat.storage.CONVERSATION_NOTICE_FLAGS), project conversations only.
+_LEGACY_SHARED_WORKSPACE_NOTE = (
+    "\n**Earlier files:** This chat started before conversation workspaces "
+    "existed: files it created earlier are in the project workspace. Use "
+    "`list_project_files` / `get_project_file` to find them.\n"
+)
+_CONVERTED_FROM_STANDALONE_NOTE = (
+    "\n**Converted chat:** This chat was just turned into a project. Its "
+    "existing files are in the chat workspace; the project workspace is empty. "
+    "Use `copy_file_to_project` for files that should become shared project "
+    "files, or do so when the user asks.\n"
+)
+
+
+def _project_files_section(
+    legacy_shared_workspace: bool, converted_from_standalone: bool,
+) -> str:
+    """The two-file-spaces paragraph plus the flag-conditioned notices.
+
+    Only ever spliced into a project conversation's prompt.
+    """
+    section = _TWO_FILE_SPACES_SECTION
+    if legacy_shared_workspace:
+        section += _LEGACY_SHARED_WORKSPACE_NOTE
+    if converted_from_standalone:
+        section += _CONVERTED_FROM_STANDALONE_NOTE
+    return section
+
+
+# Script example shown only in project conversations (standard + public).
+_PROJECT_SCRIPT_EXAMPLE = (
+    "\n\nTo promote a finished file from this conversation's workspace to the "
+    "project workspace from a script:\n"
+    "  run_python(script=\"import shutil\\nshutil.copy('/workspace/out.pdf', "
+    "'/project/out.pdf')\")"
+)
+
+
 def _build_dynamic_tools_section(
     exclude: set[str] | None = None,
     connected_services: dict[str, bool] | None = None,
@@ -221,6 +283,8 @@ def get_system_prompt(
     is_slack: bool = False,
     nested_subagents: bool = False,
     is_routine: bool = False,
+    legacy_shared_workspace: bool = False,
+    converted_from_standalone: bool = False,
 ) -> str:
     """Build the system prompt with tool instructions and skill enumeration.
 
@@ -252,6 +316,17 @@ def get_system_prompt(
             at creation time, so the "Conversation naming" first-reply
             instruction is replaced by a short note and the
             ``set_conversation_name`` tool is left out of the enumeration.
+        legacy_shared_workspace: The conversation's ``legacy_shared_workspace``
+            notice flag (chat.storage.CONVERSATION_NOTICE_FLAGS). Adds the
+            "earlier files are in the project workspace" note. Project
+            conversations only: ignored when ``has_project`` is False.
+        converted_from_standalone: The ``converted_from_standalone`` notice
+            flag. Adds the "this chat was just turned into a project" note.
+            Project conversations only, like ``legacy_shared_workspace``.
+
+    Project conversations also get the "Two file spaces" paragraph and a
+    ``/project`` script example; a standalone conversation's prompt carries
+    none of the project text.
 
     Returns:
         Complete system prompt string.
@@ -299,7 +374,7 @@ def get_system_prompt(
             '`tool_call(tool_name="project_db_query", arguments={"query": "..."})` '
             "to create tables, store data, and query it. For full usage details, load the "
             "`system:project_db` system skill.\n"
-        )
+        ) + _project_files_section(legacy_shared_workspace, converted_from_standalone)
     if project_guide and project_guide.strip():
         project_section = f"""
 
@@ -372,6 +447,7 @@ def get_system_prompt(
     naming_section = (
         _ROUTINE_NAMING_SECTION if is_routine else _CONVERSATION_NAMING_SECTION
     )
+    project_script_example = _PROJECT_SCRIPT_EXAMPLE if has_project else ""
 
     return f"""You are Quest, a personal AI assistant. You have access to the user's APIs and connected services through a local API proxy.
 {identity_line}{custom_section}{skills_section}{project_section}
@@ -499,7 +575,7 @@ To run a quick one-off Python computation:
 
 To generate a chart and show it to the user inline:
   run_python(script="import matplotlib\\nmatplotlib.use('Agg')\\nimport matplotlib.pyplot as plt\\nplt.plot([1, 2, 3])\\nplt.savefig('/workspace/trend.png')")
-  -- then embed it in your reply text as: ![Trend](trend.png)
+  -- then embed it in your reply text as: ![Trend](trend.png){project_script_example}
 
 To check the current time:
   tool_call(tool_name="get_current_time")
@@ -732,6 +808,8 @@ def get_public_project_system_prompt(
     project_guide: str = "",
     is_routine: bool = False,
     docs_enabled: bool = False,
+    legacy_shared_workspace: bool = False,
+    converted_from_standalone: bool = False,
 ) -> str:
     """Build the system prompt for a conversation in a PUBLIC project.
 
@@ -761,6 +839,12 @@ def get_public_project_system_prompt(
     "Quest Docs" paragraph is omitted; while True the tools are listed and
     the paragraph follows the Boundaries block (it stands in for the
     ``system:quest_docs`` skill, since this prompt carries no skills).
+
+    A public-project conversation is always a project conversation, so the
+    "Two file spaces" paragraph (conversation workspace at ``/workspace``,
+    project workspace at ``/project``) is always present, and
+    ``legacy_shared_workspace`` / ``converted_from_standalone`` (the
+    conversation's notice flags) add their notes as in get_system_prompt().
     """
     from chat.llm.tool_schemas import (
         TOOL_CALL_REGISTRY, PUBLIC_TOOL_CALL_ALLOWLIST,
@@ -778,7 +862,7 @@ def get_public_project_system_prompt(
         "across all conversations in the project. Use "
         '`tool_call(tool_name="project_db_query", arguments={"query": "..."})` '
         "to create tables, store data, and query it.\n"
-    )
+    ) + _project_files_section(legacy_shared_workspace, converted_from_standalone)
     if project_guide and project_guide.strip():
         project_section = f"""
 
@@ -850,15 +934,15 @@ You have three tools available:
 **The sandbox (run_script / run_python):**
 - Has open internet access: fetch public URLs and APIs with `requests` / `httpx` / `curl` / `wget`. Pre-installed Python packages include requests, httpx, beautifulsoup4, lxml, openpyxl, python-docx, matplotlib, seaborn, and pypdf.
 - Private network destinations (LAN addresses, cloud metadata) are blocked; only the public internet is reachable.
-- The project workspace is mounted read-write at `/workspace`, so scripts can read uploaded files and write results the user can see in the file browser.
+- This conversation's workspace is mounted read-write at `/workspace` and the project's shared workspace at `/project`, so scripts can read uploaded files from either and write results the user can see in the file browser (to `/workspace` unless the result is a finished deliverable for the project).
 
-**Showing images to the user:** the chat renders standard markdown images inline. To display a workspace image (e.g. a chart you generated with matplotlib) directly in your reply, reference it by its workspace-relative path: `![Revenue by quarter](chart.png)`. Paths resolve from the workspace root; only PNG/JPEG/GIF/WebP files render. External image URLs are never rendered inline (they display as plain links) -- download a remote image into the workspace first to show it.
+**Showing images to the user:** the chat renders standard markdown images inline. To display a workspace image (e.g. a chart you generated with matplotlib) directly in your reply, reference it by its workspace-relative path: `![Revenue by quarter](chart.png)`. Paths resolve from this conversation's workspace root (copy a project image over with `copy_project_file` first); only PNG/JPEG/GIF/WebP files render. External image URLs are never rendered inline (they display as plain links) -- download a remote image into the workspace first to show it.
 
 **Boundaries (this is a public project):**
 - You have NO access to the user's internal data or connected services: no email, Slack reading, calendar, Drive, memories, or skills, and no authenticated internal APIs. There is no proxy endpoint and no API key in this conversation or its sandbox. The single connector exception is `send_slack_dm_to_self` (outbound-only, delivers a message and optional workspace files to the user themselves).
 - You cannot propose write actions (`create_action_request` is unavailable) and cannot spawn sub-agents (`agent_task*` is unavailable).
 - If the user asks for something that needs internal data or a connected service, tell them plainly that it requires a regular (private) conversation outside this public project -- do not attempt workarounds.
-- Files the user uploads to this project's workspace are fair game: the user chose to bring them into a public project.
+- Files the user uploads to this conversation or to the project workspace are fair game: the user chose to bring them into a public project.
 {docs_section}
 {naming_section}
 
@@ -874,7 +958,7 @@ To fetch a public web page from the sandbox:
   run_python(script="import requests\\nprint(requests.get('https://example.com').text[:2000])")
 
 To write a file to the workspace:
-  tool_call(tool_name="write_workspace_file", arguments={{"path": "analysis.py", "content": "import requests\\n..."}})
+  tool_call(tool_name="write_workspace_file", arguments={{"path": "analysis.py", "content": "import requests\\n..."}}){_PROJECT_SCRIPT_EXAMPLE}
 """
 
 
@@ -890,6 +974,8 @@ def get_sub_agent_system_prompt(
     skills_content: str = "",
     has_project: bool = False,
     can_nest: bool = False,
+    legacy_shared_workspace: bool = False,
+    converted_from_standalone: bool = False,
 ) -> str:
     """Build the system prompt for a sub-agent.
 
@@ -915,6 +1001,15 @@ def get_sub_agent_system_prompt(
             on). When True, the prompt enumerates the ``agent_task_nested`` tool
             and relaxes the "no spawning" rule accordingly. Always False for
             2nd-level sub-agents (they are leaves).
+        legacy_shared_workspace: The parent conversation's
+            ``legacy_shared_workspace`` notice flag; adds the legacy note.
+            Project conversations only (ignored without ``has_project``).
+        converted_from_standalone: The parent conversation's
+            ``converted_from_standalone`` notice flag; adds the converted
+            note. Project conversations only.
+
+    Project conversations also get the "Two file spaces" paragraph (the
+    sub-agent shares the parent's conversation and project workspaces).
 
     Returns:
         Complete system prompt string for the sub-agent.
@@ -962,7 +1057,7 @@ def get_sub_agent_system_prompt(
             '`tool_call(tool_name="project_db_query", arguments={"query": "..."})` '
             "to create tables, store data, and query it. Load `system:project_db` for the full "
             "usage reference.\n"
-        )
+        ) + _project_files_section(legacy_shared_workspace, converted_from_standalone)
     if project_guide and project_guide.strip():
         project_section = f"""
 

@@ -45,12 +45,16 @@ logger = logging.getLogger(__name__)
 # (from-conversation), i.e. the conversation has always had its own
 # conversation workspace.
 #
-# Legacy detection rule (phase 2): a conversation is a legacy project
-# conversation -- its earlier files live in the shared project workspace --
-# iff it is a project conversation AND ``own_workspace`` is NOT set AND it has
-# at least one assistant message. The presence of ``chats/{cid}/workspace/``
-# must NOT be used for this: file_storage.validate_path and the tool
-# handlers' _get_workspace_dir mkdir that dir as a side effect of merely
+# Legacy detection (run_conversation_turn, via
+# chat.gemini_api.conversation._resolve_workspace_notice_flags): on a project
+# conversation's first turn without ``own_workspace``, a history with at least
+# one ``role: "assistant"`` message marks it a legacy project conversation --
+# its earlier files live in the shared project workspace -- and sets
+# ``legacy_shared_workspace``; either way ``own_workspace`` is then set, so
+# the check runs once per conversation. Standalone conversations are never
+# touched. The presence of ``chats/{cid}/workspace/`` must NOT be used for
+# this: file_storage.validate_path and the tool handlers'
+# conversation_workspace_dir mkdir that dir as a side effect of merely
 # opening the conversation or running any tool.
 CONVERSATION_NOTICE_FLAGS = (
     "legacy_shared_workspace", "converted_from_standalone", "own_workspace",
