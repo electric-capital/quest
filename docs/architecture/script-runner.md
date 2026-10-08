@@ -4,7 +4,7 @@ This document describes the `run_script` and `run_python` tools, which allow the
 
 ## Overview
 
-The script runner provides a secure execution environment for scripts. Both tools run inside an ephemeral Podman container based on Python 3.12-slim, with the conversation workspace mounted at `/workspace`. There are **two sandbox profiles backed by two separate images** (separate Dockerfiles + entrypoints so their tooling can diverge independently):
+The script runner provides a secure execution environment for scripts. Both tools run inside an ephemeral Podman container based on Python 3.12-slim, with the conversation workspace mounted at `/workspace` and, in project conversations, the project workspace at `/project` (see [Mounts](#mounts)). There are **two sandbox profiles backed by two separate images** (separate Dockerfiles + entrypoints so their tooling can diverge independently):
 
 - **Restricted (default)**: no external internet access -- scripts reach the **sandbox tool API** via `localhost:<port>` using slirp4netns networking with socat forwarding, authenticated by the injected `QUEST_API_KEY` -- an **ephemeral per-run sandbox token** (see [Sandbox tokens](#sandbox-tokens)), never the user's long-lived `users.api_key`. Image `quest-script-runner-<mode>` from `Dockerfile.script-runner` + `script-runner-entry.sh`.
 - **Public** (conversations in public projects, see [Public Projects Architecture](public-projects.md)): open internet egress and DNS, **no** proxy bridge and **no** `QUEST_API_KEY`/`QUEST_PORT` env vars; the entrypoint iptables-REJECTs all private/link-local destinations (LAN, cloud metadata service) before dropping privileges. Image `quest-script-runner-public-<mode>` from `Dockerfile.script-runner-public` + `script-runner-entry-public.sh`.
@@ -23,17 +23,28 @@ Both tools are defined in `chat/llm/tool_schemas.py` as part of `BASE_TOOLS`. `r
 
 1. LLM calls `run_script(path="scripts/analyze.py", args="--verbose", intent_message="Analyze data")` during the conversation
 2. `_dispatch_tool_call()` in `chat/gemini_api/tool_dispatch.py` routes the call to `_handle_run_script()` in `chat/gemini_api/tool_handlers/sandbox.py`
-3. Handler launches an ephemeral Podman container with the workspace mounted at `/workspace`
+3. Handler launches an ephemeral Podman container with the conversation workspace mounted at `/workspace` (plus `/project` in project conversations, see [Mounts](#mounts)). `path` resolves only inside the conversation workspace; in a project conversation a miss returns a not-found error that points the model at `copy_project_file` or `run_python` for a script kept in the project workspace
 4. The handler mints an ephemeral sandbox token for the run (`sandbox_token_lease()` in `chat/sandbox_tokens.py`) and the script executes inside the container with it injected as `QUEST_API_KEY`, plus `QUEST_PORT` (the **sandbox tool API** port, not the main server port -- see [Networking](#networking)). The token is revoked as soon as the container exits
-5. On completion (or timeout), stdout, stderr, and return_code are captured and returned to the LLM. On a clean container exit (no error response), the handler also publishes a per-user `file_list_changed` global on the realtime bus so any open file browsers silent-refresh -- emitted unconditionally because the `:Z` workspace mount makes a cheap diff unavailable; the FE-side fetch is a no-op when nothing actually changed. See [Realtime Architecture](realtime.md#backend-publish-sites-per-user-globals).
+5. On completion (or timeout), stdout, stderr, and return_code are captured and returned to the LLM. On a clean container exit (no error response), the handler also publishes a per-user `file_list_changed` global on the realtime bus so any open file browsers silent-refresh -- for the `conversation` scope always, and additionally the `project` scope in project conversations (the `/project` mount was writable) -- emitted unconditionally because the `:Z`/`:z` mounts make a cheap diff unavailable; the FE-side fetch is a no-op when nothing actually changed. See [Realtime Architecture](realtime.md#backend-publish-sites-per-user-globals).
 
 ### `run_python`
 
 1. LLM calls `run_python(script="import json; print(json.dumps({'status': 'ok'}))")` during the conversation
 2. `_dispatch_tool_call()` in `chat/gemini_api/tool_dispatch.py` routes the call to `_handle_run_python()` in `chat/gemini_api/tool_handlers/sandbox.py`
-3. Handler launches an ephemeral Podman container (same image and configuration as `run_script`) with the workspace mounted at `/workspace`
+3. Handler launches an ephemeral Podman container (same image and configuration as `run_script`) with the same mounts
 4. The script content is piped to `python3 -u -` via stdin, with any `args` appended to the command line
 5. On completion (or timeout), stdout, stderr, and return_code are captured and returned to the LLM. Same `file_list_changed` emission as `run_script` on a clean container exit.
+
+## Mounts
+
+`_build_script_podman_cmd(..., project_dir=None)` in `chat/gemini_api/tool_handlers/sandbox.py` mounts, in both profiles:
+
+| Mount | When | Relabel |
+|-------|------|---------|
+| conversation workspace -> `/workspace` (`-w /workspace`) | every conversation | `:Z` (private: only this conversation's containers use it) |
+| project workspace -> `/project` | project conversations only (`project_dir` from `project_workspace_dir()`) | `:z` (shared: sibling conversations of one project can run containers against it concurrently) |
+
+Both are writable, so `shutil.copy('/workspace/out.pdf', '/project/out.pdf')` promotes a file into the project workspace from a script. Standalone conversations pass `project_dir=None` and get exactly the single-mount argv. The images and entrypoints need nothing path-specific for `/project`: `WORKDIR /workspace` stays, the bind mount creates `/project`, and the entrypoints only install network rules and drop privileges (no chown or relabel of either path).
 
 ## Container Environment
 
@@ -43,7 +54,7 @@ Both tools are defined in `chat/llm/tool_schemas.py` as part of `BASE_TOOLS`. `r
 
   The library list is enumerated for the model in the `run_script`/`run_python` tool descriptions (`chat/llm/tool_schemas.py`) and the `system:workspace` skill (`chat/system_skills/catalog.py`), which also notes that *reading* a PDF's content for analysis should go through `get_workspace_file` (PDFs are returned as inline parts) -- the libraries are for manipulation/generation inside the sandbox
 - **Environment variables**: `MPLBACKEND=Agg` (headless matplotlib backend for chart generation without a display server)
-- **File access**: Workspace mounted at `/workspace` (writable via `--userns=keep-id`)
+- **File access**: Conversation workspace mounted at `/workspace` (the working directory), plus the project workspace at `/project` in project conversations; both writable via `--userns=keep-id` (see [Mounts](#mounts))
 - **API access**: Scripts access the sandbox tool API at `localhost:<port>` using the injected `QUEST_API_KEY` (per-run sandbox token) and `QUEST_PORT` environment variables. For authenticated external API requests (e.g., CoinGecko Pro), scripts use `POST /api/authed-get` on the same port -- see [Gemini API Integration - Proxy Endpoint](gemini-api.md#proxy-endpoint-post-apiauthed-get)
 - **Image definition**: `Dockerfile.script-runner` with entrypoint `script-runner-entry.sh`
 - **Podman flags**: `--userns=keep-id`, `--user=0:0`, `--cap-add=NET_ADMIN`, `--cap-add=SETPCAP`, `--security-opt=seccomp=<data_dir>/sandbox-seccomp.json` (the no-symlink profile, see [Security](#security)), `--memory=512m`
@@ -88,7 +99,7 @@ The container uses slirp4netns networking with socat forwarding and iptables-bas
 - **Memory/CPU limits**: Container resource limits prevent runaway scripts
 - **Ephemeral containers**: Each script execution creates and destroys a fresh container
 - **Timeout enforcement**: Default 60s, maximum 150s, prevents indefinite execution
-- **Workspace isolation**: Only the conversation workspace (`data/chats/{id}/workspace/`, for project conversations too -- the project workspace is not mounted) is mounted; no access to host filesystem beyond `/workspace`
+- **Workspace isolation**: Only the conversation workspace (`data/chats/{id}/workspace/`) and, for project conversations, the project workspace (`data/projects/{id}/workspace/workspace/`) are mounted; no access to host filesystem beyond `/workspace` and `/project`
 - **No symlink creation (seccomp)**: Both profiles run under a custom seccomp profile that denies the `symlink`/`symlinkat` syscalls with `EPERM` (covering `ln -s`, `os.symlink`, and archive extractors like `unzip` writing symlink entries). The workspace mount is host-backed, and host-side consumers (folder zip downloads, workspace duplication/moves, uploads) operate on workspace entries with the server's privileges -- a symlink pointing outside the workspace would redirect their reads/writes to arbitrary host paths.
 
   `chat/gemini_api/sandbox_seccomp.py` generates `<data_dir>/sandbox-seccomp.json` on first sandbox use by patching the host's default containers profile (`/etc/containers/seccomp.json`, then `/usr/share/containers/seccomp.json`, falling back to the vendored repo-root snapshot `script-runner-seccomp-fallback.json`), preserving the rest of the default confinement -- notably the `io_uring_*` denial, without which `IORING_OP_SYMLINKAT` could bypass the filter. A profile generation failure fails the sandbox run (fail closed) instead of launching unconfined.
