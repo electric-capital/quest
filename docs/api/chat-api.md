@@ -71,7 +71,7 @@ All conversation REST endpoints are defined in `chat/routes/conversations.py`. S
 Creating a conversation:
 - Creates a row in `conversations` table via `db/conversation_store.py`
 - Creates directory at `data/chats/{id}/` with `chat_history.json`
-- For a standalone conversation no workspace directory is created up front; the `workspace/` subdirectory is created lazily by the first write (file tools, uploads, the sandbox). A project conversation (`ChatStorage.create_project_conversation()`) gets its empty conversation workspace and the `own_workspace` flag at creation -- see [Projects API](projects-api.md)
+- For a standalone conversation no workspace directory is created up front; the `workspace/` subdirectory is created lazily on first access (`file_storage.validate_path()` and `conversation_workspace_dir()` mkdir it, so even a file-list request creates it). A project conversation (`ChatStorage.create_project_conversation()`) gets its empty conversation workspace and the `own_workspace` flag at creation -- see [Projects API](projects-api.md)
 
 ---
 
@@ -351,7 +351,7 @@ Defined in the model loop in `chat/gemini_api/conversation.py`, the realtime pub
 - Per-user globals:
   - **`request_count_changed`** (`counts: {all, open, executed, denied, stopped}`),
   - **`conversation_list_changed`** (`conversation_id`, `action: "created" | "archived" | "unarchived" | "renamed" | "model_changed"`),
-  - **`file_list_changed`** (`conversation_id`, `project_id`, `scope: "project" | "conversation"`; emitted from each workspace-mutating tool handler and REST route on success so file browsers can silent-refresh mid-turn; project-scoped writes fan out across sibling-conversation tabs),
+  - **`file_list_changed`** (`conversation_id`, `project_id`, `scope: "project" | "conversation"`; emitted from each workspace-mutating tool handler and REST route (the copy routes also on a 500 `copy_failed`, since a failed copy may have written part of the destination) so file browsers can silent-refresh mid-turn; project-scoped writes fan out across sibling-conversation tabs),
   - **`wait_handle_resolved`** (`conversation_id`, `handle_id`, `kind`, `status`, optional `request_id`, optional `response`),
   - **`routine_list_changed`** (`project_id`; emitted when a `create_routine`/`edit_routine` action request executes so the sidebar refreshes its cached per-project routine list),
   - **`doc_list_changed`** (no payload) and **`doc_changed`** (`doc_id`, `updated_at`; null when the doc's existence or the receiver's access changed): Quest Docs list/viewer refresh signals sent to the doc's audience (owner + share recipients, every connected user for a doc shared with everyone); see [Quest Docs API](quest-docs-api.md#realtime-events).
