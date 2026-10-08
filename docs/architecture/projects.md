@@ -1,10 +1,10 @@
 # Projects Architecture
 
-This document describes the Projects feature, which allows users to group related conversations under a shared workspace and optional project guide (custom instructions; labeled **"Project Instructions"** in the UI). The project guide is a plain text field on the project (`projects.guide`) -- it is unrelated to the deprecated per-conversation [Guides](guides.md) feature and is not deprecated with it; "guide" survives only as the backend field name.
+This document describes the Projects feature, which allows users to group related conversations under a shared project workspace and optional project guide (custom instructions; labeled **"Project Instructions"** in the UI). The project guide is a plain text field on the project (`projects.guide`) -- it is unrelated to the deprecated per-conversation [Guides](guides.md) feature and is not deprecated with it; "guide" survives only as the backend field name.
 
 ## Overview
 
-A Project is a container that groups one or more related conversations. All conversations in a project share a single workspace directory, enabling agents to build on prior work across conversations. Each project can have an optional guide -- custom instructions injected into the system prompt for all conversations in the project, alongside the user's per-conversation guide.
+A Project is a container that groups one or more related conversations. Every project conversation has two file spaces: its own **conversation workspace** (the default for everything it produces, exactly like a standalone conversation's) and the **project workspace** shared by all conversations of the project, used deliberately for deliverables that later conversations should find (see [Workspace Resolution](#workspace-resolution)). Each project can have an optional guide -- custom instructions injected into the system prompt for all conversations in the project, alongside the user's per-conversation guide.
 
 Projects can also have Skills -- reusable instruction definitions scoped to the project, with auto-load capability so they are injected into the system prompt for all project conversations (see [Skill Library Architecture](skill-library.md) for the full skill library documentation).
 
@@ -32,19 +32,25 @@ The `Conversation` model in `db/models.py` has optional `project_id` (FK to `pro
 
 ## Workspace Resolution
 
-Two workspace roots exist, each with one resolver in `chat/storage.py`:
+Two workspace roots exist, each with exactly one resolver in `chat/storage.py` (canonical-id and containment checks, see [Data Paths](data-paths.md)):
 
-- **Conversation workspace**: `data/chats/{conversation_id}/workspace/` (`ChatStorage.get_conversation_workspace_root()`), for every conversation, standalone or in a project. `create_project_conversation()` creates it up front.
-  The project workspace is reached through the project file routes (`/app/api/projects/{project_id}/files...`) and the copy-to-project / copy-from-project routes (see [File Browser API](../api/file-browser-api.md)).
-- **Project workspace**: `data/projects/{project_id}/workspace/workspace/` (`ChatStorage.get_project_workspace_root()`), shared by all conversations in the project.
+- **Conversation workspace**: `data/chats/{conversation_id}/workspace/` (`ChatStorage.get_conversation_workspace_root()`), for every conversation, standalone or in a project. `create_project_conversation()` creates it up front. It is the default for everything a conversation produces: tool writes, `authed_get` / download bodies, pasted composer images, sub-agent and user-subagent returns, sandbox output written under `/workspace`.
+- **Project workspace**: `data/projects/{project_id}/workspace/workspace/` (`ChatStorage.get_project_workspace_root()`, created by `ChatStorage.create_project_workspace()`), shared by all conversations in the project. Nothing lands there by default; it is written only on purpose.
 
-The conversation file routes (`resolve_owned_workspace`) and the tool handlers' `_get_workspace_dir()` helper (`chat/gemini_api/tool_handlers/_common.py`, which creates the dir) both resolve to the conversation workspace, project conversations included. `resolve_owned_project_workspace()` in `chat/conversation_access.py` resolves an owned project's workspace root.
+How each surface reaches the two spaces:
+
+- **HTTP**: the conversation file routes (`resolve_owned_workspace` in `chat/conversation_access.py`) always serve the conversation workspace, project conversations included; the `/app/api/projects/{project_id}/files...` mirror set (`resolve_owned_project_workspace`) serves the project workspace; `POST /conversations/{id}/files/copy-to-project` / `copy-from-project` copy or move between them (see [File Browser API](../api/file-browser-api.md)).
+- **Model tools**: in a project conversation the five scheme-qualified file tools (`list_files`, `read_file`, `write_file`, `edit_file`, `copy_file`) address `chat://<path>` (conversation workspace) or `proj://<path>` (project workspace) and replace the four `*_workspace_file` tools in the prompt; every other path- or attachment-taking tool takes conversation-workspace paths only. Handlers resolve the roots via `conversation_workspace_dir()` / `project_workspace_dir()` in `chat/gemini_api/tool_handlers/_common.py` (see [Gemini API Integration](gemini-api.md#scheme-qualified-file-tools)).
+- **Sandbox**: `/workspace` is the conversation workspace and `/project` the project workspace, both writable (see [Script Runner](script-runner.md#mounts)).
+- **UI**: the right panel shows **Chat Files** and **Project Files** cards with Copy / Move row actions between them (see [Frontend Architecture](frontend.md)).
 
 ## Converting a Conversation into a Project
 
-A standalone (non-project, non-Slack) conversation can be turned into a new project via **POST `/app/api/projects/from-conversation`** (see [Projects API](../api/projects-api.md)). The endpoint creates the project and its (empty) project workspace, flips `conversations.project_id` via `set_conversation_project()`, and sets the `converted_from_standalone` and `own_workspace` flags at the top level of the conversation's `chat_history.json` (`ChatStorage.set_conversation_flag()`, best effort -- a failed flag write is logged and the conversion still succeeds). No files move: they stay in the conversation workspace `data/chats/{conversation_id}/workspace/` (created if the conversation never had one).
+A standalone (non-project) web conversation -- not Slack, cross-user subagent or inference-API -- can be turned into a new project via **POST `/app/api/projects/from-conversation`** (see [Projects API](../api/projects-api.md)). The endpoint creates the project and its (empty) project workspace, flips `conversations.project_id` via `set_conversation_project()`, and sets the `converted_from_standalone` and `own_workspace` flags at the top level of the conversation's `chat_history.json` (`ChatStorage.set_conversation_flags()`, best effort -- a failed flag write is logged and the conversion still succeeds). No files move: they stay in the conversation workspace `data/chats/{conversation_id}/workspace/` (created if the conversation never had one).
 
-Cached SDK sessions are invalidated because project membership changes the system prompt (project guide and skill auto-loads).
+The conversation's next turn therefore runs as a project conversation: the scheme-qualified file tools replace the `*_workspace_file` tools, and the converted note in its system prompt (`_CONVERTED_FROM_STANDALONE_NOTE` in `chat/gemini_api/system_prompt.py`) tells the model its earlier files are in `chat://` and that `copy_file` to `proj://` shares them. `own_workspace` keeps legacy detection from ever flagging the converted chat (see [Storage Layout](#storage-layout)).
+
+Cached SDK sessions are invalidated (`invalidate_user_sessions`) because project membership changes the system prompt (project guide, skill auto-loads, file tools and notes).
 
 In the frontend, the option appears as "Create Project from Chat" in the top-level conversation entry's dropdown menu in `Sidebar.tsx` (hidden for Slack conversations). It opens `ConvertToProjectModal` (`frontend/src/components/ConvertToProjectModal.tsx`, reusing the `NewProjectModal` styles), which prefills the project name from the conversation title and explains that the chat becomes the project's first conversation while its files stay with the chat (the project starts with an empty Project Files space; the user can ask the chat, or use Move to project, to share files with later chats). On success the sidebar refetches projects, drops the conversation from the top-level list, and drills into the new project, auto-selecting the moved conversation.
 
@@ -75,20 +81,29 @@ data/
 │   └── {project_id}/
 │       ├── project.db              # Per-project SQLite database (created lazily, see project-db.md)
 │       └── workspace/
-│           └── workspace/          # Project workspace shared by all project conversations
+│           └── workspace/          # Project workspace shared by all project conversations (proj://, /project)
 ├── chats/
 │   └── {conversation_id}/          # Per-conversation directory (both standalone and project)
 │       ├── chat_history.json       # Messages + notice flags (includes project_id field for project conversations)
 │       ├── sdk_history.json        # SDK session history
-│       └── workspace/              # Conversation workspace (files created by the agent or uploaded by the user)
+│       └── workspace/              # Conversation workspace, standalone and project conversations (chat://, /workspace)
 └── quest.db                       # SQLite database (projects table, conversations.project_id FK)
 ```
 
-Chat history files (`chat_history.json`) for project conversations include a `project_id` field at the top level, plus the server-set notice flags of `CONVERSATION_NOTICE_FLAGS` in `chat/storage.py` (read with `ChatStorage.get_conversation_flags()`, written with `set_conversation_flag()`):
+Chat history files (`chat_history.json`) for project conversations include a `project_id` field at the top level, plus the server-set notice flags of `CONVERSATION_NOTICE_FLAGS` in `chat/storage.py` (read with `ChatStorage.get_conversation_flags()`, written with `set_conversation_flag()` / `set_conversation_flags()`):
 
 - `own_workspace` -- the explicit post-cutover marker: set by `create_project_conversation()` and by POST `/projects/from-conversation`, meaning the conversation has always had its own conversation workspace. A project conversation WITHOUT it that has at least one assistant message is a legacy conversation whose earlier files live in the shared project workspace. The presence of `data/chats/{id}/workspace/` is deliberately not the marker: opening a conversation's files or running any tool creates that dir as a side effect.
 - `converted_from_standalone` -- set by POST `/projects/from-conversation` (files left in place).
-- `legacy_shared_workspace` -- reserved for legacy project conversations.
+- `legacy_shared_workspace` -- set by legacy detection at turn start (`_resolve_workspace_notice_flags()` in `chat/gemini_api/conversation.py`): on the first turn of a project conversation without `own_workspace`, a history with at least one assistant message gets `legacy_shared_workspace`, and `own_workspace` is set either way, so the check runs once. The write is a compare-and-set against `own_workspace` (`set_conversation_flags(..., only_if_unset="own_workspace")`), so a concurrent Create Project from Chat wins and a converted chat is never flagged legacy; a newly flagged turn drops the cached chat session so the rebuilt prompt carries the legacy note.
+
+The flags drive the per-conversation notes in project prompts (`_project_files_section()` in `chat/gemini_api/system_prompt.py`): the legacy note points the model at `list_files("proj://")` / `read_file("proj://...")`, the converted note at `copy_file` from `chat://` to `proj://`. Both are persisted once and shown on every later turn, so they are worded to stay true ("may be in the project workspace", no "just converted").
+
+## Migration Notes
+
+Behavior that changed for data created before conversation workspaces existed (nothing on disk is moved):
+
+- **Routines** that relied on the shared workspace (a run reading what an earlier run wrote) must address the project space with `proj://` paths in their prompts, since every run is a fresh conversation whose files stay in its own workspace. The Routine Settings and New Routine prompt fields say this in their help text (`ROUTINE_PROMPT_FILES_HINT` in `frontend/src/constants/routines.ts`); see [Routines Architecture](routines.md#file-spaces-in-routine-prompts).
+- **Legacy project chats** (created before the change) show their earlier files under Project Files only; their Chat Files card starts empty, and old inline images in their transcripts that point at those files show the broken-reference chip (`MarkdownImage` resolves against the conversation workspace). The model gets the legacy note (see [Storage Layout](#storage-layout)) and finds the files through `proj://`.
 
 ## Project Guide Injection
 
@@ -121,7 +136,7 @@ The persistent-WS `send_message` handler in `chat/realtime/socket.py` detects pr
 
 1. After validating conversation ownership, the handler reads `project_id` from the conversation metadata (`meta.get("project_id")`)
 2. The `project_id` is passed through to `run_conversation_turn()` via `_run_send_message`
-3. All workspace file tool calls (`list_workspace_files`, `get_workspace_file`, `write_workspace_file`, `edit_workspace_file`) receive the `project_id` via `_dispatch_tool_call()` for correct workspace resolution. These tools are dispatched through the `tool_call` meta tool pattern (see [Gemini API Integration](gemini-api.md#meta-tool-pattern-tool_call))
+3. Every tool call receives the `project_id` via `_dispatch_tool_call()`. The file tools resolve `chat://` paths (and the `*_workspace_file` tools) to the conversation workspace and `proj://` paths to the project workspace; `project_id` also selects the project tool set (the scheme-qualified file tools and `project_db_query` offered, the `*_workspace_file` tools hidden) and the `/project` sandbox mount. The file tools are dispatched through the `tool_call` meta tool pattern (see [Gemini API Integration](gemini-api.md#meta-tool-pattern-tool_call))
 
 No project-specific protocol changes are needed -- conversations in a project use the same `WS /app/api/stream` endpoint as standalone conversations.
 
@@ -169,17 +184,20 @@ In the Conversations section, conversations created by routines are grouped unde
 
 ## Design Decisions
 
-**Why a shared workspace instead of per-conversation workspaces?**
-Projects are designed for related work that builds on itself across conversations. A shared workspace means files created in one conversation are immediately available in the next, eliminating the need to re-upload or recreate artifacts. This mirrors how a developer would work in a single directory across multiple terminal sessions.
+**Why a per-conversation workspace plus a deliberately used project workspace?**
+Projects are for related work that builds on itself across conversations, so the project keeps one shared space where files created in one conversation are available in the next. But when that shared space was every conversation's only workspace, everything any conversation produced landed there -- `.responses/` bodies, `pasted/` images, sub-agent returns, plugin downloads, throwaway scripts, drafts -- and over a project's life the scratch buried the deliverables. So every project conversation gets its own conversation workspace for all of that by default (every existing file tool, attachment tool, `run_script` and inline image keeps working against it unchanged, and standalone conversations do not change at all), and the project workspace is reached only through explicit `proj://` paths, the `/project` mount, the Project Files card and the copy routes. The prompt tells the model to put a file there only when it is a finished deliverable for later conversations or the user asks; no approval is needed because it is the user's own project.
+
+**Why does the project workspace keep the doubled `workspace/workspace` segment?**
+Renaming it would need a data migration touching every install for no user-visible gain. Only `ChatStorage.get_project_workspace_root()` knows about the doubling, and no caller appends `"workspace"` to a resolver result.
 
 **Why is the project guide read live instead of snapshotted like per-conversation guides?**
 Per-conversation guides are snapshotted on first message to preserve the exact instructions the conversation started with. Project guides serve a different purpose -- they provide shared context that the user may update as the project evolves (e.g., adding new requirements or API documentation). Reading the guide live from the database ensures all conversations in the project always use the latest project-level instructions.
 
 **Why `ON DELETE CASCADE` on `conversations.project_id`?**
-When a project is deleted, its conversations should be removed as well since they reference a shared workspace that will be deleted. The CASCADE constraint handles this at the database level, preventing orphaned conversation rows.
+When a project is deleted, its conversations should be removed as well since they reference a project workspace that will be deleted. The CASCADE constraint handles this at the database level, preventing orphaned conversation rows.
 
-**Why store project workspace at `data/projects/{project_id}/workspace/` instead of alongside chats?**
-Separating project workspaces from conversation directories makes the ownership model clear: conversation directories in `data/chats/` contain per-conversation data (chat history, SDK history), while project directories in `data/projects/` contain shared data (workspace files). This prevents confusion about which files are shared vs. conversation-specific.
+**Why store the project workspace under `data/projects/{project_id}/` instead of alongside chats?**
+Separating project data from conversation directories makes the ownership model clear: conversation directories in `data/chats/` contain per-conversation data (chat history, SDK history, the conversation workspace), while project directories in `data/projects/` contain shared data (the project workspace, `project.db`). This prevents confusion about which files are shared vs. conversation-specific.
 
 **Why a composite unique index on `(user_id, name)` for projects?**
 Project names should be unique per user to avoid confusion in the sidebar and project selectors. The database-level constraint prevents race conditions that application-level checks alone could miss.

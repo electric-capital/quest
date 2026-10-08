@@ -129,7 +129,7 @@ When a user account is deleted, all of that user's guides are automatically remo
 
 ## Project Model
 
-The `Project` model in `db/models.py` maps to the `projects` table. Projects group related conversations with a shared workspace and optional project guide (custom instructions injected into the system prompt). See [Projects Architecture](projects.md) for the full feature description.
+The `Project` model in `db/models.py` maps to the `projects` table. Projects group related conversations with a shared project workspace (next to each conversation's own workspace) and optional project guide (custom instructions injected into the system prompt). See [Projects Architecture](projects.md) for the full feature description.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|

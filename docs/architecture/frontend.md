@@ -289,7 +289,7 @@ App-wide state is split into one React context per responsibility, composed by `
 | `GuidesContext.tsx` (`useGuides`) | Deprecated guide list `guides` / `guidesLoaded` / `loadGuides()`; fetched only while the `guides` feature gate is on for the user, cleared when it closes |
 | `ConversationModelsContext.tsx` (`useConversationModels`) | Default models + per-conversation overrides + provider locks (details below) |
 | `ConversationSkillsContext.tsx` (`useConversationSkills`) | Per-conversation queued / loaded skill ids (`get/setQueuedSkillsForConversation`, `get/setLoadedSkillsForConversation`, `markSkillsAsLoaded`) |
-| `FileBrowserStateContext.tsx` (`useFileBrowserState`) | Per-conversation file-browser path + history (`getFileBrowserState` / `setFileBrowserState`), used by `useFileBrowser` |
+| `FileBrowserStateContext.tsx` (`useFileBrowserState`) | Per-file-space file-browser path + history + show-hidden toggle (`getFileBrowserState` / `setFileBrowserState`), keyed by `fileSourceKey()` (`conversation:<id>` / `project:<id>`) so a Chat Files and a Project Files card keep separate state; in memory, survives card remounts and conversation switches; used by `useFileBrowser` |
 
 **Boot order.** `AppConfigProvider` fetches the config and the initial version hash on mount and exposes `whenConfigLoaded`. `AuthProvider` runs `checkSession()` concurrently but awaits `whenConfigLoaded` before committing any session state, so `isCheckingAuth` only turns false once `loginMethod` is known (the sign-in screen never flashes the wrong form) and everything hydrated from the session sees the credentialed-model list. `ConversationModelsProvider` hydrates its defaults from `sessionSnapshot` as a render-time state adjustment rather than in an effect, so the first authenticated render already shows the user's stored default instead of the placeholder; `AppearanceProvider` applies the server theme in an effect (the localStorage cache has already set the pre-paint attribute). Unit tests for these boundaries live in `src/contexts/AppProviders.test.tsx` (`npm test`).
 
@@ -516,6 +516,7 @@ A sidebar component that displays projects, conversations, a Requests section, a
 - Active conversation highlighting with visual indicator
 - Compact conversation entries (title only, no message count or timestamp)
 - Conversation archive: meatball menu (three-dot icon) on each conversation entry offering Archive/Unarchive and Rename actions. Archived conversations appear dimmed and italic when the filter makes them visible
+- Create Project from Chat: the top-level (standalone, non-Slack) conversation menu item opens `ConvertToProjectModal` (`frontend/src/components/ConvertToProjectModal.tsx`), which explains that the chat becomes the project's first conversation, its files stay with the chat, and the project starts with an empty Project Files space ("Ask the chat, or use Move to project, to share files with later chats."); see [Projects -- Converting a Conversation into a Project](projects.md#converting-a-conversation-into-a-project)
 - Conversation list filter: filter icon button (lucide `Filter`) in each Conversations section header opens a popover with checkboxes ("Show Archived", "Show Slack Conversations", and top-level only "Show Inference API Runs"). All default to unchecked on every page load (no persistence) and unchecked means hide that category.
   - For the top-level list all three filters are enforced server-side via `GET /conversations` query params (`include_archived`, `include_slack`, `include_inference`; see [Chat API](../api/chat-api.md)); `applyConversationFilters()` is kept as an instant client-side pass so unchecking hides rows immediately while the refetch (triggered by the toggle-change effect) restores a full page and reveals newly included rows.
   - The project drill-down list still filters Slack client-side. Separate filter state for the top-level list and the project drill-down list
@@ -586,6 +587,7 @@ Comprehensive CSS styles with dark/light mode support:
 - "+" button in header when routines exist (opens NewRoutineModal)
 - Dotted-border "Create Routine" button when empty (opens NewRoutineModal)
 - Routine entries with name, settings gear icon (opens RoutineSettingsModal), and play button
+- Both routine modals show the shared `ROUTINE_PROMPT_FILES_HINT` (`frontend/src/constants/routines.ts`) under the Prompt field: each run is a fresh chat whose files stay in that run's Chat Files, so runs that build on each other must name `proj://` paths (see [Routines -- File Spaces in Routine Prompts](routines.md#file-spaces-in-routine-prompts))
 - Clock icon indicator for scheduled routines
 
 **Version Update Banner**:
@@ -873,7 +875,7 @@ The greeting is `What can I help you with, <first name>?` using the first token 
 
 Every "New Chat" entry point (Sidebar brand bar, both Conversations header `+` buttons, the phone top bar) lands here instead of pre-creating an empty conversation: the conversation only comes into existence as a response to the first message (see First-send flow below); entry points clicked while drilled into a project keep the drill so the chat lands in that project.
 
-**Project awareness:** the home composer can be on screen while the Sidebar is drilled into a project -- most commonly right after creating a new (empty) project, which drills in without changing the URL from `/`. In that state the first send creates the conversation INSIDE the drilled project (`createProjectConversation(drilledProjectId)`) and navigates to `/projects/<pid>/<id>`, instead of a standalone chat. The drill state is read from the context field `drilledProjectId` (owned by the Sidebar; distinct from `activeProjectId`, which mirrors the URL and is null at `/`), and a `New chat in <project name>` hint under the greeting names the destination.
+**Project awareness:** the home composer can be on screen while the Sidebar is drilled into a project -- most commonly right after creating a new (empty) project, which drills in without changing the URL from `/`. In that state the first send creates the conversation INSIDE the drilled project (`createProjectConversation(drilledProjectId)`) and navigates to `/projects/<pid>/<id>`, instead of a standalone chat. The drill state is read from the context field `drilledProjectId` (owned by the Sidebar; distinct from `activeProjectId`, which mirrors the URL and is null at `/`), and a `New chat in <project name>` hint under the greeting names the destination. The right panel meanwhile shows that project's Project Files and Tables cards over the project routes (see [Right Panel](#right-panel-file-browser-and-project-tables)); there is no chat yet, so no Chat Files card.
 
 There is no live conversation yet, so the composer is bound to a stable in-memory draft key (`HOME_DRAFT_KEY = '__home_draft__'` in `frontend/src/constants/drafts.ts`) used only for the context-keyed model/skills lookups, and its `onModelChange` is wired to `setDraftModelForConversation` (in-memory map + `defaultModel`/localStorage only, no server PATCH). HomeComposer also passes the composer's `skipSendLocks` prop so the send path never writes a provider lock for the draft key -- see Provider Locking under the Model Selector section for why locking the draft key is destructive and how legacy entries are healed.
 
@@ -1364,11 +1366,11 @@ The model can embed a workspace image directly in its reply with plain markdown 
 
 Absolute srcs (any scheme -- `http(s):`, `data:`, `blob:` -- or protocol-relative `//`) therefore degrade to a plain click-through `<a target="_blank">` link (the same user-initiated exposure ordinary markdown links already have).
 
-Only workspace-relative srcs render as images: percent-decode, strip leading `./`, `/`, and `workspace/`, then point the `<img>` at `GET /app/api/conversations/{id}/files/download?path=...` (cookie auth; the endpoint transparently serves the project workspace for project conversations, so no project id is needed).
+Only workspace-relative srcs render as images: percent-decode, strip leading `./`, `/`, and `workspace/`, then point the `<img>` at `GET /app/api/conversations/{id}/files/download?path=...` (cookie auth). That route always serves the conversation's own workspace, project conversations included: a chat's inline images resolve only against its Chat Files, never the project workspace (the model is told to `copy_file` a project image from `proj://` to `chat://` first). In legacy project chats, old inline images that pointed at files now living only in the project workspace therefore show the broken-reference chip (see [Projects -- Migration Notes](projects.md#migration-notes)).
 
 The conversation id and a click-to-enlarge callback arrive via `MarkdownWorkspaceContext` -- a context rather than a components-factory so `markdownComponents` stays a stable module constant and the `React.memo` on `MessageContentRenderer` keeps holding. `ChatPanel` provides the context (memoized) around its message list; clicking an image opens the existing `FileViewerModal` (the viewer state is a plain `{workspace_path, filename}` shared with composer-attachment thumbnails).
 
-`FileViewerModal` also provides the context (id only, no click handler) around its `.md` preview so markdown files referencing workspace images render them.
+`FileViewerModal` also provides the context (no click handler) around its `.md` preview so markdown files referencing workspace images render them, against the file's own space: `conversationId` for a Chat Files entry, `projectId` for a Project Files entry (bare paths then resolve through `GET /app/api/projects/{pid}/files/download`; chat never sets `projectId`).
 
 The Quest Docs viewer provides the context with `assetBase` (`docAssetBase(docId)` from `frontend/src/api/docsApi.ts`) instead of a conversation id. With `assetBase` set, only an `assets/<name>` src resolves (one segment, no leading dot, after the same decode/normalize) to `<assetBase>/<name>`, the doc's cookie-authed asset route; every other relative src is a missing ref, `conversationId` is ignored, and external srcs still degrade to links. See [Quest Docs -- Viewer](quest-docs.md#viewer).
 
@@ -2025,7 +2027,7 @@ The admin operations menu (`AdminOpsMenu`) is not an App-level overlay; it rende
 Components that need to refresh after streaming or workspace mutations subscribe directly to realtime events via `useEffect`, rather than relying on context-level state changes. This avoids unnecessary re-renders of unrelated context consumers.
 
 - **Sidebar** subscribes to `webSocketManager.onStreamComplete` and calls `silentLoadConversations()`, which uses stale-while-revalidate (keeps existing list visible while fetching) to avoid a "Loading..." flash
-- **FileBrowser** subscribes to `persistentWebSocket.onGlobalEvent` and filters for `file_list_changed` envelopes that match the active conversation (or its project, for project-scoped writes), debouncing 200ms before calling `silentRefresh()`. The trigger is the workspace-mutating tool / REST event itself, not a streaming-lifecycle boundary, so the file list refreshes mid-turn after each successful write
+- **FileBrowser** subscribes to `persistentWebSocket.onGlobalEvent` and filters for `file_list_changed` envelopes that match its own card's space (`fileListEventMatchesSource()`: `scope: "conversation"` + matching `conversation_id` for Chat Files, `scope: "project"` + matching `project_id` for Project Files), debouncing 200ms before calling `silentRefresh()`. The trigger is the workspace-mutating tool / REST event itself, not a streaming-lifecycle boundary, so the file list refreshes mid-turn after each successful write
 - **ProjectTables** subscribes to `webSocketManager.onStreamComplete` and calls `loadTables(true)` for a silent table list refresh at end-of-turn
 
 See `frontend/src/services/WebSocketManager.ts` for the `onStreamComplete` callback API and `frontend/src/services/PersistentWebSocket.ts` for `onGlobalEvent` (used for `file_list_changed` and other per-user globals).
@@ -2806,6 +2808,10 @@ Each `FileBrowser` takes a `source` prop (`conversationSource(cid)` / `projectSo
 
 **Copy / Move between the two file cards:** in a project conversation each row's actions menu gains "Copy to project" / "Move to project" on the Chat Files card and "Copy to chat" / "Move to chat" on the Project Files card, supplied through the `FileBrowser` `rowActions` prop by `useWorkspaceCopy` (`frontend/src/hooks/useWorkspaceCopy.ts`). They call `copyFileToProject` / `copyFileFromProject` (the copy routes, same relative path on the other side, `includeHidden` following the source card's show-hidden toggle). Rows in the conversation scratch roots (`.responses/`, `.subagent_responses/`, `pasted/`) get no to-project items, mirroring the route's `forbidden_source` rule. A `409 destination_exists` opens an overwrite confirm (`DocConfirmDialog`) that retries with `overwrite: true`; other failures, and a move whose copy landed but whose source could not be removed (`moved: false`), show as a dismissible notice on the card the action started from (`FileBrowser` `notice` prop), as does a copy that reports `skipped` entries (dot-entries left out, symlinks, special files). Row actions are disabled while their copy is in flight or the overwrite prompt is open; results arriving after a conversation switch are dropped. Both cards refresh from the `file_list_changed` events the copy routes publish for each scope. Standalone chats and the drilled home composer get no Copy / Move items.
 
+**Per-card state and downloads:** each card keeps its own path, history and show-hidden toggle (`FileBrowserStateContext`, keyed by `fileSourceKey()`), so revealing dotfiles in Project Files does not reveal them in Chat Files, and the toggle survives remounts. Downloads from either card, including Project Files downloads and folder zips, go through the same hidden-data warning (see [Workspace Download Warning](#workspace-download-warning)); a project file may have been written by any sibling conversation.
+
+**Phone:** `MobileShell` renders the same `RightPanel` inside its right-hand workspace drawer (`.mobile-workspace-drawer`, opened by the top bar's folder button, absent on docs routes), so the drawer stacks the same card set -- all three cards for a project conversation -- with the touch-capable dividers.
+
 ### Overview
 
 The file browser provides a right-side panel in the chat interface that allows users to:
@@ -2843,14 +2849,14 @@ The file browser provides a right-side panel in the chat interface that allows u
 | `frontend/src/components/TableViewerModal.tsx` | Modal (via `createPortal`) for viewing table data with sticky headers, pagination, NULL styling, and cell truncation with tooltips |
 | `frontend/src/components/TableViewerModal.css` | TableViewerModal styling |
 | `frontend/src/hooks/useFileBrowser.ts` | State management hook for file operations (includes `uploadFilesWithPaths`, `buildUploadErrorMessage`, `deleteItem`, `downloadFile` / `downloadFolder` behind the download warning's `confirmDownload`, `createFolder`, and `uploadPercent` state for progress tracking) |
-| `frontend/src/api/fileApi.ts` | API client functions for file endpoints (includes `xhrUpload()` helper for XHR-based uploads with progress callback, `uploadFiles()` and `uploadFilesWithPaths()` with `onProgress` parameter, `fetchFileContent()`, `getFileInfo()`, `deleteFile()`, `downloadFolder()`, `createFolder()`, and `saveBlobToDisk()` -- the one temporary-anchor "hand the blob to the browser" step every workspace download ends with) |
+| `frontend/src/api/fileApi.ts` | API client functions for file endpoints, parameterised by a `FileSource` (`{kind: 'conversation' \| 'project', id}`, built by `conversationSource()` / `projectSource()`; a bare string still means a conversation id) that `fileRoutesBase()` / `fileDownloadUrl()` turn into the conversation or project route base; `fileSourceKey()` for state keys; named project twins (`listProjectFiles()`, `uploadProjectFiles()`, `downloadProjectFile()`, ...); the copy routes (`copyFileToProject()` / `copyFileFromProject()`, `FileApiError`, `isDestinationExistsError()`); plus the `xhrUpload()` helper for XHR-based uploads with progress callback, `fetchFileContent()`, `getFileInfo()`, `deleteFile()`, `downloadFolder()`, `createFolder()`, `saveFileToDrive()`, and `saveBlobToDisk()` -- the one temporary-anchor "hand the blob to the browser" step every workspace download ends with) |
 | `frontend/src/contexts/DownloadWarningContext.tsx` | `DownloadWarningProvider` (in `AppProviders`) renders the single hidden-data warning dialog and exposes `confirmDownload(target)` via `useDownloadWarning()`; see [Workspace Download Warning](#workspace-download-warning) |
 | `frontend/src/hooks/useWorkspaceDownload.ts` | `useWorkspaceDownload()` -- the component-side way to download a workspace file: `confirmDownload`, then `downloadFile()`, then `saveBlobToDisk()`; used by the chat attachment viewer (`ChatPanel.tsx`), `SubagentReturnFilesPreview.tsx` and `DocImagePreview.tsx` |
 | `frontend/src/utils/downloadWarnings.ts` | Pure rule `getDownloadWarning(target)`: which file types warn, with which category explanation and severity (`INERT_TEXT_EXTENSIONS` allow-list, `CATEGORY_EXTENSIONS` incl. the `markup` / `code` text splits, `CATEGORY_DETAILS`, `SEVERE_CATEGORIES`) |
 | `frontend/src/api/projectDbApi.ts` | API client for project database table browsing and management (`fetchProjectTables()`, `fetchTableData()`, `deleteProjectTable()`) |
 | `frontend/src/utils/fileIcons.ts` | Extension-to-icon mapping utility; maps ~50 file extensions across 16 categories to Lucide icon components and CSS color classes via `getFileIconInfo()` |
 | `frontend/src/utils/directoryTraversal.ts` | Recursive directory traversal via `webkitGetAsEntry()` API; exports `FileWithPath` interface and `extractFilesFromDataTransfer()` |
-| `chat/file_routes.py` | Backend API endpoints (list, upload, download, download folder as zip, read content, file info, delete, create folder, save to Drive) |
+| `chat/file_routes.py` | Backend API endpoints (list, upload, download, download folder as zip, read content, file info, delete, create folder, save to Drive) for both the conversation routes and the `/projects/{pid}/files...` mirror, plus the copy-to-project / copy-from-project routes |
 | `chat/file_storage.py` | File operations, path validation, directory conflict detection, upload size limit (`MAX_FILE_SIZE`, 200MB), text content reading (`get_file_content()`, `VIEWABLE_EXTENSIONS`, `MAX_VIEW_SIZE`), file/folder info (`count_workspace_item_files()`), deletion (`delete_workspace_item()`), folder zipping (`create_folder_zip()`), and folder creation (`create_workspace_folder()`) |
 | `chat/project_db_routes.py` | Backend API endpoints for project database table browsing and management (`list_project_tables`, `get_project_table_data`, `delete_project_table`) |
 
@@ -2922,7 +2928,7 @@ Comprehensive CSS with dark/light mode support. `FileViewerModal.css` includes a
 React hook managing file browser state and operations.
 
 **Parameters**:
-- `conversationId`: Conversation to browse files for
+- `source`: the file space to browse (`FileSource`, or null for the empty state); re-derived from its primitives so callers may pass a fresh object every render
 
 **Return Values**:
 - `files`: Array of file/folder entries
@@ -2947,9 +2953,9 @@ React hook managing file browser state and operations.
 - `createFolder(name)`: Create a new folder inside the current path via `createFolder()` in `frontend/src/api/fileApi.ts`; refreshes the listing on success
 
 **Path State**:
-- Per-conversation path state stored in `FileBrowserStateContext`
+- Per-file-space path, history and show-hidden state stored in `FileBrowserStateContext` under `fileSourceKey(source)`
 - Navigation history maintained for back/forward
-- Path persists when switching between conversations
+- Path persists when switching between conversations, separately for each conversation's Chat Files and each project's Project Files
 
 **Stale-While-Revalidate Pattern**:
 The hook implements a stale-while-revalidate pattern for smoother UX:
@@ -2959,13 +2965,13 @@ The hook implements a stale-while-revalidate pattern for smoother UX:
 - Conversation switches use silent mode to prevent flickering when changing contexts, but reset the stale `files`/`canGoUp` state first so the previous conversation's listing can never momentarily show while the new fetch is in flight
 
 **Conversation Switch and Refetch**:
-A single effect (keyed on `conversationId` + `currentPath`) drives both conversation switches and intra-conversation folder navigation, distinguished via `prevConversationIdRef`. A switch resets stale state then silently refetches; folder navigation shows the loading state. Consolidating these two cases into one effect avoids the prior bug where a separate `[conversationId]` and `[currentPath]` effect could fire in the same commit and the shared in-flight guard swallowed the second fetch, leaving the panel on the old conversation's files.
+A single effect (keyed on the source key + `currentPath`) drives both source switches (another conversation or project) and folder navigation, distinguished via `prevSourceKeyRef`. A switch resets stale state then silently refetches; folder navigation shows the loading state. Consolidating these two cases into one effect avoids the prior bug where a separate `[conversationId]` and `[currentPath]` effect could fire in the same commit and the shared in-flight guard swallowed the second fetch, leaving the panel on the old conversation's files.
 
 **Circular Dependency Prevention and Stale-Response Guards**:
 The hook uses refs to break dependency cycles that could cause infinite refresh loops and to discard out-of-order results:
-- `inFlightRef`: Holds the `{ conversationId, path }` of the request currently in flight (or `null` when idle). The duplicate-fetch guard only fires when an in-flight request matches the *same* conversation + path, so a switch is never swallowed by a stale in-flight fetch (this replaced the prior shared `isFetchingRef` boolean, which let one conversation's fetch block the next conversation's first fetch)
-- `conversationIdRef`: Mirror of the latest `conversationId` so the async response handler can compare against the *current* conversation without a stale closure
-- Each fetch captures its `conversationId` + `path` and discards its results (success or error) if the active conversation/path has moved on before the response lands, so rapid A->B->A switching can't clobber the current list with a stale response
+- `inFlightRef`: Holds the `{ sourceKey, path }` of the request currently in flight (or `null` when idle). The duplicate-fetch guard only fires when an in-flight request matches the *same* source + path, so a switch is never swallowed by a stale in-flight fetch (this replaced the prior shared `isFetchingRef` boolean, which let one conversation's fetch block the next conversation's first fetch)
+- `sourceKeyRef`: Mirror of the latest source key so the async response handler can compare against the *current* source without a stale closure
+- Each fetch captures its source key + `path` and discards its results (success or error) if the active source/path has moved on before the response lands, so rapid A->B->A switching can't clobber the current list with a stale response
 - `browserStateRef`: Stores latest browser state, allowing state updates without effect dependencies
 
 #### Workspace Download Warning
@@ -2990,6 +2996,8 @@ Tests: `frontend/src/utils/downloadWarnings.test.ts` (the rule) and `frontend/sr
 #### 4. File API Client (`src/api/fileApi.ts`)
 
 Type-safe API client functions for file operations. Upload functions use XMLHttpRequest via the `xhrUpload()` helper instead of fetch() to support real-time upload progress events.
+
+Every function below takes a `FileTarget` as its first argument: a `FileSource` (`conversationSource(cid)` -> `/conversations/{cid}/files...`, `projectSource(pid)` -> `/projects/{pid}/files...`) or a bare string, which means a conversation id, so chat-side callers (composer uploads, HomeComposer, inline images) are unchanged. The project-side named twins (`listProjectFiles`, `uploadProjectFiles(WithPaths)`, `getProjectFileContent`, `downloadProjectFile`, `downloadProjectFolder`, `getProjectFileInfo`, `deleteProjectFile`, `createProjectFolder`, `saveProjectFileToDrive`, `projectFileDownloadUrl`) are thin wrappers. `copyFileToProject(cid, opts)` / `copyFileFromProject(cid, opts)` (`{path, dest?, overwrite?, move?, includeHidden?}`) call the copy routes and resolve to `{type, path, files_copied, skipped, moved}`; failures reject as `FileApiError` (status + error code), with `isDestinationExistsError()` for the 409. The parameters below are written for the conversation case.
 
 **Functions**:
 - `xhrUpload(url, formData, onProgress)`: Internal helper that performs file uploads via XMLHttpRequest with cookie auth. Accepts an optional `onProgress` callback receiving `(loaded, total)` byte counts from `xhr.upload.onprogress`. Returns a Promise.
@@ -3017,7 +3025,7 @@ Full-screen modal for viewing text files, JSON files, images, PDFs, and CSVs inl
 
 **Props Interface**:
 - `isOpen`: Whether the modal is visible
-- `conversationId`: Conversation that owns the file
+- `source`: the file space that owns the file (`FileSource`; a legacy `conversationId` prop is still accepted and means a conversation source) -- selects the content, download and Save to Drive routes and the `.md` preview's image resolution
 - `filePath`: Full path within workspace (e.g., `/script.py`)
 - `fileName`: Display name for the header
 - `isImage`: Whether the file is an image (determines rendering mode)
@@ -3066,7 +3074,7 @@ Full-screen modal for viewing text files, JSON files, images, PDFs, and CSVs inl
 **Behavior (Save to Drive -- `.md` files only)**:
 - A "Save to Drive" button appears in the title bar next to the download button when viewing a `.md` file
 - Clicking the button opens a naming dialog, prefilled from the filename with underscores replaced by spaces
-- On confirm, calls `saveToDrive()` from `frontend/src/api/fileApi.ts` which POSTs to `/app/api/conversations/{id}/files/save-to-drive`
+- On confirm, calls `saveFileToDrive(source, ...)` from `frontend/src/api/fileApi.ts`, which POSTs to `/app/api/conversations/{id}/files/save-to-drive` or `/app/api/projects/{id}/files/save-to-drive`
 - The raw markdown is uploaded to Google Drive via multipart upload; Google natively converts it to a Google Document
 - On success, the dialog shows a link to open the created document in Google Docs
 - See [Drive API - Save to Drive](../api/drive-api.md#save-to-drive-via-file-browser) for backend details
@@ -3101,7 +3109,7 @@ In-modal PDF preview built directly on pdfjs-dist (no wrapper library). Receives
 
 #### 7. RightPanel Component (`src/components/RightPanel.tsx`)
 
-Wrapper component that replaced the direct `<FileBrowser>` usage in `App.tsx`. Receives both `conversationId` and the URL-derived `projectId` as props, and reads `drilledProjectId` from `ProjectsContext`.
+Wrapper component that replaced the direct `<FileBrowser>` usage in `App.tsx` (and is reused by `MobileShell`'s workspace drawer). Receives both `conversationId` and the URL-derived `projectId` as props, and reads `drilledProjectId` from `ProjectsContext`, used only when there is no conversation: the drilled home composer gets the project's own cards over the project routes, never a borrowed sibling conversation.
 
 **Behavior**:
 - Card set by what is on screen (see the table at the top of this section): one card for a standalone chat or nothing, two for the drilled home composer, three for a project conversation
@@ -3158,8 +3166,8 @@ Full-screen modal for viewing table data, rendered via `createPortal` to `docume
 Both the file browser and project tables auto-refresh when the LLM (or another tab) modifies files or database tables, but on different signals:
 
 1. **FileBrowser** subscribes to `persistentWebSocket.onGlobalEvent` and listens for `file_list_changed` envelopes.
-   - The backend emits this event from each workspace-mutating tool handler (`write_workspace_file`, `edit_workspace_file`, `download_drive_file`, `google_export_doc`, `github_get_job_log`, `run_script`, `run_python`) on a successful write, and from the three mutating REST routes (`upload_files`, `delete_file`, `create_folder`) for multi-tab consistency.
-   - The FE filters by active `conversation_id` for `scope === "conversation"` envelopes and by active `project_id` for `scope === "project"` envelopes, debounces bursts within a 200ms window, and calls `silentRefresh()`. This refreshes the file list mid-turn after each write rather than waiting for the streaming lifecycle to end. See [Realtime Architecture](realtime.md#backend-publish-sites-per-user-globals).
+   - The backend emits this event from each workspace-mutating tool handler (`write_workspace_file`, `edit_workspace_file`, `write_file`, `edit_file`, `copy_file`, `download_drive_file`, `google_export_doc`, `github_get_job_log`, `run_script`, `run_python`) on a successful write, from the mutating REST routes (upload, delete, create folder) of both the conversation and the project file routes, and from the copy routes (one event per scope) for multi-tab consistency.
+   - Each card filters by its own source: a Chat Files card on `scope === "conversation"` envelopes with its `conversation_id`, a Project Files card on `scope === "project"` envelopes with its `project_id`; it debounces bursts within a 200ms window, and calls `silentRefresh()`. This refreshes the file list mid-turn after each write rather than waiting for the streaming lifecycle to end. See [Realtime Architecture](realtime.md#backend-publish-sites-per-user-globals).
 2. **ProjectTables** subscribes to `WebSocketManager.onStreamComplete` (i.e. `send_message_finished`) and calls `loadTables(true)` for a silent reload at end-of-turn.
 
 The silent refresh approach prevents UI flickering during active chat sessions by keeping the existing list visible while new data loads in the background (stale-while-revalidate pattern). Subscribing directly to realtime events instead of using context-level triggers avoids unnecessary re-renders of unrelated components.
@@ -3185,7 +3193,7 @@ app-container
     │   ├── Current path
     │   ├── File list (click viewable text, image, PDF, or CSV files to open modal)
     │   └── FileViewerModal (portal to document.body, full-screen overlay; text, image, PDF via PdfViewer, or CSV-as-sortable-table rendering)
-    ├── Draggable divider (if project conversation; split persisted to localStorage)
+    ├── Draggable dividers (between every two cards; split persisted per project to localStorage)
     └── ProjectTables (bottom card, project conversation or drilled home composer)
         ├── Table list (auto-refreshes on WebSocket events)
         └── TableViewerModal (portal to document.body; table data with pagination)
@@ -3196,9 +3204,9 @@ app-container
 **Listing Files**:
 ```
 1. User selects conversation
-2. FileBrowser mounts with conversationId
-3. useFileBrowser calls listFiles()
-4. GET /app/api/conversations/{id}/files?path=/
+2. FileBrowser mounts with its source (conversationSource(cid) for Chat Files, projectSource(pid) for Project Files)
+3. useFileBrowser calls listFiles(source, path)
+4. GET /app/api/conversations/{id}/files?path=/  (Project Files: GET /app/api/projects/{pid}/files?path=/)
 5. Backend validates path within workspace
 6. Backend returns file metadata array
 7. FileBrowser renders file list
@@ -3319,8 +3327,8 @@ app-container
    or another tab POSTs upload / delete / create-folder
 2. Backend tool handler / REST route publishes file_list_changed via bus.publish_to_user
 3. PersistentWebSocket forwards the per-user global to onGlobalEvent listeners
-4. FileBrowser (subscribed directly) filters by active conversation_id (scope="conversation")
-   or active project_id (scope="project")
+4. Each FileBrowser card (subscribed directly) filters by its own source: Chat Files by
+   conversation_id (scope="conversation"), Project Files by project_id (scope="project")
 5. 200ms debounce coalesces bursts (e.g., ten write_workspace_file calls in one turn)
 6. silentRefresh() called (no loading spinner shown)
 7. Files fetched in background, existing list stays visible

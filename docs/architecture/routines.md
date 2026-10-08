@@ -95,6 +95,17 @@ Routine runs are unattended, and weaker models sometimes end their stream before
 
 Not covered: a routine run that suspends on an action request and is later resumed by the wait-handle resume (`chat/wait_handles/resume.py`) runs its continuation without the nudge check -- the resume path cannot tell the routine run from a manual follow-up, and the user who approved the card is watching anyway.
 
+## File Spaces in Routine Prompts
+
+Every run is a fresh project conversation, so by default everything it writes lands in that run's own conversation workspace (`chat://`, `/workspace`; the run's Chat Files card) and is not visible to the next run. A routine whose runs build on each other -- a state file read back next run, a report appended every week -- must read and write the project workspace explicitly: `proj://` paths with the scheme-qualified file tools, or `/project/...` from a script (see [Projects -- Workspace Resolution](projects.md#workspace-resolution)). The guidance reaches both sides:
+
+- **Model**: the `system:routines` skill (`chat/system_skills/catalog.py`, "Runs that build on each other") tells the agent to use `proj://` paths (`read_file("proj://state.json")`, `write_file(...)`, `copy_file` from `chat://` to `proj://`) and to say so in any routine prompt it proposes via `create_routine` / `edit_routine`; every project prompt's "Two file spaces" paragraph defaults output to `chat://` (see [Gemini API Integration -- System Prompt](gemini-api.md#system-prompt)).
+- **User**: the Prompt field of New Routine and Routine Settings carries a help line, `ROUTINE_PROMPT_FILES_HINT` in `frontend/src/constants/routines.ts` ("Each run is a fresh chat, and its files stay in that run's chat. If runs build on each other, have the prompt read and write the project space explicitly ...").
+
+The routine completion tool and the scheduler are unaffected.
+
+**Migration notes:** routines written when every project conversation shared the project workspace and that relied on it (a run reading what an earlier run wrote) must be updated to address the project space with `proj://` paths in their prompts -- the help text above says this in the app. Legacy project chats (created before the change, including earlier routine runs) show their earlier files under Project Files only; their Chat Files card starts empty, old inline images pointing at those files show the broken-reference chip, and the model gets the legacy note pointing it at `proj://` (see [Projects -- Migration Notes](projects.md#migration-notes)).
+
 ## Frontend
 
 ### NewRoutineModal
@@ -102,7 +113,7 @@ Not covered: a routine run that suspends on an action request and is later resum
 `frontend/src/components/NewRoutineModal.tsx` is a dedicated modal for creating a new routine within a project. It is rendered as a React portal and provides:
 
 - Name input (max 100 characters)
-- Prompt textarea
+- Prompt textarea, with the `ROUTINE_PROMPT_FILES_HINT` help line (see [File Spaces in Routine Prompts](#file-spaces-in-routine-prompts))
 - Guide override dropdown: shows all non-default user guides (from `GuidesContext.guides`) plus a "None" option that maps to `guide_id: null` (guides are deprecated; the hint says so). Rendered only while the `guides` feature gate is on for the user (`enabled_features` from `GET /me`); otherwise the modal sends `guide_id: null`
 - Model selector dropdown: shows the non-deprecated models from the shared `SELECTABLE_MODELS` view in `frontend/src/constants/models.ts` (Gemini 3.1 Flash-Lite, Gemini 3 Flash, Gemini 3.5 Flash, Gemini 3.5 Flash-Lite, Gemini 3.6 Flash, and the Claude models); default is Gemini 3 Flash. The routine-settings modal additionally keeps a routine's stored deprecated model (e.g. Gemini 3.1 Pro) as an extra "(deprecated)" option so saving unrelated edits doesn't silently switch the model
 
@@ -114,7 +125,7 @@ The form resets when the modal opens. On submit, it calls `createRoutine()` and 
 
 **Prompt section:**
 - Name input (max 100 characters)
-- Auto-growing prompt textarea that expands to fit content up to approximately 20 lines (~420px), following the same pattern as the ChatPanel textarea. The textarea auto-sizes on initial load, on input, and when navigating back to the Prompt section
+- Auto-growing prompt textarea that expands to fit content up to approximately 20 lines (~420px), following the same pattern as the ChatPanel textarea. The textarea auto-sizes on initial load, on input, and when navigating back to the Prompt section. The label carries the `ROUTINE_PROMPT_FILES_HINT` help line
 - Guide override (deprecated, read-only leftover): there is no guide selection widget anymore. The field renders only when the routine still has a persisted `guide_id`, showing the guide's name read-only with a "Clear" button; clearing swaps the display for a "Guide will be removed when you save" hint and the save sends `clear_guide: true`. Routines without a guide show nothing
 - Model selector dropdown: shows all available models from the shared `AVAILABLE_MODELS` constant; deprecated models stored on routines are silently remapped on load via `DEPRECATED_MODEL_MAP` from `frontend/src/constants/models.ts`
 - Save button and error display
@@ -189,10 +200,10 @@ Routines and their schedules are cleaned up in multiple scenarios:
 ## Design Decisions
 
 **Why scope routines to projects instead of making them global?**
-Routines are designed for repetitive tasks within a specific project context. Scoping them to projects keeps the UI organized (routines appear in the project drill-down) and ensures the routine's prompt makes sense in the context of the project's shared workspace and guide.
+Routines are designed for repetitive tasks within a specific project context. Scoping them to projects keeps the UI organized (routines appear in the project drill-down) and ensures the routine's prompt makes sense in the context of the project's workspace, database and guide.
 
 **Why do runs not share files by default?**
-Every run is a fresh project conversation, and its files land in that run's own Chat Files space. A routine whose runs build on each other (a report appended weekly, a state file read back next run) names the project space in its prompt, e.g. "read `proj://state.json`, write `proj://reports/weekly.md`". The Prompt field of New Routine and Routine Settings says so in a help line (`ROUTINE_PROMPT_FILES_HINT` in `frontend/src/constants/routines.ts`).
+Runs are ordinary project conversations, and keeping every conversation's scratch out of the shared space is the point of the conversation workspace (see [Projects -- Design Decisions](projects.md#design-decisions)). Most runs are self-contained; the ones that accumulate state opt in by naming `proj://` paths in their prompt (see [File Spaces in Routine Prompts](#file-spaces-in-routine-prompts)), which keeps the dependency visible in the routine itself.
 
 **Why denormalize `user_id` on the routines table?**
 The `user_id` column is technically derivable from `project_id` (via the project's `user_id`), but storing it directly on the routine enables fast per-user queries (e.g., `delete_all_user_routines()` during account deletion) without joining through the projects table.
