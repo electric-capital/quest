@@ -1047,8 +1047,9 @@ def _normalize_write_params(operation: str, params: dict) -> dict:
         "placement": placement,
     }
     # Server-only pin set by the write_doc action request at approve time:
-    # the stored asset must be the file the card showed (a project
-    # workspace is shared by sibling conversations, which could swap it).
+    # the stored asset must be the file the card showed (the user can
+    # still swap the conversation-workspace file between proposal and
+    # approval, through the Chat Files card or their own sandbox runs).
     expected = params.get("expected_sha256")
     if expected:
         clean["expected_sha256"] = str(expected)
@@ -1200,10 +1201,11 @@ async def _load_workspace_image(caller: Caller, workspace_path: str) -> tuple[by
         # the doc-specific size cap is checked on the descriptor below, so
         # the error names the 5 MB image limit, not the 50 MB upload cap.
         # Conversation workspace only (project conversations included);
-        # the shared project workspace is never searched.
+        # the shared project workspace is never searched -- the project id
+        # only adds the copy_project_file hint to a not-found error.
         path = await resolve_workspace_file(
             caller.conversation_id,
-            None,
+            caller.project_id,
             workspace_path,
             max_size_bytes=sys.maxsize,
         )

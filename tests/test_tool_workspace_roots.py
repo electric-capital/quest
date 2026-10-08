@@ -190,6 +190,134 @@ async def _unifi_camera_snapshot(env, monkeypatch):
     return out["path"]
 
 
+async def _google_export_sheet(env):
+    from chat.gemini_api.tool_handlers import _handle_google_export_sheet
+    replies = [
+        json.dumps({"name": "Budget", "mimeType": "application/vnd.google-apps.spreadsheet"}),
+        _response(b"a,b\n", "text/csv"),
+    ]
+    with patch(
+        "chat.gemini_api.authed_get._make_authed_request",
+        new=AsyncMock(side_effect=replies),
+    ):
+        out = json.loads(await _handle_google_export_sheet(
+            USER, CID, "SHEET1", "csv", project_id=PID,
+        ))
+    assert out["status"] == "success", out
+    return out["filename"]
+
+
+async def _google_export_slides(env):
+    from chat.gemini_api.tool_handlers import _handle_google_export_slides
+    replies = [
+        json.dumps({"name": "Deck", "mimeType": "application/vnd.google-apps.presentation"}),
+        _response(b"slide text", "text/plain"),
+    ]
+    with patch(
+        "chat.gemini_api.authed_get._make_authed_request",
+        new=AsyncMock(side_effect=replies),
+    ):
+        out = json.loads(await _handle_google_export_slides(
+            USER, CID, "DECK1", "txt", project_id=PID,
+        ))
+    assert out["status"] == "success", out
+    return out["filename"]
+
+
+async def _slack_dm_to_self_files(env, monkeypatch):
+    import plugins.slack.tools as slack_tools
+
+    env.conv_root.mkdir(parents=True, exist_ok=True)
+    (env.conv_root / "chart.png").write_bytes(b"png-bytes")
+    sent = {}
+
+    async def fake_send(user, text, files=None):
+        sent["files"] = files
+        return {"ok": True}
+
+    monkeypatch.setattr(slack_tools.upstream, "send_dm_to_self", fake_send)
+    ctx = SimpleNamespace(user=USER, conversation_id=CID, project_id=PID)
+    out = json.loads(await slack_tools._tool_send_slack_dm_to_self(
+        ctx, {"message": "hi", "files": ["chart.png"]},
+    ))
+    assert "error" not in out, out
+    assert sent["files"] == [("chart.png", b"png-bytes")]
+    return "chart.png"
+
+
+async def _gmail_draft_and_self_send_attachments(env, monkeypatch):
+    # create_draft and send_email_to_self both resolve workspace
+    # attachments through _resolve_request_attachments.
+    import api.gmail.draft_endpoints as draft_endpoints
+    from api.gmail.models import DraftAttachment
+
+    async def fake_owned(user_id, conversation_id):
+        return {"id": conversation_id, "project_id": PID}
+
+    monkeypatch.setattr(draft_endpoints, "require_owned_conversation", fake_owned)
+    env.conv_root.mkdir(parents=True, exist_ok=True)
+    (env.conv_root / "memo.pdf").write_bytes(b"%PDF memo")
+    [resolved] = await draft_endpoints._resolve_request_attachments(
+        USER, [DraftAttachment(type="workspace", workspace_path="memo.pdf")], CID,
+    )
+    assert resolved["data"] == b"%PDF memo"
+    return resolved["filename"]
+
+
+async def _add_doc_image_source(env):
+    from chat.docs.service import Caller, _load_workspace_image
+
+    env.conv_root.mkdir(parents=True, exist_ok=True)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    (env.conv_root / "fig.png").write_bytes(png)
+    caller = Caller(
+        user=USER, conversation_id=CID, project_id=PID,
+        is_public=False, run_kind="top_level",
+    )
+    data, name = await _load_workspace_image(caller, "fig.png")
+    assert data == png
+    return name
+
+
+async def _subagent_return_landing(env, monkeypatch):
+    import db.tool_wait_handle_store as wh_store
+    import db.user_subagent_run_store as run_store
+    from chat import user_subagent
+    from chat.action_request_types.subagent_return import SubagentReturnHandler
+
+    sub_root = storage_mod.ChatStorage.get_conversation_workspace_root("subconv")
+    sub_root.mkdir(parents=True)
+    (sub_root / "answer.md").write_text("result")
+    run = {
+        "id": "run-1", "status": "running", "wait_handle_id": "wh-1",
+        "caller_conversation_id": CID, "caller_user_id": USER["id"],
+    }
+
+    async def _get_run(conversation_id):
+        return dict(run)
+
+    async def _get_handle(handle_id):
+        return {"id": handle_id, "status": "pending"}
+
+    async def _update_status(run_id, status, error=None):
+        return {**run, "status": status}
+
+    async def _resolve_caller(run_row, new_status, response):
+        return {"id": "wh-1", "status": new_status}
+
+    monkeypatch.setattr(run_store, "get_run_by_subagent_conversation", _get_run)
+    monkeypatch.setattr(run_store, "update_run_status", _update_status)
+    monkeypatch.setattr(wh_store, "get_handle", _get_handle)
+    monkeypatch.setattr(user_subagent, "resolve_caller_handle", _resolve_caller)
+    result = await SubagentReturnHandler().execute(
+        {"response": "done", "files": ["answer.md"]},
+        {"id": 2, "email": "b@example.com"},
+        conversation_id="subconv",
+    )
+    assert result["files_returned"] == [".subagent_responses/answer.md"]
+    return ".subagent_responses/answer.md"
+
+
 CASES = [
     pytest.param(_authed_get_output_file, id="authed_get_output_file"),
     pytest.param(_download_drive_file, id="download_drive_file"),
@@ -199,6 +327,15 @@ CASES = [
     pytest.param(_github_job_log, id="github_get_job_log"),
     pytest.param(_m365_save_mail_attachment, id="m365_save_mail_attachment"),
     pytest.param(_unifi_camera_snapshot, id="unifi_get_camera_snapshot"),
+    pytest.param(_google_export_sheet, id="google_export_sheet"),
+    pytest.param(_google_export_slides, id="google_export_slides"),
+    pytest.param(_slack_dm_to_self_files, id="send_slack_dm_to_self_files"),
+    pytest.param(
+        _gmail_draft_and_self_send_attachments,
+        id="gmail_draft_and_self_send_attachments",
+    ),
+    pytest.param(_add_doc_image_source, id="add_doc_image_source"),
+    pytest.param(_subagent_return_landing, id="subagent_return_landing"),
 ]
 
 
@@ -224,3 +361,32 @@ def test_io_attachment_missing_in_project_conversation_hints_copy(env):
     with pytest.raises(RuntimeError) as excinfo:
         _run(resolve_workspace_file(CID, None, "shared/report.pdf"))
     assert "copy_project_file" not in str(excinfo.value)
+
+
+def test_gmail_attachment_missing_in_project_conversation_hints_copy(env, monkeypatch):
+    import api.gmail.draft_endpoints as draft_endpoints
+    from api.gmail.models import DraftAttachment
+    from fastapi import HTTPException
+
+    async def fake_owned(user_id, conversation_id):
+        return {"id": conversation_id, "project_id": PID}
+
+    monkeypatch.setattr(draft_endpoints, "require_owned_conversation", fake_owned)
+    with pytest.raises(HTTPException) as excinfo:
+        _run(draft_endpoints._resolve_request_attachments(
+            USER, [DraftAttachment(type="workspace", workspace_path="x.pdf")], CID,
+        ))
+    assert excinfo.value.status_code == 404
+    assert "copy_project_file" in excinfo.value.detail
+
+
+def test_add_doc_image_missing_in_project_conversation_hints_copy(env):
+    from chat.docs.service import Caller, DocError, _load_workspace_image
+
+    caller = Caller(
+        user=USER, conversation_id=CID, project_id=PID,
+        is_public=False, run_kind="top_level",
+    )
+    with pytest.raises(DocError) as excinfo:
+        _run(_load_workspace_image(caller, "fig.png"))
+    assert "copy_project_file" in str(excinfo.value)

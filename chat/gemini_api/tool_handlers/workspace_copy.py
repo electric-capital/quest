@@ -10,7 +10,8 @@ for the destination scope only.
 
 Every refusal comes back as JSON ``{"error": <message>, "code": <code>}``
 (never raised): ``not_a_project_conversation``, ``forbidden_source``
-(scratch roots as a copy-to-project source), ``copy_failed`` (I/O error),
+(scratch roots as a copy-to-project source), ``invalid_project`` (the
+project id does not resolve), ``copy_failed`` (I/O error),
 or one of the ``CopyEntryError`` codes (``invalid_path``, ``not_found``,
 ``not_a_regular_file``, ``destination_exists``, ``invalid_destination``).
 """
@@ -21,6 +22,7 @@ import logging
 
 from chat.file_storage import CopyEntryError, copy_entry, is_scratch_source
 from chat.gemini_api.tool_handlers._common import (
+    _invalid_project_result,
     _not_a_project_conversation_result,
     _publish_file_list_changed,
     conversation_workspace_dir,
@@ -48,7 +50,9 @@ async def _copy_between_spaces(
     if not project_id:
         return _not_a_project_conversation_result()
     if not isinstance(path, str) or not path.strip("/ "):
-        return _error("invalid_path", "path must name a file or folder")
+        return _error("invalid_path", "path must be a string naming a file or folder")
+    if dest is not None and not isinstance(dest, str):
+        return _error("invalid_destination", "dest must be a string path")
 
     if to_project and is_scratch_source(path):
         return _error(
@@ -58,13 +62,16 @@ async def _copy_between_spaces(
         )
 
     conversation_root = await conversation_workspace_dir(conversation_id)
-    project_root = await project_workspace_dir(project_id)
+    try:
+        project_root = await project_workspace_dir(project_id)
+    except ValueError:  # InvalidStorageIdError
+        return _invalid_project_result()
     src_root, dst_root = (
         (conversation_root, project_root) if to_project
         else (project_root, conversation_root)
     )
     dest_scope = "project" if to_project else "conversation"
-    target = dest if isinstance(dest, str) and dest.strip("/ ") else path
+    target = dest if dest is not None and dest.strip("/ ") else path
 
     try:
         result = await asyncio.to_thread(

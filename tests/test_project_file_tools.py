@@ -335,3 +335,73 @@ class TestDispatch:
         assert "list_workspace_files" in error
         for tool in PROJECT_TOOLS + ("project_db_query",):
             assert (tool in error) is listed, tool
+
+
+# ---------------------------------------------------------------------------
+# Sidecar key collisions, invalid project ids, sub-agent reads
+# ---------------------------------------------------------------------------
+
+
+class TestSidecarKeys:
+    def test_conversation_file_named_project_prefix_does_not_license_project_edit(self, env):
+        _run(_handle_write_workspace_file(USER_ID, CID, "project:plan.md", "conv", project_id=PID))
+        assert _reads() == ["./project:plan.md"]
+        _put(env.project_root, "plan.md", "proj text")
+        out = json.loads(_run(_handle_edit_project_file(
+            USER_ID, CID, "plan.md", "proj", "PROJ", PID,
+        )))
+        assert "has not been read" in out["error"]
+        assert (env.project_root / "plan.md").read_text() == "proj text"
+
+    def test_project_read_does_not_license_conversation_file_named_project_prefix(self, env):
+        _put(env.project_root, "plan.md", "proj text")
+        _run(_handle_get_project_file(None, USER_ID, CID, "plan.md", PID))
+        assert _reads() == ["project:plan.md"]
+        _put(env.conv_root, "project:plan.md", "conv text")
+        out = json.loads(_run(_handle_edit_workspace_file(
+            USER_ID, CID, "project:plan.md", "conv", "CONV", project_id=PID,
+        )))
+        assert "has not been read" in out["error"]
+        assert (env.conv_root / "project:plan.md").read_text() == "conv text"
+
+    def test_conversation_file_named_project_prefix_round_trips(self, env):
+        _put(env.conv_root, "project:plan.md", "conv text")
+        _run(_handle_get_workspace_file(None, USER_ID, CID, "project:plan.md", project_id=PID))
+        out = json.loads(_run(_handle_edit_workspace_file(
+            USER_ID, CID, "project:plan.md", "conv", "CONV", project_id=PID,
+        )))
+        assert out["status"] == "edited"
+
+
+class TestInvalidProject:
+    @pytest.mark.parametrize("call", [
+        lambda: _handle_list_project_files(USER_ID, CID, "../evil"),
+        lambda: _handle_write_project_file(USER_ID, CID, "a.txt", "x", "../evil"),
+        lambda: _handle_edit_project_file(USER_ID, CID, "a.txt", "x", "y", "../evil"),
+        lambda: _async_first(_handle_get_project_file(None, USER_ID, CID, "a.txt", "../evil")),
+    ])
+    def test_invalid_project_id_is_structured(self, env, call):
+        out = json.loads(_run(call()))
+        assert out["code"] == "invalid_project"
+
+
+async def _async_first(coro):
+    text, parts = await coro
+    assert parts == []
+    return text
+
+
+class TestSubAgentReads:
+    def test_sub_agent_read_licenses_parent_edit(self, env):
+        _put(env.project_root, "plan.md", "alpha")
+        text, _ = _run(_dispatch_tool_call(
+            app=None, provider=None, user={"id": USER_ID, "email": "u@x"},
+            conversation_id=CID, timezone="UTC", tool_name="tool_call",
+            args={"tool_name": "get_project_file", "arguments": {"path": "plan.md"}},
+            project_id=PID, is_sub_agent=True, agent_name="helper",
+        ))
+        assert json.loads(text)["content"] == "alpha"
+        out = json.loads(_run(_handle_edit_project_file(
+            USER_ID, CID, "plan.md", "alpha", "ALPHA", PID,
+        )))
+        assert out["status"] == "edited"

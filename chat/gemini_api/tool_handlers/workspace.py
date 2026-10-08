@@ -28,6 +28,7 @@ from chat.gemini_api.constants import (
     _WRITE_FILE_MAX_SIZE,
 )
 from chat.gemini_api.tool_handlers._common import (
+    _invalid_project_result,
     _not_a_project_conversation_result,
     _publish_file_list_changed,
     conversation_workspace_dir,
@@ -75,6 +76,21 @@ _PROJECT_SPACE = _FileSpace(
 )
 
 
+def _read_key(rel_path: str, prefix: str = "") -> str:
+    """Sidecar key for a canonical root-relative path in one space.
+
+    Project files are keyed ``"project:<path>"``. A conversation file whose
+    own name starts with ``"project:"`` is keyed ``"./<path>"`` instead --
+    a form ``relative_to`` never produces -- so it can never collide with
+    the key of a project file (``project:plan.md`` in the conversation
+    space vs ``plan.md`` in the project space). Every other conversation
+    key stays the bare path.
+    """
+    if not prefix and rel_path.startswith(PROJECT_READ_PREFIX):
+        return "./" + rel_path
+    return prefix + rel_path
+
+
 def _mark_workspace_file_read(
     conversation_id: str, rel_path: str, prefix: str = "",
 ) -> None:
@@ -86,7 +102,9 @@ def _mark_workspace_file_read(
     (edit_project_file). Failures never break the read/write.
     """
     try:
-        ChatStorage.add_workspace_read_paths(conversation_id, [prefix + rel_path])
+        ChatStorage.add_workspace_read_paths(
+            conversation_id, [_read_key(rel_path, prefix)],
+        )
     except Exception:
         logger.debug(
             "[tool_handlers] failed to record workspace read "
@@ -181,6 +199,31 @@ def _resolve_in_root(
     return clean_path, file_path, None
 
 
+def _probe_file(file_path: Path, root: Path) -> tuple[str | None, int, str]:
+    """Sync stat of a resolved path (run in a thread).
+
+    Returns ``(kind, size, canonical_path)``: kind None when missing,
+    ``"file"`` for a regular file, ``"other"`` otherwise; the canonical
+    root-relative form ('./a.txt', 'a.txt', '/a.txt' all normalize
+    identically) is what read tracking (the edit gate) keys on.
+    """
+    canonical_path = str(file_path.relative_to(root.resolve()))
+    if not file_path.exists():
+        return None, 0, canonical_path
+    if not file_path.is_file():
+        return "other", 0, canonical_path
+    return "file", file_path.stat().st_size, canonical_path
+
+
+def _read_text_lenient(file_path: Path) -> str:
+    return file_path.read_text(encoding="utf-8", errors="replace")
+
+
+def _write_text_with_parents(file_path: Path, content: str) -> None:
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text(content, encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Root-parameterised internals (shared by both tool families)
 # ---------------------------------------------------------------------------
@@ -223,8 +266,9 @@ async def _read_file(
 ) -> tuple[str, list]:
     """Return a file below ``root`` to the model (see ``_handle_get_workspace_file``).
 
-    Records ``space.sidecar_prefix + <canonical path>`` in the
-    conversation's read sidecar on every successful read.
+    Records the file's ``_read_key`` in the conversation's read sidecar on
+    every successful read. Blocking file I/O runs in worker threads; the
+    sidecar update stays synchronous (see ``add_workspace_read_paths``).
     """
     clean_path, file_path, err = _resolve_in_root(
         root, path, space, allow_empty=True,
@@ -232,23 +276,22 @@ async def _read_file(
     if err is not None:
         return err, []
 
-    if not file_path.exists():
+    kind, file_size, canonical_path = await asyncio.to_thread(
+        _probe_file, file_path, root,
+    )
+    if kind is None:
         return json.dumps({"error": f"{space.noun} not found: {path}"}), []
 
-    if not file_path.is_file():
+    if kind != "file":
         return json.dumps({"error": f"Not a file: {path}"}), []
 
-    file_size = file_path.stat().st_size
     is_text = _is_text_file(file_path)
-    # Canonical root-relative form ('./a.txt', 'a.txt', '/a.txt' all
-    # normalize identically) -- used for read tracking (edit gate).
-    canonical_path = str(file_path.relative_to(root.resolve()))
     prefix = space.sidecar_prefix
 
     # Small text files: return contents inline in the tool response
     if is_text and file_size <= _TEXT_INLINE_LIMIT:
         try:
-            content = file_path.read_text(encoding="utf-8", errors="replace")
+            content = await asyncio.to_thread(_read_text_lenient, file_path)
             _mark_workspace_file_read(conversation_id, canonical_path, prefix)
             return json.dumps({
                 "path": clean_path,
@@ -322,7 +365,7 @@ async def _read_file(
             # For text-like files that are just too large, try reading anyway.
             if is_text:
                 try:
-                    content = file_path.read_text(encoding="utf-8", errors="replace")
+                    content = await asyncio.to_thread(_read_text_lenient, file_path)
                     _mark_workspace_file_read(conversation_id, canonical_path, prefix)
                     return json.dumps({
                         "path": clean_path,
@@ -407,15 +450,12 @@ async def _write_file(
         })
 
     # Prevent writing to directories that exist as files and vice versa
-    if file_path.exists() and file_path.is_dir():
+    if await asyncio.to_thread(file_path.is_dir):
         return json.dumps({"error": f"Cannot write file: '{clean_path}' is a directory"})
 
     try:
-        # Create parent directories if needed
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write the file
-        file_path.write_text(content, encoding="utf-8")
+        # Create parent directories if needed, then write the file
+        await asyncio.to_thread(_write_text_with_parents, file_path, content)
 
         _publish_file_list_changed(user_id, space.scope, conversation_id, project_id)
         # Writing counts as having read the file (the model authored the
@@ -445,8 +485,8 @@ async def _edit_file(
     space: _FileSpace,
 ) -> str:
     """Exact string replacement in a text file below ``root`` (see
-    ``_handle_edit_workspace_file``), gated on the
-    ``space.sidecar_prefix + <path>`` read-sidecar key."""
+    ``_handle_edit_workspace_file``), gated on the file's ``_read_key``
+    in the read sidecar."""
     clean_path, file_path, err = _resolve_in_root(
         root, path, space, allow_empty=False,
     )
@@ -463,17 +503,18 @@ async def _edit_file(
         })
 
     # Existence checks -- unlike write, edit never creates files or parents
-    if not file_path.exists():
+    kind, file_size, canonical_path = await asyncio.to_thread(
+        _probe_file, file_path, root,
+    )
+    if kind is None:
         return json.dumps({"error": f"{space.noun} not found: {path}"})
 
-    if not file_path.is_file():
+    if kind != "file":
         return json.dumps({"error": f"Not a file: {path}"})
 
     # Read-before-edit gate: the model must have seen this file's contents
-    # earlier in this conversation (in this space: the sidecar key carries
-    # the space prefix).
-    canonical_path = str(file_path.relative_to(root.resolve()))
-    read_key = space.sidecar_prefix + canonical_path
+    # earlier in this conversation (in this space: see ``_read_key``).
+    read_key = _read_key(canonical_path, space.sidecar_prefix)
     if read_key not in ChatStorage.get_workspace_read_paths(conversation_id):
         return json.dumps({
             "error": (
@@ -484,7 +525,6 @@ async def _edit_file(
         })
 
     # Size guard: editing very large files is out of scope for this tool
-    file_size = file_path.stat().st_size
     if file_size > _WRITE_FILE_MAX_SIZE:
         return json.dumps({
             "error": f"File too large to edit: {file_size} bytes (maximum is {_WRITE_FILE_MAX_SIZE} bytes / {_WRITE_FILE_MAX_SIZE // 1024}KB)",
@@ -497,7 +537,7 @@ async def _edit_file(
     # Strict UTF-8 decode -- errors='replace' would corrupt the file on
     # write-back, so binary/undecodable files are rejected outright.
     try:
-        content = file_path.read_text(encoding="utf-8")
+        content = await asyncio.to_thread(file_path.read_text, encoding="utf-8")
     except UnicodeDecodeError:
         return json.dumps({
             "error": f"File is not valid UTF-8 text: {clean_path}",
@@ -542,7 +582,7 @@ async def _edit_file(
         })
 
     try:
-        file_path.write_text(new_content, encoding="utf-8")
+        await asyncio.to_thread(file_path.write_text, new_content, encoding="utf-8")
     except Exception as e:
         return json.dumps({"error": f"Failed to write file: {e}"})
 
@@ -869,7 +909,10 @@ async def _handle_list_project_files(
     ``list_workspace_files``). Structured error outside a project."""
     if not project_id:
         return _not_a_project_conversation_result()
-    root = await project_workspace_dir(project_id)
+    try:
+        root = await project_workspace_dir(project_id)
+    except ValueError:  # InvalidStorageIdError
+        return _invalid_project_result()
     return await _list_files(root)
 
 
@@ -887,7 +930,10 @@ async def _handle_get_project_file(
     ``project:`` sidecar prefix. Structured error outside a project."""
     if not project_id:
         return _not_a_project_conversation_result(), []
-    root = await project_workspace_dir(project_id)
+    try:
+        root = await project_workspace_dir(project_id)
+    except ValueError:  # InvalidStorageIdError
+        return _invalid_project_result(), []
     return await _read_file(
         provider, user_id, conversation_id, root, path,
         _PROJECT_SPACE, model=model,
@@ -906,7 +952,10 @@ async def _handle_write_project_file(
     ``"project"``. Structured error outside a project."""
     if not project_id:
         return _not_a_project_conversation_result()
-    root = await project_workspace_dir(project_id)
+    try:
+        root = await project_workspace_dir(project_id)
+    except ValueError:  # InvalidStorageIdError
+        return _invalid_project_result()
     return await _write_file(
         user_id, conversation_id, project_id, root, path, content,
         _PROJECT_SPACE,
@@ -929,7 +978,10 @@ async def _handle_edit_project_file(
     Structured error outside a project."""
     if not project_id:
         return _not_a_project_conversation_result()
-    root = await project_workspace_dir(project_id)
+    try:
+        root = await project_workspace_dir(project_id)
+    except ValueError:  # InvalidStorageIdError
+        return _invalid_project_result()
     return await _edit_file(
         user_id, conversation_id, project_id, root, path,
         old_string, new_string, replace_all, _PROJECT_SPACE,

@@ -215,3 +215,54 @@ class TestRefusals:
         out = json.loads(_run(handler(USER_ID, CID, None, "a.txt")))
         assert out["code"] == "not_a_project_conversation"
         assert env.events == []
+
+
+class TestArgumentValidation:
+    def test_traversal_dest_is_invalid_path(self, env):
+        _put(env.conv, "a.txt")
+        assert _to_project("a.txt", dest="../x")["code"] == "invalid_path"
+
+    def test_root_dest_defaults_to_path(self, env):
+        _put(env.conv, "a.txt")
+        assert _to_project("a.txt", dest="/")["path"] == "/a.txt"
+
+    def test_absolute_dest_is_root_relative(self, env):
+        _put(env.conv, "a.txt")
+        out = _to_project("a.txt", dest="/abs/b.txt")
+        assert out["path"] == "/abs/b.txt"
+        assert (env.project / "abs" / "b.txt").exists()
+
+    @pytest.mark.parametrize("dest", [5, ["x"], {"a": 1}, True])
+    def test_non_string_dest(self, env, dest):
+        _put(env.conv, "a.txt")
+        out = _to_project("a.txt", dest=dest)
+        assert out["code"] == "invalid_destination"
+        assert not (env.project / "a.txt").exists()
+
+    @pytest.mark.parametrize("path", [None, 5, ["a.txt"]])
+    def test_non_string_path(self, env, path):
+        assert _to_project(path)["code"] == "invalid_path"
+        assert _from_project(path)["code"] == "invalid_path"
+
+    def test_dot_slash_scratch_source_refused(self, env):
+        _put(env.conv, "pasted/x.png")
+        assert _to_project("./pasted/x.png")["code"] == "forbidden_source"
+
+    def test_os_error_is_copy_failed(self, env, monkeypatch):
+        import chat.gemini_api.tool_handlers.workspace_copy as copy_mod
+
+        def boom(*a, **k):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(copy_mod, "copy_entry", boom)
+        _put(env.conv, "a.txt")
+        out = _to_project("a.txt")
+        assert out["code"] == "copy_failed"
+        assert "No space left" in out["error"]
+        assert _scopes(env) == [("project", CID, PID)]
+
+    def test_invalid_project_id(self, env):
+        out = json.loads(_run(_handle_copy_file_to_project(
+            USER_ID, CID, "../evil", "a.txt",
+        )))
+        assert out["code"] == "invalid_project"

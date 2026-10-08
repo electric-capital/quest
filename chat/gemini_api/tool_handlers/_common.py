@@ -53,6 +53,15 @@ def _not_a_project_conversation_result() -> str:
     })
 
 
+def _invalid_project_result() -> str:
+    """Structured refusal when the conversation's project id does not
+    resolve to a valid project workspace (``InvalidStorageIdError``)."""
+    return json.dumps({
+        "error": "This conversation's project workspace could not be resolved.",
+        "code": "invalid_project",
+    })
+
+
 def _publish_file_list_changed(
     user_id: int,
     scope: str,

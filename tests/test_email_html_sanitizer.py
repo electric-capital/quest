@@ -313,7 +313,8 @@ def test_gmail_draft_attached_image_renders_inline_via_cid(monkeypatch):
     async def fake_credentials(u):
         return object()
 
-    async def fake_workspace(conversation_id, workspace_path, filename_override=None):
+    async def fake_workspace(conversation_id, workspace_path, filename_override=None,
+                             project_id=None):
         assert workspace_path == "output/my chart.png"
         return {"data": png, "filename": "my chart.png", "mime_type": "image/png"}
 
@@ -383,7 +384,8 @@ def test_send_self_attached_image_renders_inline_via_cid(monkeypatch):
     async def fake_credentials(u):
         return object()
 
-    async def fake_workspace(conversation_id, workspace_path, filename_override=None):
+    async def fake_workspace(conversation_id, workspace_path, filename_override=None,
+                             project_id=None):
         assert conversation_id == "conv-1"
         if workspace_path == "output/chart.png":
             return {"data": png, "filename": "chart.png", "mime_type": "image/png"}
@@ -495,7 +497,8 @@ def test_gmail_draft_non_image_attachment_keeps_attachment_disposition(monkeypat
     async def fake_credentials(u):
         return object()
 
-    async def fake_workspace(conversation_id, workspace_path, filename_override=None):
+    async def fake_workspace(conversation_id, workspace_path, filename_override=None,
+                             project_id=None):
         return {"data": b"a,b\n1,2\n", "filename": "results.csv", "mime_type": "text/csv"}
 
     async def fake_owned(user_id, conversation_id):
