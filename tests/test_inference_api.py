@@ -373,6 +373,11 @@ _CORE_READ_OR_WORKSPACE_TOOLS = {
     "get_gmail_message_urls",
     "set_conversation_name",  # the run's own row
     "project_db_query",
+    # Project file + copy tools: project conversations only, never offered
+    # to (standalone) inference runs, whose handlers refuse without a project.
+    "list_project_files", "get_project_file",
+    "write_project_file", "edit_project_file",
+    "copy_file_to_project", "copy_project_file",
     "authed_get", "authed_post", "get_response_content",
     "telegram_get_me", "telegram_list_dialogs", "telegram_get_messages",
     "telegram_list_contacts",

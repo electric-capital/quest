@@ -10,7 +10,11 @@ the relevant skill(s) on demand through the existing ``load_skills`` tool.
 
 from chat.docs.constants import DOCS_SERVICE_KEY
 from chat.gemini_api.constants import MAX_PARALLEL_TASKS, MAX_PARALLEL_TEMPLATE_TASKS
-from chat.llm.tool_schemas import TOOL_CALL_REGISTRY, mutating_tool_call_tools
+from chat.llm.tool_schemas import (
+    PROJECT_ONLY_TOOL_CALL_TOOLS,
+    TOOL_CALL_REGISTRY,
+    mutating_tool_call_tools,
+)
 from chat.system_skills import build_system_skills_enumeration
 
 
@@ -231,7 +235,9 @@ def get_system_prompt(
         project_guide: Optional project-specific instructions to include.
         skills_content: Optional pre-built skills content string to include.
         has_project: Whether this conversation belongs to a project. When False,
-            the project_db_query tool is excluded from the dynamic tools section.
+            the project-only tools (PROJECT_ONLY_TOOL_CALL_TOOLS: project_db_query
+            and the project file / copy tools) are excluded from the dynamic
+            tools section.
         is_slack: Whether this is a Slack-driven conversation. When True, the
             Slack Reply Mode instructions are appended before the proxy preamble
             so the model knows to deliver its reply via
@@ -314,10 +320,11 @@ def get_system_prompt(
 
 """
 
-    # Build dynamic tools section, excluding project_db_query for non-project conversations
+    # Build dynamic tools section, excluding the project-only tools
+    # (project_db_query, project file + copy tools) for non-project conversations
     top_level_exclude: set[str] = set()
     if not has_project:
-        top_level_exclude.add("project_db_query")
+        top_level_exclude |= PROJECT_ONLY_TOOL_CALL_TOOLS
     if is_slack:
         # Slack-driven runs have no web UI to resolve the
         # create_action_request approval card, so hide it from the
@@ -559,9 +566,12 @@ def get_user_subagent_system_prompt(
 
     # Cross-user subagent runs are read-only for Quest Docs (access rule
     # run_kind "user_subagent"): the doc reads stay, the writes are hidden.
+    # The run is a standalone conversation in the target's account, so the
+    # project-only tools never apply.
     dynamic_tools = _build_dynamic_tools_section(
         exclude=(
-            {"wait_for_handles", "set_conversation_name", "project_db_query"}
+            {"wait_for_handles", "set_conversation_name"}
+            | PROJECT_ONLY_TOOL_CALL_TOOLS
             | _doc_write_tool_names()
         ),
         connected_services=connected_services,
@@ -659,9 +669,11 @@ def get_inference_api_system_prompt(
     # Mutating dynamic tools are hidden here AND hard-rejected at dispatch
     # (chat/gemini_api/tool_dispatch.py, is_inference_api): inference runs
     # must not change anything. That covers the Quest Docs writes too.
+    # Inference runs are standalone conversations: no project-only tools.
     dynamic_tools = _build_dynamic_tools_section(
         exclude=(
-            {"wait_for_handles", "set_conversation_name", "project_db_query"}
+            {"wait_for_handles", "set_conversation_name"}
+            | PROJECT_ONLY_TOOL_CALL_TOOLS
             | mutating_tool_call_tools()
         ),
         connected_services=connected_services,
@@ -787,6 +799,8 @@ def get_public_project_system_prompt(
 
 """
 
+    # A public-project conversation always has a project, so the project-only
+    # tools (PROJECT_ONLY_TOOL_CALL_TOOLS, all in the allowlist) stay listed.
     public_exclude = set(TOOL_CALL_REGISTRY) - set(PUBLIC_TOOL_CALL_ALLOWLIST)
     if is_routine:
         public_exclude.add("set_conversation_name")
@@ -894,7 +908,8 @@ def get_sub_agent_system_prompt(
         project_guide: Optional project-specific instructions to include.
         skills_content: Optional pre-built skills content string to include.
         has_project: Whether this conversation belongs to a project. When False,
-            the project_db_query tool is excluded from the dynamic tools section.
+            the project-only tools (PROJECT_ONLY_TOOL_CALL_TOOLS) are excluded
+            from the dynamic tools section.
         can_nest: Whether this 1st-level sub-agent may spawn one 2nd-level
             sub-agent (only when the conversation's ``nested_subagents`` flag is
             on). When True, the prompt enumerates the ``agent_task_nested`` tool
@@ -968,14 +983,14 @@ def get_sub_agent_system_prompt(
 
 """
 
-    # Build dynamic tools section excluding top-level-only tools and
-    # project_db_query when not in a project conversation. Sub-agents are
+    # Build dynamic tools section excluding top-level-only tools and the
+    # project-only tools when not in a project conversation. Sub-agents are
     # read-only for Quest Docs (access rule run_kind "sub_agent": "only the
     # top-level agent writes docs"), so the doc write tools are hidden too.
     sub_agent_exclude = {"wait_for_handles", "set_conversation_name"}
     sub_agent_exclude |= _doc_write_tool_names()
     if not has_project:
-        sub_agent_exclude.add("project_db_query")
+        sub_agent_exclude |= PROJECT_ONLY_TOOL_CALL_TOOLS
     sub_agent_dynamic_tools = _build_dynamic_tools_section(
         exclude=sub_agent_exclude, connected_services=connected_services,
     )

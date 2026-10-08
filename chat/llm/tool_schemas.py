@@ -94,8 +94,8 @@ _GMAIL_ATTACHMENTS_SCHEMA = {
                 "enum": ["drive", "workspace", "gmail"],
                 "description": (
                     "'drive' for Google Drive files, "
-                    "'workspace' for conversation workspace "
-                    "files, 'gmail' for attachments from an "
+                    "'workspace' for files in this conversation's "
+                    "workspace, 'gmail' for attachments from an "
                     "existing Gmail message."
                 ),
             },
@@ -108,7 +108,10 @@ _GMAIL_ATTACHMENTS_SCHEMA = {
                 "description": (
                     "Workspace-relative path (required when "
                     "type='workspace'); same paths as "
-                    "list_workspace_files."
+                    "list_workspace_files. In a project conversation, "
+                    "project files must be copied into this "
+                    "conversation's workspace first "
+                    "(`copy_project_file`)."
                 ),
             },
             "message_id": {
@@ -185,9 +188,10 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
     "list_workspace_files": {
         "name": "list_workspace_files",
         "description": (
-            "List all files in the conversation workspace directory. "
+            "List all files in this conversation's workspace. "
             "Returns a JSON array of relative file paths with sizes. "
-            "The workspace contains files uploaded by the user for this conversation. "
+            "The workspace contains files uploaded by the user and files produced "
+            "earlier in this conversation. "
             "Use this to discover what files are available before reading them."
         ),
         "parameters": {
@@ -204,7 +208,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
     "get_workspace_file": {
         "name": "get_workspace_file",
         "description": (
-            "Retrieve a file from the conversation workspace. "
+            "Retrieve a file from this conversation's workspace. "
             "For small text files (under 100KB), returns the file contents directly. "
             "For large or binary files, makes the file available for you to analyze "
             "directly in this response. "
@@ -231,7 +235,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
     "write_workspace_file": {
         "name": "write_workspace_file",
         "description": (
-            "Write or create a file in the conversation workspace. "
+            "Write or create a file in this conversation's workspace. "
             "If the file already exists, it will be overwritten. "
             "Parent directories are created automatically. "
             "Use this to save code, text, reports, data files, or any other "
@@ -260,8 +264,8 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
     "edit_workspace_file": {
         "name": "edit_workspace_file",
         "description": (
-            "Perform an exact string replacement in a text file in the "
-            "conversation workspace. old_string must match the file contents "
+            "Perform an exact string replacement in a text file in this "
+            "conversation's workspace. old_string must match the file contents "
             "exactly (including whitespace and indentation) and must appear "
             "exactly once in the file unless replace_all is true. "
             "You must have read the file with get_workspace_file (or written "
@@ -418,7 +422,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
     "download_drive_file": {
         "name": "download_drive_file",
         "description": (
-            "Download a Google Drive file's binary content to the conversation workspace. "
+            "Download a Google Drive file's binary content to this conversation's workspace. "
             "Use this to download PDFs, images, spreadsheets, and other files from Google Drive. "
             "After downloading, use get_workspace_file to read or analyze the file. "
             "Requires Google Services to be connected."
@@ -454,7 +458,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
     "google_export_doc": {
         "name": "google_export_doc",
         "description": (
-            "Export a native Google Doc to the conversation workspace in any format "
+            "Export a native Google Doc to this conversation's workspace in any format "
             "Google Docs supports: pdf, docx, odt, rtf, txt, md (Markdown), html, "
             "epub, or zip (zipped HTML with images). Google Docs have no raw bytes, "
             "so download_drive_file cannot fetch them -- use this tool instead. "
@@ -503,7 +507,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
     "google_export_sheet": {
         "name": "google_export_sheet",
         "description": (
-            "Export a native Google Sheet (spreadsheet) to the conversation workspace "
+            "Export a native Google Sheet (spreadsheet) to this conversation's workspace "
             "in any format Google Sheets supports: xlsx (Excel), ods, pdf, csv, tsv, "
             "or zip (zipped HTML, one page per tab). Google Sheets have no raw bytes, "
             "so download_drive_file cannot fetch them -- use this tool instead. csv and "
@@ -554,7 +558,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
     "google_export_slides": {
         "name": "google_export_slides",
         "description": (
-            "Export a native Google Slides presentation to the conversation workspace "
+            "Export a native Google Slides presentation to this conversation's workspace "
             "in any format Google Slides supports: pptx (PowerPoint), odp, pdf, txt "
             "(all slide text), or png / jpeg / svg (an image of the FIRST slide only). "
             "Google Slides have no raw bytes, so download_drive_file cannot fetch "
@@ -851,7 +855,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "plain-text body parameter only when the user explicitly asks "
             "for a plain-text email. Supports reply/forward threading "
             "(in_reply_to_message_id + thread_id from a fetched message), and "
-            "attachments from Google Drive, the conversation workspace, or an "
+            "attachments from Google Drive, this conversation's workspace, or an "
             "existing Gmail message (total attachment size limit 25MB; native "
             "Google file types like Docs/Sheets/Slides cannot be attached -- "
             "link to them in the body instead). Load system:gmail for the "
@@ -938,7 +942,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "draft). Useful for delivering reports, summaries, or reminders "
             "to the user's inbox. The subject is automatically prefixed with "
             "'[Quest]' and body_md is rendered to HTML. Supports attachments "
-            "from the conversation workspace, Google Drive, or an existing "
+            "from this conversation's workspace, Google Drive, or an existing "
             "Gmail message (25MB total; native Google Docs/Sheets/Slides "
             "cannot be attached -- link to them instead), and an attached "
             "image can be shown inline with ![caption](cid:<filename>). "
@@ -1038,6 +1042,222 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "required": ["query"],
         },
     },
+    # Project file tools (project conversations only -- PROJECT_ONLY_TOOL_CALL_TOOLS
+    # below keeps them out of every prompt of a conversation without a project).
+    # The project workspace is a second file space next to this conversation's
+    # workspace: strict addressing, a path passed here resolves only there.
+    "list_project_files": {
+        "name": "list_project_files",
+        "description": (
+            "List all files in the project workspace: the shared file space of "
+            "this conversation's project, seen by every conversation of the "
+            "project (mounted at /project in scripts). Only available in project "
+            "conversations. Returns a JSON array of relative file paths with sizes, "
+            "like list_workspace_files does for this conversation's own workspace. "
+            "Paths it returns belong to the project workspace only: read them with "
+            "get_project_file, or copy them into this conversation's workspace "
+            "with copy_project_file before passing them to any other tool."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "intent_message": {
+                    "type": "string",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'List project files'.",
+                },
+            },
+            "required": [],
+        },
+    },
+    "get_project_file": {
+        "name": "get_project_file",
+        "description": (
+            "Retrieve a file from the project workspace (the shared file space of "
+            "this conversation's project). Only available in project conversations. "
+            "Works like get_workspace_file: small text files (under 100KB) are "
+            "returned directly, large or binary files are made available for you "
+            "to analyze in this response, and files over the per-model attachment "
+            "limit return an error suggesting how to reduce them with run_python "
+            "(the project workspace is at /project there). The path resolves only "
+            "in the project workspace -- use list_project_files first."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative file path within the project workspace (e.g. 'reports/q3.md'). Use paths from list_project_files.",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Read project report'.",
+                },
+            },
+            "required": ["path"],
+        },
+    },
+    "write_project_file": {
+        "name": "write_project_file",
+        "description": (
+            "Write or create a text file in the project workspace, the file space "
+            "shared by every conversation of this project. Only available in "
+            "project conversations. The project workspace is for finished "
+            "deliverables that later conversations in the project should find, or "
+            "for files the user asks to put there -- drafts, intermediate data and "
+            "scratch output belong in this conversation's workspace "
+            "(write_workspace_file). Overwrites an existing file; parent "
+            "directories are created automatically. Maximum file size is 1MB. "
+            "To promote a file that already exists in this conversation's "
+            "workspace (including binary files), use copy_file_to_project instead."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative file path within the project workspace (e.g. 'reports/q3.md'). Parent directories are created automatically.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The full file content to write.",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Save final report'.",
+                },
+            },
+            "required": ["path", "content"],
+        },
+    },
+    "edit_project_file": {
+        "name": "edit_project_file",
+        "description": (
+            "Perform an exact string replacement in a text file in the project "
+            "workspace (the file space shared by every conversation of this "
+            "project). Only available in project conversations. Works like "
+            "edit_workspace_file: old_string must match the file contents exactly "
+            "(including whitespace and indentation) and must appear exactly once "
+            "unless replace_all is true. You must have read the file with "
+            "get_project_file (or written it with write_project_file) earlier in "
+            "this conversation before editing it -- a read in another conversation "
+            "of the project does not count. Text files only."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative file path within the project workspace (e.g. 'reports/q3.md'). The file must already exist.",
+                },
+                "old_string": {
+                    "type": "string",
+                    "description": "The exact text to replace. Must match the file contents exactly, including whitespace and indentation.",
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "The replacement text. Must differ from old_string. May be empty to delete the matched text.",
+                },
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace every occurrence of old_string instead of requiring a unique match. Defaults to false.",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Update project notes'.",
+                },
+            },
+            "required": ["path", "old_string", "new_string"],
+        },
+    },
+    "copy_file_to_project": {
+        "name": "copy_file_to_project",
+        "description": (
+            "Copy a file or directory from this conversation's workspace into the "
+            "project workspace, the file space shared by every conversation of this "
+            "project. Only available in project conversations. Use it to promote "
+            "finished deliverables that later conversations should find (or when "
+            "the user asks); leave drafts and intermediate files where they are. "
+            "Parent directories are created. An existing destination is an error "
+            "(destination_exists, nothing written) unless overwrite is true; with "
+            "overwrite a file replaces a file and a directory merges entry by entry. "
+            "A symlink or special file named as the source is refused "
+            "(not_a_regular_file). When copying a directory, symlinks, special "
+            "files and (unless include_hidden is true) hidden dot-prefixed entries "
+            "are skipped and counted in the result's 'skipped'. The scratch "
+            "directories '.responses/', '.subagent_responses/' and 'pasted/' are "
+            "refused as a source."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Source path, relative to this conversation's workspace (a file or a directory). Use paths from list_workspace_files.",
+                },
+                "dest": {
+                    "type": "string",
+                    "description": "Optional destination path, relative to the project workspace. Defaults to the same relative path as the source.",
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": "Replace an existing destination file (directories merge entry by entry). Defaults to false.",
+                },
+                "include_hidden": {
+                    "type": "boolean",
+                    "description": "When copying a directory, also copy hidden (dot-prefixed) entries. Defaults to false.",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Share report with project'.",
+                },
+            },
+            "required": ["path"],
+        },
+    },
+    "copy_project_file": {
+        "name": "copy_project_file",
+        "description": (
+            "Copy a file or directory from the project workspace (the file space "
+            "shared by every conversation of this project) into this conversation's "
+            "workspace. Only available in project conversations. Attachments, inline "
+            "images, run_script and every other tool that takes a file path read "
+            "this conversation's workspace only, so copy a project file here first "
+            "to send, attach, embed or run it. Parent directories are created. An "
+            "existing destination is an error (destination_exists, nothing "
+            "written) unless overwrite is true; with overwrite a file replaces a "
+            "file and a directory merges entry by entry. A symlink or special file "
+            "named as the source is refused (not_a_regular_file). When copying a "
+            "directory, symlinks, special files and (unless include_hidden is "
+            "true) hidden dot-prefixed entries are skipped and counted in the "
+            "result's 'skipped'."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Source path, relative to the project workspace (a file or a directory). Use paths from list_project_files.",
+                },
+                "dest": {
+                    "type": "string",
+                    "description": "Optional destination path, relative to this conversation's workspace. Defaults to the same relative path as the source.",
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": "Replace an existing destination file (directories merge entry by entry). Defaults to false.",
+                },
+                "include_hidden": {
+                    "type": "boolean",
+                    "description": "When copying a directory, also copy hidden (dot-prefixed) entries. Defaults to false.",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Copy project data here'.",
+                },
+            },
+            "required": ["path"],
+        },
+    },
     "authed_get": {
         "name": "authed_get",
         "description": (
@@ -1086,8 +1306,8 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "saved to a file for chunked reading via get_response_content.\n"
             "\n"
             "Set output_file to a workspace-relative path to save the response "
-            "body directly to a file under the hidden '.responses/' workspace "
-            "directory instead of returning it inline. This bypasses the response "
+            "body directly to a file under the hidden '.responses/' directory of "
+            "this conversation's workspace instead of returning it inline. This bypasses the response "
             "size gate and is the preferred option when you know up-front you want "
             "to process the body with run_python / run_script / get_workspace_file "
             "rather than read it inline. The receipt's 'path' is the full "
@@ -1129,7 +1349,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                     "description": (
                         "Optional workspace-relative path. When set, the response body is "
                         "written under the hidden '.responses/' directory of the "
-                        "conversation/project workspace (so the path you pass is re-rooted to "
+                        "this conversation's workspace (so the path you pass is re-rooted to "
                         "'.responses/<output_file>') and the tool returns a small JSON receipt "
                         "(path, bytes_written, content_type, status_code) instead of the body "
                         "itself. The returned 'path' is the full '.responses/...' path -- pass it "
@@ -1181,8 +1401,8 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "Size limit, force_large_response, and output_file behave exactly as "
             "for authed_get: responses larger than ~3KB are rejected unless "
             "force_large_response=true (saved for chunked reading) or output_file "
-            "is set (body written under the hidden '.responses/' workspace "
-            "directory; recommended for large log pulls)."
+            "is set (body written under the hidden '.responses/' directory of "
+            "this conversation's workspace; recommended for large log pulls)."
         ),
         "parameters": {
             "type": "object",
@@ -1228,7 +1448,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                     "description": (
                         "Optional workspace-relative path. When set, the response body is "
                         "written under the hidden '.responses/' directory of the "
-                        "conversation/project workspace and the tool returns a small JSON "
+                        "this conversation's workspace and the tool returns a small JSON "
                         "receipt (path, bytes_written, content_type, status_code) instead of "
                         "the body itself. The returned 'path' is the full '.responses/...' "
                         "path -- pass it verbatim to get_workspace_file / run_python / "
@@ -1620,7 +1840,13 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                 },
                 "workspace_path": {
                     "type": "string",
-                    "description": "Workspace-relative path of the image (same paths as list_workspace_files).",
+                    "description": (
+                        "Workspace-relative path of the image (same paths as "
+                        "list_workspace_files). In a project conversation, "
+                        "project files must be copied into this "
+                        "conversation's workspace first "
+                        "(`copy_project_file`)."
+                    ),
                 },
                 "alt": {
                     "type": "string",
@@ -1780,9 +2006,12 @@ BASE_TOOLS: list[ToolSpec] = [
     {
         "name": "run_script",
         "description": (
-            "Run a script file from the workspace inside an ephemeral Podman container "
-            "with Python 3.12 pre-installed. The workspace is mounted read-write so the "
-            "script can read input files and produce output files. The Quest API proxy "
+            "Run a script file from this conversation's workspace inside an ephemeral "
+            "Podman container with Python 3.12 pre-installed. This conversation's "
+            "workspace is mounted read-write at /workspace (the working directory) so "
+            "the script can read input files and produce output files; in a project "
+            "conversation the shared project workspace is also mounted read-write at "
+            "/project. The Quest API proxy "
             "is available at localhost inside the container (same port as your tool calls). "
             "A short-lived sandbox API token (valid only while the container runs) "
             "is in the QUEST_API_KEY environment variable. "
@@ -1792,14 +2021,19 @@ BASE_TOOLS: list[ToolSpec] = [
             "support creating and extracting optionally password-protected zip archives via "
             "`zip -P <password> archive.zip files...` and `unzip -P <password> archive.zip`). "
             "Returns stdout, stderr, and exit code. The script must already exist in "
-            "the workspace (use write_workspace_file first to create it)."
+            "this conversation's workspace (use write_workspace_file first to create it)."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Relative path to the script file within the workspace (e.g., 'analyze.py', 'scripts/process.sh').",
+                    "description": (
+                        "Relative path to the script file within this conversation's "
+                        "workspace (e.g., 'analyze.py', 'scripts/process.sh'). "
+                        "In a project conversation, project files must be copied "
+                        "into this conversation's workspace first (`copy_project_file`)."
+                    ),
                 },
                 "args": {
                     "type": "string",
@@ -1822,8 +2056,10 @@ BASE_TOOLS: list[ToolSpec] = [
         "description": (
             "Run inline Python code inside the same sandboxed Podman container as run_script. "
             "The script content is passed via stdin -- no file is created in the workspace. "
-            "The workspace is mounted read-write so the script can read input files and create "
-            "output files. Pre-installed Python libraries: requests, openpyxl, python-docx, "
+            "This conversation's workspace is mounted read-write at /workspace (the working "
+            "directory) so the script can read input files and create output files; in a "
+            "project conversation the shared project workspace is also mounted read-write "
+            "at /project. Pre-installed Python libraries: requests, openpyxl, python-docx, "
             "matplotlib, seaborn, pypdf (PDF merge/split/extract), PyPDFForm (fill PDF forms). "
             "Pre-installed CLI tools: curl, jq, bash, zip, unzip (shell "
             "out via subprocess to use `zip -P <password> archive.zip files...` for "
@@ -2498,7 +2734,9 @@ _RETURN_TO_CALLER: ToolSpec = {
                     "10, 50 MB each) to copy into the calling "
                     "conversation's workspace on approval. Only files "
                     "that exist in this conversation's workspace are "
-                    "accepted."
+                    "accepted. In a project conversation, project files "
+                    "must be copied into this conversation's workspace "
+                    "first (`copy_project_file`)."
                 ),
             },
             "intent_message": {
@@ -2684,6 +2922,25 @@ MUTATING_PROXY_PATHS: frozenset[str] = frozenset({
     "/api/reset-api-key",
 })
 
+# Dynamic tools that exist only in project conversations: the project
+# database and the project-workspace file + copy tools. Every prompt builder
+# that offers dynamic tools excludes these when the conversation has no
+# project (chat/gemini_api/system_prompt.py), and the prompts of standalone
+# run kinds -- cross-user subagents and inference-API runs -- exclude them
+# always. The handlers refuse with a structured error when there is no
+# project_id, so a hallucinated call is harmless. The write/edit/copy tools
+# are not ``mutating``: inference runs never have a project_id, so they can
+# never write the project workspace (the handlers refuse without one).
+PROJECT_ONLY_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
+    "project_db_query",
+    "list_project_files",
+    "get_project_file",
+    "write_project_file",
+    "edit_project_file",
+    "copy_file_to_project",
+    "copy_project_file",
+})
+
 # Public-project conversations: internet-enabled sandbox, cut off from every
 # internal resource. Only tool_call (restricted to
 # PUBLIC_TOOL_CALL_ALLOWLIST), run_script, and run_python -- NO curl_proxy_*
@@ -2704,12 +2961,14 @@ PUBLIC_TOOLS: list[ToolSpec] = [
 PUBLIC_ROUTINE_TOOLS: list[ToolSpec] = PUBLIC_TOOLS + [_ROUTINE_COMPLETED]
 
 # Dynamic (tool_call-routed) tools available in public-project
-# conversations: time, workspace files, conversation naming, large-response
-# paging, the project-local database, and send_slack_dm_to_self -- the one
-# connector write allowed here because it is outbound-only to the user
-# themselves (fixed recipient, no message history or internal reads; it
-# only sends text the model composed plus workspace files, which are
-# already public-project accessible). send_slack_dm_to_self is served by
+# conversations: time, workspace files (this conversation's and the
+# project's, plus the copy tools between them -- both spaces hold only
+# sandbox-originated or user-uploaded content), conversation naming,
+# large-response paging, the project-local database, and
+# send_slack_dm_to_self -- the one connector write allowed here because it
+# is outbound-only to the user themselves (fixed recipient, no message
+# history or internal reads; it only sends text the model composed plus
+# workspace files, which are already public-project accessible). send_slack_dm_to_self is served by
 # the in-tree Slack plugin; its presence here rides on the core-owned
 # _PUBLIC_ALLOWLIST_MIGRATED_TOOLS exemption in config/plugins.py (the
 # allowlist itself stays core-only -- plugins cannot extend it).
@@ -2729,6 +2988,12 @@ PUBLIC_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     "set_conversation_name",
     "get_response_content",
     "project_db_query",
+    "list_project_files",
+    "get_project_file",
+    "write_project_file",
+    "edit_project_file",
+    "copy_file_to_project",
+    "copy_project_file",
     "send_slack_dm_to_self",
     "list_docs",
     "search_docs",
