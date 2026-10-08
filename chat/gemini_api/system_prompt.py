@@ -75,14 +75,16 @@ _TWO_FILE_SPACES_SECTION = (
 # chat.storage.CONVERSATION_NOTICE_FLAGS), project conversations only.
 _LEGACY_SHARED_WORKSPACE_NOTE = (
     "\n**Earlier files:** This chat started before conversation workspaces "
-    "existed: files it created earlier are in the project workspace. Use "
+    "existed: files it created earlier may be in the project workspace. Use "
     "`list_project_files` / `get_project_file` to find them.\n"
 )
+# Persisted once and shown on every later turn, so it must not go stale
+# (no "just converted" / "the project workspace is empty").
 _CONVERTED_FROM_STANDALONE_NOTE = (
-    "\n**Converted chat:** This chat was just turned into a project. Its "
-    "existing files are in the chat workspace; the project workspace is empty. "
-    "Use `copy_file_to_project` for files that should become shared project "
-    "files, or do so when the user asks.\n"
+    "\n**Converted chat:** This chat was converted from a standalone chat "
+    "into this project. Files it created before the conversion are in this "
+    "chat's workspace, not the project workspace; use `copy_file_to_project` "
+    "for any that should become shared project files, or when the user asks.\n"
 )
 
 
@@ -318,10 +320,10 @@ def get_system_prompt(
             ``set_conversation_name`` tool is left out of the enumeration.
         legacy_shared_workspace: The conversation's ``legacy_shared_workspace``
             notice flag (chat.storage.CONVERSATION_NOTICE_FLAGS). Adds the
-            "earlier files are in the project workspace" note. Project
+            "earlier files may be in the project workspace" note. Project
             conversations only: ignored when ``has_project`` is False.
         converted_from_standalone: The ``converted_from_standalone`` notice
-            flag. Adds the "this chat was just turned into a project" note.
+            flag. Adds the "converted from a standalone chat" note.
             Project conversations only, like ``legacy_shared_workspace``.
 
     Project conversations also get the "Two file spaces" paragraph and a

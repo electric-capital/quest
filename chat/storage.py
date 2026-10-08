@@ -1015,6 +1015,27 @@ class ChatStorage:
                 json.dump(chat_data, f, indent=2)
 
     @staticmethod
+    def guide_snapshot_from(chat_data: Optional[Dict]) -> Optional[Dict]:
+        """Extract the guide snapshot from an already-parsed chat_history.json.
+
+        Args:
+            chat_data: The parsed chat_history.json (``get_conversation``
+                output), or None for a conversation without one.
+
+        Returns:
+            Dict with 'guide_id' and 'guide_snapshot' keys, or None if not set.
+        """
+        if not isinstance(chat_data, dict):
+            return None
+        guide_id = chat_data.get("guide_id")
+        if guide_id:
+            return {
+                "guide_id": guide_id,
+                "guide_snapshot": chat_data.get("guide_snapshot"),
+            }
+        return None
+
+    @staticmethod
     def get_guide_snapshot(
         conversation_id: str,
     ) -> Optional[Dict]:
@@ -1026,24 +1047,28 @@ class ChatStorage:
         Returns:
             Dict with 'guide_id' and 'guide_snapshot' keys, or None if not set.
         """
-        chat_file = ChatStorage._get_chat_history_file(conversation_id)
-        if not chat_file.exists():
-            return None
-
-        with open(chat_file, "r") as f:
-            chat_data = json.load(f)
-
-        guide_id = chat_data.get("guide_id")
-        if guide_id:
-            return {
-                "guide_id": guide_id,
-                "guide_snapshot": chat_data.get("guide_snapshot"),
-            }
-        return None
+        return ChatStorage.guide_snapshot_from(
+            ChatStorage.get_conversation(conversation_id)
+        )
 
     # ------------------------------------------------------------------
     # Per-conversation notice flags (chat_history.json top level)
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def conversation_flags_from(chat_data: Optional[Dict]) -> Dict[str, bool]:
+        """Extract the notice flags from an already-parsed chat_history.json.
+
+        Returns the ``CONVERSATION_NOTICE_FLAGS`` keys present at the top
+        level, as booleans; ``{}`` for None or a non-object.
+        """
+        if not isinstance(chat_data, dict):
+            return {}
+        return {
+            name: bool(chat_data[name])
+            for name in CONVERSATION_NOTICE_FLAGS
+            if name in chat_data
+        }
 
     @staticmethod
     def get_conversation_flags(conversation_id: str) -> Dict[str, bool]:
@@ -1059,51 +1084,54 @@ class ChatStorage:
         ``CONVERSATION_NOTICE_FLAGS`` comment for the legacy-conversation
         rule built on ``own_workspace``.
         """
-        chat_file = ChatStorage._get_chat_history_file(conversation_id)
-        if not chat_file.exists():
-            return {}
         try:
-            with open(chat_file, "r") as f:
-                chat_data = json.load(f)
+            chat_data = ChatStorage.get_conversation(conversation_id)
         except Exception:
             return {}
-        if not isinstance(chat_data, dict):
-            return {}
-        return {
-            name: bool(chat_data[name])
-            for name in CONVERSATION_NOTICE_FLAGS
-            if name in chat_data
-        }
+        return ChatStorage.conversation_flags_from(chat_data)
 
     @staticmethod
     def set_conversation_flag(conversation_id: str, name: str, value: bool) -> None:
-        """Set one notice flag at the top level of chat_history.json.
+        """Set one notice flag; see ``set_conversation_flags``.
 
-        Rewrites the file the same way ``append_message`` does, leaving
-        ``messages`` and every other key untouched. Skips the write when the
-        stored value already matches. A missing chat_history.json is a
-        logged no-op: the file is only ever created by the ``create_*``
-        methods, and a flag on a conversation without history has nothing
-        to annotate. An unreadable or non-object chat_history.json is also a
-        logged no-op (nothing is written), mirroring
-        ``get_conversation_flags``.
+        Raises:
+            ValueError: ``name`` is not one of ``CONVERSATION_NOTICE_FLAGS``.
+        """
+        ChatStorage.set_conversation_flags(conversation_id, {name: value})
+
+    @staticmethod
+    def set_conversation_flags(conversation_id: str, flags: Dict[str, bool]) -> None:
+        """Set several notice flags at the top level of chat_history.json.
+
+        One read-modify-write for all of ``flags``, rewriting the file the
+        same way ``append_message`` does and leaving ``messages`` and every
+        other key untouched. Skips the write when every stored value already
+        matches. A missing chat_history.json is a logged no-op: the file is
+        only ever created by the ``create_*`` methods, and a flag on a
+        conversation without history has nothing to annotate. An unreadable
+        or non-object chat_history.json is also a logged no-op (nothing is
+        written), mirroring ``get_conversation_flags``.
 
         Concurrency note: this is the same synchronous, non-atomic
         read-modify-write as the other chat_history.json writers. It is safe
         only because there is no ``await`` between the read and the write
         and everything runs on the single event loop, so it cannot
-        interleave with a message append; keep it fully synchronous.
+        interleave with a message append; keep it fully synchronous and on
+        the event loop (never in a worker thread).
 
         Raises:
-            ValueError: ``name`` is not one of ``CONVERSATION_NOTICE_FLAGS``.
+            ValueError: a key is not one of ``CONVERSATION_NOTICE_FLAGS``
+                (checked before anything is read or written).
         """
-        if name not in CONVERSATION_NOTICE_FLAGS:
-            raise ValueError(f"Unknown conversation flag: {name!r}")
+        for name in flags:
+            if name not in CONVERSATION_NOTICE_FLAGS:
+                raise ValueError(f"Unknown conversation flag: {name!r}")
+        names = ", ".join(flags)
         chat_file = ChatStorage._get_chat_history_file(conversation_id)
         if not chat_file.exists():
             logger.warning(
-                "set_conversation_flag(%s, %s): no chat_history.json; skipped",
-                conversation_id, name,
+                "set_conversation_flags(%s, %s): no chat_history.json; skipped",
+                conversation_id, names,
             )
             return
         try:
@@ -1111,20 +1139,24 @@ class ChatStorage:
                 chat_data = json.load(f)
         except Exception:
             logger.warning(
-                "set_conversation_flag(%s, %s): unreadable chat_history.json; skipped",
-                conversation_id, name, exc_info=True,
+                "set_conversation_flags(%s, %s): unreadable chat_history.json; skipped",
+                conversation_id, names, exc_info=True,
             )
             return
         if not isinstance(chat_data, dict):
             logger.warning(
-                "set_conversation_flag(%s, %s): chat_history.json is not an object; skipped",
-                conversation_id, name,
+                "set_conversation_flags(%s, %s): chat_history.json is not an object; skipped",
+                conversation_id, names,
             )
             return
-        value = bool(value)
-        if chat_data.get(name) is value:
+        changed = False
+        for name, value in flags.items():
+            value = bool(value)
+            if chat_data.get(name) is not value:
+                chat_data[name] = value
+                changed = True
+        if not changed:
             return
-        chat_data[name] = value
         with open(chat_file, "w") as f:
             json.dump(chat_data, f, indent=2)
 

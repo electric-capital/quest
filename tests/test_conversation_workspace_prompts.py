@@ -18,9 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import importlib.util
 import json
-import subprocess
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -34,19 +33,17 @@ from chat.gemini_api.system_prompt import (
     get_system_prompt,
 )
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
 TWO_SPACES = "**Two file spaces:**"
 LEGACY_NOTE = (
     "This chat started before conversation workspaces existed: files it "
-    "created earlier are in the project workspace. Use `list_project_files` / "
-    "`get_project_file` to find them."
+    "created earlier may be in the project workspace. Use `list_project_files` "
+    "/ `get_project_file` to find them."
 )
 CONVERTED_NOTE = (
-    "This chat was just turned into a project. Its existing files are in the "
-    "chat workspace; the project workspace is empty. Use `copy_file_to_project` "
-    "for files that should become shared project files, or do so when the "
-    "user asks."
+    "This chat was converted from a standalone chat into this project. Files "
+    "it created before the conversion are in this chat's workspace, not the "
+    "project workspace; use `copy_file_to_project` for any that should become "
+    "shared project files, or when the user asks."
 )
 PROJECT_EXAMPLE = "shutil.copy('/workspace/out.pdf', '/project/out.pdf')"
 SIX_TOOLS = (
@@ -79,6 +76,15 @@ def _write_history(chats: Path, cid: str, data: dict) -> Path:
     return path
 
 
+def _detect(cid: str, project_id):
+    """One turn's detection: read chat_history.json once, then decide."""
+    try:
+        data = _storage().ChatStorage.get_conversation(cid)
+    except Exception:
+        data = None
+    return conv_mod._resolve_workspace_notice_flags(1, cid, project_id, data)
+
+
 def _history(path: Path) -> dict:
     return json.loads(path.read_text())
 
@@ -102,7 +108,7 @@ class TestLegacyDetection:
             "id": "c1", "messages": [_USER_MSG, _ASSISTANT_MSG],
         })
         before = path.read_text()
-        assert conv_mod._resolve_workspace_notice_flags(1, "c1", None) == {}
+        assert _detect("c1", None) == {}
         assert path.read_text() == before
         assert not (chats_dir / "c1" / "workspace").exists()
 
@@ -113,7 +119,7 @@ class TestLegacyDetection:
             "messages": [_USER_MSG, _ASSISTANT_MSG],
         })
         before = path.read_text()
-        flags = conv_mod._resolve_workspace_notice_flags(1, "c1", "p1")
+        flags = _detect("c1", "p1")
         assert flags == {"own_workspace": True}
         assert path.read_text() == before
         assert (chats_dir / "c1" / "workspace").is_dir()
@@ -123,7 +129,7 @@ class TestLegacyDetection:
         path = _write_history(chats_dir, "c1", {
             "id": "c1", "project_id": "p1", "messages": [_USER_MSG, assistant],
         })
-        flags = conv_mod._resolve_workspace_notice_flags(1, "c1", "p1")
+        flags = _detect("c1", "p1")
         assert flags == {"legacy_shared_workspace": True, "own_workspace": True}
         data = _history(path)
         assert data["legacy_shared_workspace"] is True
@@ -131,16 +137,16 @@ class TestLegacyDetection:
         assert data["messages"] == [_USER_MSG, assistant]
         assert (chats_dir / "c1" / "workspace").is_dir()
 
-        # Second turn: own_workspace is set, so the history is not scanned
-        # again and the flags stay stable.
-        def _boom(_cid):
-            raise AssertionError("history re-scanned")
+        # Second turn: own_workspace is set, so nothing is decided or
+        # written again and the flags stay stable.
+        def _boom(*_a, **_kw):
+            raise AssertionError("flags rewritten")
 
         monkeypatch.setattr(
-            conv_mod.ChatStorage, "get_conversation", staticmethod(_boom),
+            conv_mod.ChatStorage, "set_conversation_flags", staticmethod(_boom),
         )
         before = path.read_text()
-        again = conv_mod._resolve_workspace_notice_flags(1, "c1", "p1")
+        again = _detect("c1", "p1")
         assert again == {"legacy_shared_workspace": True, "own_workspace": True}
         assert path.read_text() == before
 
@@ -148,7 +154,7 @@ class TestLegacyDetection:
         path = _write_history(chats_dir, "c1", {
             "id": "c1", "project_id": "p1", "messages": [_USER_MSG],
         })
-        flags = conv_mod._resolve_workspace_notice_flags(1, "c1", "p1")
+        flags = _detect("c1", "p1")
         assert flags == {"own_workspace": True}
         data = _history(path)
         assert "legacy_shared_workspace" not in data
@@ -157,7 +163,7 @@ class TestLegacyDetection:
         # Later turns (now with an assistant reply) never re-detect.
         data["messages"].append(_ASSISTANT_MSG)
         path.write_text(json.dumps(data))
-        assert conv_mod._resolve_workspace_notice_flags(1, "c1", "p1") == {
+        assert _detect("c1", "p1") == {
             "own_workspace": True,
         }
 
@@ -168,7 +174,7 @@ class TestLegacyDetection:
             "id": "c1", "project_id": "p1", "messages": [_USER_MSG, _ASSISTANT_MSG],
         })
         (chats_dir / "c1" / "workspace").mkdir()
-        flags = conv_mod._resolve_workspace_notice_flags(1, "c1", "p1")
+        flags = _detect("c1", "p1")
         assert flags["legacy_shared_workspace"] is True
         assert _history(path)["legacy_shared_workspace"] is True
 
@@ -178,7 +184,7 @@ class TestLegacyDetection:
             "converted_from_standalone": True,
             "messages": [_USER_MSG, _ASSISTANT_MSG],
         })
-        flags = conv_mod._resolve_workspace_notice_flags(1, "c1", "p1")
+        flags = _detect("c1", "p1")
         assert flags == {"own_workspace": True, "converted_from_standalone": True}
 
     def test_new_detection_drops_cached_session(self, chats_dir, monkeypatch):
@@ -187,7 +193,7 @@ class TestLegacyDetection:
         })
         monkeypatch.setitem(session_mod._active_chats, (1, "c1"), ("m", object()))
         monkeypatch.setitem(session_mod._active_chats, (1, "c2"), ("m", object()))
-        conv_mod._resolve_workspace_notice_flags(1, "c1", "p1")
+        _detect("c1", "p1")
         assert (1, "c1") not in session_mod._active_chats
         assert (1, "c2") in session_mod._active_chats
 
@@ -197,23 +203,40 @@ class TestLegacyDetection:
             "legacy_shared_workspace": True, "messages": [_ASSISTANT_MSG],
         })
         monkeypatch.setitem(session_mod._active_chats, (1, "c1"), ("m", object()))
-        conv_mod._resolve_workspace_notice_flags(1, "c1", "p1")
+        _detect("c1", "p1")
         assert (1, "c1") in session_mod._active_chats
 
     def test_missing_history_is_harmless(self, chats_dir):
-        assert conv_mod._resolve_workspace_notice_flags(1, "c1", "p1") == {
+        assert _detect("c1", "p1") == {
             "own_workspace": True,
         }
         assert not (chats_dir / "c1" / "chat_history.json").exists()
 
+    def test_one_rewrite_on_detection(self, chats_dir, monkeypatch):
+        _write_history(chats_dir, "c1", {
+            "id": "c1", "project_id": "p1", "messages": [_ASSISTANT_MSG],
+        })
+        real = conv_mod.ChatStorage.set_conversation_flags
+        calls = []
+
+        def _spy(cid, flags):
+            calls.append(dict(flags))
+            real(cid, flags)
+
+        monkeypatch.setattr(
+            conv_mod.ChatStorage, "set_conversation_flags", staticmethod(_spy),
+        )
+        _detect("c1", "p1")
+        assert calls == [{"own_workspace": True, "legacy_shared_workspace": True}]
+
     def test_failure_never_raises(self, chats_dir, monkeypatch):
-        def _boom(_cid):
+        def _boom(_data):
             raise OSError("disk on fire")
 
         monkeypatch.setattr(
-            conv_mod.ChatStorage, "get_conversation_flags", staticmethod(_boom),
+            conv_mod.ChatStorage, "conversation_flags_from", staticmethod(_boom),
         )
-        assert conv_mod._resolve_workspace_notice_flags(1, "c1", "p1") == {}
+        assert _detect("c1", "p1") == {}
 
 
 # ---------------------------------------------------------------------------
@@ -292,65 +315,138 @@ class TestPrompts:
 
 
 # ---------------------------------------------------------------------------
-# Invariant 2: standalone prompts are byte-for-byte what they were
+# Invariant 2: standalone prompts carry no project-workspace text
 # ---------------------------------------------------------------------------
 
-# The last commit before the two-file-spaces prompt text (its tool-tier
-# exclusion already uses PROJECT_ONLY_TOOL_CALL_TOOLS, so its standalone
-# prompts are the reference). The test skips when the object is missing
-# (shallow clone, squash-merged history).
-_BASELINE_COMMIT = "a222348"
+_PROJECT_MARKERS = (
+    TWO_SPACES, LEGACY_NOTE, CONVERTED_NOTE, "**Earlier files:**",
+    "**Converted chat:**", "/project", "_project_file", "copy_file_to_project",
+)
 
 
-def _load_baseline_module(tmp_path):
-    try:
-        source = subprocess.run(
-            ["git", "show", f"{_BASELINE_COMMIT}:chat/gemini_api/system_prompt.py"],
-            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-        ).stdout
-    except (OSError, subprocess.CalledProcessError):
-        pytest.skip(f"baseline commit {_BASELINE_COMMIT} not available")
-    path = tmp_path / "baseline_system_prompt.py"
-    path.write_text(source)
-    spec = importlib.util.spec_from_file_location("baseline_system_prompt", path)
-    module = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(module)
-    except ImportError as exc:  # pragma: no cover - drift guard
-        pytest.skip(f"baseline module no longer importable: {exc}")
-    return module
+def _without_allowed_mentions(prompt: str) -> str:
+    """Drop the text a standalone prompt may legitimately carry.
+
+    The run_script / run_python tool lines, and the copy-first sentence on
+    conversation-path parameters (e.g. ``add_doc_image``), which tells the
+    model what to do *if* it is in a project conversation.
+    """
+    lines = [
+        line for line in prompt.splitlines()
+        if not line.lstrip().startswith(("9. **run_script", "10. **run_python",
+                                         "5. **run_script", "6. **run_python"))
+    ]
+    return "\n".join(lines).replace(COPY_SENTENCE, "")
 
 
-def test_standalone_prompts_match_baseline(tmp_path):
-    from chat.gemini_api import system_prompt as current
-
-    baseline = _load_baseline_module(tmp_path)
-    for cs in (None, {}, {"google": True, "slack": True, "docs": True}):
-        for slack in (False, True):
-            for routine in (False, True):
-                for nested in (False, True):
-                    kw = dict(
-                        base_url="http://x", custom_system_prompt="cp",
-                        connected_services=cs, user_name="U", user_email="u@e",
-                        skills_content="sk", has_project=False, is_slack=slack,
-                        nested_subagents=nested, is_routine=routine,
-                    )
-                    assert current.get_system_prompt("KEY", **kw) == \
-                        baseline.get_system_prompt("KEY", **kw), kw
-        for can_nest in (False, True):
-            kw = dict(
-                base_url="http://x", connected_services=cs, user_email="u@e",
-                has_project=False, can_nest=can_nest,
-            )
-            assert current.get_sub_agent_system_prompt("A", "KEY", **kw) == \
-                baseline.get_sub_agent_system_prompt("A", "KEY", **kw), kw
-    assert current.get_user_subagent_system_prompt(
-        "KEY", target_user_email="t@e", caller_email="c@e",
-    ) == baseline.get_user_subagent_system_prompt(
-        "KEY", target_user_email="t@e", caller_email="c@e",
+@pytest.mark.parametrize("connected_services", [None, {}, {"google": True, "docs": True}])
+@pytest.mark.parametrize("legacy,converted", _NOTE_FLAGS)
+def test_standalone_prompts_have_no_project_text(connected_services, legacy, converted):
+    from chat.gemini_api.system_prompt import (
+        get_inference_api_system_prompt,
+        get_user_subagent_system_prompt,
     )
-    assert current.get_inference_api_system_prompt("KEY", user_email="u@e") == \
-        baseline.get_inference_api_system_prompt("KEY", user_email="u@e")
+
+    flags = dict(legacy_shared_workspace=legacy, converted_from_standalone=converted)
+    prompts = {
+        "standard": get_system_prompt(
+            "KEY", connected_services=connected_services, has_project=False, **flags,
+        ),
+        "routine": get_system_prompt(
+            "KEY", connected_services=connected_services, has_project=False,
+            is_routine=True, **flags,
+        ),
+        "sub_agent": get_sub_agent_system_prompt(
+            "A", "KEY", connected_services=connected_services, has_project=False,
+            can_nest=True, **flags,
+        ),
+        "user_subagent": get_user_subagent_system_prompt(
+            "KEY", connected_services=connected_services,
+        ),
+        "inference": get_inference_api_system_prompt(
+            "KEY", connected_services=connected_services,
+        ),
+    }
+    for kind, prompt in prompts.items():
+        text = _without_allowed_mentions(prompt)
+        for marker in _PROJECT_MARKERS:
+            assert marker not in text, (kind, marker)
+
+
+# ---------------------------------------------------------------------------
+# Golden snapshots (tests/snapshots/system_prompt_*.txt)
+#
+# Regenerate after an intended prompt change with
+#   QUEST_UPDATE_SNAPSHOTS=1 uv run pytest tests/test_conversation_workspace_prompts.py
+# and review the diff. Plugin-registered dynamic tools are removed from the
+# registry while rendering (their presence depends on whether some earlier
+# test loaded the plugins), and connected_services is pinned to {} so no
+# plugin skill, connector doc or service-gated tool is shown.
+# ---------------------------------------------------------------------------
+
+SNAPSHOT_DIR = Path(__file__).resolve().parent / "snapshots"
+
+_SNAP_COMMON = dict(
+    user_name="Snap User", user_email="snap@example.com",
+    project_guide="Snapshot project instructions.",
+)
+_SNAP_FLAGS = dict(legacy_shared_workspace=True, converted_from_standalone=True)
+
+
+def _snapshot_prompts() -> dict[str, str]:
+    from chat.gemini_api.system_prompt import get_public_project_system_prompt as pub
+
+    base = dict(base_url="http://quest.test", connected_services={}, **_SNAP_COMMON)
+    return {
+        "standalone_standard": get_system_prompt("SNAPSHOT-KEY", **base),
+        "standalone_sub_agent": get_sub_agent_system_prompt(
+            "Snap Agent", "SNAPSHOT-KEY", **base,
+        ),
+        "project_standard": get_system_prompt(
+            "SNAPSHOT-KEY", has_project=True, **base, **_SNAP_FLAGS,
+        ),
+        "project_sub_agent": get_sub_agent_system_prompt(
+            "Snap Agent", "SNAPSHOT-KEY", has_project=True, **base, **_SNAP_FLAGS,
+        ),
+        "public_project": pub(**_SNAP_COMMON, **_SNAP_FLAGS),
+    }
+
+
+def _render_snapshots() -> dict[str, str]:
+    from chat.llm.tool_schemas import PLUGIN_TOOL_NAMES, TOOL_CALL_REGISTRY
+
+    core = {
+        name: spec for name, spec in TOOL_CALL_REGISTRY.items()
+        if name not in PLUGIN_TOOL_NAMES
+    }
+    with patch.dict(TOOL_CALL_REGISTRY, core, clear=True):
+        return _snapshot_prompts()
+
+
+@pytest.mark.parametrize("name", [
+    "standalone_standard", "standalone_sub_agent", "project_standard",
+    "project_sub_agent", "public_project",
+])
+def test_prompt_snapshot(name):
+    rendered = _render_snapshots()[name]
+    path = SNAPSHOT_DIR / f"system_prompt_{name}.txt"
+    if os.environ.get("QUEST_UPDATE_SNAPSHOTS") == "1":
+        SNAPSHOT_DIR.mkdir(exist_ok=True)
+        path.write_text(rendered)
+    assert path.exists(), (
+        f"missing snapshot {path.name}; run with QUEST_UPDATE_SNAPSHOTS=1"
+    )
+    assert rendered == path.read_text(), (
+        f"system prompt '{name}' differs from {path.name}; if the change is "
+        "intended, regenerate with QUEST_UPDATE_SNAPSHOTS=1 and review the diff"
+    )
+
+
+def test_snapshots_capture_the_project_text():
+    project = (SNAPSHOT_DIR / "system_prompt_project_standard.txt").read_text()
+    standalone = (SNAPSHOT_DIR / "system_prompt_standalone_standard.txt").read_text()
+    assert TWO_SPACES in project and LEGACY_NOTE in project and CONVERTED_NOTE in project
+    assert TWO_SPACES not in standalone
 
 
 # ---------------------------------------------------------------------------
@@ -377,26 +473,16 @@ def _fake_provider():
     return provider
 
 
-@pytest.mark.parametrize("public", [False, True])
-def test_run_conversation_turn_passes_flags(chats_dir, monkeypatch, public):
-    path = _write_history(chats_dir, "c1", {
-        "id": "c1", "project_id": "p1", "messages": [_USER_MSG, _ASSISTANT_MSG],
-    })
-    captured: dict = {}
+_TURN_USER = {"id": 1, "email": "t@example.com", "api_key": "k", "name": "T"}
 
-    def _capture(*_a, **kw):
-        captured.update(kw)
-        return "system prompt"
 
+def _patch_turn_collaborators(monkeypatch, *, public: bool) -> None:
+    """Stub run_conversation_turn's DB / config / provider collaborators."""
     monkeypatch.setattr(conv_mod, "load_server_config", lambda: {"gemini": {"model": "fake"}})
     monkeypatch.setattr(conv_mod, "get_provider_for_model", lambda _m: "gemini")
     monkeypatch.setattr(conv_mod, "get_backend_for_model", lambda _m: "gemini")
-    monkeypatch.setattr(conv_mod, "get_system_prompt", _capture)
-    import chat.gemini_api.system_prompt as sp_mod
-    monkeypatch.setattr(sp_mod, "get_public_project_system_prompt", _capture)
     monkeypatch.setattr(conv_mod, "_load_sdk_history", lambda _cid: None)
     monkeypatch.setattr(conv_mod, "_save_sdk_history", lambda *a: None)
-    monkeypatch.setattr(conv_mod, "get_or_create_chat", lambda *a, **kw: object())
     monkeypatch.setattr(conv_mod, "record_api_call", AsyncMock())
     provider = _fake_provider()
     monkeypatch.setattr(conv_mod, "get_provider_instance", lambda _n, _i=None: provider)
@@ -416,28 +502,87 @@ def test_run_conversation_turn_passes_flags(chats_dir, monkeypatch, public):
     import api.instructions as instructions
     monkeypatch.setattr(instructions, "get_user_connected_services", lambda _u: {})
 
+
+def _run_turn(conversation_id="c1", project_id="p1"):
     async def _on_event(_e):
         return None
 
     asyncio.run(conv_mod.run_conversation_turn(
-        app=None, user={"id": 1, "email": "t@example.com", "api_key": "k", "name": "T"},
-        message="again", conversation_id="c1", timezone="UTC", model="fake",
-        on_event=_on_event, project_id="p1",
+        app=None, user=_TURN_USER, message="again",
+        conversation_id=conversation_id, timezone="UTC", model="fake",
+        on_event=_on_event, project_id=project_id,
     ))
+
+
+@pytest.mark.parametrize("public", [False, True])
+def test_run_conversation_turn_passes_flags(chats_dir, monkeypatch, public):
+    path = _write_history(chats_dir, "c1", {
+        "id": "c1", "project_id": "p1", "messages": [_USER_MSG, _ASSISTANT_MSG],
+    })
+    captured: dict = {}
+
+    def _capture(*_a, **kw):
+        captured.update(kw)
+        return "system prompt"
+
+    _patch_turn_collaborators(monkeypatch, public=public)
+    monkeypatch.setattr(conv_mod, "get_system_prompt", _capture)
+    import chat.gemini_api.system_prompt as sp_mod
+    monkeypatch.setattr(sp_mod, "get_public_project_system_prompt", _capture)
+    monkeypatch.setattr(conv_mod, "get_or_create_chat", lambda *a, **kw: object())
+
+    _run_turn()
     assert captured["legacy_shared_workspace"] is True
     assert captured["converted_from_standalone"] is False
     assert _history(path)["legacy_shared_workspace"] is True
 
 
+def test_detection_turn_rebuilds_stale_session(chats_dir, monkeypatch):
+    """A cached session from before detection is dropped before
+    get_or_create_chat, which then builds one with the legacy note."""
+    _write_history(chats_dir, "c1", {
+        "id": "c1", "project_id": "p1", "messages": [_USER_MSG, _ASSISTANT_MSG],
+    })
+    _patch_turn_collaborators(monkeypatch, public=False)
+    key = (_TURN_USER["id"], "c1")
+    monkeypatch.setitem(session_mod._active_chats, key, ("fake", object()))
+    seen: dict = {}
+
+    def _get_or_create_chat(_provider, user_id, conversation_id, _model, system_prompt, **_kw):
+        seen["stale_present"] = (user_id, conversation_id) in session_mod._active_chats
+        seen["system_prompt"] = system_prompt
+        return object()
+
+    monkeypatch.setattr(conv_mod, "get_or_create_chat", _get_or_create_chat)
+    reads = []
+    real_read = conv_mod.ChatStorage.get_conversation
+
+    def _counting_read(cid):
+        reads.append(cid)
+        return real_read(cid)
+
+    monkeypatch.setattr(
+        conv_mod.ChatStorage, "get_conversation", staticmethod(_counting_read),
+    )
+
+    _run_turn()
+    assert seen["stale_present"] is False
+    assert LEGACY_NOTE in seen["system_prompt"]
+    assert TWO_SPACES in seen["system_prompt"]
+    # chat_history.json was parsed once for the guide snapshot + the flags.
+    assert reads == ["c1"]
+
+
 @pytest.mark.parametrize("project_id", [None, "p1"])
-def test_run_sub_agent_passes_parent_flags(chats_dir, project_id):
+def test_run_sub_agent_passes_parent_flags(chats_dir, monkeypatch, project_id):
     from chat.gemini_api.sub_agent import _run_sub_agent
 
-    _write_history(chats_dir, "c1", {
-        "id": "c1", "project_id": "p1", "own_workspace": True,
-        "legacy_shared_workspace": True, "converted_from_standalone": True,
-        "messages": [_ASSISTANT_MSG],
-    })
+    # The flags arrive from the parent; the sub-agent never re-reads them.
+    def _no_read(*_a, **_kw):
+        raise AssertionError("sub-agent re-read chat_history.json")
+
+    monkeypatch.setattr(conv_mod.ChatStorage, "get_conversation", staticmethod(_no_read))
+    monkeypatch.setattr(conv_mod.ChatStorage, "get_conversation_flags", staticmethod(_no_read))
     provider = _fake_provider()
     usage = MagicMock()
     usage.input_tokens = usage.output_tokens = usage.cached_tokens = 0
@@ -458,6 +603,10 @@ def test_run_sub_agent_passes_parent_flags(chats_dir, project_id):
             conversation_id="c1", timezone="UTC",
             model="claude-haiku-4.5", agent_name="A", prompt="go",
             project_id=project_id,
+            workspace_notice_flags={
+                "own_workspace": True, "legacy_shared_workspace": True,
+                "converted_from_standalone": True,
+            },
         ))
     prompt = provider.create_session.call_args.kwargs["system_prompt"]
     assert (LEGACY_NOTE in prompt) is (project_id is not None)
@@ -502,7 +651,7 @@ class TestCatalog:
             assert f"**{name}(" in text, name
         assert PROJECT_EXAMPLE in text
         assert 'subprocess.run(["python3", "/project/etl.py"]' in text
-        assert COPY_SENTENCE in text
+        assert COPY_SENTENCE in " ".join(text.split())
         assert ".temp/" in text
 
     def test_routines_paragraph(self):
@@ -512,7 +661,7 @@ class TestCatalog:
         assert "/project/" in text
 
     def test_copy_first_in_attachment_texts(self):
-        assert COPY_SENTENCE in self._content("system:action_requests")
+        assert COPY_SENTENCE in " ".join(self._content("system:action_requests").split())
         docs = " ".join(self._content("system:quest_docs").split())
         assert COPY_SENTENCE.replace("In a project", "in a project")[:-1] in docs
 

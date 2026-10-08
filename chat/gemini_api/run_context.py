@@ -16,7 +16,7 @@ and never rebound. Two fields hold deliberately-mutable objects:
 * ``usage_acc`` accumulates token usage across turns.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from chat.gemini_api.usage import UsageAccumulator
@@ -74,3 +74,9 @@ class RunContext:
 
     # Cross-turn token accumulation (mutable by design)
     usage_acc: UsageAccumulator
+
+    # Workspace notice flags of a project conversation (chat_history.json,
+    # see chat.storage.CONVERSATION_NOTICE_FLAGS), resolved once at turn
+    # start and handed to sub-agent spawns for their prompts. Empty for a
+    # standalone conversation. Treat as read-only.
+    workspace_notice_flags: dict[str, bool] = field(default_factory=dict)

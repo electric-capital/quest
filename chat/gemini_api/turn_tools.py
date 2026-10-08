@@ -699,6 +699,7 @@ async def _handle_agent_task(
             on_event=ctx.on_event,
             parent_tool_id=call.tool_id,
             nested_enabled=ctx.nested_subagents,
+            workspace_notice_flags=ctx.workspace_notice_flags,
             level=1,
         )
 
@@ -741,6 +742,7 @@ async def _handle_agent_task_parallel(
             on_event=ctx.on_event,
             parent_tool_id=call.tool_id,
             nested_enabled=ctx.nested_subagents,
+            workspace_notice_flags=ctx.workspace_notice_flags,
         )
 
     return await _run_spawn_arm(
@@ -780,6 +782,7 @@ async def _handle_agent_task_parallel_template(
             on_event=ctx.on_event,
             parent_tool_id=call.tool_id,
             nested_enabled=ctx.nested_subagents,
+            workspace_notice_flags=ctx.workspace_notice_flags,
         )
 
     return await _run_spawn_arm(

@@ -477,8 +477,9 @@ neither tool looks in the other space on a miss.
 **Copy first:** attachments (Slack self-DM `files`, Gmail / Outlook draft
 attachments, `upload_to_drive`, `add_doc_image`, `return_to_caller`), inline
 markdown images in your replies and `run_script` take conversation paths
-only. In a project conversation, project files must be copied into this conversation's workspace first (`copy_project_file`). To run a script kept in the project
-workspace without copying it, start it from `run_python`:
+only. In a project conversation, project files must be copied into this
+conversation's workspace first (`copy_project_file`). To run a script kept
+in the project workspace without copying it, start it from `run_python`:
 `subprocess.run(["python3", "/project/etl.py"], check=True)`.
 
 ### Hidden directories for non-user-facing files
@@ -766,9 +767,10 @@ me", "message me on Slack"), use the `send_slack_dm_to_self` dynamic
 tool (via `tool_call`) directly. This sends a Quest-bot DM, does NOT
 require approval, works in automated / scheduled routines where there is
 no human to approve action requests, and optionally attaches workspace
-files (`files`: workspace-relative paths). In a project conversation, project files must be copied into this conversation's workspace first (`copy_project_file`).
-Note: self-DMs appear from the Quest bot, not the user. Full usage
-lives in `system:slack`.
+files (`files`: workspace-relative paths). In a project conversation,
+project files must be copied into this conversation's workspace first
+(`copy_project_file`). Note: self-DMs appear from the Quest bot, not the
+user. Full usage lives in `system:slack`.
 
 ### In scheduled / automated routines
 Routines run unattended — there is no human to approve action requests

@@ -364,10 +364,32 @@ def _stopped_action_request_result(response: dict, message: str) -> dict:
     return out
 
 
+async def _read_chat_history(conversation_id: str) -> dict | None:
+    """Read and parse chat_history.json once for the turn-start lookups.
+
+    The read + parse runs in a worker thread (the file grows with the
+    transcript). A failed threaded read -- e.g. a parse error from catching
+    a concurrent writer mid-write -- is retried once synchronously on the
+    event loop, where every chat_history.json writer runs, so that read can
+    never see a torn file; a genuinely corrupt file raises from there, as
+    the previous direct ``get_guide_snapshot`` call did.
+    """
+    try:
+        return await asyncio.to_thread(ChatStorage.get_conversation, conversation_id)
+    except Exception:
+        return ChatStorage.get_conversation(conversation_id)
+
+
 def _resolve_workspace_notice_flags(
-    user_id: int, conversation_id: str, project_id: str | None,
+    user_id: int,
+    conversation_id: str,
+    project_id: str | None,
+    chat_data: dict | None,
 ) -> dict[str, bool]:
     """Run legacy-workspace detection and return the conversation's notice flags.
+
+    ``chat_data`` is the turn's already-parsed chat_history.json
+    (``_read_chat_history``), so detection costs no extra read.
 
     Standalone conversations (``project_id`` None) are never touched and
     get ``{}``. For a project conversation this:
@@ -375,12 +397,12 @@ def _resolve_workspace_notice_flags(
     * makes sure the conversation workspace dir exists;
     * on the first turn without the ``own_workspace`` marker, decides once
       whether the conversation is a legacy project conversation -- one with
-      at least one assistant message, whose earlier files therefore live in
-      the shared project workspace -- and if so sets
+      at least one assistant message, whose earlier files may therefore
+      live in the shared project workspace -- and if so sets
       ``legacy_shared_workspace``; either way ``own_workspace`` is then set
-      so the check never runs again (see
-      ``chat.storage.CONVERSATION_NOTICE_FLAGS`` for why the workspace
-      dir's presence is not the signal);
+      (one ``set_conversation_flags`` rewrite, on the event loop) so the
+      check never runs again (see ``chat.storage.CONVERSATION_NOTICE_FLAGS``
+      for why the workspace dir's presence is not the signal);
     * returns the flags (``legacy_shared_workspace`` /
       ``converted_from_standalone`` / ``own_workspace``) for the prompt
       builders.
@@ -399,30 +421,27 @@ def _resolve_workspace_notice_flags(
         ChatStorage.get_conversation_workspace_root(conversation_id).mkdir(
             parents=True, exist_ok=True,
         )
-        flags = ChatStorage.get_conversation_flags(conversation_id)
+        flags = ChatStorage.conversation_flags_from(chat_data)
         if flags.get("own_workspace"):
             return flags
-        chat_data = ChatStorage.get_conversation(conversation_id) or {}
         messages = chat_data.get("messages") if isinstance(chat_data, dict) else None
-        has_assistant_message = any(
+        updates = {"own_workspace": True}
+        if any(
             isinstance(m, dict) and m.get("role") == "assistant"
             for m in (messages or [])
-        )
-        if has_assistant_message:
-            ChatStorage.set_conversation_flag(
-                conversation_id, "legacy_shared_workspace", True,
-            )
-            flags["legacy_shared_workspace"] = True
+        ):
+            updates["legacy_shared_workspace"] = True
+        ChatStorage.set_conversation_flags(conversation_id, updates)
+        flags.update(updates)
+        if updates.get("legacy_shared_workspace"):
             # The cached session was built with a prompt that lacks the
             # legacy note; force a rebuild on this turn.
             from chat.gemini_api.session import remove_chat_session
             remove_chat_session(user_id, conversation_id)
             logger.info(
                 "Conversation %s detected as a legacy project conversation "
-                "(files in the shared project workspace)", conversation_id,
+                "(earlier files in the shared project workspace)", conversation_id,
             )
-        ChatStorage.set_conversation_flag(conversation_id, "own_workspace", True)
-        flags["own_workspace"] = True
     except Exception:
         logger.warning(
             "Workspace notice-flag detection failed for conversation %s",
@@ -609,8 +628,12 @@ async def run_conversation_turn(
         from db.guide_store import get_guide
         custom_prompt = ""
 
+        # chat_history.json is read ONCE here; both the guide snapshot and
+        # the workspace notice flags (below) are derived from it.
+        chat_history_data = await _read_chat_history(conversation_id)
+
         # Check if this conversation already has a snapshotted guide
-        existing_snapshot = ChatStorage.get_guide_snapshot(conversation_id)
+        existing_snapshot = ChatStorage.guide_snapshot_from(chat_history_data)
         if is_user_subagent:
             pass
         elif not guides_enabled_for(user["email"]):
@@ -757,8 +780,9 @@ async def run_conversation_turn(
         # Project conversations only: legacy-workspace detection plus the
         # notice flags the prompt builders render (never raises).
         notice_flags = _resolve_workspace_notice_flags(
-            user["id"], conversation_id, project_id,
+            user["id"], conversation_id, project_id, chat_history_data,
         )
+        del chat_history_data  # don't hold the parsed transcript all turn
         legacy_shared_workspace = bool(notice_flags.get("legacy_shared_workspace"))
         converted_from_standalone = bool(notice_flags.get("converted_from_standalone"))
 
@@ -926,6 +950,7 @@ async def run_conversation_turn(
             on_event=on_event,
             structured_messages=structured_messages,
             usage_acc=usage_acc,
+            workspace_notice_flags=notice_flags,
         )
 
         wrapped_message = _wrap_message_with_metadata(
