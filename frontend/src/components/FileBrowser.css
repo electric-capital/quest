@@ -483,6 +483,17 @@
   background-color: rgba(255, 107, 107, 0.1);
 }
 
+/* Host-supplied row actions (FileBrowser `rowActions`) can be disabled.
+   `:disabled:hover` outranks every hover rule above and in the light block. */
+.file-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.file-menu-item:disabled:hover {
+  background-color: transparent;
+}
+
 /* Drag overlay */
 .drag-overlay {
   position: absolute;

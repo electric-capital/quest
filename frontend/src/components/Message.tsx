@@ -14,6 +14,7 @@ import { Copy, Check } from 'lucide-react';
 import { formatTimestamp, formatNumber } from '../utils/formatters';
 import { getModelDisplayName } from '../constants/models';
 import { API_BASE_URL } from '../api/config';
+import { conversationSource, fileDownloadUrl, projectSource } from '../api/fileApi';
 import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, StatsMessage as StatsMessageType, ErrorMessage as ErrorMessageType, InterruptedMessage as InterruptedMessageType, ActionRequestMessage as ActionRequestMessageType, CompactionMessage as CompactionMessageType, ModelFallbackMessage as ModelFallbackMessageType, RoutineNudgeMessage as RoutineNudgeMessageType, ComposerAttachmentRef } from '../api/types';
 import { ToolUseMessage } from './ToolUseMessage';
 import { ActionRequestMessage } from './ActionRequestMessage';
@@ -179,6 +180,12 @@ export function CopyableTable({ children, ...props }: React.HTMLAttributes<HTMLT
  */
 export interface MarkdownWorkspaceContextValue {
   conversationId?: string;
+  /**
+   * Resolve bare paths against a project's shared workspace instead (the
+   * FileViewerModal .md preview of a Project Files entry). Ignored when
+   * `assetBase` or `conversationId` is set; chat never sets it.
+   */
+  projectId?: string;
   assetBase?: string;
   onOpenImage?: (workspacePath: string, filename: string) => void;
 }
@@ -230,7 +237,7 @@ function docAssetUrl(path: string, assetBase: string): string | null {
  * (the same user-initiated exposure ordinary markdown links already have).
  */
 function MarkdownImage({ src, alt }: React.ImgHTMLAttributes<HTMLImageElement>) {
-  const { conversationId, assetBase, onOpenImage } = React.useContext(MarkdownWorkspaceContext);
+  const { conversationId, projectId, assetBase, onOpenImage } = React.useContext(MarkdownWorkspaceContext);
   // Track the failing URL rather than a boolean: during streaming an image
   // ref can render with a truncated src that 404s, then re-render complete.
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
@@ -252,7 +259,9 @@ function MarkdownImage({ src, alt }: React.ImgHTMLAttributes<HTMLImageElement>) 
   if (assetBase) {
     url = docAssetUrl(path, assetBase);
   } else if (conversationId) {
-    url = `${API_BASE_URL}/conversations/${conversationId}/files/download?path=${encodeURIComponent(path)}`;
+    url = fileDownloadUrl(conversationSource(conversationId), path);
+  } else if (projectId) {
+    url = fileDownloadUrl(projectSource(projectId), path);
   }
 
   if (!url || failedSrc === url) {

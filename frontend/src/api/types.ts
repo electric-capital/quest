@@ -660,6 +660,20 @@ export interface CreateFolderResponse {
   path: string;
 }
 
+/** Response of POST /conversations/:id/files/copy-to-project|copy-from-project. */
+export interface CopyEntryResponse {
+  type: 'file' | 'folder';
+  /** Destination path, root-relative (`/<dest>`). */
+  path: string;
+  files_copied: number;
+  skipped: number;
+  /**
+   * True when a requested move removed the source. False for a plain copy
+   * and for a move whose copy succeeded but whose source removal failed.
+   */
+  moved: boolean;
+}
+
 // Search types
 export interface SearchResult {
   conversation_id: string;

@@ -1,16 +1,20 @@
 /**
- * File browser panel component for workspace file management
+ * File browser panel component for workspace file management. One card per
+ * file space (`source`): a conversation's own workspace ("Chat Files") or a
+ * project's shared workspace ("Project Files"). Every operation -- listing,
+ * upload, new folder, delete, downloads, the viewer and its Save to Drive --
+ * goes through that source's routes, and the card refreshes only on
+ * `file_list_changed` events for its own space.
  */
 
 import { useRef, useState, useMemo, useCallback, useEffect, type DragEvent } from 'react';
 import { useFileBrowser } from '../hooks/useFileBrowser';
-import { getFileInfo } from '../api/fileApi';
+import { getFileInfo, type FileSource } from '../api/fileApi';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
 import { extractFilesFromDataTransfer } from '../utils/directoryTraversal';
 import { getFileIconInfo } from '../utils/fileIcons';
 import { FileViewerModal } from './FileViewerModal';
 import { NewFolderModal } from './NewFolderModal';
-import { useProjects } from '../contexts/ProjectsContext';
 import { Folder, Upload, FolderPlus, Eye, EyeOff } from 'lucide-react';
 import type { FileEntry } from '../api/types';
 import './FileBrowser.css';
@@ -50,20 +54,66 @@ export function isCsvFile(name: string): boolean {
   return name.toLowerCase().endsWith('.csv');
 }
 
+/** The row a per-row action was opened on. */
+export interface FileRowContext {
+  entry: FileEntry;
+  /** Root-relative path of the entry in its space, e.g. `/reports/q3.csv`. */
+  path: string;
+  /** The space the card browses. */
+  source: FileSource;
+}
+
+/**
+ * An extra item in a row's actions menu, supplied by the host through
+ * `rowActions` (e.g. Copy / Move between Chat Files and Project Files).
+ * Rendered after the built-in Download item and before Delete; the menu
+ * closes before `onSelect` runs.
+ */
+export interface FileRowAction {
+  /** Stable React key, unique within one row's menu. */
+  key: string;
+  label: string;
+  onSelect: () => void;
+  disabled?: boolean;
+  /** Danger styling (like Delete). */
+  danger?: boolean;
+}
+
 interface FileBrowserProps {
   /**
-   * Conversation whose workspace is browsed. For a project this may be ANY
-   * conversation of the project (they share one workspace directory) -- the
-   * RightPanel borrows one while the home composer is open inside a project.
+   * The file space browsed: a conversation's own workspace (card titled
+   * "Chat Files") or a project's shared workspace ("Project Files"). Null
+   * renders the no-conversation empty state.
    */
-  conversationId: string | null;
+  source: FileSource | null;
   /**
-   * Project the browsed workspace belongs to, when known by the host. Falls
-   * back to the URL-mirrored ``activeProjectId`` from context when omitted;
-   * the RightPanel passes it explicitly because at "/" (home composer inside
-   * a drilled project) the context value is null.
+   * Extra per-row actions for the row's menu. Called on render for each row
+   * whose menu is open; return [] for none.
    */
-  projectId?: string | null;
+  rowActions?: (row: FileRowContext) => FileRowAction[];
+}
+
+/** Card title for a file space. */
+export function fileBrowserTitle(source: FileSource | null): string {
+  if (!source) return 'Files';
+  return source.kind === 'project' ? 'Project Files' : 'Chat Files';
+}
+
+/**
+ * Whether a ``file_list_changed`` event concerns the space a card shows:
+ * conversation routes/tools publish scope "conversation" with the
+ * conversation id, project routes publish scope "project" with the project
+ * id (and a null conversation id); copy routes and sandbox runs publish one
+ * event per scope.
+ */
+export function fileListEventMatchesSource(
+  event: Record<string, unknown>,
+  source: FileSource,
+): boolean {
+  if (source.kind === 'conversation') {
+    return event.scope === 'conversation' && event.conversation_id === source.id;
+  }
+  return event.scope === 'project' && event.project_id === source.id;
 }
 
 function formatFileSize(bytes: number | null): string {
@@ -84,9 +134,10 @@ function formatDate(isoString: string): string {
   });
 }
 
-export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBrowserProps) {
-  const { activeProjectId } = useProjects();
-  const projectId = projectIdProp === undefined ? activeProjectId : projectIdProp;
+export function FileBrowser({ source, rowActions }: FileBrowserProps) {
+  // Primitives for effect deps: hosts may pass a fresh object every render.
+  const sourceKind = source?.kind ?? null;
+  const sourceId = source?.id ?? null;
   const {
     currentPath,
     files,
@@ -110,7 +161,9 @@ export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBr
     createFolder,
     refresh,
     silentRefresh,
-  } = useFileBrowser(conversationId);
+    showHidden,
+    setShowHidden,
+  } = useFileBrowser(source);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -119,12 +172,15 @@ export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBr
   const [newFolderModalOpen, setNewFolderModalOpen] = useState(false);
   // Dotfiles (e.g. machine-written `.responses/`, scratch `.temp/`) are hidden
   // by default to keep the listing clean; the toolbar toggle reveals them.
-  // Component-local like the Sidebar conversation filter -- holds its state
-  // across re-renders, resets if the component remounts.
-  const [showHidden, setShowHidden] = useState(false);
+  // Kept per file space in FileBrowserStateContext (via useFileBrowser), so
+  // the Chat Files and Project Files cards toggle independently.
 
   // Only show loading state for buttons during initial load (no files yet)
   const isInitialLoading = loading && files.length === 0;
+
+  // Root-relative path of a row in the current directory.
+  const entryPath = (item: FileEntry) =>
+    currentPath === '/' ? `/${item.name}` : `${currentPath}/${item.name}`;
 
   // Files actually rendered: drop dot-prefixed entries unless the user has
   // toggled "show hidden" on. Filtering is purely client-side -- the list
@@ -137,23 +193,17 @@ export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBr
   const hiddenCount = files.length - visibleFiles.length;
 
   // Auto-refresh when the BE publishes a ``file_list_changed`` per-user
-  // global. Filters by scope/id so only events relevant to the active
-  // conversation (or its project, for project-scoped writes) trigger a
-  // refetch. A short debounce coalesces bursts (e.g. multiple
-  // write_workspace_file in one turn) into a single silent fetch.
+  // global. Filters by scope/id so only events for this card's own space
+  // trigger a refetch (see fileListEventMatchesSource). A short debounce
+  // coalesces bursts (e.g. several write_file calls in one turn) into a
+  // single silent fetch.
   useEffect(() => {
-    if (!conversationId) return;
+    if (!sourceKind || !sourceId) return;
+    const watched: FileSource = { kind: sourceKind, id: sourceId };
     let timer: ReturnType<typeof setTimeout> | null = null;
     const unsubscribe = persistentWebSocket.onGlobalEvent((event) => {
       if (event.type !== 'file_list_changed') return;
-      const evScope = event.scope as string | undefined;
-      const evConv = event.conversation_id as string | undefined;
-      const evProject = event.project_id as string | null | undefined;
-
-      const matches =
-        (evScope === 'project' && !!evProject && evProject === projectId)
-        || (evScope === 'conversation' && evConv === conversationId);
-      if (!matches) return;
+      if (!fileListEventMatchesSource(event, watched)) return;
 
       if (timer !== null) clearTimeout(timer);
       timer = setTimeout(() => {
@@ -165,7 +215,7 @@ export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBr
       unsubscribe();
       if (timer !== null) clearTimeout(timer);
     };
-  }, [conversationId, projectId, silentRefresh]);
+  }, [sourceKind, sourceId, silentRefresh]);
 
   // Close meatball menu on click outside
   useEffect(() => {
@@ -278,8 +328,8 @@ export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBr
     if (item.type === 'folder') {
       // Get file count for folder before confirming
       try {
-        if (!conversationId) return;
-        const info = await getFileInfo(conversationId, filePath);
+        if (!source) return;
+        const info = await getFileInfo(source, filePath);
         const confirmed = window.confirm(
           `Delete folder "${item.name}"? This will delete ${info.fileCount} file${info.fileCount !== 1 ? 's' : ''}.`
         );
@@ -299,20 +349,17 @@ export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBr
     } catch {
       // Error is handled in the hook
     }
-  }, [currentPath, conversationId, deleteItem]);
+  }, [currentPath, source, deleteItem]);
 
-  // No workspace handle. Inside a project this means the project has no
-  // conversations yet (the home composer is open in an empty project), so
-  // the workspace is empty too -- say so rather than asking the user to
-  // select a conversation they cannot see.
-  if (!conversationId) {
+  // No file space: nothing to browse until a conversation is selected.
+  if (!source) {
     return (
       <div className="file-browser">
         <div className="file-browser-header">
-          <h3>{projectId ? 'Project Files' : 'Files'}</h3>
+          <h3>{fileBrowserTitle(null)}</h3>
         </div>
         <div className="file-browser-empty">
-          <p>{projectId ? 'No files yet' : 'Select a conversation to browse files'}</p>
+          <p>Select a conversation to browse files</p>
         </div>
       </div>
     );
@@ -327,11 +374,11 @@ export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBr
     >
       {/* Header with title */}
       <div className="file-browser-header">
-        <h3>{projectId ? 'Project Files' : 'Workspace Files'}</h3>
+        <h3>{fileBrowserTitle(source)}</h3>
         <div className="file-browser-header-actions">
           <button
             className={`hidden-toggle-button${showHidden ? ' active' : ''}`}
-            onClick={() => setShowHidden((v) => !v)}
+            onClick={() => setShowHidden(!showHidden)}
             title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
             aria-pressed={showHidden}
           >
@@ -464,8 +511,12 @@ export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBr
                 {hiddenCount} hidden item{hiddenCount !== 1 ? 's' : ''}. Toggle "Show hidden files" to reveal {hiddenCount !== 1 ? 'them' : 'it'}.
               </p>
             ) : (
-              <p className="drop-hint">You can drop or upload files and folders here for the agent to work on.
-                Files created by the agent will also appear here.</p>
+              <p className="drop-hint">
+                {source.kind === 'project'
+                  ? 'Shared by every chat in this project; chats reach these files as proj:// paths. You can drop or upload files and folders here.'
+                  : <>You can drop or upload files and folders here for the agent to work on.
+                    Files created by the agent will also appear here.</>}
+              </p>
             )}
           </div>
         ) : (
@@ -531,6 +582,20 @@ export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBr
                         Download as Zip
                       </button>
                     )}
+                    {rowActions?.({ entry: item, path: entryPath(item), source }).map((action) => (
+                      <button
+                        key={action.key}
+                        className={`file-menu-item${action.danger ? ' file-menu-item-danger' : ''}`}
+                        disabled={action.disabled}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenMenuItemName(null);
+                          action.onSelect();
+                        }}
+                      >
+                        {action.label}
+                      </button>
+                    ))}
                     <button
                       className="file-menu-item file-menu-item-danger"
                       onClick={(e) => handleDeleteClick(e, item)}
@@ -567,10 +632,10 @@ export function FileBrowser({ conversationId, projectId: projectIdProp }: FileBr
       />
 
       {/* File viewer modal */}
-      {conversationId && viewerFile && (
+      {viewerFile && (
         <FileViewerModal
           isOpen={!!viewerFile}
-          conversationId={conversationId}
+          source={source}
           filePath={viewerFile.path}
           fileName={viewerFile.name}
           isImage={viewerFile.isImage}

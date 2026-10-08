@@ -21,6 +21,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { FileBrowser } from './FileBrowser';
+import { conversationSource, projectSource } from '../api/fileApi';
 import { ProjectTables } from './ProjectTables';
 import { useProjects } from '../contexts/ProjectsContext';
 import { fetchProjectConversations } from '../api/client';
@@ -259,7 +260,7 @@ export function RightPanel({ conversationId, projectId: urlProjectId }: RightPan
           title="Drag to resize"
         />
         <div className="right-panel-section right-panel-card" style={{ flex: 1 }}>
-          <FileBrowser conversationId={workspaceConversationId} projectId={null} />
+          <FileBrowser source={workspaceConversationId ? conversationSource(workspaceConversationId) : null} />
         </div>
       </div>
     );
@@ -277,7 +278,9 @@ export function RightPanel({ conversationId, projectId: urlProjectId }: RightPan
         className="right-panel-section right-panel-card"
         style={{ height: `${splitPercent}%`, flex: 'none' }}
       >
-        <FileBrowser conversationId={workspaceConversationId} projectId={projectId} />
+        <FileBrowser
+          source={workspaceConversationId ? conversationSource(workspaceConversationId) : projectSource(projectId)}
+        />
       </div>
       <div
         className="right-panel-divider"
