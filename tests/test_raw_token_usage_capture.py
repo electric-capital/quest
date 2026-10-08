@@ -758,6 +758,36 @@ def test_usage_by_model_prices_long_context_per_call(_isolated_db):
     assert entry["total"]["estimated_cost_usd"] == pytest.approx(1.43, abs=1e-6)
 
 
+def test_usage_by_model_prices_haiku_5_5_at_its_100k_threshold(_isolated_db):
+    """Haiku 5.5 switches tier above 100K prompt tokens, not the default 200K.
+
+    Calls: 50K input (short tier: $0.10/$0.50) and 150K split across input,
+    cache read and cache creation (long tier: $0.50/$2.50, cache read 0.1x,
+    5m write 1.25x). A 150K call would stay in the short tier under the
+    default threshold, so this fails if the per-model CASE regresses.
+    """
+    store, models_mod = _isolated_db
+    conv = str(uuid.uuid4())
+
+    _record_anthropic(store, models_mod, conv, "claude-haiku-5-5",
+                      models_mod.ApiCallType.TOP_LEVEL,
+                      input_tokens=50_000, output_tokens=1_000)
+    _record_anthropic(store, models_mod, conv, "claude-haiku-5-5",
+                      models_mod.ApiCallType.TOP_LEVEL,
+                      input_tokens=50_000, output_tokens=1_000,
+                      cache_read=60_000, cache_creation=40_000,
+                      creation_5m=40_000)
+
+    result = _run(store.get_usage_by_model_for_conversations([conv]))
+    m = result[conv]["models"][0]
+    short = (50_000 * 0.10 + 1_000 * 0.50) / 1e6
+    long_ = (
+        50_000 * 0.50 + 60_000 * 0.05 + 40_000 * 0.625 + 1_000 * 2.50
+    ) / 1e6
+    assert m["call_count"] == 2
+    assert m["estimated_cost_usd"] == pytest.approx(short + long_, abs=1e-9)
+
+
 # ---------------------------------------------------------------------------
 # Pricing table (db/llm_pricing.py) -- pure functions, no DB
 # ---------------------------------------------------------------------------

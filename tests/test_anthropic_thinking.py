@@ -178,6 +178,28 @@ def test_sonnet_5_5_request_carries_adaptive_thinking_and_high_effort():
     assert "tool_choice" not in fake.captured_kwargs  # forced tool use 400s
 
 
+def test_haiku_5_5_request_carries_adaptive_thinking_and_medium_effort():
+    """Haiku 5.5 thinks by default; the registry pins its effort at the
+    model's own ``medium`` default and the 128K output cap. Sampling params
+    400 on this model, so the request must not carry any."""
+    provider = AnthropicProvider()
+    session = _make_session(provider, "claude-haiku-5-5")
+    events = [
+        _message_start(),
+        _block_start("text"),
+        _delta("text_delta", text="hi"),
+        _BLOCK_STOP,
+    ]
+    _, fake = _run_stream(provider, session, "hello", events)
+
+    assert fake.captured_kwargs["model"] == "claude-haiku-5-5"
+    assert fake.captured_kwargs["max_tokens"] == 128_000
+    assert fake.captured_kwargs["thinking"] == {"type": "adaptive"}
+    assert fake.captured_kwargs["output_config"] == {"effort": "medium"}
+    for param in ("temperature", "top_p", "top_k", "tool_choice"):
+        assert param not in fake.captured_kwargs
+
+
 def test_model_without_thinking_effort_sends_no_thinking_config():
     provider = AnthropicProvider()
     session = _make_session(provider, "claude-sonnet-5")

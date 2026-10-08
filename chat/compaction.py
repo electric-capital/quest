@@ -681,7 +681,7 @@ def estimate_compaction_cost_usd(
     try:
         from chat.gemini_api.history import _load_sdk_history
         from chat.llm.config import get_provider_for_model
-        from db.llm_pricing import LONG_CONTEXT_THRESHOLD, estimate_cost_usd
+        from db.llm_pricing import estimate_cost_usd, long_context_threshold
 
         loaded = _load_sdk_history(conversation_id)
         if loaded is None:
@@ -709,7 +709,9 @@ def estimate_compaction_cost_usd(
             }
         cost = estimate_cost_usd(
             provider_name, model, metrics,
-            long_context=input_tokens > LONG_CONTEXT_THRESHOLD,
+            long_context=(
+                input_tokens > long_context_threshold(provider_name, model)
+            ),
         )
         return round(cost, 2) if cost is not None else None
     except Exception:

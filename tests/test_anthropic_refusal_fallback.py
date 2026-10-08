@@ -87,6 +87,26 @@ def test_sonnet_5_5_resolves_sonnet_5_fallback_chain():
     assert provider._get_fallback_chain("claude-sonnet-5-5") == ("claude-sonnet-5",)
 
 
+def test_haiku_5_5_resolves_haiku_4_5_fallback_chain():
+    provider = AnthropicProvider()
+    assert provider._get_fallback_chain("claude-haiku-5-5") == ("claude-haiku-4.5",)
+
+
+def test_haiku_5_5_fallback_hop_turns_thinking_off_for_haiku_4_5():
+    """Haiku 4.5 rejects adaptive thinking and effort, so the hop must unset
+    both and drop max_tokens to Haiku 4.5's own cap."""
+    provider = AnthropicProvider()
+    entries = provider._build_fallback_entries(
+        provider._get_fallback_chain("claude-haiku-5-5")
+    )
+    assert entries == [{
+        "model": "claude-haiku-4-5",
+        "max_tokens": 8_192,
+        "thinking": None,
+        "output_config": None,
+    }]
+
+
 def test_models_without_config_have_no_chain():
     provider = AnthropicProvider()
     assert provider._get_fallback_chain("claude-sonnet-5") == ()

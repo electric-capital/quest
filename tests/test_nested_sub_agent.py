@@ -99,7 +99,16 @@ def _run(coro_factory):
 class TestNestedAllowedConstant:
     def test_haiku_and_flash_lite_allowed(self):
         assert "claude-haiku-4.5" in NESTED_SUB_AGENT_ALLOWED_MODELS
+        assert "claude-haiku-5-5" in NESTED_SUB_AGENT_ALLOWED_MODELS
         assert "gemini-3.5-flash-lite" in NESTED_SUB_AGENT_ALLOWED_MODELS
+
+    def test_tool_schema_copies_match_constants(self):
+        # tool_schemas.py duplicates both sets to dodge a circular import.
+        from chat.gemini_api import constants
+        from chat.llm import tool_schemas
+
+        assert tool_schemas.NESTED_SUB_AGENT_ALLOWED_MODELS == NESTED_SUB_AGENT_ALLOWED_MODELS
+        assert tool_schemas.TEMPLATE_BATCH_ALLOWED_MODELS == constants.TEMPLATE_BATCH_ALLOWED_MODELS
 
     def test_pro_and_sonnet_not_allowed(self):
         assert "gemini-3.1-pro-preview" not in NESTED_SUB_AGENT_ALLOWED_MODELS
