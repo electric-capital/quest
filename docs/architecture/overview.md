@@ -204,7 +204,7 @@ The frontend is a modern single-page application built with:
   - Upload files and folders via drag-and-drop (folders recursively traversed via `directoryTraversal.ts`), upload files via Upload Files button, create new folders in the current path via New Folder button (opens `NewFolderModal`), download files, download folders as zip
   - Inline viewing of text files (`.md`, `.py`, `.txt`), images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp`, `.bmp`, `.ico`, `.avif`), and PDFs (`.pdf`, via the pdf.js-based `PdfViewer` with thumbnail rail) via FileViewerModal, with Save to Drive for `.md` files
   - Folder navigation with back/forward/up buttons
-  - One card per file space (`source` prop): Chat Files (the conversation workspace) and, in project conversations, Project Files (the project workspace), with Copy / Move between them
+  - One card per file space (`source` prop): Chat Files (the conversation workspace) and, in project conversations and the home composer drilled into a project, Project Files (the project workspace; the drilled home composer shows Project Files + Tables without Chat Files), with Copy / Move between them
   - Per-space path and show-hidden state via `FileBrowserStateContext`
   - Auto-refresh on `file_list_changed` per-user globals (emitted by workspace-mutating tools and REST routes), filtered by the card's own space (`scope` + conversation / project id), with a 200ms debounce
   - Structured error display for partial upload failures
