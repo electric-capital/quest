@@ -41,12 +41,13 @@ data/
 ├── inference_credentials/  # Admin-managed per-provider LLM API keys (encrypted)
 ├── projects/
 │   └── {project_id}/
-│       └── workspace/      # Shared workspace for all conversations in a project
+│       └── workspace/
+│           └── workspace/  # Project workspace shared by the project's conversations (doubled segment is historical)
 └── chats/
     └── {conversation_id}/  # Per-conversation directory (flat layout, one UUID per folder)
         ├── chat_history.json
         ├── sdk_history.json
-        └── workspace/      # Standalone conversation workspace
+        └── workspace/      # Conversation workspace (every conversation, project ones included)
 ```
 
 ## Environment Variables

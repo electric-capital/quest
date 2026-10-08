@@ -59,8 +59,9 @@ per call with a paginate-via-`next_cursor` notice merged into the JSON
 result.
 
 `send_slack_dm_to_self` sends a bot-delivered DM to the user themselves
-(no approval; optional workspace-file attachments via Slack's external
-upload flow, max 10 files / 50 MB each). It is the one connector tool
+(no approval; optional conversation-workspace file attachments via
+Slack's external upload flow, max 10 files / 50 MB each; in a project
+conversation project files must be copied in first with `copy_file`). It is the one connector tool
 allowed in public-project conversations, via the core-owned
 `_PUBLIC_ALLOWLIST_MIGRATED_TOOLS` exemption in `config/plugins.py`.
 Because the text is model-written and never shown on an approval card,
