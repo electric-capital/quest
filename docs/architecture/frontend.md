@@ -2793,19 +2793,18 @@ If the session check fails, the frontend renders the `SignInScreen` component in
 
 ## Right Panel (File Browser and Project Tables)
 
-The right panel displays and manages files in each conversation's workspace directory, and for project conversations, also shows a project database table browser. The `RightPanel` component (`frontend/src/components/RightPanel.tsx`) wraps both sections, splitting them vertically with a draggable divider when a project is active. Without a project, only the FileBrowser is rendered at full height.
+The right panel shows the file spaces of what is on screen as floating cards, plus the project database table browser for projects. The `RightPanel` component (`frontend/src/components/RightPanel.tsx`) picks the card set:
 
-The panel header displays "Project Files" when the browsed workspace belongs to a project (the `projectId` prop RightPanel passes to `FileBrowser`, falling back to `activeProjectId` from `ProjectsContext` when a host omits it) and "Workspace Files" otherwise. The whole panel is horizontally resizable via a drag handle on its left edge; see the RightPanel Component section for the persisted-width behavior.
+| On screen | Cards |
+|-----------|-------|
+| Project conversation | **Chat Files** (`FileBrowser` over the conversation's own workspace, `/conversations/{cid}/files...`), **Project Files** (`FileBrowser` over the project's shared workspace, `/projects/{pid}/files...`), **Tables** (`ProjectTables`) |
+| Standalone conversation | **Chat Files** alone, full height |
+| Home composer while the Sidebar is drilled into a project (URL `/`, no conversation yet) | **Project Files** and **Tables**, served by the project routes |
+| Nothing | the `FileBrowser` empty state ("Select a conversation to browse files") |
 
-**Home composer inside a project:** when the root [Home Screen](#home-screen-homecomposer) is on screen while the Sidebar is drilled into a project (URL `/`, so the URL-derived `projectId` prop is null and there is no conversation yet), the panel still shows that project's workspace and tables instead of the standalone empty state.
+Each `FileBrowser` takes a `source` prop (`conversationSource(cid)` / `projectSource(pid)` from `api/fileApi.ts`) that selects its routes, its title and its `file_list_changed` filter; see [File Browser API](../api/file-browser-api.md). Without a conversation `RightPanel` falls back to the context `drilledProjectId` (with a live conversation the URL always wins, so a standalone chat viewed while the Sidebar is drilled never grows project cards). The whole panel is horizontally resizable via a drag handle on its left edge; see the RightPanel Component section for the persisted width and split.
 
-`RightPanel` falls back to the context `drilledProjectId` whenever it has no conversation (with a live conversation the URL always wins, so a standalone chat viewed while the Sidebar is drilled never grows project cards).
-
-Every file endpoint is keyed by conversation id. Since the per-conversation workspace change the conversation file routes serve the conversation's OWN workspace (`ChatStorage.get_conversation_workspace_root`) also for project conversations, so the borrowed handle below shows that conversation's files until the frontend gains a Project Files card backed by project file routes.
-
-The panel therefore borrows the id of any existing conversation of that project (`useProjectWorkspaceProxy`: one `fetchProjectConversations(projectId, includeArchived=true)` call, first row, result discarded when the project changes mid-flight) as the `FileBrowser`'s workspace handle. Uploads, downloads, deletes and the `file_list_changed` refresh (matched on the passed `projectId`) all work against that shared directory.
-
-A project with no conversations at all has nothing to borrow, so `FileBrowser` renders a "Project Files" header with a "No files yet" empty state rather than the "Select a conversation to browse files" placeholder.
+**Copy / Move between the two file cards:** in a project conversation each row's actions menu gains "Copy to project" / "Move to project" on the Chat Files card and "Copy to chat" / "Move to chat" on the Project Files card, supplied through the `FileBrowser` `rowActions` prop by `useWorkspaceCopy` (`frontend/src/hooks/useWorkspaceCopy.ts`). They call `copyFileToProject` / `copyFileFromProject` (the copy routes, same relative path on the other side, `includeHidden` following the source card's show-hidden toggle). Rows in the conversation scratch roots (`.responses/`, `.subagent_responses/`, `pasted/`) get no to-project items, mirroring the route's `forbidden_source` rule. A `409 destination_exists` opens an overwrite confirm (`DocConfirmDialog`) that retries with `overwrite: true`; other failures, and a move whose copy landed but whose source could not be removed (`moved: false`), show as a dismissible notice on the card the action started from (`FileBrowser` `notice` prop), as does a copy that reports `skipped` entries (dot-entries left out, symlinks, special files). Row actions are disabled while their copy is in flight or the overwrite prompt is open; results arriving after a conversation switch are dropped. Both cards refresh from the `file_list_changed` events the copy routes publish for each scope. Standalone chats and the drilled home composer get no Copy / Move items.
 
 ### Overview
 
@@ -2825,7 +2824,8 @@ The file browser provides a right-side panel in the chat interface that allows u
 
 | File | Description |
 |------|-------------|
-| `frontend/src/components/RightPanel.tsx` | Wrapper that splits right panel between FileBrowser and ProjectTables with a draggable divider; persists the vertical split position per project to localStorage; also owns the panel's horizontal width with a left-edge drag handle, persisted browser-wide to localStorage |
+| `frontend/src/components/RightPanel.tsx` | Wrapper that picks the card set (Chat Files / Project Files / Tables, see above) and stacks the cards with draggable dividers; persists the vertical split per project to localStorage; renders the Copy / Move overwrite confirm; also owns the panel's horizontal width with a left-edge drag handle, persisted browser-wide to localStorage |
+| `frontend/src/hooks/useWorkspaceCopy.ts` | Copy / Move between Chat Files and Project Files in a project conversation: both cards' `rowActions`, the 409 overwrite prompt state, per-card notices, actions disabled while their copy is in flight |
 | `frontend/src/components/RightPanel.css` | RightPanel styling (transparent gutter column; `.right-panel-card` floating-card chrome for each unit; hover-revealed `::after` pills on the left-edge width handle `.right-panel-resize-handle` and the inter-card `.right-panel-divider`, kept visible mid-drag by `.resizing-width` / `.resizing-split`) |
 | `frontend/src/components/FileBrowser.tsx` | Main file browser UI component (supports file and folder drag-and-drop, opens FileViewerModal for viewable files including JSON and images, folder download as zip, split Upload Files + New Folder action buttons with Lucide icons, opens NewFolderModal on click, hides dot-prefixed entries by default behind a stateful Eye/EyeOff toggle); uses Lucide icons via `getFileIconInfo()` for extension-specific file icons and `Folder` for directories |
 | `frontend/src/components/FileBrowser.css` | File browser styling (flex layout, multi-line error display, upload progress bar, zipping notification bar, equal-width action button row via `.file-browser-action-buttons` / `.action-button`, show-hidden toggle button, hidden-count empty-state hint, and 16 icon color classes for file-type icons in dark/light mode) |
@@ -2861,10 +2861,12 @@ The file browser provides a right-side panel in the chat interface that allows u
 The main file browser panel displayed on the right side of the chat interface.
 
 **Props Interface**:
-- `conversationId`: Current conversation ID
+- `source`: the file space browsed (`{kind: 'conversation', id}` or `{kind: 'project', id}`), or null for the empty state
+- `rowActions`: optional extra row-menu items (rendered between the Download items and Delete); RightPanel passes the Copy / Move items here
+- `notice` / `onDismissNotice`: optional host message shown under the toolbar (`error` or `warning` tone), used for Copy / Move results
 
 **Features**:
-- Context-aware header: shows "Project Files" when the conversation belongs to a project, "Workspace Files" otherwise (reads `activeProjectId` from `ProjectsContext`)
+- Header by source: "Chat Files" for a conversation, "Project Files" for a project
 - List view of files and folders with extension-specific Lucide icons (folders use `Folder` icon; files use `getFileIconInfo()` from `frontend/src/utils/fileIcons.ts` to select icon and color class by extension)
 - File metadata display (size, modification date)
 - Click-to-view for text files, JSON files, images, PDFs, and CSVs: clicking a viewable file opens a `FileViewerModal`. Text files (`.md`, `.py`, `.txt`, `.json`), image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp`, `.bmp`, `.ico`, `.avif`), PDFs (`.pdf`), and CSVs (`.csv`) are viewable.
@@ -2883,7 +2885,7 @@ The main file browser panel displayed on the right side of the chat interface.
 - Navigation controls (back, forward, up buttons)
 - Current path breadcrumb display
 - Hidden-entry filtering: files and folders whose names start with `.` (e.g. `.responses/`, `.temp/`) are filtered out of the rendered list by default. A stateful Eye/EyeOff toolbar toggle reveals/hides them, and an empty-state hint reports how many hidden items exist. This is purely client-side -- the list REST endpoint (`chat/file_routes.py`) still returns every entry; see [File Browser API](../api/file-browser-api.md)
-- Silent auto-refresh on `file_list_changed` per-user globals (200ms debounce; no loading flicker), filtered by active conversation / project. See [Realtime Architecture](realtime.md)
+- Silent auto-refresh on `file_list_changed` per-user globals (200ms debounce; no loading flicker), filtered by the card's own space (scope `conversation` + its conversation id, or scope `project` + its project id). See [Realtime Architecture](realtime.md)
 - Loading and error states
 - Structured error display: when some files in a batch fail, errors are shown in a scrollable list with per-file details (summary line plus individual error items)
 
@@ -3101,16 +3103,15 @@ In-modal PDF preview built directly on pdfjs-dist (no wrapper library). Receives
 Wrapper component that replaced the direct `<FileBrowser>` usage in `App.tsx`. Receives both `conversationId` and the URL-derived `projectId` as props, and reads `drilledProjectId` from `ProjectsContext`.
 
 **Behavior**:
-- Without a project: renders FileBrowser at full height
-- With a project: splits vertically into FileBrowser (top) and ProjectTables (bottom) with a draggable divider
-- No conversation (home composer) while the Sidebar is drilled into a project: treats the drilled project as the active one and hands FileBrowser a borrowed conversation id from that project as the shared-workspace handle (see "Home composer inside a project" above)
-- Split position is persisted to `localStorage` per project (key: `quest_project_tables_split_{projectId}`, default 60%)
-- Minimum panel height enforced at 80px during drag
+- Card set by what is on screen (see the table at the top of this section): one card for a standalone chat or nothing, two for the drilled home composer, three for a project conversation
+- Cards are flex items weighted by their share of the cards' free space (panel height minus padding and gaps; percentages summing to 100), each with an 80px `min-height`; each gap between two cards is a pointer-event drag handle (`setPointerCapture`, `touch-action: none`, so touch drags work in the MobileShell drawer too) that moves only the boundary between its two neighbours, delta-based so pointer-down never jumps
+- The split is persisted to `localStorage` per project, one key per layout: the two-card layout keeps `quest_project_tables_split_{projectId}` (top card's percentage, default 60%); the three-card layout uses `quest_project_panel_split3_{projectId}` (JSON `[chatPercent, projectPercent]`, Tables takes the rest, default `[40, 35]`) and, until first dragged, derives its shares from the two-card key (Tables keeps its old share, the file area is split evenly); loaded shares are renormalised so none is below 5% (garbage or out-of-range values fall back to the defaults), and a split is saved only when a drag actually moved it
+- During a drag the 80px minimum is measured against the free space; a pair of cards too small for two minimums is split evenly
 - FileBrowser.css uses flex layout (dimensions controlled by RightPanel) rather than fixed width/height
 
 **Floating cards**:
 - The `.right-panel` column is a transparent gutter (padding on the top/right/bottom, none on the left) hosting each unit -- FileBrowser and ProjectTables -- as a `.right-panel-card` (raised `--surface-raised` background, `--border` edge, 12px radius, `--shadow-card`); `FileBrowser.css` / `ProjectTables.css` containers are transparent and their `h3` titles are small uppercase labels
-- Both resize affordances are invisible until needed: the left-edge width handle (`.right-panel-resize-handle`, 12px hit area straddling the panel edge) and the gap between the two cards (`.right-panel-divider`, `row-resize`) draw a short pill via `::after` that fades in while the panel is hovered, turns accent on handle hover, and stays visible during a drag via the `resizing-width` / `resizing-split` classes RightPanel sets on the container from a `resizing` state
+- Both resize affordances are invisible until needed: the left-edge width handle (`.right-panel-resize-handle`, 12px hit area straddling the panel edge) and each gap between two cards (`.right-panel-divider`, `row-resize`) draw a short pill via `::after` that fades in while the panel is hovered, turns accent on handle hover (and on the divider being dragged, `.active`), and stays visible during a drag via the `resizing-width` / `resizing-split` classes RightPanel sets on the container from a `resizing` state
 
 **Horizontal resize**:
 - The panel's width is user-adjustable via the `col-resize` drag handle on its LEFT edge (`.right-panel-resize-handle`)
@@ -3121,7 +3122,7 @@ Wrapper component that replaced the direct `<FileBrowser>` usage in `App.tsx`. R
 
 #### 8. ProjectTables Component (`src/components/ProjectTables.tsx`)
 
-Lists user-created tables in the project's SQLite database. Rendered in the bottom portion of the RightPanel for project conversations.
+Lists user-created tables in the project's SQLite database. Rendered as the bottom card of the RightPanel for project conversations and for the home composer drilled into a project.
 
 **Props**: `projectId` (string or null; renders nothing when null)
 
@@ -3176,15 +3177,15 @@ app-container
 ├── main-content (flex-grow)
 │   ├── ChatPanel (message display and input)
 │   └── HomeComposer (if no conversation)
-└── RightPanel (right panel, if conversation selected; header shows "Project Files" or "Workspace Files"; horizontally resizable via left-edge handle, width persisted browser-wide to localStorage)
+└── RightPanel (right panel; Chat Files / Project Files / Tables cards by what is on screen; horizontally resizable via left-edge handle, width persisted browser-wide to localStorage)
     ├── Left-edge horizontal-resize handle (col-resize)
-    ├── FileBrowser (top, or full height if no project)
+    ├── FileBrowser (Chat Files card and/or Project Files card, see Right Panel)
     │   ├── Navigation controls
     │   ├── Current path
     │   ├── File list (click viewable text, image, PDF, or CSV files to open modal)
     │   └── FileViewerModal (portal to document.body, full-screen overlay; text, image, PDF via PdfViewer, or CSV-as-sortable-table rendering)
     ├── Draggable divider (if project conversation; split persisted to localStorage)
-    └── ProjectTables (bottom, if project conversation)
+    └── ProjectTables (bottom card, project conversation or drilled home composer)
         ├── Table list (auto-refreshes on WebSocket events)
         └── TableViewerModal (portal to document.body; table data with pagination)
 ```

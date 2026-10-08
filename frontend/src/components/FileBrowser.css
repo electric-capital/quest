@@ -226,6 +226,54 @@
   white-space: nowrap;
 }
 
+/* Host notice (Copy / Move results from RightPanel): same band as the error
+   display, with a dismiss button. Error tone reuses the error colours; the
+   warning tone (copy landed, move incomplete) uses the accent tint. */
+.file-browser-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  border-bottom: 1px solid var(--border);
+}
+
+.file-browser-notice-error {
+  color: #ff6b6b;
+  background-color: rgba(255, 107, 107, 0.1);
+}
+
+.file-browser-notice-warning {
+  color: var(--text);
+  background-color: var(--accent-soft);
+}
+
+.file-browser-notice-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.file-browser-notice-dismiss {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.file-browser-notice-dismiss:hover {
+  opacity: 1;
+  background-color: var(--hover);
+}
+
 /* Loading state */
 .file-browser-loading {
   padding: 2rem 1rem;
@@ -569,6 +617,11 @@
     color: #d32f2f;
     background-color: rgba(211, 47, 47, 0.1);
     border-bottom-color: rgba(0, 0, 0, 0.1);
+  }
+
+  .file-browser-notice-error {
+    color: #d32f2f;
+    background-color: rgba(211, 47, 47, 0.1);
   }
 
   .file-browser-loading,

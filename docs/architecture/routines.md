@@ -191,6 +191,9 @@ Routines and their schedules are cleaned up in multiple scenarios:
 **Why scope routines to projects instead of making them global?**
 Routines are designed for repetitive tasks within a specific project context. Scoping them to projects keeps the UI organized (routines appear in the project drill-down) and ensures the routine's prompt makes sense in the context of the project's shared workspace and guide.
 
+**Why do runs not share files by default?**
+Every run is a fresh project conversation, and its files land in that run's own Chat Files space. A routine whose runs build on each other (a report appended weekly, a state file read back next run) names the project space in its prompt, e.g. "read `proj://state.json`, write `proj://reports/weekly.md`". The Prompt field of New Routine and Routine Settings says so in a help line (`ROUTINE_PROMPT_FILES_HINT` in `frontend/src/constants/routines.ts`).
+
 **Why denormalize `user_id` on the routines table?**
 The `user_id` column is technically derivable from `project_id` (via the project's `user_id`), but storing it directly on the routine enables fast per-user queries (e.g., `delete_all_user_routines()` during account deletion) without joining through the projects table.
 

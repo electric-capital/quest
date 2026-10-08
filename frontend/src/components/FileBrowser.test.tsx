@@ -238,7 +238,7 @@ describe('rowActions extension point', () => {
     const labels = screen.getAllByRole('button').map((b) => b.textContent);
     expect(labels.indexOf('Copy to project')).toBeGreaterThan(labels.indexOf('Download'));
     expect(labels.indexOf('Copy to project')).toBeLessThan(labels.indexOf('Delete'));
-    expect(rowActions).toHaveBeenCalledWith({ entry: entry('a.csv'), path: '/a.csv', source: CHAT });
+    expect(rowActions).toHaveBeenCalledWith({ entry: entry('a.csv'), path: '/a.csv', source: CHAT, showHidden: false });
 
     fireEvent.click(screen.getByRole('button', { name: 'Copy to project' }));
     expect(onSelect).toHaveBeenCalledTimes(1);
@@ -312,5 +312,24 @@ describe('project-card downloads', () => {
     expect(mocks.downloadFolder).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Acknowledge and Download' }));
     await waitFor(() => expect(mocks.downloadFolder).toHaveBeenCalledWith(PROJECT, '/out'));
+  });
+});
+
+describe('host notice', () => {
+  it('renders the notice with its tone and a dismiss button', async () => {
+    serveListing({ 'conversation:c1:/': [entry('a.csv')] });
+    const onDismiss = vi.fn();
+    renderCards(
+      <FileBrowser
+        source={CHAT}
+        notice={{ message: 'Could not copy "a.csv" to Project Files: nope', tone: 'error' }}
+        onDismissNotice={onDismiss}
+      />,
+    );
+    const notice = await screen.findByRole('alert');
+    expect(notice.className).toContain('file-browser-notice-error');
+    expect(notice.textContent).toContain('Could not copy "a.csv" to Project Files: nope');
+    fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss' }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });

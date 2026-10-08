@@ -15,7 +15,7 @@ import { extractFilesFromDataTransfer } from '../utils/directoryTraversal';
 import { getFileIconInfo } from '../utils/fileIcons';
 import { FileViewerModal } from './FileViewerModal';
 import { NewFolderModal } from './NewFolderModal';
-import { Folder, Upload, FolderPlus, Eye, EyeOff } from 'lucide-react';
+import { Folder, Upload, FolderPlus, Eye, EyeOff, X } from 'lucide-react';
 import type { FileEntry } from '../api/types';
 import './FileBrowser.css';
 
@@ -61,6 +61,8 @@ export interface FileRowContext {
   path: string;
   /** The space the card browses. */
   source: FileSource;
+  /** Whether the card currently shows dot-named entries (its Eye toggle). */
+  showHidden: boolean;
 }
 
 /**
@@ -91,6 +93,18 @@ interface FileBrowserProps {
    * whose menu is open; return [] for none.
    */
   rowActions?: (row: FileRowContext) => FileRowAction[];
+  /**
+   * A host-owned message shown under the toolbar (e.g. a failed Copy / Move
+   * started from this card), dismissed through `onDismissNotice`.
+   */
+  notice?: FileBrowserNotice | null;
+  onDismissNotice?: () => void;
+}
+
+/** A host-owned card message: `error` in the error style, `warning` in the accent tint. */
+export interface FileBrowserNotice {
+  message: string;
+  tone: 'error' | 'warning';
 }
 
 /** Card title for a file space. */
@@ -134,7 +148,7 @@ function formatDate(isoString: string): string {
   });
 }
 
-export function FileBrowser({ source, rowActions }: FileBrowserProps) {
+export function FileBrowser({ source, rowActions, notice, onDismissNotice }: FileBrowserProps) {
   // Primitives for effect deps: hosts may pass a fresh object every render.
   const sourceKind = source?.kind ?? null;
   const sourceId = source?.id ?? null;
@@ -499,6 +513,24 @@ export function FileBrowser({ source, rowActions }: FileBrowserProps) {
         </div>
       )}
 
+      {/* Host notice (Copy / Move results) */}
+      {notice && (
+        <div className={`file-browser-notice file-browser-notice-${notice.tone}`} role="alert">
+          <span className="file-browser-notice-text">{notice.message}</span>
+          {onDismissNotice && (
+            <button
+              type="button"
+              className="file-browser-notice-dismiss"
+              onClick={onDismissNotice}
+              title="Dismiss"
+              aria-label="Dismiss"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* File list */}
       <div className="file-list">
         {loading && files.length === 0 ? (
@@ -582,7 +614,7 @@ export function FileBrowser({ source, rowActions }: FileBrowserProps) {
                         Download as Zip
                       </button>
                     )}
-                    {rowActions?.({ entry: item, path: entryPath(item), source }).map((action) => (
+                    {rowActions?.({ entry: item, path: entryPath(item), source, showHidden }).map((action) => (
                       <button
                         key={action.key}
                         className={`file-menu-item${action.danger ? ' file-menu-item-danger' : ''}`}

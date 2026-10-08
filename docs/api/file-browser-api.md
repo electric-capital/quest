@@ -30,6 +30,7 @@ A path passed to one route set resolves only inside that set's workspace; neithe
 | `frontend/src/components/JsonTreeViewer.tsx` | Recursive collapsible tree viewer for JSON files with syntax coloring, expand/collapse toggles, and item count badges; dark/light mode support |
 | `frontend/src/components/JsonTreeViewer.css` | JsonTreeViewer styling (syntax colors, toggle controls, dark/light mode variants) |
 | `frontend/src/components/PdfViewer.tsx` | In-modal pdf.js PDF viewer (thumbnail rail + fit-to-width pages, lazy canvas rendering, self-hosted worker/assets); see [Frontend Architecture](../architecture/frontend.md#right-panel-file-browser-and-project-tables) |
+| `frontend/src/hooks/useWorkspaceCopy.ts` | Copy / Move row actions between the Chat Files and Project Files cards (copy routes, 409 overwrite prompt, per-card notices) |
 | `frontend/src/hooks/useFileBrowser.ts` | State management hook for file browser (includes `uploadFilesWithPaths` for folder uploads, `uploadPercent` state for progress tracking, `deleteItem` for file/folder deletion, `downloadFile` / `downloadFolder` behind the hidden-data download warning, and `createFolder` for creating new folders in the current path) |
 | `frontend/src/api/fileApi.ts` | Frontend API client functions (includes `xhrUpload()` helper for XHR-based uploads with progress callback, `uploadFiles()` and `uploadFilesWithPaths()` with `onProgress` parameter, `fetchFileContent()`, `getFileInfo()`, `deleteFile()`, `downloadFolder()`, `createFolder()`, `saveToDrive()`, and `saveBlobToDisk()` -- the temporary-anchor step every workspace download ends with) |
 | `frontend/src/contexts/DownloadWarningContext.tsx`, `frontend/src/hooks/useWorkspaceDownload.ts`, `frontend/src/utils/downloadWarnings.ts` | The hidden-data download warning: every UI download of a non-plain-text file (and every folder zip) is acknowledged in a modal before the fetch -- see [Frontend Architecture -- Workspace Download Warning](../architecture/frontend.md#workspace-download-warning) |
@@ -87,6 +88,8 @@ Endpoints under `/app/api/conversations/{conversation_id}/files`:
 
 A move whose copy completed but whose source removal failed is not an error: the route returns 200 with `moved: false` (the failure is logged); the source may be partly removed, since files are deleted one at a time.
 
+In the UI these routes back the "Copy to project" / "Move to project" (Chat Files card) and "Copy to chat" / "Move to chat" (Project Files card) row actions of a project conversation's right panel (`copyFileToProject` / `copyFileFromProject` in `frontend/src/api/fileApi.ts`, driven by `frontend/src/hooks/useWorkspaceCopy.ts`; `dest` is not sent, so the entry keeps its relative path; `include_hidden` follows the source card's show-hidden toggle; scratch-root rows get no to-project actions; a non-zero `skipped` is reported to the user). A 409 `destination_exists` asks the user to overwrite and retries with `overwrite: true`; see [Frontend -- Right Panel](../architecture/frontend.md#right-panel-file-browser-and-project-tables).
+
 A separate composer-attachment upload route, `POST /app/api/conversations/{id}/composer-attachments`, persists clipboard-pasted images (PNG/JPEG only) into `workspace/pasted/<attachment_id>.<ext>` ahead of the next `send_message` WS frame. It is documented under [Chat API -- Composer Attachments](chat-api.md#composer-attachments) rather than here because the lifecycle is tied to the composer/send path, not the generic file browser.
 
 All paths are validated to prevent directory traversal attacks. Paths must resolve within the workspace directory.
@@ -138,7 +141,7 @@ All path parameters are validated to prevent directory traversal attacks (e.g., 
 **Why silent refresh for auto-refresh?**
 When the model writes to the workspace (or another tab uploads / deletes / creates a folder), the file browser auto-refreshes using a "silent refresh" mode that fetches new data without showing a loading spinner.
 
-The trigger is the `file_list_changed` per-user global on the realtime bus, emitted from each workspace-mutating tool handler and REST route on the success path; the FE filters by active conversation / project and debounces 200ms before calling `silentRefresh()` in `frontend/src/hooks/useFileBrowser.ts`.
+The trigger is the `file_list_changed` per-user global on the realtime bus, emitted from each workspace-mutating tool handler and REST route on the success path; each FileBrowser card filters by its own space (scope `conversation` + conversation id for Chat Files, scope `project` + project id for Project Files) and debounces 200ms before calling `silentRefresh()` in `frontend/src/hooks/useFileBrowser.ts`.
 
 The silent reload implements a stale-while-revalidate pattern: the UI continues displaying the existing file list while the new data loads in the background. This refreshes mid-turn after each successful write, decoupled from the streaming lifecycle. See [Realtime Architecture](../architecture/realtime.md) for the event taxonomy.
 
