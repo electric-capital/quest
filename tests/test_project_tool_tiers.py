@@ -1,10 +1,14 @@
 """Tier membership and allowlists for the project-only dynamic tools.
 
-The project database tool and the six project-workspace file / copy tools
-(``PROJECT_ONLY_TOOL_CALL_TOOLS``) are offered only to conversations that
-belong to a project: top-level, routine, sub-agent (incl. nested) and
-public-project conversations. Cross-user subagent and inference-API runs
-are standalone and never see them. The model is offered a dynamic tool
+The project database tool and the five scheme-qualified file tools
+(``PROJECT_ONLY_TOOL_CALL_TOOLS``: list_files / read_file / write_file /
+edit_file / copy_file over ``chat://`` and ``proj://``) are offered only to
+conversations that belong to a project: top-level, routine, sub-agent (incl.
+nested) and public-project conversations, whose prompts in turn hide the
+four ``*_workspace_file`` tools (``PROJECT_HIDDEN_WORKSPACE_TOOLS``).
+Standalone conversations -- and cross-user subagent and inference-API runs,
+which are always standalone -- keep the four workspace tools and never see
+the five. The model is offered a dynamic tool
 exactly when the prompt's Dynamic Tools section lists it (``tool_call`` has
 no name enum), so the prompt builders' output is the source of truth here.
 """
@@ -31,6 +35,7 @@ from chat.llm.tool_schemas import (
     SUB_AGENT_TOOLS_NESTED,
     TOP_LEVEL_TOOLS,
     USER_SUBAGENT_TOOLS,
+    PROJECT_HIDDEN_WORKSPACE_TOOLS,
     PROJECT_ONLY_TOOL_CALL_TOOLS,
     PUBLIC_TOOL_CALL_ALLOWLIST,
     TOOL_CALL_REGISTRY,
@@ -39,20 +44,16 @@ from chat.llm.tool_schemas import (
     mutating_tool_call_tools,
 )
 
-PROJECT_FILE_TOOLS = (
-    "list_project_files",
-    "get_project_file",
-    "write_project_file",
-    "edit_project_file",
-    "copy_file_to_project",
-    "copy_project_file",
+FILE_TOOLS = ("list_files", "read_file", "write_file", "edit_file", "copy_file")
+ALL_PROJECT_ONLY = (*FILE_TOOLS, "project_db_query")
+WORKSPACE_TOOLS = (
+    "list_workspace_files",
+    "get_workspace_file",
+    "write_workspace_file",
+    "edit_workspace_file",
 )
-ALL_PROJECT_ONLY = (*PROJECT_FILE_TOOLS, "project_db_query")
 
-COPY_SENTENCE = (
-    "In a project conversation, project files must be copied into this "
-    "conversation's workspace first (`copy_project_file`)."
-)
+from chat.workspace_hints import PROJECT_COPY_FIRST_SENTENCE as COPY_SENTENCE
 
 
 def _listed(prompt: str, name: str) -> bool:
@@ -60,9 +61,14 @@ def _listed(prompt: str, name: str) -> bool:
     return f"- **{name}** --" in prompt
 
 
-def _assert_offered(prompt: str, offered: bool) -> None:
+def _assert_offered(prompt: str, project: bool) -> None:
+    """Project presentation: the five scheme-qualified file tools and
+    project_db_query, and none of the four *_workspace_file tools.
+    Standalone presentation: exactly the reverse."""
     for name in ALL_PROJECT_ONLY:
-        assert _listed(prompt, name) is offered, name
+        assert _listed(prompt, name) is project, name
+    for name in WORKSPACE_TOOLS:
+        assert _listed(prompt, name) is (not project), name
 
 
 # ---------------------------------------------------------------------------
@@ -74,24 +80,24 @@ class TestRegistrySpecs:
         assert PROJECT_ONLY_TOOL_CALL_TOOLS == frozenset(ALL_PROJECT_ONLY)
         assert PROJECT_ONLY_TOOL_CALL_TOOLS <= set(TOOL_CALL_REGISTRY)
 
+    def test_hidden_workspace_set(self):
+        assert PROJECT_HIDDEN_WORKSPACE_TOOLS == frozenset(WORKSPACE_TOOLS)
+        assert PROJECT_HIDDEN_WORKSPACE_TOOLS <= set(TOOL_CALL_REGISTRY)
+        assert not (PROJECT_HIDDEN_WORKSPACE_TOOLS & PROJECT_ONLY_TOOL_CALL_TOOLS)
+
     @pytest.mark.parametrize("name,props,required", [
-        ("list_project_files", set(), []),
-        ("get_project_file", {"path"}, ["path"]),
-        ("write_project_file", {"path", "content"}, ["path", "content"]),
+        ("list_files", {"path"}, ["path"]),
+        ("read_file", {"path"}, ["path"]),
+        ("write_file", {"path", "content"}, ["path", "content"]),
         (
-            "edit_project_file",
+            "edit_file",
             {"path", "old_string", "new_string", "replace_all"},
             ["path", "old_string", "new_string"],
         ),
         (
-            "copy_file_to_project",
-            {"path", "dest", "overwrite", "include_hidden"},
-            ["path"],
-        ),
-        (
-            "copy_project_file",
-            {"path", "dest", "overwrite", "include_hidden"},
-            ["path"],
+            "copy_file",
+            {"src", "dest", "overwrite", "include_hidden"},
+            ["src", "dest"],
         ),
     ])
     def test_spec_shape(self, name, props, required):
@@ -104,48 +110,74 @@ class TestRegistrySpecs:
         assert "requires_service" not in spec
         assert not spec.get("mutating")
         desc = spec["description"]
-        assert "Only available in project conversations" in desc
-        assert "project workspace" in desc
-        if name.startswith("copy_"):
-            assert "destination_exists" in desc
-            assert "not_a_regular_file" in desc
-            assert "include_hidden" in desc
+        assert "chat://" in desc and "proj://" in desc
+        for pname in props & {"path", "src", "dest"}:
+            pdesc = params["properties"][pname]["description"]
+            assert "chat://" in pdesc or "proj://" in pdesc, (name, pname)
+        if name == "copy_file":
+            for code in ("destination_exists", "not_a_regular_file", "invalid_destination"):
+                assert code in desc
             assert "'skipped'" in desc
             for p in ("overwrite", "include_hidden"):
                 assert params["properties"][p]["type"] == "boolean"
 
-    def test_edit_project_file_requires_prior_read(self):
-        desc = TOOL_CALL_REGISTRY["edit_project_file"]["description"]
-        assert "get_project_file" in desc
+    def test_scheme_is_mandatory_in_descriptions(self):
+        props = TOOL_CALL_REGISTRY["list_files"]["parameters"]["properties"]
+        assert "scheme is required" in props["path"]["description"]
+
+    def test_edit_file_requires_prior_read(self):
+        desc = TOOL_CALL_REGISTRY["edit_file"]["description"]
+        assert "read_file" in desc
         assert "earlier in this conversation" in desc
         assert "another conversation of the project does not count" in desc
 
-    def test_write_project_file_points_at_deliverables(self):
-        desc = TOOL_CALL_REGISTRY["write_project_file"]["description"]
+    def test_write_file_points_at_deliverables(self):
+        desc = TOOL_CALL_REGISTRY["write_file"]["description"]
         assert "finished deliverables" in desc
         assert "1MB" in desc
-        assert "copy_file_to_project" in desc
-
-    def test_copy_dest_default_and_direction(self):
-        to_proj = TOOL_CALL_REGISTRY["copy_file_to_project"]["parameters"]["properties"]
-        from_proj = TOOL_CALL_REGISTRY["copy_project_file"]["parameters"]["properties"]
-        assert "relative to this conversation's workspace" in to_proj["path"]["description"]
-        assert "relative to the project workspace" in to_proj["dest"]["description"]
-        assert "relative to the project workspace" in from_proj["path"]["description"]
-        assert "relative to this conversation's workspace" in from_proj["dest"]["description"]
-        for props in (to_proj, from_proj):
-            assert "Defaults to the same relative path" in props["dest"]["description"]
+        assert "copy_file" in desc
 
     def test_edit_mirrors_edit_workspace_file(self):
         ws = TOOL_CALL_REGISTRY["edit_workspace_file"]["parameters"]
-        pj = TOOL_CALL_REGISTRY["edit_project_file"]["parameters"]
-        assert set(ws["properties"]) == set(pj["properties"])
-        assert ws["required"] == pj["required"]
+        new = TOOL_CALL_REGISTRY["edit_file"]["parameters"]
+        assert set(ws["properties"]) == set(new["properties"])
+        assert ws["required"] == new["required"]
 
-    def test_copy_to_project_mentions_scratch_refusal(self):
-        desc = TOOL_CALL_REGISTRY["copy_file_to_project"]["description"]
+    def test_copy_mentions_scratch_refusal_toward_proj(self):
+        desc = TOOL_CALL_REGISTRY["copy_file"]["description"]
         for scratch in (".responses/", ".subagent_responses/", "pasted/"):
             assert scratch in desc
+        assert (
+            "This conversation's '.responses/', '.subagent_responses/' and "
+            "'pasted/' (chat://) cannot be copied to proj://."
+        ) in desc
+
+    def test_copy_invalid_destination_wording(self):
+        desc = TOOL_CALL_REGISTRY["copy_file"]["description"]
+        assert (
+            "A destination equal to the source, inside it, or containing it "
+            "is refused (invalid_destination)."
+        ) in desc
+
+    def test_list_files_result_paths_are_space_relative(self):
+        desc = TOOL_CALL_REGISTRY["list_files"]["description"]
+        assert "{file_count, files}" in desc
+        assert "relative to the space root" in desc
+        assert "'proj://reports/q3.md'" in desc
+
+    def test_read_file_office_wording(self):
+        desc = TOOL_CALL_REGISTRY["read_file"]["description"]
+        assert "Do not use it for Office documents" in desc
+        assert "refused" not in desc
+
+    def test_edit_file_cross_family_read(self):
+        desc = TOOL_CALL_REGISTRY["edit_file"]["description"]
+        assert "get_workspace_file / write_workspace_file read counts too" in desc
+
+    def test_copy_dest_has_no_default(self):
+        dest = TOOL_CALL_REGISTRY["copy_file"]["parameters"]["properties"]["dest"]
+        assert "Required" in dest["description"]
+        assert "Defaults" not in dest["description"]
 
 
 # ---------------------------------------------------------------------------
@@ -156,11 +188,16 @@ class TestAllowlists:
     def test_public_allowlist_includes_project_tools(self):
         assert PROJECT_ONLY_TOOL_CALL_TOOLS <= PUBLIC_TOOL_CALL_ALLOWLIST
 
-    def test_script_bridge_excludes_project_tools(self):
+    def test_public_allowlist_keeps_workspace_tools_dispatchable(self):
+        # Hidden from the public prompt, but replayed calls still dispatch.
+        assert PROJECT_HIDDEN_WORKSPACE_TOOLS <= PUBLIC_TOOL_CALL_ALLOWLIST
+
+    def test_script_bridge_excludes_file_tools(self):
         assert not (PROJECT_ONLY_TOOL_CALL_TOOLS & SCRIPT_TOOL_CALL_ALLOWLIST)
+        assert not (PROJECT_HIDDEN_WORKSPACE_TOOLS & SCRIPT_TOOL_CALL_ALLOWLIST)
 
     def test_not_mutating(self):
-        assert not (set(PROJECT_FILE_TOOLS) & mutating_tool_call_tools())
+        assert not (set(FILE_TOOLS) & mutating_tool_call_tools())
 
 
 # ---------------------------------------------------------------------------
@@ -170,24 +207,38 @@ class TestAllowlists:
 class TestTopLevelPrompt:
     @pytest.mark.parametrize("is_routine", [False, True])
     @pytest.mark.parametrize("has_project", [False, True])
-    def test_offered_only_with_project(self, has_project, is_routine):
+    def test_file_tools_follow_project(self, has_project, is_routine):
         p = get_system_prompt(
             "key", has_project=has_project, is_routine=is_routine,
         )
         _assert_offered(p, has_project)
 
-    def test_slack_conversation_has_none(self):
+    def test_slack_conversation_is_standalone(self):
         _assert_offered(get_system_prompt("key", is_slack=True), False)
+
+    def test_project_rules_and_examples_name_only_offered_tools(self):
+        p = get_system_prompt("key", has_project=True)
+        for name in WORKSPACE_TOOLS:
+            assert f'tool_name="{name}"' not in p, name
+        assert 'tool_name="list_files", arguments={"path": "chat://"}' in p
+        assert 'tool_name="copy_file"' in p
 
 
 class TestSubAgentPrompt:
     @pytest.mark.parametrize("can_nest", [False, True])
     @pytest.mark.parametrize("has_project", [False, True])
-    def test_offered_only_with_project(self, has_project, can_nest):
+    def test_file_tools_follow_project(self, has_project, can_nest):
         p = get_sub_agent_system_prompt(
             "Researcher", "key", has_project=has_project, can_nest=can_nest,
         )
         _assert_offered(p, has_project)
+
+    def test_project_rules_name_only_offered_tools(self):
+        p = get_sub_agent_system_prompt("Researcher", "key", has_project=True)
+        rules = p[p.index("**Important rules:**"):]
+        for name in WORKSPACE_TOOLS:
+            assert f"`{name}`" not in rules, name
+        assert "`read_file` (`chat://<file>`)" in rules
 
 
 class TestPublicPrompt:
@@ -197,17 +248,21 @@ class TestPublicPrompt:
             user_email="ada@example.com", is_routine=is_routine,
         )
         _assert_offered(p, True)
+        for name in WORKSPACE_TOOLS:
+            assert f'tool_name="{name}"' not in p, name
 
 
 class TestStandaloneRunKinds:
-    def test_user_subagent_prompt_has_none(self):
+    def test_user_subagent_prompt_is_standalone(self):
         p = get_user_subagent_system_prompt(
             "key", target_user_email="t@example.com",
             caller_email="c@example.com",
         )
         _assert_offered(p, False)
 
-    def test_inference_api_prompt_has_none(self):
+    def test_inference_api_prompt_has_no_project_tools(self):
+        # Inference runs also drop mutating tools, but none of the file
+        # tools is mutating: the workspace tools stay, the new five never.
         p = get_inference_api_system_prompt("", user_email="u@example.com")
         _assert_offered(p, False)
 
@@ -324,3 +379,27 @@ def test_no_stale_workspace_wording_in_core_descriptions(stale):
         d for d in _description_strings(_core_specs()) if stale in d
     ]
     assert not hits, hits
+
+
+# ---------------------------------------------------------------------------
+# Public-project rejection lists what the public prompt offers
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("project_id", ["proj-1", None])
+def test_public_rejection_lists_offered_tools(project_id):
+    import json
+
+    from chat.gemini_api.tool_dispatch import _dispatch_tool_call
+
+    result, _parts = asyncio.run(_dispatch_tool_call(
+        app=None, provider=None, user={"id": 1, "email": "t@example.com"},
+        conversation_id="conv-1", timezone="UTC", tool_name="tool_call",
+        args={"tool_name": "memory_search", "arguments": {}},
+        project_id=project_id, is_public=True,
+    ))
+    error = json.loads(result)["error"]
+    listed = error.split("Available dynamic tools: ", 1)[1]
+    for name in FILE_TOOLS:
+        assert name in listed, name
+    for name in WORKSPACE_TOOLS:
+        assert (name in listed) is (project_id is None), name

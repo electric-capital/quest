@@ -1202,7 +1202,8 @@ async def _load_workspace_image(caller: Caller, workspace_path: str) -> tuple[by
         # the error names the 5 MB image limit, not the 50 MB upload cap.
         # Conversation workspace only (project conversations included);
         # the shared project workspace is never searched -- the project id
-        # only adds the copy_project_file hint to a not-found error.
+        # only adds the copy-first hint (copy_file proj:// -> chat://) to a
+        # not-found error.
         path = await resolve_workspace_file(
             caller.conversation_id,
             caller.project_id,

@@ -794,7 +794,7 @@ async def copy_from_project(
 
 
 @router.get("/projects/{project_id}/files")
-async def list_project_files(
+async def list_project_workspace_files(
     project_id: str,
     path: str = Query(default="", description="Relative path within the project workspace"),
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),

@@ -277,8 +277,9 @@ async def _handle_run_script(
                 return json.dumps({
                     "error": (
                         f"File not found: {path}. run_script takes "
-                        "conversation-workspace paths; copy the script with "
-                        "copy_project_file or run it from run_python"
+                        "conversation-workspace paths; copy the script in "
+                        "with copy_file from proj:// to chat://, or run it "
+                        "from run_python"
                     )
                 })
             return json.dumps({"error": f"File not found: {path}"})

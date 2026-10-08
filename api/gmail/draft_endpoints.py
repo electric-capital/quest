@@ -114,8 +114,8 @@ async def _resolve_workspace_attachment(
             Sanitized via ``_sanitize_workspace_filename``; falls back to the
             resolved file's basename if the override sanitizes to empty.
         project_id: The conversation's project, if any. Never changes the
-            root; only adds the ``copy_project_file`` hint to a not-found
-            error.
+            root; only adds the copy-first hint (``copy_file`` from
+            ``proj://`` to ``chat://``) to a not-found error.
 
     Returns:
         Dict with keys: data (bytes), filename (str), mime_type (str).
@@ -126,6 +126,7 @@ async def _resolve_workspace_attachment(
     # Lazy import to mirror ``_io_attachments.read_workspace_attachments``
     # and avoid pulling chat-side modules in at module import time.
     from chat.gemini_api.tool_handlers import _sanitize_workspace_filename
+    from chat.gemini_api.tool_handlers.file_paths import PROJECT_COPY_FIRST_SUFFIX
     from chat.storage import ChatStorage
 
     raw_path = workspace_path or ""
@@ -174,12 +175,7 @@ async def _resolve_workspace_attachment(
             status_code=404,
             detail=(
                 f"Workspace file not found: {raw_path}"
-                + (
-                    " (paths are in this conversation's workspace; project "
-                    "files must be copied into it first with "
-                    "copy_project_file)"
-                    if project_id else ""
-                )
+                + (PROJECT_COPY_FIRST_SUFFIX if project_id else "")
             ),
         )
     if not file_path.is_file():

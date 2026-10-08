@@ -36,24 +36,19 @@ from chat.gemini_api.system_prompt import (
 TWO_SPACES = "**Two file spaces:**"
 LEGACY_NOTE = (
     "This chat started before conversation workspaces existed: files it "
-    "created earlier may be in the project workspace. Use `list_project_files` "
-    "/ `get_project_file` to find them."
+    "created earlier may be in the project workspace. Use "
+    "`list_files(\"proj://\")` / `read_file(\"proj://...\")` to find them."
 )
 CONVERTED_NOTE = (
     "This chat was converted from a standalone chat into this project. Files "
-    "it created before the conversion are in this chat's workspace, not the "
-    "project workspace; use `copy_file_to_project` for any that should become "
-    "shared project files, or when the user asks."
+    "it created before the conversion are in this chat's workspace "
+    "(`chat://`), not the project workspace; use `copy_file` from `chat://` "
+    "to `proj://` for any that should become shared project files, or when "
+    "the user asks."
 )
 PROJECT_EXAMPLE = "shutil.copy('/workspace/out.pdf', '/project/out.pdf')"
-SIX_TOOLS = (
-    "list_project_files", "get_project_file", "write_project_file",
-    "edit_project_file", "copy_file_to_project", "copy_project_file",
-)
-COPY_SENTENCE = (
-    "In a project conversation, project files must be copied into this "
-    "conversation's workspace first (`copy_project_file`)."
-)
+FILE_TOOLS = ("list_files", "read_file", "write_file", "edit_file", "copy_file")
+from chat.workspace_hints import PROJECT_COPY_FIRST_SENTENCE as COPY_SENTENCE
 
 
 def _storage():
@@ -351,7 +346,9 @@ class TestPrompts:
 
 _PROJECT_MARKERS = (
     TWO_SPACES, LEGACY_NOTE, CONVERTED_NOTE, "**Earlier files:**",
-    "**Converted chat:**", "/project", "_project_file", "copy_file_to_project",
+    "**Converted chat:**", "/project", "chat://", "proj://",
+    *(f"- **{name}** --" for name in FILE_TOOLS),
+    *(f'tool_name="{name}"' for name in FILE_TOOLS),
 )
 
 
@@ -899,13 +896,20 @@ class TestCatalog:
         }[skill_id]
         return builder("http://x", "KEY")
 
-    def test_workspace_lists_two_spaces_and_six_tools(self):
+    def test_workspace_lists_two_spaces_and_five_tools(self):
         text = self._content("system:workspace")
         assert "Standalone conversations have one file space" in text
         assert "Project conversations have two" in text
         assert "per-conversation workspace directory mounted" not in text
-        for name in SIX_TOOLS:
+        for name in FILE_TOOLS:
             assert f"**{name}(" in text, name
+        assert "invalid_path" in text
+        flat = " ".join(text.split())
+        assert (
+            "this conversation's `.responses/`, `.subagent_responses/` and "
+            "`pasted/` (`chat://`) cannot be copied to `proj://`"
+        ) in flat
+        assert "the scheme tools below on `chat://` paths do the same" in flat
         assert PROJECT_EXAMPLE in text
         assert 'subprocess.run(["python3", "/project/etl.py"]' in text
         assert COPY_SENTENCE in " ".join(text.split())
@@ -914,13 +918,18 @@ class TestCatalog:
     def test_routines_paragraph(self):
         text = self._content("system:routines")
         assert "every routine run is a fresh\nconversation" in text
-        assert "`get_project_file` / `write_project_file`" in text
+        assert '`read_file("proj://state.json")`' in text
+        assert '`write_file("proj://state.json", ...)`' in text
         assert "/project/" in text
 
     def test_copy_first_in_attachment_texts(self):
         assert COPY_SENTENCE in " ".join(self._content("system:action_requests").split())
         docs = " ".join(self._content("system:quest_docs").split())
-        assert COPY_SENTENCE.replace("In a project", "in a project")[:-1] in docs
+        assert (
+            "project files must be copied into this conversation's workspace "
+            "first -- in a project conversation: `copy_file` from `proj://` to "
+            "`chat://`"
+        ) in docs
 
     def test_subagent_responses_in_conversation_space(self):
         text = " ".join(self._content("system:user_subagents").split())
@@ -940,4 +949,25 @@ def test_catalog_descriptions_unchanged_in_enumeration():
 
     text = build_system_skills_enumeration(None, False)
     assert "/project" not in text
-    assert "project_file" not in text
+    assert "proj://" not in text and "chat://" not in text
+
+
+def test_two_spaces_paragraph_maps_the_workspace_tools():
+    p = get_system_prompt("KEY", has_project=True)
+    for pair in (
+        '`list_workspace_files` = `list_files("chat://")`',
+        '`get_workspace_file(p)` = `read_file("chat://p")`',
+        "`write_workspace_file` = `write_file` on a `chat://` path",
+        "`edit_workspace_file` = `edit_file` on a `chat://` path",
+    ):
+        assert pair in p, pair
+
+
+@pytest.mark.parametrize("module,builder", [
+    ("api.drive", "get_instructions"),
+    ("api.gmail.instructions", "get_instructions"),
+])
+def test_backend_skill_texts_carry_the_copy_first_sentence(module, builder):
+    fn = getattr(importlib.import_module(module), builder)
+    text = " ".join(fn("http://x").split())
+    assert COPY_SENTENCE in text

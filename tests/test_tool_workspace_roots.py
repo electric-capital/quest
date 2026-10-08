@@ -357,10 +357,10 @@ def test_io_attachment_missing_in_project_conversation_hints_copy(env):
     from chat.action_request_types._io_attachments import resolve_workspace_file
     with pytest.raises(RuntimeError) as excinfo:
         _run(resolve_workspace_file(CID, PID, "shared/report.pdf"))
-    assert "copy_project_file" in str(excinfo.value)
+    assert "copy_file from proj:// to chat://" in str(excinfo.value)
     with pytest.raises(RuntimeError) as excinfo:
         _run(resolve_workspace_file(CID, None, "shared/report.pdf"))
-    assert "copy_project_file" not in str(excinfo.value)
+    assert "copy_file" not in str(excinfo.value)
 
 
 def test_gmail_attachment_missing_in_project_conversation_hints_copy(env, monkeypatch):
@@ -377,7 +377,7 @@ def test_gmail_attachment_missing_in_project_conversation_hints_copy(env, monkey
             USER, [DraftAttachment(type="workspace", workspace_path="x.pdf")], CID,
         ))
     assert excinfo.value.status_code == 404
-    assert "copy_project_file" in excinfo.value.detail
+    assert "copy_file from proj:// to chat://" in excinfo.value.detail
 
 
 def test_add_doc_image_missing_in_project_conversation_hints_copy(env):
@@ -389,4 +389,4 @@ def test_add_doc_image_missing_in_project_conversation_hints_copy(env):
     )
     with pytest.raises(DocError) as excinfo:
         _run(_load_workspace_image(caller, "fig.png"))
-    assert "copy_project_file" in str(excinfo.value)
+    assert "copy_file from proj:// to chat://" in str(excinfo.value)

@@ -245,7 +245,7 @@ class TestRunScriptPathsStayConversationOnly:
         (stub["proj_dir"] / "etl.py").write_text("print(1)\n")
         result = _call("script", project_id="proj-1", path="etl.py")
         assert result["error"].startswith("File not found: etl.py.")
-        assert "copy_project_file" in result["error"]
+        assert "copy_file from proj:// to chat://" in result["error"]
         assert "run_python" in result["error"]
         assert stub["argv"] is None
         assert stub["events"] == []

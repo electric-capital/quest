@@ -11,6 +11,7 @@ the relevant skill(s) on demand through the existing ``load_skills`` tool.
 from chat.docs.constants import DOCS_SERVICE_KEY
 from chat.gemini_api.constants import MAX_PARALLEL_TASKS, MAX_PARALLEL_TEMPLATE_TASKS
 from chat.llm.tool_schemas import (
+    PROJECT_HIDDEN_WORKSPACE_TOOLS,
     PROJECT_ONLY_TOOL_CALL_TOOLS,
     TOOL_CALL_REGISTRY,
     mutating_tool_call_tools,
@@ -54,21 +55,28 @@ Public docs the user owns or was given write access to are written directly, wit
 # standard, sub-agent and public-project prompts all splice it into their
 # project section, so a standalone conversation's prompt is unchanged.
 _TWO_FILE_SPACES_SECTION = (
-    "\n**Two file spaces:** This conversation has its own workspace (`/workspace` "
-    "in scripts, the `*_workspace_file` tools) and the project has a shared "
-    "workspace (`/project` in scripts, the `*_project_file` tools: "
-    "`list_project_files`, `get_project_file`, `write_project_file`, "
-    "`edit_project_file`). Everything you produce goes to the conversation "
-    "workspace by default: drafts, downloads, intermediate data, scripts, API "
-    "responses. Put a file in the project workspace only when it is a finished "
-    "deliverable that later conversations in this project should find, or when "
-    "the user asks. Read project files with `list_project_files` / "
-    "`get_project_file`; move finished work with `copy_file_to_project` (from a "
-    "script: `shutil.copy('/workspace/out.pdf', '/project/out.pdf')`). "
-    "Attachments, inline images and `run_script` take conversation paths only: "
-    "`copy_project_file` first. To run a script kept in the project workspace, "
-    "copy it over or start it from `run_python` "
-    "(`subprocess.run([\"python3\", \"/project/etl.py\"])`).\n"
+    "\n**Two file spaces:** This conversation has its own workspace and the "
+    "project has a shared workspace. The file tools name the space in every "
+    "path: `chat://<path>` is this conversation's workspace (`/workspace` in "
+    "scripts), `proj://<path>` is the project workspace (`/project` in "
+    "scripts); `list_files`, `read_file`, `write_file`, `edit_file` and "
+    "`copy_file` accept only scheme-qualified paths. Everything you produce "
+    "goes to `chat://` by default: drafts, downloads, intermediate data, "
+    "scripts, API responses. Put a file in `proj://` only when it is a "
+    "finished deliverable that later conversations in this project should "
+    "find, or when the user asks. Move finished work with `copy_file` from "
+    "`chat://` to `proj://` (from a script: "
+    "`shutil.copy('/workspace/out.pdf', '/project/out.pdf')`). Every other "
+    "tool that takes a file path (attachments, inline images, `run_script`, "
+    "downloads) uses plain paths in this conversation's workspace only: "
+    "`copy_file` a project file from `proj://` to `chat://` first. To run a "
+    "script kept in the project workspace, copy it over or start it from "
+    "`run_python` (`subprocess.run([\"python3\", \"/project/etl.py\"])`). "
+    "Tool descriptions that mention the conversation-workspace tools mean "
+    "the same files through the tools above: `list_workspace_files` = "
+    "`list_files(\"chat://\")`, `get_workspace_file(p)` = "
+    "`read_file(\"chat://p\")`, `write_workspace_file` = `write_file` on a "
+    "`chat://` path, `edit_workspace_file` = `edit_file` on a `chat://` path.\n"
 )
 
 # Per-conversation notices (chat_history.json flags, see
@@ -76,15 +84,16 @@ _TWO_FILE_SPACES_SECTION = (
 _LEGACY_SHARED_WORKSPACE_NOTE = (
     "\n**Earlier files:** This chat started before conversation workspaces "
     "existed: files it created earlier may be in the project workspace. Use "
-    "`list_project_files` / `get_project_file` to find them.\n"
+    "`list_files(\"proj://\")` / `read_file(\"proj://...\")` to find them.\n"
 )
 # Persisted once and shown on every later turn, so it must not go stale
 # (no "just converted" / "the project workspace is empty").
 _CONVERTED_FROM_STANDALONE_NOTE = (
     "\n**Converted chat:** This chat was converted from a standalone chat "
     "into this project. Files it created before the conversion are in this "
-    "chat's workspace, not the project workspace; use `copy_file_to_project` "
-    "for any that should become shared project files, or when the user asks.\n"
+    "chat's workspace (`chat://`), not the project workspace; use `copy_file` "
+    "from `chat://` to `proj://` for any that should become shared project "
+    "files, or when the user asks.\n"
 )
 
 
@@ -101,6 +110,60 @@ def _project_files_section(
     if converted_from_standalone:
         section += _CONVERTED_FROM_STANDALONE_NOTE
     return section
+
+
+# File-tool lines of the standard prompt's rules and examples. Standalone
+# conversations keep the *_workspace_file wording verbatim; project
+# conversations, whose prompts hide those four tools, name the
+# scheme-qualified tools instead.
+_STANDALONE_FILE_RULES = (
+    '- Use `tool_call(tool_name="list_workspace_files")` to discover available '
+    'files before trying to read them. For workspace + sandbox details, load '
+    '`system:workspace`.\n'
+    '- Use `tool_call(tool_name="get_workspace_file", arguments={"path": "..."})` '
+    'to read text files, images, and PDFs.'
+)
+_PROJECT_FILE_RULES = (
+    '- Use `tool_call(tool_name="list_files", arguments={"path": "chat://"})` '
+    '(or `"proj://"` for the project workspace) to discover available files '
+    'before trying to read them. For workspace + sandbox details, load '
+    '`system:workspace`.\n'
+    '- Use `tool_call(tool_name="read_file", arguments={"path": "chat://..."})` '
+    '(or a `proj://` path) to read text files, images, and PDFs.'
+)
+_STANDALONE_FILE_EXAMPLES = (
+    'To list workspace files:\n'
+    '  tool_call(tool_name="list_workspace_files")\n'
+    '\n'
+    'To read a text file:\n'
+    '  tool_call(tool_name="get_workspace_file", arguments={"path": "notes.txt"})\n'
+    '\n'
+    'To analyze an uploaded PDF:\n'
+    '  tool_call(tool_name="get_workspace_file", arguments={"path": "report.pdf"})\n'
+    '\n'
+    'To write a file to the workspace:\n'
+    '  tool_call(tool_name="write_workspace_file", arguments={"path": '
+    '"analysis.py", "content": "import pandas as pd\\n..."})'
+)
+_PROJECT_FILE_EXAMPLES = (
+    "To list this conversation's files and the project's files:\n"
+    '  tool_call(tool_name="list_files", arguments={"path": "chat://"})\n'
+    '  tool_call(tool_name="list_files", arguments={"path": "proj://"})\n'
+    '\n'
+    'To read a text file:\n'
+    '  tool_call(tool_name="read_file", arguments={"path": "chat://notes.txt"})\n'
+    '\n'
+    'To analyze an uploaded PDF:\n'
+    '  tool_call(tool_name="read_file", arguments={"path": "chat://report.pdf"})\n'
+    '\n'
+    "To write a file to this conversation's workspace:\n"
+    '  tool_call(tool_name="write_file", arguments={"path": '
+    '"chat://analysis.py", "content": "import pandas as pd\\n..."})\n'
+    '\n'
+    'To promote a finished file to the project workspace:\n'
+    '  tool_call(tool_name="copy_file", arguments={"src": "chat://report.pdf", '
+    '"dest": "proj://report.pdf"})'
+)
 
 
 # Script example shown only in project conversations (standard + public).
@@ -302,8 +365,11 @@ def get_system_prompt(
         skills_content: Optional pre-built skills content string to include.
         has_project: Whether this conversation belongs to a project. When False,
             the project-only tools (PROJECT_ONLY_TOOL_CALL_TOOLS: project_db_query
-            and the project file / copy tools) are excluded from the dynamic
-            tools section.
+            and the scheme-qualified file tools list_files / read_file /
+            write_file / edit_file / copy_file) are excluded from the dynamic
+            tools section; when True, the four *_workspace_file tools
+            (PROJECT_HIDDEN_WORKSPACE_TOOLS) are excluded instead and the
+            file-tool rules and examples name the scheme-qualified tools.
         is_slack: Whether this is a Slack-driven conversation. When True, the
             Slack Reply Mode instructions are appended before the proxy preamble
             so the model knows to deliver its reply via
@@ -398,9 +464,13 @@ def get_system_prompt(
 """
 
     # Build dynamic tools section, excluding the project-only tools
-    # (project_db_query, project file + copy tools) for non-project conversations
+    # (project_db_query, scheme-qualified file tools) for non-project
+    # conversations, and the four *_workspace_file tools for project ones
     top_level_exclude: set[str] = set()
-    if not has_project:
+    if has_project:
+        # The scheme-qualified file tools replace the four workspace tools.
+        top_level_exclude |= PROJECT_HIDDEN_WORKSPACE_TOOLS
+    else:
         top_level_exclude |= PROJECT_ONLY_TOOL_CALL_TOOLS
     if is_slack:
         # Slack-driven runs have no web UI to resolve the
@@ -450,6 +520,12 @@ def get_system_prompt(
         _ROUTINE_NAMING_SECTION if is_routine else _CONVERSATION_NAMING_SECTION
     )
     project_script_example = _PROJECT_SCRIPT_EXAMPLE if has_project else ""
+    file_discovery_rules = (
+        _PROJECT_FILE_RULES if has_project else _STANDALONE_FILE_RULES
+    )
+    file_examples = (
+        _PROJECT_FILE_EXAMPLES if has_project else _STANDALONE_FILE_EXAMPLES
+    )
 
     return f"""You are Quest, a personal AI assistant. You have access to the user's APIs and connected services through a local API proxy.
 {identity_line}{custom_section}{skills_section}{project_section}
@@ -500,8 +576,7 @@ You have thirteen tools available:
 - Authentication is handled automatically -- do NOT include an Authorization header.
 - Some backends are read via `tool_call(tool_name="authed_get", arguments={{"url": "https://..."}})` rather than the local proxy (Gmail Raw API, Google Calendar/Drive/Docs/Sheets/Slides/Tasks, Google Cloud, Airtable, Ramp, Federal Register, SEC EDGAR, CoinGecko). The two GCP POST reads use `authed_post`. Load the matching `system:<backend>` skill for the exact URL shapes and example queries.
 - **Before you call APIs for a backend you haven't touched yet in this conversation, load its `system:<backend>` skill first.** Trying to construct backend-specific URLs from memory will usually fail. You can load multiple at once: `load_skills(skill_ids=["system:gmail", "system:slack"])`.
-- Use `tool_call(tool_name="list_workspace_files")` to discover available files before trying to read them. For workspace + sandbox details, load `system:workspace`.
-- Use `tool_call(tool_name="get_workspace_file", arguments={{"path": "..."}})` to read text files, images, and PDFs. Do NOT use it for Office documents (.docx, .xlsx, .pptx) -- extract their contents inside `run_python` / `run_script` using `python-docx` or `openpyxl` instead. Files over the per-model attachment limit cannot be attached -- split or reduce them with `run_python` first (e.g. `pypdf` page chunks for big PDFs).
+{file_discovery_rules} Do NOT use it for Office documents (.docx, .xlsx, .pptx) -- extract their contents inside `run_python` / `run_script` using `python-docx` or `openpyxl` instead. Files over the per-model attachment limit cannot be attached -- split or reduce them with `run_python` first (e.g. `pypdf` page chunks for big PDFs).
 - **Converting documents (e.g. a Word file to PDF):** headless LibreOffice is installed in the sandbox -- run `soffice --headless --convert-to pdf --outdir /workspace <file>` via `run_python` / `run_script` (also `.doc` / `.odt` / `.rtf` / `.html` / `.xlsx` / `.pptx` sources and other target formats such as `docx`). Use it for every document conversion unless the user asks for another route; never build a PDF from `python-docx` output. For a document stored in Google Drive, `download_drive_file` it first; native Google Docs / Sheets / Slides are exported with `google_export_doc` / `google_export_sheet` / `google_export_slides` instead. Load `system:workspace` for details.
 - **Showing images to the user:** the web chat renders standard markdown images inline. To display a workspace image (a generated chart, a downloaded figure, a photo) directly in your reply, reference it by its workspace-relative path: `![Revenue by quarter](revenue.png)` or `![](reports/figure1.png)`. Paths always resolve from the workspace root. Only PNG/JPEG/GIF/WebP files render; avoid spaces in filenames you plan to embed (or percent-encode them as `%20`). External image URLs are never rendered inline (they display as plain links) -- to show a remote image, save it into the workspace first. This works only in the web chat -- Slack replies cannot render workspace images.
 - Use `tool_call(tool_name="memory_search", arguments={{"query": "..."}})` to check for relevant context when the user mentions preferences, past interactions, or information they've asked you to remember. Load `system:memory` for full memory tool semantics.
@@ -553,17 +628,7 @@ Guidelines for this pattern:
 
 **Example usage:**
 
-To list workspace files:
-  tool_call(tool_name="list_workspace_files")
-
-To read a text file:
-  tool_call(tool_name="get_workspace_file", arguments={{"path": "notes.txt"}})
-
-To analyze an uploaded PDF:
-  tool_call(tool_name="get_workspace_file", arguments={{"path": "report.pdf"}})
-
-To write a file to the workspace:
-  tool_call(tool_name="write_workspace_file", arguments={{"path": "analysis.py", "content": "import pandas as pd\\n..."}})
+{file_examples}
 
 To search memories:
   tool_call(tool_name="memory_search", arguments={{"query": "coffee preferences"}})
@@ -886,8 +951,12 @@ def get_public_project_system_prompt(
 """
 
     # A public-project conversation always has a project, so the project-only
-    # tools (PROJECT_ONLY_TOOL_CALL_TOOLS, all in the allowlist) stay listed.
+    # tools (PROJECT_ONLY_TOOL_CALL_TOOLS, all in the allowlist) stay listed,
+    # while the four *_workspace_file tools (also allowlisted, so replayed
+    # calls still dispatch) are hidden from the prompt.
     public_exclude = set(TOOL_CALL_REGISTRY) - set(PUBLIC_TOOL_CALL_ALLOWLIST)
+    # ... and the scheme-qualified file tools replace the workspace tools.
+    public_exclude |= PROJECT_HIDDEN_WORKSPACE_TOOLS
     if is_routine:
         public_exclude.add("set_conversation_name")
     if not docs_enabled:
@@ -938,7 +1007,7 @@ You have three tools available:
 - Private network destinations (LAN addresses, cloud metadata) are blocked; only the public internet is reachable.
 - This conversation's workspace is mounted read-write at `/workspace` and the project's shared workspace at `/project`, so scripts can read uploaded files from either and write results the user can see in the file browser (to `/workspace` unless the result is a finished deliverable for the project).
 
-**Showing images to the user:** the chat renders standard markdown images inline. To display a workspace image (e.g. a chart you generated with matplotlib) directly in your reply, reference it by its workspace-relative path: `![Revenue by quarter](chart.png)`. Paths resolve from this conversation's workspace root (copy a project image over with `copy_project_file` first); only PNG/JPEG/GIF/WebP files render. External image URLs are never rendered inline (they display as plain links) -- download a remote image into the workspace first to show it.
+**Showing images to the user:** the chat renders standard markdown images inline. To display a workspace image (e.g. a chart you generated with matplotlib) directly in your reply, reference it by its workspace-relative path: `![Revenue by quarter](chart.png)`. Paths resolve from this conversation's workspace root (`copy_file` a project image from `proj://` to `chat://` first); only PNG/JPEG/GIF/WebP files render. External image URLs are never rendered inline (they display as plain links) -- download a remote image into the workspace first to show it.
 
 **Boundaries (this is a public project):**
 - You have NO access to the user's internal data or connected services: no email, Slack reading, calendar, Drive, memories, or skills, and no authenticated internal APIs. There is no proxy endpoint and no API key in this conversation or its sandbox. The single connector exception is `send_slack_dm_to_self` (outbound-only, delivers a message and optional workspace files to the user themselves).
@@ -950,17 +1019,21 @@ You have three tools available:
 
 **Example usage:**
 
-To list workspace files:
-  tool_call(tool_name="list_workspace_files")
+To list this conversation's files and the project's files:
+  tool_call(tool_name="list_files", arguments={{"path": "chat://"}})
+  tool_call(tool_name="list_files", arguments={{"path": "proj://"}})
 
 To read a text file:
-  tool_call(tool_name="get_workspace_file", arguments={{"path": "notes.txt"}})
+  tool_call(tool_name="read_file", arguments={{"path": "chat://notes.txt"}})
 
 To fetch a public web page from the sandbox:
   run_python(script="import requests\\nprint(requests.get('https://example.com').text[:2000])")
 
-To write a file to the workspace:
-  tool_call(tool_name="write_workspace_file", arguments={{"path": "analysis.py", "content": "import requests\\n..."}}){_PROJECT_SCRIPT_EXAMPLE}
+To write a file to this conversation's workspace:
+  tool_call(tool_name="write_file", arguments={{"path": "chat://analysis.py", "content": "import requests\\n..."}})
+
+To promote a finished file to the project workspace:
+  tool_call(tool_name="copy_file", arguments={{"src": "chat://report.pdf", "dest": "proj://report.pdf"}}){_PROJECT_SCRIPT_EXAMPLE}
 """
 
 
@@ -997,7 +1070,9 @@ def get_sub_agent_system_prompt(
         skills_content: Optional pre-built skills content string to include.
         has_project: Whether this conversation belongs to a project. When False,
             the project-only tools (PROJECT_ONLY_TOOL_CALL_TOOLS) are excluded
-            from the dynamic tools section.
+            from the dynamic tools section; when True the four
+            *_workspace_file tools are excluded instead and the file-tool
+            rules name the scheme-qualified tools.
         can_nest: Whether this 1st-level sub-agent may spawn one 2nd-level
             sub-agent (only when the conversation's ``nested_subagents`` flag is
             on). When True, the prompt enumerates the ``agent_task_nested`` tool
@@ -1086,7 +1161,9 @@ def get_sub_agent_system_prompt(
     # top-level agent writes docs"), so the doc write tools are hidden too.
     sub_agent_exclude = {"wait_for_handles", "set_conversation_name"}
     sub_agent_exclude |= _doc_write_tool_names()
-    if not has_project:
+    if has_project:
+        sub_agent_exclude |= PROJECT_HIDDEN_WORKSPACE_TOOLS
+    else:
         sub_agent_exclude |= PROJECT_ONLY_TOOL_CALL_TOOLS
     sub_agent_dynamic_tools = _build_dynamic_tools_section(
         exclude=sub_agent_exclude, connected_services=connected_services,
@@ -1097,6 +1174,15 @@ def get_sub_agent_system_prompt(
 
     # Build the proxy preamble (intro + auth header rule + numbered API list)
     proxy_preamble = _build_proxy_preamble(base_url, user_api_key, connected_services)
+
+    # File tool names in the sub-agent rules: a project conversation's
+    # prompt offers the scheme-qualified tools instead of *_workspace_file.
+    if has_project:
+        sub_read_tool = "`read_file` (`chat://<file>`)"
+        sub_write_tool = "`write_file` (`chat://<file>`)"
+    else:
+        sub_read_tool = "`get_workspace_file`"
+        sub_write_tool = "`write_workspace_file`"
 
     # Nested-spawn conditional copy. When ``can_nest`` is on (1st-level sub-agent
     # with the conversation flag set), this sub-agent gets one extra tool
@@ -1190,15 +1276,15 @@ You have {tool_count_word} tools available:
 - Authentication is handled automatically -- do NOT include an Authorization header.
 - **Before calling APIs for a backend, load the matching `system:<backend>` skill first** so you have the right URL shapes and parameters. You can load multiple at once via `load_skills(skill_ids=[...])`.
 - Some backends are read via `tool_call(tool_name="authed_get", arguments={{"url": "https://..."}})` rather than the local proxy (Gmail Raw API, Google Calendar/Drive/Docs/Sheets/Slides/Tasks, Google Cloud, Airtable, Ramp, Federal Register, SEC EDGAR). The two GCP POST reads use `authed_post`. The loaded backend skill will tell you which one to use.
-- For Drive file content downloads, use `tool_call(tool_name="download_drive_file", arguments={{"file_id": "..."}})` to download to the workspace, then `get_workspace_file` to read it.
-- Native Google Docs / Sheets / Slides have no raw bytes: export them with `tool_call(tool_name="google_export_doc", arguments={{"document_id": "...", "format": "md"}})` (formats: pdf, docx, odt, rtf, txt, md, html, epub, zip), `google_export_sheet` (`spreadsheet_id`; xlsx, ods, pdf, csv, tsv, zip) or `google_export_slides` (`presentation_id`; pptx, odp, pdf, txt, png, jpeg, svg), then `get_workspace_file` to read the result.
+- For Drive file content downloads, use `tool_call(tool_name="download_drive_file", arguments={{"file_id": "..."}})` to download to the workspace, then {sub_read_tool} to read it.
+- Native Google Docs / Sheets / Slides have no raw bytes: export them with `tool_call(tool_name="google_export_doc", arguments={{"document_id": "...", "format": "md"}})` (formats: pdf, docx, odt, rtf, txt, md, html, epub, zip), `google_export_sheet` (`spreadsheet_id`; xlsx, ods, pdf, csv, tsv, zip) or `google_export_slides` (`presentation_id`; pptx, odp, pdf, txt, png, jpeg, svg), then {sub_read_tool} to read the result.
 - To convert a regular document (`.docx`, `.doc`, `.odt`, `.rtf`, `.html`, `.xlsx`, `.pptx`) to PDF or another format, use headless LibreOffice in the sandbox: `soffice --headless --convert-to pdf --outdir /workspace <file>` via `run_python` (Drive-stored files: `download_drive_file` first). Never build a PDF from `python-docx` output.
 {spawning_rule}
 - Per-backend skills (`system:slack`, `system:calendar`, `system:telegram`, `system:twitter`, `system:memory`) describe `create_action_request` calls written for the top-level agent; their read-only API calls are fine to use here, but ignore the write-call instructions and return the proposal to the parent instead.
 - When you have completed your task, you MUST call `agent_task_response(response="your findings here")`.
 - Your response should be comprehensive and well-formatted.
 - Do not ask follow-up questions -- complete the task with the information available.
-- Use `run_python` for one-off, throwaway tasks. Use `write_workspace_file` + `run_script` for scripts the user will want to keep, re-run, or modify. Load `system:workspace` for full patterns.
+- Use `run_python` for one-off, throwaway tasks. Use {sub_write_tool} + `run_script` for scripts the user will want to keep, re-run, or modify. Load `system:workspace` for full patterns.
 
 ---
 

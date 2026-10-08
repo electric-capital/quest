@@ -384,11 +384,10 @@ async def _resolve_workspace_attachment(ctx, workspace_path: str,
             "outside the conversation workspace."
         )
     if not file_path.is_file():
-        hint = (
-            " (paths are in this conversation's workspace; project files "
-            "must be copied into it first with copy_project_file)"
-            if ctx.project_id else ""
+        from chat.gemini_api.tool_handlers.file_paths import (
+            PROJECT_COPY_FIRST_SUFFIX,
         )
+        hint = PROJECT_COPY_FIRST_SUFFIX if ctx.project_id else ""
         raise _DraftError(f"Workspace file not found: {raw_path}{hint}")
 
     filename = None
@@ -1036,10 +1035,10 @@ CREATE_MAIL_DRAFT_TOOL = PluginTool(
             "message id, not the Message-ID header; Exchange preserves the "
             "conversation threading automatically, and forwards copy the "
             "original attachments), and attachments from this "
-            "conversation's workspace or from other Outlook messages. In "
-            "a project conversation, project files must be copied into "
-            "this conversation's workspace first (`copy_project_file`). "
-            "NOTE: for replies "
+            "conversation's workspace or from other Outlook messages. "
+            "Project files must be copied into this conversation's "
+            "workspace first (in a project conversation: `copy_file` from "
+            "`proj://` to `chat://`). NOTE: for replies "
             "and forwards the composed body REPLACES the auto-quoted "
             "original -- include quoted text in the body yourself if "
             "wanted. Total attachment size limit 25MB."
@@ -1120,10 +1119,11 @@ CREATE_MAIL_DRAFT_TOOL = PluginTool(
                                 "description": (
                                     "Path relative to this conversation's "
                                     "workspace (required when "
-                                    "type='workspace'). In a project "
-                                    "conversation, project files must be "
-                                    "copied into this conversation's "
-                                    "workspace first (`copy_project_file`)."
+                                    "type='workspace'). Project files must "
+                                    "be copied into this conversation's "
+                                    "workspace first (in a project "
+                                    "conversation: `copy_file` from "
+                                    "`proj://` to `chat://`)."
                                 ),
                             },
                             "message_id": {

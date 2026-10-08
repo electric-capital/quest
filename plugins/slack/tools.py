@@ -762,9 +762,10 @@ SEND_SLACK_DM_TO_SELF_TOOL = PluginTool(
                         "Optional paths, relative to this conversation's "
                         "workspace, of files to attach (max 10 files, 50 MB "
                         "each). The files are uploaded to the DM alongside "
-                        "the message. In a project conversation, project files "
-                        "must be copied into this conversation's workspace "
-                        "first (`copy_project_file`)."
+                        "the message. Project files must be copied into this "
+                        "conversation's workspace first (in a project "
+                        "conversation: `copy_file` from `proj://` to "
+                        "`chat://`)."
                     ),
                 },
                 "intent_message": {

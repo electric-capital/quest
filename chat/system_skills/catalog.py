@@ -307,10 +307,11 @@ conversation with its own, empty conversation workspace, and what a run
 writes there is not visible to the next run. A routine whose runs build on
 each other (a state file read back next run, a report appended to every
 week) must read from and write to the project workspace explicitly --
-`get_project_file` / `write_project_file` / `copy_file_to_project`, or
-`/project/...` from a script -- and its prompt should say so (e.g. "read
-`state.json` from the project files; write the report to the project
-files").
+`proj://` paths with the file tools (`read_file("proj://state.json")`,
+`write_file("proj://state.json", ...)`, `copy_file` from `chat://` to
+`proj://`), or `/project/...` from a script -- and its prompt should say so
+(e.g. "read `proj://state.json`; write the report to
+`proj://reports/weekly.md`").
 
 ### Reads (call directly)
 
@@ -420,22 +421,19 @@ def _workspace_content(_base_url: str, _api_key: str) -> str:
 
 - **Standalone conversations have one file space:** the conversation
   workspace, mounted at `/workspace` in the sandboxed script container and
-  reached through the `*_workspace_file` tools.
+  reached through the four `*_workspace_file` tools below (plain relative
+  paths).
 - **Project conversations have two:** their own conversation workspace
-  (`/workspace`, the `*_workspace_file` tools) AND the project workspace
-  shared by every conversation of the project (`/project` in scripts, the
-  `*_project_file` tools). Everything you produce -- drafts, downloads,
-  intermediate data, scripts, API responses -- goes to the conversation
-  workspace by default. Put a file in the project workspace only when it is
-  a finished deliverable that later conversations in this project should
-  find, or when the user asks.
+  (`chat://` in file-tool paths, `/workspace` in scripts) AND the project
+  workspace shared by every conversation of the project (`proj://`,
+  `/project` in scripts). Their file tools are the five scheme-qualified
+  tools below, which replace the `*_workspace_file` tools there.
+  Everything you produce -- drafts, downloads, intermediate data, scripts,
+  API responses -- goes to `chat://` by default. Put a file in `proj://`
+  only when it is a finished deliverable that later conversations in this
+  project should find, or when the user asks.
 
-Every path belongs to exactly one space, fixed by the tool it is passed to:
-a bare path given to a workspace tool resolves only in the conversation
-workspace, one given to a project tool only in the project workspace, and
-neither tool looks in the other space on a miss.
-
-### Workspace file tools (via `tool_call`)
+### Workspace file tools (standalone conversations, via `tool_call`; in a project conversation the scheme tools below on `chat://` paths do the same)
 
 - **list_workspace_files()** — list every file in the workspace. Use this
   before trying to read a file whose exact path you don't already know.
@@ -455,31 +453,38 @@ neither tool looks in the other space on a miss.
   exact string replacement in a workspace file you have read in this
   conversation.
 
-### Project file and copy tools (project conversations only, via `tool_call`)
+### Scheme-qualified file tools (project conversations, via `tool_call`)
 
-- **list_project_files()** / **get_project_file(path)** /
-  **write_project_file(path, content)** /
-  **edit_project_file(path, old_string, new_string, replace_all?)** — the
-  same four operations over the project workspace. `edit_project_file`
-  needs a prior `get_project_file` (or `write_project_file`) of that path in
-  this conversation.
-- **copy_file_to_project(path, dest?, overwrite?, include_hidden?)** — copy a
-  file or directory from this conversation's workspace into the project
-  workspace (the way to promote finished work).
-- **copy_project_file(path, dest?, overwrite?, include_hidden?)** — copy a
-  file or directory from the project workspace into this conversation's
-  workspace.
-- An existing destination is refused unless `overwrite: true`; copying a
-  directory skips dot-entries unless `include_hidden: true`.
+Every path names its space: `chat://<path>` (this conversation's
+workspace) or `proj://<path>` (the project workspace). A bare path, an
+unknown scheme, `..` or an absolute remainder is refused (`invalid_path`).
+
+- **list_files(path)** — list a whole space (`"chat://"`, `"proj://"`) or
+  one directory's subtree (`"proj://reports"`).
+- **read_file(path)** / **write_file(path, content)** /
+  **edit_file(path, old_string, new_string, replace_all?)** — the same
+  behaviour as the `*_workspace_file` tools above, in either space.
+  `edit_file` needs a prior read or write of that file in this
+  conversation (a read through `get_workspace_file` of the same
+  `chat://` file counts too).
+- **copy_file(src, dest, overwrite?, include_hidden?)** — copy a file or
+  directory between or within the spaces: `chat://` -> `proj://` promotes
+  finished work, `proj://` -> `chat://` brings a project file into this
+  conversation. `dest` is the full destination path. An existing
+  destination is refused unless `overwrite: true`; copying a directory
+  skips dot-entries unless `include_hidden: true`; this conversation's
+  `.responses/`, `.subagent_responses/` and `pasted/` (`chat://`) cannot
+  be copied to `proj://`.
 - From a script, both spaces are plain directories:
   `shutil.copy('/workspace/out.pdf', '/project/out.pdf')` promotes a file.
 
 **Copy first:** attachments (Slack self-DM `files`, Gmail / Outlook draft
 attachments, `upload_to_drive`, `add_doc_image`, `return_to_caller`), inline
-markdown images in your replies and `run_script` take conversation paths
-only. In a project conversation, project files must be copied into this
-conversation's workspace first (`copy_project_file`). To run a script kept
-in the project workspace without copying it, start it from `run_python`:
+markdown images in your replies and `run_script` take plain paths in this
+conversation's workspace only. Project files must be copied into this
+conversation's workspace first (in a project conversation: `copy_file` from
+`proj://` to `chat://`). To run a script kept in the project workspace
+without copying it, start it from `run_python`:
 `subprocess.run(["python3", "/project/etl.py"], check=True)`.
 
 ### Hidden directories for non-user-facing files
@@ -608,8 +613,8 @@ per-run profile.
   image back with `get_workspace_file` just to show it — only read it back
   when you yourself need to inspect the pixels (e.g. to check a render).
   Slack replies cannot render workspace images. A project-workspace image
-  must be copied into the conversation workspace (`copy_project_file`)
-  before it can be embedded.
+  must be copied into the conversation workspace first (`copy_file` from
+  `proj://` to `chat://`) before it can be embedded.
 - For large textual output, write to a workspace file and read it back with
   `get_workspace_file` instead of returning everything via stdout.
 """
@@ -767,10 +772,10 @@ me", "message me on Slack"), use the `send_slack_dm_to_self` dynamic
 tool (via `tool_call`) directly. This sends a Quest-bot DM, does NOT
 require approval, works in automated / scheduled routines where there is
 no human to approve action requests, and optionally attaches workspace
-files (`files`: workspace-relative paths). In a project conversation,
-project files must be copied into this conversation's workspace first
-(`copy_project_file`). Note: self-DMs appear from the Quest bot, not the
-user. Full usage lives in `system:slack`.
+files (`files`: workspace-relative paths). Project files must be copied
+into this conversation's workspace first (in a project conversation:
+`copy_file` from `proj://` to `chat://`). Note: self-DMs appear from the
+Quest bot, not the user. Full usage lives in `system:slack`.
 
 ### In scheduled / automated routines
 Routines run unattended — there is no human to approve action requests
@@ -1088,9 +1093,9 @@ still work in Slack.
 Docs embed raster images (PNG, JPEG, GIF, WebP; max {image_cap} each,
 {assets_cap} per doc; checked by content, SVG refused). Put the image in
 this conversation's workspace first (e.g. a matplotlib chart saved to
-`/workspace/chart.png`, or a downloaded file; in a project conversation,
-project files must be copied into this conversation's workspace first
-(`copy_project_file`)), then call
+`/workspace/chart.png`, or a downloaded file; project files must be copied
+into this conversation's workspace first -- in a project conversation:
+`copy_file` from `proj://` to `chat://`), then call
 `add_doc_image(doc_id, workspace_path="chart.png", alt="...")`. The image is
 copied into the doc's `assets/` (renamed `-2`, `-3`, ... on collision) and
 with the default `placement: "append"` the line `![alt](assets/<name>)` is

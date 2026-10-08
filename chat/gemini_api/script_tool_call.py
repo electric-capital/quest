@@ -14,11 +14,11 @@ Only tools that make sense outside the agent loop are exposed:
   ``project_db_query``, ``get_response_content``, and the workspace-download
   tools need dispatch-context ids the endpoint does not have; scripts already
   have the conversation workspace mounted at ``/workspace``, so the workspace
-  file tools are pointless here too). The project file and copy tools
-  (``list_project_files``, ``get_project_file``, ``write_project_file``,
-  ``edit_project_file``, ``copy_file_to_project``, ``copy_project_file``) are
-  left out for the same reason: a project conversation's scripts have the
-  project workspace mounted at ``/project`` and copy with ``shutil``.
+  file tools are pointless here too). The scheme-qualified file tools
+  (``list_files``, ``read_file``, ``write_file``, ``edit_file``,
+  ``copy_file``) are left out for the same reason: a project conversation's
+  scripts have the project workspace mounted at ``/project`` and copy with
+  ``shutil``.
 * No provider-part tools (``get_workspace_file`` returns provider-specific
   attachment parts that have no HTTP representation).
 * ``authed_get`` / ``authed_post`` keep their dedicated routes
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 # Tools invocable from sandbox scripts via POST /api/tool-call. An explicit
 # allow-list (not a deny-list) so newly registered tools stay script-invisible
-# until deliberately added. The workspace and project file / copy tools are
+# until deliberately added. The workspace and scheme-qualified file tools are
 # deliberately absent: scripts read and write /workspace (and /project in a
 # project conversation) directly.
 SCRIPT_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({

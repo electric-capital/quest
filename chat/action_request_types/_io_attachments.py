@@ -166,10 +166,8 @@ def _project_copy_hint(project_id: str | None) -> str:
     this conversation's workspace, never the shared project workspace."""
     if not project_id:
         return ""
-    return (
-        " (paths are in this conversation's workspace; project files must "
-        "be copied into it first with copy_project_file)"
-    )
+    from chat.gemini_api.tool_handlers.file_paths import PROJECT_COPY_FIRST_SUFFIX
+    return PROJECT_COPY_FIRST_SUFFIX
 
 
 async def resolve_workspace_file(
@@ -198,7 +196,8 @@ async def resolve_workspace_file(
     :func:`read_workspace_attachments`. ``project_id`` never changes the
     root: every conversation, project conversations included, resolves to
     its own conversation workspace (``conversation_workspace_dir``); it only
-    adds the ``copy_project_file`` hint to a not-found error.
+    adds the copy-first hint (``copy_file`` from ``proj://`` to ``chat://``)
+    to a not-found error.
     """
     if not conversation_id:
         raise RuntimeError(
@@ -314,8 +313,8 @@ async def read_workspace_attachments(
         project_id: Never changes the root: attachments always resolve
             against the conversation workspace root
             (``conversation_workspace_dir``), project conversations
-            included; only adds the ``copy_project_file`` hint to a
-            not-found error.
+            included; only adds the copy-first hint to a not-found
+            error.
         attachments: Pre-validated entries from
             :func:`validate_attachments_param` -- each has a ``path``
             and an optional ``filename`` override.

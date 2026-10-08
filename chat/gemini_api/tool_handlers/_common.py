@@ -27,9 +27,10 @@ async def project_workspace_dir(project_id: str) -> Path:
     """Return the project workspace root, creating it if missing.
 
     ``ChatStorage.get_project_workspace_root``: the workspace shared by all
-    conversations of the project, reached only through the project file
-    tools, the copy tools, ``/project`` in the sandbox and the project file
-    routes.
+    conversations of the project, reached only through ``proj://`` paths
+    of the space-aware file tools (``list_files`` / ``read_file`` /
+    ``write_file`` / ``edit_file`` / ``copy_file``), ``/project`` in the
+    sandbox and the project file routes.
     """
     from chat.storage import ChatStorage
     workspace_dir = ChatStorage.get_project_workspace_root(project_id)
@@ -37,19 +38,20 @@ async def project_workspace_dir(project_id: str) -> Path:
     return workspace_dir
 
 
-def _not_a_project_conversation_result() -> str:
-    """Structured refusal of a project file / copy tool outside a project.
+def _no_project_result() -> str:
+    """Structured refusal of a ``proj://`` path outside a project.
 
-    The tools are only offered in project conversations; this guards a
-    call that reaches dispatch anyway (stale schema, hallucinated name).
+    The space-aware file tools are only offered in project conversations;
+    this guards a call that reaches dispatch anyway (a standalone
+    conversation, a stale schema, a hallucinated path).
     """
     return json.dumps({
         "error": (
-            "This conversation is not part of a project, so it has no "
-            "project files. Use the *_workspace_file tools for this "
-            "conversation's workspace."
+            "This conversation is not part of a project, so proj:// paths "
+            "do not exist here. Use chat:// paths for this conversation's "
+            "workspace."
         ),
-        "code": "not_a_project_conversation",
+        "code": "no_project",
     })
 
 
