@@ -12,6 +12,7 @@ import {
 } from '../../api/client';
 import type {
   InferenceApiType,
+  InferenceCatalogSource,
   InferenceInstanceStatus,
   InferenceModelInfo,
   InferenceProvidersListResponse,
@@ -537,7 +538,7 @@ function VertexProviderCard({ status: initial }: { status: VertexProviderStatus 
 }
 
 // ---------------------------------------------------------------------------
-// Model typeahead (OpenRouter catalog / self-hosted server discovery)
+// Model typeahead (OpenRouter / Fireworks catalog, self-hosted server discovery)
 // ---------------------------------------------------------------------------
 
 function formatContext(tokens: number | null): string {
@@ -729,8 +730,37 @@ const openRouterSearch: CatalogSearch = async (q) => {
 };
 
 // ---------------------------------------------------------------------------
-// Provider-instance card (one OpenRouter configuration or self-hosted server)
+// Provider-instance card (one OpenRouter / Fireworks configuration or
+// self-hosted server)
 // ---------------------------------------------------------------------------
+
+/** Per-catalog copy for the "Add model" combobox. */
+function addModelCopy(
+  catalog: InferenceCatalogSource,
+  configured: boolean,
+): { placeholder: string; emptyHint: string } {
+  switch (catalog) {
+    case 'server':
+      return {
+        placeholder: configured
+          ? 'Add a model — pick one the server reports or type its name'
+          : 'Save the server URL first',
+        emptyHint: 'The server reports no other models',
+      };
+    case 'fireworks':
+      return {
+        placeholder: configured
+          ? 'Add a model — search the Fireworks catalog or type a model id'
+          : 'Save the API key first',
+        emptyHint: 'Type to search the catalog',
+      };
+    default:
+      return {
+        placeholder: 'Add a model — search the OpenRouter catalog or type an id',
+        emptyHint: 'Type to search the catalog',
+      };
+  }
+}
 
 /** Three-dot header menu holding the card's destructive action. */
 function CardMenu({ items }: { items: { label: string; onClick: () => void; disabled?: boolean; danger?: boolean }[] }) {
@@ -792,12 +822,15 @@ function CardMenu({ items }: { items: { label: string; onClick: () => void; disa
 function InstanceCard({
   status: initial,
   endpoint,
+  catalog,
   apiTypes,
   onDeleted,
 }: {
   status: InferenceInstanceStatus;
   // The kind carries its own base URL + API type (self-hosted server)
   endpoint: boolean;
+  // Where the "Add model" typeahead looks (the kind's catalog source)
+  catalog: InferenceCatalogSource;
   apiTypes: InferenceApiType[];
   onDeleted: (instanceId: string) => void;
 }) {
@@ -907,6 +940,20 @@ function InstanceCard({
 
   const existing = new Set(status.models.map((m) => m.wire_id));
   const dirty = !!apiKey.trim() || labelDirty || baseUrlDirty || apiTypeDirty;
+  // The shared OpenRouter catalog needs no credentials; an instance's own
+  // catalog (self-hosted server, Fireworks) needs the instance configured.
+  const ownCatalog = catalog !== 'openrouter';
+  const addModel = addModelCopy(catalog, status.configured);
+  const modelsNote = endpoint
+    ? 'Self-hosted models are priced at $0. Rename a model or set its context window below each row' +
+      (apiType === 'ollama' ? ' — for Ollama the context window is requested on every call.' : '.') +
+      ' The system prompt alone is roughly 17K tokens, so the server must allow at least a 32K context' +
+      (apiType === 'ollama' ? '.' : ' (llama.cpp: -c 32768).')
+    : catalog === 'fireworks'
+      ? 'Fireworks model ids are resource names such as accounts/fireworks/models/<name>; ' +
+        'the catalog lists the serverless models. A dedicated deployment ' +
+        '(accounts/<account>/deployments/<id>) can be typed in as a custom id.'
+      : undefined;
 
   return (
     <CredentialCard
@@ -988,30 +1035,17 @@ function InstanceCard({
           groups={[{ title: null, configured: status.configured, models: status.models }]}
           busy={modelsBusy || deleting}
           saveError={modelsError}
-          note={
-            endpoint
-              ? 'Self-hosted models are priced at $0. Rename a model or set its context window below each row' +
-                (apiType === 'ollama' ? ' — for Ollama the context window is requested on every call.' : '.') +
-                ' The system prompt alone is roughly 17K tokens, so the server must allow at least a 32K context' +
-                (apiType === 'ollama' ? '.' : ' (llama.cpp: -c 32768).')
-              : undefined
-          }
+          note={modelsNote}
           onToggle={handleToggle}
           onRemove={handleRemove}
           onEdit={endpoint ? handleEdit : undefined}
         >
           <AddModelCombobox
             existing={existing}
-            disabled={modelsBusy || deleting || (endpoint && !status.configured)}
-            search={endpoint ? instanceSearch : openRouterSearch}
-            placeholder={
-              endpoint
-                ? status.configured
-                  ? 'Add a model — pick one the server reports or type its name'
-                  : 'Save the server URL first'
-                : 'Add a model — search the OpenRouter catalog or type an id'
-            }
-            emptyHint={endpoint ? 'The server reports no other models' : 'Type to search the catalog'}
+            disabled={modelsBusy || deleting || (ownCatalog && !status.configured)}
+            search={ownCatalog ? instanceSearch : openRouterSearch}
+            placeholder={addModel.placeholder}
+            emptyHint={addModel.emptyHint}
             onAdd={handleAdd}
           />
         </ModelsPanel>
@@ -1030,9 +1064,11 @@ function InstanceCard({
  * server environment) with per-model enable checkboxes; every provider
  * instance gets its own editable card -- an OpenRouter configuration with a
  * label, a write-only API key and a model list fed by the OpenRouter
- * catalog typeahead, or a self-hosted server with a label, server URL, API
- * type (OpenAI-compatible / Ollama), optional key and a model list fed by
- * what the server reports, with inline name / context editing per model.
+ * catalog typeahead, a Fireworks AI configuration (same shape, its model
+ * list fed by the Fireworks serverless catalog fetched with the saved
+ * key), or a self-hosted server with a label, server URL, API type
+ * (OpenAI-compatible / Ollama), optional key and a model list fed by what
+ * the server reports, with inline name / context editing per model.
  * Each card's Models panel shows the real model id string used in API
  * calls, the server-stored liveness verdict per model (startup sweep +
  * rechecks), and Recheck buttons. Instances are added from the buttons at
@@ -1092,15 +1128,19 @@ export function InferenceProvidersSection() {
         <>
           <div className="inf-prov-cards">
             <VertexProviderCard status={data.vertex} />
-            {data.instances.map((instance) => (
-              <InstanceCard
-                key={instance.id}
-                status={instance}
-                endpoint={data.kinds.find((k) => k.kind === instance.kind)?.endpoint ?? false}
-                apiTypes={data.api_types}
-                onDeleted={handleDeleted}
-              />
-            ))}
+            {data.instances.map((instance) => {
+              const kind = data.kinds.find((k) => k.kind === instance.kind);
+              return (
+                <InstanceCard
+                  key={instance.id}
+                  status={instance}
+                  endpoint={kind?.endpoint ?? false}
+                  catalog={kind?.catalog ?? 'openrouter'}
+                  apiTypes={data.api_types}
+                  onDeleted={handleDeleted}
+                />
+              );
+            })}
           </div>
           <div className="inf-prov-footer">
             {data.kinds.map((kind) => (

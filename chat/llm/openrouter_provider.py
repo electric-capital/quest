@@ -7,15 +7,19 @@ key. The key is managed as an editable API-key inference provider
 non-Vertex models with nothing but a key pasted into Settings >
 Inference Providers.
 
-The same class serves **self-hosted** instances (kind ``local`` with API
-type ``openai``): the instance's own base URL replaces OpenRouter's, the
-key is optional (sent as a bearer token only when stored) and the
-OpenRouter-only request extensions are left out. Every mainstream local
-server -- llama.cpp ``llama-server``, vLLM, LM Studio, LocalAI, SGLang,
-Ollama's compatibility layer -- speaks this protocol. Self-hosted
-instances with API type ``ollama`` use the ``OllamaProvider`` subclass
-(chat/llm/ollama_provider.py), which keeps this class's session/history
-format but talks Ollama's native API.
+The same class serves **Fireworks AI** instances (kind ``fireworks``: the
+kind's fixed ``upstream_url`` ``https://api.fireworks.ai/inference/v1``
+with the instance's bearer API key, no OpenRouter-only extensions --
+Fireworks already includes usage in the final streamed chunk) and
+**self-hosted** instances (kind ``local`` with API type ``openai``): the
+instance's own base URL replaces OpenRouter's, the key is optional (sent
+as a bearer token only when stored) and the OpenRouter-only request
+extensions are left out. Every mainstream local server -- llama.cpp
+``llama-server``, vLLM, LM Studio, LocalAI, SGLang, Ollama's compatibility
+layer -- speaks this protocol. Self-hosted instances with API type
+``ollama`` use the ``OllamaProvider`` subclass (chat/llm/ollama_provider.py),
+which keeps this class's session/history format but talks Ollama's native
+API.
 
 Session history uses the OpenAI chat message format (plain dicts):
 ``{"role": "user"|"assistant"|"tool", "content": ...}`` with assistant
@@ -145,15 +149,20 @@ class OpenRouterProvider(LLMProvider):
         """Resolve where this instance's requests go.
 
         Returns ``{"base_url", "api_key", "headers", "openrouter"}``.
-        OpenRouter instances need their stored key; a self-hosted instance
-        needs its base URL and uses the stored key only when one exists
-        (the openai SDK insists on a non-empty key, so a placeholder is
-        sent otherwise -- local servers without ``--api-key`` ignore it).
+        Fixed-upstream kinds (OpenRouter, Fireworks) send requests to the
+        kind's ``upstream_url`` and need their stored key; a self-hosted
+        instance needs its base URL and uses the stored key only when one
+        exists (the openai SDK insists on a non-empty key, so a placeholder
+        is sent otherwise -- local servers without ``--api-key`` ignore it).
+        ``openrouter`` flags the one upstream whose request extensions
+        (accounting opt-in, attribution headers) apply.
 
         Raises:
             ValueError: descriptive "not configured" message for the admin.
         """
         from config.inference_providers import (
+            INSTANCE_KINDS,
+            LEGACY_OPENROUTER_INSTANCE_ID,
             effective_api_key,
             get_instance,
             is_endpoint_kind,
@@ -175,17 +184,22 @@ class OpenRouterProvider(LLMProvider):
                 "headers": None,
                 "openrouter": False,
             }
+        # An instance with no config entry (legacy single key, or the entry
+        # not yet synthesized) is the OpenRouter kind.
+        kind_name = instance["kind"] if instance is not None else LEGACY_OPENROUTER_INSTANCE_ID
+        kind = INSTANCE_KINDS[kind_name]
         if not api_key:
             raise ValueError(
-                f"OpenRouter API key not configured for instance "
+                f"{kind['label']} API key not configured for instance "
                 f"'{self.instance_id}'. Add it in Settings > Inference "
                 "Providers (admin only)."
             )
+        is_openrouter = kind_name == LEGACY_OPENROUTER_INSTANCE_ID
         return {
-            "base_url": OPENROUTER_BASE_URL,
+            "base_url": kind["upstream_url"] or OPENROUTER_BASE_URL,
             "api_key": api_key,
-            "headers": _OPENROUTER_HEADERS,
-            "openrouter": True,
+            "headers": _OPENROUTER_HEADERS if is_openrouter else None,
+            "openrouter": is_openrouter,
         }
 
     def _get_client(self):

@@ -1279,8 +1279,16 @@ async def admin_list_inference_providers(
     return {
         "vertex": _vertex_status(),
         "instances": [_instance_status(inst) for inst in list_instances()],
+        # ``catalog`` tells the card where its "Add model" typeahead looks:
+        # the shared OpenRouter list, the instance's own (key-fetched)
+        # Fireworks catalog, or the self-hosted server itself.
         "kinds": [
-            {"kind": kind, "label": spec["label"], "endpoint": spec["endpoint"]}
+            {
+                "kind": kind,
+                "label": spec["label"],
+                "endpoint": spec["endpoint"],
+                "catalog": spec["catalog"],
+            }
             for kind, spec in INSTANCE_KINDS.items()
         ],
         # API types a self-hosted instance can speak (the card's selector)
@@ -1407,10 +1415,10 @@ async def admin_update_inference_instance(
     """Update an instance's label, API key, endpoint and/or model list.
 
     Models new to the instance get their metadata (name, context/output
-    limits, pricing) snapshotted from the cached OpenRouter catalog or,
-    for a self-hosted instance, from what its server reports right now;
-    entries neither lists are kept as custom ids with conservative
-    defaults. Per-model ``name`` / ``context_length`` overrides in the
+    limits, pricing) snapshotted from the cached OpenRouter catalog, the
+    cached Fireworks catalog (fetched with the instance's key) or, for a
+    self-hosted instance, from what its server reports right now; entries
+    no catalog lists are kept as custom ids with conservative defaults. Per-model ``name`` / ``context_length`` overrides in the
     list replace the stored snapshot values (self-hosted servers publish
     no friendly names, and the Ollama context length is what the provider
     requests per call). A key or endpoint change drops cached SDK clients
@@ -1555,20 +1563,22 @@ async def admin_update_inference_instance(
 async def _catalog_snapshots(instance: dict, wire_ids: list[str]) -> dict[str, dict]:
     """Catalog metadata for ``wire_ids`` (defaults per unlisted id).
 
-    OpenRouter instances use the cached catalog (no refresh) so a save
-    never blocks on the network beyond the first fetch; self-hosted
-    instances ask their server (a short live request). An unreachable
-    catalog/server just means custom-id defaults -- for a self-hosted
-    instance the zero pricing and, on Ollama, the default context.
+    OpenRouter and Fireworks instances use their cached catalog (no
+    refresh) so a save never blocks on the network beyond the first fetch;
+    self-hosted instances ask their server (a short live request). An
+    unreachable catalog/server just means custom-id defaults -- for a
+    self-hosted instance the zero pricing and, on Ollama, the default
+    context.
     """
     if not wire_ids:
         return {}
     import asyncio
 
     from chat.llm.openrouter_catalog import catalog_snapshot
-    from config.inference_providers import is_endpoint_kind
+    from config.inference_providers import INSTANCE_KINDS, effective_api_key
 
-    if is_endpoint_kind(instance["kind"]):
+    source = INSTANCE_KINDS[instance["kind"]]["catalog"]
+    if source == "server":
         from chat.llm.local_catalog import default_snapshot, discover_models
 
         listed = (await discover_models(instance))["models"] if instance.get("base_url") else []
@@ -1577,9 +1587,16 @@ async def _catalog_snapshots(instance: dict, wire_ids: list[str]) -> dict[str, d
             for wire_id in wire_ids
         }
 
-    from chat.llm.openrouter_catalog import get_catalog
+    if source == "fireworks":
+        from chat.llm.fireworks_catalog import get_catalog as get_fireworks_catalog
 
-    catalog = await asyncio.to_thread(get_catalog)
+        catalog = await asyncio.to_thread(
+            get_fireworks_catalog, effective_api_key(instance["id"])[0]
+        )
+    else:
+        from chat.llm.openrouter_catalog import get_catalog
+
+        catalog = await asyncio.to_thread(get_catalog)
     return {
         wire_id: catalog_snapshot(catalog["models"], wire_id) or {}
         for wire_id in wire_ids
@@ -1591,34 +1608,58 @@ async def admin_instance_catalog(
     instance_id: str,
     q: str = "",
     limit: int = 20,
+    refresh: bool = False,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """Typeahead candidates for a self-hosted instance: the models its
-    server reports right now (``/v1/models`` or Ollama's ``/api/tags``),
-    filtered like the OpenRouter catalog search. Not cached -- what a local
-    box serves changes whenever a model is loaded or pulled. ``error`` is
-    set (and ``models`` empty) when the server cannot be reached; an
-    instance with no base URL yet answers the same way (400 for kinds that
-    have no endpoint of their own).
+    """Typeahead candidates from an instance's OWN model catalog, filtered
+    like the OpenRouter catalog search: ``{models, error}``.
+
+    - Self-hosted instances: the models the server reports right now
+      (``/v1/models`` or Ollama's ``/api/tags``). Not cached -- what a
+      local box serves changes whenever a model is loaded or pulled.
+      ``error`` is set (and ``models`` empty) when the server cannot be
+      reached; an instance with no base URL yet answers the same way.
+    - Fireworks instances: the serverless catalog fetched with the
+      instance's stored key (cached 24h, ``refresh=true`` re-fetches);
+      a missing or rejected key sets ``error`` with the stale cache -- or
+      an empty list -- so custom-id entry still works.
+
+    400 for kinds whose typeahead is the shared OpenRouter catalog
+    (``GET /admin/inference-providers/openrouter/catalog``).
     """
     _require_admin(user)
-    from chat.llm.local_catalog import discover_models
+    import asyncio
+
     from chat.llm.openrouter_catalog import search_catalog
-    from config.inference_providers import is_endpoint_kind
+    from config.inference_providers import INSTANCE_KINDS, effective_api_key
 
     instance = _instance_or_404(instance_id)
-    if not is_endpoint_kind(instance["kind"]):
+    source = INSTANCE_KINDS[instance["kind"]]["catalog"]
+    limit = max(1, min(limit, 100))
+    if source == "fireworks":
+        from chat.llm.fireworks_catalog import get_catalog as get_fireworks_catalog
+
+        api_key = effective_api_key(instance_id)[0]
+        if not api_key:
+            return {"models": [], "error": "No API key saved yet."}
+        catalog = await asyncio.to_thread(get_fireworks_catalog, api_key, refresh)
+        return {
+            "models": search_catalog(catalog["models"], q, limit),
+            "error": catalog["error"],
+        }
+    if source != "server":
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "invalid_params",
-                "message": "Only self-hosted instances report their own model list.",
+                "message": "This instance kind uses the shared OpenRouter catalog.",
             },
         )
+    from chat.llm.local_catalog import discover_models
+
     if not instance.get("base_url"):
         return {"models": [], "error": "No server URL configured yet."}
     result = await discover_models(instance)
-    limit = max(1, min(limit, 100))
     return {
         "models": search_catalog(result["models"], q, limit),
         "error": result["error"],
