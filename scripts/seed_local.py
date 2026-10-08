@@ -77,6 +77,12 @@ PROJECT_GUIDE = (
     "grounded in the files in the project workspace."
 )
 
+PROJECT_CHAT_NOTES = """# Chat notes
+
+This file lives in this conversation's own workspace, not in the shared
+project files. Sibling conversations in the project do not see it.
+"""
+
 WORKSPACE_README = """# Demo Project workspace
 
 This file was created by scripts/seed_local.py so the file browser has
@@ -312,14 +318,9 @@ async def seed() -> bool:
     print(f"  skill: {SKILL_NAME}")
 
     project = await create_project(alice["id"], PROJECT_NAME, guide=PROJECT_GUIDE)
-    ChatStorage.create_project_workspace(project["id"])
-    # The file browser resolves a project conversation's paths to the *nested*
-    # `workspace/workspace/` dir: get_workspace_path() returns
-    # projects/{id}/workspace/, and chat/file_storage.py:validate_path() then
-    # appends another "workspace" segment. Demo files must land in that nested
-    # dir to actually appear in the right-panel file browser.
-    browsable = ChatStorage.get_project_dir(project["id"]) / "workspace" / "workspace"
-    browsable.mkdir(parents=True, exist_ok=True)
+    # Project files shared by every conversation of the project live in the
+    # project workspace root (projects/{id}/workspace/workspace/).
+    browsable = ChatStorage.create_project_workspace(project["id"])
     (browsable / "README.md").write_text(WORKSPACE_README)
     print(f"  project: {PROJECT_NAME} (workspace README.md)")
 
@@ -348,7 +349,12 @@ async def seed() -> bool:
     )
     await ChatStorage.append_message(conversation_id, "user", user_message)
     await ChatStorage.append_message(conversation_id, "assistant", assistant_message)
-    print("  1 project conversation")
+    # Each project conversation also has its own conversation workspace
+    # (chats/{id}/workspace/), separate from the shared project files.
+    chat_root = ChatStorage.get_conversation_workspace_root(conversation_id)
+    chat_root.mkdir(parents=True, exist_ok=True)
+    (chat_root / "chat-notes.md").write_text(PROJECT_CHAT_NOTES)
+    print("  1 project conversation (conversation workspace chat-notes.md)")
 
     await _seed_heavy_user(users["heidi@quest.local"])
 

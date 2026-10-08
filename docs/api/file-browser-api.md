@@ -1,19 +1,24 @@
 # File Browser API Documentation
 
-This document describes the File Browser API endpoints for managing files within conversation workspaces.
+This document describes the File Browser API endpoints for managing files within conversation workspaces and project workspaces.
 
 ## Overview
 
 The File Browser API provides endpoints for listing, uploading, downloading, creating folders, and deleting files in a conversation's workspace directory. Each conversation has an isolated workspace folder that Gemini can access during tool execution.
 
-**Endpoint prefix:** `/app/api/conversations/{conversation_id}/files`
+Two workspaces are browsable (devplan 00009):
+
+- the **conversation workspace** `data/chats/{id}/workspace/` (`ChatStorage.get_conversation_workspace_root`), for every conversation -- standalone or in a project -- under `/app/api/conversations/{conversation_id}/files`;
+- the **project workspace** `data/projects/{id}/workspace/workspace/` (`ChatStorage.get_project_workspace_root`), shared by every conversation of a project, under `/app/api/projects/{project_id}/files`.
+
+A path passed to one route set resolves only inside that set's workspace; neither falls back to the other space on a miss.
 
 ## Key Files
 
 | File | Description |
 |------|-------------|
-| `chat/file_routes.py` | File browser endpoint implementations (list, upload, download, download folder as zip, read content, file info, delete, create folder, save to Drive) |
-| `chat/file_storage.py` | File operations, path validation, directory conflict detection, text content reading (`get_file_content()`), file/folder info (`count_workspace_item_files()`), deletion (`delete_workspace_item()`), folder zipping (`create_folder_zip()`), folder creation (`create_workspace_folder()`), and upload size limit (`MAX_FILE_SIZE`, 200MB) |
+| `chat/file_routes.py` | File browser endpoint implementations (list, upload, download, download folder as zip, read content, file info, delete, create folder, save to Drive) as root-parameterised handlers (`_list`, `_upload`, `_read_content`, `_download`, `_download_folder`, `_info`, `_delete`, `_create_folder`, `_save_to_drive`) behind the conversation and project route sets, plus the copy-to-project / copy-from-project routes |
+| `chat/file_storage.py` | File operations, path validation, directory conflict detection, text content reading (`get_file_content()`), file/folder info (`count_workspace_item_files()`), deletion (`delete_workspace_item()`), folder zipping (`create_folder_zip()`), folder creation (`create_workspace_folder()`), copying between workspace roots (`copy_entry()`, `CopyEntryError`, `is_scratch_source()`), and upload size limit (`MAX_FILE_SIZE`, 200MB) |
 | `quest.py` | Route registration |
 | `frontend/src/components/FileBrowser.tsx` | UI component for file browsing (supports file and folder drag-and-drop, opens FileViewerModal for viewable text files, JSON files, images, PDFs, and CSVs, folder download as zip, split Upload Files + New Folder action buttons with Lucide icons, hides dot-prefixed entries by default behind a stateful Eye/EyeOff toggle -- client-side only); uses Lucide icons via `getFileIconInfo()` for extension-specific file icons and `Folder` for directories |
 | `frontend/src/components/FileBrowser.css` | FileBrowser styling (includes multi-line error display, upload progress bar, zipping notification bar, equal-width action button row, show-hidden toggle button, hidden-count empty-state hint, and 16 icon color classes for file-type icons in dark/light mode) |
@@ -43,17 +48,17 @@ All File Browser endpoints support dual authentication: session cookie OR API ke
 **Error codes:**
 - `401` - Not authenticated (no valid cookie or API key)
 - `403` - Access restricted (wrong email domain)
-- `404` - Conversation not found
+- `404` - Conversation (or project) not found or not owned by the caller
 
 ## Endpoints
 
 All endpoints are defined in `chat/file_routes.py`. File operations (path validation, content reading, deletion) are in `chat/file_storage.py`. See those files for parameters, request/response shapes, and error codes.
 
-The four mutating routes (`upload_files`, `upload_composer_attachments`, `delete_file`, `create_folder`) publish a per-user `file_list_changed` global on the realtime bus after a successful write so file browsers in any of the user's other open tabs silent-refresh.
+The mutating routes (upload, composer attachments, delete, create-folder, and their project twins, plus the copy routes) publish a per-user `file_list_changed` global on the realtime bus after a successful write so file browsers in any of the user's other open tabs silent-refresh.
 
 The publish is a best-effort `bus.publish_to_user(...)` wrapped in try/except via `_publish_file_list_changed` in `chat/file_routes.py`; a publish failure never rolls back the underlying write.
 
-The envelope carries `scope="project"` when the conversation belongs to a project (so sibling-conversation tabs under the same project also refresh) and `scope="conversation"` otherwise. See [Realtime Architecture](../architecture/realtime.md#backend-publish-sites-per-user-globals) for the publish sites and [Subscription Protocol](../architecture/realtime.md#subscription-protocol) for the wire envelope.
+Each route passes `scope` explicitly: the conversation routes publish `scope="conversation"` (project conversations included, with their `project_id` still on the envelope), the project routes `scope="project"` with `conversation_id: null` (so every tab of the project refreshes), and the copy routes one event per scope. See [Realtime Architecture](../architecture/realtime.md#backend-publish-sites-per-user-globals) for the publish sites and [Subscription Protocol](../architecture/realtime.md#subscription-protocol) for the wire envelope.
 
 Endpoints under `/app/api/conversations/{conversation_id}/files`:
 
@@ -67,6 +72,21 @@ Endpoints under `/app/api/conversations/{conversation_id}/files`:
 - **DELETE `/files`** -- Delete a file or folder recursively (`delete_file()`)
 - **POST `/files/create-folder`** -- Create a new empty folder inside the workspace under the given parent path (`create_folder()`). Backed by `create_workspace_folder()` in `chat/file_storage.py`, which reuses `validate_path()`, `_sanitize_filename()`, and `_check_dir_conflicts()` for the same path-traversal, Unicode-space, and ancestor-file-conflict protections as the upload path. The folder name is rejected if empty, if it contains `/`, `\\`, or `..`, or if it collides with an existing entry.
 
+### Project workspace routes
+
+`/app/api/projects/{project_id}/files`, `/files/upload`, `/files/content`, `/files/download`, `/files/download-folder`, `/files/info`, `DELETE /files`, `/files/create-folder`, `/files/save-to-drive` mirror the conversation routes above with the same handlers and error shapes, over `resolve_owned_project_workspace()` in `chat/conversation_access.py` (404 `not_found` unless the caller owns the project). The project root is created on first access, so listing a project that never wrote a file returns an empty list. There is no project composer-attachment route: `pasted/` is conversation scratch.
+
+### Copy / move routes
+
+`POST /app/api/conversations/{conversation_id}/files/copy-to-project` and `/files/copy-from-project` copy (or, with `move: true`, move) a file or folder between a project conversation's workspace and its project's workspace. Body: `{path, dest?, overwrite?, move?, include_hidden?}` (`CopyEntryRequest`; `dest` defaults to `path`). The work is `copy_entry()` in `chat/file_storage.py`, run via `asyncio.to_thread`; see its docstring for the rules (both ends validated with `validate_path`, symlink / special-file leaves refused, symlinks and special files inside a folder skipped, dot-entries skipped unless named or `include_hidden`, folder merge on `overwrite`, a destination that is the source, inside it or (same root) an ancestor of it refused, every conflict found before anything is written, mid-copy symlink swaps refused, a failed copy into a fresh destination removed again incl. the parents it created, permission bits masked to `0o777`, folder nesting capped at `MAX_COPY_DEPTH` (256), a move deletes only what was copied). Errors use the usual `{error, message}` detail:
+
+- 400 `not_a_project_conversation` -- the conversation is standalone;
+- 400 `forbidden_source` -- copy-to-project from the conversation scratch roots `.responses/`, `.subagent_responses/`, `pasted/` (`is_scratch_source()`); copy-from-project does not refuse them, since copying into the conversation workspace promotes nothing;
+- 400 `invalid_path` / `invalid_destination` / `not_a_regular_file`, 404 `not_found` (missing source), 409 `destination_exists` (without `overwrite`, or a destination that appeared concurrently);
+- 500 `copy_failed` -- an I/O error while copying (e.g. disk full); both `file_list_changed` scopes are still published since part of a merge may have been written.
+
+A move whose copy completed but whose source removal failed is not an error: the route returns 200 with `moved: false` (the failure is logged); the source may be partly removed, since files are deleted one at a time.
+
 A separate composer-attachment upload route, `POST /app/api/conversations/{id}/composer-attachments`, persists clipboard-pasted images (PNG/JPEG only) into `workspace/pasted/<attachment_id>.<ext>` ahead of the next `send_message` WS frame. It is documented under [Chat API -- Composer Attachments](chat-api.md#composer-attachments) rather than here because the lifecycle is tied to the composer/send path, not the generic file browser.
 
 All paths are validated to prevent directory traversal attacks. Paths must resolve within the workspace directory.
@@ -77,7 +97,7 @@ The file endpoints keep defense-in-depth guards anyway:
 
 - uploads open the destination leaf with `O_NOFOLLOW` (`_no_follow_opener` in `chat/file_storage.py`, so an existing symlink can never redirect the truncating write outside the workspace)
 - folder zip downloads refuse to archive a folder containing a symlink at any depth (`create_folder_zip`)
-- workspace duplication/moves skip or delete symlinks instead of dereferencing them (`ChatStorage.copy_workspace_files` / `move_conversation_workspace_to_project` in `chat/storage.py`).
+- workspace duplication skips symlinks (and special files) instead of dereferencing them (`ChatStorage.copy_workspace_files(src_root, dst_root)` in `chat/storage.py`).
 
 **Off-thread filesystem work:** the list, preview, folder-zip, info, and delete routes run their sync `chat/file_storage.py` helpers via `asyncio.to_thread`. A sandbox script can plant an arbitrarily large or deep tree in its workspace, and the info/delete `rglob` counts and the zip walk are unbounded, so calling them inline from the `async` handler stalled every other request and WebSocket on the server for the whole walk (finding #279201). The helpers themselves stay synchronous and are unit-tested as such; tests/test_file_routes_offload.py checks each route keeps the loop responsive.
 
@@ -110,7 +130,7 @@ Zip archives can be large and must be fully constructed before streaming begins 
 The Fetch API does not support upload progress events. XMLHttpRequest's `upload.onprogress` provides `loaded` and `total` byte counts, enabling a real-time percentage display and progress bar during file uploads. The `xhrUpload()` helper in `frontend/src/api/fileApi.ts` wraps this with cookie-based auth and returns a Promise for consistent async handling.
 
 **Why per-conversation file storage?**
-Each conversation has its own isolated workspace directory (`data/chats/{id}/workspace/`). This ensures files from one conversation don't leak to another and matches the Gemini Docker container's workspace mount.
+Each conversation has its own isolated workspace directory (`data/chats/{id}/workspace/`), project conversations included. This ensures files from one conversation don't leak to another and matches the sandbox's workspace mount; sharing with sibling conversations is an explicit copy into the project workspace.
 
 **Why path validation?**
 All path parameters are validated to prevent directory traversal attacks (e.g., `../../../etc/passwd`). Paths must resolve to locations within the workspace directory.

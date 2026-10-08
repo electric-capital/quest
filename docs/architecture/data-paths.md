@@ -12,8 +12,8 @@ All data-directory path constants are centralized in `config/paths.py`. Modules 
 | `server_config.json` | Optional `data_dir` key to relocate the data directory outside the source tree |
 | `db/engine.py` | Imports `DATABASE_PATH` from `config/paths` |
 | `auth/config.py` | Imports `SECRET_KEY_FILE` and `PROJECT_ROOT` from `config/paths` |
-| `chat/storage.py` | Imports and re-exports `CHATS_DIR` and `PROJECTS_DIR` from `config/paths` (backward compat); hosts the ONLY id-to-path resolvers (`ChatStorage.get_conversation_dir` / `get_project_dir` / `get_project_db_path` / `get_workspace_path` / `get_doc_dir`) and `InvalidStorageIdError` |
-| `chat/conversation_access.py` | Ownership-aware accessors for HTTP routes (`require_owned_conversation`, `resolve_owned_workspace`, `require_owned_project`, `resolve_owned_project_dir`) that fuse the DB ownership lookup with the validated path |
+| `chat/storage.py` | Imports and re-exports `CHATS_DIR` and `PROJECTS_DIR` from `config/paths` (backward compat); hosts the ONLY id-to-path resolvers (`ChatStorage.get_conversation_dir` / `get_project_dir` / `get_project_db_path` / `get_conversation_workspace_root` / `get_project_workspace_root` / `get_doc_dir`) and `InvalidStorageIdError` |
+| `chat/conversation_access.py` | Ownership-aware accessors for HTTP routes (`require_owned_conversation`, `resolve_owned_workspace`, `require_owned_project`, `resolve_owned_project_workspace`) that fuse the DB ownership lookup with the validated path |
 | `chat/logging_config.py` | Imports `LOG_DIR` from `config/paths` |
 | `quest.py` | Imports `DATA_DIR` from `config/paths` |
 | `alembic/env.py` | Imports `DATABASE_PATH` from `config/paths` to override `alembic.ini` URL |
@@ -48,22 +48,25 @@ Turning a `conversation_id` / `project_id` / `doc_id` into an on-disk path happe
 | `ChatStorage.get_conversation_dir(conversation_id)` | `CHATS_DIR / conversation_id` (the legacy `_get_conversation_dir` name is an alias) |
 | `ChatStorage.get_project_dir(project_id)` | `PROJECTS_DIR / project_id` |
 | `ChatStorage.get_project_db_path(project_id)` | `PROJECTS_DIR / project_id / project.db` |
-| `ChatStorage.get_workspace_path(conversation_id, project_id=None)` | The project workspace when the conversation is in a project (DB lookup if `project_id` not passed), else the conversation dir |
+| `ChatStorage.get_conversation_workspace_root(conversation_id)` | `CHATS_DIR / conversation_id / workspace` -- the conversation workspace, the browsable root itself, for every conversation incl. project conversations (not created) |
+| `ChatStorage.get_project_workspace_root(project_id)` | `PROJECTS_DIR / project_id / workspace / workspace` -- the project workspace shared by the project's conversations (the doubled segment is the historical layout; not created) |
 | `ChatStorage.get_doc_dir(doc_id)` | `DOCS_DIR / doc_id` (not created; `chat/docs/files.py` gets every doc path through it via `doc_paths()`) |
 
 Every resolver enforces two checks and raises `InvalidStorageIdError` (a `ValueError` subclass, so callers that already treat a bad id as a cache miss or a 4xx keep working):
 
 1. **Canonical id** -- the id must be a single path segment (`Path(id).name == id`): empty, `.`, `..`, embedded separators (`<id>/workspace/cache` -- the vector in security finding #279217) and absolute paths are rejected. No id format beyond that is enforced (UUIDs in production, short names in fixtures).
-2. **Containment** -- the joined path must resolve under the root, which catches a planted `CHATS_DIR/<id>` symlink pointing outside the tree (dangling ones included). A symlinked data directory itself is fine because the root is resolved first. The plain join, not the resolved path, is what gets returned.
+2. **Containment** -- the joined path must resolve under the root, which catches a planted `CHATS_DIR/<id>` symlink pointing outside the tree (dangling ones included); the two workspace-root resolvers re-check the full root against the resolved id dir itself (`CHATS_DIR/<id>` / `PROJECTS_DIR/<id>`), so a symlinked `workspace` segment below a real id dir is refused too -- including one pointing at another conversation's or project's workspace (`chats/A/workspace -> chats/B/workspace`). A symlinked data directory itself is fine because the root is resolved first. The plain join, not the resolved path, is what gets returned.
+
+The workspace roots are what `chat/file_storage.py` functions take (`validate_path(root, rel)` and friends); no caller appends `"workspace"` to a resolver result.
 
 The resolvers deliberately know nothing about users: schedulers, migrations, the Slack runtime and cross-user subagents resolve paths with no "current user". Ownership is a separate, composable guard for request-serving code in `chat/conversation_access.py`:
 
 | Accessor | Behaviour |
 |----------|-----------|
 | `require_owned_conversation(user_id, conversation_id)` | `get_conversation_meta` lookup; 404 `conversation_not_found` when missing or another user's |
-| `resolve_owned_workspace(user_id, conversation_id)` | The above plus `get_workspace_path` resolved with the row's `project_id`; returns `(meta, path)` |
+| `resolve_owned_workspace(user_id, conversation_id)` | The above plus `get_conversation_workspace_root` (also for project conversations); returns `(meta, root)` |
 | `require_owned_project(user_id, project_id)` | `get_project` lookup; 404 `not_found` otherwise |
-| `resolve_owned_project_dir(user_id, project_id)` | The above plus `get_project_dir`; returns `(project, path)` |
+| `resolve_owned_project_workspace(user_id, project_id)` | The above plus `get_project_workspace_root`; returns `(project, root)` |
 
 Routes that serve conversation- or project-scoped files go through these accessors rather than calling the store and the resolver separately:
 

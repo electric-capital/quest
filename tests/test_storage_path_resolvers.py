@@ -2,7 +2,7 @@
 
 Follow-up to security finding #279217 (issue #185): turning an id into an
 on-disk path happens ONLY in ``_cs().get_conversation_dir`` /
-``get_project_dir``, which reject non-canonical ids and refuse paths that
+``get_project_dir`` (and the workspace-root resolvers built on them), which reject non-canonical ids and refuse paths that
 escape ``CHATS_DIR`` / ``PROJECTS_DIR``; HTTP routes add the DB ownership
 check through ``chat.conversation_access``.
 """
@@ -63,16 +63,11 @@ class TestCanonicalIds:
             _cs().get_project_db_path(bad)
 
     @pytest.mark.parametrize("bad", BAD_IDS)
-    def test_workspace_path_rejects_non_canonical(self, roots, bad, monkeypatch):
-        async def no_project(_cid):
-            return None
-
-        monkeypatch.setattr("db.conversation_store.get_project_for_conversation", no_project)
+    def test_workspace_roots_reject_non_canonical(self, roots, bad):
         with pytest.raises(_invalid()):
-            _run(_cs().get_workspace_path(bad))
-        if bad:  # an empty project_id has always meant "standalone conversation"
-            with pytest.raises(_invalid()):
-                _run(_cs().get_workspace_path("fine", project_id=bad))
+            _cs().get_conversation_workspace_root(bad)
+        with pytest.raises(_invalid()):
+            _cs().get_project_workspace_root(bad)
 
     def test_non_string_ids_rejected(self, roots):
         for value in (None, 12, b"conv"):
@@ -100,9 +95,16 @@ class TestContainment:
         assert _cs().get_conversation_dir("conv") == chats / "conv"
         assert _cs().get_project_dir("proj") == projects / "proj"
         assert _cs().get_project_db_path("proj") == projects / "proj" / "project.db"
-        assert _run(_cs().get_workspace_path("conv", project_id="proj")) == (
-            projects / "proj" / "workspace"
+        assert _cs().get_conversation_workspace_root("conv") == chats / "conv" / "workspace"
+        assert _cs().get_project_workspace_root("proj") == (
+            projects / "proj" / "workspace" / "workspace"
         )
+
+    def test_workspace_roots_are_not_created(self, roots):
+        chats, projects = roots
+        _cs().get_conversation_workspace_root("conv")
+        _cs().get_project_workspace_root("proj")
+        assert not chats.exists() and not projects.exists()
 
     def test_missing_root_is_fine(self, roots):
         # Roots are created lazily by create_conversation; resolving before
@@ -125,7 +127,30 @@ class TestContainment:
         with pytest.raises(_invalid()):
             _cs().get_project_dir("evil")
         with pytest.raises(_invalid()):
-            _run(_cs().get_workspace_path("x", project_id="evil"))
+            _cs().get_conversation_workspace_root("evil")
+        with pytest.raises(_invalid()):
+            _cs().get_project_workspace_root("evil")
+
+    def test_symlinked_workspace_entry_escaping_is_rejected(self, roots, tmp_path):
+        # The id dir itself is real; the fixed ``workspace`` segment below it
+        # is a planted symlink pointing outside the data tree.
+        chats, projects = roots
+        outside = tmp_path / "host-secret"
+        (outside / "workspace").mkdir(parents=True)
+        (chats / "conv").mkdir(parents=True)
+        (chats / "conv" / "workspace").symlink_to(outside, target_is_directory=True)
+        (projects / "p-outer").mkdir(parents=True)
+        (projects / "p-outer" / "workspace").symlink_to(outside, target_is_directory=True)
+        (projects / "p-inner" / "workspace").mkdir(parents=True)
+        (projects / "p-inner" / "workspace" / "workspace").symlink_to(
+            outside, target_is_directory=True,
+        )
+
+        with pytest.raises(_invalid()):
+            _cs().get_conversation_workspace_root("conv")
+        for pid in ("p-outer", "p-inner"):
+            with pytest.raises(_invalid()):
+                _cs().get_project_workspace_root(pid)
 
     def test_dangling_symlink_pointing_outside_is_rejected(self, roots, tmp_path):
         chats, _ = roots
@@ -165,14 +190,7 @@ def _patch_store(monkeypatch, owned: dict[str, dict], projects: dict[str, dict])
         row = projects.get(project_id)
         return row if row and row["user_id"] == user_id else None
 
-    async def project_for(conversation_id):
-        row = owned.get(conversation_id)
-        return row.get("project_id") if row else None
-
     monkeypatch.setattr("db.conversation_store.get_conversation_meta", get_meta, raising=True)
-    monkeypatch.setattr(
-        "db.conversation_store.get_project_for_conversation", project_for, raising=True
-    )
     monkeypatch.setattr("db.project_store.get_project", get_project, raising=True)
 
 
@@ -188,13 +206,21 @@ class TestOwnershipAccessors:
                 "inproj": {"id": "inproj", "user_id": 1, "project_id": "p1"},
                 "theirs": {"id": "theirs", "user_id": 2, "project_id": None},
             },
-            projects={},
+            projects={"p1": {"id": "p1", "user_id": 1}},
         )
+        # The project workspace of "inproj" exists and holds a file.
+        project_root = _cs().create_project_workspace("p1")
+        (project_root / "shared.txt").write_text("project file")
 
         meta, path = _run(resolve_owned_workspace(1, "solo"))
-        assert meta["id"] == "solo" and path == chats / "solo"
+        assert meta["id"] == "solo" and path == chats / "solo" / "workspace"
+        # A project conversation resolves to its OWN conversation workspace,
+        # never the shared project workspace.
         meta, path = _run(resolve_owned_workspace(1, "inproj"))
-        assert path == projects / "p1" / "workspace"
+        assert meta["project_id"] == "p1"
+        assert path == chats / "inproj" / "workspace"
+        assert [p.name for p in project_root.iterdir()] == ["shared.txt"]
+        assert (project_root / "shared.txt").read_text() == "project file"
 
         for cid in ("theirs", "missing", "../solo", "solo/workspace"):
             with pytest.raises(HTTPException) as exc:
@@ -202,8 +228,8 @@ class TestOwnershipAccessors:
             assert exc.value.status_code == 404
             assert exc.value.detail["error"] == "conversation_not_found"
 
-    def test_resolve_owned_project_dir(self, roots, monkeypatch):
-        from chat.conversation_access import require_owned_project, resolve_owned_project_dir
+    def test_resolve_owned_project_workspace(self, roots, monkeypatch):
+        from chat.conversation_access import resolve_owned_project_workspace
 
         _, projects = roots
         _patch_store(
@@ -214,11 +240,12 @@ class TestOwnershipAccessors:
                 "theirs": {"id": "theirs", "user_id": 2},
             },
         )
-        project, path = _run(resolve_owned_project_dir(1, "mine"))
-        assert project["id"] == "mine" and path == projects / "mine"
-        for pid in ("theirs", "missing", "../mine"):
+        project, path = _run(resolve_owned_project_workspace(1, "mine"))
+        assert project["id"] == "mine"
+        assert path == projects / "mine" / "workspace" / "workspace"
+        for pid in ("theirs", "missing", "../mine", "mine/workspace"):
             with pytest.raises(HTTPException) as exc:
-                _run(require_owned_project(1, pid))
+                _run(resolve_owned_project_workspace(1, pid))
             assert exc.value.status_code == 404
             assert exc.value.detail["error"] == "not_found"
 
@@ -318,3 +345,49 @@ class TestCrossUserRoutes:
             _run(draft_endpoints.create_draft(request, {"id": 1, "email": "a@example.test"}))
         assert exc.value.status_code == 404
         assert resolved == [], "attachment was resolved before the ownership check"
+
+
+class TestProjectConversationFileRoutes:
+    def test_upload_and_paste_land_in_the_conversation_workspace(self, roots, monkeypatch):
+        from chat.auth import get_current_user_cookie_or_apikey_checked
+        from chat.file_routes import router as file_router
+
+        chats, projects = roots
+        _patch_store(
+            monkeypatch,
+            owned={"inproj": {"id": "inproj", "user_id": 1, "project_id": "p1"}},
+            projects={"p1": {"id": "p1", "user_id": 1}},
+        )
+        shared = projects / "p1" / "workspace" / "workspace"
+        shared.mkdir(parents=True)
+        (shared / "shared.txt").write_text("project file")
+
+        app = FastAPI()
+        app.include_router(file_router)
+
+        async def user_a():
+            return {"id": 1, "email": "a@example.test"}
+
+        app.dependency_overrides[get_current_user_cookie_or_apikey_checked] = user_a
+        client = TestClient(app)
+
+        r = client.post(
+            "/app/api/conversations/inproj/files/upload",
+            files={"files": ("notes.txt", b"chat file", "text/plain")},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["errors"] == []
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+        r = client.post(
+            "/app/api/conversations/inproj/composer-attachments",
+            files={"files": ("shot.png", png, "image/png")},
+        )
+        assert r.status_code == 200, r.text
+
+        conv_root = chats / "inproj" / "workspace"
+        assert (conv_root / "notes.txt").read_bytes() == b"chat file"
+        assert len(list((conv_root / "pasted").iterdir())) == 1
+        assert sorted(p.name for p in shared.iterdir()) == ["shared.txt"]
+
+        listed = client.get("/app/api/conversations/inproj/files")
+        assert sorted(f["name"] for f in listed.json()["files"]) == ["notes.txt", "pasted"]

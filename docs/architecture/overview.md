@@ -317,10 +317,9 @@ The backend provides:
    - Provider-agnostic tool definitions in JSON Schema format with per-provider converters
    - See [LLM Provider Abstraction](llm-providers.md) for full details
 
-5. **Workspace Management**: Isolated environments per conversation or shared per project
-   - Standalone conversations get their own workspace directory at `data/chats/{conversation_id}/workspace/`
-   - Project conversations share a workspace at `data/projects/{project_id}/workspace/`
-   - `ChatStorage.get_workspace_path()` auto-detects project membership via DB lookup when `project_id` is not passed explicitly
+5. **Workspace Management**: Isolated environments per conversation, plus a shared one per project
+   - Every conversation (standalone or in a project) gets its own conversation workspace at `data/chats/{conversation_id}/workspace/` (`ChatStorage.get_conversation_workspace_root()`)
+   - Each project additionally has a shared project workspace at `data/projects/{project_id}/workspace/workspace/` (`ChatStorage.get_project_workspace_root()`)
    - LLM session state persists across sessions via `sdk_history.json`
 
 ### Storage Layer
@@ -338,7 +337,7 @@ data/
 └── chats/
     └── {conversation_id}/       # Per-conversation directory (flat layout, one folder per UUID)
         ├── chat_history.json    # Messages and metadata (includes project_id for project conversations)
-        └── workspace/           # Standalone conversation workspace
+        └── workspace/           # Conversation workspace (standalone and project conversations)
 
 config/
 └── paths.py                     # Centralized data-directory path constants (DATA_DIR, DATABASE_PATH, CHATS_DIR, etc.)
@@ -376,7 +375,7 @@ alembic.ini                       # Alembic migration configuration
 - SQLite for user data, memories, guides, projects, routines, routine schedules, conversation metadata, and action requests (transactional writes, indexed API key lookups, FTS5 for memory search, no separate server)
 - JSON files for chat message history (append-heavy, per-conversation isolation)
 - Flat `data/chats/{conversation_id}/` layout: ownership and timing tracked in SQLite `conversations` table instead of being derived from the directory hierarchy; `ChatStorage` path helpers no longer accept `user_id`
-- Workspace isolation for standalone conversations; shared workspace for project conversations (see [Projects Architecture](projects.md))
+- Workspace isolation per conversation (project conversations included), plus a shared project workspace reached via the project file routes (see [Projects Architecture](projects.md))
 - Preserved Gemini state (session files, settings)
 - UTC timestamps with explicit "Z" suffix for consistent timezone handling (see `utc_timestamp()` in `chat/storage.py`)
 

@@ -46,8 +46,11 @@ def make_conversation_list_changed(
     }
 
 
+FILE_LIST_SCOPES = frozenset({"conversation", "project"})
+
+
 def make_file_list_changed(
-    conversation_id: str,
+    conversation_id: Optional[str],
     project_id: Optional[str],
     scope: str,
 ) -> dict[str, Any]:
@@ -56,10 +59,25 @@ def make_file_list_changed(
     Per-user global with a payload ``conversation_id`` so a tab can decide
     whether to refresh: the event is global because a project workspace
     write must reach sibling-conversation tabs that don't subscribe to the
-    triggering ``conversation_id``. ``scope`` is ``"project"`` when
-    ``project_id`` is set and ``"conversation"`` otherwise; the FE filter
-    keys off it.
+    triggering ``conversation_id``.
+
+    ``scope`` names the workspace whose listing changed and is set by the
+    publisher -- it is NOT derived from ``project_id``:
+
+    * ``"conversation"`` -- the conversation workspace of
+      ``conversation_id`` (also for a project conversation, whose
+      ``project_id`` is still carried);
+    * ``"project"`` -- the shared workspace of ``project_id``;
+      ``conversation_id`` is the triggering conversation, or None for a
+      write through the project file routes.
+
+    The FE filter keys off ``scope`` plus the matching id.
+
+    Raises:
+        ValueError: ``scope`` is not one of ``FILE_LIST_SCOPES``.
     """
+    if scope not in FILE_LIST_SCOPES:
+        raise ValueError(f"invalid file_list_changed scope: {scope!r}")
     return {
         "type": "file_list_changed",
         "conversation_id": conversation_id,

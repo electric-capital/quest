@@ -147,6 +147,39 @@ class TestWorkspaceSymlinkScrub:
         # Idempotent, and missing roots are a no-op.
         assert scrub_workspace_symlinks() == 0
 
+    def test_scrub_covers_project_conversation_and_project_roots(
+        self, tmp_path, monkeypatch,
+    ):
+        # A project conversation has its own conversation workspace under
+        # CHATS_DIR, next to the project's shared root under PROJECTS_DIR;
+        # the scrub must reach both through the resolvers' layout.
+        chats = tmp_path / "chats"
+        projects = tmp_path / "projects"
+        monkeypatch.setattr(paths, "CHATS_DIR", chats)
+        monkeypatch.setattr(paths, "PROJECTS_DIR", projects)
+        monkeypatch.setattr(storage_mod, "CHATS_DIR", chats)
+        monkeypatch.setattr(storage_mod, "PROJECTS_DIR", projects)
+
+        outside = tmp_path / "host-secret.txt"
+        outside.write_text("secret")
+
+        conv_root = ChatStorage.get_conversation_workspace_root("proj-conv")
+        (conv_root / "deep").mkdir(parents=True)
+        (conv_root / "chat-leak.txt").symlink_to(outside)
+        (conv_root / "deep" / "nested-leak.txt").symlink_to(outside)
+        (conv_root / "keep.txt").write_text("keep")
+
+        project_root = ChatStorage.create_project_workspace("p1")
+        (project_root / "proj-leak.txt").symlink_to(outside)
+        (project_root / "shared.txt").write_text("shared")
+
+        assert scrub_workspace_symlinks() == 3
+        assert not list(p for p in chats.rglob("*") if p.is_symlink())
+        assert not list(p for p in projects.rglob("*") if p.is_symlink())
+        assert (conv_root / "keep.txt").read_text() == "keep"
+        assert (project_root / "shared.txt").read_text() == "shared"
+        assert outside.read_text() == "secret"
+
     def test_deep_tree_does_not_recurse(self, tmp_path):
         deep = tmp_path
         for i in range(300):
@@ -171,7 +204,7 @@ class TestFolderZipRejectsSymlinks:
         (loot / "linked-secret.txt").symlink_to(secret)
 
         with pytest.raises(ValueError, match="symbolic links"):
-            create_folder_zip(base, "loot")
+            create_folder_zip(base / "workspace", "loot")
 
     def test_zip_of_clean_folder_still_works(self, tmp_path):
         base = tmp_path / "conv"
@@ -179,7 +212,7 @@ class TestFolderZipRejectsSymlinks:
         (folder / "empty").mkdir(parents=True)
         (folder / "a.txt").write_text("hello")
 
-        zip_path, folder_name = create_folder_zip(base, "reports")
+        zip_path, folder_name = create_folder_zip(base / "workspace", "reports")
         try:
             assert folder_name == "reports"
             with zipfile.ZipFile(zip_path) as zf:
@@ -198,13 +231,6 @@ class TestCopyWorkspaceSkipsSymlinks:
         chats = tmp_path / "chats"
         monkeypatch.setattr(storage_mod, "CHATS_DIR", chats)
 
-        async def no_project(_conversation_id):
-            return None
-
-        monkeypatch.setattr(
-            "db.conversation_store.get_project_for_conversation", no_project,
-        )
-
         secret = tmp_path / "host-secret.txt"
         secret.write_text("server-side secret outside workspace")
 
@@ -216,7 +242,10 @@ class TestCopyWorkspaceSkipsSymlinks:
         (src_ws / "leak.txt").symlink_to(secret)
         (src_ws / "loot" / "nested-leak.txt").symlink_to(secret)
 
-        _run(ChatStorage.copy_workspace_files("src-conv", "dest-conv"))
+        _run(ChatStorage.copy_workspace_files(
+            ChatStorage.get_conversation_workspace_root("src-conv"),
+            ChatStorage.get_conversation_workspace_root("dest-conv"),
+        ))
 
         dest_ws = chats / "dest-conv" / "workspace"
         assert (dest_ws / "keep.txt").read_text() == "keep"
@@ -224,32 +253,6 @@ class TestCopyWorkspaceSkipsSymlinks:
         assert not (dest_ws / "loot" / "nested-leak.txt").exists()
         # The pre-existing .responses skip still holds alongside the new rule.
         assert not (dest_ws / ".responses").exists()
-
-
-class TestMoveToProjectDropsSymlinks:
-    def test_move_deletes_links_instead_of_relocating(self, tmp_path, monkeypatch):
-        chats = tmp_path / "chats"
-        projects = tmp_path / "projects"
-        monkeypatch.setattr(storage_mod, "CHATS_DIR", chats)
-        monkeypatch.setattr(storage_mod, "PROJECTS_DIR", projects)
-
-        secret = tmp_path / "host-secret.txt"
-        secret.write_text("secret")
-
-        src_ws = chats / "conv" / "workspace"
-        (src_ws / "sub").mkdir(parents=True)
-        (src_ws / "keep.txt").write_text("keep")
-        (src_ws / "leak.txt").symlink_to(secret)
-        (src_ws / "sub" / "nested-leak.txt").symlink_to(secret)
-
-        ChatStorage.move_conversation_workspace_to_project("conv", "proj")
-
-        dest_ws = projects / "proj" / "workspace" / "workspace"
-        assert (dest_ws / "keep.txt").read_text() == "keep"
-        assert (dest_ws / "sub").is_dir()
-        for root in (dest_ws, chats / "conv"):
-            assert not list(p for p in root.rglob("*") if p.is_symlink())
-        assert secret.read_text() == "secret"
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +270,7 @@ class TestUploadRefusesSymlinkLeaf:
         (ws / "overwrite-me.txt").symlink_to(target)
 
         with pytest.raises(ValueError, match="symbolic link"):
-            _run(save_uploaded_file(base, "overwrite-me.txt", b"attacker bytes"))
+            _run(save_uploaded_file(base / "workspace", "overwrite-me.txt", b"attacker bytes"))
         assert target.read_text() == "original service-owned content"
 
     def test_save_uploaded_file_with_path_rejects_symlink_leaf(self, tmp_path):
@@ -280,18 +283,18 @@ class TestUploadRefusesSymlinkLeaf:
 
         with pytest.raises(ValueError, match="symbolic link"):
             _run(save_uploaded_file_with_path(
-                base, "folder/overwrite-me.txt", b"attacker bytes",
+                base / "workspace", "folder/overwrite-me.txt", b"attacker bytes",
             ))
         assert target.read_text() == "original service-owned content"
 
     def test_normal_uploads_and_regular_overwrites_still_work(self, tmp_path):
         base = tmp_path / "conv"
-        result = _run(save_uploaded_file(base, "new.txt", b"first"))
+        result = _run(save_uploaded_file(base / "workspace", "new.txt", b"first"))
         assert result["path"] == "/new.txt"
-        result = _run(save_uploaded_file(base, "new.txt", b"second"))
+        result = _run(save_uploaded_file(base / "workspace", "new.txt", b"second"))
         assert result["size"] == len(b"second")
         assert (base / "workspace" / "new.txt").read_bytes() == b"second"
 
-        result = _run(save_uploaded_file_with_path(base, "a/b/deep.txt", b"x"))
+        result = _run(save_uploaded_file_with_path(base / "workspace", "a/b/deep.txt", b"x"))
         assert result["path"] == "/a/b/deep.txt"
         assert (base / "workspace" / "a" / "b" / "deep.txt").read_bytes() == b"x"

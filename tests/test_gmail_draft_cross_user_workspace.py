@@ -30,7 +30,7 @@ def _build_client(monkeypatch, tmp_path, owned_ids):
     test can stage a file in a "victim" workspace the caller does not own.
     """
     import api.gmail.draft_endpoints as draft_endpoints
-    import chat.gemini_api.tool_handlers as tool_handlers
+    from chat.storage import ChatStorage
     import db.conversation_store as conversation_store
     from auth.session import get_current_user
     from chat.sandbox_api import register_sandbox_api_routes
@@ -42,10 +42,12 @@ def _build_client(monkeypatch, tmp_path, owned_ids):
 
     monkeypatch.setattr(conversation_store, "get_conversation_meta", get_meta, raising=True)
 
-    async def workspace_dir(conversation_id, project_id=None):
+    def workspace_root(conversation_id):
         return tmp_path / conversation_id
 
-    monkeypatch.setattr(tool_handlers, "_get_workspace_dir", workspace_dir, raising=True)
+    monkeypatch.setattr(
+        ChatStorage, "get_conversation_workspace_root", workspace_root, raising=True,
+    )
 
     captured = {}
 

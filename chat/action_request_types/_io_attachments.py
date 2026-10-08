@@ -184,7 +184,9 @@ async def resolve_workspace_file(
 
     ``conversation_id`` is required (workspace resolution needs it); a
     ``None`` value raises ``RuntimeError``, mirroring
-    :func:`read_workspace_attachments`.
+    :func:`read_workspace_attachments`. ``project_id`` is ignored: every
+    conversation, project conversations included, resolves to its own
+    conversation workspace (``ChatStorage.get_conversation_workspace_root``).
     """
     if not conversation_id:
         raise RuntimeError(
@@ -296,9 +298,9 @@ async def read_workspace_attachments(
     Args:
         conversation_id: Conversation UUID for workspace resolution.
             Required when at least one attachment is supplied.
-        project_id: Optional project UUID (passed through to
-            ``_get_workspace_dir``; ``None`` lets the storage layer
-            resolve project membership from ``conversation_id``).
+        project_id: Accepted for call-site compatibility and ignored:
+            attachments always resolve against the conversation workspace
+            root (``_get_workspace_dir``), project conversations included.
         attachments: Pre-validated entries from
             :func:`validate_attachments_param` -- each has a ``path``
             and an optional ``filename`` override.

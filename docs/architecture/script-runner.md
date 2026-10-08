@@ -88,7 +88,7 @@ The container uses slirp4netns networking with socat forwarding and iptables-bas
 - **Memory/CPU limits**: Container resource limits prevent runaway scripts
 - **Ephemeral containers**: Each script execution creates and destroys a fresh container
 - **Timeout enforcement**: Default 60s, maximum 150s, prevents indefinite execution
-- **Workspace isolation**: Only the conversation workspace is mounted; no access to host filesystem beyond `/workspace`
+- **Workspace isolation**: Only the conversation workspace (`data/chats/{id}/workspace/`, for project conversations too -- the project workspace is not mounted) is mounted; no access to host filesystem beyond `/workspace`
 - **No symlink creation (seccomp)**: Both profiles run under a custom seccomp profile that denies the `symlink`/`symlinkat` syscalls with `EPERM` (covering `ln -s`, `os.symlink`, and archive extractors like `unzip` writing symlink entries). The workspace mount is host-backed, and host-side consumers (folder zip downloads, workspace duplication/moves, uploads) operate on workspace entries with the server's privileges -- a symlink pointing outside the workspace would redirect their reads/writes to arbitrary host paths.
 
   `chat/gemini_api/sandbox_seccomp.py` generates `<data_dir>/sandbox-seccomp.json` on first sandbox use by patching the host's default containers profile (`/etc/containers/seccomp.json`, then `/usr/share/containers/seccomp.json`, falling back to the vendored repo-root snapshot `script-runner-seccomp-fallback.json`), preserving the rest of the default confinement -- notably the `io_uring_*` denial, without which `IORING_OP_SYMLINKAT` could bypass the filter. A profile generation failure fails the sandbox run (fail closed) instead of launching unconfined.

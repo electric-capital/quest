@@ -3,9 +3,8 @@
 Covers the resolver matrix called out in the dev plan:
 
 * Standalone-conversation workspace happy path.
-* Project-conversation workspace happy path (``_get_workspace_dir`` returns
-  the shared project directory; the resolver does not double-append
-  ``"workspace"``).
+* Project-conversation happy path (the resolver reads the conversation
+  workspace root and does not append ``"workspace"`` to it).
 * Filename override — sanitised, with leading-dot stripping and
   separator replacement.
 * Path-traversal rejections: absolute path, ``..`` parts, embedded
@@ -15,8 +14,8 @@ Covers the resolver matrix called out in the dev plan:
 * MIME type fallback when ``mimetypes.guess_type`` returns ``None``.
 * Empty ``workspace_path`` -> 400.
 
-All tests stub ``_get_workspace_dir`` so no DB or filesystem layout is
-required outside of pytest's ``tmp_path``.
+All tests stub ``ChatStorage.get_conversation_workspace_root`` so no DB or
+filesystem layout is required outside of pytest's ``tmp_path``.
 """
 
 from __future__ import annotations
@@ -36,17 +35,10 @@ def _run(coro):
 
 
 def _patch_workspace_dir(workspace_dir: Path):
-    """Patch ``_get_workspace_dir`` so the resolver reads from ``workspace_dir``.
-
-    The resolver imports ``_get_workspace_dir`` lazily from
-    ``chat.gemini_api.tool_handlers``, so we patch the source symbol.
-    """
-    async def fake(*args, **kwargs):
-        return workspace_dir
-
+    """Patch the conversation-root resolver so the resolver reads from ``workspace_dir``."""
     return patch(
-        "chat.gemini_api.tool_handlers._get_workspace_dir",
-        side_effect=fake,
+        "chat.storage.ChatStorage.get_conversation_workspace_root",
+        side_effect=lambda conversation_id: workspace_dir,
     )
 
 
@@ -74,10 +66,10 @@ class TestWorkspaceAttachmentHappyPath:
         assert result["mime_type"] == "text/plain"
 
     def test_reads_file_from_project_workspace(self, tmp_path):
-        # Project conversations: ``data/projects/{project}/workspace``.
-        # The resolver does not append an extra "workspace" segment;
-        # it trusts whatever ``_get_workspace_dir`` returns.
-        workspace = tmp_path / "projects" / "proj-7" / "workspace"
+        # Project conversations read their own conversation workspace
+        # root too. The resolver does not append an extra "workspace"
+        # segment; it trusts whatever the root resolver returns.
+        workspace = tmp_path / "chats" / "conv-2" / "workspace"
         workspace.mkdir(parents=True)
         (workspace / "report.pdf").write_bytes(b"%PDF-1.4 fake")
 

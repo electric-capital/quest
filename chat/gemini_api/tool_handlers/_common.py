@@ -9,16 +9,18 @@ logger = logging.getLogger(__name__)
 
 
 async def _get_workspace_dir(conversation_id: str, project_id: str | None = None) -> Path:
-    """Return the workspace directory for a conversation.
+    """Return the conversation workspace root, creating it if missing.
 
-    Creates the directory if it does not exist.
-    For project conversations, returns the shared project workspace.
-    The user_id parameter was removed after the flat-layout migration
-    (b3f9a1c2d4e5); ownership is now tracked in the conversations table.
+    Resolves to ``ChatStorage.get_conversation_workspace_root`` for EVERY
+    conversation, project conversations included, so tools and the HTTP
+    file routes agree on where a conversation's files live. ``project_id``
+    is accepted for call-site compatibility and ignored; the shared project
+    workspace is not reachable through this helper. Phase 2 of the
+    per-conversation-workspace change replaces it with explicit
+    conversation / project workspace helpers.
     """
     from chat.storage import ChatStorage
-    workspace_path = await ChatStorage.get_workspace_path(conversation_id, project_id=project_id)
-    workspace_dir = workspace_path / "workspace"
+    workspace_dir = ChatStorage.get_conversation_workspace_root(conversation_id)
     workspace_dir.mkdir(parents=True, exist_ok=True)
     return workspace_dir
 
@@ -29,16 +31,20 @@ def _publish_file_list_changed(
     project_id: str | None,
 ) -> None:
     """Best-effort: notify the user's WS subscribers that a workspace
-    listing has changed so the file browser can silent-refresh."""
+    listing has changed so the file browser can silent-refresh.
+
+    Always ``scope="conversation"``: tool writes land in the conversation
+    workspace (see ``_get_workspace_dir``), even in project conversations.
+    ``project_id`` is still carried on the event.
+    """
     try:
         from chat.realtime import bus, events as realtime_events
-        scope = "project" if project_id else "conversation"
         bus.publish_to_user(
             user_id,
             realtime_events.make_file_list_changed(
                 conversation_id=conversation_id,
                 project_id=project_id,
-                scope=scope,
+                scope="conversation",
             ),
         )
     except Exception:
@@ -47,7 +53,6 @@ def _publish_file_list_changed(
             "(user_id=%s, conversation_id=%s)",
             user_id, conversation_id, exc_info=True,
         )
-
 
 
 # ---------------------------------------------------------------------------

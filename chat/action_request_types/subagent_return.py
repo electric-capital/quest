@@ -45,16 +45,6 @@ RETURN_FILES_DIR = ".subagent_responses"
 _ALLOWED_PARAMS = frozenset({"response", "files"})
 
 
-def _workspace_files_root(workspace_path: Path) -> Path:
-    """Return the effective files root for a conversation workspace.
-
-    ``ChatStorage.get_workspace_path`` returns the conversation directory;
-    actual files live under its ``workspace/`` subdir (same convention as
-    chat/file_storage.py and the workspace tool handlers).
-    """
-    return workspace_path / "workspace"
-
-
 async def prepare_return_params(
     validated_params: dict, run: dict, subagent_conversation_id: str,
 ) -> dict:
@@ -71,14 +61,13 @@ async def prepare_return_params(
     from chat.storage import ChatStorage
     from db.user_store import get_user_by_id
 
-    workspace_path = await ChatStorage.get_workspace_path(
+    files_root = ChatStorage.get_conversation_workspace_root(
         subagent_conversation_id,
     )
-    files_root = _workspace_files_root(workspace_path)
 
     file_entries: list[dict] = []
     for rel_path in validated_params.get("files") or []:
-        ok, resolved = validate_path(workspace_path, rel_path)
+        ok, resolved = validate_path(files_root, rel_path)
         if not ok or resolved is None:
             raise ValueError(f"Invalid file path: {rel_path!r}")
         if not resolved.is_file():
@@ -240,7 +229,7 @@ class SubagentReturnHandler(ActionRequestHandler):
 
         # Re-verify the files against the live workspace (TOCTOU close --
         # the card may have sat open while the workspace changed).
-        src_workspace = await ChatStorage.get_workspace_path(conversation_id)
+        src_workspace = ChatStorage.get_conversation_workspace_root(conversation_id)
         sources: list[Path] = []
         for rel_path in params.get("files") or []:
             ok, resolved = validate_path(src_workspace, rel_path)
@@ -254,13 +243,14 @@ class SubagentReturnHandler(ActionRequestHandler):
                 raise ValueError(f"File too large to return: {rel_path!r}")
             sources.append(resolved)
 
-        # Copy into the caller's workspace under .subagent_responses/,
-        # never clobbering existing files (suffix -2, -3, ... on
-        # collision).
-        caller_workspace = await ChatStorage.get_workspace_path(
+        # Copy into the caller's CONVERSATION workspace under
+        # .subagent_responses/ (never the caller's project workspace, even
+        # for a project conversation), never clobbering existing files
+        # (suffix -2, -3, ... on collision).
+        caller_root = ChatStorage.get_conversation_workspace_root(
             run["caller_conversation_id"],
         )
-        dest_dir = _workspace_files_root(caller_workspace) / RETURN_FILES_DIR
+        dest_dir = caller_root / RETURN_FILES_DIR
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         copied_rel_paths: list[str] = []
@@ -302,7 +292,9 @@ class SubagentReturnHandler(ActionRequestHandler):
                 bus.publish_to_user(
                     run["caller_user_id"],
                     realtime_events.make_file_list_changed(
-                        run["caller_conversation_id"], None, "conversation",
+                        conversation_id=run["caller_conversation_id"],
+                        project_id=None,
+                        scope="conversation",
                     ),
                 )
             except Exception:

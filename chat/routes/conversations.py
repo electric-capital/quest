@@ -194,7 +194,12 @@ async def duplicate_conversation_workspace(
     meta = await require_owned_conversation(user_id, conversation_id)
 
     new_conversation_id, created_at_str = await ChatStorage.create_conversation(user_id)
-    await ChatStorage.copy_workspace_files(conversation_id, new_conversation_id)
+    # The source's CONVERSATION workspace only, also for a project
+    # conversation (the shared project files are not copied).
+    await ChatStorage.copy_workspace_files(
+        ChatStorage.get_conversation_workspace_root(conversation_id),
+        ChatStorage.get_conversation_workspace_root(new_conversation_id),
+    )
 
     _publish_list_changed(user_id, new_conversation_id, "created")
 
