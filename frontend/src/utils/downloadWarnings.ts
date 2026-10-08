@@ -17,6 +17,11 @@
  * inert data is silent, markup that a viewer renders (and whose references
  * it fetches, e.g. a markdown image URL) warns, and source code is its own
  * severe category because the real hazard is running it.
+ *
+ * For the raster formats the server can rewrite (`SANITIZABLE_IMAGE_EXTENSIONS`,
+ * see chat/image_sanitizer.py) the warning additionally offers a sanitized
+ * copy -- pixels kept, every other part of the file dropped -- and the original
+ * only behind a second, explicit acknowledgement.
  */
 
 export type DownloadWarningCategory =
@@ -40,6 +45,12 @@ export interface DownloadWarning {
    * and uses the danger tone.
    */
   severity: 'warning' | 'severe';
+  /**
+   * Set when the server offers a metadata-stripped copy of this file
+   * (`GET .../files/download-sanitized`): the dialog then leads with
+   * "Download Sanitized Copy" and gates the original behind a second confirm.
+   */
+  sanitizer?: 'image';
 }
 
 export interface DownloadTarget {
@@ -92,7 +103,7 @@ const CATEGORY_DETAILS: Record<DownloadWarningCategory, string> = {
   markup: 'Files like this are rendered by the program that opens them, and the rendering can fetch remote resources the file references -- a markdown image URL, or a formula cell a spreadsheet evaluates in a CSV -- so simply viewing the file can send information to a third party.',
   code: 'Source code can do anything when it runs: read or change files on your computer, connect to the network, send data elsewhere. Nothing here has inspected what it does.',
   web: 'Web files can contain scripts that run as soon as the file is opened in a browser, and markup that is not shown on the rendered page.',
-  image: 'Images can carry data in their metadata (such as EXIF fields) and in pixel patterns that are invisible when the picture is viewed.',
+  image: 'An image file can hold hidden information that you never see when you look at the picture.',
   document: 'Documents can carry hidden metadata, embedded objects, macros or text that does not appear on the page.',
   archive: 'Archives can contain files of any type -- code, web pages, images, documents -- none of which were inspected. Every file inside carries the same risks as if it were downloaded on its own.',
   media: 'Audio and video files can carry data in their metadata and in extra streams that never play.',
@@ -101,6 +112,18 @@ const CATEGORY_DETAILS: Record<DownloadWarningCategory, string> = {
 };
 
 const SEVERE_CATEGORIES: ReadonlySet<DownloadWarningCategory> = new Set(['code', 'executable']);
+
+/**
+ * The raster formats chat/image_sanitizer.py rewrites. Hand-mirrored: the
+ * server picks the format by magic bytes and 400s anything else, so a file
+ * named .png that is not a PNG fails the sanitized fetch rather than
+ * silently downloading.
+ */
+export const SANITIZABLE_IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
+
+/** What the sanitized copy is, for the dialog: plain words, one sentence. */
+export const SANITIZED_IMAGE_EXPLANATION =
+  'The sanitized copy is the same picture with everything hidden stripped out.';
 
 /** Lower-cased extension without the dot, or '' when the name has none. */
 function extensionOf(name: string): string {
@@ -124,11 +147,14 @@ function categoryForExtension(ext: string): DownloadWarningCategory | null {
  * the file type needs none.
  */
 export function getDownloadWarning(target: DownloadTarget): DownloadWarning | null {
-  const category = target.kind === 'folder' ? 'archive' : categoryForExtension(extensionOf(target.name));
+  const ext = target.kind === 'folder' ? '' : extensionOf(target.name);
+  const category = target.kind === 'folder' ? 'archive' : categoryForExtension(ext);
   if (category === null) return null;
-  return {
+  const warning: DownloadWarning = {
     category,
     detail: CATEGORY_DETAILS[category],
     severity: SEVERE_CATEGORIES.has(category) ? 'severe' : 'warning',
   };
+  if (category === 'image' && SANITIZABLE_IMAGE_EXTENSIONS.has(ext)) warning.sanitizer = 'image';
+  return warning;
 }

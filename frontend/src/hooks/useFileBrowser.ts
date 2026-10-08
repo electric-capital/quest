@@ -368,17 +368,19 @@ export function useFileBrowser(source: FileSource | null): UseFileBrowserResult 
     }
   }, [activeSource, currentPath, fetchFiles]);
 
-  // Download file (after the hidden-data acknowledgement when the type needs one)
+  // Download file (after the hidden-data acknowledgement when the type needs
+  // one; the user may pick the server's sanitized copy of a raster image)
   const downloadFile = useCallback(async (filePath: string): Promise<void> => {
     if (!activeSource) {
       throw new Error('No file space selected');
     }
 
     const name = filePath.split('/').filter(Boolean).pop() || filePath;
-    if (!(await confirmDownload({ name, kind: 'file' }))) return;
+    const decision = await confirmDownload({ name, kind: 'file' });
+    if (decision === 'cancel') return;
 
     try {
-      saveBlobToDisk(await apiDownloadFile(activeSource, filePath));
+      saveBlobToDisk(await apiDownloadFile(activeSource, filePath, decision));
     } catch (err) {
       if (err instanceof FileApiError) {
         setError(err.message);
@@ -398,7 +400,7 @@ export function useFileBrowser(source: FileSource | null): UseFileBrowserResult 
 
     // Extract folder name from path for the notification
     const folderName = folderPath.split('/').filter(Boolean).pop() || 'folder';
-    if (!(await confirmDownload({ name: folderName, kind: 'folder' }))) return;
+    if ((await confirmDownload({ name: folderName, kind: 'folder' })) === 'cancel') return;
     setZippingFolder(folderName);
 
     try {

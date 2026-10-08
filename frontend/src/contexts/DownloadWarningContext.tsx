@@ -3,25 +3,43 @@
  *
  * Any component can ask `confirmDownload(target)` before handing a workspace
  * file to the browser; the provider renders ONE warning dialog for the whole
- * app and resolves the promise with the user's answer. File types whose
- * content is fully visible as text resolve true at once (see
+ * app and resolves the promise with the user's decision. File types whose
+ * content is fully visible as text resolve 'original' at once (see
  * utils/downloadWarnings.ts for the rule); everything else waits for the
- * "Acknowledge and Download" click. There is no remember-me: the warning
- * shows on every download, by design -- a prompt-injected agent can plant a
- * file at any point of a conversation.
+ * dialog. There is no remember-me: the warning shows on every download, by
+ * design -- a prompt-injected agent can plant a file at any point of a
+ * conversation.
+ *
+ * For a file the server can sanitize (raster images, `warning.sanitizer`)
+ * the dialog leads with "Download Sanitized Copy" and offers the original
+ * only through a second dialog whose confirm stays disabled until the user
+ * ticks an "I know what I am doing" checkbox; Cancel there returns to the
+ * first dialog, so the sanitized copy is still one click away.
  */
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { DocConfirmDialog } from '../components/docs/DocConfirmDialog';
-import { getDownloadWarning, type DownloadTarget, type DownloadWarning } from '../utils/downloadWarnings';
+import {
+  getDownloadWarning,
+  SANITIZED_IMAGE_EXPLANATION,
+  type DownloadTarget,
+  type DownloadWarning,
+} from '../utils/downloadWarnings';
 import './DownloadWarningContext.css';
+
+/**
+ * 'cancel': do nothing. 'original': fetch the file as stored.
+ * 'sanitized': fetch the server's metadata-stripped copy instead (only ever
+ * returned for a target whose warning carries a `sanitizer`).
+ */
+export type DownloadDecision = 'cancel' | 'original' | 'sanitized';
 
 export interface DownloadWarningContextValue {
   /**
-   * Resolves true when the download may proceed (no warning applies, or the
-   * user acknowledged it) and false when the user cancelled.
+   * Resolves with the user's decision: 'original' at once when no warning
+   * applies, otherwise whatever the dialog settled on.
    */
-  confirmDownload: (target: DownloadTarget) => Promise<boolean>;
+  confirmDownload: (target: DownloadTarget) => Promise<DownloadDecision>;
 }
 
 const DownloadWarningContext = createContext<DownloadWarningContextValue | null>(null);
@@ -29,32 +47,47 @@ const DownloadWarningContext = createContext<DownloadWarningContextValue | null>
 interface PendingWarning {
   target: DownloadTarget;
   warning: DownloadWarning;
-  resolve: (acknowledged: boolean) => void;
+  resolve: (decision: DownloadDecision) => void;
 }
+
+const ORIGINAL_ACK_LABEL = 'I understand the risk and want the original file.';
 
 export function DownloadWarningProvider({ children }: { children: React.ReactNode }) {
   const [pending, setPending] = useState<PendingWarning | null>(null);
+  // Second stage of a sanitizable download: the original-file confirm with
+  // its checkbox. Reset whenever the pending request changes.
+  const [confirmingOriginal, setConfirmingOriginal] = useState(false);
+  const [originalAcknowledged, setOriginalAcknowledged] = useState(false);
   // The resolver of the open dialog, reachable from the next request without
   // a stale-closure dance: a second request while one is open cancels the
   // first (its download never started) and takes the dialog over.
   const pendingRef = useRef<PendingWarning | null>(null);
 
-  const settle = useCallback((acknowledged: boolean) => {
+  const settle = useCallback((decision: DownloadDecision) => {
     const current = pendingRef.current;
     pendingRef.current = null;
     setPending(null);
-    current?.resolve(acknowledged);
+    setConfirmingOriginal(false);
+    setOriginalAcknowledged(false);
+    current?.resolve(decision);
   }, []);
 
-  const confirmDownload = useCallback((target: DownloadTarget): Promise<boolean> => {
+  const confirmDownload = useCallback((target: DownloadTarget): Promise<DownloadDecision> => {
     const warning = getDownloadWarning(target);
-    if (!warning) return Promise.resolve(true);
-    return new Promise<boolean>((resolve) => {
-      pendingRef.current?.resolve(false);
+    if (!warning) return Promise.resolve('original');
+    return new Promise<DownloadDecision>((resolve) => {
+      pendingRef.current?.resolve('cancel');
       const next: PendingWarning = { target, warning, resolve };
       pendingRef.current = next;
       setPending(next);
+      setConfirmingOriginal(false);
+      setOriginalAcknowledged(false);
     });
+  }, []);
+
+  const backToWarning = useCallback(() => {
+    setConfirmingOriginal(false);
+    setOriginalAcknowledged(false);
   }, []);
 
   // The warning usually opens on top of another ModalShell (the file viewer,
@@ -62,34 +95,44 @@ export function DownloadWarningProvider({ children }: { children: React.ReactNod
   // bubble-phase Escape listener, so an unguarded Escape would dismiss the
   // warning AND the viewer under it. Claim Escape in the capture phase while
   // the warning is open: stopPropagation there keeps every bubble listener
-  // from running (see ModalShell), and the warning alone is cancelled.
+  // from running (see ModalShell), and the warning alone is cancelled -- or,
+  // on the original-file confirm, that stage alone is closed.
   useEffect(() => {
     if (pending === null) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.stopPropagation();
-      settle(false);
+      if (confirmingOriginal) backToWarning();
+      else settle('cancel');
     };
     document.addEventListener('keydown', handleKeyDown, true);
     return () => document.removeEventListener('keydown', handleKeyDown, true);
-  }, [pending, settle]);
+  }, [pending, confirmingOriginal, backToWarning, settle]);
 
   const value = useMemo<DownloadWarningContextValue>(() => ({ confirmDownload }), [confirmDownload]);
+
+  const sanitizable = pending?.warning.sanitizer !== undefined;
+  const severe = pending?.warning.severity === 'severe';
+  const warningTitle = severe
+    ? 'This download may be harmful to run'
+    : sanitizable
+      ? 'This image may carry hidden data'
+      : 'This download may carry hidden data';
 
   return (
     <DownloadWarningContext.Provider value={value}>
       {children}
       <DocConfirmDialog
-        isOpen={pending !== null}
-        title={pending?.warning.severity === 'severe'
-          ? 'This download may be harmful to run'
-          : 'This download may carry hidden data'}
-        confirmLabel="Acknowledge and Download"
-        tone={pending?.warning.severity === 'severe' ? 'danger' : 'default'}
+        isOpen={pending !== null && !confirmingOriginal}
+        title={warningTitle}
+        confirmLabel={sanitizable ? 'Download Sanitized Copy' : 'Acknowledge and Download'}
+        secondaryLabel={sanitizable ? 'Download Original…' : undefined}
+        onSecondary={() => setConfirmingOriginal(true)}
+        tone={severe ? 'danger' : 'default'}
         busy={false}
         error={null}
-        onConfirm={() => settle(true)}
-        onClose={() => settle(false)}
+        onConfirm={() => settle(sanitizable ? 'sanitized' : 'original')}
+        onClose={() => settle('cancel')}
       >
         {pending && (
           <>
@@ -98,18 +141,50 @@ export function DownloadWarningProvider({ children }: { children: React.ReactNod
               {pending.target.kind === 'folder' ? ' will be downloaded as a zip archive.' : ''}
             </p>
             <p>{pending.warning.detail}</p>
-            {pending.warning.severity === 'severe' && (
+            {severe && (
               <p className="download-warning-severe" role="alert">
                 Do not run, execute, import, compile or install this file in any capacity -- including
                 opening it in a tool that evaluates it automatically -- unless you have reviewed every line
                 of it and understand exactly what it does.
               </p>
             )}
+            {sanitizable && <p className="download-warning-sanitized">{SANITIZED_IMAGE_EXPLANATION}</p>}
             <p>
-              Files in this workspace may have been written by the agent, and a manipulated agent can
-              hide sensitive information in them in ways that are hard to detect. Only continue if you
-              trust how this file was produced.
+              {sanitizable
+                ? 'This file may have been written by the agent, and a tricked agent can hide things in it.'
+                : 'Files in this workspace may have been written by the agent, and a manipulated agent can hide sensitive information in them in ways that are hard to detect.'}
+              {sanitizable
+                ? ' Pick the sanitized copy unless you are sure you need the original.'
+                : ' Only continue if you trust how this file was produced.'}
             </p>
+          </>
+        )}
+      </DocConfirmDialog>
+      <DocConfirmDialog
+        isOpen={pending !== null && confirmingOriginal}
+        title="Download the original file?"
+        confirmLabel="Download Original"
+        tone="danger"
+        busy={false}
+        error={null}
+        confirmDisabled={!originalAcknowledged}
+        onConfirm={() => settle('original')}
+        onClose={backToWarning}
+      >
+        {pending && (
+          <>
+            <p>
+              <code className="download-warning-name">{pending.target.name}</code>
+              {' will be downloaded exactly as it is. Nothing has checked it for hidden information.'}
+            </p>
+            <label className="download-warning-ack">
+              <input
+                type="checkbox"
+                checked={originalAcknowledged}
+                onChange={(e) => setOriginalAcknowledged(e.target.checked)}
+              />
+              <span>{ORIGINAL_ACK_LABEL}</span>
+            </label>
           </>
         )}
       </DocConfirmDialog>
