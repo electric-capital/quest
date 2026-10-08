@@ -1,5 +1,8 @@
 /**
  * Modal for viewing text file content, images, and PDFs from workspace files.
+ * Reads from one file space: a conversation's workspace (`conversationId`,
+ * the chat-side hosts -- attachments, doc image cards, subagent returns) or
+ * any `source` (the FileBrowser cards, incl. Project Files).
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -11,8 +14,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import remarkMathCurrencyGuard from '../utils/remarkMathCurrencyGuard';
 import { errorMessage } from '../utils/errorMessage';
-import { fetchFileContent, saveFileToDrive } from '../api/fileApi';
-import { API_BASE_URL } from '../api/config';
+import { fetchFileContent, fileDownloadUrl, saveFileToDrive, type FileSource } from '../api/fileApi';
 import { JsonTreeViewer } from './JsonTreeViewer';
 import { PdfViewer } from './PdfViewer';
 import { markdownComponents, MarkdownWorkspaceContext } from './Message';
@@ -47,9 +49,16 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-interface FileViewerModalProps {
+/**
+ * The file space to read from: a `source`, or a bare `conversationId` for
+ * the conversation-space hosts (same as `source={{kind: 'conversation', id}}`).
+ */
+type FileViewerSourceProps =
+  | { source: FileSource; conversationId?: never }
+  | { conversationId: string; source?: never };
+
+type FileViewerModalProps = FileViewerSourceProps & {
   isOpen: boolean;
-  conversationId: string;
   filePath: string;       // Full path within workspace (e.g., "/script.py")
   fileName: string;       // Display name
   isImage?: boolean;      // Whether the file is an image (renders via <img> instead of <pre>)
@@ -58,9 +67,14 @@ interface FileViewerModalProps {
   isCsv?: boolean;        // Whether the file is CSV (renders as a styled sortable table instead of <pre>)
   onClose: () => void;
   onDownload: () => void; // Triggers the existing download flow
-}
+};
 
-export function FileViewerModal({ isOpen, conversationId, filePath, fileName, isImage, isJson, isPdf, isCsv, onClose, onDownload }: FileViewerModalProps) {
+export function FileViewerModal({ isOpen, source: sourceProp, conversationId, filePath, fileName, isImage, isJson, isPdf, isCsv, onClose, onDownload }: FileViewerModalProps) {
+  // Primitives for effect deps: hosts may pass a fresh object every render.
+  const sourceKind: FileSource['kind'] = sourceProp ? sourceProp.kind : 'conversation';
+  const sourceId: string = sourceProp ? sourceProp.id : conversationId ?? '';
+  const source = useMemo<FileSource>(() => ({ kind: sourceKind, id: sourceId }), [sourceKind, sourceId]);
+
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,8 +87,12 @@ export function FileViewerModal({ isOpen, conversationId, filePath, fileName, is
   // Markdown preview view mode: rendered HTML (default, switch ON) vs. raw source (switch OFF).
   const [showRendered, setShowRendered] = useState(true);
 
-  // Resolves workspace-relative markdown image refs in the .md preview.
-  const markdownCtx = useMemo(() => ({ conversationId }), [conversationId]);
+  // Resolves workspace-relative markdown image refs in the .md preview
+  // against the file's own space.
+  const markdownCtx = useMemo(
+    () => (source.kind === 'project' ? { projectId: source.id } : { conversationId: source.id }),
+    [source],
+  );
 
   // CSV preview view mode: styled table (default, switch OFF) vs. raw source (switch ON).
   const [showRaw, setShowRaw] = useState(false);
@@ -123,7 +141,7 @@ export function FileViewerModal({ isOpen, conversationId, filePath, fileName, is
 
     if (isImage) {
       // Fetch image as a blob to get accurate file size and create an object URL
-      const url = `${API_BASE_URL}/conversations/${conversationId}/files/download?path=${encodeURIComponent(filePath)}`;
+      const url = fileDownloadUrl(source, filePath);
       fetch(url)
         .then((res) => {
           if (!res.ok) throw new Error('Failed to load image');
@@ -145,7 +163,7 @@ export function FileViewerModal({ isOpen, conversationId, filePath, fileName, is
     } else if (isPdf) {
       // Fetch the whole PDF as bytes and hand it to PdfViewer (the /files/content
       // text endpoint is restricted to text extensions; PDFs use /files/download).
-      const url = `${API_BASE_URL}/conversations/${conversationId}/files/download?path=${encodeURIComponent(filePath)}`;
+      const url = fileDownloadUrl(source, filePath);
       const tooLargeMessage = (bytes: number) =>
         `This PDF is too large to preview (${formatFileSize(bytes)}). Use Download instead.`;
       fetch(url)
@@ -177,7 +195,7 @@ export function FileViewerModal({ isOpen, conversationId, filePath, fileName, is
           }
         });
     } else {
-      fetchFileContent(conversationId, filePath)
+      fetchFileContent(source, filePath)
         .then((data) => {
           if (!cancelled) {
             setContent(data.content);
@@ -195,7 +213,7 @@ export function FileViewerModal({ isOpen, conversationId, filePath, fileName, is
     return () => {
       cancelled = true;
     };
-  }, [isOpen, conversationId, filePath, isImage, isPdf]);
+  }, [isOpen, source, filePath, isImage, isPdf]);
 
   const handlePdfMetadata = useCallback((info: { numPages: number }) => {
     setPdfPages(info.numPages);
@@ -291,14 +309,14 @@ export function FileViewerModal({ isOpen, conversationId, filePath, fileName, is
     setSaving(true);
     setSaveError(null);
     try {
-      const result = await saveFileToDrive(conversationId, filePath, docName.trim());
+      const result = await saveFileToDrive(source, filePath, docName.trim());
       setSaveSuccess(result.url);
     } catch (err) {
       setSaveError(errorMessage(err, 'Failed to save to Google Drive'));
     } finally {
       setSaving(false);
     }
-  }, [conversationId, filePath, docName]);
+  }, [source, filePath, docName]);
 
   // Handle Escape in save-to-drive dialog (prevent it from closing the main modal)
   useEffect(() => {

@@ -74,6 +74,26 @@ describe('MarkdownImage', () => {
     });
   });
 
+  describe('workspace space selection', () => {
+    it('resolves bare paths against the conversation workspace', () => {
+      renderMarkdown('![c](charts/a%20b.png)', { conversationId: 'c1' });
+      expect(screen.getByRole('img', { name: 'c' }).getAttribute('src'))
+        .toBe('/app/api/conversations/c1/files/download?path=charts%2Fa%20b.png');
+    });
+
+    it('resolves bare paths against a project workspace with projectId alone', () => {
+      renderMarkdown('![p](charts/a.png)', { projectId: 'p1' });
+      expect(screen.getByRole('img', { name: 'p' }).getAttribute('src'))
+        .toBe('/app/api/projects/p1/files/download?path=charts%2Fa.png');
+    });
+
+    it('prefers the conversation workspace when both ids are set', () => {
+      renderMarkdown('![b](a.png)', { conversationId: 'c1', projectId: 'p1' });
+      expect(screen.getByRole('img', { name: 'b' }).getAttribute('src'))
+        .toBe('/app/api/conversations/c1/files/download?path=a.png');
+    });
+  });
+
   describe('without an assetBase (conversation workspace)', () => {
     it('resolves a workspace path against the conversation files route', () => {
       renderMarkdown('![w](./workspace/plots/chart.png)', { conversationId: 'c1' });

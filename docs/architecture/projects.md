@@ -46,7 +46,7 @@ A standalone (non-project, non-Slack) conversation can be turned into a new proj
 
 Cached SDK sessions are invalidated because project membership changes the system prompt (project guide and skill auto-loads).
 
-In the frontend, the option appears as "Create Project from Chat" in the top-level conversation entry's dropdown menu in `Sidebar.tsx` (hidden for Slack conversations). It opens `ConvertToProjectModal` (`frontend/src/components/ConvertToProjectModal.tsx`, reusing the `NewProjectModal` styles), which prefills the project name from the conversation title and explains that the chat becomes the project's first conversation (its copy still says the workspace files move into the project; they no longer do -- the frontend copy is updated in a later phase). On success the sidebar refetches projects, drops the conversation from the top-level list, and drills into the new project, auto-selecting the moved conversation.
+In the frontend, the option appears as "Create Project from Chat" in the top-level conversation entry's dropdown menu in `Sidebar.tsx` (hidden for Slack conversations). It opens `ConvertToProjectModal` (`frontend/src/components/ConvertToProjectModal.tsx`, reusing the `NewProjectModal` styles), which prefills the project name from the conversation title and explains that the chat becomes the project's first conversation while its files stay with the chat (the project starts with an empty Project Files space; the user can ask the chat, or use Move to project, to share files with later chats). On success the sidebar refetches projects, drops the conversation from the top-level list, and drills into the new project, auto-selecting the moved conversation.
 
 ## Archiving a Project
 

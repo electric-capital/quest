@@ -10,6 +10,7 @@ import { useGuides } from '../contexts/GuidesContext';
 import { getSelectableModels } from '../constants/models';
 import type { ModelInfo } from '../constants/models';
 import { ModalShell } from './ModalShell';
+import { ROUTINE_PROMPT_FILES_HINT } from '../constants/routines';
 import './NewRoutineModal.css';
 
 interface NewRoutineModalProps {
@@ -124,6 +125,7 @@ export function NewRoutineModal({ isOpen, projectId, isPublicProject = false, on
 
         <label htmlFor="new-routine-prompt-input" className="new-routine-label">
           Prompt
+          <span className="new-routine-label-hint">{ROUTINE_PROMPT_FILES_HINT}</span>
         </label>
         <textarea
           id="new-routine-prompt-input"

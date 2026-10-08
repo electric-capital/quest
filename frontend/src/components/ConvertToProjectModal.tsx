@@ -73,9 +73,10 @@ export function ConvertToProjectModal({
       </div>
       <form className="new-project-body" onSubmit={handleSubmit}>
         <p className="new-project-description">
-          This creates a new project from this chat. The chat's workspace
-          files move into the project's shared workspace, and the chat
-          becomes the project's first conversation.
+          This creates a new project from this chat, and the chat becomes
+          the project's first conversation. Your files stay with this chat;
+          the project starts with an empty Project Files space. Ask the chat,
+          or use Move to project, to share files with later chats.
         </p>
         <label htmlFor="convert-project-name-input" className="new-project-label">
           Project Name

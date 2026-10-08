@@ -66,12 +66,15 @@
   height: 72px;
 }
 
-/* Gap between the two cards doubles as the split handle. */
+/* Each gap between two cards doubles as a split handle (one gap in the
+   two-card layout, two in the three-card layout). */
 .right-panel-divider {
   position: relative;
   height: 0.75rem;
   flex-shrink: 0;
   cursor: row-resize;
+  /* Pointer-event drag: keep touch from scrolling/zooming instead. */
+  touch-action: none;
 }
 
 .right-panel-divider::after {
@@ -94,7 +97,7 @@
 }
 
 .right-panel-divider:hover::after,
-.right-panel.resizing-split .right-panel-divider::after {
+.right-panel-divider.active::after {
   background-color: var(--accent);
   width: 72px;
 }

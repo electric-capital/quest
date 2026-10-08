@@ -1,12 +1,14 @@
 /**
- * React hook for file browser functionality
+ * React hook for file browser functionality over one file space (a
+ * conversation's workspace or a project's shared workspace, see
+ * `FileSource` in api/fileApi.ts).
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import type { FileEntry, ListFilesResponse, UploadResponse } from '../api/types';
-import { listFiles, uploadFiles as apiUploadFiles, uploadFilesWithPaths as apiUploadFilesWithPaths, downloadFile as apiDownloadFile, downloadFolder as apiDownloadFolder, deleteFile as apiDeleteFile, createFolder as apiCreateFolder, saveBlobToDisk, FileApiError } from '../api/fileApi';
+import { listFiles, uploadFiles as apiUploadFiles, uploadFilesWithPaths as apiUploadFilesWithPaths, downloadFile as apiDownloadFile, downloadFolder as apiDownloadFolder, deleteFile as apiDeleteFile, createFolder as apiCreateFolder, saveBlobToDisk, FileApiError, fileSourceKey, type FileSource } from '../api/fileApi';
 import type { FileWithPath } from '../utils/directoryTraversal';
-import { useFileBrowserState } from '../contexts/FileBrowserStateContext';
+import { useFileBrowserState, INITIAL_FILE_BROWSER_STATE } from '../contexts/FileBrowserStateContext';
 import { useDownloadWarning } from '../contexts/DownloadWarningContext';
 
 /**
@@ -48,6 +50,8 @@ interface UseFileBrowserResult {
   canGoBack: boolean;
   canGoForward: boolean;
   zippingFolder: string | null;
+  /** Dot-prefixed entries revealed; persisted per file space. */
+  showHidden: boolean;
 
   // Methods
   fetchFiles: () => Promise<void>;
@@ -63,22 +67,38 @@ interface UseFileBrowserResult {
   createFolder: (name: string) => Promise<void>;
   refresh: () => Promise<void>;
   silentRefresh: () => Promise<void>;
+  setShowHidden: (showHidden: boolean) => void;
 }
 
 /**
- * Hook for managing file browser state and operations
+ * Hook for managing file browser state and operations. `source` null = no
+ * file space (empty panel). Navigation state lives in FileBrowserStateContext
+ * under `fileSourceKey(source)`, so two cards over different spaces never
+ * share a path, history or dotfile toggle.
  */
-export function useFileBrowser(conversationId: string | null): UseFileBrowserResult {
+export function useFileBrowser(source: FileSource | null): UseFileBrowserResult {
   const { getFileBrowserState, setFileBrowserState } = useFileBrowserState();
   const { confirmDownload } = useDownloadWarning();
 
-  // Get state from context (conversation-specific)
-  const browserState = conversationId ? getFileBrowserState(conversationId) : { path: '/', history: ['/'], historyIndex: 0 };
+  // Re-derive the source from its primitives so callers may pass a fresh
+  // object literal every render without re-running every effect.
+  const sourceKind = source?.kind ?? null;
+  const sourceId = source?.id ?? null;
+  const activeSource = useMemo<FileSource | null>(
+    () => (sourceKind && sourceId ? { kind: sourceKind, id: sourceId } : null),
+    [sourceKind, sourceId],
+  );
+  // State key of the active file space (`conversation:<id>` /
+  // `project:<id>`); the guards compare keys, API calls use `activeSource`.
+  const sourceKey = activeSource ? fileSourceKey(activeSource) : null;
+
+  // Get state from context (file-space-specific)
+  const browserState = sourceKey ? getFileBrowserState(sourceKey) : INITIAL_FILE_BROWSER_STATE;
   const currentPath = browserState.path;
   const navigationHistory = browserState.history;
   const historyIndex = browserState.historyIndex;
 
-  // Local UI state (not conversation-specific)
+  // Local UI state (not persisted per file space)
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -88,51 +108,53 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
   const [zippingFolder, setZippingFolder] = useState<string | null>(null);
 
   // Refs to break circular dependencies and prevent rapid refresh.
-  // inFlightRef tracks the conversation+path of the request currently in
-  // flight (or null when idle). It is scoped per-conversation/per-path so an
-  // in-flight fetch for one conversation never swallows the first fetch for a
-  // different conversation (which would leave the panel showing stale files).
-  const inFlightRef = useRef<{ conversationId: string; path: string } | null>(null);
+  // inFlightRef tracks the file space + path of the request currently in
+  // flight (or null when idle). It is scoped per-space/per-path so an
+  // in-flight fetch for one space never swallows the first fetch for a
+  // different space (which would leave the panel showing stale files).
+  const inFlightRef = useRef<{ sourceKey: string; path: string } | null>(null);
   const browserStateRef = useRef(browserState);
   browserStateRef.current = browserState;
-  // Mirror of the latest conversationId for use inside async fetch handlers
-  // (lets the out-of-order guard compare against the *current* conversation
+  // Mirror of the latest sourceKey for use inside async fetch handlers
+  // (lets the out-of-order guard compare against the *current* file space
   // without depending on stale closure values).
-  const conversationIdRef = useRef<string | null>(conversationId);
-  conversationIdRef.current = conversationId;
-  // Tracks the conversation the consolidated fetch effect last ran for, so it
-  // can tell a conversation switch (silent, stale-while-revalidate) apart from
-  // intra-conversation path navigation (loading-visible).
-  const prevConversationIdRef = useRef<string | null>(conversationId);
+  const sourceKeyRef = useRef<string | null>(sourceKey);
+  sourceKeyRef.current = sourceKey;
+  // Tracks the file space the consolidated fetch effect last ran for, so it
+  // can tell a space switch (e.g. a conversation switch: silent,
+  // stale-while-revalidate) apart from in-space path navigation
+  // (loading-visible).
+  const prevSourceKeyRef = useRef<string | null>(sourceKey);
 
   // Helper to update browser state in context - uses ref to avoid dependency on browserState
   const updateBrowserState = useCallback((updates: Partial<typeof browserState>) => {
-    if (!conversationId) return;
-    setFileBrowserState(conversationId, { ...browserStateRef.current, ...updates });
-  }, [conversationId, setFileBrowserState]);
+    if (!sourceKey) return;
+    setFileBrowserState(sourceKey, { ...browserStateRef.current, ...updates });
+  }, [sourceKey, setFileBrowserState]);
 
   // Fetch files for current path - stable callback that doesn't depend on updateBrowserState
   // silent=true skips loading state updates (used for background refreshes)
   const fetchFilesInternal = useCallback(async (silent: boolean = false) => {
-    if (!conversationId) {
+    if (!sourceKey || !activeSource) {
       setFiles([]);
       setError(null);
       return;
     }
 
-    // Guard against duplicate concurrent fetches for the *same* conversation +
-    // path. A request for a different conversation/path is always allowed
+    // Guard against duplicate concurrent fetches for the *same* file space +
+    // path. A request for a different space/path is always allowed
     // through so a switch is never swallowed by a stale in-flight fetch.
     const inFlight = inFlightRef.current;
-    if (inFlight && inFlight.conversationId === conversationId && inFlight.path === currentPath) {
+    if (inFlight && inFlight.sourceKey === sourceKey && inFlight.path === currentPath) {
       return;
     }
     // Capture the id/path this request belongs to so the response handler can
     // ignore out-of-order results (e.g. a slow A response landing after the
     // user switched to B, or A->B->A rapid switching).
-    const requestConversationId = conversationId;
+    const requestSourceKey = sourceKey;
+    const requestSource = activeSource;
     const requestPath = currentPath;
-    inFlightRef.current = { conversationId: requestConversationId, path: requestPath };
+    inFlightRef.current = { sourceKey: requestSourceKey, path: requestPath };
 
     if (!silent) {
       setLoading(true);
@@ -140,10 +162,10 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
     setError(null);
 
     try {
-      const response: ListFilesResponse = await listFiles(requestConversationId, requestPath);
-      // Drop the response if the active conversation/path has moved on while
+      const response: ListFilesResponse = await listFiles(requestSource, requestPath);
+      // Drop the response if the active file space/path has moved on while
       // this request was in flight - otherwise we'd clobber the current list.
-      if (browserStateRef.current.path !== requestPath || conversationIdRef.current !== requestConversationId) {
+      if (browserStateRef.current.path !== requestPath || sourceKeyRef.current !== requestSourceKey) {
         return;
       }
       setFiles(response.files);
@@ -151,11 +173,11 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
 
       // Update current path from server response (normalized) - use ref to get latest state
       if (response.currentPath !== requestPath) {
-        setFileBrowserState(requestConversationId, { ...browserStateRef.current, path: response.currentPath });
+        setFileBrowserState(requestSourceKey, { ...browserStateRef.current, path: response.currentPath });
       }
     } catch (err) {
-      // Only surface errors for the still-current conversation/path.
-      if (browserStateRef.current.path !== requestPath || conversationIdRef.current !== requestConversationId) {
+      // Only surface errors for the still-current file space/path.
+      if (browserStateRef.current.path !== requestPath || sourceKeyRef.current !== requestSourceKey) {
         return;
       }
       if (err instanceof FileApiError) {
@@ -169,39 +191,39 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
         setLoading(false);
       }
       // Only clear the in-flight marker if it still refers to this request;
-      // a newer fetch for a different conversation/path may have replaced it.
+      // a newer fetch for a different file space/path may have replaced it.
       const current = inFlightRef.current;
-      if (current && current.conversationId === requestConversationId && current.path === requestPath) {
+      if (current && current.sourceKey === requestSourceKey && current.path === requestPath) {
         inFlightRef.current = null;
       }
     }
-  }, [conversationId, currentPath, setFileBrowserState]);
+  }, [sourceKey, activeSource, currentPath, setFileBrowserState]);
 
   // Public fetchFiles - shows loading state
   const fetchFiles = useCallback(async () => {
     await fetchFilesInternal(false);
   }, [fetchFilesInternal]);
 
-  // Single fetch effect for both conversation switches and intra-conversation
+  // Single fetch effect for both file-space switches and in-space
   // path navigation. Consolidating these avoids the previous A/B effect race
   // where two effects fired in the same commit and the shared in-flight guard
-  // swallowed the second fetch. A ref tracks the previous conversation so we
-  // can tell the two cases apart: a conversation switch uses a silent fetch
-  // (but resets stale state first so the old conversation's files can't show),
+  // swallowed the second fetch. A ref tracks the previous file space so we
+  // can tell the two cases apart: a space switch uses a silent fetch
+  // (but resets stale state first so the old space's files can't show),
   // while path navigation shows the loading state.
   useEffect(() => {
-    const conversationChanged = prevConversationIdRef.current !== conversationId;
-    prevConversationIdRef.current = conversationId;
+    const sourceChanged = prevSourceKeyRef.current !== sourceKey;
+    prevSourceKeyRef.current = sourceKey;
 
-    if (!conversationId) {
-      // No conversation selected - clear the panel.
+    if (!sourceKey) {
+      // No file space - clear the panel.
       setFiles([]);
       setError(null);
       return;
     }
 
-    if (conversationChanged) {
-      // Reset stale per-conversation UI state so the new conversation can
+    if (sourceChanged) {
+      // Reset stale per-space UI state so the new file space can
       // never momentarily display the previous one's files, then refetch
       // silently (stale-while-revalidate with no spinner flash).
       setFiles([]);
@@ -209,10 +231,10 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
       setError(null);
       fetchFilesInternal(true);
     } else {
-      // Intra-conversation path navigation - show the loading state.
+      // In-space path navigation - show the loading state.
       fetchFilesInternal(false);
     }
-  }, [conversationId, currentPath, fetchFilesInternal]);
+  }, [sourceKey, currentPath, fetchFilesInternal]);
 
   // Navigate to a folder
   const navigateToFolder = useCallback((folderName: string) => {
@@ -272,8 +294,8 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
 
   // Upload files
   const uploadFiles = useCallback(async (filesToUpload: FileList | File[]): Promise<UploadResponse> => {
-    if (!conversationId) {
-      throw new Error('No conversation selected');
+    if (!activeSource) {
+      throw new Error('No file space selected');
     }
 
     setUploadProgress(true);
@@ -281,7 +303,7 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
     setError(null);
 
     try {
-      const response = await apiUploadFiles(conversationId, filesToUpload, currentPath, (loaded, total) => {
+      const response = await apiUploadFiles(activeSource, filesToUpload, currentPath, (loaded, total) => {
         setUploadPercent(Math.round((loaded / total) * 100));
       });
 
@@ -306,12 +328,12 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
       setUploadProgress(false);
       setUploadPercent(null);
     }
-  }, [conversationId, currentPath, fetchFiles]);
+  }, [activeSource, currentPath, fetchFiles]);
 
   // Upload files with relative paths (for folder uploads)
   const uploadFilesWithPaths = useCallback(async (filesToUpload: FileWithPath[]): Promise<UploadResponse> => {
-    if (!conversationId) {
-      throw new Error('No conversation selected');
+    if (!activeSource) {
+      throw new Error('No file space selected');
     }
 
     setUploadProgress(true);
@@ -319,7 +341,7 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
     setError(null);
 
     try {
-      const response = await apiUploadFilesWithPaths(conversationId, filesToUpload, currentPath, (loaded, total) => {
+      const response = await apiUploadFilesWithPaths(activeSource, filesToUpload, currentPath, (loaded, total) => {
         setUploadPercent(Math.round((loaded / total) * 100));
       });
 
@@ -344,19 +366,19 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
       setUploadProgress(false);
       setUploadPercent(null);
     }
-  }, [conversationId, currentPath, fetchFiles]);
+  }, [activeSource, currentPath, fetchFiles]);
 
   // Download file (after the hidden-data acknowledgement when the type needs one)
   const downloadFile = useCallback(async (filePath: string): Promise<void> => {
-    if (!conversationId) {
-      throw new Error('No conversation selected');
+    if (!activeSource) {
+      throw new Error('No file space selected');
     }
 
     const name = filePath.split('/').filter(Boolean).pop() || filePath;
     if (!(await confirmDownload({ name, kind: 'file' }))) return;
 
     try {
-      saveBlobToDisk(await apiDownloadFile(conversationId, filePath));
+      saveBlobToDisk(await apiDownloadFile(activeSource, filePath));
     } catch (err) {
       if (err instanceof FileApiError) {
         setError(err.message);
@@ -365,13 +387,13 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
       }
       throw err;
     }
-  }, [conversationId, confirmDownload]);
+  }, [activeSource, confirmDownload]);
 
   // Download folder as zip (always behind the hidden-data acknowledgement:
   // an archive can hold anything)
   const downloadFolder = useCallback(async (folderPath: string): Promise<void> => {
-    if (!conversationId) {
-      throw new Error('No conversation selected');
+    if (!activeSource) {
+      throw new Error('No file space selected');
     }
 
     // Extract folder name from path for the notification
@@ -380,7 +402,7 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
     setZippingFolder(folderName);
 
     try {
-      saveBlobToDisk(await apiDownloadFolder(conversationId, folderPath));
+      saveBlobToDisk(await apiDownloadFolder(activeSource, folderPath));
     } catch (err) {
       if (err instanceof FileApiError) {
         setError(err.message);
@@ -391,16 +413,16 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
     } finally {
       setZippingFolder(null);
     }
-  }, [conversationId, confirmDownload]);
+  }, [activeSource, confirmDownload]);
 
   // Delete a file or folder
   const deleteItem = useCallback(async (filePath: string): Promise<void> => {
-    if (!conversationId) {
-      throw new Error('No conversation selected');
+    if (!activeSource) {
+      throw new Error('No file space selected');
     }
 
     try {
-      await apiDeleteFile(conversationId, filePath);
+      await apiDeleteFile(activeSource, filePath);
 
       // Refresh file list after deletion
       await fetchFiles();
@@ -412,18 +434,18 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
       }
       throw err;
     }
-  }, [conversationId, fetchFiles]);
+  }, [activeSource, fetchFiles]);
 
   // Create a new empty folder in the current directory
   const createFolder = useCallback(async (name: string): Promise<void> => {
-    if (!conversationId) {
-      throw new Error('No conversation selected');
+    if (!activeSource) {
+      throw new Error('No file space selected');
     }
 
     setError(null);
 
     try {
-      await apiCreateFolder(conversationId, currentPath, name);
+      await apiCreateFolder(activeSource, currentPath, name);
       // Refresh the listing so the new folder appears
       await fetchFiles();
     } catch (err) {
@@ -434,7 +456,12 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
       }
       throw err;
     }
-  }, [conversationId, currentPath, fetchFiles]);
+  }, [activeSource, currentPath, fetchFiles]);
+
+  // Dotfile toggle, persisted with the space's navigation state.
+  const setShowHidden = useCallback((showHidden: boolean) => {
+    updateBrowserState({ showHidden });
+  }, [updateBrowserState]);
 
   // Refresh current directory (shows loading state)
   const refresh = useCallback(async () => {
@@ -457,6 +484,7 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
     canGoBack: historyIndex > 0,
     canGoForward: historyIndex < navigationHistory.length - 1,
     zippingFolder,
+    showHidden: browserState.showHidden,
     fetchFiles,
     navigateToFolder,
     goBack,
@@ -470,5 +498,6 @@ export function useFileBrowser(conversationId: string | null): UseFileBrowserRes
     createFolder,
     refresh,
     silentRefresh,
+    setShowHidden,
   };
 }

@@ -24,6 +24,7 @@ import { getSelectableModels, DEPRECATED_MODEL_MAP, getModelDisplayName } from '
 import { ModalShell } from './ModalShell';
 import { RoutineCostsSection } from './RoutineCostsSection';
 import { useAnimatedHeight } from '../hooks/useAnimatedHeight';
+import { ROUTINE_PROMPT_FILES_HINT } from '../constants/routines';
 import './RoutineSettingsModal.css';
 import './settings/SkillsSection.css';
 
@@ -700,6 +701,7 @@ export function RoutineSettingsModal({
               <div className="routine-settings-field">
                 <label htmlFor="routine-settings-prompt" className="routine-settings-label">
                   Prompt
+                  <span className="routine-settings-label-hint">{ROUTINE_PROMPT_FILES_HINT}</span>
                 </label>
                 <textarea
                   ref={promptTextareaRef}

@@ -1,5 +1,16 @@
 /**
- * API client for file browser functionality
+ * API client for workspace file management.
+ *
+ * Two file spaces share one route set (chat/file_routes.py): a
+ * conversation's workspace (`/conversations/{cid}/files...`, the "Chat
+ * Files" card, and every inline-image / attachment path in chat) and a
+ * project's shared workspace (`/projects/{pid}/files...`, the "Project
+ * Files" card). Every function takes a `FileTarget`: a `FileSource`, or a
+ * bare string meaning a conversation id -- the historical signature the
+ * many conversation-space callers (Composer, HomeComposer, MarkdownImage,
+ * previews) keep using. The `*Project*` twins are thin wrappers over a
+ * project source. `copyFileToProject` / `copyFileFromProject` move entries
+ * between the two spaces of a project conversation.
  */
 
 import { API_BASE_URL } from './config';
@@ -10,6 +21,7 @@ import type {
   FileInfoResponse,
   DeleteFileResponse,
   CreateFolderResponse,
+  CopyEntryResponse,
   ApiError,
   ComposerAttachmentUploadResponse,
 } from './types';
@@ -125,40 +137,117 @@ function xhrUpload(
 }
 
 /**
- * List files in a workspace directory
+ * Which file space a call addresses: a conversation's own workspace or a
+ * project's shared workspace.
  */
-export async function listFiles(
-  conversationId: string,
-  path: string
-): Promise<ListFilesResponse> {
-  const url = new URL(`${window.location.origin}${API_BASE_URL}/conversations/${conversationId}/files`);
-  if (path) {
-    url.searchParams.set('path', path);
+export type FileSource =
+  | { kind: 'conversation'; id: string }
+  | { kind: 'project'; id: string };
+
+/**
+ * A `FileSource`, or a bare conversation id. The bare-string form exists
+ * only so the legacy conversation-space callers keep working unchanged; new
+ * code should pass a `FileSource` (`conversationSource()` / `projectSource()`).
+ */
+export type FileTarget = FileSource | string;
+
+export function conversationSource(conversationId: string): FileSource {
+  return { kind: 'conversation', id: conversationId };
+}
+
+export function projectSource(projectId: string): FileSource {
+  return { kind: 'project', id: projectId };
+}
+
+function toSource(target: FileTarget): FileSource {
+  return typeof target === 'string' ? conversationSource(target) : target;
+}
+
+/** Stable per-space key (`conversation:<id>` / `project:<id>`) for UI state maps. */
+export function fileSourceKey(source: FileSource): string {
+  return `${source.kind}:${source.id}`;
+}
+
+/**
+ * Root-relative base path of a space's file routes, e.g.
+ * `/app/api/projects/p1/files`. Sub-routes append `/upload`, `/content`, ...
+ */
+export function fileRoutesBase(target: FileTarget): string {
+  const source = toSource(target);
+  const segment = source.kind === 'project' ? 'projects' : 'conversations';
+  return `${API_BASE_URL}/${segment}/${encodeURIComponent(source.id)}/files`;
+}
+
+/**
+ * Root-relative URL of the raw download route for one file -- what inline
+ * previews (`<img src>`, PDF fetch) load. Cookie-authenticated.
+ */
+export function fileDownloadUrl(target: FileTarget, filePath: string): string {
+  return `${fileRoutesBase(target)}/download?path=${encodeURIComponent(filePath)}`;
+}
+
+/** Absolute URL object for a file route (`suffix` like `/upload`, or '' for the list/delete root). */
+function routeUrl(target: FileTarget, suffix: string): URL {
+  return new URL(`${window.location.origin}${fileRoutesBase(target)}${suffix}`);
+}
+
+/** Pull the filename out of a Content-Disposition header, else `fallback`. */
+function dispositionFilename(response: Response, fallback: string): string {
+  const contentDisposition = response.headers.get('Content-Disposition');
+  if (contentDisposition) {
+    const match = contentDisposition.match(/filename="?([^"]+)"?/);
+    if (match) return match[1];
   }
+  return fallback;
+}
 
-  const response = await fetch(url.toString(), {
-    method: 'GET',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-  });
-
+/** GET/POST/DELETE a JSON file route, raising `FileApiError` on non-2xx. */
+async function requestJson<T>(url: URL | string, init: RequestInit): Promise<T> {
+  const response = await fetch(url.toString(), { credentials: 'include', ...init });
   if (!response.ok) {
     await handleErrorResponse(response);
   }
+  return (await response.json()) as T;
+}
 
-  return await response.json();
+/** Fetch a download route into a blob URL plus the server-chosen filename. */
+async function fetchBlob(url: URL, fallbackName: string): Promise<{ url: string; filename: string }> {
+  const response = await fetch(url.toString(), { method: 'GET', credentials: 'include' });
+  if (!response.ok) {
+    await handleErrorResponse(response);
+  }
+  const filename = dispositionFilename(response, fallbackName);
+  const blob = await response.blob();
+  return { url: URL.createObjectURL(blob), filename };
+}
+
+/**
+ * List files in a workspace directory
+ */
+export async function listFiles(
+  target: FileTarget,
+  path: string
+): Promise<ListFilesResponse> {
+  const url = routeUrl(target, '');
+  if (path) {
+    url.searchParams.set('path', path);
+  }
+  return requestJson<ListFilesResponse>(url, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
 
 /**
  * Upload files to a workspace directory
  */
 export async function uploadFiles(
-  conversationId: string,
+  target: FileTarget,
   files: FileList | File[],
   path: string,
   onProgress?: (loaded: number, total: number) => void
 ): Promise<UploadResponse> {
-  const url = new URL(`${window.location.origin}${API_BASE_URL}/conversations/${conversationId}/files/upload`);
+  const url = routeUrl(target, '/upload');
   if (path) {
     url.searchParams.set('path', path);
   }
@@ -177,6 +266,7 @@ export async function uploadFiles(
  * server returns the per-file refs that the composer then carries on the
  * next ``send_message`` WS envelope. The endpoint is stricter than the
  * generic /files/upload route -- non-image MIME types are rejected.
+ * Conversation-space only (there is no project twin).
  */
 export async function uploadComposerAttachments(
   conversationId: string,
@@ -189,17 +279,10 @@ export async function uploadComposerAttachments(
     formData.append('files', file);
   }
 
-  const response = await fetch(url, {
+  return requestJson<ComposerAttachmentUploadResponse>(url, {
     method: 'POST',
     body: formData,
-    credentials: 'include',
   });
-
-  if (!response.ok) {
-    await handleErrorResponse(response);
-  }
-
-  return (await response.json()) as ComposerAttachmentUploadResponse;
 }
 
 /**
@@ -208,14 +291,12 @@ export async function uploadComposerAttachments(
  * can recreate the directory structure.
  */
 export async function uploadFilesWithPaths(
-  conversationId: string,
+  target: FileTarget,
   files: FileWithPath[],
   path: string,
   onProgress?: (loaded: number, total: number) => void
 ): Promise<UploadResponse> {
-  const url = new URL(
-    `${window.location.origin}${API_BASE_URL}/conversations/${conversationId}/files/upload`
-  );
+  const url = routeUrl(target, '/upload');
   if (path) {
     url.searchParams.set('path', path);
   }
@@ -233,22 +314,12 @@ export async function uploadFilesWithPaths(
  * Fetch text content of a file from the workspace for viewing
  */
 export async function fetchFileContent(
-  conversationId: string,
+  target: FileTarget,
   filePath: string
 ): Promise<FileContentResponse> {
-  const url = new URL(`${window.location.origin}${API_BASE_URL}/conversations/${conversationId}/files/content`);
+  const url = routeUrl(target, '/content');
   url.searchParams.set('path', filePath);
-
-  const response = await fetch(url.toString(), {
-    method: 'GET',
-    credentials: 'include',
-  });
-
-  if (!response.ok) {
-    await handleErrorResponse(response);
-  }
-
-  return await response.json();
+  return requestJson<FileContentResponse>(url, { method: 'GET' });
 }
 
 /**
@@ -273,36 +344,12 @@ export function saveBlobToDisk({ url, filename }: { url: string; filename: strin
  * Returns a blob URL that can be used for download
  */
 export async function downloadFile(
-  conversationId: string,
+  target: FileTarget,
   filePath: string
 ): Promise<{ url: string; filename: string }> {
-  const url = new URL(`${window.location.origin}${API_BASE_URL}/conversations/${conversationId}/files/download`);
+  const url = routeUrl(target, '/download');
   url.searchParams.set('path', filePath);
-
-  const response = await fetch(url.toString(), {
-    method: 'GET',
-    credentials: 'include',
-  });
-
-  if (!response.ok) {
-    await handleErrorResponse(response);
-  }
-
-  // Get filename from Content-Disposition header or use path
-  const contentDisposition = response.headers.get('Content-Disposition');
-  let filename = filePath.split('/').pop() || 'download';
-  if (contentDisposition) {
-    const match = contentDisposition.match(/filename="?([^"]+)"?/);
-    if (match) {
-      filename = match[1];
-    }
-  }
-
-  // Create blob URL
-  const blob = await response.blob();
-  const blobUrl = URL.createObjectURL(blob);
-
-  return { url: blobUrl, filename };
+  return fetchBlob(url, filePath.split('/').pop() || 'download');
 }
 
 /**
@@ -310,58 +357,24 @@ export async function downloadFile(
  * Returns a blob URL that can be used for download
  */
 export async function downloadFolder(
-  conversationId: string,
+  target: FileTarget,
   folderPath: string
 ): Promise<{ url: string; filename: string }> {
-  const url = new URL(`${window.location.origin}${API_BASE_URL}/conversations/${conversationId}/files/download-folder`);
+  const url = routeUrl(target, '/download-folder');
   url.searchParams.set('path', folderPath);
-
-  const response = await fetch(url.toString(), {
-    method: 'GET',
-    credentials: 'include',
-  });
-
-  if (!response.ok) {
-    await handleErrorResponse(response);
-  }
-
-  // Get filename from Content-Disposition header or use path
-  const contentDisposition = response.headers.get('Content-Disposition');
-  let filename = folderPath.split('/').pop() + '.zip';
-  if (contentDisposition) {
-    const match = contentDisposition.match(/filename="?([^"]+)"?/);
-    if (match) {
-      filename = match[1];
-    }
-  }
-
-  // Create blob URL
-  const blob = await response.blob();
-  const blobUrl = URL.createObjectURL(blob);
-
-  return { url: blobUrl, filename };
+  return fetchBlob(url, folderPath.split('/').pop() + '.zip');
 }
 
 /**
  * Get info about a file or folder (name, type, file count)
  */
 export async function getFileInfo(
-  conversationId: string,
+  target: FileTarget,
   filePath: string
 ): Promise<FileInfoResponse> {
-  const url = new URL(`${window.location.origin}${API_BASE_URL}/conversations/${conversationId}/files/info`);
+  const url = routeUrl(target, '/info');
   url.searchParams.set('path', filePath);
-
-  const response = await fetch(url.toString(), {
-    method: 'GET',
-    credentials: 'include',
-  });
-
-  if (!response.ok) {
-    await handleErrorResponse(response);
-  }
-
-  return await response.json();
+  return requestJson<FileInfoResponse>(url, { method: 'GET' });
 }
 
 /**
@@ -369,68 +382,163 @@ export async function getFileInfo(
  * Returns the created document's id, name, and url.
  */
 export async function saveFileToDrive(
-  conversationId: string,
+  target: FileTarget,
   filePath: string,
   title: string
 ): Promise<{ id: string; name: string; url: string }> {
-  const url = `${window.location.origin}${API_BASE_URL}/conversations/${conversationId}/files/save-to-drive`;
-
-  const response = await fetch(url, {
+  return requestJson<{ id: string; name: string; url: string }>(routeUrl(target, '/save-to-drive'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
     body: JSON.stringify({ path: filePath, title }),
   });
-
-  if (!response.ok) {
-    await handleErrorResponse(response);
-  }
-
-  return await response.json();
 }
 
 /**
  * Create a new empty folder in the workspace under the given parent path.
  */
 export async function createFolder(
-  conversationId: string,
+  target: FileTarget,
   parentPath: string,
   name: string
 ): Promise<CreateFolderResponse> {
-  const url = `${window.location.origin}${API_BASE_URL}/conversations/${conversationId}/files/create-folder`;
-
-  const response = await fetch(url, {
+  return requestJson<CreateFolderResponse>(routeUrl(target, '/create-folder'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
     body: JSON.stringify({ path: parentPath, name }),
   });
-
-  if (!response.ok) {
-    await handleErrorResponse(response);
-  }
-
-  return await response.json();
 }
 
 /**
  * Delete a file or folder from the workspace
  */
 export async function deleteFile(
-  conversationId: string,
+  target: FileTarget,
   filePath: string
 ): Promise<DeleteFileResponse> {
-  const url = new URL(`${window.location.origin}${API_BASE_URL}/conversations/${conversationId}/files`);
+  const url = routeUrl(target, '');
   url.searchParams.set('path', filePath);
+  return requestJson<DeleteFileResponse>(url, { method: 'DELETE' });
+}
 
-  const response = await fetch(url.toString(), {
-    method: 'DELETE',
-    credentials: 'include',
-  });
+// ---------------------------------------------------------------------------
+// Project twins: the same operations over a project's shared workspace.
+// ---------------------------------------------------------------------------
 
-  if (!response.ok) {
-    await handleErrorResponse(response);
-  }
+export function listProjectFiles(projectId: string, path: string): Promise<ListFilesResponse> {
+  return listFiles(projectSource(projectId), path);
+}
 
-  return await response.json();
+export function uploadProjectFiles(
+  projectId: string,
+  files: FileList | File[],
+  path: string,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<UploadResponse> {
+  return uploadFiles(projectSource(projectId), files, path, onProgress);
+}
+
+export function uploadProjectFilesWithPaths(
+  projectId: string,
+  files: FileWithPath[],
+  path: string,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<UploadResponse> {
+  return uploadFilesWithPaths(projectSource(projectId), files, path, onProgress);
+}
+
+export function getProjectFileContent(projectId: string, filePath: string): Promise<FileContentResponse> {
+  return fetchFileContent(projectSource(projectId), filePath);
+}
+
+export function projectFileDownloadUrl(projectId: string, filePath: string): string {
+  return fileDownloadUrl(projectSource(projectId), filePath);
+}
+
+export function downloadProjectFile(projectId: string, filePath: string): Promise<{ url: string; filename: string }> {
+  return downloadFile(projectSource(projectId), filePath);
+}
+
+export function downloadProjectFolder(projectId: string, folderPath: string): Promise<{ url: string; filename: string }> {
+  return downloadFolder(projectSource(projectId), folderPath);
+}
+
+export function getProjectFileInfo(projectId: string, filePath: string): Promise<FileInfoResponse> {
+  return getFileInfo(projectSource(projectId), filePath);
+}
+
+export function deleteProjectFile(projectId: string, filePath: string): Promise<DeleteFileResponse> {
+  return deleteFile(projectSource(projectId), filePath);
+}
+
+export function createProjectFolder(projectId: string, parentPath: string, name: string): Promise<CreateFolderResponse> {
+  return createFolder(projectSource(projectId), parentPath, name);
+}
+
+export function saveProjectFileToDrive(
+  projectId: string,
+  filePath: string,
+  title: string,
+): Promise<{ id: string; name: string; url: string }> {
+  return saveFileToDrive(projectSource(projectId), filePath, title);
+}
+
+// ---------------------------------------------------------------------------
+// Copy / move between a project conversation's workspace and its project's
+// workspace (POST /conversations/{cid}/files/copy-to-project|copy-from-project).
+// ---------------------------------------------------------------------------
+
+export interface CopyEntryOptions {
+  /** Source path in the source space. */
+  path: string;
+  /** Destination path in the other space; defaults to `path` server-side. */
+  dest?: string;
+  /** Replace an existing file / merge into an existing folder. */
+  overwrite?: boolean;
+  /** Remove the source after a successful copy. */
+  move?: boolean;
+  /** Copy dot-named entries inside a folder too. */
+  includeHidden?: boolean;
+}
+
+/** Error code of the 409 the copy routes return for an existing destination. */
+const DESTINATION_EXISTS = 'destination_exists';
+
+/** True for the copy routes' 409 `destination_exists` (ask to overwrite, then retry with `overwrite: true`). */
+export function isDestinationExistsError(err: unknown): err is FileApiError {
+  return err instanceof FileApiError && err.statusCode === 409 && err.errorCode === DESTINATION_EXISTS;
+}
+
+async function copyBetweenSpaces(
+  conversationId: string,
+  direction: 'copy-to-project' | 'copy-from-project',
+  options: CopyEntryOptions,
+): Promise<CopyEntryResponse> {
+  const body: Record<string, unknown> = { path: options.path };
+  if (options.dest !== undefined) body.dest = options.dest;
+  if (options.overwrite !== undefined) body.overwrite = options.overwrite;
+  if (options.move !== undefined) body.move = options.move;
+  if (options.includeHidden !== undefined) body.include_hidden = options.includeHidden;
+  return requestJson<CopyEntryResponse>(
+    routeUrl(conversationSource(conversationId), `/${direction}`),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+/**
+ * Copy (or, with `move`, move) an entry from a project conversation's own
+ * workspace into its project's workspace. Rejects with a `FileApiError`;
+ * `isDestinationExistsError()` detects the 409 overwrite prompt case. A
+ * move whose source removal failed resolves with `moved: false`.
+ */
+export function copyFileToProject(conversationId: string, options: CopyEntryOptions): Promise<CopyEntryResponse> {
+  return copyBetweenSpaces(conversationId, 'copy-to-project', options);
+}
+
+/** The reverse of `copyFileToProject`: project workspace -> conversation workspace. */
+export function copyFileFromProject(conversationId: string, options: CopyEntryOptions): Promise<CopyEntryResponse> {
+  return copyBetweenSpaces(conversationId, 'copy-from-project', options);
 }

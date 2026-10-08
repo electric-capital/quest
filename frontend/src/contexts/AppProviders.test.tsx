@@ -91,7 +91,7 @@ function FileBrowserProbe({
 }) {
   const { getFileBrowserState, setFileBrowserState } = useFileBrowserState();
   renders.count += 1;
-  handle.set = (path) => setFileBrowserState('c1', { path, history: ['/', path], historyIndex: 1 });
+  handle.set = (path) => setFileBrowserState('c1', { path, history: ['/', path], historyIndex: 1, showHidden: false });
   return <div data-testid="path">{getFileBrowserState('c1').path}</div>;
 }
 
