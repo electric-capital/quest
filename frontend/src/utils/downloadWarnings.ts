@@ -103,7 +103,7 @@ const CATEGORY_DETAILS: Record<DownloadWarningCategory, string> = {
   markup: 'Files like this are rendered by the program that opens them, and the rendering can fetch remote resources the file references -- a markdown image URL, or a formula cell a spreadsheet evaluates in a CSV -- so simply viewing the file can send information to a third party.',
   code: 'Source code can do anything when it runs: read or change files on your computer, connect to the network, send data elsewhere. Nothing here has inspected what it does.',
   web: 'Web files can contain scripts that run as soon as the file is opened in a browser, and markup that is not shown on the rendered page.',
-  image: 'Images can carry data in their metadata (such as EXIF fields) and in pixel patterns that are invisible when the picture is viewed.',
+  image: 'An image file can hold hidden information that you never see when you look at the picture.',
   document: 'Documents can carry hidden metadata, embedded objects, macros or text that does not appear on the page.',
   archive: 'Archives can contain files of any type -- code, web pages, images, documents -- none of which were inspected. Every file inside carries the same risks as if it were downloaded on its own.',
   media: 'Audio and video files can carry data in their metadata and in extra streams that never play.',
@@ -121,9 +121,9 @@ const SEVERE_CATEGORIES: ReadonlySet<DownloadWarningCategory> = new Set(['code',
  */
 export const SANITIZABLE_IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
 
-/** What the sanitized copy keeps and drops, for the dialog. */
+/** What the sanitized copy is, for the dialog: plain words, one sentence. */
 export const SANITIZED_IMAGE_EXPLANATION =
-  'A sanitized copy keeps the picture exactly as it is -- every pixel, no re-encoding -- and drops everything else in the file: EXIF, XMP, colour profiles, text chunks, comments, unknown blocks and any bytes after the end of the image. Its only metadata is a "Generated with Quest" tag.';
+  'The sanitized copy is the same picture with everything hidden stripped out.';
 
 /** Lower-cased extension without the dot, or '' when the name has none. */
 function extensionOf(name: string): string {

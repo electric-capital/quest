@@ -50,8 +50,7 @@ interface PendingWarning {
   resolve: (decision: DownloadDecision) => void;
 }
 
-const ORIGINAL_ACK_LABEL =
-  'I understand this file was not inspected, may carry hidden data, and I know what I am doing.';
+const ORIGINAL_ACK_LABEL = 'I understand the risk and want the original file.';
 
 export function DownloadWarningProvider({ children }: { children: React.ReactNode }) {
   const [pending, setPending] = useState<PendingWarning | null>(null);
@@ -151,10 +150,11 @@ export function DownloadWarningProvider({ children }: { children: React.ReactNod
             )}
             {sanitizable && <p className="download-warning-sanitized">{SANITIZED_IMAGE_EXPLANATION}</p>}
             <p>
-              Files in this workspace may have been written by the agent, and a manipulated agent can
-              hide sensitive information in them in ways that are hard to detect.
               {sanitizable
-                ? ' The sanitized copy is the safe choice; only take the original if you trust how this file was produced.'
+                ? 'This file may have been written by the agent, and a tricked agent can hide things in it.'
+                : 'Files in this workspace may have been written by the agent, and a manipulated agent can hide sensitive information in them in ways that are hard to detect.'}
+              {sanitizable
+                ? ' Pick the sanitized copy unless you are sure you need the original.'
                 : ' Only continue if you trust how this file was produced.'}
             </p>
           </>
@@ -175,8 +175,7 @@ export function DownloadWarningProvider({ children }: { children: React.ReactNod
           <>
             <p>
               <code className="download-warning-name">{pending.target.name}</code>
-              {' will be handed to you byte for byte, including every piece of metadata and any hidden'}
-              {' content a manipulated agent may have put there. Nothing here has inspected it.'}
+              {' will be downloaded exactly as it is. Nothing has checked it for hidden information.'}
             </p>
             <label className="download-warning-ack">
               <input

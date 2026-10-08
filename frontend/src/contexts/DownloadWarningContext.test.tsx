@@ -172,8 +172,7 @@ describe('DownloadWarningProvider -- sanitizable images', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
 
     expect(imageDialog()).toBeTruthy();
-    expect(screen.getByText(/keeps the picture exactly as it is/)).toBeTruthy();
-    expect(screen.getByText(/"Generated with Quest" tag/)).toBeTruthy();
+    expect(screen.getByText(/same picture with everything hidden stripped out/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Acknowledge and Download' })).toBeNull();
     const primary = screen.getByRole('button', { name: 'Download Sanitized Copy' });
     expect(primary.className).toContain('doc-dialog-confirm--default');
@@ -197,7 +196,7 @@ describe('DownloadWarningProvider -- sanitizable images', () => {
     fireEvent.click(confirm);
     expect(verdicts).toEqual([]);
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /I know what I am doing/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /I understand the risk/ }));
     expect((confirm as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(confirm);
     await waitFor(() => expect(verdicts).toEqual(['original']));
