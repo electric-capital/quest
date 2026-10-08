@@ -9,7 +9,12 @@ the relevant skill(s) on demand through the existing ``load_skills`` tool.
 """
 
 from chat.docs.constants import DOCS_SERVICE_KEY
-from chat.gemini_api.constants import MAX_PARALLEL_TASKS, MAX_PARALLEL_TEMPLATE_TASKS
+from chat.gemini_api.constants import (
+    MAX_PARALLEL_TASKS,
+    MAX_PARALLEL_TEMPLATE_TASKS,
+    SCRIPT_RUNNER_MAX_TIMEOUT,
+    SCRIPT_RUNNER_TIMEOUT,
+)
 from chat.llm.tool_schemas import (
     PROJECT_HIDDEN_WORKSPACE_TOOLS,
     PROJECT_ONLY_TOOL_CALL_TOOLS,
@@ -561,7 +566,7 @@ You have thirteen tools available:
 6. **agent_task_parallel(tasks)** -- Spawn multiple sub-agents to work on tasks in parallel (maximum {MAX_PARALLEL_TASKS} per call). All sub-agents run concurrently and the tool returns when all have completed. Each task needs an 'id' (to identify results), 'name', 'prompt', 'description', and optional 'model'. Use this instead of multiple sequential agent_task calls when the tasks are independent of each other.
 7. **agent_task_parallel_template(prompt_template, model, agents)** -- Batch-spawn sub-agents from a single prompt template. The prompt_template uses {{var}}-style placeholders that are filled from each agent's variable dict. The model is set once for the entire batch and must be a cheaper model (claude-haiku-4.5, claude-haiku-5-5, claude-sonnet-4-6, gemini-3.5-flash-lite, gemini-3.6-flash, gemini-3.7-flash, or gemini-3.8-flash). Each agent dict must include 'name' plus any template variables. Maximum {MAX_PARALLEL_TEMPLATE_TASKS} agents per call. Use this instead of agent_task_parallel when all sub-agents share the same prompt structure but differ only in specific parameters -- it saves output tokens by avoiding prompt repetition.
 8. **create_action_request(request_type, params, reasoning)** -- Create an action request for the user to approve. Used for sending messages, scheduling calendar events, editing spreadsheets, or other write operations in connected services. This call BLOCKS until the user approves, revises, or stops the request; the return value carries the verdict and any revise feedback directly (a Stop halts the conversation, and the call returns with `verdict: "stopped"` only once the user sends a new message, which arrives in the same turn). You MAY issue several `create_action_request` calls in one response (parallel tool calls) when the actions are independent -- each renders its own card, and your turn resumes only once the user has resolved every card, with each call's verdict returned on its own tool result. Load the `system:action_requests` skill for the full reference of supported request types and their param shapes.
-9. **run_script(path, args?, timeout?)** -- Run a script from the workspace inside a sandboxed container with Python 3.12. Returns stdout, stderr, exit code. Default timeout is 120 seconds (max 300). For full usage patterns, load the `system:workspace` skill.
+9. **run_script(path, args?, timeout?)** -- Run a script from the workspace inside a sandboxed container with Python 3.12. Returns stdout, stderr, exit code. Default timeout is {SCRIPT_RUNNER_TIMEOUT} seconds (max {SCRIPT_RUNNER_MAX_TIMEOUT}). For full usage patterns, load the `system:workspace` skill.
 10. **run_python(script, args?, timeout?)** -- Run inline Python in the same sandboxed container. For one-off tasks (no file written). For full usage patterns, load the `system:workspace` skill.
 11. **list_skills()** -- List skills accessible to you, including built-in `system:*` skills.
 12. **search_skills(keyword)** -- Search skills (DB + system) by keyword.
@@ -997,7 +1002,7 @@ Use the time information to answer time-sensitive questions correctly without ne
 You have three tools available:
 
 1. **tool_call(tool_name, arguments?)** -- Execute a tool by name. See the 'Dynamic Tools' section below for available tools and their parameters.
-2. **run_script(path, args?, timeout?)** -- Run a script from the workspace inside a sandboxed container with Python 3.12 and **internet access**. Returns stdout, stderr, exit code. Default timeout is 120 seconds (max 300).
+2. **run_script(path, args?, timeout?)** -- Run a script from the workspace inside a sandboxed container with Python 3.12 and **internet access**. Returns stdout, stderr, exit code. Default timeout is {SCRIPT_RUNNER_TIMEOUT} seconds (max {SCRIPT_RUNNER_MAX_TIMEOUT}).
 3. **run_python(script, args?, timeout?)** -- Run inline Python in the same internet-enabled sandboxed container. For one-off tasks (no file written).
 
 {dynamic_tools_section}
