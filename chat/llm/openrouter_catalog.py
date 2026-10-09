@@ -52,7 +52,10 @@ def _rate_per_million(value) -> float | None:
 
 
 def _normalize_entry(raw) -> dict | None:
-    """Keep the fields the typeahead and snapshots use; None when unusable."""
+    """Keep the fields the typeahead and snapshots use; None when unusable.
+
+    Also exported as :func:`normalize_openrouter_entry` for catalogs that
+    publish the OpenRouter row shape (NEAR AI Cloud's model list)."""
     if not isinstance(raw, dict):
         return None
     wire_id = raw.get("id")
@@ -86,6 +89,9 @@ def _normalize_entry(raw) -> dict | None:
         ),
         "pricing": pricing,
     }
+
+
+normalize_openrouter_entry = _normalize_entry
 
 
 def _cached_entry(raw) -> dict | None:

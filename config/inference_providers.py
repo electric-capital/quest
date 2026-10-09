@@ -20,7 +20,9 @@ Providers:
   pick models from the OpenRouter catalog (or a typed custom id);
   ``fireworks`` instances hold a Fireworks AI API key and pick models from
   Fireworks' serverless catalog (``chat/llm/fireworks_catalog.py``, fetched
-  with that key); ``local`` instances point at a self-hosted inference
+  with that key); ``nearai`` instances hold a NEAR AI Cloud API key and
+  pick models from NEAR AI's public, priced model list
+  (``chat/llm/nearai_catalog.py``); ``local`` instances point at a self-hosted inference
   server (``base_url`` + ``api_type``, optional key) and pick models from
   what that server reports (``chat/llm/local_catalog.py``). Several
   instances of the same kind can coexist (e.g. a personal and a team
@@ -56,7 +58,8 @@ directory dev-config.json (``inference_credentials: {"<instance_id>":
 ``openrouter`` instance without any migration: :func:`load_inference_config`
 synthesizes an instance entry for every credential file that has none, of
 the key-holding kind the file stem starts with (``fireworks-2.json`` -> a
-``fireworks`` instance; anything else an OpenRouter one), seeded from the
+``fireworks`` instance, ``nearai.json`` -> a ``nearai`` one; anything else
+an OpenRouter one), seeded from the
 file's optional ``models`` list so a pre-baked instance can come up with
 ready-to-pick models.
 
@@ -98,14 +101,15 @@ logger = logging.getLogger(__name__)
 # typeahead gets its candidates: ``openrouter`` = the shared public
 # OpenRouter list (chat/llm/openrouter_catalog.py, no key needed),
 # ``fireworks`` = Fireworks' serverless catalog fetched with the instance's
-# own key (chat/llm/fireworks_catalog.py), ``server`` = live discovery
-# against the instance's server (chat/llm/local_catalog.py).
+# own key (chat/llm/fireworks_catalog.py), ``nearai`` = NEAR AI Cloud's
+# public model list (chat/llm/nearai_catalog.py, no key needed), ``server``
+# = live discovery against the instance's server (chat/llm/local_catalog.py).
 #
 # Every kind runs on the ``openrouter`` LLMProvider family -- the OpenAI
 # chat-completions message format, history shape and analytics table
-# (``llm_calls_openrouter``) -- because Fireworks and every self-hosted
-# server speak that protocol (llama.cpp, vLLM, LM Studio, LocalAI, Ollama's
-# ``/v1`` shim...). The transport differs per instance: fixed upstreams and
+# (``llm_calls_openrouter``) -- because Fireworks, NEAR AI and every
+# self-hosted server speak that protocol (llama.cpp, vLLM, LM Studio,
+# LocalAI, Ollama's ``/v1`` shim...). The transport differs per instance: fixed upstreams and
 # the ``openai`` API type go through the openai SDK with the kind's or the
 # instance's base URL, the ``ollama`` API type through Ollama's native
 # ``/api/chat`` (chat/llm/ollama_provider.py) so the per-request context
@@ -137,6 +141,24 @@ INSTANCE_KINDS: dict[str, dict] = {
         "endpoint": False,
         "upstream_url": "https://api.fireworks.ai/inference/v1",
         "catalog": "fireworks",
+    },
+    # NEAR AI Cloud (https://cloud.near.ai): hosted frontier and open-weight
+    # models (several run in TEEs with attestation) behind an
+    # OpenAI-compatible API at cloud-api.near.ai/v1, authenticated by an
+    # API key created in the NEAR AI Cloud dashboard (an organization's
+    # workspace API keys) and sent as a bearer token. Wire ids are
+    # ``<vendor>/<model>`` slugs like OpenRouter's (``deepseek/deepseek-v3.2``,
+    # ``anthropic/claude-sonnet-5``). Its model list is public and carries
+    # per-token prices, so the catalog module needs no key.
+    "nearai": {
+        "label": "NEAR AI",
+        "hint": "sk-...",
+        "provider": "openrouter",
+        "backend": "nearai",
+        "key_required": True,
+        "endpoint": False,
+        "upstream_url": "https://cloud-api.near.ai/v1",
+        "catalog": "nearai",
     },
     "local": {
         "label": "Self-hosted",

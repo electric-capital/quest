@@ -708,6 +708,7 @@ def test_admin_list_shape(admin_routes, health_store):
     assert result["kinds"] == [
         {"kind": "openrouter", "label": "OpenRouter", "endpoint": False, "catalog": "openrouter"},
         {"kind": "fireworks", "label": "Fireworks AI", "endpoint": False, "catalog": "fireworks"},
+        {"kind": "nearai", "label": "NEAR AI", "endpoint": False, "catalog": "nearai"},
         {"kind": "local", "label": "Self-hosted", "endpoint": True, "catalog": "server"},
     ]
     assert [t["id"] for t in result["api_types"]] == ["openai", "ollama"]

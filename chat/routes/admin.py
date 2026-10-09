@@ -1281,7 +1281,8 @@ async def admin_list_inference_providers(
         "instances": [_instance_status(inst) for inst in list_instances()],
         # ``catalog`` tells the card where its "Add model" typeahead looks:
         # the shared OpenRouter list, the instance's own (key-fetched)
-        # Fireworks catalog, or the self-hosted server itself.
+        # Fireworks catalog, NEAR AI's public list, or the self-hosted
+        # server itself.
         "kinds": [
             {
                 "kind": kind,
@@ -1563,8 +1564,8 @@ async def admin_update_inference_instance(
 async def _catalog_snapshots(instance: dict, wire_ids: list[str]) -> dict[str, dict]:
     """Catalog metadata for ``wire_ids`` (defaults per unlisted id).
 
-    OpenRouter and Fireworks instances use their cached catalog (no
-    refresh) so a save never blocks on the network beyond the first fetch;
+    OpenRouter, Fireworks and NEAR AI instances use their cached catalog
+    (no refresh) so a save never blocks on the network beyond the first fetch;
     self-hosted instances ask their server (a short live request). An
     unreachable catalog/server just means custom-id defaults -- for a
     self-hosted instance the zero pricing and, on Ollama, the default
@@ -1593,6 +1594,10 @@ async def _catalog_snapshots(instance: dict, wire_ids: list[str]) -> dict[str, d
         catalog = await asyncio.to_thread(
             get_fireworks_catalog, effective_api_key(instance["id"])[0]
         )
+    elif source == "nearai":
+        from chat.llm.nearai_catalog import get_catalog as get_nearai_catalog
+
+        catalog = await asyncio.to_thread(get_nearai_catalog)
     else:
         from chat.llm.openrouter_catalog import get_catalog
 
@@ -1623,6 +1628,10 @@ async def admin_instance_catalog(
       instance's stored key (cached 24h, ``refresh=true`` re-fetches);
       a missing or rejected key sets ``error`` with the stale cache -- or
       an empty list -- so custom-id entry still works.
+    - NEAR AI instances: NEAR AI Cloud's public model list (cached 24h,
+      ``refresh=true`` re-fetches), served whether or not a key is saved
+      yet; a failed fetch sets ``error`` with the stale cache or an
+      empty list.
 
     400 for kinds whose typeahead is the shared OpenRouter catalog
     (``GET /admin/inference-providers/openrouter/catalog``).
@@ -1636,6 +1645,14 @@ async def admin_instance_catalog(
     instance = _instance_or_404(instance_id)
     source = INSTANCE_KINDS[instance["kind"]]["catalog"]
     limit = max(1, min(limit, 100))
+    if source == "nearai":
+        from chat.llm.nearai_catalog import get_catalog as get_nearai_catalog
+
+        catalog = await asyncio.to_thread(get_nearai_catalog, refresh)
+        return {
+            "models": search_catalog(catalog["models"], q, limit),
+            "error": catalog["error"],
+        }
     if source == "fireworks":
         from chat.llm.fireworks_catalog import get_catalog as get_fireworks_catalog
 

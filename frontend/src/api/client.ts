@@ -886,8 +886,9 @@ export function searchOpenRouterCatalog(
 
 /**
  * An instance's own model catalog: what a self-hosted server reports right
- * now (live, uncached) or the Fireworks serverless catalog fetched with the
- * instance's key (cached; `refresh` re-fetches).
+ * now (live, uncached), the Fireworks serverless catalog fetched with the
+ * instance's key, or NEAR AI Cloud's public model list (both cached;
+ * `refresh` re-fetches).
  */
 export function searchInstanceCatalog(
   instanceId: string,

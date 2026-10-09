@@ -42,12 +42,14 @@ def _isolated_inference_provider_files(tmp_path, monkeypatch):
     """
     import config.inference_providers as ip
     import chat.llm.fireworks_catalog as fireworks_catalog
+    import chat.llm.nearai_catalog as nearai_catalog
     import chat.llm.openrouter_catalog as catalog
 
     monkeypatch.setattr(ip, "INFERENCE_PROVIDERS_FILE", tmp_path / "inference_providers.json")
     monkeypatch.setattr(ip, "INFERENCE_CREDENTIALS_DIR", tmp_path / "inference_credentials")
     monkeypatch.setattr(catalog, "OPENROUTER_CATALOG_FILE", tmp_path / "openrouter_catalog.json")
     monkeypatch.setattr(fireworks_catalog, "FIREWORKS_CATALOG_FILE", tmp_path / "fireworks_catalog.json")
+    monkeypatch.setattr(nearai_catalog, "NEARAI_CATALOG_FILE", tmp_path / "nearai_catalog.json")
     # Same for the admin Model Selection store (read by public_model_catalog
     # and the turn-level usage check): tmp_path means "file absent", i.e.
     # the historical default top-level picks.

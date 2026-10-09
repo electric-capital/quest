@@ -1678,15 +1678,15 @@ export interface VertexProviderStatus {
   models: InferenceModelInfo[];
 }
 
-// One admin-configured provider instance (an OpenRouter or Fireworks AI
-// configuration, or a self-hosted inference server)
+// One admin-configured provider instance (an OpenRouter, Fireworks AI or
+// NEAR AI configuration, or a self-hosted inference server)
 export interface InferenceInstanceStatus {
   id: string;
   kind: string;
   kind_label: string;
   label: string;
-  // Usable at all: a stored key (OpenRouter, Fireworks) or a server URL
-  // (self-hosted)
+  // Usable at all: a stored key (OpenRouter, Fireworks, NEAR AI) or a
+  // server URL (self-hosted)
   configured: boolean;
   // "store" = key file in the data directory, null = no key yet
   source: 'store' | null;
@@ -1708,9 +1708,9 @@ export interface InferenceApiType {
 }
 
 // Where a kind's "Add model" typeahead looks: the shared OpenRouter
-// catalog, the instance's own key-fetched Fireworks catalog, or the
-// self-hosted server's live model list
-export type InferenceCatalogSource = 'openrouter' | 'fireworks' | 'server';
+// catalog, the instance's own key-fetched Fireworks catalog, NEAR AI
+// Cloud's public model list, or the self-hosted server's live model list
+export type InferenceCatalogSource = 'openrouter' | 'fireworks' | 'nearai' | 'server';
 
 export interface InferenceInstanceKind {
   kind: string;
@@ -1751,21 +1751,23 @@ export interface InferenceInstanceUpdate {
 }
 
 // One catalog entry (typeahead candidate) -- the OpenRouter row shape,
-// shared by the Fireworks catalog and self-hosted discovery
+// shared by the Fireworks and NEAR AI catalogs and self-hosted discovery
 export interface OpenRouterCatalogModel {
   id: string;
   name: string;
   context_length: number | null;
   max_completion_tokens: number | null;
   pricing: { prompt: number; completion: number; cache_read?: number } | null;
-  // Self-hosted discovery / Fireworks only: a short summary (family, size,
-  // quantization / "tools · vision · 128K ctx") and capabilities
+  // Self-hosted discovery / Fireworks / NEAR AI only: a short summary
+  // (family, size, quantization / "vision · reasoning") and capabilities
+  // (null = the catalog publishes none, so nothing is claimed)
   detail?: string;
   capabilities?: string[] | null;
 }
 
 // An instance's own catalog: the models a self-hosted server reports right
-// now (not cached) or the Fireworks serverless catalog (cached)
+// now (not cached), the Fireworks serverless catalog or NEAR AI's public
+// model list (both cached)
 export interface InstanceCatalogResponse {
   models: OpenRouterCatalogModel[];
   error: string | null;
