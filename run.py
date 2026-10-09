@@ -92,8 +92,9 @@ LOCAL_RUNS_KEEP = 5
 #                           id picks the kind: "openrouter" is the legacy
 #                           instance seeded with the historical curated
 #                           models, "fireworks" (or "fireworks-2", ...) a
-#                           Fireworks AI instance, any other id an
-#                           OpenRouter instance. An entry may carry a
+#                           Fireworks AI instance, "nearai" (or
+#                           "nearai-2", ...) a NEAR AI instance, any other
+#                           id an OpenRouter instance. An entry may carry a
 #                           "models" list (wire ids, or full entries with
 #                           name/context_length/pricing) beside "api_key"
 #                           to seed the instance's model list, so a local
@@ -672,7 +673,7 @@ def print_local_service_summary(project_root: Path, data_dir: Path) -> None:
     checks = [
         ("Anthropic on Vertex (Claude models)", bool(anthropic_project)),
         ("Gemini on Vertex (all Gemini models)", bool(gemini_vertex_project)),
-        ("Provider instances (OpenRouter / Fireworks keys, self-hosted servers)", openrouter_configured),
+        ("Provider instances (OpenRouter / Fireworks / NEAR AI keys, self-hosted servers)", openrouter_configured),
         ("Google OAuth (login + Google services)", google_oauth_configured),
         ("Slack", _service_configured("slack", creds.get("slack"))),
         ("GitHub OAuth", _service_configured("github", creds.get("github"))),

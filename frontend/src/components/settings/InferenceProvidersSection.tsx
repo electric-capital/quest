@@ -538,7 +538,7 @@ function VertexProviderCard({ status: initial }: { status: VertexProviderStatus 
 }
 
 // ---------------------------------------------------------------------------
-// Model typeahead (OpenRouter / Fireworks catalog, self-hosted server discovery)
+// Model typeahead (OpenRouter / Fireworks / NEAR AI catalog, self-hosted server discovery)
 // ---------------------------------------------------------------------------
 
 function formatContext(tokens: number | null): string {
@@ -730,7 +730,7 @@ const openRouterSearch: CatalogSearch = async (q) => {
 };
 
 // ---------------------------------------------------------------------------
-// Provider-instance card (one OpenRouter / Fireworks configuration or
+// Provider-instance card (one OpenRouter / Fireworks / NEAR AI configuration or
 // self-hosted server)
 // ---------------------------------------------------------------------------
 
@@ -752,6 +752,11 @@ function addModelCopy(
         placeholder: configured
           ? 'Add a model — search the Fireworks catalog or type a model id'
           : 'Save the API key first',
+        emptyHint: 'Type to search the catalog',
+      };
+    case 'nearai':
+      return {
+        placeholder: 'Add a model — search the NEAR AI catalog or type a model id',
         emptyHint: 'Type to search the catalog',
       };
     default:
@@ -940,9 +945,11 @@ function InstanceCard({
 
   const existing = new Set(status.models.map((m) => m.wire_id));
   const dirty = !!apiKey.trim() || labelDirty || baseUrlDirty || apiTypeDirty;
-  // The shared OpenRouter catalog needs no credentials; an instance's own
-  // catalog (self-hosted server, Fireworks) needs the instance configured.
+  // The shared OpenRouter catalog needs no credentials and neither does
+  // NEAR AI's public list; a self-hosted server's or Fireworks' catalog is
+  // read with the instance's own URL / key, so it waits for that to be saved.
   const ownCatalog = catalog !== 'openrouter';
+  const catalogNeedsConfig = catalog === 'server' || catalog === 'fireworks';
   const addModel = addModelCopy(catalog, status.configured);
   const modelsNote = endpoint
     ? 'Self-hosted models are priced at $0. Rename a model or set its context window below each row' +
@@ -953,7 +960,10 @@ function InstanceCard({
       ? 'Fireworks model ids are resource names such as accounts/fireworks/models/<name>; ' +
         'the catalog lists the serverless models. A dedicated deployment ' +
         '(accounts/<account>/deployments/<id>) can be typed in as a custom id.'
-      : undefined;
+      : catalog === 'nearai'
+        ? 'NEAR AI model ids are <vendor>/<model> slugs such as deepseek/deepseek-v3.2; ' +
+          'the catalog lists the chat models with their current prices.'
+        : undefined;
 
   return (
     <CredentialCard
@@ -1042,7 +1052,7 @@ function InstanceCard({
         >
           <AddModelCombobox
             existing={existing}
-            disabled={modelsBusy || deleting || (ownCatalog && !status.configured)}
+            disabled={modelsBusy || deleting || (catalogNeedsConfig && !status.configured)}
             search={ownCatalog ? instanceSearch : openRouterSearch}
             placeholder={addModel.placeholder}
             emptyHint={addModel.emptyHint}
@@ -1066,7 +1076,8 @@ function InstanceCard({
  * label, a write-only API key and a model list fed by the OpenRouter
  * catalog typeahead, a Fireworks AI configuration (same shape, its model
  * list fed by the Fireworks serverless catalog fetched with the saved
- * key), or a self-hosted server with a label, server URL, API type
+ * key), a NEAR AI configuration (same shape, fed by NEAR AI Cloud's public
+ * priced model list), or a self-hosted server with a label, server URL, API type
  * (OpenAI-compatible / Ollama), optional key and a model list fed by what
  * the server reports, with inline name / context editing per model.
  * Each card's Models panel shows the real model id string used in API
