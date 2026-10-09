@@ -43,8 +43,9 @@ This script performs the following steps:
    run, verify it otherwise
 4. Run database migrations (uv run alembic upgrade head), plus seed data
    in local mode when the database is fresh
-5. Validate the script-runner Podman image and auto-rebuild if needed
-   (failures are non-fatal in local mode)
+5. Validate the script-runner Podman images, auto-rebuild if needed, and
+   warm each image's id-mapped layer copy (failures are non-fatal in
+   local mode)
 6. Start uvicorn server
 """
 
@@ -247,6 +248,50 @@ def should_rebuild_podman_image(
         if source_mtime > image_created:
             return True
     return False
+
+
+# Upper bound for one image's warm-up run: the cold copy takes ~20 s on a
+# fast disk for a ~1 GB image, so this only ever trips on a wedged podman.
+PODMAN_WARMUP_TIMEOUT_SECONDS = 600
+
+
+def warm_podman_image(image_name: str) -> Optional[float]:
+    """Run a no-op ``--userns=keep-id`` container so podman creates the
+    image's id-mapped layer copy before the server takes its first turn.
+
+    Every sandbox run (chat/gemini_api/tool_handlers/sandbox.py) starts the
+    container with ``--userns=keep-id``. The first such run after an image is
+    built or rebuilt makes podman copy ALL of the image's layers with shifted
+    ownership -- ~20 s of kernel time for the ~1 GB sandbox images on a fast
+    disk, longer on slow ones -- and a run killed mid-copy (the tool's
+    timeout) throws the partial copy away, so with short script timeouts
+    every run dies at ``exit_code -9`` and the copy never completes. Doing it
+    here, once, keeps that cost out of the tool timeouts. A warm image costs
+    ~0.5 s. Only the userns mapping matters for the copy, so the entrypoint
+    (iptables, socat) is bypassed and no network is set up.
+
+    Args:
+        image_name: Name of the Podman image to warm.
+
+    Returns:
+        Seconds the run took, or None when it failed or timed out.
+    """
+    started = datetime.now()
+    try:
+        result = subprocess.run(
+            [
+                "podman", "run", "--rm", "--userns=keep-id", "--network=none",
+                "--entrypoint", "/bin/true", image_name,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=PODMAN_WARMUP_TIMEOUT_SECONDS,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    return (datetime.now() - started).total_seconds()
 
 
 def prepare_local_data_dir(project_root: Path, keep_data: Optional[str]) -> Path:
@@ -794,6 +839,17 @@ def main() -> None:
                         check=True,
                     )
                     print(f"+ Podman image '{image_name}' rebuilt successfully")
+
+            # Always warm: cheap (~0.5 s) when the id-mapped copy exists,
+            # and the copy can be missing without a rebuild (fresh podman
+            # storage, image built by an earlier run.py that never ran it).
+            print(f"  Warming '{image_name}' (first keep-id run after a build copies its layers)...")
+            elapsed = warm_podman_image(image_name)
+            if elapsed is None:
+                print(f"! Could not warm '{image_name}'; the first script run")
+                print("  will pay the layer-copy cost against its own timeout")
+            else:
+                print(f"+ Podman image '{image_name}' warm ({elapsed:.1f}s)")
 
     if local_mode:
         try:
