@@ -43,8 +43,9 @@ This script performs the following steps:
    run, verify it otherwise
 4. Run database migrations (uv run alembic upgrade head), plus seed data
    in local mode when the database is fresh
-5. Validate the script-runner Podman image and auto-rebuild if needed
-   (failures are non-fatal in local mode)
+5. Validate the script-runner Podman images, auto-rebuild if needed
+   (removing the build each rebuild supersedes), and warm each image's
+   id-mapped layer copy (failures are non-fatal in local mode)
 6. Start uvicorn server
 """
 
@@ -247,6 +248,124 @@ def should_rebuild_podman_image(
         if source_mtime > image_created:
             return True
     return False
+
+
+# Upper bound for one image's warm-up run: the cold copy takes ~20 s on a
+# fast disk for a ~1 GB image, so this only ever trips on a wedged podman.
+PODMAN_WARMUP_TIMEOUT_SECONDS = 600
+
+
+def warm_podman_image(image_name: str) -> Optional[float]:
+    """Run a no-op ``--userns=keep-id`` container so podman creates the
+    image's id-mapped layer copy before the server takes its first turn.
+
+    Every sandbox run (chat/gemini_api/tool_handlers/sandbox.py) starts the
+    container with ``--userns=keep-id``. The first such run after an image is
+    built or rebuilt makes podman copy ALL of the image's layers with shifted
+    ownership -- ~20 s of kernel time for the ~1 GB sandbox images on a fast
+    disk, longer on slow ones -- and a run killed mid-copy (the tool's
+    timeout) throws the partial copy away, so with short script timeouts
+    every run dies at ``exit_code -9`` and the copy never completes. Doing it
+    here, once, keeps that cost out of the tool timeouts. A warm image costs
+    ~0.5 s. Only the userns mapping matters for the copy, so the entrypoint
+    (iptables, socat) is bypassed and no network is set up.
+
+    Args:
+        image_name: Name of the Podman image to warm.
+
+    Returns:
+        Seconds the run took, or None when it failed or timed out.
+    """
+    started = datetime.now()
+    try:
+        result = subprocess.run(
+            [
+                "podman", "run", "--rm", "--userns=keep-id", "--network=none",
+                "--entrypoint", "/bin/true", image_name,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=PODMAN_WARMUP_TIMEOUT_SECONDS,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    return (datetime.now() - started).total_seconds()
+
+
+def get_podman_image_id(image_name: str) -> Optional[str]:
+    """Return the image ID a name currently resolves to, or None."""
+    result = subprocess.run(
+        ["podman", "images", "-q", "--no-trunc", image_name],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    first = result.stdout.strip().splitlines()
+    if not first:
+        return None
+    # ``--no-trunc`` prints ``sha256:<hex>``; the ``--filter id=`` and
+    # ``rmi`` forms want the bare hex, so normalize here.
+    return first[0].strip().split(":")[-1] or None
+
+
+def podman_image_tags(image_id: str) -> list:
+    """Return the ``repo:tag`` names still attached to an image ID (an
+    untagged image lists as ``<none>:<none>``, which is filtered out)."""
+    result = subprocess.run(
+        [
+            "podman", "images", "--format", "{{.Repository}}:{{.Tag}}",
+            "--filter", f"id={image_id}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return []
+    return [
+        line.strip() for line in result.stdout.splitlines()
+        if line.strip() and not line.strip().startswith("<none>")
+    ]
+
+
+def remove_superseded_podman_image(image_name: str, old_image_id: Optional[str]) -> bool:
+    """Delete the image a rebuild of ``image_name`` just replaced.
+
+    A rebuild leaves the previous build behind as an untagged ``<none>``
+    image: ~1 GB per sandbox image plus its ~1 GB id-mapped layer copy,
+    twice per deploy, so a few deploys pile up many GB of dead layers and
+    bloat the podman store. This removes exactly that one superseded
+    image -- not a blanket ``podman image prune``, which would also throw
+    away the build cache and make the next rebuild redo the full
+    LibreOffice install. The old ID is kept when the name still resolves
+    to it (the rebuild was a cache hit) or when another tag still points
+    at it (e.g. a local checkout's ``-local`` and ``-prod`` images built
+    from identical sources share one ID).
+
+    Args:
+        image_name: Image name that was just rebuilt.
+        old_image_id: Image ID the name resolved to before the rebuild.
+
+    Returns:
+        True when an image was removed.
+    """
+    if not old_image_id:
+        return False
+    if get_podman_image_id(image_name) == old_image_id:
+        return False
+    if podman_image_tags(old_image_id):
+        return False
+    # -f also removes containers leaked from a SIGKILLed run that still
+    # reference the old image (``--rm`` cannot run after a kill); every
+    # sandbox container is ephemeral by design.
+    result = subprocess.run(
+        ["podman", "rmi", "-f", old_image_id],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
 
 
 def prepare_local_data_dir(project_root: Path, keep_data: Optional[str]) -> Path:
@@ -788,12 +907,26 @@ def main() -> None:
                 if should_rebuild_podman_image(project_root, image_name, dockerfile, extra_sources=entry_sources):
                     print(f"! {dockerfile} sources have been modified since image was built")
                     print(f"  Rebuilding Podman image '{image_name}'...")
+                    old_image_id = get_podman_image_id(image_name)
                     subprocess.run(
                         ["podman", "build", "--network=host", "-t", image_name, "-f", dockerfile, "."],
                         cwd=project_root,
                         check=True,
                     )
                     print(f"+ Podman image '{image_name}' rebuilt successfully")
+                    if remove_superseded_podman_image(image_name, old_image_id):
+                        print(f"+ Removed the previous '{image_name}' build ({old_image_id[:12]})")
+
+            # Always warm: cheap (~0.5 s) when the id-mapped copy exists,
+            # and the copy can be missing without a rebuild (fresh podman
+            # storage, image built by an earlier run.py that never ran it).
+            print(f"  Warming '{image_name}' (first keep-id run after a build copies its layers)...")
+            elapsed = warm_podman_image(image_name)
+            if elapsed is None:
+                print(f"! Could not warm '{image_name}'; the first script run")
+                print("  will pay the layer-copy cost against its own timeout")
+            else:
+                print(f"+ Podman image '{image_name}' warm ({elapsed:.1f}s)")
 
     if local_mode:
         try:
