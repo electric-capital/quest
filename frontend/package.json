@@ -44,6 +44,10 @@
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4",
     "vite-plugin-static-copy": "^4.1.1",
-    "vitest": "^3.2.7"
+    "vitest": "^5.0.3"
+  },
+  "overrides": {
+    "katex": "$katex",
+    "chokidar": "^4.0.3"
   }
 }
