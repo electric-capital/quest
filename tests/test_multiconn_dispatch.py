@@ -593,11 +593,19 @@ class TestConnectedAccountsParagraph:
         line = build_connected_accounts_paragraph(_user(rows)).splitlines()[-1]
         assert line == "- Multi Connection Fixture (multiconn): a@x (default); c@x"
 
-    def test_two_rows_counted_even_when_one_is_omitted(self, multiconn_plugin):
-        # The >= 2 rule counts rows, not rendered entries.
+    def test_service_omitted_when_only_one_entry_renders(self, multiconn_plugin):
+        # The >= 2 rule counts rendered entries: an unnamed non-default row
+        # cannot be chosen, so one named connection leaves nothing to list.
         rows = [_row("a@x", is_default=True, row_id=1), _row("", row_id=2)]
-        line = build_connected_accounts_paragraph(_user(rows)).splitlines()[-1]
-        assert line == "- Multi Connection Fixture (multiconn): a@x (default)"
+        assert build_connected_accounts_paragraph(_user(rows)) == ""
+
+    def test_not_found_omits_unnamed_rows_from_available(self, multiconn_plugin):
+        from config.user_connections import ConnectionNotFound, resolve_connection
+
+        rows = [_row("", is_default=True, row_id=1), _row("b@x", row_id=2)]
+        with pytest.raises(ConnectionNotFound) as excinfo:
+            resolve_connection(_user(rows), "multiconn", "zzz@x")
+        assert excinfo.value.available == ["b@x"]
 
     def test_connected_comes_from_connected_services(self, multiconn_plugin):
         import api.instructions as instructions

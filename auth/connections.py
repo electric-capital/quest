@@ -319,7 +319,8 @@ async def _run_verify(plugin, user: dict, values: dict):
         logger.warning("[%s] verify returned no usable account: %s", plugin.id, exc)
         raise _error(
             400, "verify_failed",
-            "The connection was verified but did not return a usable account name.",
+            "The connection was verified but did not return a usable account "
+            f"name ({exc}).",
         )
     extras = getattr(result, "extras", None)
     return account, (dict(extras) if isinstance(extras, dict) else {})

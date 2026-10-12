@@ -635,7 +635,10 @@ def test_verify_unsafe_account_is_verify_failed(env, multiconn_plugin, monkeypat
     assert r.status_code == 400
     assert r.json()["detail"] == {
         "error": "verify_failed",
-        "message": "The connection was verified but did not return a usable account name.",
+        "message": (
+            "The connection was verified but did not return a usable account "
+            "name (account must not contain whitespace)."
+        ),
     }
 
 

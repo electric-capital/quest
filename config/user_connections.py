@@ -121,8 +121,9 @@ def resolve_connection(
     for row in rows:
         if _norm(row.get("account")) == wanted:
             return row
+    # Unnamed legacy rows cannot be named, so they are not offered.
     raise ConnectionNotFound(
-        service, requested, [row.get("account") or "" for row in rows],
+        service, requested, [row["account"] for row in rows if row.get("account")],
     )
 
 
@@ -239,6 +240,10 @@ def build_connected_accounts_paragraph(user: dict | None) -> str:
             if quoted:
                 entry += f" -- user-written description: {quoted}"
             entries.append(entry)
+        if len(entries) < 2:
+            # Only one nameable connection left after dropping unnamed
+            # non-default rows: nothing to choose between.
+            continue
         label = _one_line(plugin.label) or plugin.id
         lines.append(f"- {label} ({plugin.id}): " + "; ".join(entries))
 
