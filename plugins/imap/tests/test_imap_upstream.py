@@ -14,6 +14,7 @@ from plugins.imap.tests import fake_imaplib
 from plugins.imap.tests.fake_imaplib import (
     DEFAULT_HOST,
     DEFAULT_PASSWORD,
+    DEFAULT_SERVER,
     DEFAULT_USERNAME,
     make_message,
 )
@@ -22,7 +23,7 @@ from plugins.imap.upstream import ImapError, ImapSettings, run_imap
 
 def _values(**overrides):
     values = {
-        "host": DEFAULT_HOST, "port": "", "security": "ssl",
+        "server": DEFAULT_SERVER,
         "username": DEFAULT_USERNAME, "password": DEFAULT_PASSWORD,
     }
     values.update(overrides)
@@ -31,6 +32,15 @@ def _values(**overrides):
 
 def _settings(**overrides) -> ImapSettings:
     return upstream.settings_from_values(_values(**overrides))
+
+
+STARTTLS_SERVER = "imap.example.com:143 starttls"
+
+
+def _starttls_settings(fake_imap) -> ImapSettings:
+    """Settings for the default host over STARTTLS (the admin lists both)."""
+    fake_imap.admin.set("imap.example.com\nimap.example.com:143")
+    return _settings(server=STARTTLS_SERVER)
 
 
 def _run(settings, work, **kw):
@@ -85,9 +95,37 @@ def test_verify_wrong_password(fake_imap, caplog):
 
 
 def test_verify_allow_list(fake_imap):
-    assert _verify(host="other.example.com").error == "Server not allowed"
-    assert _verify(port="1993").error == "Port 1993 is not allowed for imap.example.com"
-    assert _verify(port="nope").error == "Port must be a number between 1 and 65535."
+    assert _verify(server="other.example.com:993 ssl").error == "Server not allowed"
+    # Same host, a configuration the admin did not list.
+    assert _verify(server="imap.example.com:1993 ssl").error == "Server not allowed"
+    assert _verify(server="imap.example.com:143 starttls").error == "Server not allowed"
+    assert _verify(server="nope://x").error == "Server not allowed"
+    assert _verify(server="").error == "Server not allowed"
+    # Old-shape values (host/port/security, no server) never verify.
+    legacy = {"host": DEFAULT_HOST, "port": "", "security": "ssl",
+              "username": DEFAULT_USERNAME, "password": DEFAULT_PASSWORD}
+    assert asyncio.run(upstream.verify_imap_connection(legacy)).error == "Server not allowed"
+    assert fake_imap.server.commands == []
+
+
+def test_verify_starttls_server(fake_imap):
+    fake_imap.admin.set("imap.example.com:143")
+    result = _verify(server=STARTTLS_SERVER)
+    assert result.error is None
+    assert result.account == "alice@example.com"
+    conn = fake_imap.server.connections[0]
+    assert not conn.implicit_tls and conn.port == 143
+    assert _commands(fake_imap) == ["CONNECT", "STARTTLS", "LOGIN", "CAPABILITY", "LOGOUT"]
+
+
+def test_verify_server_removed_after_form_load(fake_imap):
+    # The form offered the line, then the admin removed it before verify.
+    from plugins.imap.settings import imap_field_options
+
+    assert imap_field_options() == {"server": [DEFAULT_SERVER]}
+    fake_imap.admin.set("imap.example.com:143")
+    result = _verify(server=DEFAULT_SERVER)
+    assert result.error == "Server not allowed" and result.account is None
     assert fake_imap.server.commands == []
 
 
@@ -137,7 +175,7 @@ def test_ssl_uses_default_context(fake_imap, monkeypatch):
 
 def test_starttls_uses_default_context(fake_imap, monkeypatch):
     made = _spy_contexts(monkeypatch)
-    _run(_settings(security="starttls"), lambda s: None)
+    _run(_starttls_settings(fake_imap), lambda s: None)
     conn = fake_imap.server.connections[0]
     assert not conn.implicit_tls and conn.port == 143
     assert conn.starttls_context is made[0]
@@ -157,7 +195,7 @@ def test_tls_context_floor_and_verification():
 def test_starttls_not_advertised_is_refused(fake_imap):
     fake_imap.server.advertise_starttls = False
     with pytest.raises(ImapError) as exc:
-        _run(_settings(security="starttls"), lambda s: None)
+        _run(_starttls_settings(fake_imap), lambda s: None)
     assert exc.value.code == "imap_connect_failed"
     assert "STARTTLS" in exc.value.message
     assert "LOGIN" not in _commands(fake_imap)
@@ -167,7 +205,7 @@ def test_starttls_not_advertised_is_refused(fake_imap):
 def test_starttls_failure(fake_imap):
     fake_imap.server.starttls_error = ssl.SSLError(1, "wrong version number")
     with pytest.raises(ImapError) as exc:
-        _run(_settings(security="starttls"), lambda s: None)
+        _run(_starttls_settings(fake_imap), lambda s: None)
     assert exc.value.code == "imap_connect_failed"
     assert "wrong version number" in exc.value.message
     assert "LOGIN" not in _commands(fake_imap)
@@ -176,7 +214,7 @@ def test_starttls_failure(fake_imap):
 def test_connect_dns_failure(fake_imap):
     fake_imap.admin.set("imap.example.com\nnowhere.example.com")
     with pytest.raises(ImapError) as exc:
-        _run(_settings(host="nowhere.example.com"), lambda s: None)
+        _run(_settings(server="nowhere.example.com:993 ssl"), lambda s: None)
     assert exc.value.code == "imap_connect_failed"
     assert re.search(r"Could not connect to nowhere\.example\.com:993\b",
                      exc.value.message)
@@ -193,6 +231,7 @@ def test_allow_list_rechecked_on_every_connect(fake_imap):
     with pytest.raises(ImapError) as exc:
         _run(settings, lambda s: "ok")
     assert exc.value.code == "imap_host_not_allowed"
+    assert exc.value.to_dict()["server"] == DEFAULT_SERVER
     assert fake_imap.admin.reads > reads
     assert _commands(fake_imap).count("CONNECT") == 1
     fake_imap.admin.clear()
@@ -203,13 +242,24 @@ def test_allow_list_rechecked_on_every_connect(fake_imap):
     assert _run(settings, lambda s: "ok") == "ok"
 
 
-def test_allow_list_port_check(fake_imap):
-    fake_imap.admin.set("imap.example.com:143")
+def test_allow_list_port_and_mode_check(fake_imap):
+    ssl_settings = _settings()
+    fake_imap.admin.set("imap.example.com:143")  # only the starttls line left
     with pytest.raises(ImapError) as exc:
-        _run(_settings(), lambda s: None)
+        _run(ssl_settings, lambda s: None)
     assert exc.value.code == "imap_host_not_allowed"
-    assert exc.value.to_dict()["port"] == 993
-    assert _run(_settings(security="starttls"), lambda s: "ok") == "ok"
+    assert exc.value.to_dict()["server"] == "imap.example.com:993 ssl"
+    assert _run(_settings(server=STARTTLS_SERVER), lambda s: "ok") == "ok"
+    # Same host and port, other mode: a different configuration.
+    fake_imap.admin.set("imap.example.com:143 ssl")
+    starttls_143 = ImapSettings(
+        host=DEFAULT_HOST, port=143, security="starttls",
+        username=DEFAULT_USERNAME, password=DEFAULT_PASSWORD,
+    )
+    with pytest.raises(ImapError) as exc:
+        _run(starttls_143, lambda s: None)
+    assert exc.value.code == "imap_host_not_allowed"
+    assert exc.value.to_dict()["server"] == STARTTLS_SERVER
 
 
 # -- auth -------------------------------------------------------------------
@@ -464,13 +514,46 @@ def test_work_value_error_propagates_and_logs_out(fake_imap):
 
 
 def test_settings_from_row_and_errors(fake_imap):
-    row = fake_imap.row(port="1993", security="starttls", account="alias@example.com")
+    fake_imap.admin.set("imap.example.com\nimap.example.com:1993 starttls")
+    row = fake_imap.row(server="imap.example.com:1993 starttls", account="alias@example.com")
     s = upstream.settings_from_row(row)
     assert (s.host, s.port, s.security, s.account) == (DEFAULT_HOST, 1993, "starttls", "alias@example.com")
-    for values in ({}, _values(security="plain"), _values(port="x"), _values(password="")):
+    assert s.server.line() == "imap.example.com:1993 starttls"
+    # Bare username: the account takes the host of the resolved server.
+    s = upstream.settings_from_row(fake_imap.row(username="Bob", account=""))
+    assert s.account == "bob@imap.example.com" and s.username == "Bob"
+    for values in (_values(password=""), _values(username=" ")):
         with pytest.raises(ImapError) as exc:
             upstream.settings_from_values(values)
         assert exc.value.code == "imap_not_configured"
+
+
+@pytest.mark.parametrize("values", [
+    {},
+    _values(server=""),
+    _values(server="other.example.com:993 ssl"),
+    _values(server="imap.example.com:993 starttls"),
+    _values(server="imap.example.com plain"),
+    # A legacy row: host / port / security and no server.
+    {"host": DEFAULT_HOST, "port": "", "security": "ssl",
+     "username": DEFAULT_USERNAME, "password": DEFAULT_PASSWORD},
+])
+def test_settings_fail_closed_when_server_not_allowed(fake_imap, values):
+    with pytest.raises(ImapError) as exc:
+        upstream.settings_from_values(values)
+    assert exc.value.code == "imap_host_not_allowed"
+    assert DEFAULT_PASSWORD not in repr(exc.value.to_dict())
+
+
+def test_legacy_row_fails_closed(fake_imap):
+    row = fake_imap.row(values={
+        "host": DEFAULT_HOST, "port": "993", "security": "ssl",
+        "username": DEFAULT_USERNAME, "password": DEFAULT_PASSWORD,
+    })
+    with pytest.raises(ImapError) as exc:
+        upstream.settings_from_row(row)
+    assert exc.value.code == "imap_host_not_allowed"
+    assert fake_imap.server.commands == []
 
 
 def test_imap_error_to_dict():

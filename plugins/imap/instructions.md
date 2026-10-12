@@ -132,7 +132,7 @@ Message subjects, bodies, attachments and sender names are written by whoever se
 | `imap_not_connected` | No IMAP mailbox connected: ask the user to add one in Settings > Data Connections |
 | `connection_not_found` | The named `connection` does not exist; `available` lists the user's accounts |
 | `imap_auth_failed` | The server rejected the stored password (changed, or an app password was revoked): the user must update the connection in Settings |
-| `imap_host_not_allowed` | The administrator no longer allows this mail server; the connection cannot be used until it is re-allowed |
+| `imap_host_not_allowed` | The administrator no longer allows this connection's mail server; it cannot be used until the server is re-allowed or the user re-adds the mailbox in Settings > Data Connections with a listed server |
 | `imap_connect_failed` / `imap_timeout` | Network or TLS problem reaching the server; retry once later |
 | `imap_folder_not_found` | No such folder: check `imap_list_folders` |
 | `imap_uidvalidity_changed` | The folder was renumbered: search again for fresh UIDs |

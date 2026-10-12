@@ -60,17 +60,19 @@ Scripted failures (attributes on ``FakeImapServer``)
 
 Fixtures (registered through plugins/imap/tests/conftest.py)
 ----------------------------------------------------------
-- ``imap_admin_hosts``: an ``AdminHosts`` object; ``.set("a\\nb:993")``
-  sets the admin card's ``allowed_hosts`` text, ``.clear()`` removes the
-  card. Patches ``config.service_credentials.read_service_credentials``
+- ``imap_admin_hosts``: an ``AdminHosts`` object;
+  ``.set("a\\nb:143 starttls")`` sets the admin card's ``allowed_hosts``
+  server lines, ``.clear()`` removes the card. Patches ``config.service_credentials.read_service_credentials``
   for service ``imap`` only (others delegate to the real store).
 - ``fake_imap``: a ``FakeImapNetwork`` with one server
   ``imap.example.com`` (``network.server``), account
   ``alice@example.com`` / ``s3cret-pass`` (``network.mailbox``) with an
-  empty INBOX, admin card allowing ``imap.example.com``, and the plugin
-  transport (``upstream.IMAP4_CLASS`` / ``IMAP4_SSL_CLASS``) routed to
-  the network. Helpers: ``network.row(...)`` builds a stored connection
-  row and ``network.user(rows)`` a user dict in the db/user_store.py
+  empty INBOX, admin card allowing ``imap.example.com`` (= the
+  canonical ``DEFAULT_SERVER`` line ``imap.example.com:993 ssl``), and the
+  plugin transport (``upstream.IMAP4_CLASS`` / ``IMAP4_SSL_CLASS``) routed
+  to the network. Helpers: ``network.row(...)`` builds a stored connection
+  row (``server`` / ``username`` / ``password`` values; ``values=`` stores
+  arbitrary values instead, e.g. a legacy host/port/security row) and ``network.user(rows)`` a user dict in the db/user_store.py
   shape (``service_credentials`` + ``service_connections``), for tool
   tests resolving connections through config.user_connections.
 
@@ -102,6 +104,7 @@ from plugins.imap import upstream
 from plugins.imap.protocol import encode_folder_name
 
 DEFAULT_HOST = "imap.example.com"
+DEFAULT_SERVER = "imap.example.com:993 ssl"  # canonical admin line
 DEFAULT_USERNAME = "alice@example.com"
 DEFAULT_PASSWORD = "s3cret-pass"
 
@@ -274,18 +277,20 @@ class FakeImapNetwork:
     # -- row helpers for tool tests -----------------------------------
 
     def row(self, *, row_id: int = 1, username: str = DEFAULT_USERNAME,
-            password: str = DEFAULT_PASSWORD, host: str = DEFAULT_HOST, port: str = "",
-            security: str = "ssl", is_default: bool = True, account: Optional[str] = None,
-            description: Optional[str] = None) -> dict:
-        from plugins.imap.settings import account_for
+            password: str = DEFAULT_PASSWORD, server: str = DEFAULT_SERVER,
+            is_default: bool = True, account: Optional[str] = None,
+            description: Optional[str] = None, values: Optional[dict] = None) -> dict:
+        from plugins.imap.settings import account_for, parse_server_line
+        if values is None:
+            values = {"server": server, "username": username, "password": password}
+            host = parse_server_line(server).host
+        else:
+            host = values.get("host") or DEFAULT_HOST
         return {
             "id": row_id, "service": "imap",
             "account": account or account_for(username, host),
             "description": description, "is_default": is_default, "secret": None,
-            "oauth_blob": {"values": {
-                "host": host, "port": port, "security": security,
-                "username": username, "password": password,
-            }, "capabilities": list(POST_LOGIN_CAPABILITIES)},
+            "oauth_blob": {"values": dict(values), "capabilities": list(POST_LOGIN_CAPABILITIES)},
             "created_at": f"2026-10-0{min(row_id, 9)}T00:00:00", "updated_at": None,
         }
 

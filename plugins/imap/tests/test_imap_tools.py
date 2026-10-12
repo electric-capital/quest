@@ -87,7 +87,7 @@ def two_accounts(fake_imap):
     fake_imap.admin.set("imap.example.com\nmail.other.org")
     user = fake_imap.user([
         fake_imap.row(row_id=1, is_default=True),
-        fake_imap.row(row_id=2, is_default=False, host="mail.other.org",
+        fake_imap.row(row_id=2, is_default=False, server="mail.other.org:993 ssl",
                       username="bob@other.org", password="bob-pass"),
     ])
     return SimpleNamespace(user=user, server=other, mailbox=mailbox)
@@ -660,6 +660,43 @@ class TestConnections:
         fake_imap.admin.clear()
         out = _call(tools_mod._handle_search_messages, _ctx(_default_user(fake_imap)), {})
         assert out["error"] == "imap_host_not_allowed"
+
+    def test_server_line_removed_while_host_stays(self, fake_imap):
+        # Only the 993/ssl configuration is the row's; a starttls line for
+        # the same host does not keep it alive.
+        fake_imap.admin.set("imap.example.com:143")
+        out = _call(tools_mod._handle_list_folders, _ctx(_default_user(fake_imap)), {})
+        assert out["error"] == "imap_host_not_allowed"
+        assert out["server"] == "imap.example.com:993 ssl"
+        assert fake_imap.server.commands == []
+
+    def test_tools_resolve_server_starttls(self, fake_imap):
+        fake_imap.admin.set("imap.example.com:143")
+        user = fake_imap.user([fake_imap.row(server="imap.example.com:143 starttls")])
+        out = _call(tools_mod._handle_list_folders, _ctx(user), {})
+        assert "error" not in out
+        conn = fake_imap.server.connections[0]
+        assert not conn.implicit_tls and conn.port == 143
+        assert [c[0] for c in fake_imap.server.commands][:3] == ["CONNECT", "STARTTLS", "LOGIN"]
+
+    def test_legacy_row_without_server_fails_closed(self, fake_imap):
+        legacy = fake_imap.row(values={
+            "host": "imap.example.com", "port": "", "security": "ssl",
+            "username": "alice@example.com", "password": "s3cret-pass",
+        })
+        out = _call(tools_mod._handle_list_folders, _ctx(fake_imap.user([legacy])), {})
+        assert out["error"] == "imap_host_not_allowed"
+        assert "s3cret-pass" not in json.dumps(out)
+        assert fake_imap.server.commands == []  # never connected
+
+    def test_bare_username_account_uses_resolved_host(self, fake_imap):
+        fake_imap.server.add_account("bob", "pw-bob")
+        row = fake_imap.row(username="bob", password="pw-bob")
+        assert row["account"] == "bob@imap.example.com"
+        out = _call(tools_mod._handle_list_folders, _ctx(fake_imap.user([row])), {})
+        assert "error" not in out
+        assert out["account"] == "bob@imap.example.com"
+        assert [c for c in fake_imap.server.commands if c[0] == "LOGIN"] == [("LOGIN", "bob")]
 
     def test_auth_failure_is_structured(self, fake_imap):
         fake_imap.server.auth_fail = True

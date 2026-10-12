@@ -1,7 +1,7 @@
 """IMAP transport: one verified-TLS session per tool call.
 
-``run_imap(settings, work)`` re-checks the admin host allow-list against
-the CURRENT admin card, then in a worker thread (stdlib ``imaplib`` is
+``run_imap(settings, work)`` re-checks the admin server list against the
+CURRENT admin card, then in a worker thread (stdlib ``imaplib`` is
 blocking) connects, logs in, runs ``work(ImapSession)`` and logs out.
 The whole call is bounded by ``CALL_TIMEOUT``; on expiry the socket is
 shut down from the event loop's side so the worker thread unblocks, and
@@ -16,9 +16,12 @@ Security properties (issue #84 spec 10.2 / 10.6):
 
 - TLS always (TLS 1.2 minimum), verified with
   ``ssl.create_default_context()`` (see ``make_tls_context``): implicit
-  TLS (``IMAP4_SSL``) for security ``ssl``, ``STARTTLS`` for security
-  ``starttls`` (refused when the server does not advertise it). There is
-  no plaintext mode and no verification opt-out.
+  TLS (``IMAP4_SSL``) for an ``ssl`` server line, ``STARTTLS`` for a
+  ``starttls`` one (refused when the server does not advertise it). There
+  is no plaintext mode and no verification opt-out.
+- The connection's ``server`` value must name a configuration on the
+  CURRENT admin list, checked when the settings are built and again
+  right before every connect (``check_host_allowed``).
 - 20 s socket timeout per operation.
 - Bounded reads: a server literal above ``MAX_LITERAL_BYTES`` and a
   response line above ``MAX_LINE_BYTES`` are refused
@@ -60,12 +63,10 @@ from config.plugin_types import VerifyResult
 from plugins.imap import protocol
 from plugins.imap.settings import (
     DEFAULT_PORT_FOR_SECURITY,
-    SECURITY_CHOICES,
+    ServerConfig,
     account_for,
-    allowed_ports,
-    effective_port,
-    load_allowed_hosts,
-    normalize_host,
+    load_allowed_servers,
+    resolve_server,
     row_values,
 )
 
@@ -112,6 +113,9 @@ class ImapError(Exception):
 
 @dataclass(frozen=True)
 class ImapSettings:
+    """A resolved connection: host / port / security come from the admin
+    server configuration the row's ``server`` value names."""
+
     host: str
     port: int
     security: str
@@ -119,25 +123,39 @@ class ImapSettings:
     password: str = field(repr=False)
     account: str = ""
 
+    @property
+    def server(self) -> ServerConfig:
+        return ServerConfig(self.host, self.port, self.security)
+
+
+def _server_not_allowed(value) -> ImapError:
+    if isinstance(value, str) and value.strip():
+        shown = value.strip()[:200]
+        return ImapError(
+            "imap_host_not_allowed",
+            f"The IMAP server {shown} is no longer allowed by the administrator.",
+            server=shown,
+        )
+    return ImapError(
+        "imap_host_not_allowed",
+        "This connection's IMAP server is not on the administrator's server list; "
+        "the user must re-add the mailbox in Settings > Data Connections.",
+    )
+
 
 def _settings(values: dict, account: Optional[str]) -> ImapSettings:
-    host = normalize_host(values.get("host") or "")
-    if not host:
-        raise ImapError("imap_not_configured", "The connection has no IMAP server.")
-    security = values.get("security")
-    if security not in SECURITY_CHOICES:
-        raise ImapError("imap_not_configured", "Security must be one of: ssl, starttls.")
-    try:
-        port = effective_port(values)
-    except ValueError as exc:
-        raise ImapError("imap_not_configured", str(exc)) from None
+    """Resolve ``values["server"]`` against the CURRENT admin list."""
+    raw_server = values.get("server")
+    config = resolve_server(raw_server)
+    if config is None:
+        raise _server_not_allowed(raw_server)
     username = (values.get("username") or "").strip()
     password = values.get("password") or ""
     if not username or not password:
         raise ImapError("imap_not_configured", "The connection has no username or password.")
     return ImapSettings(
-        host=host, port=port, security=security, username=username,
-        password=password, account=account or account_for(username, host),
+        host=config.host, port=config.port, security=config.security, username=username,
+        password=password, account=account or account_for(username, config.host),
     )
 
 
@@ -147,7 +165,8 @@ def settings_from_values(values: dict) -> ImapSettings:
 
 
 def settings_from_row(row: dict) -> ImapSettings:
-    """Settings from a stored connection row."""
+    """Settings from a stored connection row (a legacy row without
+    ``server`` raises ``imap_host_not_allowed``)."""
     return _settings(row_values(row), (row or {}).get("account") or None)
 
 
@@ -795,20 +814,9 @@ def _run_session(settings: ImapSettings, work: Callable[[ImapSession], T], state
 
 
 def check_host_allowed(settings: ImapSettings) -> None:
-    """Re-check (host, port) against the CURRENT admin card."""
-    ports = allowed_ports(settings.host, load_allowed_hosts())
-    if not ports:
-        raise ImapError(
-            "imap_host_not_allowed",
-            f"The IMAP server {settings.host} is no longer allowed by the administrator.",
-            host=settings.host,
-        )
-    if settings.port not in ports:
-        raise ImapError(
-            "imap_host_not_allowed",
-            f"Port {settings.port} is not allowed for {settings.host}.",
-            host=settings.host, port=settings.port,
-        )
+    """Re-check (host, port, security) against the CURRENT admin card."""
+    if settings.server not in set(load_allowed_servers()):
+        raise _server_not_allowed(settings.server.line())
 
 
 async def run_imap(
@@ -866,23 +874,17 @@ def _verify_message(exc: ImapError) -> str:
 
 
 async def verify_imap_connection(values: dict) -> VerifyResult:
-    """``verify`` hook: allow-list check, live LOGIN + CAPABILITY, account."""
+    """``verify`` hook: server resolved against the CURRENT admin list,
+    live LOGIN + CAPABILITY, account."""
     values = values or {}
-    host = normalize_host(values.get("host") or "")
-    try:
-        port = effective_port(values)
-    except ValueError as exc:
-        return VerifyResult(error=str(exc))
-    ports = allowed_ports(host, load_allowed_hosts())
-    if not ports:
+    config = resolve_server(values.get("server"))
+    if config is None:
         return VerifyResult(error="Server not allowed")
-    if port not in ports:
-        return VerifyResult(error=f"Port {port} is not allowed for {host}")
     username = (values.get("username") or "").strip()
     try:
         from db.user_service_credential_store import normalize_account
 
-        account = normalize_account(account_for(username, host))
+        account = normalize_account(account_for(username, config.host))
     except ValueError as exc:
         return VerifyResult(
             error=f"This username cannot be used as an account name ({exc}).",

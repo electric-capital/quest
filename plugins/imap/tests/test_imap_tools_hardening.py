@@ -389,7 +389,7 @@ def db_users(tmp_path, monkeypatch, fake_imap):
     ids = {}
     for name, row in (
         ("a", fake_imap.row()),
-        ("b", fake_imap.row(host="mail.other.org", username="bob@other.org",
+        ("b", fake_imap.row(server="mail.other.org:993 ssl", username="bob@other.org",
                             password="bob-pass")),
     ):
         user = _run(user_store.create_user(

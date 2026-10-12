@@ -72,7 +72,7 @@ from plugins.imap.render import (
     safe_mime,
     url_cache_key,
 )
-from plugins.imap.settings import SERVICE_ID, imap_connected
+from plugins.imap.settings import SERVICE_ID, imap_connected, is_legacy_row
 from plugins.imap.upstream import ImapError, ImapSession, run_imap, settings_from_row
 
 logger = logging.getLogger(__name__)
@@ -261,6 +261,10 @@ def _resolve(ctx, args: dict):
             "error": "connection_not_supported", "service": SERVICE_ID,
             "requested": exc.requested,
         })
+    if row is not None and is_legacy_row(row):
+        # A row from before the server select (host/port/security, no
+        # server): fails closed in _settings with imap_host_not_allowed.
+        return row, None
     if row is None or not imap_connected(row):
         return None, _json({
             "error": "imap_not_connected",

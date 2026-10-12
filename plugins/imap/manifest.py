@@ -2,16 +2,18 @@
 
 The first ``form``-kind, multi-connection plugin (issue #84 section 10):
 a user adds up to ten IMAP mailboxes, each a connection row whose
-encrypted ``oauth_blob["values"]`` holds host / port / security /
-username / password and whose account is the mailbox address
-(``account_for``). The ``verify`` hook logs in live before a row is
-saved.
+encrypted ``oauth_blob["values"]`` holds server / username / password
+and whose account is the mailbox address (``account_for``). The
+``verify`` hook logs in live before a row is saved.
 
-The admin card (``imap.json``) holds only the ``allowed_hosts``
-allow-list: the connector row is ``available: false`` until it lists at
-least one valid server, the host select's choices come from it
-(``field_options``), and every connect re-checks it (plugins/imap/
-upstream.py). Transport: stdlib ``imaplib`` over verified TLS only.
+The admin card (``imap.json``) holds only the ``allowed_hosts`` server
+list (one ``host[:port][ ssl|starttls]`` configuration per line, saved
+in the canonical ``host:port mode`` form; see plugins/imap/settings.py):
+the connector row is ``available: false`` until it lists at least one
+valid server, the server select's choices are its canonical lines
+(``field_options``), and every connect resolves the row's ``server``
+against it again (plugins/imap/upstream.py). Transport: stdlib
+``imaplib`` over verified TLS only.
 """
 
 import json
@@ -21,7 +23,6 @@ from chat.system_skills import SystemSkill
 from config.plugin_types import CredentialField, QuestPlugin, UserConnectionSpec
 
 from plugins.imap.settings import (
-    SECURITY_CHOICES,
     SERVICE_ID,
     imap_connected,
     imap_field_options,
@@ -85,17 +86,15 @@ def get_plugin() -> QuestPlugin:
         credential_schema=(
             CredentialField(
                 key="allowed_hosts",
-                label="Allowed IMAP servers",
+                label="IMAP servers",
                 type="textarea",
                 required=True,
-                placeholder="imap.example.com\nmail.example.org:993",
+                placeholder="imap.example.com\nmail.example.org:143 starttls",
                 help=(
-                    "One server per line as a hostname, optionally followed by "
-                    ":port (for example imap.example.com or mail.example.org:993). "
-                    "A line without a port allows both 993 (TLS) and 143 (STARTTLS). "
-                    "Users can only connect their mailboxes to servers listed here, "
-                    "always over verified TLS. Removing a server disables the "
-                    "connections that use it."
+                    "One server per line: host[:port] [ssl|starttls]. A bare host "
+                    "means port 993 over TLS; write host:143 starttls for STARTTLS. "
+                    "Users pick their mailbox's server from this list; removing a "
+                    "line disables the connections that use it."
                 ),
             ),
         ),
@@ -106,13 +105,8 @@ def get_plugin() -> QuestPlugin:
             multi_connection=True,
             connection_limit=CONNECTION_LIMIT,
             fields=(
-                CredentialField(key="host", label="IMAP server", type="select", required=True),
-                # Blank = the security default: 993 for ssl, 143 for starttls.
-                CredentialField(key="port", label="Port", type="text", placeholder="993"),
-                CredentialField(
-                    key="security", label="Security", type="select", required=True,
-                    options=SECURITY_CHOICES,
-                ),
+                # Options: the admin card's canonical lines (field_options).
+                CredentialField(key="server", label="IMAP server", type="select", required=True),
                 CredentialField(key="username", label="Username", type="text", required=True),
                 CredentialField(key="password", label="Password", type="secret", required=True),
             ),
