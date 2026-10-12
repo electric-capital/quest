@@ -23,7 +23,7 @@ that hold framework objects (``oauth_router``) are typed ``Any``.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Awaitable, Callable, Literal, Optional
 
 
 @dataclass(frozen=True)
@@ -37,15 +37,39 @@ class CredentialField:
     precedence (required iff that toggle is on). ``visible_if`` names a
     sibling ``bool`` field key that must be on for the field to render;
     ``None`` means always visible.
+
+    ``select`` fields take their value from ``options`` (static choices).
+    In a per-user ``form`` connection (:class:`UserConnectionSpec`) the
+    choices may instead be runtime data supplied by the spec's
+    ``field_options()`` hook, in which case ``options`` may stay empty.
+    The same type is reused for both the admin card and ``form``-kind
+    user connections.
     """
 
     key: str
     label: str
-    type: Literal["text", "secret", "bool", "textarea"]
+    type: Literal["text", "secret", "bool", "textarea", "select"]
     placeholder: str = ""
     required: bool = False
     required_if: Optional[str] = None
     visible_if: Optional[str] = None
+    options: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class VerifyResult:
+    """Outcome of a ``form``-kind connection's ``verify`` hook.
+
+    On success ``account`` is the connection's account address (the
+    model-facing identifier, e.g. the mailbox address) and ``error`` is
+    None; ``extras`` is merged into the stored credential blob (e.g.
+    server capabilities). On failure ``error`` is a short human-readable
+    message shown under the form and ``account`` is None.
+    """
+
+    account: Optional[str] = None
+    error: Optional[str] = None
+    extras: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -76,9 +100,30 @@ class UserConnectionSpec:
     Both kinds get a generically rendered /connectors row (oauth rows use
     the ``/auth/<id>?popup=1`` connect-URL convention and the shared popup
     postMessage helpers in auth/popup_helpers.py).
+
+    The ``form`` kind collects several schema-described values (``fields``,
+    the admin card's :class:`CredentialField` type, with runtime ``select``
+    choices from ``field_options()``) and requires an async ``verify``
+    hook ``(values) -> VerifyResult`` that logs in before the row is saved;
+    the values are stored as ``{"values": {...}, **extras}`` in the row's
+    ``oauth_blob`` and the result's ``account`` becomes the row's account.
+    It sets none of the api_key / oauth fields.
+
+    ``multi_connection=True`` lets a user hold up to ``connection_limit``
+    rows (connections) for the service, each identified by its account
+    address, one of them the default. Only such plugins see more than one
+    row: the default row stays ``user["service_credentials"][<id>]`` for
+    every plugin, the full list is ``user["service_connections"][<id>]``,
+    and config/user_connections.resolve_connection maps a tool call's
+    optional ``connection`` argument to a row. Every tool of a
+    multi-connection plugin must declare that ``connection`` parameter.
+    ``oauth`` / ``api_key`` multi-connection specs must supply
+    ``account_from(row) -> account`` (the form kind gets its account from
+    ``verify``). ``row_warning(row)`` optionally returns a short warning
+    shown on the connection in Settings (any kind).
     """
 
-    kind: Literal["api_key", "oauth"]
+    kind: Literal["api_key", "oauth", "form"]
     connected: Callable[[dict], bool]
     # api_key kind:
     validate_key: Optional[Callable[[str], Optional[str]]] = None  # error msg or None
@@ -101,6 +146,21 @@ class UserConnectionSpec:
     # Connections row shows the "Update Available" re-authorize badge.
     # Called only when a stored row exists; exceptions read as False.
     needs_reauth: Optional[Callable[[dict], bool]] = None
+    # multiple connections (any kind):
+    multi_connection: bool = False
+    connection_limit: int = 10  # per (user, service) cap, 1..50
+    # form kind:
+    fields: tuple[CredentialField, ...] = ()
+    # Runtime ``select`` choices per field key (e.g. an admin-configured
+    # host list); fields named here may leave ``options`` empty.
+    field_options: Optional[Callable[[], dict[str, list[str]]]] = None
+    verify: Optional[Callable[[dict], Awaitable[VerifyResult]]] = None
+    # all kinds:
+    # row -> account address, for backfills and oauth callbacks; required
+    # for multi-connection oauth / api_key specs.
+    account_from: Optional[Callable[[dict], Optional[str]]] = None
+    # row -> short warning shown on the connection in Settings, or None.
+    row_warning: Optional[Callable[[dict], Optional[str]]] = None
 
 
 @dataclass(frozen=True)
