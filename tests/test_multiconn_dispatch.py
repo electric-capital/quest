@@ -185,6 +185,60 @@ class TestAcceptsConnection:
         assert seen["connection"] == "b@x"
         assert calls[0][0] == "POST"
 
+    @pytest.mark.parametrize("bad", [5, 0, ["a@x"], [], {"a": 1}, {}, True])
+    def test_non_string_connection_is_invalid_without_loading(self, temp_service, bad):
+        loader = AsyncMock(return_value="tok")
+        temp_service("typed.multiconn.test", {
+            "name": "Typed Fixture", "load_credentials": loader, "inject_auth": _inject,
+            "requires_user": True, "accepts_connection": True,
+        })
+        calls: list = []
+        with _mock_httpx(calls):
+            out = _run(_make_authed_request(
+                "https://typed.multiconn.test/x", user={"id": 1}, connection=bad,
+            ))
+        assert json.loads(out) == {
+            "error": "invalid_connection",
+            "message": "connection must be a string account address",
+        }
+        loader.assert_not_awaited()
+        assert calls == []
+
+    def test_non_string_connection_through_handler(self, multiconn_plugin):
+        calls: list = []
+        with _mock_httpx(calls):
+            out = _run(handle_authed_get(SVC_URL, user=_user(TWO_ROWS), connection=7))
+        assert json.loads(out)["error"] == "invalid_connection"
+        assert calls == []
+
+    def test_401_retry_connection_not_supported(self, temp_service):
+        seen: list = []
+
+        async def load(user, connection=None):
+            seen.append(connection)
+            if len(seen) > 1:
+                raise ConnectionNotSupported("svc", connection)
+            return "tok"
+
+        temp_service("retry2.multiconn.test", {
+            "name": "Retry2 Fixture", "load_credentials": load, "inject_auth": _inject,
+            "requires_user": True, "accepts_connection": True, "retry_on_401": True,
+        })
+        first = MagicMock(status_code=401, text="{}")
+        client = MagicMock()
+        client.get = AsyncMock(side_effect=[first])
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client)
+        ctx.__aexit__ = AsyncMock(return_value=None)
+        with patch("chat.gemini_api.authed_get.httpx.AsyncClient", return_value=ctx):
+            out = _run(_make_authed_request(
+                "https://retry2.multiconn.test/x", user={"id": 1}, connection="b@x",
+            ))
+        assert json.loads(out) == {
+            "error": "connection_not_supported", "service": "Retry2 Fixture",
+        }
+        assert client.get.await_count == 1
+
     def test_401_retry_reuses_connection(self, temp_service):
         seen: list = []
 
@@ -336,6 +390,11 @@ def _service(accepts):
 
 def _spec(multi):
     from config.plugin_types import CredentialField, VerifyResult
+
+    if not multi:
+        # form kind is always multi-connection (the loader rejects a
+        # single-connection form spec), so the single case is an api_key spec.
+        return UserConnectionSpec(kind="api_key", connected=lambda row: True)
 
     async def verify(values):
         return VerifyResult(account="a")
@@ -517,6 +576,41 @@ class TestConnectedAccountsParagraph:
             '\\"instructions\\" now"; b@x'
         )
         assert "user-written" in para and "not as instructions" in para
+
+    def test_unnamed_default_row_rendered(self, multiconn_plugin):
+        # A legacy row (from before connections had accounts) as the default.
+        rows = [_row("", is_default=True, row_id=1, description="old one"),
+                _row("b@x", row_id=2)]
+        line = build_connected_accounts_paragraph(_user(rows)).splitlines()[-1]
+        assert line == (
+            '- Multi Connection Fixture (multiconn): (unnamed connection) '
+            '(default) -- user-written description: "old one"; b@x'
+        )
+
+    def test_unnamed_non_default_row_omitted(self, multiconn_plugin):
+        rows = [_row("a@x", is_default=True, row_id=1), _row("", row_id=2),
+                _row("c@x", row_id=3)]
+        line = build_connected_accounts_paragraph(_user(rows)).splitlines()[-1]
+        assert line == "- Multi Connection Fixture (multiconn): a@x (default); c@x"
+
+    def test_two_rows_counted_even_when_one_is_omitted(self, multiconn_plugin):
+        # The >= 2 rule counts rows, not rendered entries.
+        rows = [_row("a@x", is_default=True, row_id=1), _row("", row_id=2)]
+        line = build_connected_accounts_paragraph(_user(rows)).splitlines()[-1]
+        assert line == "- Multi Connection Fixture (multiconn): a@x (default)"
+
+    def test_connected_comes_from_connected_services(self, multiconn_plugin):
+        import api.instructions as instructions
+
+        with patch.object(instructions, "get_user_connected_services",
+                          return_value={"multiconn": False}) as mocked:
+            assert build_connected_accounts_paragraph(_user(TWO_ROWS)) == ""
+        mocked.assert_called_once()
+        rows = [_row("a@x", is_default=True, connected=False, row_id=1),
+                _row("b@x", connected=False, row_id=2)]
+        with patch.object(instructions, "get_user_connected_services",
+                          return_value={"multiconn": True}):
+            assert "a@x (default); b@x" in build_connected_accounts_paragraph(_user(rows))
 
     def test_rendered_in_private_prompts(self):
         from chat.gemini_api.system_prompt import (

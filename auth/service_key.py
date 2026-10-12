@@ -32,7 +32,11 @@ def _resolve_api_key_plugin(service: str):
 
     plugin = get_loaded_plugin(service)
     spec = plugin.user_connection if plugin else None
-    if spec is None or spec.kind != "api_key":
+    # A multi-connection service manages its keys per connection through
+    # /auth/connections/{service}: saving here would overwrite the default
+    # row's secret without the account binding, and removing would delete
+    # every connection at once (no service-wide Disconnect, spec 11.6).
+    if spec is None or spec.kind != "api_key" or spec.multi_connection:
         raise HTTPException(
             status_code=404,
             detail={

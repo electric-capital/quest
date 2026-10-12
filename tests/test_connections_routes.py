@@ -472,3 +472,234 @@ def test_oauth_kind_create_is_use_connect_url(env, monkeypatch):
     r = _create(client(env), service="oauthsvc", values={})
     assert r.status_code == 400
     assert r.json()["detail"]["error"] == "use_connect_url"
+
+
+# ---------------------------------------------------------------------------
+# Integration review fixes
+# ---------------------------------------------------------------------------
+
+
+def test_real_auth_dependency_401_without_credentials(env, multiconn_plugin):
+    app = FastAPI()
+    app.include_router(connections_mod.router)
+    c = TestClient(app)
+    for resp in (
+        c.post(f"/auth/connections/{SERVICE}", json={"values": _values()}),
+        c.put(f"/auth/connections/{SERVICE}/1", json={"description": "x"}),
+        c.delete(f"/auth/connections/{SERVICE}/1"),
+    ):
+        assert resp.status_code == 401
+        assert resp.json()["detail"]["error"] == "not_authenticated"
+    assert _run(env.store.list_connections(env.users["alice"]["id"], SERVICE)) == []
+
+
+def test_quest_app_mounts_connection_routes():
+    """quest.app serves the routes (subprocess: importing quest loads every
+    plugin into the process-global registries)."""
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = (
+        "import json, quest\n"
+        "routes = sorted({(m, r.path) for r in quest.app.routes"
+        " if hasattr(r, 'methods') for m in r.methods})\n"
+        "print(json.dumps(routes))\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True,
+        cwd=Path(__file__).resolve().parent.parent,
+    )
+    assert proc.returncode == 0, proc.stderr
+    routes = {tuple(r) for r in json.loads(proc.stdout.strip().splitlines()[-1])}
+    assert ("POST", "/auth/connections/{service}") in routes
+    assert ("PUT", "/auth/connections/{service}/{connection_id}") in routes
+    assert ("DELETE", "/auth/connections/{service}/{connection_id}") in routes
+
+
+def test_rate_limit_retry_after_header(env, multiconn_plugin):
+    c = client(env)
+    for _ in range(10):
+        _create(c, values=_values(password="wrong"))
+    r = _create(c, values=_values(password="wrong"))
+    assert r.status_code == 429
+    assert int(r.headers["Retry-After"]) == r.json()["detail"]["retry_after"] >= 1
+
+
+def test_rate_limit_applies_to_put_values(env, multiconn_plugin):
+    c = client(env)
+    a = _create(c, values=_values()).json()["connection"]  # 1 attempt
+    url = f"/auth/connections/{SERVICE}/{a['id']}"
+    for _ in range(9):
+        assert c.put(url, json={"values": {"password": "wrong"}}).status_code == 400
+    r = c.put(url, json={"values": {"password": "fresh"}})
+    assert r.status_code == 429
+    assert r.json()["detail"]["error"] == "rate_limited"
+    # Description-only edits never verify, so they are not limited.
+    assert c.put(url, json={"description": "d"}).status_code == 200
+
+
+def test_form_value_length_cap(env, multiconn_plugin):
+    cap = connections_mod.MAX_FORM_VALUE_LENGTH
+    c = client(env)
+    r = _create(c, values=_values(password="p" * (cap + 1)))
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert detail["error"] == "invalid_values"
+    assert detail["fields"] == {"password": f"Must be at most {cap} characters."}
+    assert _create(c, values=_values(password="p" * cap)).status_code == 201
+
+
+@pytest.mark.parametrize("hook_result", ["raise", ["mail.example.com"], "a-string", None])
+def test_field_options_hook_failure_during_post(env, multiconn_plugin, monkeypatch, hook_result):
+    def _hook():
+        if hook_result == "raise":
+            raise RuntimeError("options backend down")
+        return hook_result
+
+    spec = dataclasses.replace(multiconn_plugin.user_connection, field_options=_hook)
+    monkeypatch.setattr(
+        plugins_mod, "_LOADED",
+        [dataclasses.replace(multiconn_plugin, user_connection=spec)],
+    )
+    # The fixture's host select has no static options, so the fallback
+    # leaves nothing to choose: a clean 400, never a 500.
+    r = _create(client(env), values=_values())
+    assert r.status_code == 400
+    assert r.json()["detail"]["fields"] == {"host": "Not one of the allowed choices."}
+
+
+def test_field_options_fallback_uses_static_options(multiconn_plugin):
+    from config.plugin_types import CredentialField
+
+    spec = dataclasses.replace(
+        multiconn_plugin.user_connection,
+        fields=(CredentialField(key="host", label="Server", type="select",
+                                options=("static.example.com",)),),
+        field_options=lambda: ["not", "a", "dict"],
+    )
+    assert connections_mod.resolve_field_options(spec) == {"host": ["static.example.com"]}
+
+
+def test_put_empty_body_is_noop(env, multiconn_plugin):
+    """PUT {} changes nothing and returns the current view (200)."""
+    c = client(env)
+    a = _create(c, values=_values(), description="keep").json()["connection"]
+    env.invalidated.clear()
+    r = c.put(f"/auth/connections/{SERVICE}/{a['id']}", json={})
+    assert r.status_code == 200
+    assert r.json()["connection"] == a
+    assert env.invalidated == []
+
+
+def test_put_values_on_legacy_unnamed_row(env, multiconn_plugin):
+    alice = env.users["alice"]["id"]
+    # A pre-multi-connection row: written through the legacy API, account ''.
+    _run(env.store.upsert_credential(
+        alice, SERVICE, oauth_blob={"values": _values()},
+    ))
+    row = _run(env.store.list_connections(alice, SERVICE))[0]
+    assert row["account"] == ""
+    r = client(env).put(
+        f"/auth/connections/{SERVICE}/{row['id']}", json={"values": {"password": "x"}},
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"] == {
+        "error": "account_mismatch",
+        "message": "This connection has no account name; delete it and add it again.",
+    }
+
+
+def test_create_integrity_error_is_409_conflict(env, multiconn_plugin, monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+
+    async def _race(*_a, **_kw):
+        raise IntegrityError("INSERT", {}, Exception("UNIQUE constraint failed"))
+
+    monkeypatch.setattr(env.store, "create_connection", _race)
+    r = _create(client(env), values=_values())
+    assert r.status_code == 409
+    assert r.json()["detail"]["error"] == "conflict"
+    assert env.invalidated == []
+
+
+def test_verify_unsafe_account_is_verify_failed(env, multiconn_plugin, monkeypatch):
+    from config.plugin_types import VerifyResult
+
+    async def _spaced(values):
+        return VerifyResult(account="two words@example.com")
+
+    _with_verify(monkeypatch, multiconn_plugin, _spaced)
+    r = _create(client(env), values=_values())
+    assert r.status_code == 400
+    assert r.json()["detail"] == {
+        "error": "verify_failed",
+        "message": "The connection was verified but did not return a usable account name.",
+    }
+
+
+@pytest.mark.parametrize("acct", ["a b", 'a"b', "a`b", "a\nb"])
+def test_api_key_unsafe_account_is_unresolved(env, monkeypatch, acct):
+    monkeypatch.setattr(
+        plugins_mod, "_LOADED", [_api_key_plugin(account_from=lambda row: acct)],
+    )
+    r = _create(client(env), service="keysvc", api_key="sk-abc")
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "account_unresolved"
+
+
+def test_put_api_key(env, monkeypatch):
+    monkeypatch.setattr(plugins_mod, "_LOADED", [_api_key_plugin()])
+    c = client(env)
+    alice = env.users["alice"]["id"]
+    conn = _create(c, service="keysvc", api_key="sk-team").json()["connection"]
+    url = f"/auth/connections/keysvc/{conn['id']}"
+    env.invalidated.clear()
+
+    # Same account (case-insensitive) -> the secret is replaced.
+    r = c.put(url, json={"api_key": " sk-TEAM ", "description": "rotated"})
+    assert r.status_code == 200, r.text
+    _assert_no_secrets(r)
+    assert r.json()["connection"]["description"] == "rotated"
+    row = _run(env.store.get_connection(alice, "keysvc", row_id=conn["id"]))
+    assert row["secret"] == "sk-TEAM"
+    assert env.invalidated == [alice]
+
+    for body, code in (
+        ({"api_key": "nope"}, "invalid_key"),
+        ({"api_key": "sk-other"}, "account_mismatch"),
+        ({"api_key": "sk-"}, "account_unresolved"),
+        ({"api_key": ""}, "invalid_request"),
+        ({"api_key": 5}, "invalid_request"),
+        ({"values": {"x": "y"}}, "invalid_request"),
+        ({"api_key": "sk-team", "values": {}}, "invalid_request"),
+    ):
+        r = c.put(url, json=body)
+        assert r.status_code == 400, body
+        assert r.json()["detail"]["error"] == code, body
+    mismatch = c.put(url, json={"api_key": "sk-other"}).json()["detail"]["message"]
+    assert mismatch.startswith("This key appears to belong to other, not team.")
+    row = _run(env.store.get_connection(alice, "keysvc", row_id=conn["id"]))
+    assert row["secret"] == "sk-TEAM"
+    assert row["description"] == "rotated"
+
+
+def test_put_api_key_is_rate_limited(env, monkeypatch):
+    monkeypatch.setattr(plugins_mod, "_LOADED", [_api_key_plugin()])
+    c = client(env)
+    conn = _create(c, service="keysvc", api_key="sk-team").json()["connection"]
+    url = f"/auth/connections/keysvc/{conn['id']}"
+    for _ in range(9):
+        assert c.put(url, json={"api_key": "sk-other"}).status_code == 400
+    r = c.put(url, json={"api_key": "sk-team"})
+    assert r.status_code == 429
+    assert "Retry-After" in r.headers
+
+
+def test_put_api_key_rejected_for_form_kind(env, multiconn_plugin):
+    c = client(env)
+    a = _create(c, values=_values()).json()["connection"]
+    r = c.put(f"/auth/connections/{SERVICE}/{a['id']}", json={"api_key": "sk-x"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "invalid_request"

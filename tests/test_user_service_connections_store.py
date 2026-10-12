@@ -80,11 +80,34 @@ def _default_count(env, service="imap"):
 def test_normalize_account(env):
     store = env["store"]
     assert store.normalize_account("  Work@Example.COM ") == "work@example.com"
-    assert store.normalize_account("Home Lab") == "home lab"
+    assert store.normalize_account("Home-Lab") == "home-lab"
+    assert store.normalize_account("user@mail.example.org:993") == "user@mail.example.org:993"
     for bad in ("", "   ", "a" * 321, None, 5):
         with pytest.raises(ValueError):
             store.normalize_account(bad)
     assert store.normalize_account("a" * 320) == "a" * 320
+
+
+@pytest.mark.parametrize("bad, reason", [
+    ("home lab", "whitespace"),
+    ("a\tb@x.com", "whitespace"),
+    ("a\nb@x.com", "whitespace"),
+    ("a\u00a0b@x.com", "whitespace"),        # no-break space
+    ("a\x00b@x.com", "control"),
+    ("a\x1bb@x.com", "control"),
+    ("a\u200bb@x.com", "control"),           # zero-width space (format char)
+    ('a"b@x.com', "'\"'"),
+    ("a`b@x.com", "'`'"),
+])
+def test_normalize_account_rejects_unsafe_characters(env, bad, reason):
+    with pytest.raises(ValueError, match=reason):
+        env["store"].normalize_account(bad)
+
+
+def test_create_connection_rejects_unsafe_account(env):
+    store = env["store"]
+    with pytest.raises(ValueError):
+        _run(store.create_connection(env["uid"], "svc", account="two words"))
 
 
 def test_normalize_description(env):

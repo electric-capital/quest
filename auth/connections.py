@@ -12,8 +12,11 @@ the Settings UI (issue #84, spec section 8.2):
   derives the account with ``account_from``. ``oauth`` connections are
   created by the plugin's own callback (400 ``use_connect_url``).
 - ``PUT /auth/connections/{service}/{id}``: change the description, make
-  the row the default, or (form kind) re-enter values, which re-runs
-  ``verify`` and must yield the same account.
+  the row the default, or re-enter the credential: ``values`` (form kind)
+  re-runs ``verify``, ``api_key`` (api_key kind) re-runs ``validate_key``
+  and ``account_from``; either must yield the row's own account. A body
+  with none of these keys (``{}``) is a no-op that returns the current
+  view (200) without writing or invalidating anything.
 - ``DELETE /auth/connections/{service}/{id}``: delete one row; the store
   promotes a new default when the default was deleted.
 
@@ -23,7 +26,7 @@ sees account addresses. No response ever carries a secret or a form value:
 ``GET /connectors``. Every successful write invalidates the user's cached
 chat sessions so the next message rebuilds the system prompt.
 
-Verify attempts are rate-limited per user (:data:`VERIFY_RATE_LIMIT`
+Verify attempts (and api_key re-entries) are rate-limited per user (:data:`VERIFY_RATE_LIMIT`
 attempts per rolling :data:`VERIFY_RATE_WINDOW_SECONDS`, in memory) so the
 form cannot be used to brute-force an upstream login through Quest.
 """
@@ -36,6 +39,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
+from sqlalchemy.exc import IntegrityError
 
 from auth.session import get_current_user_cookie_or_apikey
 
@@ -52,7 +56,9 @@ VERIFY_RATE_WINDOW_SECONDS = 60.0
 
 _verify_attempts: dict[int, deque] = {}
 
-_TEXT_TYPES = ("text", "secret", "select", "textarea")
+# Longest accepted form value (any string field); longer values are an
+# ``invalid_values`` error on that field.
+MAX_FORM_VALUE_LENGTH = 4096
 
 
 def reset_rate_limits() -> None:
@@ -60,9 +66,12 @@ def reset_rate_limits() -> None:
     _verify_attempts.clear()
 
 
-def _error(status: int, code: str, message: str, **extra) -> HTTPException:
+def _error(
+    status: int, code: str, message: str, *, headers: Optional[dict] = None, **extra,
+) -> HTTPException:
     return HTTPException(
         status_code=status, detail={"error": code, "message": message, **extra},
+        headers=headers,
     )
 
 
@@ -78,6 +87,7 @@ def _check_rate_limit(user_id: int) -> None:
             429, "rate_limited",
             "Too many connection attempts. Wait a minute and try again.",
             retry_after=retry_after,
+            headers={"Retry-After": str(retry_after)},
         )
     attempts.append(now)
 
@@ -87,16 +97,27 @@ def _check_rate_limit(user_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 def resolve_field_options(spec) -> dict[str, list[str]]:
-    """The select options per field key: runtime ``field_options()`` when
-    the spec has the hook (a raising hook yields no options and is logged),
-    else each select field's static ``options``."""
+    """The select options per field key.
+
+    With a ``field_options()`` hook, a select field the hook's dict names
+    gets those runtime options and every other select field falls back to
+    its static ``options``. A hook that raises or returns something other
+    than a dict is logged and ignored: every select field then uses its
+    static ``options`` (empty when it declares none, so nothing validates).
+    """
     runtime: Optional[dict] = None
     if spec.field_options is not None:
         try:
-            runtime = spec.field_options() or {}
+            runtime = spec.field_options()
         except Exception:
-            logger.exception("field_options hook raised; no select options")
-            runtime = {}
+            logger.exception("field_options hook raised; using static options")
+            runtime = None
+        if runtime is not None and not isinstance(runtime, dict):
+            logger.error(
+                "field_options hook returned %s, not a dict; using static options",
+                type(runtime).__name__,
+            )
+            runtime = None
     options: dict[str, list[str]] = {}
     for field in spec.fields:
         if field.type != "select":
@@ -160,8 +181,8 @@ def _row_connected(spec, row: dict) -> bool:
 
 def user_connection_rows(user: dict, service: str) -> list[dict]:
     """The user's rows for ``service`` from the user dict, default first."""
-    from config.user_connections import _service_rows
-    return _service_rows(user, service)
+    from config.user_connections import service_rows
+    return service_rows(user, service)
 
 
 def multi_connection_fields(plugin, user: dict) -> dict:
@@ -252,6 +273,9 @@ def validate_form_values(spec, values: Any) -> dict:
         if not isinstance(value, str):
             errors[key] = "Must be a string."
             continue
+        if len(value) > MAX_FORM_VALUE_LENGTH:
+            errors[key] = f"Must be at most {MAX_FORM_VALUE_LENGTH} characters."
+            continue
         if not value.strip():
             if required:
                 errors[key] = "This field is required."
@@ -290,13 +314,74 @@ async def _run_verify(plugin, user: dict, values: dict):
         raise _error(400, "verify_failed", str(error))
     try:
         account = normalize_account(getattr(result, "account", None))
-    except ValueError:
-        logger.warning("[%s] verify returned no usable account", plugin.id)
+    except ValueError as exc:
+        # Empty, too long, or with whitespace / control / quote characters.
+        logger.warning("[%s] verify returned no usable account: %s", plugin.id, exc)
         raise _error(
-            400, "verify_failed", "The connection was verified but no account was returned.",
+            400, "verify_failed",
+            "The connection was verified but did not return a usable account name.",
         )
     extras = getattr(result, "extras", None)
     return account, (dict(extras) if isinstance(extras, dict) else {})
+
+
+def _require_api_key(raw: Any) -> str:
+    if not isinstance(raw, str) or not raw.strip():
+        raise _error(400, "invalid_request", "api_key is required.")
+    return raw.strip()
+
+
+def _api_key_account(plugin, user: dict, api_key: str) -> str:
+    """Validate an api_key-kind key and derive its normalized account.
+
+    ``validate_key`` failure -> 400 ``invalid_key`` (not rate-limited: a
+    local shape check); then one rate-limited attempt, and an
+    ``account_from`` that raises or yields an unusable account -> 400
+    ``account_unresolved``.
+    """
+    from db.user_service_credential_store import normalize_account
+
+    spec = plugin.user_connection
+    if spec.validate_key is not None:
+        try:
+            key_error = spec.validate_key(api_key)
+        except Exception:
+            logger.exception("[%s] validate_key raised; rejecting key", plugin.id)
+            key_error = "Key validation failed."
+        if key_error:
+            raise _error(400, "invalid_key", str(key_error))
+    _check_rate_limit(user["id"])
+    raw_account = None
+    if spec.account_from is not None:
+        try:
+            raw_account = spec.account_from({"service": plugin.id, "secret": api_key})
+        except Exception:
+            logger.exception("[%s] account_from raised", plugin.id)
+    try:
+        return normalize_account(raw_account)
+    except ValueError:
+        raise _error(
+            400, "account_unresolved",
+            "Could not determine which account this key belongs to.",
+        )
+
+
+def _require_same_account(row: dict, account: str, what: str) -> None:
+    """400 ``account_mismatch`` unless ``account`` is the row's account."""
+    current = (row.get("account") or "").strip().lower()
+    if not current:
+        # A legacy row (from before connections had accounts) cannot be
+        # re-bound to an account in place.
+        raise _error(
+            400, "account_mismatch",
+            "This connection has no account name; delete it and add it again.",
+        )
+    if account != current:
+        raise _error(
+            400, "account_mismatch",
+            f"{what} belong to {account}, not {current}. "
+            "Add it as a new connection instead.",
+        )
 
 
 def _invalidate(user: dict) -> None:
@@ -330,7 +415,6 @@ async def create_connection_route(
         ConnectionExists,
         ConnectionLimit,
         create_connection,
-        normalize_account,
     )
 
     plugin = _resolve_multi_plugin(service)
@@ -351,32 +435,9 @@ async def create_connection_route(
         oauth_blob = {**extras, "values": dict(values)}
     else:  # api_key
         body = await _read_body(request, {"api_key", "description"})
-        api_key = body.get("api_key")
-        if not isinstance(api_key, str) or not api_key.strip():
-            raise _error(400, "invalid_request", "api_key is required.")
-        api_key = api_key.strip()
+        api_key = _require_api_key(body.get("api_key"))
         description = _normalize_description(body.get("description"))
-        if spec.validate_key is not None:
-            try:
-                key_error = spec.validate_key(api_key)
-            except Exception:
-                logger.exception("[%s] validate_key raised; rejecting key", plugin.id)
-                key_error = "Key validation failed."
-            if key_error:
-                raise _error(400, "invalid_key", str(key_error))
-        raw_account = None
-        if spec.account_from is not None:
-            try:
-                raw_account = spec.account_from({"service": plugin.id, "secret": api_key})
-            except Exception:
-                logger.exception("[%s] account_from raised", plugin.id)
-        try:
-            account = normalize_account(raw_account)
-        except ValueError:
-            raise _error(
-                400, "account_unresolved",
-                "Could not determine which account this key belongs to.",
-            )
+        account = _api_key_account(plugin, user, api_key)
         secret = api_key
         oauth_blob = None
 
@@ -396,6 +457,16 @@ async def create_connection_route(
             400, "connection_limit",
             f"At most {exc.limit} {plugin.label} connections are allowed.",
             limit=exc.limit,
+        )
+    except IntegrityError:
+        # A concurrent write won the race even after the store's own retry.
+        logger.warning(
+            "[%s] create_connection hit a unique-index race (user=%s)",
+            plugin.id, user.get("email"),
+        )
+        raise _error(
+            409, "conflict",
+            "The connection list changed while saving. Reload and try again.",
         )
 
     logger.info(
@@ -421,7 +492,7 @@ async def update_connection_route(
 
     plugin = _resolve_multi_plugin(service)
     spec = plugin.user_connection
-    body = await _read_body(request, {"description", "is_default", "values"})
+    body = await _read_body(request, {"description", "is_default", "values", "api_key"})
 
     row = await get_connection(user["id"], plugin.id, row_id=connection_id)
     if row is None:
@@ -441,6 +512,15 @@ async def update_connection_route(
         )
 
     new_blob = None
+    new_secret = None
+    if "values" in body and "api_key" in body:
+        raise _error(400, "invalid_request", "Send either values or api_key, not both.")
+    if "api_key" in body:
+        if spec.kind != "api_key":
+            raise _error(400, "invalid_request", "api_key applies to api_key connections only.")
+        new_secret = _require_api_key(body.get("api_key"))
+        account = _api_key_account(plugin, user, new_secret)
+        _require_same_account(row, account, "This key appears to")
     if "values" in body:
         if spec.kind != "form":
             raise _error(400, "invalid_request", "values apply to form connections only.")
@@ -457,12 +537,7 @@ async def update_connection_route(
             merged[key] = value
         values = validate_form_values(spec, merged)
         account, extras = await _run_verify(plugin, user, values)
-        if account != (row.get("account") or "").strip().lower():
-            raise _error(
-                400, "account_mismatch",
-                f"These settings belong to {account}, not {row.get('account')}. "
-                "Add it as a new connection instead.",
-            )
+        _require_same_account(row, account, "These settings")
         new_blob = {**extras, "values": dict(values)}
 
     kwargs = {}
@@ -470,6 +545,8 @@ async def update_connection_route(
         kwargs["description"] = description
     if new_blob is not None:
         kwargs["oauth_blob"] = new_blob
+    if new_secret is not None:
+        kwargs["secret"] = new_secret
     if kwargs:
         row = await update_connection(user["id"], plugin.id, connection_id, **kwargs)
         if row is None:

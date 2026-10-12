@@ -73,8 +73,8 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
             if getattr(spec, "multi_connection", False):
                 # Any of the user's connections counts (default first;
                 # falls back to the default row on older user dicts).
-                from config.user_connections import _service_rows
-                rows = _service_rows(user, plugin.id)
+                from config.user_connections import service_rows
+                rows = service_rows(user, plugin.id)
             else:
                 row = stored_rows.get(plugin.id)
                 rows = [row] if row else []

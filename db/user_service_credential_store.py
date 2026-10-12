@@ -33,6 +33,7 @@ Row dicts are ``UserServiceCredential.to_dict()``. Connection lists are
 ordered default first, then by ``created_at``, then by ``id``.
 """
 
+import unicodedata
 from typing import Any, Optional
 
 from sqlalchemy import delete, select, update
@@ -71,11 +72,19 @@ class ConnectionLimit(Exception):
         )
 
 
+# Characters that would break the account's unquoted rendering in the
+# system prompt (Connected accounts paragraph) or markdown code spans.
+_FORBIDDEN_ACCOUNT_CHARS = frozenset('"`')
+
+
 def normalize_account(value: str) -> str:
     """Canonical stored form of an account: stripped and lower-cased.
 
-    Raises ValueError when the result is empty or longer than 320
-    characters (the column width; the longest valid email address).
+    Raises ValueError when the result is empty, longer than 320 characters
+    (the column width; the longest valid email address), or contains
+    whitespace, a control character, ``"`` or a backtick: accounts are
+    rendered unquoted into the system prompt and must round-trip through
+    the model's ``connection`` argument as one token.
     """
     if not isinstance(value, str):
         raise ValueError("account must be a string")
@@ -86,6 +95,13 @@ def normalize_account(value: str) -> str:
         raise ValueError(
             f"account must be at most {MAX_ACCOUNT_LENGTH} characters"
         )
+    for ch in account:
+        if ch.isspace():
+            raise ValueError("account must not contain whitespace")
+        if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp"):
+            raise ValueError("account must not contain control characters")
+        if ch in _FORBIDDEN_ACCOUNT_CHARS:
+            raise ValueError(f"account must not contain {ch!r}")
     return account
 
 

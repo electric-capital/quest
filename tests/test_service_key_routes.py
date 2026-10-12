@@ -120,6 +120,27 @@ def test_oauth_kind_connection_404s(_as_user):
         assert exc.value.status_code == 404
 
 
+def test_multi_connection_api_key_plugin_404s(_isolated_db, _as_user):
+    # Multi-connection keys are managed per connection (/auth/connections);
+    # the service-wide routes would bypass the account binding.
+    store, _ = _isolated_db
+    plugin = QuestPlugin(
+        id="acme", label="Acme",
+        user_connection=UserConnectionSpec(
+            kind="api_key", connected=lambda row: bool(row.get("secret")),
+            multi_connection=True, account_from=lambda row: "acct",
+        ),
+    )
+    with patch.object(plugins_mod, "_LOADED", [plugin]):
+        for call in (lambda: _save("acme", {"api_key": "sk-12345678"}),
+                     lambda: _remove("acme")):
+            with pytest.raises(HTTPException) as exc:
+                call()
+            assert exc.value.status_code == 404
+            assert exc.value.detail["error"] == "unknown_service"
+    assert _run(store.get_credential(_as_user["id"], "acme")) is None
+
+
 def test_missing_cookie_is_401(_isolated_db):
     with patch.object(plugins_mod, "_LOADED", [_plugin()]):
         with pytest.raises(HTTPException) as exc:

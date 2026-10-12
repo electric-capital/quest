@@ -144,7 +144,7 @@ def test_single_connection_api_key_row_unchanged():
     }
 
 
-def test_multi_api_key_row_keeps_kind_fields_and_adds_connections():
+def test_multi_api_key_row_drops_service_key_fields_and_adds_connections():
     rows = [
         {"id": 1, "service": "keysvc", "account": "a", "is_default": True,
          "secret": None, "oauth_blob": None, "created_at": None},
@@ -154,7 +154,12 @@ def test_multi_api_key_row_keeps_kind_fields_and_adds_connections():
     user = {"email": "u@example.com", "service_credentials": {"keysvc": rows[0]},
             "service_connections": {"keysvc": rows}}
     got = _connectors(user, [_api_key_plugin(True)])["keysvc"]
-    assert got["key_url"] == "/auth/service-key/keysvc"
+    # No service-wide key entry or Disconnect for a multi-connection
+    # service (spec 11.6): keys are added per connection via connections_url.
+    for key in ("key_url", "key_field", "key_placeholder", "key_hint", "disconnect_url"):
+        assert key not in got
+    assert got["connections_url"] == "/auth/connections/keysvc"
+    assert got["kind"] == "api_key"
     # The default row has no secret, but the second connection is connected.
     assert got["connected"] is True
     assert got["multi_connection"] is True

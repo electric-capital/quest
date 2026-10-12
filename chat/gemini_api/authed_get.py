@@ -835,6 +835,13 @@ async def _make_authed_request(
     # --- Connection argument ------------------------------------------------
     # Only entries that opt in (multi-connection plugins) take a named
     # connection; any other service refuses it before credential loading.
+    if connection is not None and not isinstance(connection, str):
+        # Model-supplied JSON can carry any type; refuse it before any
+        # credential loading or upstream request.
+        return json.dumps({
+            "error": "invalid_connection",
+            "message": "connection must be a string account address",
+        })
     connection = (connection or "").strip() or None
     if connection is not None and not service.get("accepts_connection"):
         return json.dumps({
@@ -907,6 +914,11 @@ async def _make_authed_request(
                     credentials = await _call_loader(service, user, connection)
                 except ConnectionNotFound as exc:
                     return _connection_not_found_error(service, exc)
+                except ConnectionNotSupported:
+                    return json.dumps({
+                        "error": "connection_not_supported",
+                        "service": service["name"],
+                    })
                 if credentials is None:
                     error_info = service.get("missing_credentials_error", {
                         "error": "google_services_auth_required",

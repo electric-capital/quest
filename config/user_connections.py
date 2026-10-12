@@ -57,7 +57,7 @@ def is_multi_connection(service: str) -> bool:
     return bool(spec is not None and spec.multi_connection)
 
 
-def _service_rows(user: dict, service: str) -> list[dict]:
+def service_rows(user: dict, service: str) -> list[dict]:
     """The user's rows for ``service``, default first.
 
     Reads ``service_connections`` and falls back to the single default row
@@ -103,7 +103,7 @@ def resolve_connection(
     connection is accepted only when it equals the sole row's account;
     anything else raises :class:`ConnectionNotSupported`.
     """
-    rows = _service_rows(user, service)
+    rows = service_rows(user, service)
     requested = (connection or "").strip()
     if not requested:
         return _default_row(user, service, rows)
@@ -142,7 +142,7 @@ def connection_summary(user: dict, service: str) -> list[dict]:
     default first. Row ids and credentials are never included.
     """
     summary = []
-    for i, row in enumerate(_service_rows(user, service)):
+    for i, row in enumerate(service_rows(user, service)):
         # A row dict without the flag (pre-multi-connection shape) is the
         # sole, default row when it heads the list.
         is_default = bool(row.get("is_default", i == 0))
@@ -184,25 +184,26 @@ def _quote_description(description: str | None) -> str | None:
     return json.dumps(text, ensure_ascii=False)
 
 
-def _any_row_connected(spec, rows: list[dict]) -> bool:
-    for row in rows:
-        try:
-            if spec.connected(row):
-                return True
-        except Exception:
-            continue
-    return False
+# How a legacy (pre-multi-connection) default row without an account
+# address appears in the Connected accounts paragraph.
+_UNNAMED_CONNECTION = "(unnamed connection)"
 
 
 def build_connected_accounts_paragraph(user: dict | None) -> str:
     """The system prompt's "Connected accounts" paragraph, or ``""``.
 
-    Lists every connection of each loaded ``multi_connection`` plugin the
-    user is connected to (server side available AND at least one row
-    satisfies the spec's ``connected`` predicate) that has two or more
-    connections. Services with a single connection are left out, and the
-    paragraph is omitted entirely when no service qualifies, so the prompts
-    of users without multiple connections do not change.
+    Lists the connections of each loaded ``multi_connection`` plugin the
+    user is connected to (``get_user_connected_services``: server side
+    available AND at least one row satisfies the spec's ``connected``
+    predicate) that has two or more connections. Services with a single
+    connection are left out, and the paragraph is omitted entirely when no
+    service qualifies, so the prompts of users without multiple
+    connections do not change.
+
+    A legacy row without an account address cannot be named in a
+    ``connection`` argument: as the default it is listed as
+    ``(unnamed connection) (default)`` (reachable by omitting the
+    argument); otherwise it is left out of the list.
 
     Descriptions are user-written: they are collapsed to one line,
     JSON-quoted and labelled as user-written so the model treats them as
@@ -211,24 +212,29 @@ def build_connected_accounts_paragraph(user: dict | None) -> str:
     """
     if not user:
         return ""
-    from config.plugins import get_loaded_plugins, plugin_server_available
+    from api.instructions import get_user_connected_services
+    from config.plugins import get_loaded_plugins
 
+    connected: dict | None = None
     lines: list[str] = []
     for plugin in get_loaded_plugins():
         spec = plugin.user_connection
         if spec is None or not spec.multi_connection:
             continue
-        rows = _service_rows(user, plugin.id)
-        if len(rows) < 2 or not _any_row_connected(spec, rows):
+        if len(service_rows(user, plugin.id)) < 2:
             continue
-        try:
-            if not plugin_server_available(plugin):
-                continue
-        except Exception:
+        if connected is None:
+            connected = get_user_connected_services(user)
+        if not connected.get(plugin.id):
             continue
         entries = []
         for item in connection_summary(user, plugin.id):
-            entry = _one_line(item["label"])
+            if item["account"]:
+                entry = _one_line(item["label"])
+            elif item["is_default"]:
+                entry = f"{_UNNAMED_CONNECTION} (default)"
+            else:
+                continue
             quoted = _quote_description(item.get("description"))
             if quoted:
                 entry += f" -- user-written description: {quoted}"

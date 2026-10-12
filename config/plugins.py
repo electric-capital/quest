@@ -115,6 +115,11 @@ def get_loaded_plugin(plugin_id: str) -> QuestPlugin | None:
     return None
 
 
+# Plugin ids whose /auth/<id> namespace (plugin_auth_prefix) is taken by
+# core routers: auth/connections.py and auth/service_key.py.
+_RESERVED_PLUGIN_IDS = frozenset({"connections", "service_key"})
+
+
 def plugin_auth_prefix(plugin_id: str) -> str:
     """The URL namespace of a plugin's oauth-kind connection router.
 
@@ -233,6 +238,10 @@ def validate_plugin(plugin: QuestPlugin, existing_ids: set[str]) -> None:
         # "docs"); a plugin of that id would have its connected state
         # overwritten by the gate.
         raise ValueError(f"Plugin id {pid!r} is reserved (connected-services pseudo-key)")
+    if pid in _RESERVED_PLUGIN_IDS:
+        # plugin_auth_prefix() would mount the plugin's OAuth router on a
+        # core /auth/ namespace (/auth/connections, /auth/service-key).
+        raise ValueError(f"Plugin id {pid!r} is reserved (core /auth/ route namespace)")
     if not (plugin.label or "").strip():
         raise ValueError(f"Plugin {pid!r} must have a non-empty label")
 

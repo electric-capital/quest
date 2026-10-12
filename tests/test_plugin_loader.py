@@ -1125,3 +1125,15 @@ class TestStringKeyedActionTypes:
             ).scalar_one()
             assert row.params == {"message": "hi"}
             assert row.status == "open"
+
+
+@pytest.mark.parametrize("pid", ["connections", "service_key"])
+def test_core_auth_namespace_plugin_ids_are_reserved(pid):
+    """plugin_auth_prefix() would put these plugins' OAuth routers on the
+    core /auth/connections and /auth/service-key routes."""
+    from config.plugins import plugin_auth_prefix, validate_plugin
+    from config.plugin_types import QuestPlugin
+
+    assert plugin_auth_prefix(pid) in ("/auth/connections", "/auth/service-key")
+    with pytest.raises(ValueError, match="reserved"):
+        validate_plugin(QuestPlugin(id=pid, label="X"), set())
