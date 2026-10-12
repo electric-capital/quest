@@ -28,13 +28,21 @@ Results are JSON strings, except ``imap_get_messages`` which returns a
 markdown document like ``m365_get_mail_messages``. Errors are JSON
 ``{"error": <code>, "message": ...}`` (``ImapError.to_dict()`` for
 transport failures).
+
+Output budget: one ``imap_get_messages`` call returns at most
+``MAX_OUTPUT_CHARS`` characters of markdown (messages past it become
+batch errors, a single oversized message has its body cut with a note);
+search rows cap each text field at ``MAX_SEARCH_FIELD_CHARS``; rendered
+header lines are capped in plugins/imap/render.py.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import imaplib
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -60,11 +68,14 @@ from plugins.imap.render import (
     parse_message,
     render_batch_markdown,
     render_message_markdown,
+    safe_line,
     safe_mime,
     url_cache_key,
 )
 from plugins.imap.settings import SERVICE_ID, imap_connected
 from plugins.imap.upstream import ImapError, ImapSession, run_imap, settings_from_row
+
+logger = logging.getLogger(__name__)
 
 # -- limits ---------------------------------------------------------------
 
@@ -90,8 +101,23 @@ MAX_BATCH_BYTES = 60 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
 MAX_SAVE_MESSAGE_BYTES = int(MAX_ATTACHMENT_BYTES * 1.4) + 1024 * 1024
 
+# Per-call output budget of imap_get_messages (characters of markdown, i.e.
+# context the model has to read): messages past it are batch errors, a
+# single message above it has its body cut with a note.
+MAX_OUTPUT_CHARS = 400_000
+# imap_search_messages: each text field of a row (subject, from, to, date)
+# and each flag; at most this many flags per row.
+MAX_SEARCH_FIELD_CHARS = 500
+MAX_FLAG_CHARS = 100
+MAX_SEARCH_FLAGS = 50
+# imap_save_attachment's ``available`` list on a not-found error.
+MAX_AVAILABLE_LISTED = 200
+
 ATTACHMENTS_DIR = "imap-attachments"
-_MAX_FILENAME_CHARS = 180
+# Path components are capped in UTF-8 BYTES (NAME_MAX is 255 bytes on
+# common filesystems), leaving room for the ``-NNN`` collision suffix.
+_MAX_FILENAME_BYTES = 200
+_MAX_EXT_BYTES = 32
 
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
@@ -252,14 +278,40 @@ def _settings(row: dict):
         return None, _json(exc.to_dict())
 
 
+_PROTOCOL_ERROR_MESSAGE = (
+    "The server sent a response Quest could not process. Retry once; if it "
+    "persists, tell the user."
+)
+
+
 async def _run(settings, work):
-    """run_imap with ImapError / bad-argument ValueError rendered as JSON."""
+    """run_imap with every failure rendered as structured JSON.
+
+    Arguments are validated before ``work`` runs, so a stray ValueError (or
+    a parser failure on server data outside ImapSession) is the server's
+    doing: it becomes ``imap_protocol_error`` with a fixed message, never
+    ``invalid_arguments`` carrying raw parser text. Only text that cannot
+    be encoded (a lone surrogate in a folder name) is the caller's.
+    """
     try:
         return await run_imap(settings, work), None
     except ImapError as exc:
         return None, _json(exc.to_dict())
-    except ValueError as exc:
-        return None, _invalid(str(exc))
+    except UnicodeEncodeError:
+        return None, _invalid("An argument contains characters that cannot be encoded.")
+    except (ValueError, RecursionError, IndexError, TypeError):
+        logger.warning("[imap] unexpected parse failure (account=%s)", settings.account,
+                       exc_info=True)
+        return None, _json({"error": "imap_protocol_error", "message": _PROTOCOL_ERROR_MESSAGE})
+
+
+def _cap(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _field(value) -> str:
+    """A single-line, bounded text field of a search row."""
+    return _cap(safe_line(value or ""), MAX_SEARCH_FIELD_CHARS)
 
 
 def _join(values) -> str:
@@ -267,7 +319,9 @@ def _join(values) -> str:
 
 
 def _flags(value) -> list[str]:
-    return [str(f) for f in value] if isinstance(value, list) else []
+    if not isinstance(value, list):
+        return []
+    return [_cap(safe_line(str(f)), MAX_FLAG_CHARS) for f in value[:MAX_SEARCH_FLAGS]]
 
 
 # -- imap_list_folders --------------------------------------------------
@@ -306,12 +360,12 @@ async def _handle_list_folders(ctx, args: dict) -> str:
                 try:
                     status = session.status(entry["name"], raw_name=raw_name)
                 except ImapError as exc:
-                    item["status_error"] = exc.message
+                    item["status_error"] = _cap(safe_line(exc.message), 300)
                 except imaplib.IMAP4.abort:
                     raise
                 except (imaplib.IMAP4.error, ValueError) as exc:
                     # e.g. BAD on an odd folder: keep listing the rest.
-                    item["status_error"] = str(exc)[:300]
+                    item["status_error"] = _cap(safe_line(str(exc)), 300)
                 else:
                     item.update(status)
             folders.append(item)
@@ -354,18 +408,35 @@ def _search_terms(args: dict) -> list:
 
 
 def _search_row(uid: int, item: dict) -> dict:
-    env = protocol.decode_envelope(item.get("ENVELOPE"))
-    bs = item.get("BODYSTRUCTURE")
-    return {
-        "uid": uid,
-        "date": env.get("date") or item.get("INTERNALDATE"),
-        "from": _join(env.get("from")),
-        "to": _join(env.get("to")),
-        "subject": env.get("subject") or "",
-        "size": item.get("RFC822.SIZE"),
-        "flags": _flags(item.get("FLAGS")),
-        "has_attachments": protocol.bodystructure_has_attachments(bs) if bs else False,
-    }
+    """One result row; text fields single-line and capped. A message whose
+    ENVELOPE / BODYSTRUCTURE cannot be decoded still gets a row (uid, size,
+    flags, ``parse_error``) instead of failing the whole search."""
+    size = item.get("RFC822.SIZE")
+    size = size if isinstance(size, int) and not isinstance(size, bool) else None
+    try:
+        env = protocol.decode_envelope(item.get("ENVELOPE"))
+        bs = item.get("BODYSTRUCTURE")
+        return {
+            "uid": uid,
+            "date": _field(env.get("date") or item.get("INTERNALDATE")),
+            "from": _field(_join(env.get("from"))),
+            "to": _field(_join(env.get("to"))),
+            "subject": _field(env.get("subject")),
+            "size": size,
+            "flags": _flags(item.get("FLAGS")),
+            "has_attachments": protocol.bodystructure_has_attachments(bs) if bs else False,
+        }
+    except Exception:  # hostile ENVELOPE / BODYSTRUCTURE: keep the other rows
+        logger.info("[imap] could not decode the summary of UID %s", uid, exc_info=True)
+        return {
+            "uid": uid,
+            "size": size,
+            "flags": _flags(item.get("FLAGS")),
+            "parse_error": (
+                "The server's summary of this message could not be decoded; "
+                "fetch it with imap_get_messages."
+            ),
+        }
 
 
 async def _handle_search_messages(ctx, args: dict) -> str:
@@ -421,28 +492,96 @@ def _huge_message_markdown(item: dict, *, folder: str, uid: int, uidvalidity: in
         account=account, flags=_flags(item.get("FLAGS")), replace_urls=False,
     )
     header_block = rendered.split("\n\n---\n\n", 1)[0]
-    size = item.get("RFC822.SIZE") or 0
+    size = item.get("RFC822.SIZE")
+    size = size if isinstance(size, int) and not isinstance(size, bool) else 0
     body = (
         "## Body\n\n"
         f"_[Message is {size:,} bytes, above the {MAX_RENDER_MESSAGE_BYTES // (1024 * 1024)} MB "
         "rendering limit: only the headers and the attachment list are shown.]_"
     )
     try:
-        # Same attachment rule as render.list_attachments.
+        # Same attachment rule (and depth-first order, attached messages not
+        # descended into) as render.list_attachments.
         parts = protocol.bodystructure_attachment_parts(item.get("BODYSTRUCTURE"))
     except (ValueError, RecursionError, IndexError, TypeError):
-        parts = []
-    if parts:
-        lines = ["## Attachments", "",
-                 "_Sizes are encoded (transfer) sizes. Save one with imap_save_attachment "
-                 "using its `filename`._", ""]
-        for part in parts:
-            name = display_name(part["filename"]) if part["filename"] else "(unnamed)"
-            lines.append(f"- **{name}** -- `{safe_mime(part['mime'])}`, ~{part['size']:,} bytes")
-        attachments = "\n".join(lines)
-    else:
+        parts = None
+    if parts is None:
+        attachments = (
+            "## Attachments\n\n_The server's structure summary of this message could not "
+            "be read, so its attachments cannot be listed._"
+        )
+    elif not parts:
         attachments = "## Attachments\n\n_No attachments._"
+    else:
+        if size > MAX_SAVE_MESSAGE_BYTES:
+            note = (
+                "_Listed from the server's structure summary (BODYSTRUCTURE); sizes are "
+                "encoded (transfer) sizes. This message is above the "
+                f"{MAX_SAVE_MESSAGE_BYTES // (1024 * 1024)} MB that imap_save_attachment "
+                "can open, so these attachments cannot be saved._"
+            )
+        else:
+            note = (
+                "_Listed from the server's structure summary (BODYSTRUCTURE); sizes are "
+                "encoded (transfer) sizes. imap_save_attachment downloads the whole message "
+                "and enumerates its parts itself: the attachment_index shown here normally "
+                "matches, but check the filename in its result. Unnamed parts can only be "
+                "saved by attachment_index._"
+            )
+        lines = ["## Attachments", "", note, ""]
+        for index, part in enumerate(parts, 1):
+            name = display_name(part["filename"]) if part["filename"] else "(unnamed)"
+            lines.append(
+                f"- **{name}** -- `{safe_mime(part['mime'])}`, ~{part['size']:,} bytes, "
+                f"attachment_index: `{index}`"
+            )
+        attachments = "\n".join(lines)
     return f"{header_block}\n\n---\n\n{body}\n\n---\n\n{attachments}"
+
+
+_SECTION_SEP = "\n\n---\n\n"
+
+
+def _fit_markdown(markdown: str, limit: int) -> str:
+    """Cut one rendered message to ``limit`` characters: the header block
+    stays, a very long attachment list is cut at a line, and the body gets
+    what is left, with a note saying so."""
+    if len(markdown) <= limit:
+        return markdown
+    head, sep, rest = markdown.partition(_SECTION_SEP)
+    if not sep:
+        return markdown[:limit]
+    body, sep2, attachments = rest.rpartition(_SECTION_SEP)
+    if not sep2:
+        body, attachments = rest, ""
+    max_attachments = limit // 4
+    if len(attachments) > max_attachments:
+        cut = attachments.rfind("\n", 0, max_attachments)
+        attachments = attachments[: max(cut, 0)] + (
+            "\n\n_[Attachment list cut to fit the output limit.]_"
+        )
+    note = (
+        f"\n\n_[Message cut to fit the {MAX_OUTPUT_CHARS:,}-character output limit of one "
+        f"imap_get_messages call: the body shows its first {{shown:,}} of {len(body):,} "
+        "characters. Save attachments with imap_save_attachment; the rest of the body "
+        "cannot be shown.]_"
+    )
+    room = limit - len(head) - len(attachments) - 2 * len(_SECTION_SEP) - len(note) - 20
+    shown = max(0, room)
+    body = body[:shown] + note.format(shown=shown)
+    document = f"{head}{_SECTION_SEP}{body}{_SECTION_SEP}{attachments}" if attachments \
+        else f"{head}{_SECTION_SEP}{body}"
+    return document[:limit]
+
+
+def _budget_error(uid: int) -> dict:
+    return {
+        "uid": uid, "ok": False, "error_code": "imap_output_limit",
+        "error_message": (
+            f"Skipped: this call's output reached the {MAX_OUTPUT_CHARS:,}-character limit; "
+            f"fetch UID {uid} in a separate call."
+        ),
+    }
 
 
 async def _handle_get_messages(ctx, args: dict) -> str:
@@ -506,6 +645,15 @@ async def _handle_get_messages(ctx, args: dict) -> str:
                 })
                 continue
             budget -= len(raw)
+            if len(raw) > MAX_RENDER_MESSAGE_BYTES:
+                # RFC822.SIZE understated the message: never hand it to the
+                # full MIME parser, show it like any other huge message.
+                big = session.uid_fetch(
+                    [uid], "(UID FLAGS RFC822.SIZE BODYSTRUCTURE BODY.PEEK[HEADER])",
+                ).get(uid) or {"FLAGS": got.get("FLAGS", item.get("FLAGS"))}
+                big = {**big, "RFC822.SIZE": len(raw)}
+                fetched.append({"uid": uid, "kind": "huge", "item": big})
+                continue
             fetched.append({
                 "uid": uid, "kind": "full", "raw": bytes(raw),
                 "flags": _flags(got.get("FLAGS", item.get("FLAGS"))),
@@ -518,24 +666,48 @@ async def _handle_get_messages(ctx, args: dict) -> str:
     uidvalidity, fetched = result
 
     def render_all() -> list[dict]:
+        # One message failing to render is a batch error, not a failed call;
+        # rendering stops once the output budget is spent.
         entries: list[dict] = []
+        used = 0
+        rendered_any = False
         for entry in fetched:
             kind = entry.get("kind")
-            if kind == "huge":
-                markdown = _huge_message_markdown(
-                    entry["item"], folder=folder, uid=entry["uid"],
-                    uidvalidity=uidvalidity, account=account,
-                )
-            elif kind == "full":
-                markdown = render_message_markdown(
-                    entry.pop("raw"), folder=folder, uid=entry["uid"],
-                    uidvalidity=uidvalidity, account=account, flags=entry["flags"],
-                    replace_urls=not include_urls, conversation_id=conversation_id,
-                    include_html=include_html,
-                )
-            else:
+            if kind not in ("huge", "full"):
                 entries.append(entry)
                 continue
+            if used >= MAX_OUTPUT_CHARS:
+                entry.pop("raw", None)
+                entries.append(_budget_error(entry["uid"]))
+                continue
+            try:
+                if kind == "huge":
+                    markdown = _huge_message_markdown(
+                        entry["item"], folder=folder, uid=entry["uid"],
+                        uidvalidity=uidvalidity, account=account,
+                    )
+                else:
+                    markdown = render_message_markdown(
+                        entry.pop("raw"), folder=folder, uid=entry["uid"],
+                        uidvalidity=uidvalidity, account=account, flags=entry["flags"],
+                        replace_urls=not include_urls, conversation_id=conversation_id,
+                        include_html=include_html,
+                    )
+            except Exception:
+                logger.warning("[imap] could not render UID %s", entry["uid"], exc_info=True)
+                entries.append({
+                    "uid": entry["uid"], "ok": False, "error_code": "imap_render_failed",
+                    "error_message": f"Message UID {entry['uid']} could not be rendered.",
+                })
+                continue
+            remaining = MAX_OUTPUT_CHARS - used
+            if len(markdown) > remaining:
+                if rendered_any:
+                    entries.append(_budget_error(entry["uid"]))
+                    continue
+                markdown = _fit_markdown(markdown, remaining)
+            used += len(markdown)
+            rendered_any = True
             entries.append({"uid": entry["uid"], "ok": True, "markdown": markdown})
         return entries
 
@@ -585,13 +757,18 @@ async def _handle_get_message_urls(ctx, args: dict) -> str:
                 "conversation); script calls have none."
             ),
         })
-    account = row.get("account") or ""
+    # The same account string imap_get_messages rendered (and keyed) with.
+    settings, error = _settings(row)
+    if error:
+        return error
+    account = settings.account
     key = (
         url_cache_key(account, folder, uidvalidity, uid) if uidvalidity is not None
         else latest_url_cache_key(account, folder, uid)
     )
     try:
-        mapping = _get_cached_url_mapping(conversation_id, key)
+        # SQLite file access: off the event loop.
+        mapping = await asyncio.to_thread(_get_cached_url_mapping, conversation_id, key)
     except ValueError:
         mapping = None
     if not mapping:
@@ -626,9 +803,17 @@ async def _handle_get_message_urls(ctx, args: dict) -> str:
 # -- imap_save_attachment ------------------------------------------------
 
 
-def safe_filename(name: Optional[str], fallback: str) -> str:
+def _utf8_prefix(text: str, max_bytes: int) -> str:
+    """The longest prefix of ``text`` that is at most ``max_bytes`` in UTF-8
+    (never splits a character)."""
+    return text.encode("utf-8")[:max(0, max_bytes)].decode("utf-8", "ignore")
+
+
+def safe_filename(name: Optional[str], fallback: str,
+                  max_bytes: int = _MAX_FILENAME_BYTES) -> str:
     """A single workspace path component: no separators, no leading dots,
-    no control characters, bounded length (extension kept)."""
+    no control characters, at most ``max_bytes`` UTF-8 bytes (extension
+    kept when it is short)."""
     from chat.gemini_api.tool_handlers import _sanitize_workspace_filename
 
     text = "".join(
@@ -637,11 +822,27 @@ def safe_filename(name: Optional[str], fallback: str) -> str:
     text = _sanitize_workspace_filename(text).strip()
     if text in ("", ".", ".."):
         text = fallback
-    if len(text) > _MAX_FILENAME_CHARS:
+    if len(text.encode("utf-8")) > max_bytes:
         stem, ext = os.path.splitext(text)
-        ext = ext[:20]
-        text = stem[: _MAX_FILENAME_CHARS - len(ext)] + ext
+        if len(ext.encode("utf-8")) > _MAX_EXT_BYTES:
+            stem, ext = text, ""
+        text = _utf8_prefix(stem, max_bytes - len(ext.encode("utf-8"))).rstrip() + ext
+        if not text.strip(" .") or text.startswith("."):
+            text = _utf8_prefix(fallback, max_bytes)
     return text
+
+
+def account_dir_name(account: Optional[str]) -> str:
+    """The ``imap-attachments/<account>/`` component. When cleaning changed
+    the account string, a short hash of the original is appended so two
+    accounts that clean to the same text never share a folder."""
+    text = account or ""
+    cleaned = safe_filename(text, "account")
+    if cleaned == text:
+        return cleaned
+    digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:8]
+    base = safe_filename(text, "account", max_bytes=_MAX_FILENAME_BYTES - len(digest) - 1)
+    return f"{base}-{digest}"
 
 
 def _default_attachment_name(index: int, mime: str) -> str:
@@ -671,9 +872,10 @@ def _write_unique(directory: Path, filename: str, data: bytes) -> Path:
 def _pick_attachment(attachments, index: Optional[int], filename: Optional[str]):
     """(attachment, error_message)."""
     available = [
-        {"attachment_index": a.index, "filename": a.filename, "mime": a.mime,
-         "approx_size": a.size}
-        for a in attachments
+        {"attachment_index": a.index,
+         "filename": _cap(a.filename, MAX_SEARCH_FIELD_CHARS) if a.filename else a.filename,
+         "mime": a.mime, "approx_size": a.size}
+        for a in attachments[:MAX_AVAILABLE_LISTED]
     ]
     if not attachments:
         return None, ("This message has no attachments.", available)
@@ -749,6 +951,14 @@ async def _handle_save_attachment(ctx, args: dict) -> str:
                 "imap_message_not_found", f"Message UID {uid} disappeared while fetching.",
                 folder=folder, uid=uid,
             )
+        if len(raw) > MAX_SAVE_MESSAGE_BYTES:
+            # RFC822.SIZE understated the message: the actual bytes decide.
+            raise ImapError(
+                "imap_attachment_too_large",
+                f"The message is {len(raw):,} bytes; attachments above "
+                f"{MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB cannot be saved.",
+                size=len(raw),
+            )
         return uidvalidity, bytes(raw)
 
     fetched, error = await _run(settings, work)
@@ -790,9 +1000,11 @@ async def _handle_save_attachment(ctx, args: dict) -> str:
     default_name = result["filename"] or _default_attachment_name(result["index"], result["mime"])
     target_name = safe_filename(save_as or default_name, _default_attachment_name(
         result["index"], result["mime"]))
-    account_dir = safe_filename(settings.account, "account")
-    try:
-        root = (await tool_handlers.conversation_workspace_dir(conversation_id)).resolve()
+    account_dir = account_dir_name(settings.account)
+
+    def save(root_dir: Path) -> tuple[Path, Path]:
+        # Filesystem work: off the event loop.
+        root = root_dir.resolve()
         directory = root / ATTACHMENTS_DIR / account_dir
         for component in (root / ATTACHMENTS_DIR, directory):
             if component.is_symlink():
@@ -800,9 +1012,11 @@ async def _handle_save_attachment(ctx, args: dict) -> str:
         directory.mkdir(parents=True, exist_ok=True)
         resolved_dir = directory.resolve()
         resolved_dir.relative_to(root)  # ValueError if a symlink escaped
-        written = await asyncio.to_thread(
-            _write_unique, resolved_dir, target_name, result["data"],
-        )
+        return root, _write_unique(resolved_dir, target_name, result["data"])
+
+    try:
+        workspace_dir = await tool_handlers.conversation_workspace_dir(conversation_id)
+        root, written = await asyncio.to_thread(save, workspace_dir)
     except ValueError:
         return _json({
             "error": "invalid_destination",

@@ -38,7 +38,7 @@ _PLUGIN_DIR = Path(__file__).parent
 _EXAMPLE_ACCOUNT = "work@example.com"
 _NO_CONNECTIONS = (
     "_No IMAP mailbox is connected yet. The user adds one in Settings > Data "
-    "Connections; until then every imap_* tool returns `imap_not_connected`._"
+    "Connections; until then the imap_* tools cannot reach any mailbox._"
 )
 
 

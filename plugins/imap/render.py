@@ -44,7 +44,10 @@ Decisions worth knowing:
 * Header values, the identity lines, flags, filenames and MIME types are
   single-line safe: C0/C1 controls, U+2028/U+2029 and bidi controls become
   spaces. Headers are decoded once (``policy=default`` already decodes
-  RFC 2047; only the raw fallback decodes by hand).
+  RFC 2047; only the raw fallback decodes by hand). Each header line is
+  capped at ``MAX_HEADER_LINE_CHARS`` and each listed filename at
+  ``MAX_LISTED_NAME_CHARS`` (an ellipsis marks the cut), so a hostile
+  10 MB ``To:`` cannot flood the model's context.
 * Hostile or broken MIME never raises: unknown charsets fall back to UTF-8
   with replacement, unknown transfer encodings yield the raw payload, the
   part walk is iterative and bounded (``MAX_PARTS`` parts, ``MAX_DEPTH``
@@ -91,6 +94,8 @@ MAX_DEPTH = 64
 MAX_RENDER_RAW_BYTES = 25 * 1024 * 1024
 MAX_BOUNDARY_LINES = 2000
 _HEADER_ONLY_BYTES = 256 * 1024
+MAX_HEADER_LINE_CHARS = 2000
+MAX_LISTED_NAME_CHARS = 500
 
 _BODY_TYPES = ("text/plain", "text/html")
 
@@ -188,11 +193,16 @@ def _get_header(msg: Message, name: str) -> str:
     return ""
 
 
+def _cap_text(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
 def display_name(name) -> str:
-    """A filename for the bold ``**name**`` slot of a listing: single-line
-    and with the markdown-active ``\\``, ``*`` and backtick escaped
-    (``imap_save_attachment`` also accepts this escaped spelling)."""
-    return safe_line(name).translate(_NAME_ESCAPES)
+    """A filename for the bold ``**name**`` slot of a listing: single-line,
+    capped at ``MAX_LISTED_NAME_CHARS`` and with the markdown-active ``\\``,
+    ``*`` and backtick escaped (``imap_save_attachment`` also accepts this
+    escaped spelling; a cut name is saved by ``attachment_index``)."""
+    return _cap_text(safe_line(name), MAX_LISTED_NAME_CHARS).translate(_NAME_ESCAPES)
 
 
 def safe_mime(mime) -> str:
@@ -750,7 +760,7 @@ def render_message_markdown(
         header_lines.append(f"Flags: {', '.join(clean_flags) if clean_flags else '(none)'}")
     if replaced_url_count is not None:
         header_lines.append(f"Replaced URL count: {replaced_url_count}")
-    header_block = "\n".join(header_lines)
+    header_block = "\n".join(_cap_text(line, MAX_HEADER_LINE_CHARS) for line in header_lines)
 
     # --- Attachments -------------------------------------------------------
     if problem is not None:

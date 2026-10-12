@@ -536,7 +536,7 @@ class TestSaveAttachment:
     def test_unnamed_attachment_and_long_name(self, fake_imap, workspace):
         assert tools_mod.safe_filename("", "attachment-2.bin") == "attachment-2.bin"
         long = tools_mod.safe_filename("a" * 400 + ".pdf", "x")
-        assert len(long) <= 180 and long.endswith(".pdf")
+        assert len(long.encode("utf-8")) <= 200 and long.endswith(".pdf")
 
     def test_symlinked_destination_refused(self, fake_imap, workspace, tmp_path):
         root, _ = workspace
