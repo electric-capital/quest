@@ -353,6 +353,7 @@ async def _tool_authed_get(ctx: ToolContext, args: dict) -> str:
         conversation_id=ctx.conversation_id,
         project_id=ctx.project_id,
         output_file=args.get("output_file"),
+        connection=args.get("connection"),
     )
 
 
@@ -364,6 +365,7 @@ async def _tool_authed_post(ctx: ToolContext, args: dict) -> str:
         conversation_id=ctx.conversation_id,
         project_id=ctx.project_id,
         output_file=args.get("output_file"),
+        connection=args.get("connection"),
     )
 
 
@@ -470,6 +472,7 @@ async def _tool_load_skills(ctx: ToolContext, args: dict) -> str:
         base_url=get_proxy_base_url(),
         api_key=ctx.user.get("api_key", ""),
         conversation_id=ctx.conversation_id,
+        user=ctx.user,
     )
 
 

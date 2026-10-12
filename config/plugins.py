@@ -41,7 +41,8 @@ Namespacing rules enforced at load time:
   ``description`` / ``account`` / ``connection``; ``multi_connection``
   oauth / api_key specs need ``account_from``; ``connection_limit`` in
   1..50; every tool of a multi-connection plugin declares a
-  ``connection`` parameter.
+  ``connection`` parameter and every one of its authed_get service
+  entries sets ``accepts_connection`` (which no other plugin may set).
 
 Plugins do NOT mount ``/api/*`` HTTP routes (see config/plugin_types.py)
 -- bespoke behavior lives in ``tools`` handlers instead. The one
@@ -432,6 +433,27 @@ def validate_plugin(plugin: QuestPlugin, existing_ids: set[str]) -> None:
             raise ValueError(
                 f"Plugin {pid!r} services entries must be "
                 "{'key': '<hostname[/prefix]>', 'entry': {...}} dicts"
+            )
+        # authed_get's ``connection`` argument reaches a service's loader
+        # only when its entry sets ``accepts_connection``. A multi-connection
+        # plugin must opt every entry in (no half-converted services); any
+        # other plugin must not (single-connection loaders keep their
+        # ``(user)`` signature -- invariant 5). register_service checks the
+        # loader's signature.
+        multi = bool(
+            plugin.user_connection is not None
+            and plugin.user_connection.multi_connection
+        )
+        accepts = bool(service["entry"].get("accepts_connection"))
+        if multi and not accepts:
+            raise ValueError(
+                f"Plugin {pid!r} is multi_connection but authed_get service "
+                f"{service['key']!r} does not set 'accepts_connection': True"
+            )
+        if accepts and not multi:
+            raise ValueError(
+                f"Plugin {pid!r} authed_get service {service['key']!r} sets "
+                "'accepts_connection' but the plugin is not multi_connection"
             )
 
 
