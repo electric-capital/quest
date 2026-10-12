@@ -26,6 +26,7 @@ from auth import (
     airtable_router,
     ramp_router,
     service_key_router,
+    connections_router,
     dev_login_router,
     password_login_router,
 )
@@ -388,6 +389,9 @@ app.include_router(airtable_router)
 app.include_router(ramp_router)
 # Generic per-user API key routes for plugin services (auth/service_key.py)
 app.include_router(service_key_router)
+# Generic per-connection routes for multi-connection plugin services
+# (auth/connections.py)
+app.include_router(connections_router)
 app.include_router(dev_login_router)
 # Email/password sign-in (active only when server_config.json login_method
 # is "password"; auth/password_login.py)
