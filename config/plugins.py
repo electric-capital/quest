@@ -163,6 +163,29 @@ def plugin_server_available(plugin: QuestPlugin) -> bool:
         return False
 
 
+def plugin_is_connectionless(plugin: QuestPlugin) -> bool:
+    """Whether a plugin has nothing to connect, server-side or per-user.
+
+    A plugin that declares neither a ``credential_schema`` (no admin card)
+    nor a ``user_connection`` (no Data Connections row) wraps a free,
+    public upstream -- the in-tree SEC EDGAR plugin -- and is reachable by
+    every user of every deployment. Its ``connected_services`` key is
+    therefore always true, which must not read as the user having
+    connected something: GET /me's ``has_any_service_connected`` (the
+    first-run "open Settings" nudge) skips these ids like the capability
+    pseudo-keys. Such a plugin's skills are normally ungated
+    (``requires=None``), its tools unadvertised-gated (no
+    ``requires_service``).
+    """
+    return not plugin.credential_schema and plugin.user_connection is None
+
+
+def connectionless_plugin_ids() -> frozenset[str]:
+    """Ids of the loaded plugins with nothing to connect (see
+    :func:`plugin_is_connectionless`)."""
+    return frozenset(p.id for p in _LOADED if plugin_is_connectionless(p))
+
+
 def _extra_plugin_roots() -> list[Path]:
     """Extra plugin search roots from the QUEST_PLUGIN_PATH env var.
 

@@ -314,7 +314,7 @@ The `_SERVICE_REGISTRY` dict in `chat/gemini_api/authed_get.py` maps API hostnam
 - Google Calendar, Google Drive, Google Docs, Gmail, Google Sheets, Google Slides (read-only), Google Tasks, the four Google Cloud (GCP) hosts (Resource Manager, Compute Engine, GKE/Container, Cloud Logging -- all read-only; see [GCP API Documentation](../api/gcp-api.md)) (all per-user OAuth with 401 retry)
 - Airtable (per-user PAT with `allowed_endpoints` validation)
 - GitHub (per-user OAuth token without 401 retry, with `allowed_endpoints` validation and service `default_headers`)
-- the no-auth Federal Register / SEC EDGAR hosts
+- the no-auth Federal Register host (the no-auth SEC EDGAR hosts are plugin-registered -- see [SEC EDGAR API](../../plugins/sec_edgar/docs/sec-edgar-api.md))
 
 See the registry entries in `chat/gemini_api/authed_get.py` for exact hostnames, credential loaders, and auth injection functions.
 

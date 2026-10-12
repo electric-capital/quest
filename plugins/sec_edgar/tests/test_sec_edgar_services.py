@@ -1,10 +1,14 @@
-"""Tests for the SEC EDGAR entry in the ``authed_get`` registry.
+"""Tests for the SEC EDGAR plugin's two ``authed_get`` service entries.
 
-The SEC EDGAR data API (host ``data.sec.gov``) is a free, public,
-UNAUTHENTICATED US government API. It is modelled as a no-auth service: a sync
-no-arg loader returning ``None``, a no-op auth injector, ``requires_user`` left
-unset, and a plain-hostname registry entry keyed ``data.sec.gov`` (no
-``path_prefix`` -- path gating is done entirely by ``allowed_endpoints``).
+``data.sec.gov`` and ``www.sec.gov`` are registered by the plugin
+(plugins/sec_edgar), so every test here runs with it registered via the
+autouse fixture below.
+
+The SEC EDGAR data API is a free, public, UNAUTHENTICATED US government API.
+It is modelled as a no-auth service: a sync no-arg loader returning ``None``,
+a no-op auth injector, ``requires_user`` left unset, and a plain-hostname
+registry entry keyed ``data.sec.gov`` (no ``path_prefix`` -- path gating is
+done entirely by ``allowed_endpoints``).
 
 The single SEC-specific detail: SEC's fair-access policy returns HTTP 403 to
 requests lacking a descriptive ``User-Agent``, so the entry carries a
@@ -23,6 +27,7 @@ Covers:
   denied. Both resolve via the plain-hostname fallback in ``_find_service``.
 * A mocked request succeeds with exactly one HTTP call and injects NO
   ``Authorization`` header, while the ``User-Agent`` default header is present.
+* Unregistered (plugin not loaded), neither host resolves at all.
 
 All HTTP calls are mocked -- no real network traffic.
 """
@@ -38,10 +43,22 @@ from chat.gemini_api.authed_get import (
     _find_service,
     _make_authed_request,
 )
+from plugins.sec_edgar.manifest import (
+    DATA_HOST,
+    FILES_HOST,
+    inject_no_auth,
+    load_sec_edgar_credentials,
+)
 
 
-_SEC_KEY = "data.sec.gov"
-_SEC_FILES_KEY = "www.sec.gov"
+_SEC_KEY = DATA_HOST
+_SEC_FILES_KEY = FILES_HOST
+
+
+@pytest.fixture(autouse=True)
+def _register_plugin(sec_edgar_plugin):
+    """All tests here exercise the plugin-registered registry entries."""
+    yield
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +117,16 @@ class TestSecEdgarRegistryEntry:
         assert entry["name"] == "SEC EDGAR"
         # Plain hostname key: no path_prefix (gating is by allowed_endpoints).
         assert "path_prefix" not in entry
+        # The plugin's own loader / injector.
+        assert entry["load_credentials"] is load_sec_edgar_credentials
+        assert entry["inject_auth"] is inject_no_auth
+
+    def test_entry_has_no_post_allow_list(self):
+        """Read-only by construction: GET paths only."""
+        for key in (_SEC_KEY, _SEC_FILES_KEY):
+            entry = _SERVICE_REGISTRY[key]
+            assert "allowed_post_endpoints" not in entry
+            assert "_allowed_post_endpoints" not in entry
 
     def test_entry_is_no_auth(self):
         """No per-user requirement and no token-refresh retry -- it's public."""
@@ -257,6 +284,20 @@ class TestSecEdgarServiceLookup:
         service2 = _find_service("www.sec.gov", "/files/company_tickers_exchange.json")
         assert service2 is not None
         assert "SEC EDGAR" in service2["name"]
+
+    def test_hosts_unreachable_while_plugin_is_not_loaded(self, sec_edgar_plugin):
+        """The two hosts exist only through the plugin: unregister -> gone."""
+        from config import plugins as plugins_mod
+        plugins_mod.unregister_plugin(sec_edgar_plugin)
+        try:
+            assert _find_service("data.sec.gov", "/submissions/CIK0000320193.json") is None
+            assert _find_service("www.sec.gov", "/files/company_tickers.json") is None
+            assert _SEC_KEY not in _SERVICE_REGISTRY
+            assert _SEC_FILES_KEY not in _SERVICE_REGISTRY
+        finally:
+            # Re-register so the fixture's own teardown unregisters cleanly.
+            plugins_mod.register_plugin(sec_edgar_plugin)
+            plugins_mod._LOADED.append(sec_edgar_plugin)
 
 
 # ---------------------------------------------------------------------------

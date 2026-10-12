@@ -123,21 +123,6 @@ def _load_federal_register_credentials() -> None:
     return None
 
 
-def _load_sec_edgar_credentials() -> None:
-    """Load credentials for the SEC EDGAR data API: there are none.
-
-    The SEC EDGAR data API (host ``data.sec.gov``) is a free, public,
-    unauthenticated US government API. Modelled as a no-auth service: a sync,
-    no-arg loader returning ``None`` (matching ``load_coingecko_api_key``'s call
-    shape). ``requires_user`` is NOT set on the registry entry, so
-    ``_make_authed_request`` invokes this with no args and a ``None`` return
-    flows past the missing-credentials guard. SEC's fair-access policy requires
-    a descriptive ``User-Agent`` on every request; that is supplied via the
-    entry's ``default_headers``, not here.
-    """
-    return None
-
-
 # Ramp developer-API resources reachable read-only via authed_get. Each name
 # expands to a regex allowing that resource root and any sub-path beneath it
 # (list + detail + nested reads, UUID id segments). Only GETs consult
@@ -407,7 +392,8 @@ _SERVICE_REGISTRY: dict[str, dict[str, Any]] = {
         ],
     },
     # The GitHub entry ("api.github.com") is plugin-registered
-    # (plugins/github) via register_service().
+    # (plugins/github) via register_service(), as are the SEC EDGAR entries
+    # ("data.sec.gov" + "www.sec.gov", plugins/sec_edgar).
     # Federal Register API: free, public, UNAUTHENTICATED US government API.
     # Path-scoped to /api/v1 so authed_get cannot proxy arbitrary
     # www.federalregister.gov (human website) URLs. No-auth service: the loader
@@ -434,55 +420,6 @@ _SERVICE_REGISTRY: dict[str, dict[str, Any]] = {
             r"^/api/v1/agencies/[^/]+$",                                 # single agency (slug or numeric id)
             r"^/api/v1/suggested_searches$",                            # suggested searches list
             r"^/api/v1/suggested_searches/[^/]+$",                      # single suggested search
-        ],
-    },
-    # SEC EDGAR data API: free, public, UNAUTHENTICATED US government API on the
-    # dedicated data host data.sec.gov. No-auth service: the loader returns None
-    # and the injector is a no-op (requires_user left unset so the None
-    # credential is not treated as an error). A plain hostname key (no
-    # path_prefix) is used because data.sec.gov serves multiple distinct path
-    # roots (/submissions/, /api/xbrl/...); path gating is done entirely by the
-    # allowed_endpoints regexes. The ticker->CIK file company_tickers.json lives
-    # on www.sec.gov, which is intentionally NOT registered.
-    "data.sec.gov": {
-        "name": "SEC EDGAR",
-        "load_credentials": _load_sec_edgar_credentials,
-        "inject_auth": _inject_no_auth,
-        # SEC's fair-access policy returns HTTP 403 to requests lacking a
-        # descriptive User-Agent (format: name + contact). This is injected as a
-        # default header (below caller headers in precedence), mirroring GitHub
-        # and Federal Register. Includes a contact token per SEC policy.
-        "default_headers": {
-            "User-Agent": "Quest/1.0 (admin@quest.example)",
-        },
-        "allowed_endpoints": [
-            # CIK is 10-digit zero-padded (e.g. CIK0000320193).
-            r"^/submissions/CIK\d{10}\.json$",                                  # primary entity submission/filing history
-            r"^/submissions/CIK\d{10}-submissions-\d+\.json$",                  # older-filings spillover for large filers
-            r"^/api/xbrl/companyconcept/CIK\d{10}/[^/]+/[^/]+\.json$",          # one concept's time series for one entity
-            r"^/api/xbrl/companyfacts/CIK\d{10}\.json$",                        # all XBRL facts for one entity (large)
-            r"^/api/xbrl/frames/[^/]+/[^/]+/[^/]+/CY\d{4}(Q[1-4]I?)?\.json$",   # one concept+unit across entities for a period
-        ],
-    },
-    # SEC EDGAR ticker->CIK map files on the www.sec.gov host. The submissions
-    # and XBRL calls above require a 10-digit CIK, but the only public ticker->CIK
-    # mapping lives in two static JSON files on www.sec.gov. This entry narrowly
-    # allow-lists EXACTLY those two files so the agent can resolve a ticker to a
-    # CIK itself. Same no-auth modeling as data.sec.gov: None loader, no-op
-    # injector, requires_user unset, and the SEC User-Agent default header. The
-    # rest of www.sec.gov (the human site, /cgi-bin/browse-edgar, other /files/)
-    # remains NOT proxied -- the allowed_endpoints regexes match only these two.
-    "www.sec.gov": {
-        "name": "SEC EDGAR (files)",
-        "load_credentials": _load_sec_edgar_credentials,
-        "inject_auth": _inject_no_auth,
-        # Same SEC fair-access User-Agent requirement as data.sec.gov.
-        "default_headers": {
-            "User-Agent": "Quest/1.0 (admin@quest.example)",
-        },
-        "allowed_endpoints": [
-            r"^/files/company_tickers\.json$",           # ticker -> CIK + company name
-            r"^/files/company_tickers_exchange\.json$",  # same, with exchange info
         ],
     },
     # Ramp developer API: per-user OAuth Bearer token. Ramp access tokens

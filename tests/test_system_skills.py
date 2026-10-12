@@ -41,8 +41,8 @@ NONE_CONNECTED = {k: False for k in ALL_CONNECTED}
 # ---------------------------------------------------------------------------
 
 def test_catalog_is_non_empty():
-    # 13 connection-gated backend + 2 ungated backends (federal_register,
-    # sec_edgar) + 4 cross-cutting.
+    # 13 connection-gated backend + 1 ungated backend (federal_register;
+    # sec_edgar is plugin-registered) + 4 cross-cutting.
     assert len(CATALOG) >= 12
 
 
@@ -199,28 +199,6 @@ def test_federal_register_skill_is_ungated_and_loadable():
     assert len(results) == 1
     entry = results[0]
     assert entry["id"] == "system:federal_register"
-    assert "error" not in entry
-    assert "content" in entry and entry["content"].strip()
-
-
-def test_sec_edgar_skill_is_ungated_and_loadable():
-    # The SEC EDGAR data API is free/public, so its skill carries no `requires`
-    # gate: it must be present in the catalog, visible even with nothing
-    # connected and outside a project, and loadable (content, no error).
-    assert "system:sec_edgar" in CATALOG
-    assert CATALOG["system:sec_edgar"].requires is None
-
-    visible_ids = {
-        s.id for s in list_system_skills(NONE_CONNECTED, has_project=False)
-    }
-    assert "system:sec_edgar" in visible_ids
-
-    results = load_system_skills(
-        ["system:sec_edgar"], NONE_CONNECTED, BASE_URL, API_KEY,
-    )
-    assert len(results) == 1
-    entry = results[0]
-    assert entry["id"] == "system:sec_edgar"
     assert "error" not in entry
     assert "content" in entry and entry["content"].strip()
 

@@ -100,7 +100,7 @@ plugins/
 
 ## Reference plugin
 
-Ten in-tree implementations (proprietary integrations can live in
+Eleven in-tree implementations (proprietary integrations can live in
 external repos and load via `QUEST_PLUGIN_PATH`):
 
 - `plugins/github/` — the GitHub integration (plugin id `github`) with a
@@ -200,6 +200,16 @@ external repos and load via `QUEST_PLUGIN_PATH`):
   (`tskey-client-...`, exchanged for a cached short-lived access token by
   the credential loader); one GET-only `authed_get` entry and the
   `system:tailscale` skill. Read side only.
+- `plugins/sec_edgar/` — the SEC EDGAR integration (plugin id `sec_edgar`):
+  the **credential-free** shape -- no admin card and no user connection at
+  all, because the SEC EDGAR data API is a free, public, unauthenticated
+  US government service. Two GET-only no-auth `authed_get` entries
+  (`data.sec.gov` for submissions + XBRL facts, `www.sec.gov` for exactly
+  the two ticker->CIK map files, both carrying SEC's required `User-Agent`)
+  and the **ungated** (`requires=None`) `system:sec_edgar` skill; no tools,
+  no action requests. Its `connected_services` key is always true, so
+  `GET /me`'s `has_any_service_connected` skips plugins of this shape
+  (`config.plugins.connectionless_plugin_ids()`).
 
 Each `plugin.py` is a thin re-export of `manifest.py` so tests import
 the real modules through the normal `plugins.<id>.*` package path.
@@ -258,7 +268,7 @@ their `tests/` directories too (repo-root `conftest.py`). See
 Upstream gitignores `plugins/*` except this README, `.gitkeep`,
 `_example/`, and the in-tree `github/`,
 `m365/`, `slack/`, `twitter/`, `twilio/`, `unifi/`, `iru/`, `telegram/`,
-`google_admin/`, and `tailscale/` plugins. A fork
+`google_admin/`, `tailscale/`, and `sec_edgar/` plugins. A fork
 that ships proprietary plugins should remove or override those ignore
 lines in the fork and commit its plugin directories as ordinary files —
 there is no upstream merge surface either way.

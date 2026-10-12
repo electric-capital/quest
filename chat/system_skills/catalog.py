@@ -19,7 +19,6 @@ from api import (
     federal_register as federal_register_api,
     gcp as gcp_api,
     ramp as ramp_api,
-    sec_edgar as sec_edgar_api,
     sheets as sheets_api,
     slides as slides_api,
     tasks as tasks_api,
@@ -1294,16 +1293,8 @@ _register(SystemSkill(
     content_builder=lambda base_url, _api_key: federal_register_api.get_instructions(base_url),
 ))
 
-# Ungated: the SEC EDGAR data API is free/public and needs no connection, so
-# requires=None makes this skill always visible/loadable.
-_register(SystemSkill(
-    id="system:sec_edgar",
-    name="SEC EDGAR",
-    description="Read SEC EDGAR company submissions and XBRL financial facts via authed_get (no auth).",
-    when_to_load="Load when the user asks about SEC filings, 10-K/10-Q, company financials, or EDGAR data.",
-    requires=None,
-    content_builder=lambda base_url, _api_key: sec_edgar_api.get_instructions(base_url),
-))
+# system:sec_edgar is registered by the in-tree SEC EDGAR plugin
+# (plugins/sec_edgar) via register_system_skill().
 
 # Cross-cutting skills (always available -- gates apply only to backend skills)
 _register(SystemSkill(

@@ -56,7 +56,7 @@ def test_exact_host_with_unscoped_path_falls_through():
 
 def test_plain_hostname_fallback_unaffected():
     assert _find_service("docs.googleapis.com", "/v1/documents/abc")["name"] == "Google Docs"
-    assert _find_service("data.sec.gov", "/submissions/CIK0000320193.json")["name"] == "SEC EDGAR"
+    assert _find_service("api.airtable.com", "/v0/meta/bases")["name"] == "Airtable"
 
 
 class _CapturingAsyncClient:

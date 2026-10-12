@@ -1,36 +1,11 @@
-"""SEC EDGAR data API instructions for the system prompt.
-
-SEC EDGAR reads are handled via the ``authed_get`` tool, which makes GET
-requests directly to the public SEC EDGAR data API at
-``https://data.sec.gov/...``. The API is free and requires NO authentication,
-so no connection or credential setup is needed. SEC's fair-access policy does
-require a descriptive ``User-Agent`` on every request; the server injects one
-automatically (the model does not set it).
-
-In addition to ``data.sec.gov``, the two static ticker->CIK map files on
-``www.sec.gov`` (``/files/company_tickers.json`` and
-``/files/company_tickers_exchange.json``) are allow-listed so the agent can
-resolve a stock ticker to the 10-digit CIK every data.sec.gov call requires.
-The rest of ``www.sec.gov`` remains not proxied.
-"""
-
-SEC_EDGAR_API_BASE = "https://data.sec.gov"
-
-
-# ---------------------------------------------------------------------------
-# Instruction text for the SEC EDGAR data API
-# ---------------------------------------------------------------------------
-
-def get_instructions(base_url: str) -> str:
-    """SEC EDGAR data API documentation section (accessed via authed_get)."""
-    return f"""## SEC EDGAR API (via authed_get)
+## SEC EDGAR API (via authed_get)
 
 Search and read public company submission/filing history and XBRL financial
 data from the US Securities and Exchange Commission's EDGAR system. The SEC
 EDGAR data API is free, public, and requires **NO authentication**. Access it
 with `authed_get` using the full API URL on host `data.sec.gov`.
 
-**Base URL:** `{SEC_EDGAR_API_BASE}`
+**Base URL:** `https://data.sec.gov`
 
 **CIK (Central Index Key) -- must be 10-digit zero-padded:** Every
 `data.sec.gov` path takes a CIK in the form `CIK0000320193` (Apple). The CIK
@@ -92,19 +67,19 @@ Do not loop requests aggressively.
 
 ```
 # Resolve a ticker to a CIK: fetch the (large) ticker->CIK map to the workspace
-tool_call(tool_name="authed_get", arguments={{"url": "https://www.sec.gov/files/company_tickers.json", "output_file": "company_tickers.json"}})
+tool_call(tool_name="authed_get", arguments={"url": "https://www.sec.gov/files/company_tickers.json", "output_file": "company_tickers.json"})
 
 # Submissions / filing history for one CIK (big filers likely need output_file)
-tool_call(tool_name="authed_get", arguments={{"url": "{SEC_EDGAR_API_BASE}/submissions/CIK0000320193.json", "output_file": "aapl_submissions.json"}})
+tool_call(tool_name="authed_get", arguments={"url": "https://data.sec.gov/submissions/CIK0000320193.json", "output_file": "aapl_submissions.json"})
 
 # A single company concept (one metric's time series)
-tool_call(tool_name="authed_get", arguments={{"url": "{SEC_EDGAR_API_BASE}/api/xbrl/companyconcept/CIK0000320193/us-gaap/Revenues.json"}})
+tool_call(tool_name="authed_get", arguments={"url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0000320193/us-gaap/Revenues.json"})
 
 # All XBRL facts for one entity -- large, so stream it to the workspace
-tool_call(tool_name="authed_get", arguments={{"url": "{SEC_EDGAR_API_BASE}/api/xbrl/companyfacts/CIK0000320193.json", "output_file": "aapl_facts.json"}})
+tool_call(tool_name="authed_get", arguments={"url": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json", "output_file": "aapl_facts.json"})
 
 # A frames query: one concept+unit across all entities for a period (I = instantaneous)
-tool_call(tool_name="authed_get", arguments={{"url": "{SEC_EDGAR_API_BASE}/api/xbrl/frames/us-gaap/AccountsPayableCurrent/USD/CY2023Q1I.json", "output_file": "frame.json"}})
+tool_call(tool_name="authed_get", arguments={"url": "https://data.sec.gov/api/xbrl/frames/us-gaap/AccountsPayableCurrent/USD/CY2023Q1I.json", "output_file": "frame.json"})
 ```
 
 **Important Notes:**
@@ -117,4 +92,4 @@ tool_call(tool_name="authed_get", arguments={{"url": "{SEC_EDGAR_API_BASE}/api/x
 - Frames period token format: `CY####`, `CY####Q#`, or `CY####Q#I` (`I` = instantaneous).
 - SEC requires a descriptive `User-Agent` on every request; the server injects
   one automatically, so you do **not** set it.
-- Developer reference: `https://www.sec.gov/search-filings/edgar-application-programming-interfaces`"""
+- Developer reference: `https://www.sec.gov/search-filings/edgar-application-programming-interfaces`

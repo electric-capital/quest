@@ -275,12 +275,12 @@ class TestConnectionNotSupported:
         calls: list = []
         with _mock_httpx(calls):
             out = _run(_make_authed_request(
-                "https://data.sec.gov/submissions/CIK0000320193.json",
+                "https://www.federalregister.gov/api/v1/agencies",
                 connection="someone@example.com",
             ))
         assert json.loads(out) == {
             "error": "connection_not_supported",
-            "service": _SERVICE_REGISTRY["data.sec.gov"]["name"],
+            "service": _SERVICE_REGISTRY["www.federalregister.gov/api/v1"]["name"],
         }
         assert calls == []
 

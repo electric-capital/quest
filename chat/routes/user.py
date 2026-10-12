@@ -176,17 +176,21 @@ async def get_current_user_info(user: dict = Depends(get_current_user_cookie_or_
         Dictionary with email, name, google_services_connected, and has_any_service_connected flags
     """
     from config.feature_gates import enabled_features
+    from config.plugins import connectionless_plugin_ids
     from api.instructions import PSEUDO_SERVICE_KEYS, get_user_connected_services
 
     # One roster for every service -- core and plugin alike -- so the
     # aggregate can't drift out of sync with new services (the old
     # hand-written OR silently missed twitter and airtable). Capability
     # pseudo-keys (e.g. "docs", the Quest Docs feature gate) gate tools
-    # like a service but are not connections, so they never count.
+    # like a service but are not connections, so they never count; neither
+    # do plugins with nothing to connect (no admin card, no per-user row --
+    # e.g. the free SEC EDGAR API), whose key is always true.
     connected_services = get_user_connected_services(user)
+    never_connections = PSEUDO_SERVICE_KEYS | connectionless_plugin_ids()
     has_any_service_connected = any(
         connected for key, connected in connected_services.items()
-        if key not in PSEUDO_SERVICE_KEYS
+        if key not in never_connections
     )
 
     is_impersonating = "_impersonator_uid" in user
