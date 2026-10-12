@@ -89,6 +89,14 @@ def get_plugin() -> QuestPlugin:
                 type="textarea",
                 required=True,
                 placeholder="imap.example.com\nmail.example.org:993",
+                help=(
+                    "One server per line as a hostname, optionally followed by "
+                    ":port (for example imap.example.com or mail.example.org:993). "
+                    "A line without a port allows both 993 (TLS) and 143 (STARTTLS). "
+                    "Users can only connect their mailboxes to servers listed here, "
+                    "always over verified TLS. Removing a server disables the "
+                    "connections that use it."
+                ),
             ),
         ),
         is_configured=imap_is_configured,

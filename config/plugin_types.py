@@ -44,12 +44,17 @@ class CredentialField:
     ``field_options()`` hook, in which case ``options`` may stay empty.
     The same type is reused for both the admin card and ``form``-kind
     user connections.
+
+    ``help`` is optional guidance rendered under the field's label (what
+    the input should look like, what each line means); plain text, no
+    markup.
     """
 
     key: str
     label: str
     type: Literal["text", "secret", "bool", "textarea", "select"]
     placeholder: str = ""
+    help: str = ""
     required: bool = False
     required_if: Optional[str] = None
     visible_if: Optional[str] = None

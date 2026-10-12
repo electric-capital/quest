@@ -137,6 +137,40 @@ describe('SchemaForm', () => {
     expect((screen.getByLabelText(/Notes/) as HTMLTextAreaElement).disabled).toBe(true);
   });
 
+  it('renders help text under the label and links it to the control', () => {
+    const fields: SchemaFormField[] = [
+      { key: 'hosts', label: 'Allowed servers', type: 'textarea', placeholder: '', required: true, help: 'One server per line.' },
+      { key: 'name', label: 'Name', type: 'text', placeholder: '', required: false, help: 'Shown to the assistant.' },
+      { key: 'kind', label: 'Kind', type: 'select', placeholder: '', required: false, options: ['a'], help: 'Pick one.' },
+      { key: 'on', label: 'On', type: 'bool', placeholder: '', required: false, help: 'Toggle it.' },
+      { key: 'plain', label: 'Plain', type: 'text', placeholder: '', required: false },
+    ];
+    const Local = () => {
+      const [values, setValues] = useState<SchemaFormValues>(() => initialSchemaValues(fields));
+      return (
+        <SchemaForm
+          fields={fields}
+          values={values}
+          onChange={(k, v) => setValues((prev) => ({ ...prev, [k]: v }))}
+          idPrefix="h"
+          errors={{ hosts: 'Bad line' }}
+        />
+      );
+    };
+    render(<Local />);
+    const hosts = screen.getByLabelText('Allowed servers');
+    expect(screen.getByText('One server per line.').getAttribute('id')).toBe('h-hosts-help');
+    // Help and error both describe the control.
+    expect(hosts.getAttribute('aria-describedby')).toBe('h-hosts-help h-hosts-error');
+    expect(screen.getByLabelText(/^Name/).getAttribute('aria-describedby')).toBe('h-name-help');
+    expect(screen.getByLabelText(/^Kind/).getAttribute('aria-describedby')).toBe('h-kind-help');
+    expect(screen.getByLabelText('On').getAttribute('aria-describedby')).toBe('h-on-help');
+    expect(screen.getByText('Toggle it.')).toBeTruthy();
+    // No help: no paragraph and no describedby.
+    expect(screen.getByLabelText(/^Plain/).getAttribute('aria-describedby')).toBeNull();
+    expect(document.querySelectorAll('.svc-cred-help')).toHaveLength(4);
+  });
+
   it('shows per-field errors linked to their control', () => {
     render(<Harness errors={{ host: 'Not one of the allowed choices.', password: 'This field is required.' }} />);
     const host = screen.getByLabelText('IMAP server');

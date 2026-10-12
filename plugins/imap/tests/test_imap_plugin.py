@@ -8,7 +8,7 @@ import pytest
 
 import chat.routes.user as user_routes
 from config import plugins as plugins_mod
-from config.service_specs import get_service_spec, resolve_update
+from config.service_specs import fields_view, get_service_spec, resolve_update
 
 PLUGIN_PY = Path(__file__).resolve().parent.parent / "plugin.py"
 
@@ -72,6 +72,12 @@ def test_connectors_row_lists_connections_with_warning(imap_plugin, fake_imap):
 def test_admin_card_save_normalises_and_rejects(imap_plugin):
     spec = get_service_spec("imap")
     assert spec is not None
+    # The allow-list field explains the one-per-line host[:port] format and
+    # the no-port = 993 + 143 rule under its label.
+    (hosts_field,) = [f for f in fields_view(spec) if f["key"] == "allowed_hosts"]
+    assert hosts_field["type"] == "textarea"
+    assert "One server per line" in hosts_field["help"]
+    assert "993" in hosts_field["help"] and "143" in hosts_field["help"]
     stored = resolve_update(spec, {"allowed_hosts": "IMAP.Example.com\n\nimap.example.com"}, None)
     assert stored["allowed_hosts"] == "imap.example.com"
     with pytest.raises(ValueError, match="Line 1"):

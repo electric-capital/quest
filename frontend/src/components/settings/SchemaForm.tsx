@@ -101,6 +101,24 @@ function FieldLabel({ id, label, optional }: { id: string; label: string; option
   );
 }
 
+/** Optional plain-text guidance under the label, linked to the control via
+ * aria-describedby (see describedByIds). Renders nothing when empty. */
+function FieldHelp({ id, help }: { id: string; help?: string }) {
+  if (!help) return null;
+  return (
+    <p id={id} className="svc-cred-help">
+      {help}
+    </p>
+  );
+}
+
+/** The aria-describedby value for a control with optional help and error
+ * paragraphs, or undefined when it has neither. */
+function describedByIds(helpId: string, help: string | undefined, errorId: string, error: string | undefined) {
+  const ids = [help ? helpId : null, error ? errorId : null].filter(Boolean);
+  return ids.length ? ids.join(' ') : undefined;
+}
+
 /** One labelled single-line text / password input. */
 export function CredentialField({
   id,
@@ -108,6 +126,7 @@ export function CredentialField({
   value,
   onChange,
   placeholder,
+  help,
   secret = false,
   optional = false,
   readOnly = false,
@@ -119,6 +138,7 @@ export function CredentialField({
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
+  help?: string;
   secret?: boolean;
   optional?: boolean;
   readOnly?: boolean;
@@ -126,9 +146,11 @@ export function CredentialField({
   error?: string;
 }) {
   const errorId = `${id}-error`;
+  const helpId = `${id}-help`;
   return (
     <div className="svc-cred-row">
       <FieldLabel id={id} label={label} optional={optional} />
+      <FieldHelp id={helpId} help={help} />
       <input
         id={id}
         className="svc-cred-input"
@@ -140,7 +162,7 @@ export function CredentialField({
         readOnly={readOnly || undefined}
         disabled={disabled || undefined}
         aria-invalid={error ? true : undefined}
-        aria-describedby={error ? errorId : undefined}
+        aria-describedby={describedByIds(helpId, help, errorId, error)}
       />
       <FieldError id={errorId} error={error} />
     </div>
@@ -187,10 +209,11 @@ export function SchemaForm({
         if (!isFieldVisible(field, values)) return null;
         const id = `${idPrefix}-${field.key}`;
         const errorId = `${id}-error`;
+        const helpId = `${id}-help`;
         const error = errors[field.key];
         const optional = !isFieldRequired(field, values);
         const readOnly = readOnlyKeys.includes(field.key);
-        const describedBy = error ? errorId : undefined;
+        const describedBy = describedByIds(helpId, field.help, errorId, error);
         if (field.type === 'bool') {
           return (
             <Fragment key={field.key}>
@@ -210,6 +233,7 @@ export function SchemaForm({
                 </span>
                 <span className="svc-cred-toggle-text">{field.label}</span>
               </label>
+              <FieldHelp id={helpId} help={field.help} />
               <FieldError id={errorId} error={error} />
             </Fragment>
           );
@@ -218,6 +242,7 @@ export function SchemaForm({
           return (
             <div key={field.key} className="svc-cred-row">
               <FieldLabel id={id} label={field.label} optional={optional} />
+              <FieldHelp id={helpId} help={field.help} />
               <textarea
                 id={id}
                 className="svc-cred-textarea"
@@ -241,6 +266,7 @@ export function SchemaForm({
           return (
             <div key={field.key} className="svc-cred-row">
               <FieldLabel id={id} label={field.label} optional={optional} />
+              <FieldHelp id={helpId} help={field.help} />
               <select
                 id={id}
                 className="svc-cred-input svc-cred-select"
@@ -284,6 +310,7 @@ export function SchemaForm({
                 ? secretPlaceholder(storedSecrets.includes(field.key), field.placeholder)
                 : field.placeholder
             }
+            help={field.help}
             secret={secret}
             optional={optional}
             readOnly={readOnly}

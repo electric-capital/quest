@@ -380,7 +380,7 @@ def test_admin_list_returns_schema_for_all_core_services(admin_routes):
         assert isinstance(row["credentials"], dict)
         for field in row["fields"]:
             assert set(field) == {
-                "key", "label", "type", "placeholder",
+                "key", "label", "type", "placeholder", "help",
                 "required", "required_if", "visible_if",
             }
 

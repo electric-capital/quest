@@ -321,6 +321,7 @@ def fields_view(spec: ServiceSpec) -> list[dict]:
             "label": f.label,
             "type": f.type,
             "placeholder": f.placeholder,
+            "help": f.help,
             "required": f.required,
             "required_if": f.required_if,
             "visible_if": f.visible_if,

@@ -1636,6 +1636,9 @@ export interface SchemaFormField {
   label: string;
   type: SchemaFieldType;
   placeholder: string;
+  // Optional plain-text guidance shown under the label (what the input
+  // should look like).
+  help?: string;
   required: boolean;
   // Key of a sibling bool field; when set, the field is required iff that
   // toggle is on (takes precedence over `required`).
