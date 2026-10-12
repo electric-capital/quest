@@ -88,8 +88,8 @@ class TestPlainText:
         raw = _plain(f"Click {LONG_URL} now, or https://x.io for short.")
         doc = _render(raw, conversation_id=CONV_ID)
         assert "Click (#1#) now" in doc
-        assert "https://x.io" in doc
-        assert LONG_URL not in doc
+        assert doc.count("https://x.io for short") == 1
+        assert doc.count(LONG_URL) == 0
         assert "Replaced URL count: 1" in doc
         key = url_cache_key("ada@mail.example.com", "INBOX", 777, 42)
         assert _get_cached_url_mapping(CONV_ID, key) == {1: LONG_URL}

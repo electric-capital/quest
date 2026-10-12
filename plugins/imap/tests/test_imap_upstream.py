@@ -3,6 +3,7 @@
 import asyncio
 import imaplib
 import logging
+import re
 import ssl
 import time
 
@@ -130,6 +131,7 @@ def test_ssl_uses_default_context(fake_imap, monkeypatch):
     assert conn.ssl_context is made[0]
     assert conn.ssl_context.verify_mode == ssl.CERT_REQUIRED
     assert conn.ssl_context.check_hostname is True
+    assert conn.ssl_context.minimum_version >= ssl.TLSVersion.TLSv1_2
     assert conn.timeout == upstream.SOCKET_TIMEOUT
 
 
@@ -140,7 +142,16 @@ def test_starttls_uses_default_context(fake_imap, monkeypatch):
     assert not conn.implicit_tls and conn.port == 143
     assert conn.starttls_context is made[0]
     assert conn.starttls_context.verify_mode == ssl.CERT_REQUIRED
+    assert conn.starttls_context.check_hostname is True
+    assert conn.starttls_context.minimum_version >= ssl.TLSVersion.TLSv1_2
     assert _commands(fake_imap)[:3] == ["CONNECT", "STARTTLS", "LOGIN"]
+
+
+def test_tls_context_floor_and_verification():
+    ctx = upstream.make_tls_context()
+    assert ctx.minimum_version >= ssl.TLSVersion.TLSv1_2
+    assert ctx.check_hostname is True
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
 
 
 def test_starttls_not_advertised_is_refused(fake_imap):
@@ -167,7 +178,8 @@ def test_connect_dns_failure(fake_imap):
     with pytest.raises(ImapError) as exc:
         _run(_settings(host="nowhere.example.com"), lambda s: None)
     assert exc.value.code == "imap_connect_failed"
-    assert "nowhere.example.com:993" in exc.value.message
+    assert re.search(r"Could not connect to nowhere\.example\.com:993\b",
+                     exc.value.message)
 
 
 # -- allow-list re-check ------------------------------------------------------

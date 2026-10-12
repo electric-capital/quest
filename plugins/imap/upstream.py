@@ -14,7 +14,8 @@ handshakes) with the call before blocking on it.
 
 Security properties (issue #84 spec 10.2 / 10.6):
 
-- TLS always, verified with ``ssl.create_default_context()``: implicit
+- TLS always (TLS 1.2 minimum), verified with
+  ``ssl.create_default_context()`` (see ``make_tls_context``): implicit
   TLS (``IMAP4_SSL``) for security ``ssl``, ``STARTTLS`` for security
   ``starttls`` (refused when the server does not advertise it). There is
   no plaintext mode and no verification opt-out.
@@ -546,7 +547,7 @@ class _QuestTransport:
         if name not in self.capabilities:
             raise self.abort("TLS not supported by server")
         if ssl_context is None:
-            ssl_context = ssl.create_default_context()
+            ssl_context = make_tls_context()
         typ, dat = self._simple_command(name)
         if typ != "OK":
             raise self.error("Couldn't establish TLS session")
@@ -599,6 +600,19 @@ def _connect_failed(settings: ImapSettings, exc: BaseException, what: str = "Cou
     )
 
 
+def make_tls_context() -> ssl.SSLContext:
+    """The TLS context for every IMAP connection the plugin opens.
+
+    ``ssl.create_default_context()`` supplies the system CA store,
+    certificate verification and hostname checking (never relaxed here);
+    the protocol floor is pinned to TLS 1.2 explicitly rather than left to
+    the OpenSSL build's default.
+    """
+    context = ssl.create_default_context()
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
+
+
 def _connect(settings: ImapSettings, state: Optional[_CallState] = None) -> Any:
     _connect_local.state = state
     try:
@@ -608,7 +622,7 @@ def _connect(settings: ImapSettings, state: Optional[_CallState] = None) -> Any:
 
 
 def _connect_inner(settings: ImapSettings) -> Any:
-    context = ssl.create_default_context()
+    context = make_tls_context()
     try:
         if settings.security == "ssl":
             conn = IMAP4_SSL_CLASS(
