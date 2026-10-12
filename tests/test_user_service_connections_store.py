@@ -317,6 +317,79 @@ def test_partial_unique_index_forbids_two_defaults(env):
 
 
 # ---------------------------------------------------------------------------
+# Concurrent-first-row races (forced by hiding existing rows from one read)
+# ---------------------------------------------------------------------------
+
+def _hide_rows_once(monkeypatch, store, name, empty):
+    """Make store.<name> pretend no rows exist on its first call only, as if
+    a concurrent writer committed between our read and our commit."""
+    real = getattr(store, name)
+    calls = {"n": 0}
+
+    async def fake(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return empty
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(store, name, fake)
+    return calls
+
+
+def test_create_retries_when_a_concurrent_first_row_took_the_default(env, monkeypatch):
+    store, uid = env["store"], env["uid"]
+    _run(store.create_connection(uid, "imap", account="a"))
+    calls = _hide_rows_once(monkeypatch, store, "_list_service_rows", [])
+    # First attempt thinks it is the first row, claims the default and trips
+    # the partial index; the retry sees "a" and creates a non-default row.
+    row = _run(store.create_connection(uid, "imap", account="b"))
+    assert calls["n"] == 2
+    assert row["is_default"] is False
+    assert _accounts(store, uid) == [("a", True), ("b", False)]
+
+
+def test_create_reraises_after_two_lost_races(env, monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+
+    store, uid = env["store"], env["uid"]
+    _run(store.create_connection(uid, "imap", account="a"))
+
+    async def always_empty(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(store, "_list_service_rows", always_empty)
+    with pytest.raises(IntegrityError):
+        _run(store.create_connection(uid, "imap", account="b"))
+    assert _accounts(store, uid) == [("a", True)]
+
+
+def test_create_lost_race_on_same_account_is_connection_exists(env, monkeypatch):
+    store, uid = env["store"], env["uid"]
+    _run(store.create_connection(uid, "imap", account="a"))
+    _hide_rows_once(monkeypatch, store, "_list_service_rows", [])
+    with pytest.raises(store.ConnectionExists):
+        _run(store.create_connection(uid, "imap", account="A"))
+
+
+def test_upsert_credential_retries_when_a_concurrent_create_took_the_default(env, monkeypatch):
+    store, uid = env["store"], env["uid"]
+    first = _run(store.create_connection(uid, "imap", account="a", secret="old"))
+    calls = _hide_rows_once(monkeypatch, store, "_default_row", None)
+    row = _run(store.upsert_credential(uid, "imap", secret="new"))
+    assert calls["n"] == 2
+    assert row["id"] == first["id"] and row["secret"] == "new"
+    assert _accounts(store, uid) == [("a", True)]
+
+
+def test_upsert_connection_by_account_survives_default_race(env, monkeypatch):
+    store, uid = env["store"], env["uid"]
+    _run(store.create_connection(uid, "gmail", account="a"))
+    _hide_rows_once(monkeypatch, store, "_list_service_rows", [])
+    row = _run(store.upsert_connection_by_account(uid, "gmail", account="b", secret="s"))
+    assert row["is_default"] is False and row["secret"] == "s"
+
+
+# ---------------------------------------------------------------------------
 # upsert_connection_by_account
 # ---------------------------------------------------------------------------
 
@@ -436,8 +509,11 @@ def test_user_dict_carries_default_and_all_connections(env, monkeypatch):
     assert user["service_credentials"]["acme"]["secret"] == "sk"
     assert [r["account"] for r in user["service_connections"]["imap"]] == ["b", "a"]
     assert user["service_connections"]["acme"] == [user["service_credentials"]["acme"]]
-    # The shim row is a copy, not the list's own dict.
-    assert user["service_credentials"]["imap"] is not user["service_connections"]["imap"][0]
+    # The shim row IS the list's default dict, so in-place token refreshes
+    # (GitHub/Twitter mutate service_credentials[svc]["oauth_blob"]) show
+    # through service_connections too.
+    for svc in ("imap", "acme"):
+        assert user["service_credentials"][svc] is user["service_connections"][svc][0]
 
     other = _run(user_store.create_user(
         email=f"e-{uuid.uuid4().hex}@example.com", name="E", api_key=f"k-{uuid.uuid4().hex}",

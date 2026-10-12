@@ -76,6 +76,7 @@ def downgrade() -> None:
     """Drop the connection columns, restoring one row per (user, service).
 
     Refuses while any (user, service) holds more than one connection.
+    The remaining single rows lose their account and description.
     """
     bind = op.get_bind()
     duplicates = bind.execute(sa.text(
