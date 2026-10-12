@@ -36,6 +36,12 @@ Namespacing rules enforced at load time:
 - tool names must not collide with the public-project tool allowlist
   (plugin surface is always blocked in public projects), except the
   core-owned ``_PUBLIC_ALLOWLIST_MIGRATED_TOOLS`` exemptions.
+- user connections: ``form`` kind needs ``fields`` + ``verify`` and no
+  api_key / oauth fields; field keys short identifiers, never
+  ``description`` / ``account`` / ``connection``; ``multi_connection``
+  oauth / api_key specs need ``account_from``; ``connection_limit`` in
+  1..50; every tool of a multi-connection plugin declares a
+  ``connection`` parameter.
 
 Plugins do NOT mount ``/api/*`` HTTP routes (see config/plugin_types.py)
 -- bespoke behavior lives in ``tools`` handlers instead. The one
@@ -60,7 +66,12 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from config.plugin_types import HelpLink, QuestPlugin
+from config.plugin_types import (
+    CredentialField,
+    HelpLink,
+    QuestPlugin,
+    UserConnectionSpec,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -290,7 +301,7 @@ def validate_plugin(plugin: QuestPlugin, existing_ids: set[str]) -> None:
     # User connection: recognized kind + callable hooks + per-kind fields.
     user_connection = plugin.user_connection
     if user_connection is not None:
-        if user_connection.kind not in ("api_key", "oauth"):
+        if user_connection.kind not in ("api_key", "oauth", "form"):
             raise ValueError(
                 f"Plugin {pid!r} user_connection kind "
                 f"{user_connection.kind!r} is unknown"
@@ -309,7 +320,10 @@ def validate_plugin(plugin: QuestPlugin, existing_ids: set[str]) -> None:
             raise ValueError(
                 f"Plugin {pid!r} user_connection.needs_reauth is not callable"
             )
-        if user_connection.kind == "api_key":
+        _validate_connection_extras(pid, user_connection)
+        if user_connection.kind == "form":
+            _validate_form_connection(pid, user_connection)
+        elif user_connection.kind == "api_key":
             if user_connection.oauth_router is not None:
                 raise ValueError(
                     f"Plugin {pid!r} api_key user_connection must not set "
@@ -371,6 +385,21 @@ def validate_plugin(plugin: QuestPlugin, existing_ids: set[str]) -> None:
                     "non-empty strings"
                 )
 
+        # A multi-connection plugin's tools must all take the optional
+        # ``connection`` argument (resolved via
+        # config/user_connections.resolve_connection), so a plugin cannot
+        # half-convert and leave some tools pinned to the default row.
+        if user_connection.multi_connection:
+            for tool in plugin.tools:
+                params = tool.spec.get("parameters") or {}
+                props = params.get("properties") if isinstance(params, dict) else None
+                if not isinstance(props, dict) or "connection" not in props:
+                    raise ValueError(
+                        f"Plugin {pid!r} is multi_connection but tool "
+                        f"{tool.spec.get('name', '')!r} does not declare a "
+                        "'connection' parameter"
+                    )
+
     # System skills: system:<id> namespace, plus the catalog's own static
     # checks (description length etc.) so a skill that would fail catalog
     # registration is rejected here, at validation time. Only the duplicate-id
@@ -393,6 +422,100 @@ def validate_plugin(plugin: QuestPlugin, existing_ids: set[str]) -> None:
                 f"Plugin {pid!r} services entries must be "
                 "{'key': '<hostname[/prefix]>', 'entry': {...}} dicts"
             )
+
+
+# Form-field keys must be short identifiers; three are reserved for the
+# generic connection layer (the connection's description, its account
+# address, and the tool argument).
+_FORM_FIELD_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+_RESERVED_FORM_FIELD_KEYS = frozenset({"description", "account", "connection"})
+_CONNECTION_LIMIT_RANGE = (1, 50)
+
+
+def _validate_connection_extras(pid: str, spec: UserConnectionSpec) -> None:
+    """Checks shared by every connection kind: multi-connection fields."""
+    if not isinstance(spec.multi_connection, bool):
+        raise ValueError(
+            f"Plugin {pid!r} user_connection.multi_connection must be a bool"
+        )
+    low, high = _CONNECTION_LIMIT_RANGE
+    limit = spec.connection_limit
+    if isinstance(limit, bool) or not isinstance(limit, int) \
+            or not low <= limit <= high:
+        raise ValueError(
+            f"Plugin {pid!r} user_connection.connection_limit must be an "
+            f"int in {low}..{high}, got {limit!r}"
+        )
+    for hook in ("account_from", "row_warning", "field_options", "verify"):
+        value = getattr(spec, hook)
+        if value is not None and not callable(value):
+            raise ValueError(
+                f"Plugin {pid!r} user_connection.{hook} is not callable"
+            )
+    if spec.multi_connection and spec.kind in ("api_key", "oauth") \
+            and spec.account_from is None:
+        raise ValueError(
+            f"Plugin {pid!r} multi_connection {spec.kind} user_connection "
+            "must supply account_from"
+        )
+    if spec.kind != "form":
+        for attr in ("fields", "field_options", "verify"):
+            if getattr(spec, attr):
+                raise ValueError(
+                    f"Plugin {pid!r} {spec.kind} user_connection must not set "
+                    f"{attr} (form-only field)"
+                )
+
+
+def _validate_form_connection(pid: str, spec: UserConnectionSpec) -> None:
+    """Rules for the schema-driven ``form`` connection kind."""
+    if spec.oauth_router is not None or spec.scopes:
+        raise ValueError(
+            f"Plugin {pid!r} form user_connection must not set oauth_router "
+            "or scopes (oauth-only fields)"
+        )
+    if spec.validate_key is not None or spec.key_placeholder is not None \
+            or spec.key_help is not None or spec.key_help_links:
+        raise ValueError(
+            f"Plugin {pid!r} form user_connection must not set validate_key "
+            "or key_* (api_key-only fields)"
+        )
+    if not spec.fields:
+        raise ValueError(f"Plugin {pid!r} form user_connection needs fields")
+    if spec.verify is None:
+        raise ValueError(
+            f"Plugin {pid!r} form user_connection needs a verify hook"
+        )
+    for f in spec.fields:
+        if not isinstance(f, CredentialField):
+            raise ValueError(
+                f"Plugin {pid!r} form user_connection fields must be "
+                "CredentialField instances"
+            )
+        if not isinstance(f.key, str) or not _FORM_FIELD_KEY_RE.match(f.key):
+            raise ValueError(
+                f"Plugin {pid!r} form field key {f.key!r} is invalid (must "
+                f"match {_FORM_FIELD_KEY_RE.pattern})"
+            )
+        if f.key in _RESERVED_FORM_FIELD_KEYS:
+            raise ValueError(
+                f"Plugin {pid!r} form field key {f.key!r} is reserved"
+            )
+    # Same type / select / reference rules as the admin card, except that
+    # select fields may take their choices from field_options(). Which keys
+    # that hook covers is only known at runtime, so with the hook present
+    # every select field may leave ``options`` empty.
+    from config.service_specs import _validate_fields
+    runtime_keys = frozenset(
+        f.key for f in spec.fields if f.type == "select"
+    ) if spec.field_options is not None else frozenset()
+    _validate_fields(pid, spec.fields, runtime_option_keys=runtime_keys)
+
+
+def get_user_connection_spec(service: str) -> UserConnectionSpec | None:
+    """The loaded plugin's user-connection spec for ``service``, or None."""
+    plugin = get_loaded_plugin(service)
+    return plugin.user_connection if plugin is not None else None
 
 
 def discover_plugins(

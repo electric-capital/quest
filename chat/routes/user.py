@@ -500,7 +500,10 @@ async def get_connectors(user: dict = Depends(get_current_user_cookie_or_apikey_
     stored_rows = user.get("service_credentials") or {}
     for plugin in get_loaded_plugins():
         spec = plugin.user_connection
-        if spec is None:
+        if spec is None or spec.kind == "form":
+            # form-kind connections have no generic row shape here yet
+            # (no connect_url / key_url); listing one as oauth would hand
+            # the frontend a dead Connect button.
             continue
         row = stored_rows.get(plugin.id)
         try:
