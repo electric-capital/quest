@@ -5,6 +5,7 @@ import pytest
 from chat.llm.config import MODEL_REGISTRY
 from db.llm_pricing import (
     _ANTHROPIC_PRICING,
+    _FIREWORKS_PRICING,
     _GEMINI_PRICING,
     _OPENROUTER_PRICING,
     LONG_CONTEXT_THRESHOLD,
@@ -106,3 +107,56 @@ def test_opus_5_5_cache_writes_use_standard_multipliers():
     )
     # $4 input + $20 output + $5 (5m write) + $8 (1h write)
     assert cost == pytest.approx(37.0)
+
+
+_FIREWORKS_METRICS = {
+    "prompt_tokens": 2_000_000,  # includes the 1M cached below
+    "cached_prompt_tokens": 1_000_000,
+    "completion_tokens": 1_000_000,
+}
+
+
+def test_fireworks_table_keys_are_fireworks_wire_ids_with_full_rates():
+    for wire_id, entry in _FIREWORKS_PRICING.items():
+        assert wire_id.startswith("accounts/fireworks/"), wire_id
+        assert set(entry) == {"input", "output", "cache_read"}, wire_id
+        assert entry["cache_read"] < entry["input"] < entry["output"], wire_id
+    # The two namespaces must never share a key (the lookup chains them).
+    assert not set(_FIREWORKS_PRICING) & set(_OPENROUTER_PRICING)
+
+
+def test_fireworks_rows_price_from_the_static_table():
+    # $3 x 1M uncached + $0.30 x 1M cached + $15 x 1M output
+    assert estimate_cost_usd(
+        "openrouter", "fireworks:accounts/fireworks/models/kimi-k3", _FIREWORKS_METRICS,
+    ) == pytest.approx(18.30)
+    # The speed router bills at its own "Fast" rates, not the base model's.
+    assert estimate_cost_usd(
+        "openrouter", "fireworks:accounts/fireworks/routers/kimi-k3-fast", _FIREWORKS_METRICS,
+    ) == pytest.approx(27.45)
+    # Unqualified (legacy) and differently-labelled instance ids resolve alike.
+    assert estimate_cost_usd(
+        "openrouter", "accounts/fireworks/models/kimi-k3", _FIREWORKS_METRICS,
+    ) == pytest.approx(18.30)
+    assert estimate_cost_usd(
+        "openrouter", "fw2:accounts/fireworks/models/kimi-k3", _FIREWORKS_METRICS,
+    ) == pytest.approx(18.30)
+
+
+def test_fireworks_meta_routers_and_unlisted_ids_have_no_estimate():
+    for model in ("fireworks:auto", "fireworks:firerouter/auto",
+                  "fireworks:accounts/acme/deployments/abc123"):
+        assert estimate_cost_usd("openrouter", model, _FIREWORKS_METRICS) is None
+
+
+def test_instance_snapshot_pricing_wins_over_the_static_tables(monkeypatch):
+    import config.inference_providers as ip
+
+    monkeypatch.setattr(
+        ip, "instance_model_pricing",
+        lambda wire_id: {"prompt": 1.0, "completion": 2.0} if wire_id.endswith("kimi-k3") else None,
+    )
+    # $1 x 1M uncached + $1 x 1M cached (no cache_read -> input rate) + $2 x 1M
+    assert estimate_cost_usd(
+        "openrouter", "fireworks:accounts/fireworks/models/kimi-k3", _FIREWORKS_METRICS,
+    ) == pytest.approx(4.0)

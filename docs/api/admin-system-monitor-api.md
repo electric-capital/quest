@@ -15,7 +15,7 @@ REST endpoints powering the admin-only `/admin/system-reports` page (UI title "S
 | `db/user_store.py` | `list_user_signup_dates()` -- user id -> `created_at` for the Total Usage new-user counts |
 | `db/guide_store.py` | `list_all_guides()` -- every user guide joined to its owner, with the per-guide routine reference count (guides report) |
 | `db/project_store.py` | `list_all_project_guides()` -- projects with non-empty `projects.guide` instructions joined to their owner (guides report) |
-| `db/llm_pricing.py` | Static per-model USD list-price table (both providers, cache read/write rates incl. the Anthropic 5m/1h TTL split, Gemini long-context tier) and `estimate_cost_usd()` -- used only for calls without a provider-reported amount |
+| `db/llm_pricing.py` | Static per-model USD list-price tables (Vertex Gemini + Claude, plus the OpenRouter and Fireworks fallbacks behind the instance pricing snapshots; cache read/write rates incl. the Anthropic 5m/1h TTL split, Gemini long-context tier) and `estimate_cost_usd()` -- used only for calls without a provider-reported amount |
 | `chat/storage.py` | `ChatStorage._resolve_list_title` (title precedence), `count_user_message_active_days()` (distinct user-message days, whole lifetime), and `user_message_active_days()` (the range-clipped day-set variant) |
 | `chat/auth.py` | `is_admin()` -- admin-email check used by all admin endpoints |
 | `frontend/src/api/client.ts` | `fetchLatestActiveConversations()`, `fetchAdminUsageReport()`, `fetchMostExpensiveConversations()`, `fetchAdminUserReport()`, `fetchAdminModelReport()`, `fetchAdminGuidesReport()` client functions |

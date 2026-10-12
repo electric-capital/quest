@@ -22,7 +22,10 @@ bearer API key -- unlike OpenRouter's public list):
   ``deprecationDate`` of the shared models; a failure there only costs the
   friendly names. It exposes no pricing (``serverlessModes`` is empty on
   every public entry, checked 2026-10-08), so Fireworks snapshots carry
-  ``pricing: None`` and the cost reports show "no estimate" for them.
+  ``pricing: None``; the cost reports price Fireworks rows from the
+  hand-maintained ``_FIREWORKS_PRICING`` table in db/llm_pricing.py (a
+  mirror of the public serverless price list, consulted by wire id when a
+  row has no snapshot pricing) and show "no estimate" for ids it lacks.
 
 Settings > Inference Providers uses the result the same two ways as the
 OpenRouter catalog: the "Add model" typeahead on a Fireworks card searches
@@ -148,7 +151,8 @@ def _normalize_entry(raw, details: dict | None = None, today: datetime.date | No
         # Fireworks publishes no per-model output cap; the request uses the
         # conservative default (DEFAULT_INSTANCE_MAX_OUTPUT_TOKENS).
         "max_completion_tokens": None,
-        # No API exposes serverless prices (see module docstring).
+        # No API exposes serverless prices (see module docstring); the
+        # static table in db/llm_pricing.py prices the rows instead.
         "pricing": None,
         "detail": " · ".join(bits),
         "capabilities": capabilities,

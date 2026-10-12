@@ -20,6 +20,10 @@ ESTIMATE, not billing truth:
   estimates run high until the promo ends.
 - Gemini explicit-cache storage ($/1M-token-hours) is not modeled -- only
   per-call token rates.
+- Fireworks AI publishes no prices through its API, so its rows are priced
+  from the hand-maintained ``_FIREWORKS_PRICING`` mirror of the public
+  serverless price list (checked 2026-10-12), Standard serving path; the
+  Priority path and 50%-off batch inference are not modeled.
 
 Tier pricing: models with a ``long_context`` block bill at higher rates when
 a single call's context exceeds the model's threshold (Gemini:
@@ -103,11 +107,75 @@ _OPENROUTER_PRICING: dict[str, dict] = {
     },
 }
 
+# Fireworks AI serverless rates per 1M tokens, keyed by the wire id a
+# ``fireworks`` instance calls (``accounts/fireworks/models/<name>`` and the
+# ``accounts/fireworks/routers/<name>-fast`` speed routers). Fireworks
+# exposes no prices through its API (the catalog snapshots carry ``pricing:
+# None``), so like the Vertex tables above this is a hand-maintained mirror
+# of the public list: the "Standard" serving path rates on
+# https://docs.fireworks.ai/serverless/pricing, cross-checked against each
+# model's page on fireworks.ai/models/fireworks/<name> (checked 2026-10-12).
+# The ``-fast`` routers bill at their own higher "Fast" path rates; the
+# "Priority" path and the "(US)" variants are not selectable here and not
+# modeled. Same token convention as OpenRouter: ``input`` is the rate for
+# uncached prompt tokens, ``cache_read`` for the ``cached_prompt_tokens``
+# subset of ``prompt_tokens``, reasoning tokens bill at the output rate
+# inside ``completion_tokens``. Deliberately unpriced (no estimate):
+# ``auto`` / ``firerouter/auto`` (the meta-routers pick a different model per
+# request) and ids the pricing page does not list.
+_FIREWORKS_PRICING: dict[str, dict] = {
+    "accounts/fireworks/models/deepseek-v4p1-flash": {
+        "input": 0.30, "output": 1.20, "cache_read": 0.006,
+    },
+    "accounts/fireworks/models/ember-1": {
+        "input": 3.00, "output": 15.00, "cache_read": 0.30,
+    },
+    "accounts/fireworks/models/glm-5p2": {
+        "input": 1.40, "output": 4.40, "cache_read": 0.14,
+    },
+    "accounts/fireworks/models/glm-5p3": {
+        "input": 1.40, "output": 4.40, "cache_read": 0.26,
+    },
+    "accounts/fireworks/models/glm-5p3-flash": {
+        "input": 0.15, "output": 0.50, "cache_read": 0.03,
+    },
+    "accounts/fireworks/models/gpt-oss-120b": {
+        "input": 0.15, "output": 0.60, "cache_read": 0.015,
+    },
+    "accounts/fireworks/models/inkling": {
+        "input": 1.00, "output": 4.05, "cache_read": 0.17,
+    },
+    "accounts/fireworks/models/kimi-k3": {
+        "input": 3.00, "output": 15.00, "cache_read": 0.30,
+    },
+    "accounts/fireworks/models/minimax-m3": {
+        "input": 0.30, "output": 1.20, "cache_read": 0.06,
+    },
+    "accounts/fireworks/models/nemotron-3-ultra-nvfp4": {
+        "input": 0.60, "output": 2.40, "cache_read": 0.12,
+    },
+    "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b": {
+        "input": 0.05, "output": 0.20, "cache_read": 0.01,
+    },
+    "accounts/fireworks/models/qwen3p8-max": {
+        "input": 2.00, "output": 6.00, "cache_read": 0.25,
+    },
+    "accounts/fireworks/routers/glm-5p3-fast": {
+        "input": 2.10, "output": 6.60, "cache_read": 0.39,
+    },
+    "accounts/fireworks/routers/kimi-k3-fast": {
+        "input": 4.50, "output": 22.50, "cache_read": 0.45,
+    },
+}
+
 
 def _openrouter_entry(model: str) -> Optional[dict]:
-    """Pricing entry for an OpenRouter row: instance snapshot, then the
-    static table. ``model`` may be qualified (``openrouter:vendor/x``) or a
-    bare legacy id."""
+    """Pricing entry for a row of the shared ``llm_calls_openrouter`` table
+    (every OpenAI-compatible instance kind): the instance snapshot, then the
+    static OpenRouter table, then the static Fireworks table -- the wire-id
+    namespaces (``vendor/model`` vs ``accounts/fireworks/...``) never
+    collide. ``model`` may be qualified (``openrouter:vendor/x``,
+    ``fireworks:accounts/fireworks/models/x``) or a bare legacy id."""
     from config.inference_providers import instance_model_pricing, split_model_id
 
     wire_id = split_model_id(model)[1]
@@ -117,7 +185,7 @@ def _openrouter_entry(model: str) -> Optional[dict]:
         if "cache_read" in snapshot:
             entry["cache_read"] = snapshot["cache_read"]
         return entry
-    return _OPENROUTER_PRICING.get(wire_id)
+    return _OPENROUTER_PRICING.get(wire_id) or _FIREWORKS_PRICING.get(wire_id)
 
 
 _STATIC_PRICING: dict[str, dict[str, dict]] = {
