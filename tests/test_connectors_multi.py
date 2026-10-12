@@ -69,13 +69,17 @@ def test_form_row_shape(multiconn_plugin):
     ]
     assert row["form_fields"] == [
         {"key": "host", "label": "Server", "type": "select", "required": True,
-         "placeholder": "", "options": ["mail.example.com", "mail.example.org"]},
+         "placeholder": "", "required_if": None, "visible_if": None,
+         "options": ["mail.example.com", "mail.example.org"]},
         {"key": "port", "label": "Port", "type": "text", "required": False,
-         "placeholder": "993", "options": []},
+         "placeholder": "993", "required_if": None, "visible_if": None,
+         "options": []},
         {"key": "username", "label": "Username", "type": "text", "required": True,
-         "placeholder": "", "options": []},
+         "placeholder": "", "required_if": None, "visible_if": None,
+         "options": []},
         {"key": "password", "label": "Password", "type": "secret", "required": True,
-         "placeholder": "", "options": []},
+         "placeholder": "", "required_if": None, "visible_if": None,
+         "options": []},
     ]
     # Never any credential material, and no single-connection fields.
     assert SECRET not in repr(row)

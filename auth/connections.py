@@ -139,6 +139,8 @@ def form_fields_view(spec) -> list[dict]:
             "type": field.type,
             "required": bool(field.required),
             "placeholder": field.placeholder,
+            "required_if": field.required_if,
+            "visible_if": field.visible_if,
             "options": options.get(field.key, []),
         }
         for field in spec.fields
