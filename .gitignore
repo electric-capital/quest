@@ -31,6 +31,7 @@ plugins/*
 !plugins/google_admin/
 !plugins/tailscale/
 !plugins/sec_edgar/
+!plugins/imap/
 
 # Python
 __pycache__/
