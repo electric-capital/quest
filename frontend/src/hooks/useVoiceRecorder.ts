@@ -26,9 +26,21 @@
  *   gives up after ``LIVE_SIGNAL_TIMEOUT_MS`` and flips to ``recording``
  *   anyway. The recorder itself runs from the moment it is created, so any
  *   audio that arrives earlier than our detection is still in the clip.
+ * - The give-up timer is armed BEFORE the Web Audio work, not after it:
+ *   iOS Safari can leave ``AudioContext.resume()`` pending indefinitely when
+ *   it decides the page is not allowed to start audio, and a ``starting``
+ *   state that waits on that promise would never end. ``createLevelMonitor``
+ *   also races the resume against its own short timeout; when it loses, the
+ *   recording simply runs without a level meter.
  * - While recording, ``inputLevel`` (0..1, quantised and throttled so it
  *   costs at most a few re-renders a second) exposes the current input
  *   loudness for a level meter: the user can see they are being heard.
+ * - The capture track can end or mute under the recorder: iOS reconfigures
+ *   its audio session when Web Audio starts during capture, a Bluetooth
+ *   device disconnects, another app takes the microphone. An ``ended``
+ *   track stops the recording cleanly (whatever was captured is delivered,
+ *   or "Nothing was recorded" with the reason in the report); ``mute`` /
+ *   ``unmute`` are logged so the report shows them.
  * - Chrome/Firefox/Edge record Opus-in-WebM; Safari records AAC-in-MP4.
  *   The first supported entry of ``PREFERRED_MIME_TYPES`` wins, falling
  *   back to the browser's default; the server sniffs the container anyway.
@@ -47,23 +59,47 @@
  * - ``stop()`` during ``starting`` is honoured: before the recorder exists
  *   it aborts the start (no clip, no callback), afterwards it stops the
  *   recorder normally and delivers whatever was captured.
+ * - Every run keeps a trace (environment snapshot + relative-time log of
+ *   each step). A failure hands the caller a ``VoiceInputDiagnostics`` next
+ *   to the human message, and a finished clip carries the trace so a
+ *   transcription failure can be reported with the same detail
+ *   (utils/voiceInputReport.ts lays it out as text). There is no console on
+ *   a phone; the report is how a user gets a failure to someone who can
+ *   read it.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  collectVoiceInputEnvironment,
+  describeError,
+  describeMimeSupport,
+} from '../utils/voiceInputReport';
+import type { VoiceInputClipInfo, VoiceInputDiagnostics, VoiceInputStage } from '../utils/voiceInputReport';
 
 export type VoiceRecorderStatus = 'idle' | 'starting' | 'recording';
+
+/** Environment snapshot + step log of one recording run. */
+export interface VoiceInputTrace {
+  environment: [string, string][];
+  timeline: string[];
+}
 
 export interface VoiceRecording {
   blob: Blob;
   mimeType: string;
   filename: string;
   durationMs: number;
+  /** For the transcription-failure report (see utils/voiceInputReport.ts). */
+  trace: VoiceInputTrace;
 }
 
 export const MAX_RECORDING_SECONDS = 120;
 
 /** How long ``starting`` waits for the first audible frame before giving up. */
 export const LIVE_SIGNAL_TIMEOUT_MS = 3000;
+
+/** How long ``createLevelMonitor`` waits for ``AudioContext.resume()``. */
+export const AUDIO_CONTEXT_RESUME_TIMEOUT_MS = 2000;
 
 // RMS above which a frame counts as "the microphone is delivering audio".
 // A live mic's noise floor is orders of magnitude above this; a device that
@@ -73,8 +109,10 @@ const LIVE_SIGNAL_RMS = 1e-5;
 const FULL_SCALE_RMS = 0.25;
 const LEVEL_STEPS = 10;
 const LEVEL_UPDATE_INTERVAL_MS = 80;
+// Trace lines kept per run (mute/unmute storms must not grow it unbounded).
+const MAX_TRACE_LINES = 60;
 
-const PREFERRED_MIME_TYPES = [
+export const PREFERRED_MIME_TYPES = [
   'audio/webm;codecs=opus',
   'audio/webm',
   'audio/mp4',
@@ -120,18 +158,74 @@ function describeCaptureError(error: unknown): string {
   return 'Could not start recording.';
 }
 
+/** One run's trace: environment snapshot at start plus a relative-time log. */
+class RunTrace {
+  readonly environment: [string, string][];
+  readonly timeline: string[] = [];
+  private readonly startedAt = Date.now();
+
+  constructor() {
+    this.environment = collectVoiceInputEnvironment();
+    this.environment.push(['mime support', describeMimeSupport(PREFERRED_MIME_TYPES)]);
+  }
+
+  log(text: string): void {
+    if (this.timeline.length >= MAX_TRACE_LINES) return;
+    this.timeline.push(`+${Date.now() - this.startedAt}ms ${text}`);
+  }
+
+  snapshot(): VoiceInputTrace {
+    return { environment: [...this.environment], timeline: [...this.timeline] };
+  }
+
+  diagnostics(stage: VoiceInputStage, message: string, error: unknown, clip?: VoiceInputClipInfo): VoiceInputDiagnostics {
+    return {
+      stage,
+      message,
+      error: error === undefined ? '' : describeError(error),
+      ...this.snapshot(),
+      clip,
+    };
+  }
+}
+
+/** Short description of a capture track for the trace. */
+function describeTrack(track: MediaStreamTrack): string {
+  let settings = '';
+  try {
+    const s = track.getSettings();
+    const parts: string[] = [];
+    if (typeof s.sampleRate === 'number') parts.push(`${s.sampleRate}Hz`);
+    if (typeof s.channelCount === 'number') parts.push(`${s.channelCount}ch`);
+    if (parts.length > 0) settings = ` ${parts.join(' ')}`;
+  } catch { /* getSettings unsupported */ }
+  return `"${track.label || '(unnamed)'}" ${track.readyState} muted=${track.muted}${settings}`;
+}
+
 /**
  * Open the microphone: the ``default`` device by id first (see module
  * docstring for why), falling back to a bare request where that id does
  * not exist. Permission errors propagate from the first attempt.
  */
-async function openMicrophone(): Promise<MediaStream> {
+async function openMicrophone(trace: RunTrace): Promise<MediaStream> {
+  trace.log('getUserMedia default device by id');
   try {
-    return await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: 'default' } } });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: 'default' } } });
+    trace.log('getUserMedia ok');
+    return stream;
   } catch (error) {
     const name = error instanceof DOMException ? error.name : '';
+    trace.log(`getUserMedia by id rejected: ${describeError(error)}`);
     if (name !== 'OverconstrainedError' && name !== 'NotFoundError') throw error;
-    return navigator.mediaDevices.getUserMedia({ audio: true });
+    trace.log('getUserMedia bare {audio: true}');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      trace.log('getUserMedia ok');
+      return stream;
+    } catch (fallbackError) {
+      trace.log(`getUserMedia bare rejected: ${describeError(fallbackError)}`);
+      throw fallbackError;
+    }
   }
 }
 
@@ -151,34 +245,58 @@ interface LevelMonitor {
 /**
  * Attach an AnalyserNode to the stream so we can read input loudness.
  * Returns null when Web Audio is unavailable or refuses to run (a context
- * that stays suspended would only ever report zeros).
+ * that stays suspended would only ever report zeros). ``resume()`` is
+ * raced against ``AUDIO_CONTEXT_RESUME_TIMEOUT_MS`` because iOS Safari may
+ * never settle it; a lost race is a run without a level meter, not a stuck
+ * recorder.
  */
-async function createLevelMonitor(stream: MediaStream): Promise<LevelMonitor | null> {
-  if (typeof AudioContext === 'undefined') return null;
+async function createLevelMonitor(stream: MediaStream, trace: RunTrace): Promise<LevelMonitor | null> {
+  if (typeof AudioContext === 'undefined') {
+    trace.log('AudioContext unavailable; no level meter');
+    return null;
+  }
   let context: AudioContext;
   try {
     context = new AudioContext();
-  } catch {
+  } catch (error) {
+    trace.log(`AudioContext constructor failed: ${describeError(error)}`);
     return null;
   }
+  trace.log(`AudioContext created state=${context.state}`);
+  let resumeTimer: number | null = null;
   try {
-    if (context.state !== 'running') await context.resume();
-    if (context.state !== 'running') throw new Error('AudioContext not running');
+    if (context.state !== 'running') {
+      const timedOut = new Promise<'timeout'>((resolve) => {
+        resumeTimer = window.setTimeout(() => resolve('timeout'), AUDIO_CONTEXT_RESUME_TIMEOUT_MS);
+      });
+      const outcome = await Promise.race([context.resume().then(() => 'resumed' as const), timedOut]);
+      if (outcome === 'timeout') {
+        throw new Error(`resume() still pending after ${AUDIO_CONTEXT_RESUME_TIMEOUT_MS}ms (state=${context.state})`);
+      }
+    }
+    if (context.state !== 'running') throw new Error(`AudioContext not running (state=${context.state})`);
     const analyser = context.createAnalyser();
     analyser.fftSize = 1024;
     context.createMediaStreamSource(stream).connect(analyser);
+    trace.log('AudioContext running; level monitor attached');
     return { context, analyser, buffer: new Float32Array(analyser.fftSize) };
-  } catch {
+  } catch (error) {
+    trace.log(`level monitor unavailable: ${describeError(error)}`);
     void context.close().catch(() => undefined);
     return null;
+  } finally {
+    if (resumeTimer !== null) window.clearTimeout(resumeTimer);
   }
 }
 
 interface UseVoiceRecorderOptions {
   /** Called with the finished clip after a manual stop or the auto-stop. */
   onRecordingComplete: (recording: VoiceRecording) => void;
-  /** Called with a human-readable message when capture cannot start. */
-  onError: (message: string) => void;
+  /**
+   * Called with a human-readable message when capture cannot start or
+   * produces nothing, plus the diagnostics behind it for the details view.
+   */
+  onError: (message: string, diagnostics: VoiceInputDiagnostics) => void;
   maxSeconds?: number;
 }
 
@@ -276,8 +394,10 @@ export function useVoiceRecorder({
 
   const start = useCallback(async () => {
     if (recorderRef.current || startingRef.current || status !== 'idle') return;
+    const trace = new RunTrace();
     if (!isVoiceInputSupported()) {
-      onErrorRef.current('Voice input is not available in this browser.');
+      const message = 'Voice input is not available in this browser.';
+      onErrorRef.current(message, trace.diagnostics('open_microphone', message, undefined));
       return;
     }
     startingRef.current = true;
@@ -285,13 +405,18 @@ export function useVoiceRecorder({
     setStatus('starting');
     let stream: MediaStream;
     try {
-      stream = await openMicrophone();
+      stream = await openMicrophone(trace);
     } catch (error) {
       startingRef.current = false;
       setStatus('idle');
-      if (!abortStartRef.current) onErrorRef.current(describeCaptureError(error));
+      if (!abortStartRef.current) {
+        const message = describeCaptureError(error);
+        onErrorRef.current(message, trace.diagnostics('open_microphone', message, error));
+      }
       return;
     }
+    const tracks = stream.getAudioTracks();
+    trace.log(`stream: ${tracks.length} audio track${tracks.length === 1 ? '' : 's'}${tracks[0] ? ` ${describeTrack(tracks[0])}` : ''}`);
     if (abortStartRef.current) {
       // stop()/cancel() arrived while the permission prompt or device open
       // was in flight: nothing was captured, nothing to deliver.
@@ -303,12 +428,15 @@ export function useVoiceRecorder({
     let recorder: MediaRecorder;
     try {
       const mimeType = pickMimeType();
+      trace.log(`MediaRecorder mimeType=${mimeType ?? '(browser default)'}`);
       recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
     } catch (error) {
+      trace.log(`MediaRecorder constructor failed: ${describeError(error)}`);
       startingRef.current = false;
       for (const track of stream.getTracks()) track.stop();
       setStatus('idle');
-      onErrorRef.current(describeCaptureError(error));
+      const message = describeCaptureError(error);
+      onErrorRef.current(message, trace.diagnostics('create_recorder', message, error));
       return;
     }
 
@@ -321,10 +449,13 @@ export function useVoiceRecorder({
     // moment the recorder started; markLive() re-bases it.
     startedAtRef.current = Date.now();
     let live = false;
+    // The reason the capture ended on its own, for the empty-clip report.
+    let trackEnded: string | null = null;
 
-    const markLive = () => {
+    const markLive = (reason: string) => {
       if (live) return;
       live = true;
+      trace.log(`recording (${reason})`);
       if (liveTimeoutRef.current !== null) {
         window.clearTimeout(liveTimeoutRef.current);
         liveTimeoutRef.current = null;
@@ -341,9 +472,17 @@ export function useVoiceRecorder({
     recorder.ondataavailable = (event: BlobEvent) => {
       if (event.data && event.data.size > 0) chunksRef.current.push(event.data);
     };
-    recorder.onerror = () => {
+    recorder.onerror = (event: Event) => {
+      const error = (event as { error?: unknown }).error ?? new Error('MediaRecorder error event');
+      trace.log(`MediaRecorder error: ${describeError(error)}`);
       discardRef.current = true;
-      onErrorRef.current('Recording failed.');
+      const message = 'Recording failed.';
+      onErrorRef.current(message, trace.diagnostics('recording', message, error, {
+        mimeType: recorder.mimeType,
+        bytes: chunksRef.current.reduce((n, c) => n + c.size, 0),
+        durationMs: Date.now() - startedAtRef.current,
+        chunks: chunksRef.current.length,
+      }));
       stop();
     };
     recorder.onstop = () => {
@@ -356,10 +495,17 @@ export function useVoiceRecorder({
       releaseStream();
       setStatus('idle');
       setElapsedSeconds(0);
-      if (discardRef.current) return;
       const blob = new Blob(chunks, { type: mimeType });
+      const clip: VoiceInputClipInfo = { mimeType, bytes: blob.size, durationMs, chunks: chunks.length };
+      trace.log(`recorder stopped: ${clip.bytes} bytes in ${clip.chunks} chunks${discardRef.current ? ' (discarded)' : ''}`);
+      if (discardRef.current) return;
       if (blob.size === 0) {
-        onErrorRef.current('Nothing was recorded.');
+        const message = trackEnded
+          ? 'Nothing was recorded: the microphone stopped delivering audio.'
+          : 'Nothing was recorded.';
+        onErrorRef.current(message, trace.diagnostics(
+          'recording', message, trackEnded ? new Error(trackEnded) : undefined, clip,
+        ));
         return;
       }
       onCompleteRef.current({
@@ -367,36 +513,68 @@ export function useVoiceRecorder({
         mimeType,
         filename: `voice-input.${extensionFor(mimeType)}`,
         durationMs,
+        trace: trace.snapshot(),
       });
     };
+    for (const track of tracks) {
+      track.addEventListener('ended', () => {
+        if (recorderRef.current !== recorder) return;
+        trackEnded = `capture track ended (${describeTrack(track)})`;
+        trace.log(trackEnded);
+        stop();
+      });
+      track.addEventListener('mute', () => {
+        if (recorderRef.current === recorder) trace.log('capture track muted');
+      });
+      track.addEventListener('unmute', () => {
+        if (recorderRef.current === recorder) trace.log('capture track unmuted');
+      });
+    }
 
     // A timeslice keeps data flowing so a tab crash mid-recording loses at
     // most a second, and Safari needs one to emit any data before stop.
-    recorder.start(1000);
+    try {
+      recorder.start(1000);
+    } catch (error) {
+      trace.log(`MediaRecorder.start failed: ${describeError(error)}`);
+      recorderRef.current = null;
+      releaseStream();
+      setStatus('idle');
+      const message = describeCaptureError(error);
+      onErrorRef.current(message, trace.diagnostics('create_recorder', message, error));
+      return;
+    }
+    trace.log('MediaRecorder started (1000ms timeslice)');
     // stop() may have been called synchronously by a re-render between the
     // await above and here (e.g. the composer locking); honour it.
     if (recorderRef.current !== recorder) return;
 
+    // Armed before the Web Audio work so a resume() that never settles can
+    // not leave the state stuck in "starting" (see module docstring).
+    liveTimeoutRef.current = window.setTimeout(
+      () => markLive(`no live signal within ${LIVE_SIGNAL_TIMEOUT_MS}ms`),
+      LIVE_SIGNAL_TIMEOUT_MS,
+    );
+
     // Watch the stream for the first real audio, then keep a level meter.
-    const monitor = await createLevelMonitor(stream);
+    const monitor = await createLevelMonitor(stream, trace);
     if (recorderRef.current !== recorder) {
       if (monitor) void monitor.context.close().catch(() => undefined);
       return;
     }
     if (!monitor) {
       // No Web Audio: nothing to gate on, trust the recorder.
-      markLive();
+      markLive('no level monitor');
       return;
     }
     monitorRef.current = monitor;
-    liveTimeoutRef.current = window.setTimeout(markLive, LIVE_SIGNAL_TIMEOUT_MS);
     let lastLevelAt = 0;
     let lastLevel = 0;
     const tick = () => {
       if (monitorRef.current !== monitor) return;
       monitor.analyser.getFloatTimeDomainData(monitor.buffer);
       const rms = rmsOf(monitor.buffer);
-      if (!live && rms > LIVE_SIGNAL_RMS) markLive();
+      if (!live && rms > LIVE_SIGNAL_RMS) markLive(`live signal rms=${rms.toExponential(2)}`);
       const now = Date.now();
       if (live && now - lastLevelAt >= LEVEL_UPDATE_INTERVAL_MS) {
         lastLevelAt = now;

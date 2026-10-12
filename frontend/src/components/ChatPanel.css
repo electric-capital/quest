@@ -252,7 +252,7 @@
  * Slack-driven conversation. */
 .slack-thread-link-note {
   font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--text-secondary);
   padding: 0 0.25rem;
 }
 
@@ -293,11 +293,67 @@
   margin-top: 0.15rem;
 }
 
-/* Composer paste: rejection / status notice */
+/* Composer paste: rejection / status notice. Colour comes from the scheme
+   token: a literal white here was invisible on the light-mode phone bubble
+   (white text on the white notice background). */
 .paste-notice {
   font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--text-secondary);
   padding: 0 0.25rem;
+}
+
+/* A notice carrying a diagnostic report: the text is a button that opens
+   the full readout (NoticeDetailsModal), with a dismiss control beside it. */
+.paste-notice-actionable {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.paste-notice-details {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.4rem;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.paste-notice-details:hover {
+  color: var(--text);
+}
+
+.paste-notice-details-hint {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+
+.paste-notice-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.paste-notice-dismiss:hover {
+  color: var(--text);
+  background-color: var(--hover);
 }
 
 /* Composer paste: queued attachment thumbnails (above the input row) */

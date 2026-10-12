@@ -34,7 +34,7 @@
  */
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { ArrowUp, Flag, Globe, LoaderCircle, Mic, Paperclip, Sparkles, Square } from 'lucide-react';
+import { ArrowUp, Flag, Globe, LoaderCircle, Mic, Paperclip, Sparkles, Square, X } from 'lucide-react';
 import { useAppConfig } from '../contexts/AppConfigContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useConversationModels } from '../contexts/ConversationModelsContext';
@@ -42,6 +42,8 @@ import { useConversationSkills } from '../contexts/ConversationSkillsContext';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { isVoiceInputSupported, useVoiceRecorder } from '../hooks/useVoiceRecorder';
 import type { VoiceRecording } from '../hooks/useVoiceRecorder';
+import { describeError, formatVoiceInputReport } from '../utils/voiceInputReport';
+import type { VoiceInputDiagnostics } from '../utils/voiceInputReport';
 import type { ComposerAttachmentRef } from '../api/types';
 import { uploadComposerAttachments } from '../api/fileApi';
 import { transcribeAudio } from '../api/client';
@@ -58,6 +60,7 @@ import { ContextIndicator } from './ContextIndicator';
 import { ModelSelector } from './ModelSelector';
 import { SkillSelectorModal } from './SkillSelectorModal';
 import { SystemPromptModal } from './SystemPromptModal';
+import { NoticeDetailsModal } from './NoticeDetailsModal';
 
 /**
  * A clipboard-pasted image queued in the composer. Stays in component-local
@@ -92,6 +95,14 @@ const MAX_PENDING_FILES = 20;
 interface QueuedFile {
   id: string;
   file: File;
+}
+
+// The inline notice above the input. `report` is the plain-text diagnostic
+// readout (utils/voiceInputReport.ts) a user can open, screenshot and paste
+// into a debugging session; present only on failures that collected one.
+interface ComposerNotice {
+  text: string;
+  report?: string;
 }
 
 /** Human-readable byte size for the file chips (e.g. "12.3 KB"). */
@@ -270,7 +281,15 @@ export function Composer({
   // image paste queue above). The host owns the actual upload; the composer
   // just collects the raw File[] and hands them off via onSend.
   const [pendingFiles, setPendingFiles] = useState<QueuedFile[]>([]);
-  const [pasteNotice, setPasteNotice] = useState<string | null>(null);
+  // Inline notice above the input (paste rejections, attachment limits,
+  // voice-input failures). A notice with a `report` is an error the user can
+  // tap to open the full diagnostic readout (NoticeDetailsModal) and it stays
+  // until dismissed; plain notices auto-dismiss.
+  const [notice, setNotice] = useState<ComposerNotice | null>(null);
+  const [isNoticeDetailsOpen, setIsNoticeDetailsOpen] = useState(false);
+  const setPasteNotice = useCallback((text: string | null, report?: string) => {
+    setNotice(text ? { text, report } : null);
+  }, []);
   const [isUploadingAttachments, setIsUploadingAttachments] = useState(false);
   // Voice input: true from the moment a recording finishes until the
   // transcript request resolves (the mic button shows a spinner meanwhile).
@@ -420,22 +439,32 @@ export function Composer({
       armSendAfterTranscription(false);
       console.error('Transcription failed:', error);
       const code = error instanceof ApiClientError ? error.errorCode : undefined;
-      setPasteNotice(
-        code === 'voice_input_disabled'
-          ? 'Voice input has been turned off by an administrator.'
-          : code === 'transcription_unavailable'
-            ? 'Voice input is not available right now (no transcription model is configured).'
-            : `Could not transcribe the recording${error instanceof Error && error.message ? `: ${error.message}` : '.'}`,
-      );
+      const message = code === 'voice_input_disabled'
+        ? 'Voice input has been turned off by an administrator.'
+        : code === 'transcription_unavailable'
+          ? 'Voice input is not available right now (no transcription model is configured).'
+          : `Could not transcribe the recording${error instanceof Error && error.message ? `: ${error.message}` : '.'}`;
+      setPasteNotice(message, formatVoiceInputReport({
+        stage: 'transcribe',
+        message,
+        error: describeError(error),
+        ...recording.trace,
+        clip: {
+          mimeType: recording.mimeType,
+          bytes: recording.blob.size,
+          durationMs: recording.durationMs,
+          chunks: 0,
+        },
+      }));
     } finally {
       setIsTranscribing(false);
     }
-  }, [isMobile, resizeInput, armSendAfterTranscription]);
+  }, [isMobile, resizeInput, armSendAfterTranscription, setPasteNotice]);
 
-  const handleRecordingError = useCallback((message: string) => {
+  const handleRecordingError = useCallback((message: string, diagnostics: VoiceInputDiagnostics) => {
     armSendAfterTranscription(false);
-    setPasteNotice(message);
-  }, [armSendAfterTranscription]);
+    setPasteNotice(message, formatVoiceInputReport(diagnostics));
+  }, [armSendAfterTranscription, setPasteNotice]);
 
   const {
     status: recorderStatus,
@@ -640,7 +669,7 @@ export function Composer({
       .finally(() => {
         setIsUploadingAttachments(false);
       });
-  }, [inputValue, pendingAttachments, pendingFiles, isStreaming, isUploadingAttachments, hasPendingWait, expensiveResumeBlocked, isRecording, isTranscribing, stopRecording, armSendAfterTranscription, onSend, onAfterSend, selectedModel, skipSendLocks, deferImageUpload, conversationId, isProviderLocked, lockConversationProvider, queuedSkills, markSkillsAsLoaded, isFirstMessage, selectedFlags]);
+  }, [inputValue, pendingAttachments, pendingFiles, isStreaming, isUploadingAttachments, hasPendingWait, expensiveResumeBlocked, isRecording, isTranscribing, stopRecording, armSendAfterTranscription, onSend, onAfterSend, selectedModel, skipSendLocks, deferImageUpload, conversationId, isProviderLocked, lockConversationProvider, queuedSkills, markSkillsAsLoaded, isFirstMessage, selectedFlags, setPasteNotice]);
 
   // Complete a Send that was pressed mid-dictation. Runs once the recorder
   // is idle and the transcript request has resolved; by then the transcript
@@ -697,7 +726,7 @@ export function Composer({
     // selection when switching conversations so they never bleed across.
     setSelectedFlags([]);
     setIsFlagsOpen(false);
-  }, [conversationId]);
+  }, [conversationId, setPasteNotice]);
 
   // Close the Flags popover on an outside click (AdminOpsMenu pattern).
   useEffect(() => {
@@ -712,12 +741,14 @@ export function Composer({
   }, [isFlagsOpen]);
 
   // Auto-dismiss the inline paste-rejection notice after a few seconds so
-  // it doesn't linger above the composer.
+  // it doesn't linger above the composer. A notice carrying a diagnostic
+  // report stays until the user dismisses it (or sends), since the report
+  // is what they need to tap on a phone.
   useEffect(() => {
-    if (!pasteNotice) return;
-    const t = window.setTimeout(() => setPasteNotice(null), 4000);
+    if (!notice || notice.report) return;
+    const t = window.setTimeout(() => setNotice(null), 4000);
     return () => window.clearTimeout(t);
-  }, [pasteNotice]);
+  }, [notice]);
 
   const removeAttachment = useCallback((id: string) => {
     setPendingAttachments((prev) => {
@@ -775,7 +806,7 @@ export function Composer({
         return merged;
       });
     }
-  }, []);
+  }, [setPasteNotice]);
 
   // Read the chosen files and queue them. Resets input.value so picking the
   // same file again re-fires onChange.
@@ -916,7 +947,7 @@ export function Composer({
     },
     // ``inputDisabled`` is the only outer state the paste handler reads;
     // the rest is local to the function or self-stable setState callbacks.
-    [inputDisabled],
+    [inputDisabled, setPasteNotice],
   );
 
   // ----------------------------------------------------------------
@@ -998,8 +1029,30 @@ export function Composer({
     </div>
   ) : null;
 
-  const pasteNoticeEl = pasteNotice ? (
-    <div className="paste-notice" role="status">{pasteNotice}</div>
+  const pasteNoticeEl = notice ? (
+    notice.report ? (
+      <div className="paste-notice paste-notice-actionable" role="status">
+        <button
+          type="button"
+          className="paste-notice-details"
+          onClick={() => setIsNoticeDetailsOpen(true)}
+          title="Show the full error report"
+        >
+          {notice.text}
+          <span className="paste-notice-details-hint">Tap for details</span>
+        </button>
+        <button
+          type="button"
+          className="paste-notice-dismiss"
+          onClick={() => setNotice(null)}
+          aria-label="Dismiss"
+        >
+          <X size={14} />
+        </button>
+      </div>
+    ) : (
+      <div className="paste-notice" role="status">{notice.text}</div>
+    )
   ) : null;
 
   const pastedImagesRow = pendingAttachments.length > 0 ? (
@@ -1105,6 +1158,13 @@ export function Composer({
         isOpen={isSystemPromptModalOpen}
         conversationId={conversationId}
         onClose={() => setIsSystemPromptModalOpen(false)}
+      />
+
+      <NoticeDetailsModal
+        isOpen={isNoticeDetailsOpen && Boolean(notice?.report)}
+        title="Error details"
+        report={notice?.report ?? ''}
+        onClose={() => setIsNoticeDetailsOpen(false)}
       />
     </>
   );

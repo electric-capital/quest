@@ -1,0 +1,164 @@
+/* Diagnostic readout behind a composer notice. Mirrors the TokenCostModal
+   overlay/modal conventions (dark-first, light-mode override block); the
+   report is monospace, wrapped and selectable so it screenshots and copies
+   cleanly on a phone. */
+
+.notice-details-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.notice-details-modal {
+  background-color: #2a2a2a;
+  border-radius: 12px;
+  width: 560px;
+  max-width: 92vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  animation: slideUp 0.15s ease-out;
+}
+
+.notice-details-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.notice-details-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.notice-details-close {
+  background: none;
+  border: none;
+  padding: 0.25rem;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.5);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.notice-details-close:hover {
+  color: rgba(255, 255, 255, 0.87);
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.notice-details-hint {
+  margin: 0;
+  padding: 0.75rem 1.25rem 0;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.notice-details-report {
+  margin: 0.75rem 1.25rem;
+  padding: 0.75rem;
+  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+  color: rgba(255, 255, 255, 0.88);
+  background-color: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+}
+
+.notice-details-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 1.25rem 1rem;
+}
+
+.notice-details-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background-color: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.notice-details-copy:hover {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+@media (max-width: 768px) {
+  .notice-details-modal {
+    width: 100%;
+    max-width: calc(100vw - 1rem);
+    max-height: calc(100dvh - 1rem);
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  .notice-details-modal {
+    background-color: #ffffff;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  }
+
+  .notice-details-header {
+    border-bottom-color: rgba(0, 0, 0, 0.1);
+  }
+
+  .notice-details-header h2 {
+    color: #1a1a1a;
+  }
+
+  .notice-details-close {
+    color: rgba(0, 0, 0, 0.5);
+  }
+
+  .notice-details-close:hover {
+    color: rgba(0, 0, 0, 0.87);
+    background-color: rgba(0, 0, 0, 0.05);
+  }
+
+  .notice-details-hint {
+    color: rgba(0, 0, 0, 0.6);
+  }
+
+  .notice-details-report {
+    color: #1a1a1a;
+    background-color: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.12);
+  }
+
+  .notice-details-copy {
+    border-color: rgba(0, 0, 0, 0.18);
+    background-color: rgba(0, 0, 0, 0.04);
+    color: #1a1a1a;
+  }
+
+  .notice-details-copy:hover {
+    background-color: rgba(0, 0, 0, 0.08);
+  }
+}
