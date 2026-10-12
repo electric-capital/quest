@@ -15,11 +15,18 @@ Stub verify behaviour (deterministic, no network):
   route's verify timeout down to exercise the timeout path)
 - otherwise -> account = the username lower-cased when it contains ``@``,
   else ``<username>@<host>``; ``extras`` records the host.
+
+It also contributes an authed_get service entry on ``api.multiconn.test``
+(``accepts_connection=True``; the loader resolves the ``connection``
+argument and returns the row's account as the bearer credential) and a
+``system:multiconn`` skill whose content builder takes the ``connections``
+keyword (it lists the account addresses it receives).
 """
 
 import asyncio
 import json
 
+from chat.system_skills.catalog import SystemSkill
 from config.plugin_types import (
     CredentialField,
     PluginTool,
@@ -102,6 +109,57 @@ _WHOAMI_TOOL = PluginTool(
 )
 
 
+SERVICE_HOST = "api.multiconn.test"
+
+
+async def _load_service_credentials(user: dict, connection: str | None = None):
+    """authed_get loader: the resolved row's account is the "token".
+
+    ConnectionNotFound propagates; authed_get turns it into the structured
+    ``connection_not_found`` error.
+    """
+    row = resolve_connection(user, PLUGIN_ID, connection)
+    if row is None:
+        return None
+    return row.get("account")
+
+
+def _inject_service_auth(token, headers: dict[str, str]) -> None:
+    headers["Authorization"] = f"Bearer {token}"
+
+
+_SERVICE = {
+    "key": SERVICE_HOST,
+    "entry": {
+        "name": "Multi Connection Fixture API",
+        "load_credentials": _load_service_credentials,
+        "inject_auth": _inject_service_auth,
+        "requires_user": True,
+        "accepts_connection": True,
+        "allowed_endpoints": [r"^/v1/[a-z]+$"],
+        "missing_credentials_error": {
+            "error": "multiconn_not_connected",
+            "message": "Connect Multi Connection Fixture in Settings.",
+        },
+    },
+}
+
+
+def _skill_content(base_url: str, api_key: str, connections=None) -> str:
+    accounts = ", ".join(c["label"] for c in (connections or [])) or "none"
+    return f"## Multi Connection Fixture\n\nYour connections: {accounts}\n"
+
+
+_SKILL = SystemSkill(
+    id="system:multiconn",
+    name="Multi Connection Fixture",
+    description="Test fixture skill for multi-connection services.",
+    when_to_load="Never (test fixture).",
+    content_builder=_skill_content,
+    requires=PLUGIN_ID,
+)
+
+
 def get_plugin() -> QuestPlugin:
     return QuestPlugin(
         id=PLUGIN_ID,
@@ -122,4 +180,6 @@ def get_plugin() -> QuestPlugin:
             row_warning=_row_warning,
         ),
         tools=(_WHOAMI_TOOL,),
+        services=(_SERVICE,),
+        system_skills=(_SKILL,),
     )

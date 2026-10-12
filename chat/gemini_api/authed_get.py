@@ -32,6 +32,7 @@ from pydantic import BaseModel
 from auth.config import load_coingecko_api_key
 from auth.google_credentials import get_valid_service_credentials
 from auth.session import get_current_user_cookie_or_apikey
+from config.user_connections import ConnectionNotFound, ConnectionNotSupported
 
 logger = logging.getLogger(__name__)
 
@@ -560,8 +561,34 @@ def register_service(key: str, entry: dict[str, Any]) -> None:
             f"authed_get service key {key!r} has a path component but the "
             "entry declares no 'path_prefix'"
         )
+    if entry.get("accepts_connection"):
+        if not entry.get("requires_user"):
+            raise ValueError(
+                f"authed_get service {key!r} sets 'accepts_connection' but not "
+                "'requires_user': connections are per-user"
+            )
+        if not _loader_accepts_connection(entry["load_credentials"]):
+            raise ValueError(
+                f"authed_get service {key!r} sets 'accepts_connection' but its "
+                "'load_credentials' does not accept a 'connection' keyword"
+            )
     _compile_service_patterns(entry)
     _SERVICE_REGISTRY[key] = entry
+
+
+def _loader_accepts_connection(loader: Any) -> bool:
+    """Whether *loader* can be called as ``loader(user, connection=...)``."""
+    try:
+        params = inspect.signature(loader).parameters
+    except (TypeError, ValueError):
+        return False
+    param = params.get("connection")
+    if param is not None:
+        return param.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
 # Compile core entries' allow-list regexes at module load time.
@@ -651,6 +678,37 @@ def _reject_disallowed_caller_headers(headers: dict[str, str] | None) -> str | N
 
 
 # ---------------------------------------------------------------------------
+# Credential loader invocation
+# ---------------------------------------------------------------------------
+
+async def _call_loader(service: dict[str, Any], user: dict | None, connection: str | None):
+    """Invoke an entry's credential loader with the arguments it takes.
+
+    Per-user loaders get the user dict -- plus ``connection=`` when the entry
+    sets ``accepts_connection``; no-auth loaders are called with no
+    arguments, sync or async.
+    """
+    loader = service["load_credentials"]
+    if service.get("requires_user", False):
+        if service.get("accepts_connection"):
+            return await loader(user, connection=connection)
+        return await loader(user)
+    if inspect.iscoroutinefunction(loader):
+        return await loader()
+    return loader()
+
+
+def _connection_not_found_error(service: dict[str, Any], exc: ConnectionNotFound) -> str:
+    """The structured ``connection_not_found`` error, listing the accounts."""
+    return json.dumps({
+        "error": "connection_not_found",
+        "service": service["name"],
+        "requested": exc.requested,
+        "available": exc.available,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Internal request helper
 # ---------------------------------------------------------------------------
 
@@ -662,6 +720,7 @@ async def _make_authed_request(
     raw_response: bool = False,
     method: str = "GET",
     json_body: dict | None = None,
+    connection: str | None = None,
 ) -> str | httpx.Response:
     """Core authenticated request logic shared by the tool handlers and HTTP endpoints.
 
@@ -684,6 +743,13 @@ async def _make_authed_request(
     When *raw_response* is ``True``, returns the ``httpx.Response`` object
     directly on success so callers can access ``.content`` for binary data.
     On failure, still returns a JSON error string.
+
+    *connection* names one of the user's connections (an account address)
+    for a multi-connection service. It is passed to the loader only when the
+    matched entry sets ``accepts_connection``; for any other service a
+    non-blank *connection* returns the structured ``connection_not_supported``
+    error before any credential loading or network I/O. Blank / ``None``
+    leaves behaviour unchanged.
 
     Request header precedence (lowest priority first, highest last):
         1. Service ``default_headers`` (e.g. GitHub's ``User-Agent``).
@@ -766,6 +832,16 @@ async def _make_authed_request(
                 )
             })
 
+    # --- Connection argument ------------------------------------------------
+    # Only entries that opt in (multi-connection plugins) take a named
+    # connection; any other service refuses it before credential loading.
+    connection = (connection or "").strip() or None
+    if connection is not None and not service.get("accepts_connection"):
+        return json.dumps({
+            "error": "connection_not_supported",
+            "service": service["name"],
+        })
+
     # --- Credential loading -----------------------------------------------
     requires_user = service.get("requires_user", False)
     if requires_user and user is None:
@@ -777,13 +853,14 @@ async def _make_authed_request(
         })
 
     try:
-        loader = service["load_credentials"]
-        if requires_user:
-            credentials = await loader(user)
-        elif inspect.iscoroutinefunction(loader):
-            credentials = await loader()
-        else:
-            credentials = loader()
+        credentials = await _call_loader(service, user, connection)
+    except ConnectionNotFound as exc:
+        return _connection_not_found_error(service, exc)
+    except ConnectionNotSupported:
+        return json.dumps({
+            "error": "connection_not_supported",
+            "service": service["name"],
+        })
     except Exception:
         return json.dumps({
             "error": (
@@ -826,7 +903,10 @@ async def _make_authed_request(
                     service["name"],
                     user.get("email", "unknown"),
                 )
-                credentials = await service["load_credentials"](user)
+                try:
+                    credentials = await _call_loader(service, user, connection)
+                except ConnectionNotFound as exc:
+                    return _connection_not_found_error(service, exc)
                 if credentials is None:
                     error_info = service.get("missing_credentials_error", {
                         "error": "google_services_auth_required",
@@ -885,6 +965,15 @@ async def _make_authed_request(
 # ---------------------------------------------------------------------------
 
 
+def _connection_kwargs(connection: str | None) -> dict[str, str]:
+    """``{"connection": ...}`` only when one was given.
+
+    Keeps calls that omit ``connection`` identical to before the argument
+    existed (tests and plugins patch ``_make_authed_request`` with mocks).
+    """
+    return {"connection": connection} if connection is not None else {}
+
+
 def _content_type_to_extension(content_type: str | None) -> str:
     """Pick a file extension based on the upstream Content-Type header.
 
@@ -919,6 +1008,7 @@ async def _handle_authed_get_to_file(
     output_file: str,
     method: str = "GET",
     json_body: dict | None = None,
+    connection: str | None = None,
 ) -> str:
     """Run the authed request and stream the body into the workspace.
 
@@ -966,7 +1056,7 @@ async def _handle_authed_get_to_file(
 
     response = await _make_authed_request(
         url, headers=headers, user=user, raw_response=True,
-        method=method, json_body=json_body,
+        method=method, json_body=json_body, **_connection_kwargs(connection),
     )
     # On any failure (validation, credential, upstream HTTP 4xx/5xx,
     # transport error) _make_authed_request returns a JSON error string.
@@ -1087,6 +1177,7 @@ async def handle_authed_get(
     conversation_id: str | None = None,
     project_id: str | None = None,
     output_file: str | None = None,
+    connection: str | None = None,
 ) -> str:
     """Make an authenticated GET request to a supported external API.
 
@@ -1111,6 +1202,10 @@ async def handle_authed_get(
             existing file. The size gate and ``force_large_response`` blob
             mechanism are bypassed; ``alt=media`` is also unlocked because
             the bytes go straight to disk.
+        connection: Optional account address of the user's connection to use,
+            for multi-connection services (entries with
+            ``accepts_connection``). Any other service returns the
+            structured ``connection_not_supported`` error when it is given.
 
     Returns:
         JSON string of the response body on success, or a JSON error
@@ -1160,9 +1255,13 @@ async def handle_authed_get(
             conversation_id=conversation_id,
             project_id=project_id,
             output_file=output_file,
+            **_connection_kwargs(connection),
         )
 
-    result = await _make_authed_request(url, headers=headers, user=user, raw_response=False)
+    result = await _make_authed_request(
+        url, headers=headers, user=user, raw_response=False,
+        **_connection_kwargs(connection),
+    )
     # _make_authed_request with raw_response=False always returns a string
     result = result  # type: ignore[assignment]
 
@@ -1256,6 +1355,7 @@ async def handle_authed_post(
     conversation_id: str | None = None,
     project_id: str | None = None,
     output_file: str | None = None,
+    connection: str | None = None,
 ) -> str:
     """Make an authenticated POST request to a narrow set of read-shaped endpoints.
 
@@ -1285,6 +1385,8 @@ async def handle_authed_post(
             body is written under the hidden ``.responses/`` subdirectory and a
             small JSON receipt is returned instead of the body (same contract as
             ``handle_authed_get``).
+        connection: Optional connection account address (same contract as
+            ``handle_authed_get``).
 
     Returns:
         JSON string of the response body on success, or a JSON error string on
@@ -1300,11 +1402,12 @@ async def handle_authed_post(
             output_file=output_file,
             method="POST",
             json_body=body,
+            **_connection_kwargs(connection),
         )
 
     result = await _make_authed_request(
         url, headers=headers, user=user, raw_response=False,
-        method="POST", json_body=body,
+        method="POST", json_body=body, **_connection_kwargs(connection),
     )
     result = result  # type: ignore[assignment]
 
@@ -1323,6 +1426,7 @@ class AuthedGetRequest(BaseModel):
     """Request body for the POST /api/authed-get proxy endpoint."""
     url: str
     headers: Optional[dict[str, str]] = None
+    connection: Optional[str] = None
 
 
 class AuthedPostRequest(BaseModel):
@@ -1330,6 +1434,7 @@ class AuthedPostRequest(BaseModel):
     url: str
     body: Optional[dict] = None
     headers: Optional[dict[str, str]] = None
+    connection: Optional[str] = None
 
 
 async def authed_get_endpoint(
@@ -1358,6 +1463,7 @@ async def authed_get_endpoint(
     if is_binary:
         result = await _make_authed_request(
             body.url, headers=body.headers, user=user, raw_response=True,
+            **_connection_kwargs(body.connection),
         )
         if isinstance(result, str):
             # Error path -- result is a JSON error string
@@ -1377,7 +1483,10 @@ async def authed_get_endpoint(
         )
 
     # Standard JSON path -- delegate to handle_authed_get
-    result_text = await handle_authed_get(body.url, headers=body.headers, user=user)
+    result_text = await handle_authed_get(
+        body.url, headers=body.headers, user=user,
+        **_connection_kwargs(body.connection),
+    )
     try:
         parsed = json.loads(result_text)
     except (json.JSONDecodeError, TypeError):
@@ -1398,6 +1507,7 @@ async def authed_post_endpoint(
     """
     result_text = await handle_authed_post(
         req.url, body=req.body, headers=req.headers, user=user,
+        **_connection_kwargs(req.connection),
     )
     try:
         parsed = json.loads(result_text)

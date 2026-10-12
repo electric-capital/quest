@@ -247,6 +247,7 @@ async def _handle_load_skills(
     base_url: str = "",
     api_key: str = "",
     conversation_id: str | None = None,
+    user: dict | None = None,
 ) -> str:
     """Load the full content of one or more skills by ID.
 
@@ -266,6 +267,8 @@ async def _handle_load_skills(
         api_key: User's API key (for system skill content builders).
         conversation_id: Conversation UUID (records successfully loaded
             DB skills for the edit_skill content-edit read gate).
+        user: The user dict, passed to system skill builders that take a
+            ``connections`` keyword.
 
     Returns:
         A markdown document (plain string) describing the loaded skills.
@@ -284,7 +287,7 @@ async def _handle_load_skills(
 
         system_results = load_system_skills(
             system_ids, connected_services, base_url, api_key,
-            has_project=has_project,
+            has_project=has_project, user=user,
         ) if system_ids else []
 
         db_results = await get_accessible_skills_by_ids(user_id, db_ids) if db_ids else []

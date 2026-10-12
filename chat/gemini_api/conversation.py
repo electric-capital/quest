@@ -801,7 +801,12 @@ async def run_conversation_turn(
         converted_from_standalone = bool(notice_flags.get("converted_from_standalone"))
 
         from api.instructions import get_user_connected_services
+        from config.user_connections import build_connected_accounts_paragraph
         connected_services = get_user_connected_services(user)
+        # Never rendered into the public-project prompt (spec 11.5).
+        connected_accounts = (
+            "" if is_public else build_connected_accounts_paragraph(user)
+        )
         is_slack_origin = origin == "slack"
         if is_user_subagent:
             from chat.gemini_api.system_prompt import get_user_subagent_system_prompt
@@ -814,6 +819,7 @@ async def run_conversation_turn(
                 caller_name=(subagent_caller or {}).get("name", ""),
                 caller_email=(subagent_caller or {}).get("email", ""),
                 skills_content=resolved_skills_content,
+                connected_accounts=connected_accounts,
             )
         elif is_inference_api:
             from chat.gemini_api.system_prompt import (
@@ -826,6 +832,7 @@ async def run_conversation_turn(
                 user_name=user.get("name", ""),
                 user_email=user["email"],
                 skills_content=resolved_skills_content,
+                connected_accounts=connected_accounts,
             )
         elif is_public:
             # Public-project prompt: NO proxy preamble (it embeds the
@@ -863,6 +870,7 @@ async def run_conversation_turn(
                 is_routine=bool(routine_id),
                 legacy_shared_workspace=legacy_shared_workspace,
                 converted_from_standalone=converted_from_standalone,
+                connected_accounts=connected_accounts,
             )
         ChatStorage.set_system_prompt(conversation_id, system_prompt)
         # Always load saved SDK history from disk so it's available as a

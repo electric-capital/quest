@@ -340,6 +340,17 @@ _ROUTINE_NAMING_SECTION = """**Routine run:** This conversation is a routine run
 **Routine completion (IMPORTANT):** When every piece of work the routine prompt asked for is done and you have written your final summary, call the top-level `routine_completed` tool (it has its own function declaration -- call it directly, not through `tool_call`) EXACTLY ONCE as your LAST tool call. A run that ends without this call is treated as unfinished: you will receive a follow-up message asking you to check that all the requested work was done and to call `routine_completed`. If part of the task could not be completed, still call `routine_completed` and explain what is missing in its `summary`."""
 
 
+def _connected_accounts_block(paragraph: str) -> str:
+    """The "Connected accounts" paragraph as a prompt block, or ``""``.
+
+    Rendered right after the system-skills enumeration. An empty paragraph
+    adds nothing at all, keeping the prompts of users without multiple
+    connections byte-identical. Never used by the public-project prompt.
+    """
+    paragraph = (paragraph or "").strip()
+    return f"\n\n{paragraph}" if paragraph else ""
+
+
 def get_system_prompt(
     user_api_key: str,
     base_url: str = "http://localhost:8000",
@@ -355,6 +366,7 @@ def get_system_prompt(
     is_routine: bool = False,
     legacy_shared_workspace: bool = False,
     converted_from_standalone: bool = False,
+    connected_accounts: str = "",
 ) -> str:
     """Build the system prompt with tool instructions and skill enumeration.
 
@@ -396,6 +408,9 @@ def get_system_prompt(
         converted_from_standalone: The ``converted_from_standalone`` notice
             flag. Adds the "converted from a standalone chat" note.
             Project conversations only, like ``legacy_shared_workspace``.
+        connected_accounts: Pre-rendered "Connected accounts" paragraph
+            (config.user_connections.build_connected_accounts_paragraph);
+            empty -> nothing is added, so the prompt is unchanged.
 
     Project conversations also get the "Two file spaces" paragraph and a
     ``/project`` script example; a standalone conversation's prompt carries
@@ -574,7 +589,7 @@ You have thirteen tools available:
 
 {dynamic_tools_section}
 
-{system_skills_block}
+{system_skills_block}{_connected_accounts_block(connected_accounts)}
 
 **Important rules:**
 - All API URLs used with `curl_proxy_get`/`curl_proxy_post` must start with `{base_url}/api/`.
@@ -676,6 +691,7 @@ def get_user_subagent_system_prompt(
     caller_name: str = "",
     caller_email: str = "",
     skills_content: str = "",
+    connected_accounts: str = "",
 ) -> str:
     """Build the system prompt for a cross-user subagent conversation.
 
@@ -767,7 +783,7 @@ User Local Time: <current local datetime> (<timezone>)
 
 {dynamic_tools}
 
-{system_skills_block}
+{system_skills_block}{_connected_accounts_block(connected_accounts)}
 
 ---
 
@@ -781,6 +797,7 @@ def get_inference_api_system_prompt(
     user_name: str = "",
     user_email: str = "",
     skills_content: str = "",
+    connected_accounts: str = "",
 ) -> str:
     """Build the system prompt for a one-shot inference API conversation.
 
@@ -867,7 +884,7 @@ User Local Time: <current local datetime> (<timezone>)
 
 {dynamic_tools}
 
-{system_skills_block}
+{system_skills_block}{_connected_accounts_block(connected_accounts)}
 
 ---
 
@@ -1056,6 +1073,7 @@ def get_sub_agent_system_prompt(
     can_nest: bool = False,
     legacy_shared_workspace: bool = False,
     converted_from_standalone: bool = False,
+    connected_accounts: str = "",
 ) -> str:
     """Build the system prompt for a sub-agent.
 
@@ -1089,6 +1107,8 @@ def get_sub_agent_system_prompt(
         converted_from_standalone: The parent conversation's
             ``converted_from_standalone`` notice flag; adds the converted
             note. Project conversations only.
+        connected_accounts: Pre-rendered "Connected accounts" paragraph (the
+            user's multi-connection services); empty -> nothing added.
 
     Project conversations also get the "Two file spaces" paragraph (the
     sub-agent shares the parent's conversation and project workspaces).
@@ -1273,7 +1293,7 @@ You have {tool_count_word} tools available:
 
 {sub_agent_dynamic_tools}
 
-{system_skills_block}
+{system_skills_block}{_connected_accounts_block(connected_accounts)}
 
 **Important rules:**
 - You are a sub-agent. Focus on completing your assigned task efficiently.

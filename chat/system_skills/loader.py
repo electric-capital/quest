@@ -4,7 +4,8 @@ These functions are the only entry points the rest of the codebase should
 use; the catalog itself is treated as private state.
 """
 
-from typing import Optional
+import inspect
+from typing import Callable, Optional
 
 from chat.docs.constants import DOCS_SERVICE_KEY, docs_disabled_message
 from chat.system_skills.catalog import CATALOG, SYSTEM_SKILL_PREFIX, SystemSkill
@@ -56,12 +57,67 @@ def list_system_skills(
     ]
 
 
+_ACCEPTS_CONNECTIONS_CACHE: dict[int, tuple[Callable, bool]] = {}
+
+
+def builder_accepts_connections(builder: Callable) -> bool:
+    """Whether a skill content builder takes a ``connections`` keyword.
+
+    Existing ``(base_url, api_key)`` builders (and lambdas) do not, and are
+    called exactly as before. Cached per builder object.
+    """
+    cached = _ACCEPTS_CONNECTIONS_CACHE.get(id(builder))
+    if cached is not None and cached[0] is builder:
+        return cached[1]
+    try:
+        params = inspect.signature(builder).parameters
+    except (TypeError, ValueError):
+        accepts = False
+    else:
+        param = params.get("connections")
+        if param is not None:
+            accepts = param.kind in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            )
+        else:
+            accepts = any(
+                p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+            )
+    # Hold a reference to the builder so its id() can never be reused.
+    _ACCEPTS_CONNECTIONS_CACHE[id(builder)] = (builder, accepts)
+    return accepts
+
+
+def build_skill_content(
+    skill: SystemSkill, base_url: str, api_key: str, user: Optional[dict] = None,
+) -> str:
+    """Run a skill's content builder.
+
+    Builders that accept a ``connections`` keyword also receive
+    ``config.user_connections.connection_summary(user, skill.requires)`` (an
+    empty list without a user or a ``requires`` service), so a
+    multi-connection plugin's skill can show the user's real account
+    addresses. Every other builder is called as ``(base_url, api_key)``.
+    """
+    if builder_accepts_connections(skill.content_builder):
+        from config.user_connections import connection_summary
+
+        connections = (
+            connection_summary(user, skill.requires)
+            if user and skill.requires else []
+        )
+        return skill.content_builder(base_url, api_key, connections=connections)
+    return skill.content_builder(base_url, api_key)
+
+
 def load_system_skills(
     skill_ids: list[str],
     connected_services: Optional[dict[str, bool]],
     base_url: str,
     api_key: str,
     has_project: bool = False,
+    user: Optional[dict] = None,
 ) -> list[dict]:
     """Resolve full content for the requested system skill ids.
 
@@ -77,6 +133,8 @@ def load_system_skills(
         base_url: Quest API proxy base URL (passed to content builders).
         api_key: User's API key (passed to content builders that need it).
         has_project: Whether the current conversation belongs to a project.
+        user: The user dict, for builders that take a ``connections``
+            keyword (see :func:`build_skill_content`). Optional.
 
     Returns:
         A list of result dicts. The order matches the input order.
@@ -120,7 +178,7 @@ def load_system_skills(
             })
             continue
         try:
-            content = skill.content_builder(base_url, api_key)
+            content = build_skill_content(skill, base_url, api_key, user)
         except Exception as exc:  # pragma: no cover -- defensive
             results.append({
                 "id": skill.id,

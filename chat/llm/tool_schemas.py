@@ -1339,6 +1339,14 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                         "since the bytes go straight to disk."
                     ),
                 },
+                "connection": {
+                    "type": "string",
+                    "description": (
+                        "Account address of the connection to use when you have more "
+                        "than one for this service (see Connected accounts in your "
+                        "instructions). Omit to use the default."
+                    ),
+                },
                 "intent_message": {
                     "type": "string",
                     "description": (
@@ -1428,6 +1436,14 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                         "run_script to read it back. Absolute paths and '..' segments are "
                         "rejected. When set, the size gate and force_large_response are "
                         "bypassed. Recommended for large log-entry pulls."
+                    ),
+                },
+                "connection": {
+                    "type": "string",
+                    "description": (
+                        "Account address of the connection to use when you have more "
+                        "than one for this service (see Connected accounts in your "
+                        "instructions). Omit to use the default."
                     ),
                 },
                 "intent_message": {

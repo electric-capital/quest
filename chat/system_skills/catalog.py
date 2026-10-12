@@ -52,7 +52,10 @@ class SystemSkill:
         requires: Optional ``connected_services`` key that must be true for
             this skill to be visible/loadable. ``None`` means always available.
         content_builder: ``(base_url, api_key) -> str`` returning the full
-            skill content when the skill is loaded.
+            skill content when the skill is loaded. A builder that also
+            accepts a ``connections`` keyword receives the user's
+            connections for ``requires`` (``connection_summary`` dicts,
+            default first) -- see loader.build_skill_content.
         requires_project: When True, skill is only surfaced when the
             current conversation belongs to a project.
     """
@@ -61,7 +64,7 @@ class SystemSkill:
     name: str
     description: str
     when_to_load: str
-    content_builder: Callable[[str, str], str]
+    content_builder: Callable[..., str]
     requires: Optional[str] = None
     requires_project: bool = False
 
