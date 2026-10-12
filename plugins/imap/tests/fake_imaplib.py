@@ -3,11 +3,17 @@
 It emulates the parts of ``imaplib.IMAP4`` / ``imaplib.IMAP4_SSL`` that
 plugins/imap/upstream.py uses, with imaplib's real return shapes:
 ``(typ, data)`` pairs, FETCH data as ``[(b'1 (UID 5 BODY[] {12}',
-b'<literal>'), b')', ...]`` (several literals per message possible),
-LIST lines (literal tuples for awkward names), STATUS, SEARCH, EXAMINE
-with UIDVALIDITY reached through ``response('UIDVALIDITY')`` (popped
-from ``untagged_responses`` exactly like imaplib), and imaplib's
-exceptions (``imaplib.IMAP4.error`` / ``.abort``).
+b'<literal>'), b')', ...]`` (several literals per message possible;
+``BINARY[...]`` literals use the literal8 marker ``~{n}``), LIST lines
+(literal tuples followed by imaplib's empty trailer line for awkward
+names), STATUS, SEARCH, EXAMINE with UIDVALIDITY reached through
+``response('UIDVALIDITY')`` (popped from ``untagged_responses`` exactly
+like imaplib), CAPABILITY returning every collected untagged CAPABILITY
+(the login ``[CAPABILITY ...]`` response code AND the reply, as imaplib
+does), user names checked the way a server parses them (an unquoted name
+with specials is a BAD command), ``debug`` initialised from
+``imaplib.Debug``, and imaplib's exceptions (``imaplib.IMAP4.error`` /
+``.abort``).
 
 Model
 -----
@@ -34,7 +40,19 @@ Scripted failures (attributes on ``FakeImapServer``)
 - ``hang_on``: a command name (``"LOGIN"``, ``"SEARCH"``, ``"FETCH"``,
   ``"LIST"``, ``"EXAMINE"``) that blocks until the socket is shut down
   from outside (then raises ``imaplib.IMAP4.abort('socket error: EOF')``)
-  -- the timeout path.
+  -- the timeout path. ``"CONNECT"`` blocks inside the constructor (like
+  a stuck TCP connect / TLS handshake) until the socket the fake
+  registered through ``upstream.register_connect_socket`` is shut down,
+  then raises ``OSError``; ``server.connect_exited`` is set when the
+  constructor returns or raises.
+- ``omit_uidvalidity_code``: EXAMINE sends no ``[UIDVALIDITY]`` code
+  (the transport falls back to STATUS).
+- ``unsolicited_fetch``: every UID FETCH reply starts with an unsolicited
+  ``* n FETCH (FLAGS (...))`` for another message (no UID).
+- ``uid_last``: FETCH responses put the ``UID`` item last.
+- ``FakeFolder.raw_name``: a server-side name that is not the canonical
+  modified UTF-7 encoding of ``name``; mailbox arguments are compared
+  with the raw names byte for byte, like a real server.
 - ``string_disposition``: emit BODYSTRUCTURE dispositions as a raw
   header string (as pymap does) instead of the RFC 3501 list form.
 - folder missing: just don't create it (EXAMINE / STATUS answer NO).
@@ -76,12 +94,12 @@ import threading
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from email.message import EmailMessage
-from typing import Any, Optional
+from typing import Optional
 
 import pytest
 
 from plugins.imap import upstream
-from plugins.imap.protocol import decode_folder_name, encode_folder_name
+from plugins.imap.protocol import encode_folder_name
 
 DEFAULT_HOST = "imap.example.com"
 DEFAULT_USERNAME = "alice@example.com"
@@ -137,6 +155,13 @@ class FakeFolder:
     next_uid: int = 1
     attributes: tuple = ("\\HasNoChildren",)
     delimiter: Optional[str] = "/"
+    raw_name: Optional[str] = None  # non-canonical server-side name
+
+    @property
+    def wire_name(self) -> str:
+        if self.name == "INBOX":
+            return "INBOX"
+        return self.raw_name or encode_folder_name(self.name)
 
 
 class FakeMailbox:
@@ -147,9 +172,10 @@ class FakeMailbox:
         self.folders: dict[str, FakeFolder] = {}
 
     def add_folder(self, name: str, *, uidvalidity: int = 1, special_use: Optional[str] = None,
-                   delimiter: Optional[str] = "/") -> FakeFolder:
+                   delimiter: Optional[str] = "/", raw_name: Optional[str] = None) -> FakeFolder:
         attrs = ("\\HasNoChildren",) + ((special_use,) if special_use else ())
-        folder = FakeFolder(name=name, uidvalidity=uidvalidity, attributes=attrs, delimiter=delimiter)
+        folder = FakeFolder(name=name, uidvalidity=uidvalidity, attributes=attrs, delimiter=delimiter,
+                            raw_name=raw_name)
         self.folders[name] = folder
         return folder
 
@@ -183,6 +209,10 @@ class FakeImapServer:
         self.auth_fail = False
         self.hang_on: Optional[str] = None
         self.string_disposition = False
+        self.omit_uidvalidity_code = False
+        self.unsolicited_fetch = False
+        self.uid_last = False
+        self.connect_exited = threading.Event()
 
     def add_account(self, username: str, password: str, *, inbox: bool = True) -> FakeMailbox:
         mailbox = FakeMailbox(password)
@@ -356,9 +386,20 @@ class FakeIMAP4:
         self.selected: Optional[FakeFolder] = None
         self.logged_out = False
         self._cmd_log: dict = {}
+        self.debug = imaplib.Debug  # as imaplib.IMAP4.__init__ does
+        self._login_caps: Optional[bytes] = None
         server.record("CONNECT", host, port, "TLS" if implicit_tls else "PLAIN")
-        if server.connect_error is not None:
-            raise server.connect_error
+        try:
+            # Like upstream.QuestIMAP4: register the socket before blocking.
+            upstream.register_connect_socket(self.sock)
+            if server.hang_on == "CONNECT":
+                if not self.sock.closed.wait(10):
+                    raise TimeoutError("timed out")
+                raise OSError(9, "Bad file descriptor")
+            if server.connect_error is not None:
+                raise server.connect_error
+        finally:
+            server.connect_exited.set()
         server.connections.append(self)
 
     # -- capability --------------------------------------------------
@@ -375,7 +416,10 @@ class FakeIMAP4:
     def capability(self):
         self.server.record("CAPABILITY")
         caps = POST_LOGIN_CAPABILITIES if self.state != "NONAUTH" else self.capabilities
-        return "OK", [" ".join(caps).encode()]
+        # imaplib returns every untagged CAPABILITY collected so far: the
+        # login response code first, then this reply.
+        collected = self.untagged_responses.pop("CAPABILITY", [])
+        return "OK", [*collected, " ".join(caps).encode()]
 
     def _maybe_hang(self, name: str) -> None:
         if self.server.hang_on == name:
@@ -400,9 +444,18 @@ class FakeIMAP4:
             raise self.error(b"[AUTHENTICATIONFAILED] Invalid credentials (Failure)")
         self.mailbox = mailbox
         self.state = "AUTH"
-        return "OK", [b"[CAPABILITY IMAP4rev1] Logged in"]
+        code = " ".join(POST_LOGIN_CAPABILITIES)
+        self.untagged_responses.setdefault("CAPABILITY", []).append(code.encode())
+        return "OK", [f"[CAPABILITY {code}] Logged in".encode()]
 
     def login(self, user, password):
+        # imaplib sends ``user`` verbatim (it quotes only the password); a
+        # server parses an unquoted name as an atom.
+        if user.startswith('"'):
+            user = _unquote(user)
+        elif not user or re.search(r'[\s(){%*"\\\]\x00-\x1f]', user):
+            self.server.record("LOGIN", user)
+            raise self.error(b"LOGIN command error: BAD [b'Invalid user name argument']")
         self.server.record("LOGIN", user)
         self._maybe_hang("LOGIN")
         if not self.tls:
@@ -442,10 +495,16 @@ class FakeIMAP4:
             raise self.error(f"command {name} illegal in state NONAUTH")
 
     def _folder(self, quoted: str) -> Optional[FakeFolder]:
-        name = decode_folder_name(_unquote(quoted))
-        if name.upper() == "INBOX":
-            name = "INBOX"
-        return self.mailbox.folders.get(name) if self.mailbox else None
+        """Raw (wire) name comparison, INBOX case-insensitive."""
+        raw = _unquote(quoted)
+        if not self.mailbox:
+            return None
+        if raw.upper() == "INBOX":
+            return self.mailbox.folders.get("INBOX")
+        for folder in self.mailbox.folders.values():
+            if folder.wire_name == raw:
+                return folder
+        return None
 
     def list(self, directory='""', pattern="*"):
         self._require_auth("LIST")
@@ -453,11 +512,12 @@ class FakeIMAP4:
         self._maybe_hang("LIST")
         data: list = []
         for folder in self.mailbox.folders.values():
-            raw = "INBOX" if folder.name == "INBOX" else encode_folder_name(folder.name)
+            raw = folder.wire_name
             attrs = " ".join(folder.attributes)
             delim = _q(folder.delimiter)
             if '"' in raw or "\\" in raw:
                 data.append((f"({attrs}) {delim} {{{len(raw)}}}".encode(), raw.encode()))
+                data.append(b"")  # imaplib's trailer line after the literal
             else:
                 data.append(f"({attrs}) {delim} {_q(raw)}".encode())
         return "OK", data
@@ -487,7 +547,8 @@ class FakeIMAP4:
         self.selected = folder
         self.state = "SELECTED"
         self.untagged_responses["EXISTS"] = [str(len(folder.messages)).encode()]
-        self.untagged_responses["UIDVALIDITY"] = [str(folder.uidvalidity).encode()]
+        if not self.server.omit_uidvalidity_code:
+            self.untagged_responses["UIDVALIDITY"] = [str(folder.uidvalidity).encode()]
         if readonly:
             self.untagged_responses["READ-ONLY"] = [b""]
         return "OK", [str(len(folder.messages)).encode()]
@@ -590,6 +651,10 @@ class FakeIMAP4:
         items = _split_items(items_text)
         data: list = []
         ordered = sorted(self.selected.messages)
+        if self.server.unsolicited_fetch and ordered:
+            # e.g. another client changed flags: no UID item.
+            data.append(f"{len(ordered)} (FLAGS (\\Seen))".encode())
+        uid_last = self.server.uid_last
         for uid in self._parse_uids(uid_spec):
             msg = self.selected.messages.get(uid)
             if msg is None:
@@ -598,7 +663,7 @@ class FakeIMAP4:
             sets_seen = any(_item_sets_seen(i) for i in items)
             if sets_seen:
                 msg.flags.add("\\Seen")
-            text = f"{seq} (UID {uid}"
+            text = f"{seq} (" if uid_last else f"{seq} (UID {uid}"
             for item in items:
                 upper = item.upper()
                 if upper == "UID":
@@ -618,9 +683,12 @@ class FakeIMAP4:
                     text += f" {upper} " + _bodystructure(parsed, self.server.string_disposition)
                 else:
                     key, payload = self._section(item, msg.raw)
-                    text += f" {key} {{{len(payload)}}}"
+                    marker = "~" if key.startswith("BINARY") else ""  # RFC 3516 literal8
+                    text += f" {key} {marker}{{{len(payload)}}}"
                     data.append((text.encode(), payload))
                     text = ""
+            if uid_last:
+                text += f" UID {uid}"
             data.append((text + ")").encode())
         return "OK", data
 
@@ -753,10 +821,11 @@ def _bodystructure(part, string_disposition: bool = False) -> str:
     if isinstance(payload, list):  # message/rfc822
         inner = payload[0]
         body = inner.as_bytes()
+        lines = body.count(b"\n")  # no backslash inside f-strings (Python 3.11)
         return (f"({_q(maintype)} {_q(subtype)} {_params(ctype_params)} NIL NIL "
                 f"{_q((part.get('Content-Transfer-Encoding') or '7bit').upper())} {len(body)} "
                 f"{_envelope(body)} {_bodystructure(inner, string_disposition)} "
-                f"{body.count(b'\n')} NIL NIL NIL NIL)")
+                f"{lines} NIL NIL NIL NIL)")
     raw_payload = (payload or "").encode("utf-8", "surrogateescape")
     encoding = (part.get("Content-Transfer-Encoding") or "7bit").upper()
     disp_header = part.get("Content-Disposition")
@@ -771,7 +840,8 @@ def _bodystructure(part, string_disposition: bool = False) -> str:
     fields = (f"{_q(maintype)} {_q(subtype)} {_params(ctype_params)} NIL NIL "
               f"{_q(encoding)} {len(raw_payload)}")
     if maintype == "TEXT":
-        fields += f" {raw_payload.count(b'\n')}"
+        text_lines = raw_payload.count(b"\n")
+        fields += f" {text_lines}"
     return f"({fields} NIL {disposition} NIL NIL)"
 
 

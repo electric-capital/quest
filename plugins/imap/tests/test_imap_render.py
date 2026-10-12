@@ -11,7 +11,6 @@ from plugins.imap import render
 from plugins.imap.render import (
     MAX_BODY_BYTES,
     attachment_payload,
-    format_address_list,
     latest_url_cache_key,
     list_attachments,
     parse_message,
@@ -205,17 +204,18 @@ class TestAlternativeAndAttachments:
         assert atts[1].filename == "résumé 2026.pdf"
         assert atts[1].size == len(b"%PDF-1.4 data")
         assert attachment_payload(atts[1]) == b"%PDF-1.4 data"
-        assert atts[2].filename is None
+        assert atts[2].filename == "Forwarded.eml"  # named after the attached subject
         eml = attachment_payload(atts[2])
-        assert b"Subject: Forwarded" in eml and b"inner body" in eml
+        assert b"Subject: Forwarded\r\n" in eml and b"inner body" in eml
+        assert b"\n" not in eml.replace(b"\r\n", b"")  # CRLF line endings throughout
         assert atts[2].size == len(eml)
 
         doc = _render(raw)
         _, body, section = _sections(doc)
         assert "inner body" not in body  # attached message is not descended into
-        assert "- **logo.png** -- `image/png`, 12 bytes, inline, attachment_index: `1`" in section
+        assert "- **logo.png** -- `image/png`, ~12 bytes, inline, attachment_index: `1`" in section
         assert "**résumé 2026.pdf** -- `application/pdf`" in section
-        assert "- **(unnamed)** -- `message/rfc822`" in section
+        assert "- **Forwarded.eml** -- `message/rfc822`" in section
         assert "attachment_index: `3`" in section
 
     def test_listing_is_deterministic(self):
@@ -381,27 +381,6 @@ class TestRobustness:
         assert "the real content" in doc
 
 
-class TestAddressList:
-    def test_header_string(self):
-        assert format_address_list('"Ada L" <ada@x.io>, bob@y.io') == "Ada L <ada@x.io>, bob@y.io"
-
-    def test_encoded_word_string(self):
-        assert format_address_list("=?utf-8?q?Andr=C3=A9?= <a@x.io>") == "André <a@x.io>"
-
-    def test_tuples_and_dicts(self):
-        assert format_address_list([("Ada", "ada@x.io"), ("", "b@y.io")]) == "Ada <ada@x.io>, b@y.io"
-        assert format_address_list([
-            {"name": "Ada", "address": "ada@x.io"},
-            {"name": None, "mailbox": "b", "host": "y.io"},
-            {"name": "a@b.c", "email": "a@b.c"},
-        ]) == "Ada <ada@x.io>, b@y.io, a@b.c"
-
-    def test_empty_and_crlf(self):
-        assert format_address_list(None) == ""
-        assert format_address_list([]) == ""
-        assert "\n" not in format_address_list([("Evil\r\nName", "e@x.io")])
-
-
 class TestBatch:
     def test_batch_with_errors(self):
         doc = render_batch_markdown([
@@ -418,3 +397,217 @@ class TestBatch:
         doc = render_batch_markdown([{"uid": 5, "ok": True, "markdown": "M"}])
         assert "## Batch errors" not in doc
         assert doc.endswith("\n\n===\n\nM")
+
+
+# ---------------------------------------------------------------------------
+# Review fixes
+# ---------------------------------------------------------------------------
+
+
+def _mime(*parts: bytes, ctype: bytes = b"multipart/mixed", boundary: bytes = b"XX",
+          headers: bytes = b"Subject: s\r\nFrom: a@example.com\r\n") -> bytes:
+    chunks = [headers + b"Content-Type: " + ctype + b"; boundary=" + boundary + b"\r\n\r\n"]
+    chunks += [b"--" + boundary + b"\r\n" + part + b"\r\n" for part in parts]
+    return b"".join(chunks) + b"--" + boundary + b"--\r\n"
+
+
+class TestReviewFixes:
+    def test_text_calendar_invite_is_an_attachment(self):
+        raw = _mime(
+            b"Content-Type: text/plain\r\n\r\nYou are invited.",
+            b"Content-Type: text/calendar; method=REQUEST; charset=utf-8\r\n\r\n"
+            b"BEGIN:VCALENDAR\r\nEND:VCALENDAR",
+            b"Content-Type: text/vcard\r\n\r\nBEGIN:VCARD\r\nEND:VCARD",
+        )
+        atts = list_attachments(parse_message(raw))
+        assert [a.mime for a in atts] == ["text/calendar", "text/vcard"]
+        assert attachment_payload(atts[0]).startswith(b"BEGIN:VCALENDAR")
+        _, body, section = _sections(_render(raw))
+        assert "You are invited." in body and "VCALENDAR" not in body
+        assert "`text/calendar`" in section and "attachment_index: `2`" in section
+
+    def test_multi_fragment_plain_body(self):
+        """Apple Mail style: text, inline image, text -- both texts shown."""
+        raw = _mime(
+            b"Content-Type: text/plain\r\n\r\nFirst fragment.",
+            b"Content-Type: image/png; name=pic.png\r\nContent-Disposition: inline; filename=pic.png\r\n"
+            b"Content-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=",
+            b"Content-Type: text/plain\r\n\r\nSecond fragment.",
+        )
+        _, body, section = _sections(_render(raw))
+        assert "First fragment." in body and "Second fragment." in body
+        assert body.index("First") < body.index("Second")
+        assert "**pic.png** -- `image/png`, ~8 bytes, inline, attachment_index: `1`" in section
+
+    def test_filenameless_html_next_to_chosen_plain_is_rendered(self):
+        alternative = _mime(
+            b"Content-Type: text/plain\r\n\r\nplain twin",
+            b"Content-Type: text/html\r\n\r\n<p>html twin</p>",
+            ctype=b"multipart/alternative", boundary=b"ALT", headers=b"",
+        )
+        raw = _mime(
+            alternative.rstrip(b"\r\n"),
+            b"Content-Type: text/html\r\n\r\n<p>signature <b>block</b></p>",
+        )
+        _, body, section = _sections(_render(raw))
+        assert "plain twin" in body and "html twin" not in body
+        assert "signature **block**" in body
+        assert "<p>" not in body
+        assert section == "## Attachments\n\n_No attachments._"
+
+    def test_include_html_fences_html_fragments(self):
+        raw = _mime(
+            b"Content-Type: text/plain\r\n\r\nplain twin",
+            b"Content-Type: text/html\r\n\r\n<p>html twin</p>",
+            ctype=b"multipart/alternative",
+        )
+        doc = _render(raw, include_html=True)
+        assert "## Body (HTML)\n\n```html\n<p>html twin</p>" in doc
+        assert "plain twin" not in doc
+
+    def test_single_part_with_name_param_still_renders_body(self):
+        raw = (b"Subject: s\r\nContent-Type: text/plain; name=\"body.txt\"\r\n\r\n"
+               b"The actual body.\r\n")
+        _, body, section = _sections(_render(raw))
+        assert "The actual body." in body
+        assert "**body.txt**" in section  # still listed, consistent with BODYSTRUCTURE
+
+    def test_headers_not_decoded_twice(self):
+        raw = (b"Subject: =?utf-8?q?=3D=3Futf-8=3Fq=3Fhidden=3F=3D?=\r\n"
+               b"From: a@example.com\r\n\r\nbody\r\n")
+        assert "Subject: =?utf-8?q?hidden?=" in _render(raw)
+
+    def test_control_line_separator_and_bidi_chars_flattened(self):
+        import base64
+        from urllib.parse import quote
+
+        unsafe = "\u2028\u2029\x0b\x0c\x1b\x85\u202e\u2066\u200f"
+        evil = "a" + "".join(f"{ch}{chr(ord('b') + i)}" for i, ch in enumerate(unsafe))
+        subject = base64.b64encode(evil.encode()).decode()
+        filename = quote("re\u202eport*`x`\u2028.pdf".encode())
+        raw = _mime(
+            b"Content-Type: text/plain\r\n\r\nbody",
+            b"Content-Type: application/octet-stream\r\n"
+            b"Content-Disposition: attachment; filename*=utf-8''" + filename.encode()
+            + b"\r\n\r\nx",
+            headers=f"Subject: =?utf-8?b?{subject}?=\r\nFrom: a@example.com\r\n".encode(),
+        )
+        doc = _render(raw, folder="IN\u202eBOX", account="ada@mail.example.com")
+        header, _, section = _sections(doc)
+        for ch in unsafe:
+            assert ch not in doc
+        assert header.splitlines()[0] == "Subject: a b c d e f g h i j"
+        assert "Folder: IN BOX" in header
+        assert "- **re port\\*\\`x\\` .pdf** -- `application/octet-stream`" in section
+
+    def test_cache_keys_percent_encode_separators(self):
+        assert url_cache_key("a:b@c", "x:1%", 9, 3) == "imap:a%3Ab@c:x%3A1%25:9:3"
+        assert url_cache_key("a", "b:c", 1, 2) != url_cache_key("a:b", "c", 1, 2)
+        assert latest_url_cache_key("a@b", "F:G", 7) == "imap:a@b:F%3AG:latest:7"
+
+    def test_latest_pointer_rewritten_even_without_urls(self, chats_dir):
+        latest = latest_url_cache_key("ada@mail.example.com", "INBOX", 42)
+        _render(_plain(f"see {LONG_URL}"), conversation_id=CONV_ID)
+        assert _get_cached_url_mapping(CONV_ID, latest) == {1: LONG_URL}
+        # Same UID after a UIDVALIDITY change, now a message without URLs.
+        _render(_plain("no links here"), conversation_id=CONV_ID, uidvalidity=778)
+        assert _get_cached_url_mapping(CONV_ID, latest) == {}
+        assert _get_cached_url_mapping(
+            CONV_ID, url_cache_key("ada@mail.example.com", "INBOX", 777, 42)) == {1: LONG_URL}
+
+    def test_parse_budget_many_tiny_parts_headers_only(self):
+        import time
+
+        parts = [b"Content-Type: text/plain\r\n\r\nx"] * 100_000
+        raw = _mime(*parts)
+        started = time.monotonic()
+        doc = _render(raw)
+        assert time.monotonic() - started < 2
+        header, body, section = _sections(doc)
+        assert header.startswith("Subject: s")
+        assert "Not rendered" in body and "MIME part boundaries" in body
+        assert "Not listed" in section
+        assert render.message_too_complex(raw) is not None
+
+    def test_raw_size_guard(self, monkeypatch):
+        monkeypatch.setattr(render, "MAX_RENDER_RAW_BYTES", 1000)
+        doc = _render(_plain("y" * 5000))
+        assert "Subject: Quarterly report" in doc
+        assert "rendering limit" in doc and "yyyy" not in doc
+
+    def test_listed_sizes_are_estimates_without_decoding(self, monkeypatch):
+        data = bytes(range(256)) * 400
+        msg = EmailMessage()
+        msg.set_content("body")
+        msg.add_attachment(data, maintype="application", subtype="octet-stream", filename="d.bin")
+        raw = msg.as_bytes()
+        atts = list_attachments(parse_message(raw))
+        assert atts[0].size == len(data)  # well-formed base64: the estimate is exact
+
+        def boom(*a, **k):
+            raise AssertionError("decoded while rendering")
+
+        monkeypatch.setattr(render, "attachment_payload", boom)
+        monkeypatch.setattr(render, "_part_bytes", lambda part: boom() if part.get_filename() else b"body")
+        _, _, section = _sections(_render(raw))
+        assert f"~{len(data):,} bytes" in section
+
+    def test_message_rfc822_enumeration_and_payload(self):
+        inner = EmailMessage()
+        inner["Subject"] = "Inner \u202e subject"
+        inner["From"] = "b@example.com"
+        inner.set_content("inner body")
+        outer = EmailMessage()
+        outer["Subject"] = "outer"
+        outer.set_content("outer body")
+        outer.add_attachment(inner)
+        atts = list_attachments(parse_message(outer.as_bytes()))
+        assert [(a.index, a.mime, a.filename) for a in atts] == [(1, "message/rfc822", "Inner   subject.eml")]
+        assert b"inner body" in attachment_payload(atts[0])
+
+    def test_inline_images_in_related_keep_walk_order(self):
+        msg = EmailMessage()
+        msg.set_content("<p>hi</p>", subtype="html")
+        for name in ("a.png", "b.png", "c.png"):
+            msg.add_related(b"img", maintype="image", subtype="png", filename=name,
+                            disposition="inline")
+        atts = list_attachments(parse_message(msg.as_bytes()))
+        assert [a.filename for a in atts] == ["a.png", "b.png", "c.png"]
+        assert [a.index for a in atts] == [1, 2, 3]
+        _, body, _ = _sections(_render(msg.as_bytes()))
+        assert "hi" in body
+
+    @pytest.mark.parametrize("charset", ["unicode_escape", "raw_unicode_escape", "rot13"])
+    def test_escape_and_non_text_charsets_fall_back_to_utf8(self, charset):
+        raw = (f"Content-Type: text/plain; charset={charset}\r\n\r\n".encode()
+               + b"literal \\x41\\u0042 stays")
+        assert "literal \\x41\\u0042 stays" in _render(raw)
+
+    def test_deep_nesting_outcome_is_explicit(self):
+        depth = 400
+        raw = b"Content-Type: multipart/mixed; boundary=b0\r\n\r\n"
+        for i in range(1, depth):
+            raw += b"--b%d\r\nContent-Type: multipart/mixed; boundary=b%d\r\n\r\n" % (i - 1, i)
+        raw += b"--b%d\r\nContent-Type: text/plain\r\n\r\ndeep\r\n" % (depth - 1)
+        doc = _render(raw)
+        _, body, section = _sections(doc)
+        # Beyond MAX_DEPTH nothing is descended into: empty body, no attachments.
+        assert body == "## Body\n\n_(empty body)_"
+        assert section == "## Attachments\n\n_No attachments._"
+
+    def test_many_parts_exact_count(self):
+        msg = EmailMessage()
+        msg.set_content("body")
+        for i in range(800):
+            msg.add_attachment(b"x", maintype="application", subtype="octet-stream",
+                               filename=f"f{i}.bin")
+        atts = list_attachments(parse_message(msg.as_bytes()))
+        # MAX_PARTS visits: the multipart root, the body, then 498 attachments.
+        assert len(atts) == render.MAX_PARTS - 2
+        assert atts[-1].filename == f"f{render.MAX_PARTS - 3}.bin"
+
+    def test_batch_errors_are_single_line(self):
+        doc = render_batch_markdown([
+            {"uid": 1, "ok": False, "error_code": "x", "error_message": "a\u2028## Body\u202e"},
+        ])
+        assert "\u2028" not in doc and "\u202e" not in doc

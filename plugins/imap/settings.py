@@ -16,6 +16,11 @@ Per-user connection rows (``form`` kind) store their form values under
 ``oauth_blob["values"]``: ``host``, ``port`` (blank = the security
 default), ``security`` (``ssl`` / ``starttls``), ``username``,
 ``password``.
+
+Known limitation (generic layer, ``auth/connections.py``, deliberately
+unchanged in this phase): the re-entry form sends secrets only when
+typed, so a PUT that changes ``host`` with a blank password keeps the
+stored password and will offer it to the new (admin-allowed) host.
 """
 
 from __future__ import annotations
@@ -33,8 +38,11 @@ DEFAULT_PORTS = (993, 143)  # a line without a port allows both
 SECURITY_CHOICES = ("ssl", "starttls")
 DEFAULT_PORT_FOR_SECURITY = {"ssl": 993, "starttls": 143}
 ROW_WARNING_HOST_REMOVED = "Server no longer allowed"
+ROW_WARNING_BAD_PORT = "Invalid port"
 
-_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+# DNS labels; "_" is accepted because internal hosts use it (it is not
+# valid in public DNS names but resolvers handle it).
+_LABEL_RE = re.compile(r"^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$")
 _IPV4_LIKE_RE = re.compile(r"^[0-9.]+$")
 
 
@@ -262,7 +270,7 @@ def imap_row_warning(row: dict) -> Optional[str]:
     try:
         port = effective_port(values)
     except ValueError:
-        return ROW_WARNING_HOST_REMOVED
+        return ROW_WARNING_BAD_PORT
     if not is_allowed(host, port):
         return ROW_WARNING_HOST_REMOVED
     return None

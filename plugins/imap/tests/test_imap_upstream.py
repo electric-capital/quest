@@ -93,8 +93,7 @@ def test_verify_allow_list(fake_imap):
 def test_verify_connect_error(fake_imap):
     fake_imap.server.connect_error = ConnectionRefusedError(111, "Connection refused")
     result = _verify()
-    assert result.error.startswith("Could not connect:")
-    assert "Connection refused" in result.error
+    assert result.error == "Could not connect to imap.example.com:993: Connection refused"
 
 
 def test_verify_tls_error(fake_imap):
@@ -102,7 +101,8 @@ def test_verify_tls_error(fake_imap):
         1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate"
     )
     result = _verify()
-    assert result.error.startswith("Could not connect:")
+    assert result.error.startswith("Could not connect to imap.example.com:993: ")
+    assert result.error.count("Could not connect") == 1
     assert "CERTIFICATE_VERIFY_FAILED" in result.error
 
 
@@ -466,3 +466,281 @@ def test_imap_error_to_dict():
     assert err.to_dict() == {
         "error": "imap_uidvalidity_changed", "message": "changed", "expected": 1, "current": 2,
     }
+
+
+# -- review fixes: hostile servers, bounds, connect cancellation ----------------
+
+
+def test_hostile_fetch_response_is_protocol_error_not_value_error(fake_imap, monkeypatch):
+    uid = fake_imap.mailbox.add_message("INBOX", make_message())
+
+    def hostile(self, uid_spec, items_text):
+        return "OK", [b"1 (UID 1 BODYSTRUCTURE " + b"(" * 5000 + b")" * 5000 + b")"]
+
+    monkeypatch.setattr(fake_imaplib.FakeIMAP4, "_fetch", hostile)
+    with pytest.raises(ImapError) as exc:
+        _run(_settings(), lambda s: (s.examine("INBOX"), s.uid_fetch([uid], "BODYSTRUCTURE")))
+    assert exc.value.code == "imap_protocol_error"
+    assert "parse" in exc.value.message
+
+
+def test_hostile_status_and_huge_uid_tokens(fake_imap, monkeypatch):
+    def status(self, mailbox, names):
+        return "OK", [b'"INBOX" (MESSAGES ' + b"9" * 5000 + b" UNSEEN \xc2\xb2 UIDVALIDITY 3)"]
+
+    def uid(self, command, *args):
+        return "OK", [b"1 2 " + b"9" * 5000 + " ²".encode()]
+
+    monkeypatch.setattr(fake_imaplib.FakeIMAP4, "status", status)
+    got = _run(_settings(), lambda s: s.status("INBOX"))
+    assert got == {"messages": 0, "unseen": 0, "uidvalidity": 3}
+    monkeypatch.setattr(fake_imaplib.FakeIMAP4, "uid", uid)
+    assert _run(_settings(), lambda s: (s.examine("INBOX"), s.uid_search([]))[1]) == [1, 2]
+
+
+def test_binary_literal8_through_fake(fake_imap):
+    raw = make_message(attachments=(("a.bin", "application/octet-stream", b"\x00\x01binary"),))
+    uid = fake_imap.mailbox.add_message("INBOX", raw)
+    got = _run(_settings(), lambda s: (s.examine("INBOX"), s.uid_fetch([uid], "BINARY.PEEK[1]"))[1])
+    assert isinstance(got[uid]["BINARY[1]"], bytes) and got[uid]["BINARY[1]"].startswith(b"Hello")
+    # The fake sends the literal8 marker, as imaplib hands it over.
+    conn = fake_imap.server.connections[0]
+    conn.state, conn.selected = "SELECTED", fake_imap.mailbox.folders["INBOX"]
+    _typ, data = conn.uid("FETCH", str(uid), "(UID BINARY.PEEK[1])")
+    assert data[0][0].endswith(b"BINARY[1] ~{%d}" % len(data[0][1]))
+
+
+def test_unsolicited_fetch_and_uid_last_ordering(fake_imap):
+    mb = fake_imap.mailbox
+    u1 = mb.add_message("INBOX", make_message(subject="one"))
+    u2 = mb.add_message("INBOX", make_message(subject="two"))
+    fake_imap.server.unsolicited_fetch = True
+    fake_imap.server.uid_last = True
+    got = _run(_settings(), lambda s: (s.examine("INBOX"),
+                                         s.uid_fetch([u1, u2], "(UID FLAGS BODY.PEEK[HEADER])"))[1])
+    assert list(got) == [u1, u2]
+    assert got[u2]["BODY[HEADER]"].startswith(b"Subject: two")
+    assert got[u1]["FLAGS"] == []
+
+
+def test_capabilities_use_newest_reply_and_dedupe(fake_imap, monkeypatch):
+    # The fake already returns the login response code AND the reply.
+    caps = _run(_settings(), lambda s: s.capabilities)
+    assert caps == fake_imaplib.POST_LOGIN_CAPABILITIES
+    monkeypatch.setattr(
+        fake_imaplib.FakeIMAP4, "capability",
+        lambda self: ("OK", [b"IMAP4REV1 OLD", b"IMAP4rev1 IDLE IDLE MOVE idle", None]),
+    )
+    assert _run(_settings(), lambda s: s.capabilities) == ("IMAP4REV1", "IDLE", "MOVE")
+
+
+def test_username_is_quoted(fake_imap):
+    odd = 'we(ird) %user* "x"'
+    fake_imap.server.add_account(odd, "pw-odd")
+    assert _run(_settings(username=odd, password="pw-odd"), lambda s: "in") == "in"
+    assert ("LOGIN", odd) in fake_imap.server.commands
+    # The fake really rejects an unquoted name with specials (guard for the guard).
+    imap4, _ = fake_imap.classes()
+    conn = imap4(DEFAULT_HOST, 143)
+    conn.starttls()
+    with pytest.raises(imaplib.IMAP4.error):
+        conn.login(odd, "pw-odd")
+
+
+def test_not_or_refused_with_literal_terms(fake_imap):
+    fake_imap.mailbox.add_message("INBOX", make_message(subject="Grüße"))
+    for terms in (["NOT", ("SUBJECT", "grüße")], ["OR", ("FROM", "jörg"), ("SUBJECT", "köln")]):
+        with pytest.raises(ValueError):
+            _run(_settings(), lambda s: (s.examine("INBOX"), s.uid_search(terms)))
+    assert "UID SEARCH" not in fake_imap.server.command_text()
+
+
+def test_examine_falls_back_to_status_for_uidvalidity(fake_imap):
+    fake_imap.mailbox.folders["INBOX"].uidvalidity = 42
+    fake_imap.server.omit_uidvalidity_code = True
+    assert _run(_settings(), lambda s: s.examine("INBOX")) == 42
+    assert ("STATUS", '"INBOX"', "(UIDVALIDITY)") in fake_imap.server.commands
+
+
+def test_non_canonical_raw_folder_names(fake_imap):
+    fake_imap.mailbox.add_folder("éé", raw_name="&AOk-&AOk-", uidvalidity=9)
+
+    def work(s):
+        listed = [f for f in s.list_folders() if f["name"] == "éé"]
+        return listed, s.examine("&AOk-&AOk-"), s.status("éé", raw_name="&AOk-&AOk-")
+
+    listed, uidvalidity, status = _run(_settings(), work)
+    assert listed[0]["raw_name"] == "&AOk-&AOk-"
+    assert uidvalidity == 9 and status["uidvalidity"] == 9
+    # The decoded name encodes canonically, which this server does not know.
+    with pytest.raises(ImapError) as exc:
+        _run(_settings(), lambda s: s.examine("éé"))
+    assert exc.value.code == "imap_folder_not_found"
+
+
+def test_list_literal_name_with_trailer(fake_imap):
+    fake_imap.mailbox.add_folder('Say "hi"')
+    folders = _run(_settings(), lambda s: s.list_folders())
+    assert [f["name"] for f in folders] == ["INBOX", 'Say "hi"']
+
+
+def test_debug_level_never_reaches_transport(fake_imap, monkeypatch):
+    monkeypatch.setattr(imaplib, "Debug", 5)
+    _run(_settings(), lambda s: None)
+    assert fake_imap.server.connections[0].debug == 0
+    real = upstream.QuestIMAP4.__new__(upstream.QuestIMAP4)
+    real.debug = 5  # what imaplib.IMAP4.__init__ does with imaplib.Debug
+    assert real.debug == 0
+
+
+def test_real_transport_classes_are_the_quest_subclasses():
+    assert issubclass(upstream.QuestIMAP4, imaplib.IMAP4)
+    assert issubclass(upstream.QuestIMAP4_SSL, imaplib.IMAP4_SSL)
+    assert upstream.QuestIMAP4_SSL.debug is upstream.QuestIMAP4.debug
+
+
+def _bare(cls, data: bytes):
+    import io
+
+    conn = cls.__new__(cls)
+    conn.file = io.BytesIO(data)
+    return conn
+
+
+def test_long_response_line_beyond_imaplib_maxline():
+    line = b"* SEARCH " + b" ".join(b"%d" % i for i in range(1, 200_001)) + b"\r\n"
+    assert len(line) > imaplib._MAXLINE
+    conn = _bare(upstream.QuestIMAP4, line)
+    assert conn.readline() == line
+    assert conn._quest_broken is False
+
+
+def test_response_line_and_literal_caps(monkeypatch):
+    monkeypatch.setattr(upstream, "MAX_LINE_BYTES", 100)
+    conn = _bare(upstream.QuestIMAP4_SSL, b"x" * 200 + b"\r\n")
+    with pytest.raises(imaplib.IMAP4.error):
+        conn.readline()
+    assert conn._quest_broken is True
+    monkeypatch.setattr(upstream, "MAX_LITERAL_BYTES", 10)
+    conn = _bare(upstream.QuestIMAP4, b"0123456789abc")
+    assert conn.read(10) == b"0123456789"
+    with pytest.raises(imaplib.IMAP4.error) as exc:
+        conn.read(11)
+    assert "literal" in str(exc.value)
+    assert conn._quest_broken is True
+
+
+def test_literal_cap_stays_above_save_limit():
+    from plugins.imap import tools
+
+    assert upstream.MAX_LITERAL_BYTES > tools.MAX_SAVE_MESSAGE_BYTES
+
+
+def test_broken_connection_is_hard_closed_not_logged_out(fake_imap):
+    def work(s):
+        s._conn._quest_broken = True
+        raise imaplib.IMAP4.error("command: FETCH => literal too large")
+
+    with pytest.raises(ImapError) as exc:
+        _run(_settings(), work)
+    assert exc.value.code == "imap_protocol_error"
+    assert "LOGOUT" not in _commands(fake_imap)
+    assert fake_imap.server.connections[0].sock.closed.is_set()
+
+
+def test_abort_is_hard_closed_not_logged_out(fake_imap):
+    def work(s):
+        raise imaplib.IMAP4.abort("socket error: EOF")
+
+    with pytest.raises(ImapError) as exc:
+        _run(_settings(), work)
+    assert exc.value.code == "imap_connect_failed"
+    assert "LOGOUT" not in _commands(fake_imap)
+
+
+def test_timeout_does_not_send_logout(fake_imap):
+    fake_imap.server.hang_on = "LIST"
+    with pytest.raises(ImapError):
+        _run(_settings(), lambda s: s.list_folders(), timeout=0.3)
+    assert "LOGOUT" not in _commands(fake_imap)
+
+
+def test_timeout_during_connect_unblocks_worker(fake_imap):
+    fake_imap.server.hang_on = "CONNECT"
+    started = time.monotonic()
+    with pytest.raises(ImapError) as exc:
+        _run(_settings(), lambda s: None, timeout=0.3)
+    assert exc.value.code == "imap_timeout"
+    # The stuck constructor's socket was shut down from outside: the worker
+    # thread leaves the connect phase at once instead of after 10 s.
+    assert fake_imap.server.connect_exited.wait(3)
+    assert time.monotonic() - started < 3
+    assert "LOGIN" not in _commands(fake_imap)
+
+
+def test_open_socket_registers_and_cancel_interrupts_connect(monkeypatch):
+    """The real connect helper: a cancel shuts the socket a blocked connect waits on."""
+    import threading
+
+    class BlockingSocket:
+        def __init__(self, *a):
+            self.closed = threading.Event()
+
+        def settimeout(self, t):
+            pass
+
+        def connect(self, address):
+            self.closed.wait(5)
+            raise OSError(9, "Bad file descriptor")
+
+        def shutdown(self, how):
+            self.closed.set()
+
+        def close(self):
+            self.closed.set()
+
+    monkeypatch.setattr(upstream.socket, "getaddrinfo",
+                        lambda *a, **k: [(2, 1, 6, "", ("192.0.2.1", 993))])
+    monkeypatch.setattr(upstream.socket, "socket", BlockingSocket)
+    state = upstream._CallState()
+    outcome = {}
+
+    def worker():
+        upstream._connect_local.state = state
+        started = time.monotonic()
+        try:
+            upstream._open_socket("imap.example.com", 993, 20)
+        except OSError as exc:
+            outcome["error"] = exc
+        outcome["elapsed"] = time.monotonic() - started
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    time.sleep(0.1)
+    state.cancel()
+    thread.join(3)
+    assert not thread.is_alive()
+    assert isinstance(outcome["error"], OSError) and outcome["elapsed"] < 2
+    # Registering after the cancel closes the socket and refuses at once.
+    late = BlockingSocket()
+    with pytest.raises(OSError):
+        state.add_socket(late)
+    assert late.closed.is_set()
+
+
+def test_sessions_run_on_dedicated_bounded_pool(fake_imap):
+    import threading
+
+    names = _run(_settings(), lambda s: threading.current_thread().name)
+    assert names.startswith("imap")
+    assert upstream._EXECUTOR._max_workers == upstream.MAX_WORKERS
+
+
+def test_connect_error_text_has_single_prefix(fake_imap):
+    fake_imap.server.connect_error = ConnectionRefusedError(111, "Connection refused")
+    with pytest.raises(ImapError) as exc:
+        _run(_settings(), lambda s: None)
+    assert exc.value.message == "Could not connect to imap.example.com:993: Connection refused"
+    err = ssl.SSLCertVerificationError(1, "x")
+    err.verify_message = "self-signed certificate"
+    assert upstream._exc_text(err) == "certificate verify failed: self-signed certificate"

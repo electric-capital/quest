@@ -53,11 +53,14 @@ from config.user_connections import (
 from plugins.imap import protocol
 from plugins.imap.render import (
     attachment_payload,
+    display_name,
     latest_url_cache_key,
     list_attachments,
+    message_too_complex,
     parse_message,
     render_batch_markdown,
     render_message_markdown,
+    safe_mime,
     url_cache_key,
 )
 from plugins.imap.settings import SERVICE_ID, imap_connected
@@ -283,6 +286,7 @@ async def _handle_list_folders(ctx, args: dict) -> str:
         truncated = len(listed) > MAX_FOLDERS
         folders = []
         for entry in listed[:MAX_FOLDERS]:
+            raw_name = entry.get("raw_name") or entry["name"]
             item = {
                 "name": entry["name"],
                 "delimiter": entry.get("delimiter"),
@@ -292,11 +296,15 @@ async def _handle_list_folders(ctx, args: dict) -> str:
                 "unseen": None,
                 "uidvalidity": None,
             }
+            if raw_name != "INBOX" and protocol.encode_folder_name(entry["name"]) != raw_name:
+                # Stored non-canonically on the server: the decoded name
+                # does not encode back to it, so tools need the raw spelling.
+                item["raw_name"] = raw_name
             if any(f.upper() in _NOSELECT_FLAGS for f in item["flags"]):
                 item["selectable"] = False
             else:
                 try:
-                    status = session.status(entry["name"])
+                    status = session.status(entry["name"], raw_name=raw_name)
                 except ImapError as exc:
                     item["status_error"] = exc.message
                 except imaplib.IMAP4.abort:
@@ -419,17 +427,18 @@ def _huge_message_markdown(item: dict, *, folder: str, uid: int, uidvalidity: in
         f"_[Message is {size:,} bytes, above the {MAX_RENDER_MESSAGE_BYTES // (1024 * 1024)} MB "
         "rendering limit: only the headers and the attachment list are shown.]_"
     )
-    parts = [
-        p for p in protocol.bodystructure_parts(item.get("BODYSTRUCTURE"))
-        if p["disposition"] == "attachment" or p["filename"] or not p["mime"].startswith("text/")
-    ]
+    try:
+        # Same attachment rule as render.list_attachments.
+        parts = protocol.bodystructure_attachment_parts(item.get("BODYSTRUCTURE"))
+    except (ValueError, RecursionError, IndexError, TypeError):
+        parts = []
     if parts:
         lines = ["## Attachments", "",
                  "_Sizes are encoded (transfer) sizes. Save one with imap_save_attachment "
                  "using its `filename`._", ""]
         for part in parts:
-            name = part["filename"] or "(unnamed)"
-            lines.append(f"- **{name}** -- `{part['mime']}`, ~{part['size']:,} bytes")
+            name = display_name(part["filename"]) if part["filename"] else "(unnamed)"
+            lines.append(f"- **{name}** -- `{safe_mime(part['mime'])}`, ~{part['size']:,} bytes")
         attachments = "\n".join(lines)
     else:
         attachments = "## Attachments\n\n_No attachments._"
@@ -662,7 +671,8 @@ def _write_unique(directory: Path, filename: str, data: bytes) -> Path:
 def _pick_attachment(attachments, index: Optional[int], filename: Optional[str]):
     """(attachment, error_message)."""
     available = [
-        {"attachment_index": a.index, "filename": a.filename, "mime": a.mime, "size": a.size}
+        {"attachment_index": a.index, "filename": a.filename, "mime": a.mime,
+         "approx_size": a.size}
         for a in attachments
     ]
     if not attachments:
@@ -673,7 +683,11 @@ def _pick_attachment(attachments, index: Optional[int], filename: Optional[str])
                 return att, None
         return None, (f"No attachment with attachment_index {index}.", available)
     wanted = filename.casefold()
-    matches = [a for a in attachments if (a.filename or "").casefold() == wanted]
+    # The listing escapes \ * ` in names; accept that spelling too.
+    matches = [
+        a for a in attachments
+        if a.filename and wanted in (a.filename.casefold(), display_name(a.filename).casefold())
+    ]
     if len(matches) == 1:
         return matches[0], None
     if not matches:
@@ -744,6 +758,12 @@ async def _handle_save_attachment(ctx, args: dict) -> str:
 
     def extract() -> dict:
         # MIME parsing is CPU-bound: off the event loop, after the session.
+        problem = message_too_complex(raw, max_bytes=MAX_SAVE_MESSAGE_BYTES)
+        if problem is not None:
+            raise ImapError(
+                "imap_message_too_complex",
+                f"Cannot open this message's attachments: {problem}.",
+            )
         attachments = list_attachments(parse_message(raw))
         att, problem = _pick_attachment(attachments, index, filename)
         if att is None:
@@ -842,7 +862,7 @@ _FOLDER_PARAM = {
     "type": "string",
     "description": (
         "Folder (mailbox) name as returned by imap_list_folders, e.g. \"INBOX\" or "
-        "\"Archive/2026\"."
+        "\"Archive/2026\" (for a folder listed with a raw_name, that raw_name also works)."
     ),
 }
 
@@ -863,7 +883,8 @@ LIST_FOLDERS_TOOL = PluginTool(
         "description": (
             "List the folders (mailboxes) of an IMAP account with message and unread "
             f"counts, flags, delimiter and special-use role (\\Sent, \\Trash, ...). Capped "
-            f"at {MAX_FOLDERS} folders. {_REQUIRES}"
+            f"at {MAX_FOLDERS} folders. A folder whose server-side name is encoded unusually "
+            f"also carries raw_name. {_REQUIRES}"
         ),
         "parameters": {
             "type": "object",

@@ -757,3 +757,111 @@ class TestSkill:
 
         assert "system:imap" not in [s.id for s in list_system_skills({"imap": False})]
         assert "system:imap" in [s.id for s in list_system_skills({"imap": True})]
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: raw folder names, shared attachment rule, hostile data
+# ---------------------------------------------------------------------------
+
+
+_CALENDAR_MESSAGE = (
+    b"Subject: Invite\r\nFrom: a@example.com\r\nTo: alice@example.com\r\n"
+    b"Content-Type: multipart/mixed; boundary=XX\r\n\r\n"
+    b"--XX\r\nContent-Type: text/plain\r\n\r\nPart one.\r\n"
+    b"--XX\r\nContent-Type: text/calendar; method=REQUEST\r\n\r\nBEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n"
+    b"--XX\r\nContent-Type: text/plain\r\n\r\nPart two.\r\n"
+    b"--XX\r\nContent-Type: application/pdf\r\n"
+    b"Content-Disposition: attachment; filename=\"q*`3`.pdf\"\r\n\r\n%PDF\r\n"
+    b"--XX--\r\n"
+)
+
+
+class TestReviewFixes:
+    def test_raw_name_listed_and_accepted(self, fake_imap, url_cache):
+        mb = fake_imap.mailbox
+        mb.add_folder("éé", raw_name="&AOk-&AOk-")
+        mb.add_folder("Entwürfe")  # canonical: no raw_name
+        uid = mb.add_message("éé", make_message(subject="odd folder"))
+        user = _default_user(fake_imap)
+        out = _call(tools_mod._handle_list_folders, _ctx(user), {})
+        by_name = {f["name"]: f for f in out["folders"]}
+        assert by_name["éé"]["raw_name"] == "&AOk-&AOk-"
+        assert by_name["éé"]["messages"] == 1  # STATUS used the raw name
+        assert "raw_name" not in by_name["Entwürfe"] and "raw_name" not in by_name["INBOX"]
+        found = _call(tools_mod._handle_search_messages, _ctx(user), {"folder": "&AOk-&AOk-"})
+        assert [m["uid"] for m in found["messages"]] == [uid]
+        doc = _call(tools_mod._handle_get_messages, _ctx(user),
+                    {"folder": "&AOk-&AOk-", "uids": [uid]})
+        assert "Subject: odd folder" in doc
+
+    def test_render_and_save_agree_on_attachment_index(self, fake_imap, workspace, url_cache):
+        root, _ = workspace
+        uid = fake_imap.mailbox.add_message("INBOX", _CALENDAR_MESSAGE)
+        user = _default_user(fake_imap)
+        doc = _call(tools_mod._handle_get_messages, _ctx(user), {"folder": "INBOX", "uids": [uid]})
+        assert "Part one." in doc and "Part two." in doc
+        assert "`text/calendar`, ~" in doc and "attachment_index: `1`" in doc
+        assert "**q\\*\\`3\\`.pdf** -- `application/pdf`" in doc and "attachment_index: `2`" in doc
+        cal = _call(tools_mod._handle_save_attachment, _ctx(user),
+                    {"folder": "INBOX", "uid": uid, "attachment_index": 1})
+        assert cal["content_type"] == "text/calendar"
+        assert (root / cal["path"]).read_bytes().startswith(b"BEGIN:VCALENDAR")
+        assert cal["size_bytes"] == len((root / cal["path"]).read_bytes())  # exact size
+        # The escaped spelling shown in the listing also works as filename.
+        pdf = _call(tools_mod._handle_save_attachment, _ctx(user),
+                    {"folder": "INBOX", "uid": uid, "filename": "q\\*\\`3\\`.pdf"})
+        assert pdf["attachment_index"] == 2 and pdf["content_type"] == "application/pdf"
+        # has_attachments uses the same rule from BODYSTRUCTURE.
+        found = _call(tools_mod._handle_search_messages, _ctx(user), {})
+        assert found["messages"][0]["has_attachments"] is True
+
+    def test_has_attachments_for_calendar_only_message(self, fake_imap):
+        raw = (b"Subject: cal\r\nContent-Type: multipart/alternative; boundary=A\r\n\r\n"
+               b"--A\r\nContent-Type: text/plain\r\n\r\ninvite\r\n"
+               b"--A\r\nContent-Type: text/calendar; method=REQUEST\r\n\r\nBEGIN:VCALENDAR\r\n--A--\r\n")
+        fake_imap.mailbox.add_message("INBOX", raw)
+        found = _call(tools_mod._handle_search_messages, _ctx(_default_user(fake_imap)), {})
+        assert found["messages"][0]["has_attachments"] is True
+
+    def test_huge_message_listing_uses_shared_rule_and_safe_names(self, fake_imap, monkeypatch,
+                                                                 url_cache):
+        monkeypatch.setattr(tools_mod, "MAX_RENDER_MESSAGE_BYTES", 100)
+        uid = fake_imap.mailbox.add_message("INBOX", _CALENDAR_MESSAGE)
+        out = _call(tools_mod._handle_get_messages, _ctx(_default_user(fake_imap)),
+                    {"folder": "INBOX", "uids": [uid]})
+        assert "rendering limit" in out
+        section = out.split("## Attachments", 1)[1]
+        assert "`text/calendar`" in section
+        assert "**q\\*\\`3\\`.pdf**" in section
+        assert "`text/plain`" not in section
+
+    def test_complex_message_save_refused_and_render_headers_only(self, fake_imap, workspace,
+                                                                  url_cache):
+        parts = b"".join(b"--XX\r\nContent-Type: text/plain\r\n\r\nx\r\n" for _ in range(3000))
+        raw = (b"Subject: Bomb\r\nContent-Type: multipart/mixed; boundary=XX\r\n\r\n"
+               + parts + b"--XX--\r\n")
+        uid = fake_imap.mailbox.add_message("INBOX", raw)
+        user = _default_user(fake_imap)
+        doc = _call(tools_mod._handle_get_messages, _ctx(user), {"folder": "INBOX", "uids": [uid]})
+        assert "Subject: Bomb" in doc and "Not rendered" in doc
+        out = _call(tools_mod._handle_save_attachment, _ctx(user),
+                    {"folder": "INBOX", "uid": uid, "attachment_index": 1})
+        assert out["error"] == "imap_message_too_complex"
+
+    def test_available_sizes_marked_approximate(self, fake_imap, workspace):
+        uid = fake_imap.mailbox.add_message("INBOX", make_message(attachments=(
+            ("report.pdf", "application/pdf", PDF_BYTES),)))
+        out = _call(tools_mod._handle_save_attachment, _ctx(_default_user(fake_imap)),
+                    {"folder": "INBOX", "uid": uid, "attachment_index": 5})
+        assert out["available"] == [{"attachment_index": 1, "filename": "report.pdf",
+                                     "mime": "application/pdf", "approx_size": len(PDF_BYTES)}]
+
+    def test_hostile_server_response_is_protocol_error(self, fake_imap, monkeypatch):
+        fake_imap.mailbox.add_message("INBOX", make_message())
+
+        def hostile(self, uid_spec, items_text):
+            return "OK", [b"1 (UID 1 ENVELOPE " + b"(" * 3000 + b")" * 3000 + b")"]
+
+        monkeypatch.setattr(FakeIMAP4, "_fetch", hostile)
+        out = _call(tools_mod._handle_search_messages, _ctx(_default_user(fake_imap)), {})
+        assert out["error"] == "imap_protocol_error"

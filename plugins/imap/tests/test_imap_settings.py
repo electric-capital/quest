@@ -53,7 +53,8 @@ def test_same_host_different_ports_kept():
     ("[::1]993", "after ']'"),
     ("imap example.com", "whitespace"),
     ("-bad.example.com", "invalid host name"),
-    ("bad_host.example.com", "invalid host name"),
+    ("bad host.example.com", "whitespace"),
+    ("-under_.example.com", "invalid host name"),
     ("ünicode.example.com", "punycode"),
     ("999.1.1.1", "invalid IPv4"),
     ("a" * 64 + ".example.com", "invalid host name"),
@@ -170,10 +171,18 @@ def test_row_warning(imap_admin_hosts):
     # The admin removes the host: the existing row is flagged.
     imap_admin_hosts.set("alt.example.com:1993")
     assert s.imap_row_warning(ok) == "Server no longer allowed"
-    # Rows without a host do not warn; malformed ports do.
+    # Rows without a host do not warn; malformed ports get their own warning.
     assert s.imap_row_warning({"oauth_blob": {}}) is None
     bad = _row(host="alt.example.com", port="nope", security="ssl")
-    assert s.imap_row_warning(bad) == "Server no longer allowed"
+    assert s.imap_row_warning(bad) == "Invalid port"
+
+
+def test_underscore_hostnames_allowed(imap_admin_hosts):
+    assert s.parse_allowed_hosts("mail_01.corp.internal\n_imap.example.com:993") == [
+        s.AllowedHost("mail_01.corp.internal", None), s.AllowedHost("_imap.example.com", 993),
+    ]
+    imap_admin_hosts.set("mail_01.corp.internal")
+    assert s.is_allowed("MAIL_01.corp.internal", 993)
 
 
 def test_account_for():

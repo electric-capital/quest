@@ -28,7 +28,7 @@ tool_call(tool_name="imap_search_messages", arguments={"connection": {{CONNECTIO
 
 ## Folders
 
-Folder names are the `name` values from `imap_list_folders` (e.g. `INBOX`, `Sent`, `Archive/2026`, `[Gmail]/All Mail`). `INBOX` is the default for searches. Find the sent / trash / archive folder by its `special_use` value rather than guessing the name -- providers name them differently. Folders flagged `\Noselect` are containers only and hold no messages.
+Folder names are the `name` values from `imap_list_folders` (e.g. `INBOX`, `Sent`, `Archive/2026`, `[Gmail]/All Mail`). `INBOX` is the default for searches. Find the sent / trash / archive folder by its `special_use` value rather than guessing the name -- providers name them differently. Folders flagged `\Noselect` are containers only and hold no messages. A folder listed with a `raw_name` (a name the server stores in an unusual encoding) is addressed by passing that `raw_name` as `folder` if its `name` is not found.
 
 ## Searching
 
@@ -93,13 +93,13 @@ Replaced URL count: 2               (present only when URLs were replaced)
 
 ## Attachments
 
-- **report.pdf** -- `application/pdf`, 12,345 bytes, attachment_index: `1`
+- **report.pdf** -- `application/pdf`, ~12,345 bytes, attachment_index: `1`
 ```
 
 - Several UIDs return one `# IMAP messages batch` document: a counts line, a `## Batch errors` section first when a UID failed (e.g. `imap_message_not_found`), then `===`-separated messages in request order.
 - At most 20 UIDs per call. Messages are large: fetch only what you need, and delegate bulk reading (dozens of messages) to sub-agents.
 - Plain-text bodies are preferred; HTML-only messages are converted to markdown. `"include_html": true` shows the raw HTML in a fenced block instead.
-- Bodies above 2 MB are truncated with a note. Messages above 25 MB are not downloaded: you get the headers, a note and the attachment list (save attachments from those by `filename`).
+- Bodies above 2 MB are truncated with a note. Messages above 25 MB are not downloaded: you get the headers, a note and the attachment list (save attachments from those by `filename`). Listed attachment sizes are estimates (`~`); `imap_save_attachment` reports the exact size. A message with an extreme number of MIME parts is shown with headers only.
 - Long URLs in bodies are replaced with short identifiers like `(#1#)`. Pass `"include_urls": true` to keep them inline, or resolve them afterwards:
 
 ```
@@ -135,6 +135,8 @@ Message subjects, bodies, attachments and sender names are written by whoever se
 | `imap_uidvalidity_changed` | The folder was renumbered: search again for fresh UIDs |
 | `imap_message_not_found` | No message with that UID (deleted or moved) |
 | `imap_attachment_not_found` | No such attachment; `available` lists the message's attachments |
+| `imap_message_too_complex` | The message has too many MIME parts to open; its attachments cannot be saved |
+| `imap_protocol_error` | The server sent a response Quest could not process; retry once, then tell the user |
 | `invalid_arguments` | A malformed argument; the message says which |
 
 ## From scripts (run_python / run_script)

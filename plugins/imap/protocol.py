@@ -21,6 +21,10 @@ digit atoms -> int, other atoms -> str, parenthesised lists -> list,
 literals -> bytes at the top level of a FETCH item (``BODY[...]``,
 ``BINARY[...]``, ``RFC822.*``) and str (UTF-8, replacement on errors)
 inside nested lists (e.g. an ENVELOPE subject sent as a literal).
+
+Hostile input: nesting deeper than ``MAX_NESTING`` and over-long digit
+atoms raise :class:`ImapParseError` (a ValueError); the transport turns
+every parse failure into ``imap_protocol_error``.
 """
 
 from __future__ import annotations
@@ -31,6 +35,20 @@ import email.utils
 import re
 from email.message import Message
 from typing import Any, Iterable, Optional
+
+MAX_NESTING = 64  # parenthesis depth a server response may use
+_MAX_NUMBER_DIGITS = 20  # a number atom longer than this stays a string
+
+
+class ImapParseError(ValueError):
+    """A server response the parser refuses (too deep, malformed)."""
+
+
+def is_number_atom(text: str) -> bool:
+    """ASCII digits only (``str.isdigit`` also accepts e.g. superscripts),
+    bounded length so ``int()`` stays cheap."""
+    return bool(text) and text.isascii() and text.isdigit() and len(text) <= _MAX_NUMBER_DIGITS
+
 
 # -- tokenizer ----------------------------------------------------------
 
@@ -46,7 +64,8 @@ class _Atom(str):
     """An unquoted atom (distinguishes ``"123"`` from ``123``)."""
 
 
-_LITERAL_MARK_RE = re.compile(rb"\{(\d+)\+?\}$")
+# ``{n}`` literal markers, incl. RFC 3516 literal8 ``~{n}`` (BINARY[...]).
+_LITERAL_MARK_RE = re.compile(rb"~?\{(\d+)\+?\}$")
 
 
 def _segments(data: Iterable[Any]) -> list:
@@ -131,13 +150,15 @@ def _tokenize(data: Iterable[Any]) -> list:
 def _atom_value(tok: _Atom):
     if tok.upper() == "NIL":
         return None
-    if tok.isdigit():
+    if is_number_atom(tok):
         return int(tok)
     return str(tok)
 
 
-def _parse_value(tokens: list, pos: int, *, top_literal_bytes: bool = False):
+def _parse_value(tokens: list, pos: int, *, top_literal_bytes: bool = False, depth: int = 0):
     """Parse one value at ``tokens[pos]``; returns (value, next_pos)."""
+    if depth > MAX_NESTING:
+        raise ImapParseError(f"response nests deeper than {MAX_NESTING} levels")
     while pos < len(tokens) and tokens[pos] == "\n":
         pos += 1
     if pos >= len(tokens):
@@ -157,7 +178,7 @@ def _parse_value(tokens: list, pos: int, *, top_literal_bytes: bool = False):
                 continue
             if t == ")" and not isinstance(t, _Atom):
                 return items, pos + 1
-            value, pos = _parse_value(tokens, pos)
+            value, pos = _parse_value(tokens, pos, depth=depth + 1)
             items.append(value)
         return items, pos
     if isinstance(tok, _Atom):
@@ -187,7 +208,7 @@ def parse_fetch_messages(data: Iterable[Any]) -> list[tuple[int, dict]]:
     n = len(tokens)
     while pos < n:
         tok = tokens[pos]
-        if not (isinstance(tok, _Atom) and tok.isdigit()):
+        if not (isinstance(tok, _Atom) and is_number_atom(tok)):
             pos += 1
             continue
         seq = int(tok)
@@ -377,6 +398,25 @@ def quote_folder(name: str) -> str:
     return quote_imap_string(encode_folder_name(name))
 
 
+def quote_raw_folder(raw_name: str) -> str:
+    """A server-side (already encoded) folder name quoted verbatim."""
+    check_safe_text(raw_name, "folder name")
+    return quote_imap_string(raw_name)
+
+
+def raw_name_candidate(name: str) -> Optional[str]:
+    """``name`` itself when it can only be a server-side raw name that does
+    not round-trip through modified UTF-7 (e.g. ``&AOkA6Q-`` style runs
+    the server wrote non-canonically, or invalid runs kept verbatim by
+    :func:`decode_folder_name`): ASCII, contains ``&``, and differs from
+    the canonical encoding of its own decoding. None otherwise."""
+    if not isinstance(name, str) or not name.isascii() or "&" not in name:
+        return None
+    if encode_folder_name(decode_folder_name(name)) == name:
+        return None
+    return name
+
+
 # -- BODYSTRUCTURE ------------------------------------------------------
 
 
@@ -449,9 +489,17 @@ def _disposition(value: Any) -> tuple[Optional[str], dict]:
     return None, {}
 
 
+_MIME_TOKEN_RE = re.compile(r"[a-z0-9!#$&^_.+-]+")
+
+
+def _mime_token(value: Any) -> str:
+    text = str(value or "").lower() if not isinstance(value, list) else ""
+    return text if _MIME_TOKEN_RE.fullmatch(text) else ""
+
+
 def _leaf_info(part: list, section: str) -> dict:
-    maintype = str(part[0] or "").lower() if len(part) > 0 else ""
-    subtype = str(part[1] or "").lower() if len(part) > 1 else ""
+    maintype = _mime_token(part[0]) if len(part) > 0 else ""
+    subtype = _mime_token(part[1]) if len(part) > 1 else ""
     params = _param_dict(part[2]) if len(part) > 2 else {}
     size = part[6] if len(part) > 6 and isinstance(part[6], int) else 0
     if maintype == "text":
@@ -464,7 +512,7 @@ def _leaf_info(part: list, section: str) -> dict:
     filename = disp_params.get("filename") or params.get("name")
     return {
         "section": section,
-        "mime": f"{maintype}/{subtype}" if maintype else "application/octet-stream",
+        "mime": f"{maintype}/{subtype}" if maintype and subtype else "application/octet-stream",
         "filename": _decode_words(filename) if filename else None,
         "size": size,
         "disposition": disposition,
@@ -482,8 +530,8 @@ def bodystructure_parts(bs: Any) -> list[dict]:
     attached ``message/rfc822`` is one leaf and is not descended into."""
     out: list[dict] = []
 
-    def walk(part: Any, prefix: str) -> None:
-        if not isinstance(part, list) or not part:
+    def walk(part: Any, prefix: str, depth: int) -> None:
+        if not isinstance(part, list) or not part or depth > MAX_NESTING:
             return
         if _is_multipart(part):
             index = 0
@@ -491,23 +539,37 @@ def bodystructure_parts(bs: Any) -> list[dict]:
                 if not isinstance(child, list):
                     break
                 index += 1
-                walk(child, f"{prefix}.{index}" if prefix else str(index))
+                walk(child, f"{prefix}.{index}" if prefix else str(index), depth + 1)
             return
         out.append(_leaf_info(part, prefix or "1"))
 
-    walk(bs, "")
+    walk(bs, "", 0)
     return out
 
 
+BODY_MIME_TYPES = ("text/plain", "text/html")
+
+
+def is_attachment_part(part: dict) -> bool:
+    """The attachment rule shared with plugins/imap/render.py: a leaf is an
+    attachment unless it is a ``text/plain`` / ``text/html`` part without
+    an ``attachment`` disposition and without a filename (so
+    ``text/calendar`` invites, ``text/csv``, vCards, images and attached
+    messages all count)."""
+    if part["disposition"] == "attachment" or part["filename"]:
+        return True
+    return part["mime"] not in BODY_MIME_TYPES
+
+
+def bodystructure_attachment_parts(bs: Any) -> list[dict]:
+    """The leaves of a BODYSTRUCTURE that are attachments (see
+    :func:`is_attachment_part`), in section order."""
+    return [part for part in bodystructure_parts(bs) if is_attachment_part(part)]
+
+
 def bodystructure_has_attachments(bs: Any) -> bool:
-    """Whether any leaf looks like an attachment: an ``attachment``
-    disposition, a filename, or a non-text type."""
-    for part in bodystructure_parts(bs):
-        if part["disposition"] == "attachment" or part["filename"]:
-            return True
-        if not part["mime"].startswith("text/"):
-            return True
-    return False
+    """Whether any leaf is an attachment (see :func:`is_attachment_part`)."""
+    return bool(bodystructure_attachment_parts(bs))
 
 
 # -- ENVELOPE -----------------------------------------------------------

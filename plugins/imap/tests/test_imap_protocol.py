@@ -247,3 +247,70 @@ def test_bodystructure_from_parsed_fetch():
     bs = p.parse_fetch_response(data)[4]["BODYSTRUCTURE"]
     assert [part["section"] for part in p.bodystructure_parts(bs)] == ["1", "2"]
     assert p.bodystructure_parts(bs)[1]["filename"] == "a b.pdf"
+
+
+# -- hostile / unusual server data (review fixes) -------------------------------
+
+
+def test_fetch_literal8_binary_marker():
+    """RFC 3516 BINARY literals use ``~{n}``; the ``~`` must not become a value."""
+    data = [(b"1 (UID 5 BINARY[1] ~{5}", b"hello"), b" BINARY.SIZE[1] 5)"]
+    assert p.parse_fetch_response(data) == {
+        5: {"UID": 5, "BINARY[1]": b"hello", "BINARY.SIZE[1]": 5},
+    }
+
+
+def test_fetch_deep_nesting_raises_parse_error_not_recursion_error():
+    deep = b"(" * 5000 + b")" * 5000
+    with pytest.raises(p.ImapParseError):
+        p.parse_fetch_response([b"1 (UID 5 BODYSTRUCTURE " + deep + b")"])
+    # Within the cap still parses.
+    ok = b"(" * p.MAX_NESTING + b")" * p.MAX_NESTING
+    assert 5 in p.parse_fetch_response([b"1 (UID 5 X " + ok + b")"])
+
+
+@pytest.mark.parametrize("atom", ["9" * 5000, "²", "٣"])
+def test_fetch_non_ascii_or_huge_digit_atoms_stay_strings(atom):
+    data = [f"1 (UID {atom} RFC822.SIZE {atom})".encode()]
+    assert p.parse_fetch_response(data) == {}  # no integer UID
+    ((_seq, items),) = p.parse_fetch_messages(data)
+    assert items["UID"] == atom and isinstance(items["UID"], str)
+    assert p.parse_fetch_messages([f"{atom} (UID 1)".encode()]) == []
+
+
+def test_bodystructure_walk_is_depth_bounded():
+    leaf = ["TEXT", "PLAIN", None, None, None, "7BIT", 1, 1]
+    bs = leaf
+    for _ in range(200):
+        bs = [bs, "MIXED"]
+    assert p.bodystructure_parts(bs) == []  # deeper than MAX_NESTING: ignored, no RecursionError
+
+
+def test_attachment_rule_text_types():
+    """Only text/plain and text/html are body candidates (render.py agrees)."""
+    bs = [
+        ["TEXT", "PLAIN", None, None, None, "7BIT", 1, 1, None, None, None, None],
+        ["TEXT", "HTML", None, None, None, "7BIT", 1, 1, None, None, None, None],
+        ["TEXT", "CALENDAR", ["METHOD", "REQUEST"], None, None, "7BIT", 9, 1, None, None, None, None],
+        ["TEXT", "PLAIN", ["NAME", "notes.txt"], None, None, "7BIT", 1, 1, None, None, None, None],
+        "MIXED", None, None, None, None,
+    ]
+    assert [x["mime"] for x in p.bodystructure_attachment_parts(bs)] == ["text/calendar", "text/plain"]
+    assert p.bodystructure_has_attachments(bs) is True
+    assert p.bodystructure_has_attachments(bs[:2] + ["ALTERNATIVE"]) is False
+
+
+def test_bodystructure_mime_tokens_sanitised():
+    bs = ["TEXT`) evil", "PLAIN", None, None, None, "7BIT", 1, 1]
+    assert p.bodystructure_parts(bs)[0]["mime"] == "application/octet-stream"
+
+
+def test_raw_name_candidate():
+    assert p.raw_name_candidate("INBOX") is None
+    assert p.raw_name_candidate("Entwürfe") is None  # not ASCII: a decoded name
+    assert p.raw_name_candidate("Entw&APw-rfe") is None  # canonical: decoded form is used
+    assert p.raw_name_candidate("&AOk-&AOk-") == "&AOk-&AOk-"  # non-canonical run split
+    assert p.raw_name_candidate("bad&zz-name") == "bad&zz-name"  # invalid run kept verbatim
+    assert p.quote_raw_folder("&AOk-&AOk-") == '"&AOk-&AOk-"'
+    with pytest.raises(ValueError):
+        p.quote_raw_folder("a\r\nb")
