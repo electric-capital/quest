@@ -420,6 +420,11 @@ _BLOCKED_PROXY_PATHS: list[str] = [
     # cached sessions that still emit curl_proxy_get get a "use the
     # dedicated tool" pointer instead of a bare no-route error.
     "/api/telegram",
+    # IMAP mailboxes are the dedicated imap_* dynamic tools (plugins/imap)
+    # and never had HTTP routes; the prefix is reserved here so a model
+    # guessing at /api/imap/* gets a "use the dedicated tool" pointer, and
+    # so no future route under it is reachable through curl_proxy_*.
+    "/api/imap",
 ]
 
 
