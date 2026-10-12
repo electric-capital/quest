@@ -529,6 +529,19 @@ class TestReviewFixes:
         assert "Not listed" in section
         assert render.message_too_complex(raw) is not None
 
+    def test_parse_budget_counts_cr_only_boundaries(self):
+        body = b"".join(
+            b"\r--b\rContent-Type: text/plain\r\rx" for _ in range(20_000)
+        )
+        raw = (b"Subject: s\rContent-Type: multipart/mixed; boundary=b\r\r"
+               + body + b"\r--b--\r")
+        assert raw.count(b"\n--") == 0
+        assert render.message_too_complex(raw) is not None
+
+    def test_crlf_boundaries_counted_once(self):
+        raw = b"".join(b"\r\n--b" for _ in range(render.MAX_BOUNDARY_LINES))
+        assert render.message_too_complex(raw) is None
+
     def test_raw_size_guard(self, monkeypatch):
         monkeypatch.setattr(render, "MAX_RENDER_RAW_BYTES", 1000)
         doc = _render(_plain("y" * 5000))

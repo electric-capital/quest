@@ -252,7 +252,9 @@ def message_too_complex(raw, *, max_bytes: int | None = None) -> str | None:
             f"{max_bytes // (1024 * 1024)} MB rendering limit"
         )
     if isinstance(data, (bytes, bytearray)):
-        boundaries = data.count(b"\n--")
+        # The feedparser also splits lines on a bare CR, so count CR-only
+        # delimiter lines too ("\r\n--" contains "\n--" but not "\r--").
+        boundaries = data.count(b"\n--") + data.count(b"\r--")
         if boundaries > MAX_BOUNDARY_LINES:
             return (
                 f"the message has about {boundaries:,} MIME part boundaries "
