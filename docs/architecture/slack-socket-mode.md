@@ -26,7 +26,7 @@ When the user replies in that thread, the Socket Mode worker resolves the row an
 - [`frontend/src/components/settings/SlackSection.tsx`](../../frontend/src/components/settings/SlackSection.tsx) -- Settings > Slack section with the default-model dropdown (listed only while the user's Slack connector row is connected; see [Settings Data Connections](settings-data-connections.md))
 - [`db/models.py`](../../db/models.py) -- `Conversation.origin` column and the `SlackConversation` ORM model
 - [`db/conversation_store.py`](../../db/conversation_store.py) -- `create_conversation(origin=...)` and `_conversation_to_dict` including `origin`
-- [`db/user_store.py`](../../db/user_store.py) -- `get_user_by_slack_user_id()` resolves a Quest user by json_extracting `$.user_id` from the `user_service_credentials` slack row's `oauth_blob` (written by the Slack plugin's OAuth callback)
+- [`db/user_store.py`](../../db/user_store.py) -- `get_user_by_slack_user_id()` resolves a Quest user by loading the `user_service_credentials` slack rows and matching `user_id` in the ORM-decrypted `oauth_blob` in Python (`oauth_blob` is encrypted at rest, so SQL `json_extract` cannot see inside it; written by the Slack plugin's OAuth callback)
 - [`auth/config.py`](../../auth/config.py) -- `load_slack_socket_mode_token()` (App-Level Token) and `load_slack_bot_token()`; the loaders stay core (the worker needs them) even though the `slack` credential store entry is registered by the Slack plugin (see [Plugins](plugins.md))
 - [`quest.py`](../../quest.py) -- `lifespan()` calls `slack_socket_mode.start(app)` and `slack_socket_mode.shutdown()` wrapped so Slack-side failures cannot block boot or shutdown
 - Migration [`alembic/versions/e58a2bf14c01_add_slack_conversations_table_and_origin.py`](../../alembic/versions/e58a2bf14c01_add_slack_conversations_table_and_origin.py) -- adds `conversations.origin` and creates `slack_conversations`
@@ -53,7 +53,7 @@ Message text is truncated to `_MAX_TEXT_LOG_CHARS` (500) when logged. All handle
 
 ## User Resolution
 
-For every accepted DM, `_handle_socket_mode_request()` resolves the Quest user via `get_user_by_slack_user_id(slack_user_id)` in `db/user_store.py`, which joins `user_service_credentials` (service `slack`) and matches `json_extract(oauth_blob, '$.user_id')`. The same per-user Slack OAuth record the Slack plugin's `/auth/slack` callback stores (see the [Slack plugin doc](../../plugins/slack/docs/slack-api.md)) is reused -- no additional onboarding step is required. DMs from Slack users with no linked Quest account are dropped with a warning.
+For every accepted DM, `_handle_socket_mode_request()` resolves the Quest user via `get_user_by_slack_user_id(slack_user_id)` in `db/user_store.py`, which loads the `user_service_credentials` rows for service `slack` and matches `user_id` in each ORM-decrypted `oauth_blob` in Python (the blob is ciphertext in SQL, so `json_extract` cannot be used). The same per-user Slack OAuth record the Slack plugin's `/auth/slack` callback stores (see the [Slack plugin doc](../../plugins/slack/docs/slack-api.md)) is reused -- no additional onboarding step is required. DMs from Slack users with no linked Quest account are dropped with a warning.
 
 ## Dispatch: Top-Level DM vs Threaded Reply
 

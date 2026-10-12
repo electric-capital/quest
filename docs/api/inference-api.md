@@ -79,7 +79,9 @@ Mirrors the cross-user subagent runtime (`chat/user_subagent.py`), minus approva
 3. The system prompt (`get_inference_api_system_prompt` in `chat/gemini_api/system_prompt.py`)
    forbids intermediate assistant text -- the caller only ever receives the markdown passed to
    `return_final_response`. The user's custom system prompt and guides are excluded; user
-   auto-load skills are included. `run_inference` drives the turn with a copy of the owner's user
+   auto-load skills are included, as is the Connected accounts paragraph for users with several
+   connections to a multi-connection service (see
+   [User Connections](../architecture/user-connections.md)). `run_inference` drives the turn with a copy of the owner's user
    dict whose `api_key` is blank: an inference token is narrower than the reusable `users.api_key`
    (which authenticates the whole app surface), and everything the model can see -- the proxy
    preamble and the system-skill docs rendered by `load_skills` -- is deliverable to the token

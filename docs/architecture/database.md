@@ -45,7 +45,7 @@ The `User.to_dict()` method converts a model instance to a plain dict (including
 
 ## UserServiceCredential Model
 
-The `UserServiceCredential` model maps to the `user_service_credentials` table: per-user credentials for **plugin-contributed** services (one row per `(user, service)`, unique composite index). Core integrations keep their dedicated `users` columns (`ramp_oauth`, `airtable_token`, ...); plugins cannot add columns, so their per-user connections live here.
+The `UserServiceCredential` model maps to the `user_service_credentials` table: per-user credentials for **plugin-contributed** services, one row per **connection**: a `(user, service)` holds one row for an ordinary plugin and up to `connection_limit` rows for a `multi_connection` plugin (e.g. IMAP mailboxes), told apart by `account` with exactly one `is_default` row -- see [User Connections](user-connections.md). Core integrations keep their dedicated `users` columns (`ramp_oauth`, `airtable_token`, ...); plugins cannot add columns, so their per-user connections live here.
 
 - A legacy pre-plugin per-user key column was folded in by migration `d9f4b82a61c7`,
 - the GitHub plugin's OAuth token JSON is a row with service `github` in `oauth_blob` (migration `a7c3e91b52d8` did the same for `users.github_oauth`),
@@ -56,16 +56,21 @@ The `UserServiceCredential` model maps to the `user_service_credentials` table: 
 |--------|------|-------------|-------------|
 | `id` | `Integer` | Primary key, auto-increment | Row ID |
 | `user_id` | `Integer` | FK to `users.id` (CASCADE), indexed, not null | Owner's integer ID |
-| `service` | `String(64)` | Not null; unique with `user_id` | The plugin id (e.g. `acme_tracker`) |
+| `service` | `String(64)` | Not null | The plugin id (e.g. `acme_tracker`) |
+| `account` | `String(320)` | Not null, default `''`; unique with `user_id` + `service` | The connection's account address (or user-chosen name), stored lower-cased with no whitespace, `"` or backtick (`normalize_account()`); `''` on legacy pre-multi-connection rows |
+| `description` | `Text` | Nullable | Optional user-written note about the connection (one line, at most 200 characters via `normalize_description()`), shown to the model as quoted data |
+| `is_default` | `Boolean` | Not null, default true | The default connection of its `(user, service)`; exactly one per pair while any row exists |
 | `secret` | `Text` (`EncryptedText`) | Nullable | API key for the `api_key` connection kind, encrypted at rest |
-| `oauth_blob` | `JSON` (`EncryptedJSON`) | Nullable | Token JSON, encrypted at rest for the `oauth` connection kind (e.g. the GitHub plugin's access token + granted scopes) |
+| `oauth_blob` | `JSON` (`EncryptedJSON`) | Nullable | Token JSON, encrypted at rest for the `oauth` connection kind (e.g. the GitHub plugin's access token + granted scopes); for the `form` kind, `{"values": {...}, **verify extras}` (e.g. an IMAP mailbox's server / username / password) |
 | `created_at` / `updated_at` | `DateTime` | Not null | Timestamps |
 
-Both secret columns are encrypted at rest like the per-user credential columns ([Encryption at Rest](encryption-at-rest.md)). Access goes through `db/user_service_credential_store.py` (get/list/upsert/delete plus `delete_all_credentials()` used by the logout-and-disconnect flow; account deletion relies on the FK cascade).
+Indexes: `ix_user_service_credentials_user_id`, the unique `ix_user_service_credentials_user_service_account` on `(user_id, service, account)` (case-insensitive because accounts are stored lower-cased), and the partial unique `ix_user_service_credentials_user_service_default` on `(user_id, service) WHERE is_default`, which backstops "exactly one default". Migration `e3c9b7a1d5f2` added the three columns (legacy rows become `account=''`, `is_default=1`) and swapped the old unique `(user_id, service)` index for these two in place (`batch_alter_table`, so the encrypted columns are never rewritten); its downgrade refuses with a `RuntimeError` while any `(user, service)` holds more than one row.
 
-`db/user_store.py` attaches the rows to every returned user dict as `user["service_credentials"]` (a service -> row map, present only when non-empty, and only queried while a loaded plugin declares a `user_connection`) so the sync `get_user_connected_services()` can evaluate plugin connection predicates without a DB round-trip.
+Both secret columns are encrypted at rest like the per-user credential columns ([Encryption at Rest](encryption-at-rest.md)). Access goes through `db/user_service_credential_store.py` in two layers: the historical single-connection functions (get/list/upsert act on the DEFAULT row; `delete_credential()` removes every row of the service; `delete_all_credentials()` is used by the logout-and-disconnect flow; account deletion relies on the FK cascade), and the per-connection functions (`list_connections`, `get_connection`, `create_connection` raising `ConnectionExists` / `ConnectionLimit`, `update_connection`, `set_default_connection`, `delete_connection` which promotes the oldest remaining row, `upsert_connection_by_account`) that keep exactly one default inside single transactions.
 
-Keys are written by the generic routes `POST /auth/service-key/{service}` and `POST /auth/service-key/{service}/remove` (`auth/service_key.py`), which serve every loaded plugin with an `api_key`-kind `UserConnectionSpec`.
+`db/user_store.py` attaches the rows to every returned user dict as `user["service_credentials"]` (a service -> DEFAULT row map, the compat shim every single-connection plugin keeps reading) plus `user["service_connections"]` (service -> every row, default first; the default is the same dict object in both maps so in-place token refreshes stay visible) -- both present only when non-empty and only queried while a loaded plugin declares a `user_connection` -- so the sync `get_user_connected_services()` can evaluate plugin connection predicates without a DB round-trip.
+
+Keys are written by the generic routes `POST /auth/service-key/{service}` and `POST /auth/service-key/{service}/remove` (`auth/service_key.py`), which serve every loaded plugin with a single-connection `api_key`-kind `UserConnectionSpec`; multi-connection rows are written by the per-connection routes `POST/PUT/DELETE /auth/connections/{service}[/{id}]` (`auth/connections.py`).
 
 ## Memory Model
 

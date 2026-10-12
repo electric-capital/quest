@@ -179,7 +179,7 @@ The frontend is a modern single-page application built with:
   - `SettingsModal.tsx` is a thin shell providing modal chrome, left nav sidebar, and section routing
   - `SettingsModal.css` retains shell/layout styles and shared utility classes
   - 6 per-section sub-components in `frontend/src/components/settings/`, each managing its own state and data fetching, mounting/unmounting as the user navigates tabs:
-    - `DataConnectionsSection` -- OAuth connectors (Google Services, Slack, Telegram, plugin rows like GitHub and Twitter/X) with Connect/Reconnect buttons and popup handling; API key connectors (Airtable, api_key-kind plugin rows) with shared `ApiKeyForm`. See [OAuth Popup Flow](oauth-popup.md)
+    - `DataConnectionsSection` -- OAuth connectors (Google Services, Slack, Telegram, plugin rows like GitHub and Twitter/X) with Connect/Reconnect buttons and popup handling; API key connectors (Airtable, api_key-kind plugin rows) with shared `ApiKeyForm`; multi-connection plugin services (e.g. IMAP, `form` kind) render one `ConnectionCard` per connection and add accounts through `ConnectionForm` (the shared `SchemaForm`). See [OAuth Popup Flow](oauth-popup.md) and [User Connections](user-connections.md)
     - `MemoriesSection` -- Memory CRUD with archive toggle, inline editing, "Show archived" toggle
     - `GuidesSection` -- Guide CRUD with default guide handling, inline editing, save status feedback. After mutations, `refreshContextGuides()` updates `GuidesContext`
     - `SkillsSection` -- Tabbed interface ("My Skills" / "Shared with Me"), skill CRUD, visibility badges, sharing with type-ahead user search, auto-load toggle with server-backed persistence via `user_skill_autoloads` table
@@ -833,6 +833,11 @@ Settings Flow (Data Connections):
    and optional "needs new scopes" badge
 5. API key connectors (Airtable, api_key-kind plugin rows) use a shared ApiKeyForm component: text field to paste
    key when disconnected, "Connected" badge + key preview (...XXXX) + Disconnect button when connected
+5a. Multi-connection plugin rows (`multi_connection: true`, always for the `form` kind, e.g. IMAP)
+   carry a `connections` list and `connections_url`: one card per connection (account, description,
+   Default / Make default, Reconnect, Disconnect), added through a schema-driven form
+   (`form_fields`) that POSTs to /auth/connections/{service}, where the plugin's `verify` hook
+   logs in before the row is saved -- see user-connections.md
 6. Clicking an OAuth connector button opens the OAuth flow in a popup window (via openOAuthPopup()
    from frontend/src/utils/oauthPopup.ts) with ?popup=1 appended to the auth URL
 7. OAuth flow completes in the popup; backend callback returns an HTML page that

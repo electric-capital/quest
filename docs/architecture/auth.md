@@ -4,7 +4,7 @@ This document describes the `auth/` submodule, which contains all OAuth flows, s
 
 ## Overview
 
-Auth-related functionality was extracted from `quest.py` into a dedicated `auth/` submodule. The submodule handles Google OAuth (app login and Google Services), Airtable token management, generic per-user plugin API keys (`auth/service_key.py`), dev-only email login (for testing multi-user features without Google accounts), session cookie serialization, FastAPI auth dependencies, and OAuth popup HTML generators. The `auth/__init__.py` re-exports commonly used symbols and exposes FastAPI routers that the main app registers.
+Auth-related functionality was extracted from `quest.py` into a dedicated `auth/` submodule. The submodule handles Google OAuth (app login and Google Services), Airtable token management, generic per-user plugin API keys (`auth/service_key.py`), per-connection management for multi-connection plugins (`auth/connections.py`, see [User Connections](user-connections.md)), dev-only email login (for testing multi-user features without Google accounts), session cookie serialization, FastAPI auth dependencies, and OAuth popup HTML generators. The `auth/__init__.py` re-exports commonly used symbols and exposes FastAPI routers that the main app registers.
 
 ## Router Registration
 
@@ -13,8 +13,11 @@ The main app in `quest.py` registers the routers from the auth submodule:
 1. `google_login_router` -- App login endpoints (`/auth/`, `/auth/login`, `/auth/callback`, `/auth/login-url`, `/auth/logout`)
 2. `google_services_router` -- Google Services OAuth (`/auth/google-services`, `/auth/google-services/callback`)
 3. `airtable_router` -- Airtable token management (`/auth/airtable/save-token`, `/auth/airtable/remove-token`)
-4. `dev_login_router` -- Dev-only email login (`POST /auth/dev-login`)
-5. `password_login_router` -- Email/password sign-in (`/auth/password/*`, see Sign-in Methods below)
+4. `ramp_router` -- Ramp OAuth (`/auth/ramp`, see [Ramp API](../api/ramp-api.md))
+5. `service_key_router` -- single-connection plugin API keys (`/auth/service-key/{service}`, `.../remove`)
+6. `connections_router` -- multi-connection plugin connections (`POST /auth/connections/{service}`, `PUT`/`DELETE /auth/connections/{service}/{id}`; cookie or API-key auth)
+7. `dev_login_router` -- Dev-only email login (`POST /auth/dev-login`)
+8. `password_login_router` -- Email/password sign-in (`/auth/password/*`, see Sign-in Methods below)
 
 Plugin OAuth routers (e.g. the Slack plugin's `/auth/slack`, `/auth/slack/callback`, `/auth/slack/disconnect`, the GitHub plugin's `/auth/github/*`, the Twitter/X plugin's `/auth/twitter`, `/auth/twitter/callback`, `/auth/twitter/disconnect`, and the Telegram plugin's non-OAuth login router `/auth/telegram`, `/auth/telegram/send-code`, `/auth/telegram/verify`, `/auth/telegram/2fa`, `/auth/telegram/disconnect`) are mounted separately by `mount_plugin_oauth_routers()` in quest.py after plugin load -- see [Plugin Architecture](plugins.md).
 

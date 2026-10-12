@@ -59,6 +59,7 @@ Currently blocked:
 | `/api/slack`, `/api/slack-simple` | Slack is dedicated dynamic tools only (`list_slack_conversations`, `send_slack_dm_to_self`, etc.) with no HTTP routes; the blocked prefixes give cached sessions that still emit `curl_proxy_*` a "use the dedicated tool" error instead of a bare no-route error (`/api/slack-simple` needs its own entry because prefix matching is segment-bounded) |
 | `/api/twitter` | Twitter/X reads moved to the twitter plugin's `api.twitter.com` `authed_get` service entry; same cached-session pointer rationale |
 | `/api/telegram` | Telegram reads are dedicated dynamic tools only (`telegram_get_me`, `telegram_list_dialogs`, `telegram_get_messages`, `telegram_list_contacts`) with no HTTP routes, registered by the `plugins/telegram` plugin; sandbox scripts use the `/api/tool-call` bridge. See [Telegram API](../../plugins/telegram/docs/telegram-api.md) |
+| `/api/imap` | IMAP mailboxes are the dedicated `imap_*` dynamic tools of the `plugins/imap` plugin and never had HTTP routes; the prefix is reserved so a model guessing at `/api/imap/*` gets a "use the dedicated tool" pointer and no future route under it is reachable through `curl_proxy_*` |
 
 ## Edge Cases Handled
 

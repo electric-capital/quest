@@ -318,6 +318,16 @@ The `_SERVICE_REGISTRY` dict in `chat/gemini_api/authed_get.py` maps API hostnam
 
 See the registry entries in `chat/gemini_api/authed_get.py` for exact hostnames, credential loaders, and auth injection functions.
 
+### Named Connections (`connection` argument)
+
+`authed_get` and `authed_post` take an optional `connection` argument (an account address) for services where the user holds several connections (multi-connection plugins -- see [User Connections](user-connections.md)). It reaches the credential loader only when the registry entry sets `accepts_connection: True` (validated by `register_service()`: the entry must also be `requires_user` and its `load_credentials` must accept a `connection` keyword; plugin loader validation requires the flag on every entry of a multi-connection plugin and forbids it elsewhere). Omitted or blank means the default connection, so calls without it behave exactly as before. The loader resolves the name through `resolve_connection()` in `config/user_connections.py`; `_make_authed_request()` turns failures into structured JSON errors before any upstream request:
+
+- `invalid_connection` -- the argument is not a string,
+- `connection_not_supported` -- a connection was named for a service whose entry does not accept one,
+- `connection_not_found` -- no connection with that account; carries `service`, `requested` and `available` (the user's account addresses, default first).
+
+The sandbox `/api/authed-get` and `/api/authed-post` proxy bodies carry the same optional `connection` field.
+
 ### Allowed Endpoints Validation
 
 Services can optionally declare an `allowed_endpoints` field in their `_SERVICE_REGISTRY` entry: a list of regex patterns defining which URL paths are permitted. Before making the HTTP request, `_make_authed_request()` checks the request path against these compiled regexes (compiled at module load time for performance). If no pattern matches, the request is rejected with an error listing the allowed patterns.
@@ -365,7 +375,7 @@ A REST proxy endpoint exposes the same `authed_get` functionality to sandbox cod
 
 **Auth:** Bearer token via the `get_current_user_cookie_or_apikey` dependency in `chat/gemini_api/authed_get.py` on the main app (which, like every auth dependency, applies the `check_user_allowed()` admission policy -- see [auth.md](auth.md)); on the sandbox tool API port that dependency is overridden so ONLY the container's ephemeral `QUEST_API_KEY` sandbox token is accepted (see [Script Runner Architecture](script-runner.md#sandbox-tokens))
 
-**Request body:** `AuthedGetRequest` Pydantic model in `chat/gemini_api/authed_get.py` -- accepts `url` (string, required) and `headers` (object, optional), matching the `authed_get` tool call args minus `intent_message`
+**Request body:** `AuthedGetRequest` Pydantic model in `chat/gemini_api/authed_get.py` -- accepts `url` (string, required), `headers` (object, optional) and `connection` (string, optional -- see [Named Connections](#named-connections-connection-argument)), matching the `authed_get` tool call args minus `intent_message`
 
 **Handler:** `authed_get_endpoint()` in `chat/gemini_api/authed_get.py` delegates to the same `handle_authed_get()` function used by the tool call path, then parses the result back to JSON for a properly formatted `JSONResponse`
 
@@ -497,7 +507,7 @@ The prompt is assembled from, in order:
 5. Message-envelope explainer (XML metadata wrapping, UTC/local time hints, `<conversation_skills_loaded>` semantics)
 6. Sixteen directly-registered tools: `curl_proxy_get`, `curl_proxy_post`, `tool_call`, `load_gmail_attachment`, `agent_task`, `agent_task_parallel`, `agent_task_parallel_template`, `create_action_request`, `run_script`, `run_python`, `list_skills`, `search_skills`, `load_skills`, `list_my_skills`, `get_skill`, `list_routines`. Descriptions are short and point at the relevant `system:<backend>` skill for backend-specific details
 7. Auto-generated "Dynamic Tools" section produced by `_build_dynamic_tools_section()` over `TOOL_CALL_REGISTRY` (tools dispatched via the `tool_call` meta tool)
-8. System-skills enumeration block produced by `build_system_skills_enumeration(connected_services, has_project)` from `chat.system_skills` -- a compact bullet list (id, description, when-to-load) of every catalog entry visible under the current gates. This is the only always-on signal that a given backend's docs exist; the model loads them as needed
+8. System-skills enumeration block produced by `build_system_skills_enumeration(connected_services, has_project)` from `chat.system_skills` -- a compact bullet list (id, description, when-to-load) of every catalog entry visible under the current gates. This is the only always-on signal that a given backend's docs exist; the model loads them as needed. It is followed, only for users with **two or more listable connections** to a multi-connection service (named connections plus an unnamed legacy default, listed as `(unnamed connection) (default)`; unnamed non-default rows are dropped), by the **Connected accounts** paragraph (`build_connected_accounts_paragraph(user)` in `config/user_connections.py`, pre-rendered by `run_conversation_turn()` and passed as `connected_accounts`): each such service's account addresses, the default marked, plus the user-written connection descriptions collapsed to one line, JSON-quoted and labelled as data. Everyone else's prompt text is unchanged (the `authed_get` / `authed_post` tool schemas, however, now always include the optional `connection` argument). The same paragraph goes into the sub-agent, cross-user-subagent and inference-API prompts, never the public-project prompt. Skill content builders that accept a `connections` keyword (e.g. `system:imap`) also receive the user's connection summary (`chat/system_skills/loader.py`)
 9. Short backend-agnostic "Important rules" bullets:
    - the `{base_url}/api/` prefix constraint for `curl_proxy_*`
    - the no-`Authorization`-header rule
@@ -526,7 +536,7 @@ The connected services dict is obtained via `get_user_connected_services(user)` 
 - Carries a "What you cannot do" rule that explicitly enumerates the absent tools (`create_action_request`, `wait_for_handles`, `agent_task*`, `set_conversation_name`) and instructs the model to return any approval-gated write proposal to the parent via `agent_task_response` rather than attempt the write directly. See [Action Requests Architecture](action-requests.md) for the escape-hatch flow.
   - When `can_nest=True`, this rule is relaxed to permit exactly one tier of 2nd-level sub-agents via `agent_task_nested` (restricted to `claude-haiku-5-5` / `claude-haiku-4.5` / `gemini-3.5-flash-lite`, leaves that cannot spawn further); the other top-level tools stay forbidden. `can_nest` is always `False` for 2nd-level sub-agents. See [Nested Sub-Agents](#nested-sub-agents)
 - Receives the same `connected_services` / `has_project` gating, so the system-skills enumeration is identical to the parent's
-- Receives the same pre-resolved `skills_content` from the parent, so sub-agents see the same auto-loaded DB skills
+- Receives the same pre-resolved `skills_content` from the parent, so sub-agents see the same auto-loaded DB skills; the Connected accounts paragraph is built the same way, by `build_connected_accounts_paragraph(user)` in `chat/gemini_api/sub_agent.py`
 - In a project conversation, gets the same "Two file spaces" paragraph and legacy / converted notes as the parent (flags from `RunContext.workspace_notice_flags`, see [Workspace Notice Flags](#workspace-notice-flags))
 - Gets access to `list_skills` / `search_skills` / `load_skills` so it can pull in backend skills independently of the parent; loaded skill content lives only for the sub-agent's turn
 - Instructs the model to call `agent_task_response(response="...")` when the task is complete and not to ask follow-up questions
@@ -548,7 +558,7 @@ New project conversations get `own_workspace` at creation (`create_project_conve
 
 Both system prompt functions accept an optional `connected_services` parameter (dict mapping service group names to booleans). The dict is forwarded to `build_system_skills_enumeration()` so only skills whose `requires` gate is satisfied are enumerated -- backend skills for services the user has not connected are hidden from the model's view. When `connected_services` is `None`, all backend skills are enumerated (used by tests and admin tooling).
 
-`get_user_connected_services(user)` in `api/instructions.py` builds the dict from non-null OAuth token / API key fields on the user record (`google_services_oauth`, `slack_oauth.access_token`, `telegram_session`, plus `airtable`, `ramp`), extended with one key per loaded plugin (e.g. `github`, `twitter` -- true only when the plugin's server config AND the user's stored credential row are both present).
+`get_user_connected_services(user)` in `api/instructions.py` builds the dict from non-null OAuth token / API key fields on the user record (`google_services_oauth`, `airtable`, `ramp`), extended with one key per loaded plugin (e.g. `github`, `slack`, `telegram`, `imap` -- true only when the plugin's server config is available AND the user's stored credential row satisfies the plugin's `connected` predicate; for a multi-connection plugin, any of its rows).
 
 ### Sub-Agent Retry Rule
 

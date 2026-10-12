@@ -27,7 +27,8 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 - [Auth Submodule](architecture/auth.md) - OAuth flows, session management, and credential handling (`auth/` package)
 - [Frontend Architecture](architecture/frontend.md) - React frontend implementation and build tooling
 - [OAuth Popup Flow](architecture/oauth-popup.md) - OAuth popup window architecture, postMessage protocol, and popup flag propagation
-- [Settings Data Connections](architecture/settings-data-connections.md) - Settings UI OAuth connector pattern (connected = badge + Reconnect; not connected = badge + Connect; no Disconnect button)
+- [Settings Data Connections](architecture/settings-data-connections.md) - Data-driven Settings > Data Connections section: only connected services listed, an "+ Add Connection" picker for the rest (OAuth popup, API key step, or a plugin-defined account form), and one card per connection for multi-connection services
+- [User Connections](architecture/user-connections.md) - Multi-account connections: N named connections per (user, service) with a default, the `connection` tool argument and its resolver errors, the Connected accounts prompt paragraph, the `/auth/connections` routes, the `form` connection kind with a plugin `verify` hook, and the requirements for converting an existing plugin
 - [Service Credentials](architecture/service-credentials.md) - Per-service upstream credential store in the data directory (0600 files, encrypted at rest), admin-only Settings editor, startup migration from `server_credentials.json`
 - [Encryption at Rest](architecture/encryption-at-rest.md) - Password-wrapped data key (`encryption_key.json`), AES-256-GCM envelopes for every secret column and credential file, startup password resolution (env / file / local sentinel / prompt), the single in-place migration with pre-encryption backup
 - [Inference Providers](architecture/inference-providers.md) - Admin-only Settings panel for LLM backends: read-only detected Vertex AI environment plus admin-added provider instances (OpenRouter, Fireworks AI, NEAR AI and TrustedRouter API keys, self-hosted servers) with per-instance model lists in a per-instance credential store
@@ -68,6 +69,7 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 - [Ramp App Setup](setup/ramp-setup.md) - Creating and configuring Ramp OAuth integration
 - [Telegram Setup](../plugins/telegram/docs/telegram-setup.md) - Configuring the Telegram integration (served by the plugins/telegram plugin)
 - [Tailscale Setup](../plugins/tailscale/docs/tailscale-setup.md) - Connecting a tailnet with a read-scoped OAuth client or an API access token (served by the plugins/tailscale plugin)
+- [IMAP Setup](../plugins/imap/docs/imap-setup.md) - Admin IMAP server list (one `host[:port] [ssl|starttls]` per line), per-user mailbox connections with app passwords, several accounts per user, and troubleshooting (served by the plugins/imap plugin)
 
 ### API Reference
 - [Chat API](api/chat-api.md) - REST endpoints for conversation CRUD plus the persistent multiplexed WebSocket (`WS /app/api/stream`) carrying chat traffic and live updates
@@ -93,6 +95,7 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 - [SEC EDGAR API](../plugins/sec_edgar/docs/sec-edgar-api.md) - SEC EDGAR read-only access via `authed_get` (company submissions and XBRL financial facts on `data.sec.gov`, plus the two `www.sec.gov` ticker→CIK map files); free public US government API with no authentication and a required SEC `User-Agent` header, surfaced via the ungated `system:sec_edgar` skill (plugins/sec_edgar plugin, the credential-free shape: no admin card, no connection row)
 - [Twitter/X API](../plugins/twitter/docs/twitter-api.md) - Twitter/X DM, bookmarks, and tweet lookup endpoints, plus action-request-based DM sending
 - [Tailscale API](../plugins/tailscale/docs/tailscale-api.md) - Tailscale tailnet configuration read-only via `authed_get` (devices, routes, policy file, DNS, users, keys, settings, webhooks, flow logs) over a per-user API access token or OAuth client secret, surfaced via the gated `system:tailscale` skill
+- [IMAP Mail API](../plugins/imap/docs/imap-api.md) - Read-only IMAP mailbox access for any admin-allowed server as five `imap_*` tools (folders, search, message fetch with URL replacement, URL lookup, attachment save), several mailboxes per user selected with the `connection` argument (plugins/imap plugin, the first multi-connection plugin)
 - [Ramp API](api/ramp-api.md) - Ramp spend-management read-only access via `authed_get` (transactions, cards, bills, reimbursements, vendors, statements, accounting, audit logs) over per-user OAuth, surfaced via the gated `system:ramp` skill
 - [Frontend API Client Usage](api/api-client-usage.md) - How to use the TypeScript API client
 
@@ -298,7 +301,7 @@ quest/
 ├── plugins/                 # Filesystem-discovered integration plugins (see architecture/plugins.md)
 │   ├── README.md           # Plugin authoring guide (layout, rules, gitignore note)
 │   ├── _example/           # Single-file smoke-test fixture (loaded only by tests)
-│   └── github/, m365/, slack/, twitter/, twilio/, unifi/, iru/, telegram/, google_admin/, tailscale/, sec_edgar/  # In-tree plugins (see architecture/plugins.md)
+│   └── github/, m365/, slack/, twitter/, twilio/, unifi/, iru/, telegram/, google_admin/, tailscale/, sec_edgar/, imap/  # In-tree plugins (see architecture/plugins.md)
 ├── config/                  # Configuration modules
 │   └── paths.py            # Centralized data-directory path constants (PROJECT_ROOT, DATA_DIR, DATABASE_PATH, CHATS_DIR, PROJECTS_DIR, SECRET_KEY_FILE, LOG_DIR); reads optional data_dir from server_config.json
 ├── db/                      # Database layer (user data, memories, guides, projects, routines, routine schedules, conversation metadata, action requests, skills, skill shares, skill auto-loads, API call usage)
