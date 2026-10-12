@@ -1658,6 +1658,8 @@ export interface CredentialFieldSchema extends SchemaFormField {
 // A per-user form-kind connection field (GET /connectors `form_fields`):
 // select choices are resolved server-side at request time.
 export interface ConnectionFormField extends SchemaFormField {
+  required_if: string | null;
+  visible_if: string | null;
   options: string[];
 }
 

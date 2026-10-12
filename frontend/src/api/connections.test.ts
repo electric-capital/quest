@@ -192,6 +192,21 @@ describe('ConnectionApiError parsing', () => {
     expect(unauth.message).toBe('Not authenticated');
   });
 
+  it('reads a FastAPI 422 validation list as invalid_request', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        { detail: [{ loc: ['path', 'connection_id'], msg: 'Input should be a valid integer', type: 'int_parsing' }] },
+        422,
+      ),
+    );
+    const error = await caught(updateConnection(URL_BASE, 7, { description: 'x' }));
+    expect(error.status).toBe(422);
+    expect(error.code).toBe('invalid_request');
+    expect(error.message).toBe('Input should be a valid integer');
+    expect(error.fields).toBeUndefined();
+    expect(error.connectionId).toBeUndefined();
+  });
+
   it('wraps network failures as status 0 network_error', async () => {
     fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
     const error = await caught(createConnection(URL_BASE, {}));

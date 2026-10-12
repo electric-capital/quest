@@ -30,8 +30,9 @@ export function isFieldRequired(field: SchemaFormField, values: SchemaFormValues
 /**
  * Initial editable values for `fields`: bool fields are booleans, secrets
  * always start empty (the server never returns them; empty = keep the
- * stored one where the route supports it), every other field takes its
- * stored string or ''.
+ * stored one where the route supports it), a required select with exactly
+ * one option and no stored value starts on that option, every other field
+ * takes its stored string or ''.
  */
 export function initialSchemaValues(
   fields: readonly SchemaFormField[],
@@ -43,6 +44,15 @@ export function initialSchemaValues(
       values[field.key] = stored[field.key] === true;
     } else if (field.type === 'secret') {
       values[field.key] = '';
+    } else if (
+      field.type === 'select' &&
+      field.required &&
+      !field.required_if &&
+      (field.options ?? []).length === 1 &&
+      !stored[field.key]
+    ) {
+      // A required select with a single choice has nothing to choose.
+      values[field.key] = field.options![0];
     } else {
       const raw = stored[field.key];
       values[field.key] = typeof raw === 'string' ? raw : '';
@@ -77,7 +87,7 @@ export function missingRequiredFields(
 function FieldError({ id, error }: { id: string; error?: string }) {
   if (!error) return null;
   return (
-    <div id={id} className="svc-cred-field-error" role="alert">
+    <div id={id} className="svc-cred-field-error">
       {error}
     </div>
   );

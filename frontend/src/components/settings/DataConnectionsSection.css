@@ -336,6 +336,202 @@
   color: var(--accent-text);
 }
 
+/* Multi-connection services (issue #84): one card per connection, the cards
+   of a service kept together in a .connector-group. Cards reuse the
+   .connector-row look and wrap their actions under the text on narrow
+   widths. */
+.connector-group {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+}
+
+.connector-group:last-child {
+  border-bottom: none;
+}
+
+.connection-card {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  row-gap: 0.375rem;
+  border-radius: 6px;
+  transition: background-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.connection-card .connector-row-icon {
+  padding-top: 0.125rem;
+}
+
+.connection-card-highlight {
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.connection-card-main {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.connection-card-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.connection-account {
+  font-weight: 500;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.connection-account-unnamed {
+  font-style: italic;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.connection-chip-default {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.connection-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.connection-card-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Text-style action (Make default, "Show it"). */
+.connection-link-btn {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.8125rem;
+  color: var(--accent-text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.connection-link-btn:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+/* Inline description editor: reads as a detail line until hovered/focused. */
+.connection-description {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.connection-description-input {
+  flex: 1 1 10rem;
+  min-width: 0;
+  max-width: 28rem;
+  box-sizing: border-box;
+  margin-left: -0.375rem;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.75rem;
+}
+
+.connection-description-input::placeholder {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.connection-description-input:hover {
+  border-color: var(--border);
+}
+
+.connection-description-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background-color: var(--surface-raised);
+  color: var(--text);
+}
+
+.connection-description-status {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.connection-description-status.error,
+.connection-card-error,
+.connection-form-error {
+  color: #ff6b6b;
+}
+
+.connection-card-warning {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: #ffc107;
+  overflow-wrap: anywhere;
+}
+
+.connection-card-error {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+/* Re-entry form opened from a card: full width under the card's text. */
+.connection-card-panel {
+  flex-basis: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  margin-top: 0.25rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 0.75rem;
+}
+
+/* Add / re-entry form (form + api_key kinds). */
+.connection-form {
+  min-width: 0;
+}
+
+.connection-form .svc-cred-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.connection-form-note {
+  margin: 0 0 0.625rem;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.connection-form-error {
+  margin: 0 0 0.75rem;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.connection-form-submit {
+  border: none;
+}
+
+.connection-form-submit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* Light mode: only the literal semantic status colours need a darker,
    higher-contrast variant on light grounds. Everything else follows the
    tokens. */
@@ -346,4 +542,8 @@
   .connector-btn-disconnect { color: #d32f2f; border-color: #d32f2f; }
   .connector-btn-disconnect:hover { background: rgba(220, 53, 69, 0.08); }
   .api-key-status.error { color: #d32f2f; }
+  .connection-description-status.error,
+  .connection-card-error,
+  .connection-form-error { color: #d32f2f; }
+  .connection-card-warning { color: #856404; }
 }

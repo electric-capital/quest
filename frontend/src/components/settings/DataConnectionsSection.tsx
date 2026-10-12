@@ -1,8 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchConnectors, saveConnectorKey, disconnectConnector } from '../../api/client';
 import type { ConnectorRow } from '../../api/types';
 import { openOAuthPopup } from '../../utils/oauthPopup';
 import { ServiceIcon } from './serviceIcons';
+import { ConnectionCard } from './ConnectionCard';
+import { ConnectionForm } from './ConnectionForm';
+import { canAddConnection, connectionsOf, isMultiConnection } from './connectionHelpers';
 import './DataConnectionsSection.css';
 
 function ApiKeyForm({ placeholder, onSave }: { placeholder: string; onSave: (key: string) => Promise<void> }) {
@@ -45,12 +48,17 @@ interface DataConnectionsSectionProps {
   refreshConnectionStatus: () => void;
 }
 
-// The add-flow panel is either closed, showing the service picker, or
-// showing the key-entry step for one picked api_key service.
+// The add-flow panel is either closed, showing the service picker, the
+// key-entry step for one picked single-connection api_key service, or the
+// form step for one picked multi-connection (form / api_key kind) service.
 type AddFlowState =
   | { step: 'closed' }
   | { step: 'pick' }
-  | { step: 'enter_key'; service: string };
+  | { step: 'enter_key'; service: string }
+  | { step: 'enter_form'; service: string };
+
+// How long the "Show it" highlight stays on an existing connection card.
+const HIGHLIGHT_MS = 2500;
 
 /**
  * The user's Data Connections, rendered generically from the
@@ -60,6 +68,11 @@ type AddFlowState =
  * picking one triggers that service's flow -- an OAuth popup via the
  * row's connect_url, or a key-entry step posting to the row's key_url.
  * Adding a connector (core or plugin) requires no change here.
+ *
+ * Multi-connection services (issue #84: `multi_connection`, always for
+ * form kind) render one ConnectionCard per connection instead of a single
+ * row, with no service-wide Disconnect, and stay in the picker while under
+ * their connection_limit; picking one opens the ConnectionForm step.
  */
 export function DataConnectionsSection({ refreshConnectionStatus }: DataConnectionsSectionProps) {
   const [connectors, setConnectors] = useState<ConnectorRow[] | null>(null);
@@ -67,6 +80,12 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
   const [pendingOAuthPopup, setPendingOAuthPopup] = useState<Window | null>(null);
   const [popupBlockedUrl, setPopupBlockedUrl] = useState<string | null>(null);
   const [addFlow, setAddFlow] = useState<AddFlowState>({ step: 'closed' });
+  const [highlightedConnection, setHighlightedConnection] = useState<number | null>(null);
+  const highlightTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
+  }, []);
 
   // Load connectors on mount
   useEffect(() => {
@@ -150,6 +169,33 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
     return () => clearInterval(interval);
   }, [pendingOAuthPopup, refreshConnectionStatus, refreshConnectors]);
 
+  const handleConnectionsChanged = useCallback(() => {
+    refreshConnectors();
+    refreshConnectionStatus();
+  }, [refreshConnectors, refreshConnectionStatus]);
+
+  // connection_exists in the add form: scroll to and briefly highlight the
+  // existing connection's card (the form stays open with its values).
+  const handleShowExisting = (connector: ConnectorRow, connectionId: number | null, account?: string) => {
+    const wanted = (account || '').toLowerCase();
+    const id =
+      connectionId ??
+      connectionsOf(connector).find((c) => wanted && c.account.toLowerCase() === wanted)?.id ??
+      null;
+    if (id === null) {
+      refreshConnectors();
+      return;
+    }
+    if (!connectionsOf(connector).some((c) => c.id === id)) refreshConnectors();
+    const card = document.querySelector(`[data-connection-id="${id}"]`);
+    if (card && typeof card.scrollIntoView === 'function') {
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    setHighlightedConnection(id);
+    if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = window.setTimeout(() => setHighlightedConnection(null), HIGHLIGHT_MS);
+  };
+
   const handleDisconnect = async (connector: ConnectorRow) => {
     if (!connector.disconnect_url) return;
     if (!confirm(`Remove ${connector.label} connection?`)) return;
@@ -171,6 +217,8 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
     if (connector.kind === 'oauth') {
       setAddFlow({ step: 'closed' });
       handleOAuthConnect(connector.connect_url || '');
+    } else if (isMultiConnection(connector)) {
+      setAddFlow({ step: 'enter_form', service: connector.service });
     } else {
       setAddFlow({ step: 'enter_key', service: connector.service });
     }
@@ -213,6 +261,29 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
     );
   };
 
+  // Optional guidance above a key / form step: where to create the credential.
+  const renderKeyHelp = (connector: ConnectorRow) => {
+    const links = connector.key_help_links ?? [];
+    if (!connector.key_help && links.length === 0) return null;
+    return (
+      <p className="add-connection-help">
+        {connector.key_help && <span>{connector.key_help}</span>}
+        {links.length > 0 && (
+          <span className="add-connection-help-links">
+            {links.map((link, index) => (
+              <span key={link.url}>
+                {index > 0 && <span className="add-connection-help-sep" aria-hidden="true">·</span>}
+                <a href={link.url} target="_blank" rel="noopener noreferrer">
+                  {link.label}
+                </a>
+              </span>
+            ))}
+          </span>
+        )}
+      </p>
+    );
+  };
+
   const renderAddFlow = (addable: ConnectorRow[]) => {
     if (addFlow.step === 'closed') {
       if (addable.length === 0) return null;
@@ -242,23 +313,7 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
               Back
             </button>
           </div>
-          {(connector.key_help || (connector.key_help_links && connector.key_help_links.length > 0)) && (
-            <p className="add-connection-help">
-              {connector.key_help && <span>{connector.key_help}</span>}
-              {connector.key_help_links && connector.key_help_links.length > 0 && (
-                <span className="add-connection-help-links">
-                  {connector.key_help_links.map((link, index) => (
-                    <span key={link.url}>
-                      {index > 0 && <span className="add-connection-help-sep" aria-hidden="true">·</span>}
-                      <a href={link.url} target="_blank" rel="noopener noreferrer">
-                        {link.label}
-                      </a>
-                    </span>
-                  ))}
-                </span>
-              )}
-            </p>
-          )}
+          {renderKeyHelp(connector)}
           <div className="add-connection-keystep">
             <ApiKeyForm
               placeholder={connector.key_placeholder || 'Paste API key'}
@@ -274,7 +329,41 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
       );
     }
 
+    if (addFlow.step === 'enter_form') {
+      const connector = addable.find((c) => c.service === addFlow.service);
+      if (!connector) {
+        // Limit reached elsewhere (or no longer available) -- back to the picker.
+        return renderAddPicker(addable);
+      }
+      return (
+        <div className="add-connection-panel">
+          <div className="add-connection-header">
+            <span className="add-connection-title">Connect {connector.label}</span>
+            <button className="add-connection-cancel" onClick={() => setAddFlow({ step: 'pick' })}>
+              Back
+            </button>
+          </div>
+          {renderKeyHelp(connector)}
+          <ConnectionForm
+            key={connector.service}
+            connector={connector}
+            onDone={() => {
+              setAddFlow({ step: 'closed' });
+              handleConnectionsChanged();
+            }}
+            onShowExisting={(id, account) => handleShowExisting(connector, id, account)}
+          />
+        </div>
+      );
+    }
+
     return renderAddPicker(addable);
+  };
+
+  const tileKindLabel = (connector: ConnectorRow) => {
+    if (connector.kind === 'oauth') return 'Sign in';
+    if (connector.kind === 'form') return 'Account details';
+    return 'API key';
   };
 
   const renderAddPicker = (addable: ConnectorRow[]) => (
@@ -301,7 +390,7 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
               </span>
               <span className="add-connection-tile-name">{connector.label}</span>
               <span className="add-connection-tile-kind">
-                {connector.kind === 'oauth' ? 'Sign in' : 'API key'}
+                {tileKindLabel(connector)}
               </span>
             </button>
           ))}
@@ -313,8 +402,14 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
   // Rows the server reports as unavailable (unconfigured plugin/service)
   // are hidden from both the connected list and the add picker.
   const visible = (connectors || []).filter((c) => c.available !== false);
-  const connectedRows = visible.filter((c) => c.connected);
-  const addableRows = visible.filter((c) => !c.connected);
+  // Multi-connection rows list while they have any connection and stay
+  // addable below their connection_limit.
+  const connectedRows = visible.filter((c) =>
+    isMultiConnection(c) ? connectionsOf(c).length > 0 : c.connected,
+  );
+  const addableRows = visible.filter((c) =>
+    isMultiConnection(c) ? canAddConnection(c) : !c.connected,
+  );
 
   return (
     <div className="settings-section">
@@ -332,20 +427,40 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
             </p>
           ) : (
             <div className="connectors-list">
-              {connectedRows.map((connector) => (
-                <div className="connector-row" key={connector.service}>
-                  <span className="connector-row-icon">
-                    <ServiceIcon service={connector.service} />
-                  </span>
-                  <div className="connector-info">
-                    <span className="connector-name">{connector.label}</span>
-                    {connector.description && (
-                      <span className="connector-detail">{connector.description}</span>
-                    )}
+              {connectedRows.map((connector) =>
+                isMultiConnection(connector) ? (
+                  <div
+                    className="connector-group"
+                    key={connector.service}
+                    role="group"
+                    aria-label={`${connector.label} connections`}
+                  >
+                    {connectionsOf(connector).map((connection) => (
+                      <ConnectionCard
+                        key={connection.id}
+                        connector={connector}
+                        connection={connection}
+                        highlighted={highlightedConnection === connection.id}
+                        onChanged={handleConnectionsChanged}
+                        onOAuthConnect={handleOAuthConnect}
+                      />
+                    ))}
                   </div>
-                  {renderConnectedActions(connector)}
-                </div>
-              ))}
+                ) : (
+                  <div className="connector-row" key={connector.service}>
+                    <span className="connector-row-icon">
+                      <ServiceIcon service={connector.service} />
+                    </span>
+                    <div className="connector-info">
+                      <span className="connector-name">{connector.label}</span>
+                      {connector.description && (
+                        <span className="connector-detail">{connector.description}</span>
+                      )}
+                    </div>
+                    {renderConnectedActions(connector)}
+                  </div>
+                ),
+              )}
             </div>
           )}
           {renderAddFlow(addableRows)}

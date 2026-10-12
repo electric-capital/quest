@@ -146,7 +146,9 @@ describe('SchemaForm', () => {
     expect(document.getElementById(errorId!)?.textContent).toBe('Not one of the allowed choices.');
     expect(screen.getByLabelText('Password').getAttribute('aria-describedby')).toBe('t-password-error');
     expect(screen.getByLabelText('Username').getAttribute('aria-invalid')).toBeNull();
-    expect(screen.getAllByRole('alert')).toHaveLength(2);
+    // Field errors are announced through aria-describedby, not as alerts
+    // (the form-level summary owns role="alert").
+    expect(screen.queryAllByRole('alert')).toHaveLength(0);
   });
 
   it('uses the keep-stored placeholder for stored secrets', () => {
@@ -164,6 +166,27 @@ describe('schema helpers', () => {
     ).toEqual({
       host: 'imap.a.com', folder: '', username: '', password: '', notes: '', use_proxy: true, proxy: '',
     });
+  });
+
+  it('pre-fills a required select with exactly one option', () => {
+    const fields: SchemaFormField[] = [
+      { key: 'host', label: 'Host', type: 'select', placeholder: '', required: true, options: ['imap.only.com'] },
+      { key: 'folder', label: 'Folder', type: 'select', placeholder: '', required: false, options: ['INBOX'] },
+      { key: 'port', label: 'Port', type: 'select', placeholder: '', required: true, options: ['993', '143'] },
+    ];
+    expect(initialSchemaValues(fields)).toEqual({ host: 'imap.only.com', folder: '', port: '' });
+    // A stored value wins over the single option.
+    expect(initialSchemaValues(fields, { host: 'imap.old.com' }).host).toBe('imap.old.com');
+  });
+
+  it('flags an empty required secret only with checkSecrets', () => {
+    const fields: SchemaFormField[] = [
+      { key: 'password', label: 'Password', type: 'secret', placeholder: '', required: true },
+    ];
+    expect(missingRequiredFields(fields, { password: '' })).toEqual([]);
+    expect(missingRequiredFields(fields, { password: '' }, { checkSecrets: true })).toEqual(['password']);
+    expect(missingRequiredFields(fields, { password: ' ' }, { checkSecrets: true })).toEqual(['password']);
+    expect(missingRequiredFields(fields, { password: 'x' }, { checkSecrets: true })).toEqual([]);
   });
 
   it('lists missing required fields, secrets only on request', () => {

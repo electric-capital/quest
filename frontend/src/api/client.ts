@@ -506,6 +506,17 @@ async function connectionError(response: Response): Promise<ConnectionApiError> 
     error instanceof ApiClientError ? error : new ApiClientError('Unknown error', response.status),
   );
   const rawDetail = base.details?.detail;
+  // A FastAPI request-validation 422 carries `detail` as a list of
+  // {loc, msg, type} entries rather than the routes' {error, message} object.
+  if (Array.isArray(rawDetail)) {
+    const first = rawDetail[0] as Record<string, unknown> | undefined;
+    const msg = first && typeof first.msg === 'string' ? first.msg : base.message;
+    return new ConnectionApiError(msg || 'Invalid request', response.status, {
+      code: 'invalid_request',
+      retryAfter: parseRetryAfter(retryHeader, undefined),
+      details: base.details,
+    });
+  }
   const detail =
     rawDetail && typeof rawDetail === 'object' ? (rawDetail as Record<string, unknown>) : {};
   let fields: Record<string, string> | undefined;
