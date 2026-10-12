@@ -97,19 +97,27 @@ def _rows(db_path: Path, sql: str) -> list[tuple]:
         conn.close()
 
 
-# users columns added by migrations after ENCRYPTION_REV that the current
-# ORM model maps (it SELECTs every mapped column, so the read-back needs
-# them); plain nullable columns, added by hand for the read-back only.
-_LATER_USERS_COLUMNS = (("password_hash", "VARCHAR(255)"),)
+# Columns added by migrations after ENCRYPTION_REV that the current ORM
+# models map (they SELECT every mapped column, so the read-back needs them);
+# added by hand, with their server defaults, for the read-back only.
+_LATER_COLUMNS = {
+    "users": (("password_hash", "VARCHAR(255)"),),
+    "user_service_credentials": (
+        ("account", "VARCHAR(320) NOT NULL DEFAULT ''"),
+        ("description", "TEXT"),
+        ("is_default", "BOOLEAN NOT NULL DEFAULT 1"),
+    ),
+}
 
 
 def _read_back_via_orm(env: dict, db_path: Path) -> dict:
     conn = sqlite3.connect(db_path)
     try:
-        existing = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
-        for name, sql_type in _LATER_USERS_COLUMNS:
-            if name not in existing:
-                conn.execute(f"ALTER TABLE users ADD COLUMN {name} {sql_type}")
+        for table, columns in _LATER_COLUMNS.items():
+            existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            for name, sql_type in columns:
+                if name not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
         conn.commit()
     finally:
         conn.close()

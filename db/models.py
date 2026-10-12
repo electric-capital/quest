@@ -256,14 +256,25 @@ class UserServiceCredential(Base):
     connection kind); ``oauth_blob`` holds token JSON for the ``oauth``
     kind (e.g. the GitHub plugin's access token). Both are encrypted at
     rest (db/encrypted_types.py), like the per-user credential columns.
+
+    A (user, service) may hold several rows -- one per connection, told
+    apart by ``account`` (stored lower-cased, unique per (user, service);
+    legacy single-connection rows carry ``''``). Exactly one row per
+    (user, service) is the default (``is_default``), guarded by a partial
+    unique index and maintained by db/user_service_credential_store.py.
     """
 
     __tablename__ = "user_service_credentials"
     __table_args__ = (
         sa.Index("ix_user_service_credentials_user_id", "user_id"),
         sa.Index(
-            "ix_user_service_credentials_user_id_service",
+            "ix_user_service_credentials_user_service_account",
+            "user_id", "service", "account", unique=True,
+        ),
+        sa.Index(
+            "ix_user_service_credentials_user_service_default",
             "user_id", "service", unique=True,
+            sqlite_where=sa.text("is_default"),
         ),
     )
 
@@ -291,6 +302,20 @@ class UserServiceCredential(Base):
         EncryptedJSON("user_service_credentials.oauth_blob"), nullable=True
     )
 
+    # The connection's account address or user-chosen name, stored
+    # lower-cased; '' on legacy rows of single-connection services.
+    account: Mapped[str] = mapped_column(
+        String(320), nullable=False, default="", server_default=""
+    )
+
+    # Optional user-written description (context for the model, <= 200 chars)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Default-connection marker: exactly one row per (user, service)
+    is_default: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=True, server_default="1"
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
@@ -302,7 +327,11 @@ class UserServiceCredential(Base):
 
     def to_dict(self) -> dict:
         return {
+            "id": self.id,
             "service": self.service,
+            "account": self.account or "",
+            "description": self.description,
+            "is_default": bool(self.is_default),
             "secret": self.secret,
             "oauth_blob": self.oauth_blob,
             "created_at": self.created_at.isoformat() if self.created_at else None,

@@ -25,19 +25,24 @@ async def _user_dict(db, user: User) -> dict:
     can evaluate plugin connection predicates without a DB round-trip. The
     extra query is skipped entirely while no loaded plugin declares a
     per-user connection.
+
+    ``service_credentials[service]`` is the service's DEFAULT connection
+    (the compat shim every single-connection plugin reads), and
+    ``service_connections[service]`` lists every connection, default
+    first. Both come from one query and are present under the same
+    condition.
     """
     d = user.to_dict()
     from config.plugins import get_loaded_plugins
     if not any(p.user_connection is not None for p in get_loaded_plugins()):
         return d
-    result = await db.execute(
-        select(UserServiceCredential).where(
-            UserServiceCredential.user_id == user.id
-        )
-    )
-    rows = result.scalars().all()
-    if rows:
-        d["service_credentials"] = {row.service: row.to_dict() for row in rows}
+    from db.user_service_credential_store import fetch_all_connections
+    connections = await fetch_all_connections(db, user.id)
+    if connections:
+        d["service_credentials"] = {
+            service: dict(rows[0]) for service, rows in connections.items()
+        }
+        d["service_connections"] = connections
     return d
 
 
