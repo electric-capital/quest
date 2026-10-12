@@ -76,6 +76,16 @@ function imap(connections: ConnectionRow[] = [WORK, HOME], limit = 10): Connecto
   };
 }
 
+const OUTLOOK: ConnectorRow = {
+  service: 'm365', label: 'Outlook', kind: 'oauth', available: true, connected: true,
+  connect_url: '/auth/m365?popup=1', multi_connection: true, connection_limit: 10,
+  connections: [WORK, HOME], connections_url: '/auth/connections/m365',
+};
+const ACME: ConnectorRow = {
+  service: 'acme', label: 'Acme', kind: 'api_key', available: true, connected: true,
+  multi_connection: true, connection_limit: 5, connections: [WORK], connections_url: '/auth/connections/acme',
+};
+
 function serve(...connectors: ConnectorRow[]) {
   mocks.fetchConnectors.mockResolvedValue({ connectors });
 }
@@ -329,13 +339,169 @@ describe('DataConnectionsSection: multi-connection cards', () => {
     expect((await home.findByRole('alert')).textContent).toContain('belong to x@y.com');
   });
 
-  it('opens the popup to reconnect an oauth-kind connection', async () => {
-    serve({ ...imap(), service: 'm365', label: 'Outlook', kind: 'oauth', connect_url: '/auth/m365?popup=1', form_fields: undefined });
+  it('reconnects only the default oauth-kind connection through the popup', async () => {
+    // The oauth callbacks still write the default row, so a non-default
+    // card must not offer a Reconnect that would overwrite the default.
+    serve(OUTLOOK, SLACK);
     mocks.openOAuthPopup.mockReturnValue({ closed: false, close: vi.fn() });
     await renderSection();
     fireEvent.click(screen.getByRole('button', { name: 'Reconnect work@example.com' }));
     expect(mocks.openOAuthPopup).toHaveBeenCalledWith('/auth/m365?popup=1');
-    expect(screen.getAllByText('Update Available')).toHaveLength(1);
+    expect(within(card(2)).queryByRole('button', { name: /Reconnect/ })).toBeNull();
+    expect(within(card(2)).getByText('Update Available')).toBeTruthy();
+    expect(within(card(2)).getByRole('button', { name: 'Make default' })).toBeTruthy();
+  });
+
+  it('keeps a connected oauth-kind multi service out of the picker', async () => {
+    serve(OUTLOOK, SLACK);
+    await renderSection();
+    fireEvent.click(screen.getByRole('button', { name: '+ Add Connection' }));
+    expect(screen.queryByRole('button', { name: /Outlook/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /Slack/ })).toBeTruthy();
+  });
+
+  it('offers an oauth-kind multi service without connections in the picker', async () => {
+    serve({ ...OUTLOOK, connected: false, connections: [] });
+    mocks.openOAuthPopup.mockReturnValue({ closed: false, close: vi.fn() });
+    await renderSection();
+    fireEvent.click(screen.getByRole('button', { name: '+ Add Connection' }));
+    fireEvent.click(screen.getByRole('button', { name: /Outlook/ }));
+    expect(mocks.openOAuthPopup).toHaveBeenCalledWith('/auth/m365?popup=1');
+  });
+
+  it('hides Reconnect on a legacy connection without an account', async () => {
+    serve(imap([{ ...WORK, account: '' }, HOME]));
+    await renderSection();
+    const legacy = within(card(1));
+    expect(legacy.queryByRole('button', { name: /Reconnect/ })).toBeNull();
+    expect(legacy.getByText(/disconnect this connection and add it again/)).toBeTruthy();
+    expect(legacy.getByRole('button', { name: 'Disconnect (unnamed connection)' })).toBeTruthy();
+    expect(within(card(2)).getByRole('button', { name: 'Reconnect me@home.example' })).toBeTruthy();
+  });
+
+  it('re-enters a form without secrets, omitting blank fields', async () => {
+    const noSecrets: ConnectorRow = {
+      ...imap(),
+      form_fields: [
+        { key: 'host', label: 'Server', type: 'text', placeholder: '', required: true, required_if: null, visible_if: null, options: [] },
+        { key: 'port', label: 'Port', type: 'text', placeholder: '', required: true, required_if: null, visible_if: null, options: [] },
+        { key: 'tls', label: 'Use TLS', type: 'bool', placeholder: '', required: false, required_if: null, visible_if: null, options: [] },
+      ],
+    };
+    serve(noSecrets);
+    mocks.updateConnection.mockResolvedValue(WORK);
+    await renderSection();
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect work@example.com' }));
+    const work = within(card(1));
+    expect(work.queryByLabelText('Use TLS')).toBeNull();
+    const save = work.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.change(work.getByLabelText(/Port/), { target: { value: '1993' } });
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(mocks.updateConnection).toHaveBeenCalledWith('/auth/connections/imap', 1, { values: { port: '1993' } }),
+    );
+  });
+
+  it('re-enters with optional and conditional secrets, omitting blank ones', async () => {
+    const secrets: ConnectorRow = {
+      ...imap(),
+      form_fields: [
+        { key: 'username', label: 'Username', type: 'text', placeholder: '', required: true, required_if: null, visible_if: null, options: [] },
+        { key: 'password', label: 'Password', type: 'secret', placeholder: '', required: false, required_if: null, visible_if: null, options: [] },
+        { key: 'use_proxy', label: 'Use proxy', type: 'bool', placeholder: '', required: false, required_if: null, visible_if: null, options: [] },
+        { key: 'proxy_secret', label: 'Proxy secret', type: 'secret', placeholder: '', required: false, required_if: 'use_proxy', visible_if: 'use_proxy', options: [] },
+      ],
+    };
+    serve(secrets);
+    mocks.updateConnection.mockResolvedValue(WORK);
+    await renderSection();
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect work@example.com' }));
+    const work = within(card(1));
+    expect(work.queryByLabelText(/Username/)).toBeNull();
+    // Both secrets show as optional (the conditional one's toggle is not part of re-entry).
+    expect(work.getByLabelText(/^Password/)).toBeTruthy();
+    expect(work.getByLabelText(/^Proxy secret/)).toBeTruthy();
+    const save = work.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.change(work.getByLabelText(/^Proxy secret/), { target: { value: 's3' } });
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(mocks.updateConnection).toHaveBeenCalledWith('/auth/connections/imap', 1, { values: { proxy_secret: 's3' } }),
+    );
+  });
+
+  it('re-enters a multi-connection api_key with PUT {api_key}', async () => {
+    serve(ACME);
+    mocks.updateConnection.mockResolvedValue(WORK);
+    await renderSection();
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect work@example.com' }));
+    const field = within(card(1)).getByLabelText('API key');
+    expect(document.activeElement).toBe(field);
+    fireEvent.change(field, { target: { value: ' k-new ' } });
+    fireEvent.click(within(card(1)).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(mocks.updateConnection).toHaveBeenCalledWith('/auth/connections/acme', 1, { api_key: 'k-new' }),
+    );
+    await waitFor(() => expect(within(card(1)).queryByLabelText('API key')).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Reconnect work@example.com' }));
+  });
+
+  it('closes the re-entry form on Escape without reaching the modal', async () => {
+    serve(imap());
+    const modalEscape = vi.fn();
+    document.addEventListener('keydown', modalEscape);
+    try {
+      await renderSection();
+      fireEvent.click(screen.getByRole('button', { name: 'Reconnect me@home.example' }));
+      const password = within(card(2)).getByLabelText('Password');
+      expect(document.activeElement).toBe(password);
+      fireEvent.keyDown(password, { key: 'Escape' });
+      expect(within(card(2)).queryByLabelText('Password')).toBeNull();
+      expect(modalEscape).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener('keydown', modalEscape);
+    }
+  });
+
+  it('keeps Escape in the description input from reaching the modal', async () => {
+    serve(imap());
+    const modalEscape = vi.fn();
+    document.addEventListener('keydown', modalEscape);
+    try {
+      await renderSection();
+      const input = screen.getByLabelText('Description for work@example.com');
+      input.focus();
+      fireEvent.keyDown(input, { key: 'Escape' });
+      expect(modalEscape).not.toHaveBeenCalled();
+      fireEvent.keyDown(input, { key: 'a' });
+      expect(modalEscape).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener('keydown', modalEscape);
+    }
+  });
+
+  it('drops a stale connectors response', async () => {
+    serve(imap());
+    await renderSection();
+    let resolveSlow!: (v: unknown) => void;
+    mocks.fetchConnectors
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSlow = resolve; }))
+      .mockResolvedValueOnce({ connectors: [imap([WORK, { ...HOME, description: 'fresh' }])] });
+    mocks.updateConnection.mockResolvedValue(WORK);
+    mocks.deleteConnection.mockResolvedValue(undefined);
+    // Two writes, two refreshes: the first one's response arrives last.
+    fireEvent.click(within(card(2)).getByRole('button', { name: 'Make default' }));
+    await waitFor(() => expect(mocks.fetchConnectors).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect work@example.com' }));
+    await waitFor(() => expect(mocks.fetchConnectors).toHaveBeenCalledTimes(3));
+    await waitFor(() =>
+      expect((screen.getByLabelText('Description for me@home.example') as HTMLInputElement).value).toBe('fresh'),
+    );
+    await act(async () => {
+      resolveSlow({ connectors: [imap([WORK, { ...HOME, description: 'stale' }])] });
+    });
+    expect((screen.getByLabelText('Description for me@home.example') as HTMLInputElement).value).toBe('fresh');
   });
 });
 
@@ -437,6 +603,7 @@ describe('DataConnectionsSection: multi-connection add flow', () => {
       fireEvent.click(within(alert).getByRole('button', { name: 'Show it' }));
       expect(scroll).toHaveBeenCalled();
       expect(card(1).className).toContain('connection-card-highlight');
+      expect(document.activeElement).toBe(card(1));
       expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('hunter2');
       act(() => {
         vi.advanceTimersByTime(3000);
@@ -501,5 +668,21 @@ describe('DataConnectionsSection: multi-connection add flow', () => {
     fireEvent.blur(input);
     await screen.findByText('Add a connection');
     expect(screen.queryByText('Connect IMAP mailbox')).toBeNull();
+  });
+
+  it('goes back to the picker on Escape in the add form, keeping the modal open', async () => {
+    serve(imap([]));
+    const modalEscape = vi.fn();
+    document.addEventListener('keydown', modalEscape);
+    try {
+      await renderSection();
+      await openForm();
+      const host = screen.getByLabelText('IMAP server');
+      fireEvent.keyDown(host, { key: 'Escape' });
+      expect(screen.getByText('Add a connection')).toBeTruthy();
+      expect(modalEscape).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener('keydown', modalEscape);
+    }
   });
 });

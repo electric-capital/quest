@@ -58,13 +58,17 @@ export function apiKeyField(connector: ConnectorRow): SchemaFormField {
  *
  * Re-entering an existing connection: the server never returns stored
  * values, but PUT {values} merges the submitted values over the stored ones
- * (and an empty secret keeps the stored secret). So the re-entry form shows
- * only the secret fields, each required -- every other field (the ones that
- * determine the account) stays exactly as stored, untouched and unseen. A
- * form without secret fields shows every field, all optional: whatever is
- * left blank is omitted from the PUT and keeps its stored value (bool fields
- * are not offered); the server
- * refuses a change that resolves to another account (account_mismatch).
+ * and an empty secret keeps the stored secret. So the re-entry form shows
+ * only the secret fields, with their own required flags -- every other
+ * field (the ones that determine the account) stays exactly as stored,
+ * untouched and unseen. A secret's required_if / visible_if names a bool
+ * field the re-entry form does not show (its stored state is unknown), so
+ * such a conditional secret is shown, and optional. A form without secret
+ * fields shows every non-bool field, all optional (an unticked box cannot
+ * mean "keep as stored", so bool fields are not offered). Blank fields are
+ * omitted from the PUT and keep their stored values; the server refuses a
+ * change that resolves to another account (account_mismatch). An empty
+ * list (an all-bool form) means the connection cannot be re-entered.
  */
 export function connectionFormFields(
   connector: ConnectorRow,
@@ -74,18 +78,44 @@ export function connectionFormFields(
   const fields = connector.form_fields ?? [];
   if (mode === 'add') return fields;
   const secrets = fields.filter((field) => field.type === 'secret');
-  if (secrets.length > 0) {
-    return secrets.map((field) => ({ ...field, required: true, required_if: null, visible_if: null }));
-  }
-  // Bool fields are left out: an unticked box cannot mean "keep as stored".
-  return fields
-    .filter((field) => field.type !== 'bool')
-    .map((field) => ({ ...field, required: false, required_if: null, visible_if: null }));
+  const shown = secrets.length > 0 ? secrets : fields.filter((field) => field.type !== 'bool');
+  return shown.map((field) => ({
+    ...field,
+    required: secrets.length > 0 && !field.required_if && field.required,
+    required_if: null,
+    visible_if: null,
+  }));
 }
 
 /** True when the re-entry form shows only the secret fields. */
 export function reconnectsSecretsOnly(connector: ConnectorRow): boolean {
   return connector.kind === 'form' && (connector.form_fields ?? []).some((f) => f.type === 'secret');
+}
+
+/**
+ * Whether a connection offers Reconnect. For oauth kind only the default
+ * connection: the oauth callbacks still write the default row (no
+ * per-connection connect URL yet). Otherwise not for a legacy row without
+ * an account (the server refuses re-entry with account_mismatch: it has to
+ * be deleted and added again) nor for a form whose re-entry would show no
+ * field.
+ */
+export function canReconnect(connector: ConnectorRow, connection: ConnectionRow): boolean {
+  if (connector.kind === 'oauth') return connection.is_default;
+  if (!connection.account) return false;
+  return connectionFormFields(connector, 'reconnect').length > 0;
+}
+
+/**
+ * Whether the add picker offers the service. Multi-connection rows stay
+ * addable below their connection_limit -- except oauth kind, whose callback
+ * still overwrites the default row, so it is addable only while it has no
+ * connection. Single-connection rows: while not connected.
+ */
+export function isAddable(connector: ConnectorRow): boolean {
+  if (!isMultiConnection(connector)) return !connector.connected;
+  if (connector.kind === 'oauth') return connectionsOf(connector).length === 0;
+  return canAddConnection(connector);
 }
 
 export const GENERIC_ERROR = 'Something went wrong. Please try again.';

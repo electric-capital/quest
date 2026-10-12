@@ -5,7 +5,7 @@ import { openOAuthPopup } from '../../utils/oauthPopup';
 import { ServiceIcon } from './serviceIcons';
 import { ConnectionCard } from './ConnectionCard';
 import { ConnectionForm } from './ConnectionForm';
-import { canAddConnection, connectionsOf, isMultiConnection } from './connectionHelpers';
+import { connectionsOf, isAddable, isMultiConnection } from './connectionHelpers';
 import './DataConnectionsSection.css';
 
 function ApiKeyForm({ placeholder, onSave }: { placeholder: string; onSave: (key: string) => Promise<void> }) {
@@ -87,13 +87,31 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
     if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
   }, []);
 
+  // Every connectors fetch takes a sequence number; only the newest one may
+  // apply its response, so a slow earlier fetch never overwrites a newer list.
+  const fetchSeqRef = useRef(0);
+
+  // Apply a fetched list. A key / form step whose service is no longer
+  // addable (connected or at its limit elsewhere) falls back to the picker.
+  const applyConnectors = useCallback((list: ConnectorRow[]) => {
+    setConnectors(list);
+    setAddFlow((prev) => {
+      if (prev.step !== 'enter_key' && prev.step !== 'enter_form') return prev;
+      const stillAddable = list.some(
+        (c) => c.service === prev.service && c.available !== false && isAddable(c),
+      );
+      return stillAddable ? prev : { step: 'pick' };
+    });
+  }, []);
+
   // Load connectors on mount
   useEffect(() => {
+    const seq = ++fetchSeqRef.current;
     const loadConnectors = async () => {
       setIsLoadingConnectors(true);
       try {
         const response = await fetchConnectors();
-        setConnectors(response.connectors);
+        if (seq === fetchSeqRef.current) applyConnectors(response.connectors);
       } catch (error) {
         console.error('Failed to load connectors:', error);
       } finally {
@@ -102,11 +120,16 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
     };
 
     loadConnectors();
-  }, []);
+  }, [applyConnectors]);
 
   const refreshConnectors = useCallback(() => {
-    fetchConnectors().then((r) => setConnectors(r.connectors));
-  }, []);
+    const seq = ++fetchSeqRef.current;
+    fetchConnectors()
+      .then((r) => {
+        if (seq === fetchSeqRef.current) applyConnectors(r.connectors);
+      })
+      .catch((error) => console.error('Failed to refresh connectors:', error));
+  }, [applyConnectors]);
 
   // Handle opening an OAuth flow in a popup window
   const handleOAuthConnect = useCallback((url: string) => {
@@ -186,11 +209,9 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
       refreshConnectors();
       return;
     }
+    // The card scrolls into view and takes focus itself (ConnectionCard
+    // effect), also when it only appears after this refresh.
     if (!connectionsOf(connector).some((c) => c.id === id)) refreshConnectors();
-    const card = document.querySelector(`[data-connection-id="${id}"]`);
-    if (card && typeof card.scrollIntoView === 'function') {
-      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
     setHighlightedConnection(id);
     if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
     highlightTimerRef.current = window.setTimeout(() => setHighlightedConnection(null), HIGHLIGHT_MS);
@@ -352,6 +373,7 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
               handleConnectionsChanged();
             }}
             onShowExisting={(id, account) => handleShowExisting(connector, id, account)}
+            onCancel={() => setAddFlow({ step: 'pick' })}
           />
         </div>
       );
@@ -402,14 +424,12 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
   // Rows the server reports as unavailable (unconfigured plugin/service)
   // are hidden from both the connected list and the add picker.
   const visible = (connectors || []).filter((c) => c.available !== false);
-  // Multi-connection rows list while they have any connection and stay
-  // addable below their connection_limit.
+  // Multi-connection rows list while they have any connection; see
+  // isAddable for when the picker offers a service.
   const connectedRows = visible.filter((c) =>
     isMultiConnection(c) ? connectionsOf(c).length > 0 : c.connected,
   );
-  const addableRows = visible.filter((c) =>
-    isMultiConnection(c) ? canAddConnection(c) : !c.connected,
-  );
+  const addableRows = visible.filter(isAddable);
 
   return (
     <div className="settings-section">

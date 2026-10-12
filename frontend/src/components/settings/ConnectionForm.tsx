@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ConnectionApiError, createConnection, updateConnection } from '../../api/client';
 import type {
   ConnectionRow,
@@ -31,6 +31,10 @@ export interface ConnectionFormProps {
   onDone: () => void;
   /** connection_exists: scroll to / highlight the existing connection's card. */
   onShowExisting?: (connectionId: number | null, account?: string) => void;
+  /** Escape inside the form: close just this form (the Settings modal stays open). */
+  onCancel?: () => void;
+  /** Focus the first field on mount. */
+  autoFocus?: boolean;
 }
 
 /**
@@ -41,7 +45,14 @@ export interface ConnectionFormProps {
  * connectionFormFields for which fields that form shows. Errors render
  * inline and the form keeps its values.
  */
-export function ConnectionForm({ connector, connection, onDone, onShowExisting }: ConnectionFormProps) {
+export function ConnectionForm({
+  connector,
+  connection,
+  onDone,
+  onShowExisting,
+  onCancel,
+  autoFocus = false,
+}: ConnectionFormProps) {
   const mode = connection ? 'reconnect' : 'add';
   const fields = useMemo(() => connectionFormFields(connector, mode), [connector, mode]);
   const [values, setValues] = useState<SchemaFormValues>(() => initialSchemaValues(fields));
@@ -49,6 +60,12 @@ export function ConnectionForm({ connector, connection, onDone, onShowExisting }
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<FormError | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const formRef = useRef<HTMLFormElement>(null);
+
+  useEffect(() => {
+    if (!autoFocus) return;
+    formRef.current?.querySelector<HTMLElement>('input, select, textarea')?.focus();
+  }, [autoFocus]);
 
   const idPrefix = `connection-${connector.service}-${connection ? connection.id : 'new'}`;
   // Re-entering with every field optional (no secret fields) needs at least one value.
@@ -123,7 +140,20 @@ export function ConnectionForm({ connector, connection, onDone, onShowExisting }
   };
 
   return (
-    <form className="svc-cred-form connection-form" onSubmit={handleSubmit} noValidate>
+    <form
+      ref={formRef}
+      className="svc-cred-form connection-form"
+      onSubmit={handleSubmit}
+      noValidate
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && onCancel) {
+          // Close only this form, not the Settings modal around it.
+          e.preventDefault();
+          e.stopPropagation();
+          onCancel();
+        }
+      }}
+    >
       {connection && (
         <p className="connection-form-note">
           {reconnectsSecretsOnly(connector)

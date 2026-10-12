@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { deleteConnection, updateConnection } from '../../api/client';
 import type { ConnectionRow, ConnectorRow } from '../../api/types';
 import { ServiceIcon } from './serviceIcons';
@@ -6,6 +6,7 @@ import { ConnectionForm } from './ConnectionForm';
 import {
   DESCRIPTION_MAX_LENGTH,
   accountLabel,
+  canReconnect,
   connectionErrorMessage,
   normalizeDescription,
 } from './connectionHelpers';
@@ -112,8 +113,26 @@ export function ConnectionCard({ connector, connection, highlighted, onChanged, 
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState('');
   const [reconnectOpen, setReconnectOpen] = useState(false);
+  const reconnectButtonRef = useRef<HTMLButtonElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
   const url = connector.connections_url || '';
   const account = accountLabel(connection);
+  const reconnectable = canReconnect(connector, connection);
+
+  // "Show it" (connection_exists): bring this card into view and focus it.
+  // Keyed on the highlight so it also runs once a refresh renders the card.
+  useEffect(() => {
+    if (!highlighted) return;
+    const el = cardRef.current;
+    if (!el) return;
+    if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.focus({ preventScroll: true });
+  }, [highlighted]);
+
+  const closeReconnect = () => {
+    setReconnectOpen(false);
+    reconnectButtonRef.current?.focus();
+  };
 
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true);
@@ -139,7 +158,12 @@ export function ConnectionCard({ connector, connection, highlighted, onChanged, 
     if (connector.kind === 'oauth') {
       onOAuthConnect(connector.connect_url || '');
     } else {
-      setReconnectOpen((open) => !open);
+      if (reconnectOpen) {
+        closeReconnect();
+      } else {
+        setActionError('');
+        setReconnectOpen(true);
+      }
     }
   };
 
@@ -158,6 +182,8 @@ export function ConnectionCard({ connector, connection, highlighted, onChanged, 
 
   return (
     <div
+      ref={cardRef}
+      tabIndex={-1}
       className={className}
       id={`connection-${connector.service}-${connection.id}`}
       data-connection-id={connection.id}
@@ -185,6 +211,11 @@ export function ConnectionCard({ connector, connection, highlighted, onChanged, 
           onSave={saveDescription}
         />
         {connection.warning && <div className="connection-card-warning">{connection.warning}</div>}
+        {!connection.account && connector.kind !== 'oauth' && (
+          <div className="connection-card-hint">
+            To re-enter its credentials, disconnect this connection and add it again.
+          </div>
+        )}
         {actionError && (
           <div className="connection-card-error" role="alert">
             {actionError}
@@ -197,16 +228,19 @@ export function ConnectionCard({ connector, connection, highlighted, onChanged, 
             Make default
           </button>
         )}
-        <button
-          type="button"
-          className={`connector-btn ${connection.needs_reauth ? 'connector-btn-connect' : 'connector-btn-reconnect'}`}
-          onClick={handleReconnect}
-          disabled={busy}
-          aria-expanded={connector.kind === 'oauth' ? undefined : reconnectOpen}
-          aria-label={`Reconnect ${account}`}
-        >
-          Reconnect
-        </button>
+        {reconnectable && (
+          <button
+            ref={reconnectButtonRef}
+            type="button"
+            className={`connector-btn ${connection.needs_reauth ? 'connector-btn-connect' : 'connector-btn-reconnect'}`}
+            onClick={handleReconnect}
+            disabled={busy}
+            aria-expanded={connector.kind === 'oauth' ? undefined : reconnectOpen}
+            aria-label={`Reconnect ${account}`}
+          >
+            Reconnect
+          </button>
+        )}
         <button
           type="button"
           className="connector-btn-disconnect"
@@ -221,15 +255,17 @@ export function ConnectionCard({ connector, connection, highlighted, onChanged, 
         <div className="connection-card-panel">
           <div className="add-connection-header">
             <span className="add-connection-title">Reconnect {account}</span>
-            <button type="button" className="add-connection-cancel" onClick={() => setReconnectOpen(false)}>
+            <button type="button" className="add-connection-cancel" onClick={closeReconnect}>
               Cancel
             </button>
           </div>
           <ConnectionForm
             connector={connector}
             connection={connection}
+            autoFocus
+            onCancel={closeReconnect}
             onDone={() => {
-              setReconnectOpen(false);
+              closeReconnect();
               onChanged();
             }}
           />

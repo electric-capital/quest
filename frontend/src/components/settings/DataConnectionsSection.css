@@ -363,6 +363,7 @@
 }
 
 .connection-card-highlight {
+  padding-inline: 0.5rem;
   background: var(--accent-soft);
   box-shadow: 0 0 0 2px var(--accent);
 }
@@ -482,6 +483,16 @@
   font-size: 0.75rem;
   color: #ffc107;
   overflow-wrap: anywhere;
+}
+
+.connection-card:focus {
+  outline: none;
+}
+
+.connection-card-hint {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
 }
 
 .connection-card-error {
