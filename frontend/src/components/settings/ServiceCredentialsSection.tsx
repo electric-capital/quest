@@ -1,18 +1,21 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { ServiceIcon } from './serviceIcons';
+import {
+  SchemaForm,
+  initialSchemaValues,
+  isFieldVisible,
+  missingRequiredFields,
+} from './SchemaForm';
 import { fetchServiceCredentials, updateServiceCredentials } from '../../api/client';
 import type {
   CredentialFieldSchema,
+  SchemaFormValues,
   ServiceCredentialDetail,
 } from '../../api/types';
 import './ServiceCredentialsSection.css';
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
-
-export function secretPlaceholder(isSet: boolean, hint: string): string {
-  return isSet ? 'Leave blank to keep the stored value' : hint;
-}
 
 /**
  * The subset of a credential/provider status the shared card chrome needs;
@@ -81,41 +84,6 @@ export function CredentialCard({
   );
 }
 
-export function CredentialField({
-  id,
-  label,
-  value,
-  onChange,
-  placeholder,
-  secret = false,
-  optional = false,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-  secret?: boolean;
-  optional?: boolean;
-}) {
-  return (
-    <div className="svc-cred-row">
-      <label htmlFor={id} className="svc-cred-label">
-        {label} {optional && <span className="svc-cred-optional">(optional)</span>}
-      </label>
-      <input
-        id={id}
-        className="svc-cred-input"
-        type={secret ? 'password' : 'text'}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        autoComplete={secret ? 'new-password' : 'off'}
-      />
-    </div>
-  );
-}
-
 export function SaveActions({
   saveStatus,
   saveError,
@@ -148,32 +116,17 @@ export function SaveActions({
   );
 }
 
-type FormValues = Record<string, string | boolean>;
-
 /** Initial editable values from a fetched detail: secrets always reset to
  * empty (the server never returns them; empty means keep on save). */
-function formToValues(detail: ServiceCredentialDetail): FormValues {
-  const values: FormValues = {};
-  for (const field of detail.fields) {
-    if (field.type === 'bool') {
-      values[field.key] = detail.credentials[field.key] === true;
-    } else if (field.type === 'secret') {
-      values[field.key] = '';
-    } else {
-      const raw = detail.credentials[field.key];
-      values[field.key] = typeof raw === 'string' ? raw : '';
-    }
-  }
-  return values;
+function formToValues(detail: ServiceCredentialDetail): SchemaFormValues {
+  return initialSchemaValues(detail.fields, detail.credentials);
 }
 
-function isFieldVisible(field: CredentialFieldSchema, values: FormValues): boolean {
-  return !field.visible_if || values[field.visible_if] === true;
-}
-
-function isFieldRequired(field: CredentialFieldSchema, values: FormValues): boolean {
-  if (field.required_if) return values[field.required_if] === true;
-  return field.required;
+/** Secret keys the server reports as stored (`<key>_set`). */
+function storedSecretKeys(detail: ServiceCredentialDetail): string[] {
+  return detail.fields
+    .filter((field) => field.type === 'secret' && detail.credentials[`${field.key}_set`] === true)
+    .map((field) => field.key);
 }
 
 /**
@@ -192,7 +145,7 @@ function CredentialForm({
   onSaved: (updated: ServiceCredentialDetail) => void;
   onCancel: () => void;
 }) {
-  const [values, setValues] = useState<FormValues>(() => formToValues(detail));
+  const [values, setValues] = useState<SchemaFormValues>(() => formToValues(detail));
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [saveError, setSaveError] = useState('');
   const statusTimeoutRef = useRef<number | null>(null);
@@ -224,14 +177,7 @@ function CredentialForm({
 
   // Required text fields must be filled before saving; required secrets are
   // left to the server (an empty value may legitimately keep a stored one).
-  const missingRequired = detail.fields.some(
-    (field) =>
-      field.type !== 'bool' &&
-      field.type !== 'secret' &&
-      isFieldVisible(field, values) &&
-      isFieldRequired(field, values) &&
-      !String(values[field.key] ?? '').trim(),
-  );
+  const missingRequired = missingRequiredFields(detail.fields, values).length > 0;
 
   return (
     <div className="svc-cred-form">
@@ -242,66 +188,13 @@ function CredentialForm({
           which takes precedence from then on.
         </p>
       )}
-      {detail.fields.map((field) => {
-        if (!isFieldVisible(field, values)) return null;
-        const id = `svc-cred-${detail.service}-${field.key}`;
-        const optional = !isFieldRequired(field, values);
-        if (field.type === 'bool') {
-          return (
-            <label key={field.key} className="svc-cred-toggle">
-              <input
-                type="checkbox"
-                className="svc-cred-toggle-input"
-                checked={values[field.key] === true}
-                onChange={(e) => setValue(field.key, e.target.checked)}
-              />
-              <span className="svc-cred-toggle-track" aria-hidden="true">
-                <span className="svc-cred-toggle-knob" />
-              </span>
-              <span className="svc-cred-toggle-text">{field.label}</span>
-            </label>
-          );
-        }
-        if (field.type === 'textarea') {
-          return (
-            <div key={field.key} className="svc-cred-row">
-              <label htmlFor={id} className="svc-cred-label">
-                {field.label}{' '}
-                {optional && <span className="svc-cred-optional">(optional)</span>}
-              </label>
-              <textarea
-                id={id}
-                className="svc-cred-textarea"
-                value={String(values[field.key] ?? '')}
-                onChange={(e) => setValue(field.key, e.target.value)}
-                placeholder={field.placeholder}
-                rows={3}
-                spellCheck={false}
-              />
-            </div>
-          );
-        }
-        const secret = field.type === 'secret';
-        return (
-          <CredentialField
-            key={field.key}
-            id={id}
-            label={field.label}
-            value={String(values[field.key] ?? '')}
-            onChange={(value) => setValue(field.key, value)}
-            placeholder={
-              secret
-                ? secretPlaceholder(
-                    detail.credentials[`${field.key}_set`] === true,
-                    field.placeholder,
-                  )
-                : field.placeholder
-            }
-            secret={secret}
-            optional={optional}
-          />
-        );
-      })}
+      <SchemaForm
+        fields={detail.fields}
+        values={values}
+        onChange={setValue}
+        idPrefix={`svc-cred-${detail.service}`}
+        storedSecrets={storedSecretKeys(detail)}
+      />
       <div className="svc-cred-form-actions">
         <SaveActions
           saveStatus={saveStatus}

@@ -20,12 +20,8 @@ import type {
   VertexProviderStatus,
   VertexSectionInfo,
 } from '../../api/types';
-import {
-  CredentialCard,
-  CredentialField,
-  SaveActions,
-  secretPlaceholder,
-} from './ServiceCredentialsSection';
+import { CredentialCard, SaveActions } from './ServiceCredentialsSection';
+import { CredentialField, secretPlaceholder } from './SchemaForm';
 import type { SaveStatus } from './ServiceCredentialsSection';
 import './ServiceCredentialsSection.css';
 import './InferenceProvidersSection.css';

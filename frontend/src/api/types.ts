@@ -745,7 +745,11 @@ export interface ConnectorRow {
   service: string;
   label: string;
   description?: string;
-  kind: 'oauth' | 'api_key';
+  // 'form': a multi-connection plugin whose connections are added by
+  // POSTing the `form_fields` values to `connections_url`.
+  kind: 'oauth' | 'api_key' | 'form';
+  // Single-connection rows: the credential is present. Multi-connection
+  // rows: at least one connection is connected.
   connected: boolean;
   needs_reauth?: boolean;
   // Server-side availability (e.g. a plugin service the admin has not configured).
@@ -765,6 +769,53 @@ export interface ConnectorRow {
   // upstream pages where the credential is created.
   key_help?: string;
   key_help_links?: ConnectorHelpLink[];
+  // Multi-connection rows (a user may hold several connections, one per
+  // account): the per-connection list (default first), the cap on how many
+  // a user may add, and the base URL of the generic connection routes
+  // (POST to add, PUT/DELETE `<connections_url>/<id>`; see
+  // createConnection / updateConnection / deleteConnection in client.ts).
+  multi_connection?: boolean;
+  connection_limit?: number;
+  connections?: ConnectionRow[];
+  connections_url?: string;
+  // form-kind rows: the fields of the add / re-enter form (no values).
+  form_fields?: ConnectionFormField[];
+}
+
+// One connection of a multi-connection service (never carries credentials).
+export interface ConnectionRow {
+  id: number;
+  // The account the connection belongs to (normalized, e.g. an email
+  // address); '' for a legacy row created before accounts existed.
+  account: string;
+  description: string | null;
+  is_default: boolean;
+  needs_reauth: boolean;
+  // Plugin-supplied per-connection warning text, null when none.
+  warning: string | null;
+  created_at: string | null;
+}
+
+// POST <connections_url>: `values` for form kind, `api_key` for api_key kind.
+export interface CreateConnectionBody {
+  values?: SchemaFormValues;
+  api_key?: string;
+  description?: string | null;
+}
+
+// PUT <connections_url>/<id>: every key optional; `values` (form kind) or
+// `api_key` (api_key kind) re-enters the credential and must resolve to the
+// connection's own account. An empty secret value keeps the stored one.
+// `is_default` accepts only true.
+export interface UpdateConnectionBody {
+  description?: string | null;
+  is_default?: true;
+  values?: SchemaFormValues;
+  api_key?: string;
+}
+
+export interface ConnectionResponse {
+  connection: ConnectionRow;
 }
 
 export interface ConnectorHelpLink {
@@ -1574,17 +1625,40 @@ export interface ServiceCredentialSummary {
   source: 'store' | 'legacy' | null;
 }
 
-export interface CredentialFieldSchema {
+// Field types of a schema-rendered form (components/settings/SchemaForm).
+export type SchemaFieldType = 'text' | 'secret' | 'bool' | 'textarea' | 'select';
+
+// One field of a schema-rendered form: the common shape of the admin
+// credential schema (CredentialFieldSchema) and the per-user connection
+// form (ConnectionFormField), both views of the backend's CredentialField.
+export interface SchemaFormField {
   key: string;
   label: string;
-  type: 'text' | 'secret' | 'bool' | 'textarea';
+  type: SchemaFieldType;
   placeholder: string;
   required: boolean;
   // Key of a sibling bool field; when set, the field is required iff that
   // toggle is on (takes precedence over `required`).
-  required_if: string | null;
+  required_if?: string | null;
   // Key of a sibling bool field that must be on for the field to render.
+  visible_if?: string | null;
+  // select fields: the allowed choices.
+  options?: string[];
+}
+
+// Form values keyed by field key: strings for text-like fields, booleans
+// for bool fields.
+export type SchemaFormValues = Record<string, string | boolean>;
+
+export interface CredentialFieldSchema extends SchemaFormField {
+  required_if: string | null;
   visible_if: string | null;
+}
+
+// A per-user form-kind connection field (GET /connectors `form_fields`):
+// select choices are resolved server-side at request time.
+export interface ConnectionFormField extends SchemaFormField {
+  options: string[];
 }
 
 // Masked form values keyed by field key: text/textarea fields round-trip

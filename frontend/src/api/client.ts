@@ -6,8 +6,19 @@
  */
 
 import { endpoints, API_BASE_URL } from './config';
-import { apiGet, apiPost, apiPut, apiDelete, handleErrorResponse } from './request';
+import {
+  apiGet,
+  apiPost,
+  apiPut,
+  apiDelete,
+  handleErrorResponse,
+  ApiClientError,
+} from './request';
 import type {
+  ConnectionResponse,
+  ConnectionRow,
+  CreateConnectionBody,
+  UpdateConnectionBody,
   ListConversationsResponse,
   CreateConversationResponse,
   CompactResult,
@@ -419,6 +430,165 @@ export async function saveConnectorKey(
  */
 export async function disconnectConnector(disconnectUrl: string): Promise<void> {
   await apiPost(disconnectUrl);
+}
+
+// Multi-connection routes (/auth/connections/{service}[/{id}]). The base URL
+// is the row's `connections_url` from GET /connectors, so plugin services
+// need no dedicated client function.
+
+/**
+ * A failed connection-route request, with the structured fields of the
+ * route's `{detail: {error, message, ...}}` error body pulled out for the
+ * Settings UI. `code` is the `detail.error` string, e.g.:
+ *
+ * - `invalid_values` (400): `fields` maps field key -> message
+ * - `verify_failed` (400): `message` is the upstream / plugin reason
+ * - `connection_exists` (409): `account` + `connectionId` of the existing row
+ * - `connection_limit` (400): `limit`
+ * - `account_mismatch` / `cannot_unset_default` / `invalid_description` /
+ *   `invalid_key` / `account_unresolved` / `invalid_request` (400)
+ * - `connection_not_found` / `unknown_service` (404), `conflict` (409)
+ * - `rate_limited` (429): `retryAfter` seconds (Retry-After header, else
+ *   the body's `retry_after`)
+ *
+ * Extends ApiClientError, so `statusCode` / `errorCode` / `details` are set
+ * too; `status` and `code` are the same values under shorter names.
+ */
+export class ConnectionApiError extends ApiClientError {
+  status: number;
+  code?: string;
+  fields?: Record<string, string>;
+  account?: string;
+  connectionId?: number | null;
+  limit?: number;
+  retryAfter?: number;
+
+  constructor(
+    message: string,
+    status: number,
+    init: {
+      code?: string;
+      fields?: Record<string, string>;
+      account?: string;
+      connectionId?: number | null;
+      limit?: number;
+      retryAfter?: number;
+      details?: Record<string, unknown>;
+    } = {},
+  ) {
+    super(message, status, init.code, undefined, init.details);
+    this.name = 'ConnectionApiError';
+    this.status = status;
+    this.code = init.code;
+    this.fields = init.fields;
+    this.account = init.account;
+    this.connectionId = init.connectionId;
+    this.limit = init.limit;
+    this.retryAfter = init.retryAfter;
+  }
+}
+
+function parseRetryAfter(header: string | null, body: unknown): number | undefined {
+  if (header) {
+    const seconds = Number(header);
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds;
+    const date = Date.parse(header);
+    if (!Number.isNaN(date)) return Math.max(0, Math.ceil((date - Date.now()) / 1000));
+  }
+  return typeof body === 'number' && Number.isFinite(body) ? body : undefined;
+}
+
+/** Turn a non-2xx connection-route response into a ConnectionApiError. */
+async function connectionError(response: Response): Promise<ConnectionApiError> {
+  const retryHeader = response.headers.get('Retry-After');
+  // handleErrorResponse always throws; reuse its body parsing.
+  const base = await handleErrorResponse(response).catch((error: unknown) =>
+    error instanceof ApiClientError ? error : new ApiClientError('Unknown error', response.status),
+  );
+  const rawDetail = base.details?.detail;
+  const detail =
+    rawDetail && typeof rawDetail === 'object' ? (rawDetail as Record<string, unknown>) : {};
+  let fields: Record<string, string> | undefined;
+  if (detail.fields && typeof detail.fields === 'object') {
+    fields = {};
+    for (const [key, value] of Object.entries(detail.fields as Record<string, unknown>)) {
+      fields[key] = String(value);
+    }
+  }
+  return new ConnectionApiError(base.message, response.status, {
+    code: base.errorCode,
+    fields,
+    account: typeof detail.account === 'string' ? detail.account : undefined,
+    connectionId:
+      typeof detail.connection_id === 'number'
+        ? detail.connection_id
+        : 'connection_id' in detail
+          ? null
+          : undefined,
+    limit: typeof detail.limit === 'number' ? detail.limit : undefined,
+    retryAfter: parseRetryAfter(retryHeader, detail.retry_after),
+    details: base.details,
+  });
+}
+
+async function connectionRequest(
+  method: 'POST' | 'PUT' | 'DELETE',
+  url: string,
+  body?: unknown,
+): Promise<Response> {
+  const init: RequestInit = { method, credentials: 'include' };
+  if (body !== undefined) {
+    init.headers = { 'Content-Type': 'application/json' };
+    init.body = JSON.stringify(body);
+  }
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (error) {
+    throw new ConnectionApiError(
+      error instanceof Error && error.message ? error.message : 'Network error',
+      0,
+      { code: 'network_error' },
+    );
+  }
+  if (!response.ok) throw await connectionError(response);
+  return response;
+}
+
+function connectionUrl(connectionsUrl: string, id: number): string {
+  return `${connectionsUrl.replace(/\/+$/, '')}/${encodeURIComponent(String(id))}`;
+}
+
+/**
+ * Add a connection: POST `connectionsUrl` with `{values, description?}`
+ * (form kind) or `{api_key, description?}` (api_key kind). Resolves to the
+ * new connection; throws ConnectionApiError.
+ */
+export async function createConnection(
+  connectionsUrl: string,
+  body: CreateConnectionBody,
+): Promise<ConnectionRow> {
+  const response = await connectionRequest('POST', connectionsUrl, body);
+  return ((await response.json()) as ConnectionResponse).connection;
+}
+
+/**
+ * Change one connection: description, `is_default: true`, or re-entered
+ * `values` / `api_key` (must resolve to the same account). Resolves to the
+ * updated connection; throws ConnectionApiError.
+ */
+export async function updateConnection(
+  connectionsUrl: string,
+  id: number,
+  body: UpdateConnectionBody,
+): Promise<ConnectionRow> {
+  const response = await connectionRequest('PUT', connectionUrl(connectionsUrl, id), body);
+  return ((await response.json()) as ConnectionResponse).connection;
+}
+
+/** Delete one connection (204); throws ConnectionApiError. */
+export async function deleteConnection(connectionsUrl: string, id: number): Promise<void> {
+  await connectionRequest('DELETE', connectionUrl(connectionsUrl, id));
 }
 
 // Project API functions
