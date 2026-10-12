@@ -129,6 +129,9 @@ def resolve_connection(
 def connection_label(row: dict) -> str:
     """``"work@example.com"`` or ``"work@example.com (default)"``."""
     account = row.get("account") or ""
+    if not account:
+        # A legacy row (pre-multi-connection) has no account address.
+        return "default" if row.get("is_default") else ""
     return f"{account} (default)" if row.get("is_default") else account
 
 

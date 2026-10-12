@@ -199,6 +199,9 @@ class TestConnectionSummary:
         assert connection_label(_row("a@example.com", is_default=True)) \
             == "a@example.com (default)"
         assert connection_label(_row("a@example.com")) == "a@example.com"
+        # Legacy rows carry no account address.
+        assert connection_label(_row("", is_default=True)) == "default"
+        assert connection_label({"secret": "s", "is_default": True}) == "default"
 
     def test_summary_default_first_with_fields(self, multi_loaded):
         home = _row("me@home.example", description="personal", row_id=2)
@@ -220,7 +223,7 @@ class TestConnectionSummary:
         legacy = {"id": 1, "service_credentials": {"tmc": {"secret": "s"}}}
         assert connection_summary(legacy, "tmc") == [
             {"account": "", "description": None, "is_default": True,
-             "label": " (default)"},
+             "label": "default"},
         ]
 
 
@@ -249,15 +252,19 @@ def _validate(plugin):
 class TestFormKindValidation:
     def test_valid_form_spec(self):
         _validate(_plugin(_form_spec(), tools=(_tool("tmc_read"),)))
-        # Single-connection form spec, static select options.
+        # Static select options instead of field_options().
         _validate(_plugin(_form_spec(
-            multi_connection=False, field_options=None,
+            field_options=None,
             fields=(
                 CredentialField(key="host", label="H", type="select",
                                 options=("a.example", "b.example")),
                 CredentialField(key="password", label="P", type="secret"),
             ),
         )))
+
+    def test_form_requires_multi_connection(self):
+        with pytest.raises(ValueError, match="requires multi_connection=True"):
+            _validate(_plugin(_form_spec(multi_connection=False)))
 
     def test_form_requires_fields(self):
         with pytest.raises(ValueError, match="needs fields"):
@@ -312,6 +319,13 @@ class TestFormKindValidation:
             _validate(_plugin(_form_spec(fields=fields, field_options=None)))
         # Runtime options cover it.
         _validate(_plugin(_form_spec(fields=fields)))
+
+    def test_options_must_be_tuple_of_nonempty_strings(self):
+        for options in (["a"], ("a", ""), ("a", 3)):
+            fields = (CredentialField(key="host", label="H", type="select",
+                                      options=options),)
+            with pytest.raises(ValueError, match="tuple of non-empty strings"):
+                _validate(_plugin(_form_spec(fields=fields)))
 
     def test_options_on_non_select_rejected(self):
         fields = (CredentialField(key="port", label="P", type="text",
@@ -377,9 +391,37 @@ class TestMultiConnectionValidation:
                 _tool("tmc_list", with_connection=False),
             )))
 
+    def test_connection_param_must_be_string(self):
+        tool = PluginTool(
+            spec={
+                "name": "tmc_read", "description": "d",
+                "parameters": {"type": "object", "properties": {
+                    "connection": {"type": "integer"},
+                }},
+            },
+            handler=_tool_handler,
+        )
+        with pytest.raises(ValueError, match="type string"):
+            _validate(_plugin(_form_spec(), tools=(tool,)))
+
+    def test_connection_param_must_be_optional(self):
+        tool = PluginTool(
+            spec={
+                "name": "tmc_read", "description": "d",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"connection": {"type": "string"}},
+                    "required": ["connection"],
+                },
+            },
+            handler=_tool_handler,
+        )
+        with pytest.raises(ValueError, match="must be optional"):
+            _validate(_plugin(_form_spec(), tools=(tool,)))
+
     def test_single_connection_tools_need_no_connection_param(self):
         _validate(_plugin(
-            _form_spec(multi_connection=False),
+            UserConnectionSpec(kind="api_key", connected=lambda row: True),
             tools=(_tool("tmc_list", with_connection=False),),
         ))
 
@@ -418,11 +460,31 @@ class TestAdminSelectFields:
                                     **field_kwargs),),
         )
 
-    def test_select_requires_static_options(self):
+    def test_admin_card_rejects_select(self):
+        # The admin CredentialForm cannot render select yet: only form
+        # connections (allow_select) accept it.
+        from config.service_specs import _validate_fields
+        with pytest.raises(ValueError, match="unknown type"):
+            _validate_fields("tsel", self._spec(options=("us", "eu")).fields)
+
+    def test_plugin_credential_schema_select_rejected(self):
+        from config.service_specs import register_plugin_credentials
+        plugin = QuestPlugin(
+            id="tsel", label="T",
+            credential_schema=(CredentialField(
+                key="region", label="Region", type="select", options=("us",),
+            ),),
+        )
+        with pytest.raises(ValueError, match="unknown type"):
+            register_plugin_credentials(plugin)
+
+    def test_select_with_allow_select_requires_options(self):
         from config.service_specs import _validate_fields
         with pytest.raises(ValueError, match="needs options"):
-            _validate_fields("tsel", self._spec().fields)
-        _validate_fields("tsel", self._spec(options=("us", "eu")).fields)
+            _validate_fields("tsel", self._spec().fields, allow_select=True)
+        _validate_fields(
+            "tsel", self._spec(options=("us", "eu")).fields, allow_select=True,
+        )
 
     def test_fields_view_carries_options(self):
         from config.service_specs import fields_view

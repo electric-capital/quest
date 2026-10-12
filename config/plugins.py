@@ -391,13 +391,24 @@ def validate_plugin(plugin: QuestPlugin, existing_ids: set[str]) -> None:
         # half-convert and leave some tools pinned to the default row.
         if user_connection.multi_connection:
             for tool in plugin.tools:
+                name = tool.spec.get("name", "")
                 params = tool.spec.get("parameters") or {}
                 props = params.get("properties") if isinstance(params, dict) else None
                 if not isinstance(props, dict) or "connection" not in props:
                     raise ValueError(
                         f"Plugin {pid!r} is multi_connection but tool "
-                        f"{tool.spec.get('name', '')!r} does not declare a "
-                        "'connection' parameter"
+                        f"{name!r} does not declare a 'connection' parameter"
+                    )
+                prop = props["connection"]
+                if not isinstance(prop, dict) or prop.get("type") != "string":
+                    raise ValueError(
+                        f"Plugin {pid!r} tool {name!r} 'connection' parameter "
+                        "must be of type string"
+                    )
+                if "connection" in (params.get("required") or ()):
+                    raise ValueError(
+                        f"Plugin {pid!r} tool {name!r} 'connection' parameter "
+                        "must be optional (omitted = the default connection)"
                     )
 
     # System skills: system:<id> namespace, plus the catalog's own static
@@ -480,6 +491,14 @@ def _validate_form_connection(pid: str, spec: UserConnectionSpec) -> None:
             f"Plugin {pid!r} form user_connection must not set validate_key "
             "or key_* (api_key-only fields)"
         )
+    if not spec.multi_connection:
+        # The generic connection routes serve only multi-connection
+        # plugins, so a single-connection form would have no way to
+        # connect.
+        raise ValueError(
+            f"Plugin {pid!r} form user_connection requires "
+            "multi_connection=True"
+        )
     if not spec.fields:
         raise ValueError(f"Plugin {pid!r} form user_connection needs fields")
     if spec.verify is None:
@@ -492,7 +511,7 @@ def _validate_form_connection(pid: str, spec: UserConnectionSpec) -> None:
                 f"Plugin {pid!r} form user_connection fields must be "
                 "CredentialField instances"
             )
-        if not isinstance(f.key, str) or not _FORM_FIELD_KEY_RE.match(f.key):
+        if not isinstance(f.key, str) or not _FORM_FIELD_KEY_RE.fullmatch(f.key):
             raise ValueError(
                 f"Plugin {pid!r} form field key {f.key!r} is invalid (must "
                 f"match {_FORM_FIELD_KEY_RE.pattern})"
@@ -509,7 +528,9 @@ def _validate_form_connection(pid: str, spec: UserConnectionSpec) -> None:
     runtime_keys = frozenset(
         f.key for f in spec.fields if f.type == "select"
     ) if spec.field_options is not None else frozenset()
-    _validate_fields(pid, spec.fields, runtime_option_keys=runtime_keys)
+    _validate_fields(
+        pid, spec.fields, allow_select=True, runtime_option_keys=runtime_keys,
+    )
 
 
 def get_user_connection_spec(service: str) -> UserConnectionSpec | None:
