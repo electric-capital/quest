@@ -39,7 +39,9 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
     (:func:`config.plugins.plugin_server_available`) AND, when the plugin
     declares a per-user connection, the user's stored credential row (from
     ``user["service_credentials"]``, attached by db/user_store.py) must
-    satisfy the plugin's ``connected`` predicate. Both must hold, so a
+    satisfy the plugin's ``connected`` predicate -- for a
+    ``multi_connection`` plugin, any of its rows in
+    ``user["service_connections"]``. Both must hold, so a
     user-side credential can't keep a plugin's ``system:<id>`` skill
     visible after an admin disables the plugin's service server-side.
 
@@ -68,15 +70,25 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
         connected = True
         spec = plugin.user_connection
         if spec is not None:
-            row = stored_rows.get(plugin.id)
-            try:
-                connected = bool(row) and bool(spec.connected(row))
-            except Exception:
-                logger.exception(
-                    "Plugin %r connected predicate raised; treating as "
-                    "not connected", plugin.id,
-                )
-                connected = False
+            if getattr(spec, "multi_connection", False):
+                # Any of the user's connections counts (default first;
+                # falls back to the default row on older user dicts).
+                from config.user_connections import _service_rows
+                rows = _service_rows(user, plugin.id)
+            else:
+                row = stored_rows.get(plugin.id)
+                rows = [row] if row else []
+            connected = False
+            for row in rows:
+                try:
+                    if spec.connected(row):
+                        connected = True
+                        break
+                except Exception:
+                    logger.exception(
+                        "Plugin %r connected predicate raised; treating as "
+                        "not connected", plugin.id,
+                    )
         services[plugin.id] = connected and plugin_server_available(plugin)
 
     # Capability pseudo-key (PSEUDO_SERVICE_KEYS), not a connector: mirrors

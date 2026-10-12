@@ -500,10 +500,20 @@ async def get_connectors(user: dict = Depends(get_current_user_cookie_or_apikey_
     stored_rows = user.get("service_credentials") or {}
     for plugin in get_loaded_plugins():
         spec = plugin.user_connection
-        if spec is None or spec.kind == "form":
-            # form-kind connections have no generic row shape here yet
-            # (no connect_url / key_url); listing one as oauth would hand
-            # the frontend a dead Connect button.
+        if spec is None:
+            continue
+        if spec.kind == "form":
+            # form-kind connections are always multi-connection (the loader
+            # enforces it): their row is the per-connection shape only.
+            from auth.connections import multi_connection_fields
+            plugin_row = {
+                "service": plugin.id,
+                "label": plugin.label,
+                "kind": spec.kind,
+                "available": plugin_server_available(plugin),
+            }
+            plugin_row.update(multi_connection_fields(plugin, user))
+            connectors.append(plugin_row)
             continue
         row = stored_rows.get(plugin.id)
         try:
@@ -548,6 +558,12 @@ async def get_connectors(user: dict = Depends(get_current_user_cookie_or_apikey_
                 "connect_url": f"{plugin_auth_prefix(plugin.id)}?popup=1",
                 "needs_reauth": needs_reauth,
             })
+        if getattr(spec, "multi_connection", False):
+            # Multi-connection api_key/oauth plugins keep their kind's
+            # fields above and add the per-connection list; `connected`
+            # becomes "any connection is connected".
+            from auth.connections import multi_connection_fields
+            plugin_row.update(multi_connection_fields(plugin, user))
         connectors.append(plugin_row)
 
     return {"connectors": connectors}

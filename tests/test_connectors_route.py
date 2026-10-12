@@ -455,8 +455,9 @@ def test_telegram_plugin_row(telegram_plugin):
 
 
 def test_form_kind_plugin_row_not_rendered_as_oauth():
-    """A form-kind connection has no oauth connect_url; it is left out of
-    the single-row list rather than mis-rendered as an oauth row."""
+    """A form-kind connection has no oauth connect_url: it is rendered as
+    a multi-connection form row (see tests/test_connectors_multi.py), never
+    mis-rendered as an oauth row."""
     from config.plugin_types import (
         CredentialField, QuestPlugin, UserConnectionSpec, VerifyResult,
     )
@@ -477,4 +478,8 @@ def test_form_kind_plugin_row_not_rendered_as_oauth():
     rows = _get_connectors_with_plugin(
         {"email": "u@example.com"}, plugin, None,
     )
-    assert "formy" not in rows
+    row = rows["formy"]
+    assert row["kind"] == "form"
+    assert row["multi_connection"] is True
+    assert row["connections_url"] == "/auth/connections/formy"
+    assert "connect_url" not in row and "key_url" not in row
