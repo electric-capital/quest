@@ -133,6 +133,12 @@ def _service_rows(user_id: int, service: str):
     )
 
 
+async def _list_service_rows(db, user_id: int, service: str) -> list:
+    """The (user, service) rows in list order, as ORM objects."""
+    result = await db.execute(_service_rows(user_id, service))
+    return list(result.scalars().all())
+
+
 async def _default_row(db, user_id: int, service: str):
     result = await db.execute(_service_rows(user_id, service).limit(1))
     return result.scalars().first()
@@ -197,6 +203,22 @@ async def upsert_credential(
     default with account ''. ``account`` and ``description`` of an
     existing row are left alone.
     """
+    for attempt in range(2):
+        try:
+            return await _write_default_credential(
+                user_id, service, secret=secret, oauth_blob=oauth_blob,
+            )
+        except IntegrityError:
+            # A concurrent writer created the first row between our read and
+            # our commit: retry once, which now updates that default row.
+            if attempt:
+                raise
+    raise AssertionError("unreachable")
+
+
+async def _write_default_credential(
+    user_id: int, service: str, *, secret: Optional[str], oauth_blob: Optional[dict],
+) -> dict:
     async with AsyncSessionLocal() as db:
         row = await _default_row(db, user_id, service)
         if row is None:
@@ -206,7 +228,11 @@ async def upsert_credential(
             db.add(row)
         row.secret = secret
         row.oauth_blob = oauth_blob
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            raise
         await db.refresh(row)
         return row.to_dict()
 
@@ -331,11 +357,50 @@ async def create_connection(
     """
     account = normalize_account(account)
     description = normalize_description(description)
+    for attempt in range(2):
+        try:
+            return await _insert_connection(
+                user_id, service, account=account, description=description,
+                secret=secret, oauth_blob=oauth_blob,
+                make_default=make_default, limit=limit,
+            )
+        except IntegrityError:
+            # The session is closed (and rolled back) by now. Lost a race
+            # with a concurrent create of the same account: report it like
+            # the pre-check would have.
+            if await get_connection(user_id, service, account=account):
+                raise ConnectionExists(service, account)
+            # Otherwise a concurrent first row (create_connection or
+            # upsert_credential) claimed the default between our read and
+            # our commit: retry once so the default status is recomputed.
+            if attempt:
+                raise
+    raise AssertionError("unreachable")
+
+
+async def _insert_connection(
+    user_id: int,
+    service: str,
+    *,
+    account: str,
+    description: Optional[str],
+    secret: Optional[str],
+    oauth_blob: Optional[dict],
+    make_default: Optional[bool],
+    limit: Optional[int],
+) -> dict:
+    """One create attempt in its own session (already-normalized inputs).
+
+    Raises IntegrityError (after the session has rolled back and closed)
+    when a concurrent writer tripped a unique index.
+    """
     async with AsyncSessionLocal() as db:
-        result = await db.execute(_service_rows(user_id, service))
-        existing = result.scalars().all()
+        existing = await _list_service_rows(db, user_id, service)
         if any(row.account == account for row in existing):
             raise ConnectionExists(service, account)
+        # Best-effort under concurrency: two creates racing past this check
+        # can each insert, overshooting the cap by the number of concurrent
+        # writers (bounded; nothing relies on the cap for safety).
         if limit is not None and len(existing) >= limit:
             raise ConnectionLimit(service, limit)
         is_default = not existing or bool(make_default)
@@ -355,11 +420,6 @@ async def create_connection(
             await db.commit()
         except IntegrityError:
             await db.rollback()
-            # Lost a race with a concurrent create of the same account:
-            # report it like the pre-check would have. Anything else (e.g.
-            # two concurrent first rows both claiming the default) re-raises.
-            if await get_connection(user_id, service, account=account):
-                raise ConnectionExists(service, account)
             raise
         await db.refresh(row)
         return row.to_dict()

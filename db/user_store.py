@@ -30,7 +30,10 @@ async def _user_dict(db, user: User) -> dict:
     (the compat shim every single-connection plugin reads), and
     ``service_connections[service]`` lists every connection, default
     first. Both come from one query and are present under the same
-    condition.
+    condition. ``service_credentials[service]`` IS the dict object
+    ``service_connections[service][0]`` (not a copy): token refreshes that
+    update ``user["service_credentials"][svc]["oauth_blob"]`` in place
+    (GitHub, Twitter) must stay visible through ``service_connections``.
     """
     d = user.to_dict()
     from config.plugins import get_loaded_plugins
@@ -40,7 +43,7 @@ async def _user_dict(db, user: User) -> dict:
     connections = await fetch_all_connections(db, user.id)
     if connections:
         d["service_credentials"] = {
-            service: dict(rows[0]) for service, rows in connections.items()
+            service: rows[0] for service, rows in connections.items()
         }
         d["service_connections"] = connections
     return d

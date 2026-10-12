@@ -167,7 +167,9 @@ def test_upgrade_downgrade_roundtrip(deployment):
     assert read["a_github"]["oauth_blob"] == {"access_token": "gho-a"}
     assert [r["secret"] for r in read["b_acme"]] == ["sk-b"]
 
-    # ORM metadata matches the migrated table (autogenerate stays quiet).
+    # ORM metadata matches the migrated table's columns and index columns /
+    # uniqueness. compare_metadata does NOT compare sqlite_where or server
+    # defaults; the index-SQL and legacy-row assertions above cover those.
     assert json.loads(_python(env, _DRIFT)) == []
 
     # A second connection and a second default.
