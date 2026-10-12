@@ -22,7 +22,9 @@ Providers:
   Fireworks' serverless catalog (``chat/llm/fireworks_catalog.py``, fetched
   with that key); ``nearai`` instances hold a NEAR AI Cloud API key and
   pick models from NEAR AI's public, priced model list
-  (``chat/llm/nearai_catalog.py``); ``local`` instances point at a self-hosted inference
+  (``chat/llm/nearai_catalog.py``); ``trustedrouter`` instances hold a
+  TrustedRouter API key and pick models from TrustedRouter's public, priced
+  model list (``chat/llm/trustedrouter_catalog.py``); ``local`` instances point at a self-hosted inference
   server (``base_url`` + ``api_type``, optional key) and pick models from
   what that server reports (``chat/llm/local_catalog.py``). Several
   instances of the same kind can coexist (e.g. a personal and a team
@@ -58,7 +60,8 @@ directory dev-config.json (``inference_credentials: {"<instance_id>":
 ``openrouter`` instance without any migration: :func:`load_inference_config`
 synthesizes an instance entry for every credential file that has none, of
 the key-holding kind the file stem starts with (``fireworks-2.json`` -> a
-``fireworks`` instance, ``nearai.json`` -> a ``nearai`` one; anything else
+``fireworks`` instance, ``nearai.json`` -> a ``nearai`` one,
+``trustedrouter.json`` -> a ``trustedrouter`` one; anything else
 an OpenRouter one), seeded from the
 file's optional ``models`` list so a pre-baked instance can come up with
 ready-to-pick models.
@@ -102,7 +105,9 @@ logger = logging.getLogger(__name__)
 # OpenRouter list (chat/llm/openrouter_catalog.py, no key needed),
 # ``fireworks`` = Fireworks' serverless catalog fetched with the instance's
 # own key (chat/llm/fireworks_catalog.py), ``nearai`` = NEAR AI Cloud's
-# public model list (chat/llm/nearai_catalog.py, no key needed), ``server``
+# public model list (chat/llm/nearai_catalog.py, no key needed),
+# ``trustedrouter`` = TrustedRouter's public model list
+# (chat/llm/trustedrouter_catalog.py, no key needed), ``server``
 # = live discovery against the instance's server (chat/llm/local_catalog.py).
 #
 # Every kind runs on the ``openrouter`` LLMProvider family -- the OpenAI
@@ -159,6 +164,23 @@ INSTANCE_KINDS: dict[str, dict] = {
         "endpoint": False,
         "upstream_url": "https://cloud-api.near.ai/v1",
         "catalog": "nearai",
+    },
+    # TrustedRouter (https://trustedrouter.com): an OpenAI-compatible router
+    # at api.trustedrouter.com/v1 whose gateway runs attested in Google
+    # Confidential Space (verifiable at https://trustedrouter.com/trust),
+    # authenticated by an API key (``sk-tr-v1-...``) sent as a bearer token.
+    # Wire ids are ``<vendor>/<model>`` slugs like OpenRouter's plus
+    # TrustedRouter's own routes (``trustedrouter/auto``). Its model list is
+    # public and carries per-token prices, so the catalog module needs no key.
+    "trustedrouter": {
+        "label": "TrustedRouter",
+        "hint": "sk-tr-v1-...",
+        "provider": "openrouter",
+        "backend": "trustedrouter",
+        "key_required": True,
+        "endpoint": False,
+        "upstream_url": "https://api.trustedrouter.com/v1",
+        "catalog": "trustedrouter",
     },
     "local": {
         "label": "Self-hosted",

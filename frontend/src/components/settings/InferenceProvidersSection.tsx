@@ -755,6 +755,11 @@ function addModelCopy(
         placeholder: 'Add a model — search the NEAR AI catalog or type a model id',
         emptyHint: 'Type to search the catalog',
       };
+    case 'trustedrouter':
+      return {
+        placeholder: 'Add a model — search the TrustedRouter catalog or type a model id',
+        emptyHint: 'Type to search the catalog',
+      };
     default:
       return {
         placeholder: 'Add a model — search the OpenRouter catalog or type an id',
@@ -942,7 +947,7 @@ function InstanceCard({
   const existing = new Set(status.models.map((m) => m.wire_id));
   const dirty = !!apiKey.trim() || labelDirty || baseUrlDirty || apiTypeDirty;
   // The shared OpenRouter catalog needs no credentials and neither does
-  // NEAR AI's public list; a self-hosted server's or Fireworks' catalog is
+  // NEAR AI's or TrustedRouter's public list; a self-hosted server's or Fireworks' catalog is
   // read with the instance's own URL / key, so it waits for that to be saved.
   const ownCatalog = catalog !== 'openrouter';
   const catalogNeedsConfig = catalog === 'server' || catalog === 'fireworks';
@@ -959,7 +964,10 @@ function InstanceCard({
       : catalog === 'nearai'
         ? 'NEAR AI model ids are <vendor>/<model> slugs such as deepseek/deepseek-v3.2; ' +
           'the catalog lists the chat models with their current prices.'
-        : undefined;
+        : catalog === 'trustedrouter'
+          ? 'TrustedRouter model ids are <vendor>/<model> slugs such as deepseek/deepseek-v4-flash-0731, ' +
+            'plus routes such as trustedrouter/auto; the catalog lists the chat models with their current prices.'
+          : undefined;
 
   return (
     <CredentialCard

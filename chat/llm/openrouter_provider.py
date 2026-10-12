@@ -9,7 +9,8 @@ Inference Providers.
 
 The same class serves the other fixed-upstream kinds -- **Fireworks AI**
 (kind ``fireworks``, ``https://api.fireworks.ai/inference/v1``) and **NEAR
-AI Cloud** (kind ``nearai``, ``https://cloud-api.near.ai/v1``): the kind's
+AI Cloud** (kind ``nearai``, ``https://cloud-api.near.ai/v1``) and
+**TrustedRouter** (kind ``trustedrouter``, ``https://api.trustedrouter.com/v1``): the kind's
 ``upstream_url`` with the instance's bearer API key and no OpenRouter-only
 extensions (both include usage in the final streamed chunk by themselves,
 NEAR AI with the ``prompt_tokens_details.cached_tokens`` split of its
@@ -152,7 +153,7 @@ class OpenRouterProvider(LLMProvider):
         """Resolve where this instance's requests go.
 
         Returns ``{"base_url", "api_key", "headers", "openrouter"}``.
-        Fixed-upstream kinds (OpenRouter, Fireworks, NEAR AI) send requests to the
+        Fixed-upstream kinds (OpenRouter, Fireworks, NEAR AI, TrustedRouter) send requests to the
         kind's ``upstream_url`` and need their stored key; a self-hosted
         instance needs its base URL and uses the stored key only when one
         exists (the openai SDK insists on a non-empty key, so a placeholder

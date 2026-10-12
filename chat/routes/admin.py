@@ -1281,7 +1281,7 @@ async def admin_list_inference_providers(
         "instances": [_instance_status(inst) for inst in list_instances()],
         # ``catalog`` tells the card where its "Add model" typeahead looks:
         # the shared OpenRouter list, the instance's own (key-fetched)
-        # Fireworks catalog, NEAR AI's public list, or the self-hosted
+        # Fireworks catalog, NEAR AI's or TrustedRouter's public list, or the self-hosted
         # server itself.
         "kinds": [
             {
@@ -1564,7 +1564,7 @@ async def admin_update_inference_instance(
 async def _catalog_snapshots(instance: dict, wire_ids: list[str]) -> dict[str, dict]:
     """Catalog metadata for ``wire_ids`` (defaults per unlisted id).
 
-    OpenRouter, Fireworks and NEAR AI instances use their cached catalog
+    OpenRouter, Fireworks, NEAR AI and TrustedRouter instances use their cached catalog
     (no refresh) so a save never blocks on the network beyond the first fetch;
     self-hosted instances ask their server (a short live request). An
     unreachable catalog/server just means custom-id defaults -- for a
@@ -1598,6 +1598,10 @@ async def _catalog_snapshots(instance: dict, wire_ids: list[str]) -> dict[str, d
         from chat.llm.nearai_catalog import get_catalog as get_nearai_catalog
 
         catalog = await asyncio.to_thread(get_nearai_catalog)
+    elif source == "trustedrouter":
+        from chat.llm.trustedrouter_catalog import get_catalog as get_trustedrouter_catalog
+
+        catalog = await asyncio.to_thread(get_trustedrouter_catalog)
     else:
         from chat.llm.openrouter_catalog import get_catalog
 
@@ -1632,6 +1636,8 @@ async def admin_instance_catalog(
       ``refresh=true`` re-fetches), served whether or not a key is saved
       yet; a failed fetch sets ``error`` with the stale cache or an
       empty list.
+    - TrustedRouter instances: TrustedRouter's public model list, served
+      the same way as NEAR AI's (cached 24h, keyless, stale on failure).
 
     400 for kinds whose typeahead is the shared OpenRouter catalog
     (``GET /admin/inference-providers/openrouter/catalog``).
@@ -1645,10 +1651,13 @@ async def admin_instance_catalog(
     instance = _instance_or_404(instance_id)
     source = INSTANCE_KINDS[instance["kind"]]["catalog"]
     limit = max(1, min(limit, 100))
-    if source == "nearai":
-        from chat.llm.nearai_catalog import get_catalog as get_nearai_catalog
+    if source in ("nearai", "trustedrouter"):
+        if source == "nearai":
+            from chat.llm.nearai_catalog import get_catalog as get_public_catalog
+        else:
+            from chat.llm.trustedrouter_catalog import get_catalog as get_public_catalog
 
-        catalog = await asyncio.to_thread(get_nearai_catalog, refresh)
+        catalog = await asyncio.to_thread(get_public_catalog, refresh)
         return {
             "models": search_catalog(catalog["models"], q, limit),
             "error": catalog["error"],
