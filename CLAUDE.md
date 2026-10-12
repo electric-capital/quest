@@ -24,9 +24,6 @@ Work on this repo is PR-based: create a feature branch, commit there, push it, a
 
 Documentation conventions are in docs/STYLE_GUIDE.md. Follow these when writing or updating docs.
 
-If you are asked to write dev plans, they are stored in ./devplans/ (this directory is in .gitignore). 
-Name plan files as devplans/NNNNN-feature-name.md, where NNNNN is an incrementing number.
-
 ## Local server port and process hygiene
 
 The local server port comes from the `dev_port` key in the checkout's gitignored `dev_config.json`
