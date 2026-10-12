@@ -9,6 +9,8 @@ plugin registered. All of them are built by the shared factory in
 tests/plugin_support.py.
 """
 
+from pathlib import Path
+
 from config.plugins import PLUGINS_DIR
 
 from tests.plugin_support import plugin_fixture
@@ -23,6 +25,10 @@ github_plugin = plugin_fixture(PLUGINS_DIR / "github")
 slack_plugin = plugin_fixture(PLUGINS_DIR / "slack")
 twitter_plugin = plugin_fixture(PLUGINS_DIR / "twitter")
 telegram_plugin = plugin_fixture(PLUGINS_DIR / "telegram")
+# Test-only multi-connection (form kind) plugin for the issue #84 suites.
+multiconn_plugin = plugin_fixture(
+    Path(__file__).resolve().parent / "fixture_plugins" / "multiconn"
+)
 
 
 import pytest
