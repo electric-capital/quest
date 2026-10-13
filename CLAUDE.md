@@ -22,7 +22,10 @@ in this repo, follow the workflow steps.
 Work on this repo is PR-based: create a feature branch, commit there, push it, and open a PR against
 `main` with `gh pr create`. Do not commit straight to `main` -- PRs are reviewed and merged by humans.
 
-Documentation conventions are in docs/STYLE_GUIDE.md. Follow these when writing or updating docs.
+Documentation conventions are in docs/STYLE_GUIDE.md. Follow these when writing or updating docs,
+and work through its "Updating Documentation" steps: edit the one doc that owns the topic, grep the
+docs for anything the change renamed or removed, describe the end state rather than the change, and
+run `uv run pytest tests/test_docs.py` before committing.
 
 ## Local server port and process hygiene
 
@@ -38,7 +41,7 @@ sessions hosting them can match too.
 
 # Project Documentation
 
-The docs/ folder contains comprehensive project documentation. Start with docs/README.md for a table of contents.
+The docs/ folder contains the project documentation; docs/architecture/overview.md is the code map.
 
 A quick-reference index of all doc files with short summaries is auto-included below:
 
