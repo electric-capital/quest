@@ -1,5 +1,6 @@
 """IMAP plugin settings: admin server-list parsing and per-row helpers."""
 
+import logging
 import re
 
 import pytest
@@ -88,7 +89,7 @@ def test_canonical_line_round_trips(config, line):
 ])
 def test_parse_rejects_bad_lines_with_line_number(line, fragment):
     with pytest.raises(ValueError) as exc:
-        s.parse_allowed_servers(f"ok.example.com\n\n{line}")
+        s.parse_legacy_server_lines(f"ok.example.com\n\n{line}")
     assert str(exc.value).startswith("Line 3:")
     assert fragment in str(exc.value)
 
@@ -98,7 +99,7 @@ def test_parse_rejects_bad_lines_with_line_number(line, fragment):
 
 def test_parse_list_keeps_admin_order_and_skips_blank_lines():
     text = "  IMAP.Example.COM \n\nmail.example.org:143\n   \n[::1] starttls\n"
-    assert s.parse_allowed_servers(text) == [
+    assert s.parse_legacy_server_lines(text) == [
         ServerConfig("imap.example.com", 993, "ssl"),
         ServerConfig("mail.example.org", 143, "starttls"),
         ServerConfig("::1", 143, "starttls"),
@@ -106,7 +107,7 @@ def test_parse_list_keeps_admin_order_and_skips_blank_lines():
 
 
 def test_same_host_on_several_lines_with_different_port_or_mode():
-    got = s.parse_allowed_servers(
+    got = s.parse_legacy_server_lines(
         "h.example.com\nh.example.com:143\nh.example.com:143 ssl\nh.example.com:1993"
     )
     assert [e.line() for e in got] == [
@@ -125,7 +126,7 @@ def test_same_host_on_several_lines_with_different_port_or_mode():
 ])
 def test_duplicate_configurations_rejected(text, message):
     with pytest.raises(ValueError) as exc:
-        s.parse_allowed_servers(text)
+        s.parse_legacy_server_lines(text)
     assert str(exc.value) == message
 
 
@@ -174,15 +175,20 @@ def test_parse_server_entry_rejects(entry, message):
         s.parse_server_entry(entry)
 
 
-def test_parse_allowed_servers_accepts_entries_and_legacy_text():
+def test_parse_allowed_servers_takes_entries_only():
     entries = s.parse_allowed_servers([_entry("b.example"), _entry("[::1]", "143")])
     assert [e.line() for e in entries] == ["b.example:993 ssl", "[::1]:143 starttls"]
-    legacy = s.parse_allowed_servers("b.example\n[::1]:143")
-    assert legacy == entries
     assert s.parse_allowed_servers(None) == []
     assert s.parse_allowed_servers([]) == []
     with pytest.raises(ValueError, match="must be a list of entries"):
         s.parse_allowed_servers({"host": "x"})
+    # The legacy text form is the migration's business, not a live shape.
+    with pytest.raises(ValueError, match="must be a list of entries"):
+        s.parse_allowed_servers("b.example\n[::1]:143")
+    assert s.parse_legacy_server_lines("b.example\n[::1]:143") == entries
+    assert s.parse_legacy_server_lines(None) == []
+    with pytest.raises(ValueError, match="must be text"):
+        s.parse_legacy_server_lines(entries)
 
 
 @pytest.mark.parametrize("entries, message", [
@@ -215,47 +221,64 @@ def test_validate_imap_admin_normalises_entries():
     assert s.validate_imap_admin(out) == out
 
 
-def test_validate_imap_admin_migrates_legacy_text():
-    """A legacy text value (API callers, pre-baked configs) still saves,
-    stored as entries."""
-    out = s.validate_imap_admin({"allowed_hosts": "B.example.com\n\n[::1]:143"})
-    assert out == {"allowed_hosts": [
-        {"host": "b.example.com", "port": "993", "security": "ssl"},
-        {"host": "::1", "port": "143", "security": "starttls"},
-    ]}
-
-
 def test_validate_imap_admin_rejects_empty_bad_and_duplicates():
     with pytest.raises(ValueError, match="add at least one server"):
         s.validate_imap_admin({"allowed_hosts": []})
     with pytest.raises(ValueError, match="add at least one server"):
-        s.validate_imap_admin({"allowed_hosts": "  \n "})
-    with pytest.raises(ValueError, match="add at least one server"):
         s.validate_imap_admin({})
     with pytest.raises(ValueError, match="Entry 1: Host: no scheme"):
         s.validate_imap_admin({"allowed_hosts": [_entry("http://x")]})
-    with pytest.raises(ValueError, match="Line 1"):
-        s.validate_imap_admin({"allowed_hosts": "http://x"})
     with pytest.raises(ValueError, match=re.escape("Entry 2: duplicate of entry 1")):
         s.validate_imap_admin({"allowed_hosts": [_entry("x.example"), _entry("x.example", "993")]})
     with pytest.raises(ValueError, match="use ssl or starttls"):
         s.validate_imap_admin({"allowed_hosts": [_entry("x.example", "143", "plain")]})
 
 
-def test_imap_flatten_projects_legacy_text_into_entries():
-    assert s.imap_flatten({"allowed_hosts": "imap.example.com\nmail.example.org:143", "x": 1}) == {
+@pytest.fixture()
+def imap_store(imap_plugin, tmp_path, monkeypatch):
+    """A real (empty) per-service credential store under tmp_path (the
+    plugin registered so ``imap`` is a known store service)."""
+    from config import service_credentials as sc
+    monkeypatch.setattr(sc, "SERVICE_CREDENTIALS_DIR", tmp_path / "service_credentials")
+    return sc
+
+
+def test_migrate_legacy_allowed_hosts_rewrites_text_lines(imap_store, caplog):
+    imap_store.write_service_credentials(s.SERVICE_ID, {
+        "allowed_hosts": "IMAP.Example.com\n\nmail.example.org:143\n[::1] starttls",
+        "other": "kept",
+    })
+    with caplog.at_level(logging.INFO, logger=s.__name__):
+        assert s.migrate_legacy_allowed_hosts() is True
+    assert imap_store.read_service_credentials(s.SERVICE_ID) == {
         "allowed_hosts": [
             {"host": "imap.example.com", "port": "993", "security": "ssl"},
             {"host": "mail.example.org", "port": "143", "security": "starttls"},
+            {"host": "::1", "port": "143", "security": "starttls"},
         ],
-        "x": 1,
+        "other": "kept",
     }
-    # Unparseable legacy text reads as no entries; entries pass through.
-    assert s.imap_flatten({"allowed_hosts": "http://bad"}) == {"allowed_hosts": []}
+    assert "Migrated the IMAP admin server list from text lines to 3 entries" in caplog.text
+    assert s.load_allowed_servers() == s.parse_legacy_server_lines(
+        "imap.example.com\nmail.example.org:143\n[::1] starttls")
+    # Idempotent: entries are left alone.
+    assert s.migrate_legacy_allowed_hosts() is False
+
+
+def test_migrate_legacy_allowed_hosts_leaves_entries_missing_and_bad_text(imap_store, caplog):
+    assert s.migrate_legacy_allowed_hosts() is False  # no card
     entries = [{"host": "a.example", "port": "993", "security": "ssl"}]
-    assert s.imap_flatten({"allowed_hosts": entries}) == {"allowed_hosts": entries}
-    assert s.imap_flatten({}) == {}
-    assert s.imap_flatten(None) == {}
+    imap_store.write_service_credentials(s.SERVICE_ID, {"allowed_hosts": entries})
+    assert s.migrate_legacy_allowed_hosts() is False
+    assert imap_store.read_service_credentials(s.SERVICE_ID) == {"allowed_hosts": entries}
+    # Text that no longer parses stays as it is, with a warning.
+    imap_store.write_service_credentials(s.SERVICE_ID, {"allowed_hosts": "a.example\nhttp://bad"})
+    with caplog.at_level(logging.WARNING, logger=s.__name__):
+        assert s.migrate_legacy_allowed_hosts() is False
+    assert "legacy text form and does not parse (Line 2: no scheme" in caplog.text
+    assert imap_store.read_service_credentials(s.SERVICE_ID) == {"allowed_hosts": "a.example\nhttp://bad"}
+    assert s.imap_is_configured(imap_store.read_service_credentials(s.SERVICE_ID)) is False
+    assert s.load_allowed_servers() == []
 
 
 def test_is_configured():
@@ -263,13 +286,11 @@ def test_is_configured():
     assert s.imap_is_configured({"allowed_hosts": []}) is False
     assert s.imap_is_configured({"allowed_hosts": [_entry("imap.example.com:993")]}) is False
     assert s.imap_is_configured({"allowed_hosts": [_entry("a.example"), _entry("a.example", "993")]}) is False
-    # Legacy text cards stay configured until re-saved.
-    assert s.imap_is_configured({"allowed_hosts": "imap.example.com"}) is True
-    assert s.imap_is_configured({"allowed_hosts": "imap.example.com:993 ssl"}) is True
+    # The legacy text form is not a live shape (the post_load migration
+    # rewrites it); it reads as unconfigured.
+    assert s.imap_is_configured({"allowed_hosts": "imap.example.com"}) is False
     assert s.imap_is_configured({"allowed_hosts": ""}) is False
     assert s.imap_is_configured({}) is False
-    assert s.imap_is_configured({"allowed_hosts": "imap.example.com\nhttp://bad"}) is False
-    assert s.imap_is_configured({"allowed_hosts": "a.example\na.example:993"}) is False
     assert s.imap_is_configured(None) is False
 
 
@@ -299,7 +320,7 @@ def test_field_options_are_canonical_lines_in_admin_order(imap_admin_hosts):
 
 
 def test_resolve_server(imap_admin_hosts):
-    allowed = s.parse_allowed_servers("a.example.com\nb.example.com:143\n[::1]:993")
+    allowed = s.parse_legacy_server_lines("a.example.com\nb.example.com:143\n[::1]:993")
     assert s.resolve_server("a.example.com:993 ssl", allowed) == ServerConfig("a.example.com", 993, "ssl")
     # Stored values are compared in canonical form.
     assert s.resolve_server("A.example.com", allowed) == ServerConfig("a.example.com", 993, "ssl")

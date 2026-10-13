@@ -243,12 +243,6 @@ class QuestPlugin:
     # values (the ServiceSpec ``validate`` hook): ``(flat values) -> flat
     # values``, raising ValueError to reject the save.
     credential_validate: Optional[Callable[[dict], dict]] = None
-    # Optional projection of the STORED config into the flat form values
-    # (the ServiceSpec ``flatten`` hook): ``(stored) -> flat``. For
-    # stored shapes the schema does not match one-to-one, e.g. a legacy
-    # text value an older card wrote where the schema now has a ``list``
-    # field; the default is the stored dict itself.
-    credential_flatten: Optional[Callable[[dict], dict]] = None
 
     # -- per-user connection -> generic Data Connections row
     user_connection: Optional[UserConnectionSpec] = None

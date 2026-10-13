@@ -8,8 +8,9 @@ and whose account is the mailbox address (``account_for``). The
 
 The admin card (``imap.json``) holds only the ``allowed_hosts`` server
 list: a ``list`` field whose entries are ``host`` / ``port`` /
-``security`` sub-forms, stored in canonical form (legacy text cards
-still read; see plugins/imap/settings.py). The connector row is
+``security`` sub-forms, stored in canonical form (a pre-list-field
+text card is migrated by the ``post_load`` hook; see
+plugins/imap/settings.py). The connector row is
 ``available: false`` until it lists at least one valid server, the
 server select's choices are the entries' canonical ``host:port mode``
 lines (``field_options``), and every connect resolves the row's
@@ -28,9 +29,9 @@ from plugins.imap.settings import (
     SERVICE_ID,
     imap_connected,
     imap_field_options,
-    imap_flatten,
     imap_is_configured,
     imap_row_warning,
+    migrate_legacy_allowed_hosts,
     validate_imap_admin,
 )
 from plugins.imap.tools import ALL_TOOLS, SCRIPT_TOOL_NAMES
@@ -120,7 +121,7 @@ def get_plugin() -> QuestPlugin:
         ),
         is_configured=imap_is_configured,
         credential_validate=validate_imap_admin,
-        credential_flatten=imap_flatten,
+        post_load=migrate_legacy_allowed_hosts,
         user_connection=UserConnectionSpec(
             kind="form",
             multi_connection=True,

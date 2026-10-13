@@ -322,7 +322,6 @@ def register_plugin_credentials(plugin: QuestPlugin) -> None:
         fields=tuple(plugin.credential_schema),
         is_configured=plugin.is_configured or (lambda config: True),
         validate=plugin.credential_validate,
-        flatten=plugin.credential_flatten,
     )
     _validate_fields(spec.service, spec.fields, allow_list=True)
     if spec.service in _CORE_SPECS or spec.service in _PLUGIN_SPECS:

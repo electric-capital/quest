@@ -766,27 +766,16 @@ def test_list_field_validate_hook_sees_entries(plugin_specs, admin_routes):
     assert exc_info.value.detail["message"] == "Relays, entry 2: duplicate host"
 
 
-def test_list_field_flatten_hook_projects_legacy_shape(plugin_specs, admin_routes):
-    def flatten(stored):
-        text = stored.get("relays")
-        if isinstance(text, str):
-            return {**stored, "relays": [{"host": h, "mode": "tls"} for h in text.split()]}
-        return stored
-
-    plugin_specs.register_plugin_credentials(_relay_plugin(credential_flatten=flatten))
-    sc.write_service_credentials("relay", {"relays": "a.example b.example"})
-    result = _run(admin_routes.admin_get_service_credentials("relay", user=ADMIN_USER))
-    assert result["credentials"]["relays"] == [
-        {"host": "a.example", "mode": "tls", "port": "", "auth": False, "user": ""},
-        {"host": "b.example", "mode": "tls", "port": "", "auth": False, "user": ""},
-    ]
-    # A non-list stored value without a flatten hook reads as no entries.
+def test_list_field_non_list_stored_value_reads_as_no_entries(plugin_specs):
     plain = _relay_plugin()
     spec = plugin_specs.ServiceSpec(
         service="relay2", label=plain.label, fields=plain.credential_schema,
     )
     assert plugin_specs.form_view(spec, {"relays": "a.example b.example"}) == {
         "label": "", "relays": [],
+    }
+    assert plugin_specs.form_view(spec, {"relays": [{"host": "a"}, "junk", None]}) == {
+        "label": "", "relays": [{"host": "a", "mode": "", "port": "", "auth": False, "user": ""}],
     }
 
 

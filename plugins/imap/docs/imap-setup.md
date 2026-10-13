@@ -30,7 +30,7 @@ Once saved, the card lists the servers read-only:
 
 ![The configured IMAP mailbox card listing its servers](images/imap-admin-card-summary.png)
 
-Cards saved before this form existed hold the servers as text lines (`host[:port] [ssl|starttls]`); they keep working, the card shows the lines as entries, and the next Save stores the list.
+A card saved before this form existed (the servers as `host[:port] [ssl|starttls]` text lines) is converted into entries automatically the first time the server starts with this version; nothing to do. If a line no longer parses, the server logs a warning and the card shows no servers until you re-add them.
 
 Common providers:
 

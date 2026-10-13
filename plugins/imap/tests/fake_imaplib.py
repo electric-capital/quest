@@ -62,7 +62,7 @@ Fixtures (registered through plugins/imap/tests/conftest.py)
 ----------------------------------------------------------
 - ``imap_admin_hosts``: an ``AdminHosts`` object;
   ``.set("a\\nb:143 starttls")`` sets the admin card's ``allowed_hosts``
-  server lines, ``.clear()`` removes the card. Patches ``config.service_credentials.read_service_credentials``
+  entries from legacy-style lines (one per line), ``.clear()`` removes the card. Patches ``config.service_credentials.read_service_credentials``
   for service ``imap`` only (others delegate to the real store).
 - ``fake_imap``: a ``FakeImapNetwork`` with one server
   ``imap.example.com`` (``network.server``), account
@@ -861,7 +861,20 @@ class AdminHosts:
         self.reads = 0
 
     def set(self, text: str) -> None:
-        self.config = {"allowed_hosts": text}
+        """Set the card from legacy-style lines (the test shorthand): each
+        line becomes a canonical entry, an unparseable line a raw
+        ``{"host": line}`` entry so the card stays invalid."""
+        from plugins.imap.settings import parse_server_line
+
+        entries = []
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                entries.append(parse_server_line(line).entry())
+            except ValueError:
+                entries.append({"host": line.strip(), "port": "", "security": ""})
+        self.config = {"allowed_hosts": entries}
 
     def clear(self) -> None:
         self.config = None

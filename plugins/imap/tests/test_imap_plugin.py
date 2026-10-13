@@ -126,17 +126,30 @@ def test_admin_card_save_normalises_and_rejects(imap_plugin):
         resolve_update(spec, {"allowed_hosts": []}, None)
 
 
-def test_admin_card_reads_legacy_text_as_entries(imap_plugin):
-    """A card saved as text before the list field shows its lines as
-    entries (and stays configured) until the next save stores entries."""
+def test_plugin_post_load_migrates_legacy_text_card(imap_plugin, tmp_path, monkeypatch):
+    """The manifest's post_load hook rewrites a pre-list-field text card
+    into entries, so the card reads configured and the per-user select
+    offers the lines."""
+    from config import service_credentials as sc
     from config.service_specs import form_view
+    monkeypatch.setattr(sc, "SERVICE_CREDENTIALS_DIR", tmp_path / "service_credentials")
+    sc.write_service_credentials("imap", {"allowed_hosts": "imap.example.com\nmail.example.org:143"})
     spec = get_service_spec("imap")
-    legacy = {"allowed_hosts": "imap.example.com\nmail.example.org:143"}
-    assert form_view(spec, legacy) == {"allowed_hosts": [
+    assert spec.is_configured(sc.read_service_credentials("imap")) is False
+    assert form_view(spec, sc.read_service_credentials("imap")) == {"allowed_hosts": []}
+
+    assert imap_plugin.post_load is not None
+    imap_plugin.post_load()
+    stored = sc.read_service_credentials("imap")
+    assert stored == {"allowed_hosts": [
         {"host": "imap.example.com", "port": "993", "security": "ssl"},
         {"host": "mail.example.org", "port": "143", "security": "starttls"},
     ]}
-    assert spec.is_configured(legacy) is True
-    stored = resolve_update(spec, form_view(spec, legacy), legacy)
-    assert isinstance(stored["allowed_hosts"], list)
-    assert form_view(spec, stored) == form_view(spec, legacy)
+    assert spec.is_configured(stored) is True
+    assert form_view(spec, stored) == stored
+    assert imap_field_options_for_test() == ["imap.example.com:993 ssl", "mail.example.org:143 starttls"]
+
+
+def imap_field_options_for_test():
+    from plugins.imap.settings import imap_field_options
+    return imap_field_options()["server"]

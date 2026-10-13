@@ -29,12 +29,14 @@ IPv6 hosts bare). The canonical LINE form ``host:port mode``
 (``imap.example.com:993 ssl``, ``[::1]:143 starttls``) is what the
 per-user server select offers and what connection rows store.
 
-Cards saved before the list field hold the legacy TEXT form instead:
+Cards saved before the list field held the legacy TEXT form instead:
 one ``host[:port][ ssl|starttls]`` line per server (the same defaults;
-additionally ``:143`` without a mode meant ``starttls``). Every reader
-accepts both shapes (:func:`parse_allowed_servers`), the card's read
-view projects the text into entries (:func:`imap_flatten`), and the
-next save stores the list.
+additionally ``:143`` without a mode meant ``starttls``). The plugin's
+``post_load`` hook (:func:`migrate_legacy_allowed_hosts`) rewrites such
+a card into entries once at startup (:func:`parse_legacy_server_lines`
+is the text parser, kept for that); text that no longer parses is left
+in place with a warning and reads as an unconfigured card. Nothing else
+reads the text form.
 
 Every connect re-reads the card (:func:`load_allowed_servers`), so
 removing an entry takes effect on the next tool call.
@@ -230,33 +232,12 @@ def parse_server_entry(entry: Any) -> ServerConfig:
     return ServerConfig(host, port, security)
 
 
-def parse_allowed_servers(value: Any) -> list[ServerConfig]:
-    """Parse the admin ``allowed_hosts`` value, in admin order.
-
-    Accepts the list-field shape (a list of entry dicts, see
-    :func:`parse_server_entry`) and the legacy text shape (one line per
-    server, blank lines ignored, see :func:`parse_server_line`). Raises
-    ``ValueError("Entry N: ...")`` / ``ValueError("Line N: ...")`` on the
-    first bad item, including one that names the same configuration as an
-    earlier one.
-    """
-    if value is None:
-        return []
-    if isinstance(value, list):
-        numbered = list(enumerate(value, start=1))
-        parse, noun = parse_server_entry, "Entry"
-    elif isinstance(value, str):
-        numbered = [
-            (number, raw)
-            for number, raw in enumerate(value.splitlines(), start=1)
-            if raw.strip()
-        ]
-        parse, noun = parse_server_line, "Line"
-    else:
-        raise ValueError("the server list must be a list of entries")
+def _collect_servers(items, parse, noun: str) -> list[ServerConfig]:
+    """Parse numbered ``(number, raw)`` items with ``parse``, refusing a
+    configuration already seen; errors are prefixed ``"<noun> N: "``."""
     entries: list[ServerConfig] = []
     first_seen: dict[ServerConfig, int] = {}
-    for number, raw in numbered:
+    for number, raw in items:
         try:
             entry = parse(raw)
         except ValueError as exc:
@@ -271,6 +252,37 @@ def parse_allowed_servers(value: Any) -> list[ServerConfig]:
     return entries
 
 
+def parse_allowed_servers(value: Any) -> list[ServerConfig]:
+    """Parse the admin ``allowed_hosts`` value -- a list of entry dicts
+    (see :func:`parse_server_entry`) -- in admin order; None = [].
+
+    Raises ``ValueError("Entry N: ...")`` on the first bad entry,
+    including one that names the same configuration as an earlier one.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("the server list must be a list of entries")
+    return _collect_servers(enumerate(value, start=1), parse_server_entry, "Entry")
+
+
+def parse_legacy_server_lines(text: Any) -> list[ServerConfig]:
+    """Parse the pre-list-field text form, one ``host[:port][ ssl|starttls]``
+    line per server (blank lines ignored; see :func:`parse_server_line`).
+    Only the startup migration uses it. Raises ``ValueError("Line N: ...")``.
+    """
+    if text is None:
+        return []
+    if not isinstance(text, str):
+        raise ValueError("the server list must be text")
+    numbered = [
+        (number, raw)
+        for number, raw in enumerate(text.splitlines(), start=1)
+        if raw.strip()
+    ]
+    return _collect_servers(numbered, parse_server_line, "Line")
+
+
 def validate_imap_admin(values: dict) -> dict:
     """``credential_validate`` hook: normalise ``allowed_hosts`` to one
     canonical entry per server (see :meth:`ServerConfig.entry`), or raise
@@ -281,19 +293,34 @@ def validate_imap_admin(values: dict) -> dict:
     return {**values, "allowed_hosts": [e.entry() for e in entries]}
 
 
-def imap_flatten(config: dict) -> dict:
-    """``credential_flatten`` hook: the card's read view. A legacy text
-    ``allowed_hosts`` (one line per server) is projected into entries so
-    the list field shows it; unparseable text shows as no entries (the
-    card reads "Not configured" either way)."""
-    flat = dict(config or {})
-    value = flat.get("allowed_hosts")
-    if isinstance(value, str):
-        try:
-            flat["allowed_hosts"] = [e.entry() for e in parse_allowed_servers(value)]
-        except ValueError:
-            flat["allowed_hosts"] = []
-    return flat
+def migrate_legacy_allowed_hosts() -> bool:
+    """``post_load`` hook: rewrite a card still holding ``allowed_hosts``
+    as legacy text lines into the list field's entries. Returns whether
+    the store was written. Text that does not parse is left as it is
+    (logged; the card reads as not configured until the admin re-saves
+    it). Runs once per startup; a failure (e.g. the encryption key not
+    yet unlocked on a manual uvicorn start) is logged by the loader."""
+    from config import service_credentials
+
+    config = service_credentials.read_service_credentials(SERVICE_ID)
+    if not isinstance(config, dict) or not isinstance(config.get("allowed_hosts"), str):
+        return False
+    try:
+        entries = parse_legacy_server_lines(config["allowed_hosts"])
+    except ValueError as exc:
+        logger.warning(
+            "IMAP admin server list is in the legacy text form and does not "
+            "parse (%s); re-save it in Settings > Service Credentials", exc,
+        )
+        return False
+    service_credentials.write_service_credentials(
+        SERVICE_ID, {**config, "allowed_hosts": [e.entry() for e in entries]},
+    )
+    logger.info(
+        "Migrated the IMAP admin server list from text lines to %d entr%s",
+        len(entries), "y" if len(entries) == 1 else "ies",
+    )
+    return True
 
 
 def imap_is_configured(config: dict) -> bool:
