@@ -191,10 +191,11 @@ def repo_with_origin(tmp_path: Path) -> Path:
 
 class TestTagReleaseScript:
     def test_creates_annotated_tag_and_pushes(self, repo_with_origin):
-        result = run_tag_script(repo_with_origin, "1.0.0")
+        result = run_tag_script(repo_with_origin, "1.0.0", "-m", "- First release")
         assert result.returncode == 0, result.stderr
         assert git(repo_with_origin, "cat-file", "-t", "v1.0.0") == "tag"
-        assert "Release v1.0.0" in git(repo_with_origin, "tag", "-l", "-n1", "v1.0.0")
+        assert git(repo_with_origin, "tag", "-l", "--format=%(contents:subject)", "v1.0.0") == "Quest v1.0.0"
+        assert git(repo_with_origin, "tag", "-l", "--format=%(contents:body)", "v1.0.0") == "- First release"
         assert "v1.0.0" in git(repo_with_origin, "ls-remote", "--tags", "origin")
         assert resolve_release_info(repo_with_origin).version == "1.0.0"
 
@@ -203,7 +204,7 @@ class TestTagReleaseScript:
         git(repo_with_origin, "push", "-q", "origin", "v1.2.3")
         commit(repo_with_origin, "two")
         git(repo_with_origin, "push", "-q", "origin", "main")
-        result = run_tag_script(repo_with_origin, "--next", "minor", "--no-push")
+        result = run_tag_script(repo_with_origin, "--next", "minor", "--no-push", "-m", "x")
         assert result.returncode == 0, result.stderr
         assert git(repo_with_origin, "tag", "--list", "v1.3.0") == "v1.3.0"
         assert "v1.3.0" not in git(repo_with_origin, "ls-remote", "--tags", "origin")
@@ -211,27 +212,44 @@ class TestTagReleaseScript:
     def test_refuses_dirty_tree_and_non_main(self, repo_with_origin):
         git(repo_with_origin, "checkout", "-q", "-b", "feat")
         (repo_with_origin / "dirty").write_text("x")
-        result = run_tag_script(repo_with_origin, "1.0.0")
+        result = run_tag_script(repo_with_origin, "1.0.0", "-m", "x")
         assert result.returncode != 0
         assert "not clean" in result.stderr and "not 'main'" in result.stderr
         assert git(repo_with_origin, "tag", "--list") == ""
 
     def test_refuses_version_not_greater_than_latest(self, repo_with_origin):
         git(repo_with_origin, "tag", "-a", "v2.0.0", "-m", "x")
-        result = run_tag_script(repo_with_origin, "1.9.9", "--no-push")
+        result = run_tag_script(repo_with_origin, "1.9.9", "--no-push", "-m", "x")
         assert result.returncode != 0
         assert "not greater than the latest release 2.0.0" in result.stderr
 
     def test_refuses_existing_tag_and_bad_version(self, repo_with_origin):
         git(repo_with_origin, "tag", "v1.0.0")
-        assert "already exists" in run_tag_script(repo_with_origin, "1.0.0", "--force").stderr
-        assert "Invalid version" in run_tag_script(repo_with_origin, "1.0", "--force").stderr
+        assert "already exists" in run_tag_script(repo_with_origin, "1.0.0", "--force", "-m", "x").stderr
+        assert "Invalid version" in run_tag_script(repo_with_origin, "1.0", "--force", "-m", "x").stderr
+
+    def test_requires_highlights(self, repo_with_origin, tmp_path):
+        result = run_tag_script(repo_with_origin, "1.0.0", "--no-push")
+        assert result.returncode != 0 and "-F/--file" in result.stderr
+        empty = tmp_path / "empty.md"
+        empty.write_text("  \n")
+        result = run_tag_script(repo_with_origin, "1.0.0", "--no-push", "-F", str(empty))
+        assert result.returncode != 0 and "highlights are empty" in result.stderr
+        assert git(repo_with_origin, "tag", "--list") == ""
+
+    def test_highlights_file_keeps_markdown_headings(self, repo_with_origin, tmp_path):
+        notes = tmp_path / "highlights.md"
+        notes.write_text("### Docs\n- Quest Docs\n\n### Fixes\n- Voice input on iOS\n")
+        result = run_tag_script(repo_with_origin, "1.0.0", "--no-push", "-F", str(notes))
+        assert result.returncode == 0, result.stderr
+        body = git(repo_with_origin, "tag", "-l", "--format=%(contents:body)", "v1.0.0")
+        assert body == "### Docs\n- Quest Docs\n\n### Fixes\n- Voice input on iOS"
 
     def test_force_bypasses_guards(self, repo_with_origin):
         git(repo_with_origin, "checkout", "-q", "-b", "feat")
         result = run_tag_script(repo_with_origin, "0.1.0", "--force", "--no-push", "-m", "hotfix")
         assert result.returncode == 0, result.stderr
-        assert "hotfix" in git(repo_with_origin, "tag", "-l", "-n1", "v0.1.0")
+        assert "hotfix" in git(repo_with_origin, "tag", "-l", "-n3", "v0.1.0")
 
     def test_rejected_push_explains_ruleset(self, repo_with_origin, tmp_path):
         # Simulate the GitHub "release tags" ruleset with a pre-receive hook
@@ -244,7 +262,7 @@ class TestTagReleaseScript:
             "done\nexit 0\n"
         )
         hook.chmod(0o755)
-        result = run_tag_script(repo_with_origin, "1.0.0")
+        result = run_tag_script(repo_with_origin, "1.0.0", "-m", "x")
         assert result.returncode != 0
         assert "Repository rule violations" in result.stderr
         assert "bypass list" in result.stderr

@@ -5,15 +5,19 @@ Creates an annotated ``v<MAJOR>.<MINOR>.<PATCH>`` git tag on the current
 commit and pushes it to ``origin``. The running server reads the nearest
 such tag at startup (config/version.py) and shows it in Settings > About
 and on ``GET /app/api/version``; pushing the tag also triggers the
-``release.yml`` workflow, which publishes a GitHub Release with generated
-notes.
+``release.yml`` workflow, which publishes a GitHub Release.
+
+Every release needs highlights, given with ``-F <file>`` (a markdown
+bullet list) or ``-m <text>``. The tag message is ``Quest v<version>``
+followed by the highlights, and the release workflow puts the highlights
+under a "Highlights" heading above GitHub's generated list of merged PRs.
 
 Usage::
 
-    uv run python scripts/tag_release.py 1.4.0            # tag + push
-    uv run python scripts/tag_release.py 1.4.0 --no-push  # tag only
-    uv run python scripts/tag_release.py 1.4.0 -m "Public projects GA"
-    uv run python scripts/tag_release.py --next patch     # bump the latest tag
+    uv run python scripts/tag_release.py 1.4.0 -F highlights.md            # tag + push
+    uv run python scripts/tag_release.py 1.4.0 -F highlights.md --no-push  # tag only
+    uv run python scripts/tag_release.py 1.4.0 -m "- Public projects GA"
+    uv run python scripts/tag_release.py --next patch -F highlights.md     # bump the latest tag
 
 Guards (each can be bypassed with ``--force``): the working tree must be
 clean, HEAD must be on ``main`` and match ``origin/main``, and the version
@@ -108,13 +112,18 @@ def main() -> None:
         "--next", choices=["major", "minor", "patch"],
         help="derive the version by bumping the latest release tag",
     )
-    parser.add_argument("-m", "--message", help="tag annotation (default: 'Release v<version>')")
+    highlights = parser.add_mutually_exclusive_group(required=True)
+    highlights.add_argument("-m", "--message", help="release highlights (markdown bullet list)")
+    highlights.add_argument("-F", "--file", type=Path, help="file holding the release highlights")
     parser.add_argument("--no-push", action="store_true", help="create the tag locally only")
     parser.add_argument("--force", action="store_true", help="skip the clean-tree / main / ordering guards")
     args = parser.parse_args()
 
     if bool(args.version) == bool(args.next):
         parser.error("give exactly one of <version> or --next")
+    body = (args.file.read_text() if args.file else args.message).strip()
+    if not body:
+        parser.error("the release highlights are empty")
 
     latest = (existing_release_versions() or [None])[-1]
     version = args.version or bump(latest, args.next)
@@ -141,9 +150,10 @@ def main() -> None:
         if problems:
             sys.exit("Refusing to tag:\n  - " + "\n  - ".join(problems) + "\n(use --force to override)")
 
-    message = args.message or f"Release {tag}"
-    git("tag", "-a", tag, "-m", message)
-    print(f"Created tag {tag} on {git('rev-parse', '--short', 'HEAD')}: {message}")
+    message = f"Quest {tag}\n\n{body}"
+    # whitespace cleanup keeps "#" lines (markdown headings) that the default strips.
+    git("tag", "-a", tag, "--cleanup=whitespace", "-m", message)
+    print(f"Created tag {tag} on {git('rev-parse', '--short', 'HEAD')}:\n{message}")
 
     if args.no_push:
         print(f"Not pushed. Push later with: git push origin {tag}")

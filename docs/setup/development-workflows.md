@@ -104,16 +104,17 @@ The `v*` tag namespace is reserved for releases and protected on GitHub by the "
 - A pushed release tag is immutable. A bad release gets a new patch release (`v1.4.1`), never a re-pointed `v1.4.0`.
 - Only a maintainer on the bypass list can push the tag. Anyone else runs the script with `--no-push` (or lets the push fail -- the tag stays local and the script explains why) and hands the tag to a maintainer.
 
-- Cut a release with `scripts/tag_release.py` from a clean, up-to-date `main` checkout:
+- Every release has highlights: a short markdown bullet list of the user-visible changes, one line per feature area, written from the merged PRs since the previous release tag (`git log <previous-tag>..origin/main --oneline`). Preview the highlights with a maintainer before tagging, since a pushed tag cannot be changed.
+- Cut a release with `scripts/tag_release.py` from a clean, up-to-date `main` checkout, passing the highlights with `-F <file>` (or `-m <text>`); the script refuses to tag without them:
 
   ```
-  uv run python scripts/tag_release.py 1.4.0            # explicit version
-  uv run python scripts/tag_release.py --next minor     # bump the latest tag
-  uv run python scripts/tag_release.py 1.4.0 --no-push  # tag locally, push later
+  uv run python scripts/tag_release.py 1.4.0 -F highlights.md            # explicit version
+  uv run python scripts/tag_release.py --next minor -F highlights.md     # bump the latest tag
+  uv run python scripts/tag_release.py 1.4.0 -F highlights.md --no-push  # tag locally, push later
   ```
 
-  The script refuses to tag a dirty tree, a branch other than `main`, a HEAD that differs from `origin/main`, or a version that is not greater than the latest existing release tag (`--force` overrides all four). It creates the annotated tag and pushes it to `origin`.
-- Pushing the tag triggers `.github/workflows/release.yml`, which publishes a GitHub Release with notes generated from the merged PRs since the previous release tag (pre-release tags are marked as such).
+  The script refuses to tag a dirty tree, a branch other than `main`, a HEAD that differs from `origin/main`, or a version that is not greater than the latest existing release tag (`--force` overrides all four). It creates the annotated tag, with `Quest v<version>` as the subject and the highlights as the body, and pushes it to `origin`.
+- Pushing the tag triggers `.github/workflows/release.yml`, which publishes a GitHub Release whose notes are the tag's highlights under a "Highlights" heading, followed by GitHub's generated list of the merged PRs since the previous release tag (pre-release tags are marked as such).
 - `config/version.py` resolves the release at process startup: `git describe --tags --match 'v[0-9]*'` for the nearest tag, the commit distance to it, the tag's date, and the HEAD hash. The result is exposed on the unauthenticated `GET /app/api/version` (`version`, `tag`, `released`, `commits_since_tag`, `git_hash`), printed by `run.py` in the startup banner (`Release: v1.4.0 (1a2b3c4)`), and shown in Settings > About. A checkout at the tag reports `1.4.0`; one that has moved past it reports `1.4.0+3.g1a2b3c4` and the About section adds a "N commits past release" note; an untagged checkout (or one without `.git`) reports `version: null` and About falls back to "unreleased (<short hash>)".
 - Deployments must have the tags available: `git fetch` brings in tags reachable from the fetched commits, but a clone made with `--no-tags` or `--depth` will show as unreleased until `git fetch --tags` runs.
 

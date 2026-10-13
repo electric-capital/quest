@@ -1,7 +1,8 @@
 name: Release
 
 # Publishes a GitHub Release for every v<MAJOR>.<MINOR>.<PATCH> tag pushed
-# by scripts/tag_release.py. The running app reads the same tag at startup
+# by scripts/tag_release.py, with the tag's highlights above the generated
+# notes. The running app reads the same tag at startup
 # (config/version.py) to show the version in Settings > About.
 on:
   push:
@@ -35,5 +36,14 @@ jobs:
           notes_args=(--generate-notes)
           if [[ -n "$previous" ]]; then
             notes_args+=(--notes-start-tag "$previous")
+          fi
+          # The tag message body (the highlights given to tag_release.py) goes
+          # above the generated PR list. checkout can leave the pushed tag as a
+          # lightweight ref, so re-fetch the annotated tag object first.
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          highlights="$(git tag --list "$TAG" --format='%(contents:body)')"
+          if [[ -n "${highlights//[[:space:]]/}" ]]; then
+            printf '## Highlights\n\n%s\n\n' "$highlights" > highlights.md
+            notes_args+=(--notes-file highlights.md)
           fi
           gh release create "$TAG" --title "$TAG" --verify-tag $prerelease_flag "${notes_args[@]}"
