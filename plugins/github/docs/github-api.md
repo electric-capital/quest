@@ -149,8 +149,4 @@ Three reasons make job logs a poor fit for the generic `authed_get` path.
 - Third, agents almost always want job logs as a workspace file they can grep and re-read, so the tool writes directly to the workspace and returns only metadata plus a short preview.
 
 **Why is GitHub a plugin?**
-Phase 5 of the plugin architecture ([Plugins](../../../docs/architecture/plugins.md)) needed a proving migration for the oauth-kind `UserConnectionSpec` -- a plugin-provided `/auth/<id>` router, token storage in `user_service_credentials.oauth_blob`, and the `needs_reauth` hook.
-
-GitHub was the natural candidate: its OAuth flow was the simplest of the core connectors (refresh support for GitHub App tokens came later), and its whole surface (service entry, skill, one tool, credential schema) fits the manifest.
-
-The tool was renamed `get_github_job_log` -> `github_get_job_log` for the `<id>_` prefix rule (tool names have no persistence, so the rename is free); the store key (`github.json`), connected-services key, `system:github` id, and OAuth URLs are all unchanged.
+Its whole surface (service entry, skill, tools, action requests, credential schema) fits the [plugin](../../../docs/architecture/plugins.md) manifest, and it is the reference for the oauth-kind `UserConnectionSpec`: a plugin-provided `/auth/<id>` router, token storage in `user_service_credentials.oauth_blob`, and the `needs_reauth` hook. The tool name follows the `<id>_` prefix rule (`github_get_job_log`); the store key (`github.json`), connected-services key, `system:github` id and OAuth URLs match the pre-plugin ones, so existing connections carry over.

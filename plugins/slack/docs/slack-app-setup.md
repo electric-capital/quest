@@ -6,7 +6,7 @@ Quest integrates with Slack using a two-tier token architecture: a shared bot to
 
 ## Key Files
 
-- Settings > Service Credentials (admin) -- Slack card managing `client_id`, `client_secret`, and the optional `bot_token` / `socket_mode_token` in the per-service credential store; see [Service Credentials](../architecture/service-credentials.md)
+- Settings > Service Credentials (admin) -- Slack card managing `client_id`, `client_secret`, and the optional `bot_token` / `socket_mode_token` in the per-service credential store; see [Service Credentials](../../../docs/architecture/service-credentials.md)
 - `server_credentials.json` -- legacy `slack` section, used as a fallback when the store has nothing
 - `server_credentials.example.json` -- Template showing the legacy file structure
 - `auth/config.py` -- `load_slack_client_config()`, `load_slack_bot_token()`, `load_slack_socket_mode_token()`, Slack OAuth scope constants
@@ -25,13 +25,13 @@ A Slack app must be created at api.slack.com/apps. The app needs:
 - **Bot token scopes**: `chat:write` (bot-sent DMs), plus `files:write` and `im:write` (file attachments on `send_slack_dm_to_self` self-DMs: the upload flow and its `conversations.open` DM-channel lookup). Add `im:history` and `im:read` when enabling Socket Mode (see below)
 - **Redirect URL**: `http://localhost:8000/auth/slack/callback` (dev) or `https://your-domain.com/auth/slack/callback` (production)
 
-An org admin installs the app once to obtain the shared bot token (`xoxb-...`). Individual users connect via the Data Connections section in Settings. See [OAuth Popup Flow](../architecture/oauth-popup.md).
+An org admin installs the app once to obtain the shared bot token (`xoxb-...`). Individual users connect via the Data Connections section in Settings. See [OAuth Popup Flow](../../../docs/architecture/oauth-popup.md).
 
 An admin enters the `client_id`, `client_secret`, and `bot_token` in the Slack card under Settings > Service Credentials (or, legacy, in the `slack` section of `server_credentials.json`). When Socket Mode is enabled, the App-Level Token goes in the same place as `socket_mode_token`.
 
 ## Socket Mode Configuration
 
-Socket Mode lets Quest receive incoming user DMs to the bot over a WebSocket. Runtime behaviour and graceful-degradation semantics are in [Slack Socket Mode Architecture](../architecture/slack-socket-mode.md). For the Slack app itself, the following UI settings must all be configured -- events will not flow without every one of them:
+Socket Mode lets Quest receive incoming user DMs to the bot over a WebSocket. Runtime behaviour and graceful-degradation semantics are in [Slack Socket Mode Architecture](../../../docs/architecture/slack-socket-mode.md). For the Slack app itself, the following UI settings must all be configured -- events will not flow without every one of them:
 
 - **Socket Mode**: enabled. Generate an App-Level Token with the `connections:write` scope; save it as the Slack `socket_mode_token` (format: `xapp-...`). Loaded by `load_slack_socket_mode_token()` in `auth/config.py`
 - **Bot Token Scopes**: add `im:history` and `im:read` (in addition to `chat:write`). Required for the bot to see DM events

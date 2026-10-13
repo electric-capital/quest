@@ -14,7 +14,7 @@ This document covers both the Simple API and the Raw API.
 
 | File | Description |
 |------|-------------|
-| `api/gmail/` | Gmail package (split from the former monolithic `api/gmail.py`). Re-exports all 16 public symbols from `api/gmail/__init__.py` for backward compatibility (`from api.gmail import X` continues to work) |
+| `api/gmail/` | Gmail package; `api/gmail/__init__.py` re-exports its public symbols so `from api.gmail import X` works |
 | `api/gmail/constants.py` | API URLs, size limits (`_MAX_TOTAL_ATTACHMENT_SIZE`), regexes, unicode sets (`_INVISIBLE_UNICODE_CODEPOINTS`), URL replacement threshold (`_URL_REPLACEMENT_MIN_LENGTH`) |
 | `api/gmail/models.py` | Pydantic models: `DraftAttachment`, `CreateDraftRequest`, `SendEmailToSelfRequest` |
 | `api/gmail/helpers.py` | Pure helper functions: `clean_email_markdown()`, `replace_urls_with_identifiers()`, `convert_html_to_markdown()`, `convert_markdown_to_html()` + `sanitize_email_html()` (see [Outgoing HTML Sanitization](#outgoing-html-sanitization)), `extract_attachments()`, `render_message_markdown()` / `render_batch_markdown()` (markdown output for the Simple API fetch endpoints), `simplify_message()`, URL cache functions (`_cache_url_mapping()`, `_get_cached_url_mapping()`), and other transformation utilities |
@@ -38,7 +38,8 @@ This document covers both the Simple API and the Raw API.
 | `api/gmail/quest_labels.py` | Quest-managed label configuration helpers shared by the settings API and tool handlers: `validate_gmail_label_names()` (normalization + validation for the `gmail_labels` user setting), `get_configured_gmail_labels()`, `full_quest_label_name()` (`[Quest]/<name>` mapping), and the `MAX_GMAIL_LABELS` / `MAX_GMAIL_LABEL_NAME_LENGTH` limits |
 | `chat/llm/tool_schemas.py` | `load_gmail_attachment` tool definition in `BASE_TOOLS` (with `provider_descriptions` for provider-specific description overrides); `archive_gmail_message`, `list_gmail_quest_labels`, `modify_gmail_labels`, `get_gmail_messages`, `list_gmail_labels`, `get_gmail_message_urls`, `create_gmail_draft`, and `send_gmail_to_self` tool definitions in `TOOL_CALL_REGISTRY` |
 | `tests/test_gmail_simple_tools.py` | Test suite for the Gmail Simple tool handlers: result/error conversion in `_run_gmail_simple_endpoint()`, single-vs-batch routing and bool coercion in `get_gmail_messages`, `conversation_id` injection (and model-supplied spoof rejection) in `create_gmail_draft`, and registry wiring |
-| `quest.py` | Route registration (including `POST /api/gmail-simple/send-self`, `POST /api/gmail-raw/v1/batch`, `GET /api/gmail-simple/urls/{message_id}/{identifiers}`, and `GET /api/gmail-simple/urls/{message_id}`) |
+| `chat/sandbox_api.py` | Registers the `/api/gmail-simple/*` routes on the loopback sandbox API server only (`register_sandbox_api_routes`) |
+| `quest.py` | Registers the raw Gmail batch route on the main app |
 
 ## Authentication
 
@@ -129,7 +130,7 @@ Hi there.
 - **resume.pdf** -- `application/pdf`, 12,345 bytes, attachmentId: `abc`
 ```
 
-Headers (From/To/Cc/Bcc/Date/Message-ID/Gmail Message ID/Thread ID/Labels) are plain `Label: value` lines -- no markdown heading for the subject and no `Snippet:` line. An optional `Replaced URL count: N` line follows `Labels:` when long URLs were substituted with `(#N#)` identifiers (see [URL Replacement](#why-replace-long-urls-with-numeric-identifiers)). Cc/Bcc lines are omitted when empty. The `## Attachments` section is emitted even when there are no attachments (with the placeholder `_No attachments._`). When `include_html=true`, the body section is `## Body (HTML)` containing a fenced block (`html` language, fence widened to outlast any backtick run inside the HTML).
+Headers (From/To/Cc/Bcc/Date/Message-ID/Gmail Message ID/Thread ID/Labels) are plain `Label: value` lines -- no markdown heading for the subject and no `Snippet:` line. An optional `Replaced URL count: N` line follows `Labels:` when long URLs were substituted with `(#N#)` identifiers (see [Design Decisions](#design-decisions)). Cc/Bcc lines are omitted when empty. The `## Attachments` section is emitted even when there are no attachments (with the placeholder `_No attachments._`). When `include_html=true`, the body section is `## Body (HTML)` containing a fenced block (`html` language, fence widened to outlast any backtick run inside the HTML).
 
 **Batch response** -- produced by `render_batch_markdown()`:
 

@@ -69,7 +69,7 @@ Currently blocked:
 
 **conversation_id auto-injection (Pydantic body models)**: After parsing a Pydantic body model, `build_handler_kwargs()` checks whether the model instance has a `conversation_id` attribute that is `None`. If so, and if a `conversation_id` was passed into the function (originating from `execute_tool_call()` via `chat/gemini_api/tool_dispatch.py`), it injects the value directly onto the model instance.
 
-This allows handlers like `create_draft()` in `api/gmail/draft_endpoints.py` to receive the conversation context without the LLM needing to know or provide its own conversation ID. Used by `CreateDraftRequest` for resolving workspace file attachments (see [Gmail API - Attachment Support](../api/gmail-api.md#attachment-schema)).
+This allows handlers like `create_draft()` in `api/gmail/draft_endpoints.py` to receive the conversation context without the LLM needing to know or provide its own conversation ID. Used by `CreateDraftRequest` for resolving workspace file attachments (see [Gmail API - Attachments](../api/gmail-api.md#attachments)).
 
 **conversation_id auto-injection (scalar GET parameters)**: For any handler parameter named `conversation_id` that is not a Pydantic model, `build_handler_kwargs()` injects the value from the dispatch context and skips query parameter lookup entirely. This prevents the LLM from overriding the value via URL query params (which could cause cross-conversation data access).
 

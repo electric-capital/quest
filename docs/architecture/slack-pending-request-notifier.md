@@ -33,7 +33,7 @@ Two keys in the `users.settings` JSON column (same pattern as `slack_default_mod
 3. Load the bot token; return quietly when Slack is not configured
 4. Per user: skip when the user row is gone, `slack_pending_notifications_enabled` is `false`, or the Slack OAuth record has no `user_id`/`access_token` (blob shape mirrors `get_user_by_slack_user_id()` in `db/user_store.py`)
 5. Due check (both gates use the user's interval):
-   - **age gate**: the oldest open request must itself be at least one interval old -- a freshly-proposed card the user is probably already looking at is never insta-DMed (the desktop notification in `frontend/src/services/desktopNotifications.ts` already covers creation time)
+   - **age gate**: the oldest open request must itself be at least one interval old -- a freshly-proposed card the user is probably already looking at is never insta-DMed
    - **throttle gate**: at least one interval since the last reminder to this user (`_last_notified`)
 6. Send the DM (`chat.postMessage` with the bare `U...` id as `channel`, Block Kit section + a context line pointing at Settings > Slack), recording `_last_notified` **before** the send so a persistently failing send waits out a full interval instead of retrying every poll tick. Per-user failures are logged and do not block other users. When `app_base_url` is configured (`config/server_config.py`), the DM carries an "Open your inbox" link to `<app_base_url>/inbox` -- the deep-linkable URL of the requests inbox (see below); without it the DM is link-free.
 

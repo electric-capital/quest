@@ -141,8 +141,8 @@ See [OAuth Popup Flow](oauth-popup.md) for the full postMessage protocol.
 
 ## Design Decisions
 
-**Why a list of rows instead of the old fixed-key `connectors` dict?**
-The dict shape required a hand-written JSX block (plus types and client functions) per connector, and availability/popup-URL special cases accumulated per service. The list shape moves every per-service fact to the backend row, which is also the seam plugin-provided connectors will use (see the plugin architecture plan, Phase 3).
+**Why a list of rows instead of a fixed-key `connectors` dict?**
+A dict shape needs a hand-written JSX block (plus types and client functions) per connector, and availability/popup-URL special cases pile up per service. The list shape moves every per-service fact to the backend row, which is also the seam plugin-provided connectors use.
 
 **Why show only connected rows instead of every supported service?**
 As core and plugin connectors accumulate, a fixed roster of mostly-"Not Connected" rows buries the user's actual connections in noise. Listing only added connections keeps the section proportional to what the user uses, and the add picker remains the single discovery surface for what's supported. It also made multiple connections per service a rendering change rather than a redesign: the list already read as connection instances rather than a service catalog, so a multi-connection service just contributes several cards.

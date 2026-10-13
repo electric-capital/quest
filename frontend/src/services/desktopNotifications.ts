@@ -1,9 +1,10 @@
 /**
  * Desktop notification service for alerting users when the browser tab is not focused.
  *
- * Fires browser Notification API alerts for two events:
- * 1. Stream completion (model finishes answering)
- * 2. New action request creation
+ * Fires a browser Notification API alert when a response stream completes
+ * (the model finishes answering). New action requests raise no desktop
+ * notification; the sidebar badge and the Slack pending-request notifier
+ * cover them.
  *
  * Follows the singleton service pattern used by requestEvents.ts --
  * no React dependency, safe to call from anywhere.

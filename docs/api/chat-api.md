@@ -307,7 +307,7 @@ The endpoint is implemented in `chat/realtime/socket.py`; the frontend client is
 
 The socket carries subscribe / unsubscribe / catchup / resync (with a 5-min server-side TTL per `(connection, conversation)` refreshed every 3 min by the foreground client; the React lifecycle does not eagerly unsubscribe on tab switch), the `send_message` and `stop` control plane, durable per-conversation events (`message_appended` with monotonic `seq`), transient streaming events, and per-user globals. See [Realtime Architecture](../architecture/realtime.md) for the full protocol, lifecycle (heartbeat, watchdog, reconnect, subscription TTL), seq allocation, replay buffer, send-lock, and stop semantics.
 
-The historical per-turn `WS /app/api/conversations/{id}/message` endpoint and the legacy `confirm_action_result` bridge were removed in devplan 00062; clients use the persistent socket and resolve wait handles via REST (`POST /app/api/wait-handles/{id}/resolve`, `POST /app/api/action-requests/{id}/resolve`).
+There is no per-conversation WebSocket: clients use the persistent socket and resolve wait handles via REST (`POST /app/api/wait-handles/{id}/resolve`, `POST /app/api/action-requests/{id}/resolve`).
 
 ### Send Message
 
@@ -357,7 +357,7 @@ Defined in the model loop in `chat/gemini_api/conversation.py`, the realtime pub
   - **`doc_list_changed`** (no payload) and **`doc_changed`** (`doc_id`, `updated_at`; null when the doc's existence or the receiver's access changed): Quest Docs list/viewer refresh signals sent to the doc's audience (owner + share recipients, every connected user for a doc shared with everyone); see [Quest Docs API](quest-docs-api.md#realtime-events).
 - Liveness / errors: **`ping`** / **`pong`**, **`error`** (carries `code` and `error`/`message`; codes include 4400 invalid op, 4401 auth, 4404 not found, 4503 queue overflow, 4500 internal).
 
-The durable-event set persisted to `chat_history.json` is `FLUSH_EVENT_TYPES` in `chat/_flush_helper.py` (`tool_use`, `tool_result`, `action_request`, `stats`); these events advance `seq` and trigger `message_appended`. Streaming text is bundled into a synthetic `text` message at the next flush boundary by both the backend (the model loop) and the frontend (`WebSocketManager`'s text-delta buffer).
+The durable-event set persisted to `chat_history.json` is `FLUSH_EVENT_TYPES` in `chat/_flush_helper.py`; these events advance `seq` and trigger `message_appended`. Streaming text is bundled into a synthetic `text` message at the next flush boundary by both the backend (the model loop) and the frontend (`WebSocketManager`'s text-delta buffer).
 
 ### Message Persistence
 
