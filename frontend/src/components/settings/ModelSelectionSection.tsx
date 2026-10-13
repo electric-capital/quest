@@ -252,7 +252,9 @@ export function ModelSelectionSection() {
         to the top level of the composer's model menu with a descriptor of your choice
         (everything else stays under "All models"). Public-project conversations get their
         own top level, and each model can be allowed or blocked for private and for public
-        conversations. Applies to all users. Admin only.
+        conversations. Models newly added to a provider configuration start out blocked
+        for private conversations — tick "Allowed" here to open them up. Applies to all
+        users. Admin only.
       </p>
       {loadError ? (
         <div className="svc-cred-load-error">{loadError}</div>

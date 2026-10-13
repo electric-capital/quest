@@ -849,6 +849,7 @@ function InstanceCard({
   catalog,
   apiTypes,
   onDeleted,
+  onNavigateToModelSelection,
 }: {
   status: InferenceInstanceStatus;
   // The kind carries its own base URL + API type (self-hosted server)
@@ -857,6 +858,7 @@ function InstanceCard({
   catalog: InferenceCatalogSource;
   apiTypes: InferenceApiType[];
   onDeleted: (instanceId: string) => void;
+  onNavigateToModelSelection?: () => void;
 }) {
   const [status, setStatus] = useState(initial);
   const [label, setLabel] = useState(initial.label);
@@ -1082,6 +1084,22 @@ function InstanceCard({
             emptyHint={addModel.emptyHint}
             onAdd={handleAdd}
           />
+          {/* Server-side rule (restrict_new_models in config/model_selection.py):
+              a model added here is written to Model Selection with private use
+              off, so a provider meant for public projects never gets private
+              conversations' data by default. */}
+          <p className="inf-prov-models-note">
+            Models added here start out allowed in public-project conversations only.
+            To offer one in private conversations, allow it in{' '}
+            {onNavigateToModelSelection ? (
+              <button className="inf-prov-section-link" onClick={onNavigateToModelSelection}>
+                Model Selection
+              </button>
+            ) : (
+              'Model Selection'
+            )}
+            .
+          </p>
         </ModelsPanel>
       </div>
     </CredentialCard>
@@ -1107,9 +1125,17 @@ function InstanceCard({
  * Each card's Models panel shows the real model id string used in API
  * calls, the server-stored liveness verdict per model (startup sweep +
  * rechecks), and Recheck buttons. Instances are added from the buttons at
- * the bottom.
+ * the bottom. A model added to an instance is allowed in public-project
+ * conversations only until an admin allows it for private ones in Model
+ * Selection (the server writes that rule when the model is added).
  */
-export function InferenceProvidersSection() {
+export function InferenceProvidersSection({
+  onNavigateToModelSelection,
+}: {
+  // Opens Settings > Model Selection (the note under each instance's model
+  // list links there, since newly added models start private-disallowed)
+  onNavigateToModelSelection?: () => void;
+}) {
   const [data, setData] = useState<InferenceProvidersListResponse | null>(null);
   const [loadError, setLoadError] = useState('');
   const [adding, setAdding] = useState<string | null>(null);
@@ -1173,6 +1199,7 @@ export function InferenceProvidersSection() {
                   catalog={kind?.catalog ?? 'openrouter'}
                   apiTypes={data.api_types}
                   onDeleted={handleDeleted}
+                  onNavigateToModelSelection={onNavigateToModelSelection}
                 />
               );
             })}

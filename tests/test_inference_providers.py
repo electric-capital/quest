@@ -899,6 +899,65 @@ def test_admin_update_instance_models_snapshot_from_catalog(
     assert scheduled == [[f"openrouter:{DEEPSEEK}", "openrouter:custom/model"]]
 
 
+def test_admin_update_instance_new_models_start_private_disallowed(
+    admin_routes, scheduled, fake_catalog,
+):
+    """A model added to an instance is recorded in Model Selection with
+    private use off (public-project use open) so a provider added for
+    public projects never sees private conversations' data by default;
+    models the instance already had, and models the admin has already
+    curated, keep their settings."""
+    import config.model_selection as ms
+
+    ip.upsert_instance(_instance("openrouter", models=[{"id": QWEN}]))
+    ip.write_inference_credentials("openrouter", {"api_key": "sk-or"})
+    ms.save_model_selection({"openrouter:custom/model": {"slot": 4, "descriptor": "Mine"}})
+
+    body = admin_routes.InstanceUpdate(models=[
+        admin_routes.InstanceModelUpdate(id=QWEN, enabled=False),
+        admin_routes.InstanceModelUpdate(id=DEEPSEEK),
+        admin_routes.InstanceModelUpdate(id="custom/model"),
+        admin_routes.InstanceModelUpdate(id="disabled/new", enabled=False),
+    ])
+    _run(admin_routes.admin_update_inference_instance("openrouter", body, user=ADMIN_USER))
+
+    entries = ms.read_model_selection()
+    # New models: private off, public still allowed, no slots
+    for wire_id in (DEEPSEEK, "disabled/new"):
+        assert entries[f"openrouter:{wire_id}"] == {**ms.UNSET_ENTRY, "allow_private": False}
+        assert not ms.is_model_allowed(f"openrouter:{wire_id}", public=False)
+        assert ms.is_model_allowed(f"openrouter:{wire_id}", public=True)
+    # Already-present model: untouched (allowed everywhere)
+    assert f"openrouter:{QWEN}" not in entries
+    assert ms.is_model_allowed(f"openrouter:{QWEN}", public=False)
+    # New to the instance but already curated by the admin: settings kept
+    assert entries["openrouter:custom/model"] == {**ms.UNSET_ENTRY, "slot": 4, "descriptor": "Mine"}
+    # The Model Selection table shows the restriction on the new rows
+    rows = {m["id"]: m for m in _run(admin_routes.admin_get_model_selection(user=ADMIN_USER))["models"]}
+    assert rows[f"openrouter:{DEEPSEEK}"]["allow_private"] is False
+    assert rows[f"openrouter:{DEEPSEEK}"]["allow_public"] is True
+    assert rows["openrouter:custom/model"]["allow_private"] is True
+    assert f"openrouter:{QWEN}" not in rows  # disabled models are not curatable rows
+
+    # A save that adds nothing leaves the selection alone; re-adding a model
+    # whose entry is still on file keeps that entry
+    body = admin_routes.InstanceUpdate(models=[admin_routes.InstanceModelUpdate(id=QWEN)])
+    _run(admin_routes.admin_update_inference_instance("openrouter", body, user=ADMIN_USER))
+    body = admin_routes.InstanceUpdate(models=[
+        admin_routes.InstanceModelUpdate(id=QWEN), admin_routes.InstanceModelUpdate(id=DEEPSEEK),
+    ])
+    _run(admin_routes.admin_update_inference_instance("openrouter", body, user=ADMIN_USER))
+    assert ms.read_model_selection() == entries
+
+    # Enabling Vertex models is not "adding" one: the selection is untouched
+    ip.set_vertex_disabled_models(["claude-haiku-4.5"])
+    _run(admin_routes.admin_update_vertex_models(
+        admin_routes.VertexModelsUpdate(disabled_models=[]), user=ADMIN_USER,
+    ))
+    assert ms.read_model_selection() == entries
+    assert ms.is_model_allowed("claude-haiku-4.5", public=False)
+
+
 def test_admin_delete_instance(admin_routes, health_store, monkeypatch):
     import chat.llm.config as llm_config
 

@@ -241,7 +241,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       case 'service-credentials':
         return isAdmin && !isMobile ? <ServiceCredentialsSection /> : null;
       case 'inference-providers':
-        return isAdmin && !isMobile ? <InferenceProvidersSection /> : null;
+        return isAdmin && !isMobile ? (
+          <InferenceProvidersSection
+            onNavigateToModelSelection={() => setActiveSection('model-selection')}
+          />
+        ) : null;
       case 'model-selection':
         return isAdmin && !isMobile ? <ModelSelectionSection /> : null;
       case 'about':

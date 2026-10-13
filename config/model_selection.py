@@ -39,6 +39,14 @@ defaults (:data:`DEFAULT_MODEL_SELECTION`: the three curated "Smart /
 Faster / Fastest" picks the composer menu used to hardcode); once an admin
 saves, the file is the whole truth -- clearing every slot stays cleared.
 
+The one exception to "absent = allowed everywhere" is a model an admin
+adds to a provider instance in Settings > Inference Providers: the admin
+route records it here with ``allow_private`` off via
+:func:`restrict_new_models` the moment it is added, so a provider that was
+only meant for internet-facing public projects never receives a private
+conversation's data by default. The admin allows it for private
+conversations deliberately, in the Model Selection table.
+
 The frontend gets the same per-model fields on every catalog entry of
 ``GET /app/api/config`` (``public_model_catalog()`` in chat/llm/config.py)
 and derives the top-level menu from them, so nothing here is mirrored by
@@ -213,6 +221,32 @@ def save_model_selection(entries: dict[str, dict]) -> dict[str, dict]:
             pass
         raise
     return normalized
+
+
+def restrict_new_models(model_ids: list[str]) -> list[str]:
+    """Record freshly added models as not allowed in private conversations.
+
+    Called by the Inference Providers admin route with the qualified ids of
+    the models an instance just gained. Each id that has no entry yet gets
+    ``{**UNSET_ENTRY, "allow_private": False}`` (public-project use stays
+    open, no slots); an id that already has one -- e.g. a model removed and
+    re-added before the next full-replacement Model Selection save dropped
+    its row -- keeps the admin's existing settings. Returns the ids that
+    were restricted. Nothing is written when there is nothing to add; with
+    no file yet, the historical defaults are materialized alongside so
+    the top-level menu does not change.
+    """
+    entries = read_model_selection()
+    restricted = [
+        model_id for model_id in model_ids
+        if isinstance(model_id, str) and model_id and model_id not in entries
+    ]
+    if not restricted:
+        return []
+    for model_id in restricted:
+        entries[model_id] = {**UNSET_ENTRY, "allow_private": False}
+    save_model_selection(entries)
+    return restricted
 
 
 def selection_for(model_id: str, entries: dict[str, dict] | None = None) -> dict:

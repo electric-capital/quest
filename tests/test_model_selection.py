@@ -180,6 +180,32 @@ def test_save_rejects_duplicate_slots_without_writing(store):
     assert store.exists()
 
 
+def test_restrict_new_models_writes_private_off_entries(store):
+    # No file yet: the new entries land beside the materialized defaults, so
+    # the historical top level survives the write
+    assert ms.restrict_new_models([f"openrouter:{DEEPSEEK}", "", None]) == [f"openrouter:{DEEPSEEK}"]
+    entries = ms.read_model_selection()
+    assert entries[f"openrouter:{DEEPSEEK}"] == _entry(allow_private=False)
+    assert entries["claude-opus-4-8"] == ms.DEFAULT_MODEL_SELECTION["claude-opus-4-8"]
+    assert not ms.is_model_allowed(f"openrouter:{DEEPSEEK}", public=False)
+    assert ms.is_model_allowed(f"openrouter:{DEEPSEEK}", public=True)
+
+    # An existing entry -- the admin's decision -- is never overwritten
+    ms.save_model_selection({f"openrouter:{DEEPSEEK}": {"slot": 4, "descriptor": "Cheap"}})
+    assert ms.restrict_new_models([f"openrouter:{DEEPSEEK}", "openrouter:other/model"]) == [
+        "openrouter:other/model"
+    ]
+    entries = ms.read_model_selection()
+    assert entries[f"openrouter:{DEEPSEEK}"] == _entry(slot=4, descriptor="Cheap")
+    assert entries["openrouter:other/model"] == _entry(allow_private=False)
+
+    # Nothing to add -> nothing written
+    mtime = store.stat().st_mtime_ns
+    assert ms.restrict_new_models([f"openrouter:{DEEPSEEK}"]) == []
+    assert ms.restrict_new_models([]) == []
+    assert store.stat().st_mtime_ns == mtime
+
+
 def test_selection_for_falls_back_to_qualified_legacy_id(store):
     ms.save_model_selection({f"openrouter:{DEEPSEEK}": {"allow_public": False}})
     assert ms.selection_for(f"openrouter:{DEEPSEEK}")["allow_public"] is False

@@ -1430,6 +1430,12 @@ async def admin_update_inference_instance(
     every enabled model of the instance is rechecked in the background (a
     failing verdict recorded under the old settings or before the model
     existed would otherwise keep it hidden from the picker).
+
+    Models new to the instance also start out **not allowed in private
+    conversations**: their Model Selection entry is written with
+    ``allow_private`` off (``restrict_new_models``), so a provider added
+    for public-project use cannot receive private conversations' data
+    until an admin allows the model in Settings > Model Selection.
     """
     _require_admin(user)
     from chat.llm.config import drop_provider_instance, reset_provider_client_caches
@@ -1444,6 +1450,7 @@ async def admin_update_inference_instance(
         upsert_instance,
         write_inference_credentials,
     )
+    from config.model_selection import restrict_new_models
 
     instance = _instance_or_404(instance_id)
     kind = INSTANCE_KINDS[instance["kind"]]
@@ -1508,6 +1515,7 @@ async def admin_update_inference_instance(
             )
 
     removed_ids: list[str] = []
+    added_ids: list[str] = []
     if body.models is not None:
         existing = {m["id"]: m for m in instance["models"]}
         wanted: list[dict] = []
@@ -1541,10 +1549,20 @@ async def admin_update_inference_instance(
             qualify_model_id(instance_id, wire_id)
             for wire_id in existing if wire_id not in seen
         ]
+        added_ids = [
+            qualify_model_id(instance_id, m["id"]) for m in wanted if m["id"] not in existing
+        ]
         instance["models"] = wanted
 
     instance = upsert_instance(instance)
 
+    if added_ids:
+        restricted = restrict_new_models(added_ids)
+        if restricted:
+            logger.info(
+                "[admin] new models of instance %s start private-disallowed: %s",
+                instance_id, restricted,
+            )
     if removed_ids:
         await get_model_health_store().forget(removed_ids)
     if key_changed or endpoint_changed:
