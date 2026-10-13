@@ -55,6 +55,11 @@ _PATH_EXTENSIONS = (
 # directory / its parent).
 _PATH_BASES = (ROOT, ROOT / "frontend", ROOT / "frontend" / "src", ROOT / "frontend" / "src" / "components")
 
+# Build output and installed packages: docs may name files there, but they
+# exist only after a build or install, so whether they resolve depends on the
+# machine (the backend CI job never builds the frontend). Not checked.
+_GENERATED_PREFIXES = ("frontend/dist/", "dist/", "frontend/node_modules/", "node_modules/", ".venv/")
+
 _HISTORY_MARKERS = re.compile(
     r"devplans?[ /]?\d+"
     r"|\bphase \d"
@@ -126,6 +131,8 @@ def _looks_like_repo_path(span: str) -> str | None:
         return None  # a bare file name or a single runtime directory
     if path.startswith(("/", "~", "data/")) or (path.startswith(".") and not path.startswith(("./", "../"))):
         return None  # URL routes, home paths, runtime data, dot-dirs
+    if path.startswith(_GENERATED_PREFIXES):
+        return None  # build output, present only after a build
     if not path.endswith(_PATH_EXTENSIONS):
         return None
     return path
