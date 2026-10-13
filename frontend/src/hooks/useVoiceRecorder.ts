@@ -53,7 +53,11 @@
  *   the phone (it chimes, and audio takes seconds to arrive) even though
  *   the built-in microphone is what ends up used. An explicit device id
  *   opens only that device. Browsers without a ``default`` alias
- *   (Firefox, Safari) reject the constraint and get the bare form.
+ *   (Firefox, Safari) reject the constraint and get the bare form. The
+ *   rejection is recognised by its ``name`` read duck-typed, never via
+ *   ``instanceof DOMException``: WebKit's ``OverconstrainedError`` is a
+ *   class of its own, and the instanceof guard made every iPhone fail with
+ *   "Could not start recording" before the bare request was ever tried.
  * - Tracks are stopped as soon as the recording ends so the browser's
  *   "microphone in use" indicator goes away immediately.
  * - ``stop()`` during ``starting`` is honoured: before the recorder exists
@@ -143,9 +147,21 @@ function extensionFor(mimeType: string): string {
   return 'webm';
 }
 
+/**
+ * The ``name`` of a capture error, read duck-typed: WebKit's
+ * ``OverconstrainedError`` is its own class, not a ``DOMException``, so an
+ * ``instanceof DOMException`` guard saw no name on iOS Safari and the
+ * by-id -> bare fallback never ran (the exact failure seen on an iPhone).
+ */
+function errorName(error: unknown): string {
+  if (!error || typeof error !== 'object') return '';
+  const name = (error as { name?: unknown }).name;
+  return typeof name === 'string' ? name : '';
+}
+
 /** Human message for a getUserMedia / MediaRecorder failure. */
 function describeCaptureError(error: unknown): string {
-  const name = error instanceof DOMException ? error.name : '';
+  const name = errorName(error);
   if (name === 'NotAllowedError' || name === 'SecurityError') {
     return 'Microphone access was denied. Allow the microphone for this site and try again.';
   }
@@ -214,7 +230,7 @@ async function openMicrophone(trace: RunTrace): Promise<MediaStream> {
     trace.log('getUserMedia ok');
     return stream;
   } catch (error) {
-    const name = error instanceof DOMException ? error.name : '';
+    const name = errorName(error);
     trace.log(`getUserMedia by id rejected: ${describeError(error)}`);
     if (name !== 'OverconstrainedError' && name !== 'NotFoundError') throw error;
     trace.log('getUserMedia bare {audio: true}');

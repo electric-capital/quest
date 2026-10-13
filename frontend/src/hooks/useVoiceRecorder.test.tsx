@@ -163,6 +163,43 @@ describe('useVoiceRecorder', () => {
     expect(log).toContain('recorder stopped: 1234 bytes in 1 chunks');
   });
 
+  it("falls back when WebKit's OverconstrainedError is not a DOMException", async () => {
+    // Safari rejects the by-id request with its own OverconstrainedError
+    // class: same name and message, no DOMException prototype.
+    class WebKitOverconstrainedError {
+      name = 'OverconstrainedError';
+      message = 'Invalid constraint';
+      constraint = '';
+    }
+    const track = new FakeTrack();
+    getUserMedia
+      .mockRejectedValueOnce(new WebKitOverconstrainedError())
+      .mockResolvedValueOnce(fakeStream(track));
+    const { result, onError, onComplete } = renderRecorder();
+
+    await kickStart(result);
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(getUserMedia).toHaveBeenLastCalledWith({ audio: true });
+    expect(result.current.status).toBe('recording');
+
+    FakeMediaRecorder.instances[0].emit(64);
+    act(() => { result.current.stop(); });
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][0].trace.timeline.join('\n')).toContain('getUserMedia bare {audio: true}');
+  });
+
+  it('spells the denied-microphone message for a non-DOMException NotAllowedError', async () => {
+    getUserMedia.mockRejectedValueOnce({ name: 'NotAllowedError', message: 'not allowed' });
+    const { result, onError } = renderRecorder();
+
+    await kickStart(result);
+
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0]).toMatch(/Microphone access was denied/);
+  });
+
   it('leaves "starting" on the give-up timer when AudioContext.resume() never settles', async () => {
     vi.stubGlobal('AudioContext', HangingAudioContext);
     getUserMedia.mockResolvedValueOnce(fakeStream(new FakeTrack()));
