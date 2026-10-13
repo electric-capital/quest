@@ -235,7 +235,7 @@ Routes are registered in this order (highest priority first):
 1. **Assets mount**: `/assets/*` → `frontend/dist/assets/`
 2. **API routes**: `/app/api/*` → REST and WebSocket endpoints
 3. **HTML entry**: `/` → `frontend/dist/index.html`
-4. **SPA catch-all**: `/chats/{rest:path}`, `/projects/{rest:path}`, and `/admin/{rest:path}` → `frontend/dist/index.html` (enables deep links for URL-based routing; admin API routes are unaffected since they live under `/app/api/admin/...`)
+4. **SPA catch-all**: the `serve_spa_*` handlers in `quest.py`, one per client-side URL prefix → `frontend/dist/index.html` (enables deep links for URL-based routing; admin API routes are unaffected since they live under `/app/api/admin/...`)
 5. **Static files**: `/{filename}` → `frontend/dist/{filename}`
 6. **Backward compatibility**: `/chat*` → 301 redirect to `/*`
 

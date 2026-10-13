@@ -177,6 +177,8 @@ In practice this rejection is a backstop rather than the primary UX: `_run_resum
 
 It replies a `stop_acknowledged` envelope so the client UI can clear its "thinking" spinner immediately. The cancel-time tail edit (`_save_interrupted_sdk_history`), session removal (`remove_chat_session`), and final flush all happen inside `_run_send_message`'s `CancelledError` handler, mirroring the per-turn `_handle_api_mode` semantics that were deleted from `chat/routes/_helpers.py`.
 
+Only `stop` cancels a run; a socket drop never does. The run task is registered in `_active_send_runs`, not owned by the connection: when a socket closes (reload, navigation, network loss), the teardown in `stream_endpoint` only removes that connection's subscriptions and the run keeps going. Its durable events still reach `chat_history.json` through the flush callback whether or not anyone is subscribed (bus publish failures are swallowed), so a reconnecting tab recovers through catchup or `resync` plus REST. Binding the run to the socket that started it was rejected because a page reload or a phone losing signal would then discard a long turn mid-flight.
+
 ## Fresh User Per Turn
 
 The persistent WS is held open for the whole browser session and is never re-handshaked when the user connects/disconnects a data source in Settings. Because of this, `_handle_send_message` in `chat/realtime/socket.py` re-reads the user fresh from the DB via `get_user_by_id(conn.user_id)` at the start of every `send_message` turn and threads that fresh dict into `_run_send_message` instead of the connect-time `conn.user` snapshot. It also refreshes `conn.user` so any later snapshot consumer benefits from the fresh read.
