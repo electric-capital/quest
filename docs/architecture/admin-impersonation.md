@@ -1,6 +1,6 @@
 # Admin Impersonation
 
-Admin users can impersonate other users to debug issues or view the application as that user. The feature spans session management, dedicated API endpoints, and frontend UI changes.
+Admin users can impersonate other users to debug issues or view the application as that user. The feature spans session management, dedicated API endpoints, and the frontend admin menu.
 
 ## Overview
 
@@ -16,25 +16,23 @@ Admins (users whose email is in the `admin_emails` list in `server_config.json`)
 - `db/user_store.py` -- `list_all_users()` returns all users with safe fields (id, email, name)
 
 **Frontend:**
-- `frontend/src/components/AdminOpsMenu.tsx` -- Impersonation UI (user picker, amber button state, end impersonation button)
-- `frontend/src/components/AdminOpsMenu.css` -- Amber/orange styling for impersonation state
+- `frontend/src/components/AdminOpsMenu.tsx` -- The admin menu hosting the user picker and the end-impersonation action; rendered inline in the sidebar's `UserInfoBar.tsx`, or floating on the System Reports page, which has no sidebar
 - `frontend/src/contexts/AuthContext.tsx` -- `isImpersonating`, `impersonatorEmail`, `impersonatorName` state values
-- `frontend/src/api/client.ts` -- `fetchAdminUsers()`, `impersonateUser()`, `stopImpersonation()` API functions
-- `frontend/src/api/config.ts` -- Endpoint URL builders (`adminUsers`, `adminImpersonate`, `adminStopImpersonation`)
+- `frontend/src/api/client.ts` -- `fetchAdminUsers()`, `impersonateUser()`, `stopImpersonation()`
 - `frontend/src/api/types.ts` -- `is_impersonating`, `impersonator_email`, `impersonator_name` on the `/me` response type
 
 ## Impersonation Flow
 
-1. Admin clicks the wrench icon (AdminOpsMenu) and selects "Impersonate" -- `frontend/src/components/AdminOpsMenu.tsx`
+1. Admin opens the admin menu and chooses to impersonate -- `frontend/src/components/AdminOpsMenu.tsx`
 2. Frontend fetches user list via `GET /app/api/admin/users` -- `chat/routes/admin.py` (`admin_list_users`). Returns all users except the requesting admin
 3. Admin selects a target user. Frontend sends `POST /app/api/admin/impersonate` with `{user_id}` -- `chat/routes/admin.py` (`admin_impersonate`)
 4. Backend validates admin status, prevents nested impersonation, creates a signed cookie `{v, uid: target, imp: admin}` with 1-hour max_age -- `auth/session.py`
 5. Frontend reloads; `GET /app/api/me` returns the target user's identity plus `is_impersonating: true`, `impersonator_email`, `impersonator_name` -- `chat/routes/user.py`
-6. AuthContext stores impersonation state; AdminOpsMenu renders amber button with impersonation info -- `frontend/src/contexts/AuthContext.tsx`, `frontend/src/components/AdminOpsMenu.tsx`
+6. AuthContext stores the impersonation state, and AdminOpsMenu shows it and hides the admin-only items while it lasts -- `frontend/src/contexts/AuthContext.tsx`, `frontend/src/components/AdminOpsMenu.tsx`
 
 ## Ending Impersonation
 
-1. Admin clicks "End impersonation" in AdminOpsMenu -- `frontend/src/components/AdminOpsMenu.tsx`
+1. Admin ends the impersonation from AdminOpsMenu -- `frontend/src/components/AdminOpsMenu.tsx`
 2. Frontend sends `POST /app/api/admin/stop-impersonation` -- `chat/routes/admin.py` (`admin_stop_impersonation`)
 3. Backend reads the current cookie to extract `_impersonator_uid`, creates a new normal cookie for the admin with 30-day max_age
 4. Frontend navigates to `/` (to avoid stale conversation URLs from the impersonated user's session) and reloads
