@@ -135,6 +135,25 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "max_input_tokens": 1_000_000,
         "max_output_tokens": 65_000,
     },
+    # Released 2026-10-13 (GA on the global endpoint and the us/eu
+    # multi-regions). Google's frontier model: ONE 1,048,576-token window
+    # shared by input, thinking and output, with a single synchronous
+    # request generating up to 65,536 thinking + output tokens -- the
+    # 1M-token "long decode" output needs the continuation-token flow,
+    # which the provider does not drive, so the output cap stays in line
+    # with the Flash entries. Thinking is always on (low/medium/high,
+    # default medium; the provider sends no thinking config). Implicit
+    # caching only. Priced like Opus 5.5 ($4/$20 list) -- see
+    # db/llm_pricing.py -- so it is a top-level / sub-agent model, not a
+    # template-batch or nested-sub-agent one.
+    "gemini-4-argon": {
+        "provider": "gemini",
+        "backend": "vertex",
+        "display_name": "Gemini 4 Argon",
+        "vertex_model_id": "gemini-4-argon",
+        "max_input_tokens": 1_000_000,
+        "max_output_tokens": 65_000,
+    },
     "claude-haiku-4.5": {
         "provider": "anthropic",
         "display_name": "Claude Haiku 4.5",

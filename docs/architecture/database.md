@@ -443,6 +443,7 @@ Two `StrEnum` enums are used by the LLM call analytics models (`LlmCallGemini` /
 | `GEMINI_3_6_FLASH` | `"gemini-3.6-flash"` | Vertex-backed Gemini Flash |
 | `GEMINI_3_7_FLASH` | `"gemini-3.7-flash"` | Vertex-backed Gemini Flash |
 | `GEMINI_3_8_FLASH` | `"gemini-3.8-flash"` | Vertex-backed Gemini Flash; newest Flash-class model |
+| `GEMINI_4_ARGON` | `"gemini-4-argon"` | Vertex-backed Gemini 4 Argon; Google's frontier model (GA 2026-10-13) |
 | `CLAUDE_HAIKU_4_5` | `"claude-haiku-4.5"` | Anthropic Claude Haiku on Vertex AI |
 | `CLAUDE_HAIKU_5_5` | `"claude-haiku-5-5"` | Anthropic Claude Haiku 5.5 on Vertex AI (1M-token input window) |
 | `CLAUDE_SONNET_4_6` | `"claude-sonnet-4-6"` | Anthropic Claude Sonnet on Vertex AI |

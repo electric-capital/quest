@@ -119,6 +119,7 @@ class TestRoutineSummaryFieldValues:
             "gemini-3.6-flash",
             "gemini-3.7-flash",
             "gemini-3.8-flash",
+            "gemini-4-argon",
             None,
         ],
     )
