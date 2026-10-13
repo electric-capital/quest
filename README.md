@@ -12,7 +12,7 @@ are not engineers.
 See more on our [post](https://electriccapital.substack.com/p/open-sourcing-quest?r=1acoy&utm_campaign=post-expanded-share&utm_medium=web)
 about why we decided to build our own harness.
 
-Follow [@puntium](https://x.com/puntium) on X for latest updates and discussion.
+Follow [@QuestHarness](https://x.com/QuestHarness) on X for latest updates and discussion.
 
 ## Overview
 
