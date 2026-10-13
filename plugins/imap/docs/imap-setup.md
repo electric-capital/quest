@@ -10,19 +10,27 @@ How to let users connect IMAP mailboxes for the `plugins/imap` plugin. See [imap
 
 ## Admin: IMAP servers
 
-Settings > Service Credentials > IMAP mailbox (admin only) holds one field, **IMAP servers**: one allowed server per line, `host[:port] [ssl|starttls]`. The connector does not appear in users' Data Connections until the list has at least one valid line. Saving rewrites each line into its canonical form `host:port mode`, which is exactly what users see in their server select.
+Settings > Service Credentials > IMAP mailbox (admin only) holds one field, **IMAP servers**: the list of mail servers users may connect to. The connector does not appear in users' Data Connections until the list has at least one server. Each server is added, edited or removed on its own ("+ Add server", then Edit / Remove on its row) with a small form:
 
-| Line | Saved as | Notes |
-|------|----------|-------|
-| `imap.example.com` | `imap.example.com:993 ssl` | Bare host = implicit TLS on 993 |
-| `imap.example.com:993` | `imap.example.com:993 ssl` | Duplicate of the line above if both are listed |
-| `mail.example.org:143` | `mail.example.org:143 starttls` | Port 143 without a mode means STARTTLS |
-| `mail.example.org starttls` | `mail.example.org:143 starttls` | STARTTLS without a port means 143 |
-| `mail.example.org:1993` | `mail.example.org:1993 ssl` | Any other port without a mode means implicit TLS |
-| `mail.example.org:1143 starttls` | `mail.example.org:1143 starttls` | Explicit port and mode |
-| `10.0.0.25`, `[2001:db8::25]:993` | as given, with port and mode added | IP literals; IPv6 must be bracketed |
+![The IMAP mailbox card with two servers listed and the add-server form open](images/imap-admin-card-editing.png)
 
-Rejected lines (the error names the line number): a scheme (`imaps://imap.example.com`), a path, a user name (`user@imap.example.com`), an unbracketed IPv6 address, a mode other than `ssl` / `starttls` (e.g. `plain`; there is no plaintext mode), a port outside 1-65535, a non-ASCII host name (write the `xn--` punycode form), and two lines naming the same host, port and mode. The same host may be listed more than once with different ports or modes.
+| Field | Meaning |
+|-------|---------|
+| **Host** (required) | The server's host name or IP address only: `imap.example.com`, `10.0.0.25`, `2001:db8::25`. No scheme, path, user name or port. |
+| **Security** | `ssl` = implicit TLS (the default, usually port 993) or `starttls` = STARTTLS (usually port 143). There is no plaintext mode. |
+| **Port** | Leave empty for the mode's default (993 for `ssl`, 143 for `starttls`); otherwise 1-65535. |
+
+Done closes the entry form (it stays disabled until the host is filled in), Save stores the whole list. Users see each server in their server select as `host:port security`, for example `imap.example.com:993 ssl`.
+
+Rejected on Save (the error names the entry number): a scheme (`imaps://imap.example.com`), a path, a user name (`user@imap.example.com`), a port typed into the Host field (`imap.example.com:993`), a port outside 1-65535, a non-ASCII host name (write the `xn--` punycode form), and two entries naming the same host, port and security. The same host may be listed more than once with different ports or modes.
+
+![Save rejected: entry 4 duplicates entry 1](images/imap-admin-card-error.png)
+
+Once saved, the card lists the servers read-only:
+
+![The configured IMAP mailbox card listing its servers](images/imap-admin-card-summary.png)
+
+Cards saved before this form existed hold the servers as text lines (`host[:port] [ssl|starttls]`); they keep working, the card shows the lines as entries, and the next Save stores the list.
 
 Common providers:
 
@@ -32,7 +40,7 @@ Common providers:
 - **Microsoft 365 / Outlook.com** (`outlook.office365.com`): Microsoft has turned off basic (password) authentication for IMAP in Exchange Online and, as far as we know, for personal Outlook.com accounts as well, so a password login is expected to fail with "Login failed". For Microsoft 365 work accounts in the deployment's tenant, use the Microsoft 365 plugin ([m365-mail-api.md](../../m365/docs/m365-mail-api.md)), which uses OAuth through a single-tenant Entra registration. Personal Outlook.com mailboxes are outside that tenant, so Quest likely has no supported way to read them.
 - **Company mail servers** (Dovecot, Cyrus, Exchange on-premises with IMAP enabled, ...): list the host the users' mail clients use; add a `starttls` line if the server only offers STARTTLS on 143.
 
-Removing a line takes effect on the next tool call: every connection that uses it stops working (`imap_host_not_allowed`) and its Data Connections card shows "Server no longer allowed". The connections are not deleted; putting the same server configuration back (in any spelling that canonicalises to the same line) makes them work again.
+Removing a server takes effect on the next tool call: every connection that uses it stops working (`imap_host_not_allowed`) and its Data Connections card shows "Server no longer allowed". The connections are not deleted; putting the same server configuration back (same host, port and security) makes them work again.
 
 ## User: adding mailboxes
 

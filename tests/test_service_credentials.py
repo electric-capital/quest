@@ -381,7 +381,7 @@ def test_admin_list_returns_schema_for_all_core_services(admin_routes):
         for field in row["fields"]:
             assert set(field) == {
                 "key", "label", "type", "placeholder", "help",
-                "required", "required_if", "visible_if",
+                "required", "required_if", "visible_if", "default",
             }
 
 
@@ -651,3 +651,184 @@ def test_plugin_credentials_id_collision_rejected(plugin_specs):
     )
     with pytest.raises(ValueError):
         plugin_specs.register_plugin_credentials(plugin)
+
+
+# ---------------------------------------------------------------------------
+# list fields (entries with per-entry sub-forms)
+# ---------------------------------------------------------------------------
+
+def _relay_plugin(**overrides):
+    """A plugin whose card is a list of mail relays plus a flat field."""
+    from config.plugin_types import CredentialField, QuestPlugin
+    relay_fields = (
+        CredentialField(key="host", label="Host", type="text", required=True),
+        CredentialField(
+            key="mode", label="Mode", type="select", options=("tls", "starttls"),
+            default="tls", required=True,
+        ),
+        CredentialField(key="port", label="Port", type="text"),
+        CredentialField(key="auth", label="Authenticated", type="bool"),
+        CredentialField(
+            key="user", label="User", type="text", required_if="auth", visible_if="auth",
+        ),
+    )
+    kwargs = dict(
+        id="relay",
+        label="Mail relays",
+        credential_schema=(
+            CredentialField(key="label", label="Label", type="text", default="Relays"),
+            CredentialField(
+                key="relays", label="Relays", type="list", required=True,
+                item_label="relay", max_items=3, item_fields=relay_fields,
+                help="Where mail goes.",
+            ),
+        ),
+        is_configured=lambda creds: bool(creds.get("relays")),
+    )
+    kwargs.update(overrides)
+    return QuestPlugin(**kwargs)
+
+
+def test_list_field_schema_view(plugin_specs, admin_routes):
+    plugin_specs.register_plugin_credentials(_relay_plugin())
+    result = _run(admin_routes.admin_get_service_credentials("relay", user=ADMIN_USER))
+    label_field, relays = result["fields"]
+    assert label_field["default"] == "Relays"
+    assert relays["type"] == "list"
+    assert relays["item_label"] == "relay"
+    assert relays["max_items"] == 3
+    assert relays["help"] == "Where mail goes."
+    assert [f["key"] for f in relays["item_fields"]] == ["host", "mode", "port", "auth", "user"]
+    mode = relays["item_fields"][1]
+    assert mode["options"] == ["tls", "starttls"] and mode["default"] == "tls"
+    assert relays["item_fields"][4]["required_if"] == "auth"
+    # Nothing stored: the list reads as no entries.
+    assert result["credentials"] == {"label": "", "relays": []}
+    assert result["configured"] is False
+
+
+def test_list_field_round_trip(plugin_specs, admin_routes):
+    plugin_specs.register_plugin_credentials(_relay_plugin())
+    detail = _put(admin_routes, "relay", {
+        "label": "",
+        "relays": [
+            {"host": " a.example ", "mode": "tls", "port": "", "auth": False},
+            {"host": "b.example", "mode": "starttls", "port": "587", "auth": True, "user": "u"},
+        ],
+    })
+    assert detail["configured"] is True
+    assert detail["credentials"]["relays"] == [
+        {"host": "a.example", "mode": "tls", "port": "", "auth": False, "user": ""},
+        {"host": "b.example", "mode": "starttls", "port": "587", "auth": True, "user": "u"},
+    ]
+    assert sc.read_service_credentials("relay")["relays"][1]["user"] == "u"
+
+    # A later save replaces the whole list (entries removed client-side go).
+    detail = _put(admin_routes, "relay", {"relays": [{"host": "c.example", "mode": "tls"}]})
+    assert [e["host"] for e in detail["credentials"]["relays"]] == ["c.example"]
+
+
+@pytest.mark.parametrize("body, message", [
+    ({"relays": []}, "Relays: add at least one relay."),
+    ({}, "Relays: add at least one relay."),
+    ({"relays": "a.example"}, "Relays must be a list of entries."),
+    ({"relays": ["a.example"]}, "Relays, entry 1: Expected a JSON object of fields."),
+    ({"relays": [{"host": "a", "mode": "tls"}, {"mode": "tls"}]}, "Relays, entry 2: Host is required."),
+    ({"relays": [{"host": "a", "mode": "plain"}]}, "Relays, entry 1: Mode must be one of: tls, starttls."),
+    ({"relays": [{"host": "a", "mode": "tls", "extra": 1}]}, "Relays, entry 1: Unknown field(s): extra"),
+    ({"relays": [{"host": "a", "mode": "tls", "port": 25}]}, "Relays, entry 1: Port must be a string."),
+    ({"relays": [{"host": "a", "mode": "tls", "auth": True}]}, "Relays, entry 1: User is required."),
+    ({"relays": [{"host": h, "mode": "tls"} for h in "abcd"]}, "Relays: at most 3 relays allowed."),
+])
+def test_list_field_rejections(plugin_specs, admin_routes, body, message):
+    plugin_specs.register_plugin_credentials(_relay_plugin())
+    with pytest.raises(HTTPException) as exc_info:
+        _put(admin_routes, "relay", body)
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["message"] == message
+
+
+def test_list_field_validate_hook_sees_entries(plugin_specs, admin_routes):
+    seen = {}
+
+    def validate(values):
+        seen.update(values)
+        if len({e["host"] for e in values["relays"]}) < len(values["relays"]):
+            raise ValueError("Relays, entry 2: duplicate host")
+        return {**values, "relays": [{**e, "host": e["host"].upper()} for e in values["relays"]]}
+
+    plugin_specs.register_plugin_credentials(_relay_plugin(credential_validate=validate))
+    detail = _put(admin_routes, "relay", {"relays": [{"host": "a", "mode": "tls"}]})
+    assert seen["relays"] == [{"host": "a", "mode": "tls", "port": "", "auth": False, "user": ""}]
+    assert detail["credentials"]["relays"][0]["host"] == "A"
+    with pytest.raises(HTTPException) as exc_info:
+        _put(admin_routes, "relay", {"relays": [{"host": "a", "mode": "tls"}, {"host": "a", "mode": "tls"}]})
+    assert exc_info.value.detail["message"] == "Relays, entry 2: duplicate host"
+
+
+def test_list_field_flatten_hook_projects_legacy_shape(plugin_specs, admin_routes):
+    def flatten(stored):
+        text = stored.get("relays")
+        if isinstance(text, str):
+            return {**stored, "relays": [{"host": h, "mode": "tls"} for h in text.split()]}
+        return stored
+
+    plugin_specs.register_plugin_credentials(_relay_plugin(credential_flatten=flatten))
+    sc.write_service_credentials("relay", {"relays": "a.example b.example"})
+    result = _run(admin_routes.admin_get_service_credentials("relay", user=ADMIN_USER))
+    assert result["credentials"]["relays"] == [
+        {"host": "a.example", "mode": "tls", "port": "", "auth": False, "user": ""},
+        {"host": "b.example", "mode": "tls", "port": "", "auth": False, "user": ""},
+    ]
+    # A non-list stored value without a flatten hook reads as no entries.
+    plain = _relay_plugin()
+    spec = plugin_specs.ServiceSpec(
+        service="relay2", label=plain.label, fields=plain.credential_schema,
+    )
+    assert plugin_specs.form_view(spec, {"relays": "a.example b.example"}) == {
+        "label": "", "relays": [],
+    }
+
+
+@pytest.mark.parametrize("field_kwargs, message", [
+    (dict(type="list", item_label="r"), "needs item_fields"),
+    (dict(type="list", max_items=-1, item_fields=(("host", "text"),)), "max_items"),
+    (dict(type="list", item_fields=(("key", "secret"),)), "entries allow only"),
+    (dict(type="list", item_fields=(("inner", "list"),)), "entries allow only"),
+    (dict(type="list", item_fields=(("a", "text"), ("a", "text"))), "duplicate relays entry field keys"),
+    (dict(type="list", item_fields=(("m", "select"),)), "relays entry field 'm' needs options"),
+    (dict(type="text", item_label="x"), "sets list options but is not a list field"),
+    (dict(type="bool", default="yes"), "default is only for text, textarea and select"),
+    (dict(type="list", item_fields=(("m", "select", dict(options=("a",), default="b")),)),
+     "relays entry field 'm' default must be one of its options"),
+    (dict(type="list", item_fields=(("m", "text"), ("n", "text", dict(visible_if="m")))),
+     "visible_if='m' must name a bool field"),
+])
+def test_list_field_schema_rejections(plugin_specs, field_kwargs, message):
+    from config.plugin_types import CredentialField, QuestPlugin
+    kwargs = dict(field_kwargs)
+    if "item_fields" in kwargs:
+        kwargs["item_fields"] = tuple(
+            CredentialField(key=item[0], label=item[0], type=item[1], **(item[2] if len(item) > 2 else {}))
+            for item in kwargs["item_fields"]
+        )
+    plugin = QuestPlugin(
+        id="relay", label="Relays",
+        credential_schema=(CredentialField(key="relays", label="Relays", **kwargs),),
+    )
+    with pytest.raises(ValueError, match=message):
+        plugin_specs.register_plugin_credentials(plugin)
+    assert "relay" not in sc.KNOWN_SERVICES
+
+
+def test_list_field_refused_in_user_connection_forms():
+    """Per-user form connections render no list fields (no editor there)."""
+    from config.plugin_types import CredentialField
+    from config.service_specs import _validate_fields
+    fields = (CredentialField(
+        key="hosts", label="Hosts", type="list",
+        item_fields=(CredentialField(key="h", label="H", type="text"),),
+    ),)
+    with pytest.raises(ValueError, match="unknown type 'list'"):
+        _validate_fields("x", fields, allow_select=True)
+    _validate_fields("x", fields, allow_list=True)

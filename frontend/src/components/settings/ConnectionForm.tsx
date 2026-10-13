@@ -4,6 +4,7 @@ import type {
   ConnectionRow,
   ConnectorRow,
   CreateConnectionBody,
+  SchemaFormValue,
   SchemaFormValues,
   UpdateConnectionBody,
 } from '../../api/types';
@@ -73,7 +74,7 @@ export function ConnectionForm({
   const missing = missingRequiredFields(fields, values, { checkSecrets: true }).length > 0;
   const canSubmit = !submitting && !missing && (mode === 'add' || anyValue);
 
-  const handleChange = (key: string, value: string | boolean) => {
+  const handleChange = (key: string, value: SchemaFormValue) => {
     setValues((prev) => ({ ...prev, [key]: value }));
     if (fieldErrors[key]) {
       setFieldErrors((prev) => {

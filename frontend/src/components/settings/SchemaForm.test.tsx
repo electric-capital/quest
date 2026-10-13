@@ -6,10 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import {
   SchemaForm,
+  entrySummary,
   initialSchemaValues,
   missingRequiredFields,
 } from './SchemaForm';
-import type { SchemaFormField, SchemaFormValues } from '../../api/types';
+import type { SchemaFormField, SchemaFormValue, SchemaFormValues } from '../../api/types';
 
 const FIELDS: SchemaFormField[] = [
   { key: 'host', label: 'IMAP server', type: 'select', placeholder: '', required: true, options: ['imap.a.com', 'imap.b.com'] },
@@ -27,7 +28,7 @@ function Harness({
   ...rest
 }: {
   initial?: SchemaFormValues;
-  onChangeSpy?: (key: string, value: string | boolean) => void;
+  onChangeSpy?: (key: string, value: SchemaFormValue) => void;
   readOnlyKeys?: string[];
   storedSecrets?: string[];
   errors?: Record<string, string>;
@@ -232,5 +233,158 @@ describe('schema helpers', () => {
     expect(missingRequiredFields(FIELDS, { ...values, use_proxy: true, host: 'h', username: ' u ' })).toEqual([
       'proxy',
     ]);
+  });
+});
+
+// A list field: entries of a host / mode / port / note sub-form, capped
+// at three, as the IMAP admin card uses it.
+const SERVERS: SchemaFormField = {
+  key: 'servers',
+  label: 'Servers',
+  type: 'list',
+  placeholder: '',
+  help: 'Where users may connect.',
+  required: true,
+  item_label: 'server',
+  max_items: 3,
+  item_fields: [
+    { key: 'host', label: 'Host', type: 'text', placeholder: 'imap.example.com', required: true },
+    { key: 'mode', label: 'Mode', type: 'select', placeholder: '', required: true, options: ['ssl', 'starttls'], default: 'ssl' },
+    { key: 'port', label: 'Port', type: 'text', placeholder: 'Default', required: false },
+    { key: 'pinned', label: 'Pinned', type: 'bool', placeholder: '', required: false },
+  ],
+};
+const LIST_FIELDS: SchemaFormField[] = [
+  { key: 'title', label: 'Title', type: 'text', placeholder: '', required: false, default: 'Mail' },
+  SERVERS,
+];
+
+function ListHarness({ initial, disabled }: { initial?: SchemaFormValues; disabled?: boolean }) {
+  const [values, setValues] = useState<SchemaFormValues>(
+    () => initial ?? initialSchemaValues(LIST_FIELDS),
+  );
+  return (
+    <div>
+      <SchemaForm
+        fields={LIST_FIELDS}
+        values={values}
+        idPrefix="l"
+        onChange={(key, value) => setValues((prev) => ({ ...prev, [key]: value }))}
+        disabled={disabled}
+      />
+      <output data-testid="values">{JSON.stringify(values)}</output>
+    </div>
+  );
+}
+
+const STORED_SERVERS = [
+  { host: 'imap.a.com', mode: 'ssl', port: '993', pinned: false },
+  { host: 'imap.b.com', mode: 'starttls', port: '', pinned: true },
+];
+
+describe('SchemaForm list fields', () => {
+  it('builds initial values from stored entries and schema defaults', () => {
+    expect(initialSchemaValues(LIST_FIELDS, { servers: STORED_SERVERS })).toEqual({
+      title: 'Mail',
+      servers: [
+        { host: 'imap.a.com', mode: 'ssl', port: '993', pinned: false },
+        { host: 'imap.b.com', mode: 'starttls', port: '', pinned: true },
+      ],
+    });
+    expect(initialSchemaValues(LIST_FIELDS, { title: 'Set', servers: 'junk' })).toEqual({
+      title: 'Set',
+      servers: [],
+    });
+  });
+
+  it('treats an empty required list as missing', () => {
+    expect(missingRequiredFields(LIST_FIELDS, { title: '', servers: [] })).toEqual(['servers']);
+    expect(missingRequiredFields(LIST_FIELDS, { title: '', servers: STORED_SERVERS })).toEqual([]);
+  });
+
+  it('summarises an entry as title plus details', () => {
+    expect(entrySummary(SERVERS, STORED_SERVERS[1])).toEqual({
+      title: 'imap.b.com',
+      details: ['Mode: starttls', 'Pinned'],
+    });
+    expect(entrySummary(SERVERS, { host: '', mode: '', port: '', pinned: false })).toEqual({
+      title: '',
+      details: [],
+    });
+  });
+
+  it('lists stored entries with Edit / Remove and the empty state', () => {
+    render(<ListHarness initial={{ title: '', servers: STORED_SERVERS }} />);
+    expect(screen.getByText('Where users may connect.')).toBeTruthy();
+    expect(screen.getByText('imap.a.com')).toBeTruthy();
+    expect(screen.getByText('Mode: starttls')).toBeTruthy();
+    expect(screen.getByText('Pinned')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Edit imap.a.com' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove imap.a.com' }));
+    expect(currentValues().servers).toEqual([STORED_SERVERS[1]]);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove imap.b.com' }));
+    expect(currentValues().servers).toEqual([]);
+    expect(screen.getByText('No servers yet.')).toBeTruthy();
+  });
+
+  it('adds an entry through the inline editor with the schema defaults', () => {
+    render(<ListHarness />);
+    fireEvent.click(screen.getByRole('button', { name: '+ Add server' }));
+    // The add button hides while the editor is open.
+    expect(screen.queryByRole('button', { name: '+ Add server' })).toBeNull();
+    const done = screen.getByRole('button', { name: 'Done' }) as HTMLButtonElement;
+    expect(done.disabled).toBe(true); // host required
+    const mode = screen.getByLabelText('Mode') as HTMLSelectElement;
+    expect(mode.value).toBe('ssl'); // schema default
+    fireEvent.change(screen.getByLabelText('Host'), { target: { value: 'imap.c.com' } });
+    expect(done.disabled).toBe(false);
+    fireEvent.change(screen.getByLabelText(/Port/), { target: { value: '1993' } });
+    fireEvent.click(done);
+    expect(currentValues().servers).toEqual([
+      { host: 'imap.c.com', mode: 'ssl', port: '1993', pinned: false },
+    ]);
+    expect(screen.queryByTestId('l-servers-new-editor')).toBeNull();
+    expect(screen.getByRole('button', { name: '+ Add server' })).toBeTruthy();
+  });
+
+  it('edits an entry in place and Cancel discards the draft', () => {
+    render(<ListHarness initial={{ title: '', servers: STORED_SERVERS }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit imap.b.com' }));
+    const host = screen.getByLabelText('Host') as HTMLInputElement;
+    expect(host.value).toBe('imap.b.com');
+    // Other rows' buttons wait while an editor is open.
+    expect((screen.getByRole('button', { name: 'Edit imap.a.com' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(host, { target: { value: 'imap.x.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(currentValues().servers).toEqual(STORED_SERVERS);
+    expect(screen.getByText('imap.b.com')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit imap.b.com' }));
+    fireEvent.change(screen.getByLabelText('Host'), { target: { value: 'imap.y.com' } });
+    fireEvent.click(screen.getByLabelText('Pinned'));
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(currentValues().servers).toEqual([
+      STORED_SERVERS[0],
+      { host: 'imap.y.com', mode: 'starttls', port: '', pinned: false },
+    ]);
+  });
+
+  it('stops adding at max_items', () => {
+    render(
+      <ListHarness
+        initial={{ title: '', servers: [...STORED_SERVERS, { host: 'imap.c.com', mode: 'ssl', port: '', pinned: false }] }}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: '+ Add server' })).toBeNull();
+    expect(screen.getByText('At most 3 servers.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove imap.c.com' }));
+    expect(screen.getByRole('button', { name: '+ Add server' })).toBeTruthy();
+  });
+
+  it('hides the entry controls while disabled', () => {
+    render(<ListHarness initial={{ title: '', servers: STORED_SERVERS }} disabled />);
+    expect(screen.getByText('imap.a.com')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Edit|Remove|Add server/ })).toBeNull();
   });
 });

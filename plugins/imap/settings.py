@@ -4,27 +4,40 @@ Stdlib-only (the admin card is read lazily through
 ``config.service_credentials``), so the manifest hooks stay importable
 without the app stack.
 
-Admin card (service ``imap``): one ``allowed_hosts`` textarea ("IMAP
-servers"), one server configuration per line::
-
-    host[:port][ ssl|starttls]
+Admin card (service ``imap``): one ``allowed_hosts`` **list** field
+("IMAP servers") whose entries are small forms -- ``host``, ``port``
+and ``security`` -- added, edited and removed one at a time in the
+Settings UI (the generic ``list`` field type of
+``config.plugin_types.CredentialField``). Each entry describes one
+allowed server configuration:
 
 - ``host``: a DNS name (lower-cased, trailing dot dropped, punycode for
-  non-ASCII), an IPv4 literal, or an IPv6 literal in brackets
-  (``[::1]``). No scheme, path or userinfo.
-- defaults: no port and no mode = ``993 ssl``; ``:143`` without a mode =
-  ``starttls``; any other port without a mode = ``ssl``; ``ssl`` without
-  a port = 993; ``starttls`` without a port = 143.
-- the mode is ``ssl`` (implicit TLS) or ``starttls``, case-insensitive,
-  separated by whitespace; there is no plaintext mode.
-- a host may appear on several lines with different port/mode; two lines
-  naming the same configuration (after the defaults are applied) are an
-  error.
+  non-ASCII), an IPv4 literal, or an IPv6 literal (bare or in brackets,
+  ``::1`` / ``[::1]``). No scheme, path, port or userinfo.
+- ``security``: ``ssl`` (implicit TLS, the form default) or
+  ``starttls``; there is no plaintext mode. An empty value (API
+  callers) means ``starttls`` for port 143, else ``ssl``.
+- ``port``: optional; empty means the mode's default, 993 for ``ssl``
+  and 143 for ``starttls``.
+- the same host may appear in several entries with different port/mode;
+  two entries naming the same configuration (after the defaults are
+  applied) are an error.
 
-Saving the card normalises every line to its canonical form
-``host:port mode`` (``imap.example.com:993 ssl``, ``[::1]:143 starttls``).
+Saving the card stores every entry in canonical form
+(``{"host": "imap.example.com", "port": "993", "security": "ssl"}``,
+IPv6 hosts bare). The canonical LINE form ``host:port mode``
+(``imap.example.com:993 ssl``, ``[::1]:143 starttls``) is what the
+per-user server select offers and what connection rows store.
+
+Cards saved before the list field hold the legacy TEXT form instead:
+one ``host[:port][ ssl|starttls]`` line per server (the same defaults;
+additionally ``:143`` without a mode meant ``starttls``). Every reader
+accepts both shapes (:func:`parse_allowed_servers`), the card's read
+view projects the text into entries (:func:`imap_flatten`), and the
+next save stores the list.
+
 Every connect re-reads the card (:func:`load_allowed_servers`), so
-removing a line takes effect on the next tool call.
+removing an entry takes effect on the next tool call.
 
 Per-user connection rows (``form`` kind) store their form values under
 ``oauth_blob["values"]``: ``server`` (one of the canonical lines, chosen
@@ -71,9 +84,14 @@ class ServerConfig:
     security: str
 
     def line(self) -> str:
-        """The canonical form: ``host:port mode`` (IPv6 bracketed)."""
+        """The canonical line form: ``host:port mode`` (IPv6 bracketed)."""
         host = f"[{self.host}]" if ":" in self.host else self.host
         return f"{host}:{self.port} {self.security}"
+
+    def entry(self) -> dict:
+        """The canonical admin-card entry (the ``list`` field's item
+        values, all strings; IPv6 hosts bare)."""
+        return {"host": self.host, "port": str(self.port), "security": self.security}
 
 
 def _parse_port(text: str) -> int:
@@ -167,49 +185,121 @@ def parse_server_line(line: str) -> ServerConfig:
     return ServerConfig(host, port, security)
 
 
-def parse_allowed_servers(text: Any) -> list[ServerConfig]:
-    """Parse the admin ``allowed_hosts`` text, in admin order.
+def parse_server_entry(entry: Any) -> ServerConfig:
+    """Parse one admin-card entry ``{"host", "port", "security"}`` (defaults
+    applied; values may be missing, empty, or carry surrounding whitespace).
 
-    Blank lines and surrounding whitespace are ignored. Raises
-    ``ValueError("Line N: ...")`` on the first bad line, including a line
-    that names the same configuration as an earlier one.
+    Raises ValueError with a short reason naming the offending field.
     """
-    if text is None:
-        return []
-    if not isinstance(text, str):
-        raise ValueError("the server list must be text")
-    entries: list[ServerConfig] = []
-    first_line: dict[ServerConfig, int] = {}
-    for number, raw in enumerate(text.splitlines(), start=1):
-        if not raw.strip():
-            continue
+    if not isinstance(entry, dict):
+        raise ValueError("server entry must be an object")
+    host_text = str(entry.get("host") or "").strip()
+    if not host_text:
+        raise ValueError("Host is required")
+    if ":" in host_text and "://" not in host_text and not host_text.startswith("["):
+        # A bare IPv6 literal (the entry form has a separate port field,
+        # so a colon can only mean IPv6; a host:port spelling is refused
+        # by the port-in-host check below).
+        if host_text.count(":") == 1:
+            raise ValueError("Host: write the port in the Port field")
+        host_text = f"[{host_text}]"
+    try:
+        host, port_in_host = _parse_host_port(host_text)
+    except ValueError as exc:
+        raise ValueError(f"Host: {exc}") from None
+    if port_in_host is not None:
+        raise ValueError("Host: write the port in the Port field")
+    port_text = str(entry.get("port") or "").strip()
+    port: Optional[int] = None
+    if port_text:
         try:
-            entry = parse_server_line(raw)
+            port = _parse_port(port_text)
         except ValueError as exc:
-            raise ValueError(f"Line {number}: {exc}") from None
-        if entry in first_line:
+            raise ValueError(f"Port: {exc}") from None
+    security_text = str(entry.get("security") or "").strip().lower()
+    security: Optional[str] = security_text or None
+    if security is not None and security not in SECURITY_CHOICES:
+        raise ValueError(
+            f"Security: unknown mode {security_text!r} (use ssl or starttls; "
+            "plaintext IMAP is not supported)"
+        )
+    if security is None:
+        security = "starttls" if port == STARTTLS_DEFAULT_PORT else "ssl"
+    if port is None:
+        port = DEFAULT_PORT_FOR_SECURITY[security]
+    return ServerConfig(host, port, security)
+
+
+def parse_allowed_servers(value: Any) -> list[ServerConfig]:
+    """Parse the admin ``allowed_hosts`` value, in admin order.
+
+    Accepts the list-field shape (a list of entry dicts, see
+    :func:`parse_server_entry`) and the legacy text shape (one line per
+    server, blank lines ignored, see :func:`parse_server_line`). Raises
+    ``ValueError("Entry N: ...")`` / ``ValueError("Line N: ...")`` on the
+    first bad item, including one that names the same configuration as an
+    earlier one.
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        numbered = list(enumerate(value, start=1))
+        parse, noun = parse_server_entry, "Entry"
+    elif isinstance(value, str):
+        numbered = [
+            (number, raw)
+            for number, raw in enumerate(value.splitlines(), start=1)
+            if raw.strip()
+        ]
+        parse, noun = parse_server_line, "Line"
+    else:
+        raise ValueError("the server list must be a list of entries")
+    entries: list[ServerConfig] = []
+    first_seen: dict[ServerConfig, int] = {}
+    for number, raw in numbered:
+        try:
+            entry = parse(raw)
+        except ValueError as exc:
+            raise ValueError(f"{noun} {number}: {exc}") from None
+        if entry in first_seen:
             raise ValueError(
-                f"Line {number}: duplicate of line {first_line[entry]} ({entry.line()})"
+                f"{noun} {number}: duplicate of {noun.lower()} "
+                f"{first_seen[entry]} ({entry.line()})"
             )
-        first_line[entry] = number
+        first_seen[entry] = number
         entries.append(entry)
     return entries
 
 
 def validate_imap_admin(values: dict) -> dict:
     """``credential_validate`` hook: normalise ``allowed_hosts`` to one
-    canonical ``host:port mode`` line per server, or raise ValueError
-    (shown on the card)."""
-    entries = parse_allowed_servers(values.get("allowed_hosts") or "")
+    canonical entry per server (see :meth:`ServerConfig.entry`), or raise
+    ValueError (shown on the card)."""
+    entries = parse_allowed_servers(values.get("allowed_hosts"))
     if not entries:
-        raise ValueError("IMAP servers: list at least one server.")
-    return {**values, "allowed_hosts": "\n".join(e.line() for e in entries)}
+        raise ValueError("IMAP servers: add at least one server.")
+    return {**values, "allowed_hosts": [e.entry() for e in entries]}
+
+
+def imap_flatten(config: dict) -> dict:
+    """``credential_flatten`` hook: the card's read view. A legacy text
+    ``allowed_hosts`` (one line per server) is projected into entries so
+    the list field shows it; unparseable text shows as no entries (the
+    card reads "Not configured" either way)."""
+    flat = dict(config or {})
+    value = flat.get("allowed_hosts")
+    if isinstance(value, str):
+        try:
+            flat["allowed_hosts"] = [e.entry() for e in parse_allowed_servers(value)]
+        except ValueError:
+            flat["allowed_hosts"] = []
+    return flat
 
 
 def imap_is_configured(config: dict) -> bool:
-    """At least one valid server line (False on any parse error)."""
+    """At least one valid server entry (False on any parse error)."""
     try:
-        return bool(parse_allowed_servers((config or {}).get("allowed_hosts") or ""))
+        return bool(parse_allowed_servers((config or {}).get("allowed_hosts")))
     except (ValueError, AttributeError):
         return False
 
@@ -222,7 +312,7 @@ def load_allowed_servers() -> list[ServerConfig]:
     if not isinstance(config, dict):
         return []
     try:
-        return parse_allowed_servers(config.get("allowed_hosts") or "")
+        return parse_allowed_servers(config.get("allowed_hosts"))
     except ValueError as exc:
         logger.warning("IMAP admin server list is invalid: %s", exc)
         return []

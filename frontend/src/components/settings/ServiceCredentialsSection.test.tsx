@@ -43,6 +43,30 @@ const COINGECKO: ServiceCredentialDetail = {
   credentials: { api_key_set: false },
 };
 
+const IMAP: ServiceCredentialDetail = {
+  service: 'imap',
+  label: 'IMAP mailbox',
+  configured: true,
+  source: 'store',
+  fields: [
+    {
+      key: 'allowed_hosts', label: 'IMAP servers', type: 'list', placeholder: '', required: true,
+      required_if: null, visible_if: null, item_label: 'server', max_items: 0,
+      item_fields: [
+        { key: 'host', label: 'Host', type: 'text', placeholder: 'imap.example.com', required: true },
+        { key: 'security', label: 'Security', type: 'select', placeholder: '', required: true, options: ['ssl', 'starttls'], default: 'ssl' },
+        { key: 'port', label: 'Port', type: 'text', placeholder: 'Default', required: false },
+      ],
+    },
+  ],
+  credentials: {
+    allowed_hosts: [
+      { host: 'imap.a.com', security: 'ssl', port: '993' },
+      { host: 'imap.b.com', security: 'starttls', port: '143' },
+    ],
+  },
+};
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -114,5 +138,56 @@ describe('ServiceCredentialsSection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(await screen.findByText('Host is invalid.')).toBeTruthy();
     expect(screen.getByLabelText('Host')).toBeTruthy();
+  });
+});
+
+describe('ServiceCredentialsSection list fields', () => {
+  it('summarises the entries and saves the edited entry array', async () => {
+    mocks.fetchServiceCredentials.mockResolvedValue({ services: [IMAP] });
+    mocks.updateServiceCredentials.mockImplementation(async (_service: string, values: unknown) => ({
+      ...IMAP,
+      credentials: values,
+    }));
+    render(<ServiceCredentialsSection />);
+
+    // Summary card: one line per entry with its details.
+    expect(await screen.findByText('imap.a.com')).toBeTruthy();
+    expect(screen.getByText('Security: starttls')).toBeTruthy();
+    expect(screen.getByText('Port: 143')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByRole('button', { name: 'Edit imap.a.com' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove imap.a.com' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add server' }));
+    fireEvent.change(screen.getByLabelText('Host'), { target: { value: 'imap.c.com' } });
+    fireEvent.change(screen.getByLabelText('Security'), { target: { value: 'starttls' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(mocks.updateServiceCredentials).toHaveBeenCalledTimes(1));
+    expect(mocks.updateServiceCredentials).toHaveBeenCalledWith('imap', {
+      allowed_hosts: [
+        { host: 'imap.b.com', security: 'starttls', port: '143' },
+        { host: 'imap.c.com', security: 'starttls', port: '' },
+      ],
+    });
+    // Back on the summary with the saved entries.
+    expect(await screen.findByText('imap.c.com')).toBeTruthy();
+    expect(screen.queryByText('imap.a.com')).toBeNull();
+  });
+
+  it('disables Save while a required list is empty', async () => {
+    mocks.fetchServiceCredentials.mockResolvedValue({
+      services: [{ ...IMAP, configured: false, source: null, credentials: { allowed_hosts: [] } }],
+    });
+    render(<ServiceCredentialsSection />);
+    fireEvent.click(await screen.findByRole('button', { name: 'IMAP mailbox' }));
+    expect(screen.getByText('No servers yet.')).toBeTruthy();
+    const save = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: '+ Add server' }));
+    fireEvent.change(screen.getByLabelText('Host'), { target: { value: 'imap.c.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(save.disabled).toBe(false);
   });
 });

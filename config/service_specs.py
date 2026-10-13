@@ -22,6 +22,12 @@ express directly:
 - ``validate(flat) -> flat``: post-resolution normalization/validation of
   the flat values; raises ``ValueError`` to reject the save.
 
+A ``list`` field (admin cards only) holds zero or more entries, each a
+sub-form described by the field's ``item_fields``; the stored and PUT
+value is a list of entry dicts, resolved entry by entry with the same
+rules (``_resolve_values``) and reported as "<Label>, entry N: ..." on
+rejection. See :class:`~config.plugin_types.CredentialField`.
+
 Like the rest of ``config/``, this module is stdlib-only.
 """
 
@@ -46,7 +52,12 @@ class ServiceSpec:
     unflatten: Optional[Callable[[dict, dict], dict]] = None
 
 
-FIELD_TYPES = ("text", "secret", "bool", "textarea", "select")
+FIELD_TYPES = ("text", "secret", "bool", "textarea", "select", "list")
+
+# Field types an entry of a ``list`` field may use: no secrets (the
+# masked read view and empty-means-keep rule are keyed by field, not by
+# entry position) and no nested lists.
+LIST_ITEM_FIELD_TYPES = ("text", "bool", "textarea", "select")
 
 
 def _validate_fields(
@@ -54,49 +65,69 @@ def _validate_fields(
     fields: tuple[CredentialField, ...],
     *,
     allow_select: bool = False,
+    allow_list: bool = False,
     runtime_option_keys: frozenset = frozenset(),
+    _context: str = "",
 ) -> None:
     """Reject schemas the generic form machinery cannot render safely.
 
     ``select`` is accepted only with ``allow_select`` (per-user ``form``
-    connection fields; the admin card cannot render it yet). Select fields
+    connection fields, and the entries of a ``list`` field). Select fields
     need static ``options`` unless their key is in ``runtime_option_keys``
     (a ``form`` connection whose ``field_options()`` hook supplies the
-    choices at request time).
+    choices at request time). ``list`` is accepted only with
+    ``allow_list`` (admin cards); its ``item_fields`` are validated
+    recursively with the entry rules (``LIST_ITEM_FIELD_TYPES``).
     """
     keys = [f.key for f in fields]
     if len(keys) != len(set(keys)):
-        raise ValueError(f"Service {service!r} declares duplicate field keys")
+        raise ValueError(f"Service {service!r} declares duplicate {_context}field keys")
     bool_keys = {f.key for f in fields if f.type == "bool"}
     for f in fields:
-        if f.type not in FIELD_TYPES or (f.type == "select" and not allow_select):
-            raise ValueError(
-                f"Service {service!r} field {f.key!r} has unknown type {f.type!r}"
-            )
+        what = f"Service {service!r} {_context}field {f.key!r}"
+        if (
+            f.type not in FIELD_TYPES
+            or (f.type == "select" and not allow_select)
+            or (f.type == "list" and not allow_list)
+        ):
+            raise ValueError(f"{what} has unknown type {f.type!r}")
         if not isinstance(f.options, tuple) or not all(
             isinstance(o, str) and o for o in f.options
         ):
-            raise ValueError(
-                f"Service {service!r} field {f.key!r} options must be a tuple "
-                "of non-empty strings"
-            )
+            raise ValueError(f"{what} options must be a tuple of non-empty strings")
         if f.type == "select":
             if not f.options and f.key not in runtime_option_keys:
-                raise ValueError(
-                    f"Service {service!r} select field {f.key!r} needs options"
-                )
+                raise ValueError(f"{what} needs options")
         elif f.options:
-            raise ValueError(
-                f"Service {service!r} field {f.key!r} sets options but is "
-                "not a select field"
-            )
+            raise ValueError(f"{what} sets options but is not a select field")
+        if not isinstance(f.default, str):
+            raise ValueError(f"{what} default must be a string")
+        if f.default:
+            if f.type not in ("text", "textarea", "select"):
+                raise ValueError(f"{what} default is only for text, textarea and select fields")
+            if f.type == "select" and f.options and f.default not in f.options:
+                raise ValueError(f"{what} default must be one of its options")
         for ref_attr in ("required_if", "visible_if"):
             ref = getattr(f, ref_attr)
             if ref is not None and ref not in bool_keys:
-                raise ValueError(
-                    f"Service {service!r} field {f.key!r} {ref_attr}={ref!r} "
-                    "must name a bool field"
-                )
+                raise ValueError(f"{what} {ref_attr}={ref!r} must name a bool field")
+        if f.type == "list":
+            if not f.item_fields:
+                raise ValueError(f"{what} needs item_fields")
+            if not isinstance(f.max_items, int) or f.max_items < 0:
+                raise ValueError(f"{what} max_items must be a non-negative int")
+            for item in f.item_fields:
+                if item.type not in LIST_ITEM_FIELD_TYPES:
+                    raise ValueError(
+                        f"{what} entry field {item.key!r} has type {item.type!r}; "
+                        f"entries allow only {', '.join(LIST_ITEM_FIELD_TYPES)}"
+                    )
+            _validate_fields(
+                service, f.item_fields, allow_select=True,
+                _context=f"{f.key} entry ",
+            )
+        elif f.item_fields or f.item_label or f.max_items:
+            raise ValueError(f"{what} sets list options but is not a list field")
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +178,7 @@ _CORE_SPECS: dict[str, ServiceSpec] = {}
 
 
 def _register_core(spec: ServiceSpec) -> None:
-    _validate_fields(spec.service, spec.fields)
+    _validate_fields(spec.service, spec.fields, allow_list=True)
     _CORE_SPECS[spec.service] = spec
 
 
@@ -291,8 +322,9 @@ def register_plugin_credentials(plugin: QuestPlugin) -> None:
         fields=tuple(plugin.credential_schema),
         is_configured=plugin.is_configured or (lambda config: True),
         validate=plugin.credential_validate,
+        flatten=plugin.credential_flatten,
     )
-    _validate_fields(spec.service, spec.fields)
+    _validate_fields(spec.service, spec.fields, allow_list=True)
     if spec.service in _CORE_SPECS or spec.service in _PLUGIN_SPECS:
         raise ValueError(f"Credential service already registered: {spec.service!r}")
     from config.service_credentials import register_plugin_service
@@ -313,74 +345,98 @@ def all_service_specs() -> tuple[ServiceSpec, ...]:
 # Generic form projection and update resolution
 # ---------------------------------------------------------------------------
 
+def _field_view(f: CredentialField) -> dict:
+    view = {
+        "key": f.key,
+        "label": f.label,
+        "type": f.type,
+        "placeholder": f.placeholder,
+        "help": f.help,
+        "required": f.required,
+        "required_if": f.required_if,
+        "visible_if": f.visible_if,
+        "default": f.default,
+    }
+    if f.type == "select":
+        view["options"] = list(f.options)
+    if f.type == "list":
+        view["item_fields"] = [_field_view(item) for item in f.item_fields]
+        view["item_label"] = f.item_label
+        view["max_items"] = f.max_items
+    return view
+
+
 def fields_view(spec: ServiceSpec) -> list[dict]:
     """The field schema as sent to the frontend for generic rendering."""
-    return [
-        {
-            "key": f.key,
-            "label": f.label,
-            "type": f.type,
-            "placeholder": f.placeholder,
-            "help": f.help,
-            "required": f.required,
-            "required_if": f.required_if,
-            "visible_if": f.visible_if,
-            **({"options": list(f.options)} if f.type == "select" else {}),
-        }
-        for f in spec.fields
-    ]
+    return [_field_view(f) for f in spec.fields]
 
 
 def _flat(spec: ServiceSpec, config: dict) -> dict:
     return spec.flatten(config) if spec.flatten else dict(config)
 
 
-def form_view(spec: ServiceSpec, config: dict | None) -> dict:
-    """Project a stored config into the masked form values.
-
-    Secrets are never returned; the form only learns ``<key>_set``.
-    """
-    flat = _flat(spec, config or {})
+def _values_view(fields: tuple[CredentialField, ...], flat: dict) -> dict:
     view: dict = {}
-    for f in spec.fields:
+    for f in fields:
         value = flat.get(f.key)
         if f.type == "secret":
             view[f.key + "_set"] = bool(value)
         elif f.type == "bool":
             view[f.key] = bool(value)
+        elif f.type == "list":
+            view[f.key] = [
+                _values_view(f.item_fields, item)
+                for item in (value if isinstance(value, list) else [])
+                if isinstance(item, dict)
+            ]
         else:
             view[f.key] = value if isinstance(value, str) else ""
     return view
 
 
-def resolve_update(spec: ServiceSpec, values: dict, existing: dict | None) -> dict:
-    """Validate a generic PUT body and produce the config dict to store.
+def form_view(spec: ServiceSpec, config: dict | None) -> dict:
+    """Project a stored config into the masked form values.
 
-    Applies the schema rules: unknown keys rejected, strings stripped,
-    empty secret = keep the stored one, ``required``/``required_if``
-    enforcement, then the spec's ``validate`` hook and stored-shape
-    mapping. Raises ValueError with a user-facing message on rejection.
+    Secrets are never returned; the form only learns ``<key>_set``. A
+    ``list`` field projects to a list of entry dicts (one per stored
+    entry, each in the same masked form; a non-list stored value reads
+    as no entries).
     """
+    return _values_view(spec.fields, _flat(spec, config or {}))
+
+
+def _resolve_values(
+    fields: tuple[CredentialField, ...],
+    values: dict,
+    flat_existing: dict,
+    *,
+    where: str = "",
+) -> dict:
+    """The schema rules for one level of fields (a card, or one entry of a
+    ``list`` field): unknown keys rejected, strings stripped, empty secret
+    = keep the stored one, select choices checked, ``required`` /
+    ``required_if`` enforced. ``where`` prefixes every error message
+    ("IMAP servers, entry 2: ")."""
     if not isinstance(values, dict):
-        raise ValueError("Expected a JSON object of credential fields.")
-    field_map = {f.key: f for f in spec.fields}
+        raise ValueError(f"{where}Expected a JSON object of fields.")
+    field_map = {f.key: f for f in fields}
     unknown = sorted(set(values) - set(field_map))
     if unknown:
-        raise ValueError(f"Unknown field(s): {', '.join(unknown)}")
-
-    existing = existing or {}
-    flat_existing = _flat(spec, existing)
+        raise ValueError(f"{where}Unknown field(s): {', '.join(unknown)}")
 
     resolved: dict = {}
-    for f in spec.fields:
+    for f in fields:
         raw = values.get(f.key)
         if f.type == "bool":
             resolved[f.key] = bool(raw)
             continue
+        if f.type == "list":
+            resolved[f.key] = _resolve_entries(f, raw)
+            continue
         if raw is None:
             raw = ""
         if not isinstance(raw, str):
-            raise ValueError(f"{f.label} must be a string.")
+            raise ValueError(f"{where}{f.label} must be a string.")
         value = raw.strip()
         if f.type == "secret" and not value:
             # Empty means "keep the stored secret" (round-trips the masked
@@ -388,18 +444,61 @@ def resolve_update(spec: ServiceSpec, values: dict, existing: dict | None) -> di
             stored = flat_existing.get(f.key)
             value = stored if isinstance(stored, str) else ""
         if f.type == "select" and value and value not in f.options:
-            raise ValueError(f"{f.label} must be one of: {', '.join(f.options)}.")
+            raise ValueError(
+                f"{where}{f.label} must be one of: {', '.join(f.options)}.")
         resolved[f.key] = value
 
-    for f in spec.fields:
+    for f in fields:
         if f.type == "bool":
             continue
         required = bool(resolved.get(f.required_if)) if f.required_if else f.required
         if required and not resolved.get(f.key):
             if f.type == "secret":
                 raise ValueError(
-                    f"{f.label} is required (no stored secret to keep).")
-            raise ValueError(f"{f.label} is required.")
+                    f"{where}{f.label} is required (no stored secret to keep).")
+            if f.type == "list":
+                raise ValueError(
+                    f"{where}{f.label}: add at least one "
+                    f"{f.item_label or 'entry'}.")
+            raise ValueError(f"{where}{f.label} is required.")
+    return resolved
+
+
+def _resolve_entries(f: CredentialField, raw) -> list[dict]:
+    """Resolve a ``list`` field's PUT value: a JSON array of entry objects
+    (absent = none), each resolved with the entry schema."""
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list):
+        raise ValueError(f"{f.label} must be a list of entries.")
+    if f.max_items and len(raw) > f.max_items:
+        noun = f.item_label or "entry"
+        raise ValueError(
+            f"{f.label}: at most {f.max_items} {noun}"
+            f"{'' if f.max_items == 1 else 's'} allowed.")
+    return [
+        _resolve_values(
+            f.item_fields, item, {}, where=f"{f.label}, entry {n}: ",
+        )
+        for n, item in enumerate(raw, start=1)
+    ]
+
+
+def resolve_update(spec: ServiceSpec, values: dict, existing: dict | None) -> dict:
+    """Validate a generic PUT body and produce the config dict to store.
+
+    Applies the schema rules: unknown keys rejected, strings stripped,
+    empty secret = keep the stored one, ``required``/``required_if``
+    enforcement (per entry too for ``list`` fields, whose value must be a
+    JSON array of entry objects), then the spec's ``validate`` hook and
+    stored-shape mapping. Raises ValueError with a user-facing message on
+    rejection.
+    """
+    if not isinstance(values, dict):
+        raise ValueError("Expected a JSON object of credential fields.")
+    existing = existing or {}
+    flat_existing = _flat(spec, existing)
+    resolved = _resolve_values(spec.fields, values, flat_existing)
 
     if spec.validate:
         resolved = spec.validate(resolved)

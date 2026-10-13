@@ -7,13 +7,14 @@ and whose account is the mailbox address (``account_for``). The
 ``verify`` hook logs in live before a row is saved.
 
 The admin card (``imap.json``) holds only the ``allowed_hosts`` server
-list (one ``host[:port][ ssl|starttls]`` configuration per line, saved
-in the canonical ``host:port mode`` form; see plugins/imap/settings.py):
-the connector row is ``available: false`` until it lists at least one
-valid server, the server select's choices are its canonical lines
-(``field_options``), and every connect resolves the row's ``server``
-against it again (plugins/imap/upstream.py). Transport: stdlib
-``imaplib`` over verified TLS only.
+list: a ``list`` field whose entries are ``host`` / ``port`` /
+``security`` sub-forms, stored in canonical form (legacy text cards
+still read; see plugins/imap/settings.py). The connector row is
+``available: false`` until it lists at least one valid server, the
+server select's choices are the entries' canonical ``host:port mode``
+lines (``field_options``), and every connect resolves the row's
+``server`` against it again (plugins/imap/upstream.py). Transport:
+stdlib ``imaplib`` over verified TLS only.
 """
 
 import json
@@ -23,9 +24,11 @@ from chat.system_skills import SystemSkill
 from config.plugin_types import CredentialField, QuestPlugin, UserConnectionSpec
 
 from plugins.imap.settings import (
+    SECURITY_CHOICES,
     SERVICE_ID,
     imap_connected,
     imap_field_options,
+    imap_flatten,
     imap_is_configured,
     imap_row_warning,
     validate_imap_admin,
@@ -87,19 +90,37 @@ def get_plugin() -> QuestPlugin:
             CredentialField(
                 key="allowed_hosts",
                 label="IMAP servers",
-                type="textarea",
+                type="list",
                 required=True,
-                placeholder="imap.example.com\nmail.example.org:143 starttls",
+                item_label="server",
                 help=(
-                    "One server per line: host[:port] [ssl|starttls]. A bare host "
-                    "means port 993 over TLS; write host:143 starttls for STARTTLS. "
-                    "Users pick their mailbox's server from this list; removing a "
-                    "line disables the connections that use it."
+                    "The mail servers users may connect to. Users pick their "
+                    "mailbox's server from this list; removing a server disables "
+                    "the connections that use it."
+                ),
+                item_fields=(
+                    CredentialField(
+                        key="host", label="Host", type="text", required=True,
+                        placeholder="imap.example.com",
+                        help="Host name or IP address only, no port or scheme.",
+                    ),
+                    CredentialField(
+                        key="security", label="Security", type="select",
+                        required=True, options=SECURITY_CHOICES, default="ssl",
+                        help="ssl = implicit TLS (usually port 993); starttls = "
+                             "STARTTLS (usually port 143). Plaintext IMAP is not "
+                             "supported.",
+                    ),
+                    CredentialField(
+                        key="port", label="Port", type="text",
+                        placeholder="Default: 993 for ssl, 143 for starttls",
+                    ),
                 ),
             ),
         ),
         is_configured=imap_is_configured,
         credential_validate=validate_imap_admin,
+        credential_flatten=imap_flatten,
         user_connection=UserConnectionSpec(
             kind="form",
             multi_connection=True,

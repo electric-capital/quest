@@ -48,17 +48,39 @@ class CredentialField:
     ``help`` is optional guidance rendered under the field's label (what
     the input should look like, what each line means); plain text, no
     markup.
+
+    ``default`` pre-fills a ``text`` / ``textarea`` / ``select`` field
+    (a select default must be one of its ``options``) when nothing is
+    stored yet -- a fresh card, or a new entry of a ``list`` field.
+
+    ``list`` fields (admin cards only) hold zero or more entries, each a
+    small form of its own described by ``item_fields`` (the same
+    ``CredentialField`` type: ``text`` / ``textarea`` / ``bool`` /
+    ``select`` with static options, with ``required_if`` / ``visible_if``
+    between the entry's own fields; no secrets, no nested lists). The
+    stored value is a list of ``{item key: value}`` dicts in entry order;
+    the admin UI shows the entries as rows with per-entry Edit / Remove
+    and an "Add <item_label>" sub-form. ``required`` means at least one
+    entry; ``max_items`` caps the count (0 = unlimited). A ``validate``
+    hook receives the entries as that list (already stripped, selects
+    checked, required item fields enforced) and may normalise or reject
+    them (e.g. duplicates), raising ``ValueError`` with an entry number.
     """
 
     key: str
     label: str
-    type: Literal["text", "secret", "bool", "textarea", "select"]
+    type: Literal["text", "secret", "bool", "textarea", "select", "list"]
     placeholder: str = ""
     help: str = ""
     required: bool = False
     required_if: Optional[str] = None
     visible_if: Optional[str] = None
     options: tuple[str, ...] = ()
+    default: str = ""
+    # list fields only:
+    item_fields: tuple["CredentialField", ...] = ()
+    item_label: str = ""  # singular noun for one entry, e.g. "server"
+    max_items: int = 0  # 0 = unlimited
 
 
 @dataclass(frozen=True)
@@ -221,6 +243,12 @@ class QuestPlugin:
     # values (the ServiceSpec ``validate`` hook): ``(flat values) -> flat
     # values``, raising ValueError to reject the save.
     credential_validate: Optional[Callable[[dict], dict]] = None
+    # Optional projection of the STORED config into the flat form values
+    # (the ServiceSpec ``flatten`` hook): ``(stored) -> flat``. For
+    # stored shapes the schema does not match one-to-one, e.g. a legacy
+    # text value an older card wrote where the schema now has a ``list``
+    # field; the default is the stored dict itself.
+    credential_flatten: Optional[Callable[[dict], dict]] = None
 
     # -- per-user connection -> generic Data Connections row
     user_connection: Optional[UserConnectionSpec] = None

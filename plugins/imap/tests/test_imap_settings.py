@@ -1,5 +1,7 @@
 """IMAP plugin settings: admin server-list parsing and per-row helpers."""
 
+import re
+
 import pytest
 
 from plugins.imap import settings as s
@@ -127,30 +129,141 @@ def test_duplicate_configurations_rejected(text, message):
     assert str(exc.value) == message
 
 
-def test_validate_imap_admin_normalises_to_canonical_lines():
-    out = s.validate_imap_admin({
-        "allowed_hosts": "B.example.com\n\n[::1]:143\nmail.example.org:1143 STARTTLS\nb.example.com:143 ssl",
-    })
-    assert out == {"allowed_hosts": (
-        "b.example.com:993 ssl\n[::1]:143 starttls\nmail.example.org:1143 starttls\n"
-        "b.example.com:143 ssl"
-    )}
-    # Saving the canonical text again is a no-op.
+def _entry(host, port="", security=""):
+    return {"host": host, "port": port, "security": security}
+
+
+@pytest.mark.parametrize("entry, expected", [
+    (_entry("imap.example.com"), ("imap.example.com", 993, "ssl")),
+    (_entry(" IMAP.Example.com. ", " 993 ", " SSL "), ("imap.example.com", 993, "ssl")),
+    (_entry("imap.example.com", "", "starttls"), ("imap.example.com", 143, "starttls")),
+    # An empty mode follows the port rule (143 -> starttls, else ssl).
+    (_entry("imap.example.com", "143"), ("imap.example.com", 143, "starttls")),
+    (_entry("imap.example.com", "1143"), ("imap.example.com", 1143, "ssl")),
+    (_entry("imap.example.com", "1143", "starttls"), ("imap.example.com", 1143, "starttls")),
+    # The form's default mode wins over the port rule.
+    (_entry("imap.example.com", "143", "ssl"), ("imap.example.com", 143, "ssl")),
+    (_entry("10.0.0.25"), ("10.0.0.25", 993, "ssl")),
+    (_entry("::1", "143"), ("::1", 143, "starttls")),
+    (_entry("[2001:DB8::1]", "", "starttls"), ("2001:db8::1", 143, "starttls")),
+    ({"host": "imap.example.com"}, ("imap.example.com", 993, "ssl")),
+])
+def test_parse_server_entry(entry, expected):
+    cfg = s.parse_server_entry(entry)
+    assert (cfg.host, cfg.port, cfg.security) == expected
+    assert cfg.entry() == {"host": expected[0], "port": str(expected[1]), "security": expected[2]}
+
+
+@pytest.mark.parametrize("entry, message", [
+    (_entry(""), "Host is required"),
+    ({}, "Host is required"),
+    ("imap.example.com", "server entry must be an object"),
+    (_entry("imap.example.com:993"), "Host: write the port in the Port field"),
+    (_entry("[::1]:993"), "Host: write the port in the Port field"),
+    (_entry("imaps://imap.example.com"), "Host: no scheme"),
+    (_entry("imap.example.com/x"), "Host: no path"),
+    (_entry("me@imap.example.com"), "Host: no user name"),
+    (_entry("[::1"), "Host: unclosed"),
+    (_entry("mail.ex\u00e4mple.com"), "Host: non-ASCII"),
+    (_entry("imap.example.com", "0"), "Port: port 0 is out of range"),
+    (_entry("imap.example.com", "abc"), "Port: invalid port 'abc'"),
+    (_entry("imap.example.com", "993", "plain"), "Security: unknown mode 'plain'"),
+])
+def test_parse_server_entry_rejects(entry, message):
+    with pytest.raises(ValueError, match=re.escape(message)):
+        s.parse_server_entry(entry)
+
+
+def test_parse_allowed_servers_accepts_entries_and_legacy_text():
+    entries = s.parse_allowed_servers([_entry("b.example"), _entry("[::1]", "143")])
+    assert [e.line() for e in entries] == ["b.example:993 ssl", "[::1]:143 starttls"]
+    legacy = s.parse_allowed_servers("b.example\n[::1]:143")
+    assert legacy == entries
+    assert s.parse_allowed_servers(None) == []
+    assert s.parse_allowed_servers([]) == []
+    with pytest.raises(ValueError, match="must be a list of entries"):
+        s.parse_allowed_servers({"host": "x"})
+
+
+@pytest.mark.parametrize("entries, message", [
+    ([_entry("a.example"), _entry("b.example"), _entry("a.example")],
+     "Entry 3: duplicate of entry 1 (a.example:993 ssl)"),
+    ([_entry("a.example"), _entry("A.Example.", "993", "SSL")],
+     "Entry 2: duplicate of entry 1 (a.example:993 ssl)"),
+    ([_entry("[::1]", "993"), _entry("0:0::1", "", "ssl")],
+     "Entry 2: duplicate of entry 1 ([::1]:993 ssl)"),
+    ([_entry("a.example"), _entry("x:y")], "Entry 2: Host: write the port in the Port field"),
+])
+def test_duplicate_and_bad_entries_rejected(entries, message):
+    with pytest.raises(ValueError) as exc:
+        s.parse_allowed_servers(entries)
+    assert str(exc.value) == message
+
+
+def test_validate_imap_admin_normalises_entries():
+    out = s.validate_imap_admin({"allowed_hosts": [
+        _entry("B.example.com"), _entry("::1", "143"),
+        _entry("mail.example.org", "1143", "STARTTLS"), _entry("b.example.com", "143", "ssl"),
+    ]})
+    assert out == {"allowed_hosts": [
+        {"host": "b.example.com", "port": "993", "security": "ssl"},
+        {"host": "::1", "port": "143", "security": "starttls"},
+        {"host": "mail.example.org", "port": "1143", "security": "starttls"},
+        {"host": "b.example.com", "port": "143", "security": "ssl"},
+    ]}
+    # Saving the canonical entries again is a no-op.
     assert s.validate_imap_admin(out) == out
 
 
+def test_validate_imap_admin_migrates_legacy_text():
+    """A legacy text value (API callers, pre-baked configs) still saves,
+    stored as entries."""
+    out = s.validate_imap_admin({"allowed_hosts": "B.example.com\n\n[::1]:143"})
+    assert out == {"allowed_hosts": [
+        {"host": "b.example.com", "port": "993", "security": "ssl"},
+        {"host": "::1", "port": "143", "security": "starttls"},
+    ]}
+
+
 def test_validate_imap_admin_rejects_empty_bad_and_duplicates():
-    with pytest.raises(ValueError, match="at least one server"):
+    with pytest.raises(ValueError, match="add at least one server"):
+        s.validate_imap_admin({"allowed_hosts": []})
+    with pytest.raises(ValueError, match="add at least one server"):
         s.validate_imap_admin({"allowed_hosts": "  \n "})
+    with pytest.raises(ValueError, match="add at least one server"):
+        s.validate_imap_admin({})
+    with pytest.raises(ValueError, match="Entry 1: Host: no scheme"):
+        s.validate_imap_admin({"allowed_hosts": [_entry("http://x")]})
     with pytest.raises(ValueError, match="Line 1"):
         s.validate_imap_admin({"allowed_hosts": "http://x"})
-    with pytest.raises(ValueError, match="Line 2: duplicate of line 1"):
-        s.validate_imap_admin({"allowed_hosts": "x.example\nx.example:993"})
+    with pytest.raises(ValueError, match=re.escape("Entry 2: duplicate of entry 1")):
+        s.validate_imap_admin({"allowed_hosts": [_entry("x.example"), _entry("x.example", "993")]})
     with pytest.raises(ValueError, match="use ssl or starttls"):
-        s.validate_imap_admin({"allowed_hosts": "x.example:143 plain"})
+        s.validate_imap_admin({"allowed_hosts": [_entry("x.example", "143", "plain")]})
+
+
+def test_imap_flatten_projects_legacy_text_into_entries():
+    assert s.imap_flatten({"allowed_hosts": "imap.example.com\nmail.example.org:143", "x": 1}) == {
+        "allowed_hosts": [
+            {"host": "imap.example.com", "port": "993", "security": "ssl"},
+            {"host": "mail.example.org", "port": "143", "security": "starttls"},
+        ],
+        "x": 1,
+    }
+    # Unparseable legacy text reads as no entries; entries pass through.
+    assert s.imap_flatten({"allowed_hosts": "http://bad"}) == {"allowed_hosts": []}
+    entries = [{"host": "a.example", "port": "993", "security": "ssl"}]
+    assert s.imap_flatten({"allowed_hosts": entries}) == {"allowed_hosts": entries}
+    assert s.imap_flatten({}) == {}
+    assert s.imap_flatten(None) == {}
 
 
 def test_is_configured():
+    assert s.imap_is_configured({"allowed_hosts": [_entry("imap.example.com")]}) is True
+    assert s.imap_is_configured({"allowed_hosts": []}) is False
+    assert s.imap_is_configured({"allowed_hosts": [_entry("imap.example.com:993")]}) is False
+    assert s.imap_is_configured({"allowed_hosts": [_entry("a.example"), _entry("a.example", "993")]}) is False
+    # Legacy text cards stay configured until re-saved.
     assert s.imap_is_configured({"allowed_hosts": "imap.example.com"}) is True
     assert s.imap_is_configured({"allowed_hosts": "imap.example.com:993 ssl"}) is True
     assert s.imap_is_configured({"allowed_hosts": ""}) is False

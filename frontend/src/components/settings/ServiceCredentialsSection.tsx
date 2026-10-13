@@ -3,13 +3,16 @@ import type { ReactNode } from 'react';
 import { ServiceIcon } from './serviceIcons';
 import {
   SchemaForm,
+  entrySummary,
   initialSchemaValues,
   isFieldVisible,
+  listEntries,
   missingRequiredFields,
 } from './SchemaForm';
 import { fetchServiceCredentials, updateServiceCredentials } from '../../api/client';
 import type {
   CredentialFieldSchema,
+  SchemaFormValue,
   SchemaFormValues,
   ServiceCredentialDetail,
 } from '../../api/types';
@@ -156,7 +159,7 @@ function CredentialForm({
     };
   }, []);
 
-  const setValue = useCallback((key: string, value: string | boolean) => {
+  const setValue = useCallback((key: string, value: SchemaFormValue) => {
     setValues((prev) => ({ ...prev, [key]: value }));
   }, []);
 
@@ -228,6 +231,29 @@ function summaryValue(field: CredentialFieldSchema, detail: ServiceCredentialDet
       </span>
     ) : (
       <span className="svc-cred-summary-empty">Not set</span>
+    );
+  }
+  if (field.type === 'list') {
+    const entries = listEntries(creds[field.key] as SchemaFormValues[string]);
+    if (entries.length === 0) return <span className="svc-cred-summary-empty">None</span>;
+    return (
+      <ul className="svc-cred-summary-list">
+        {entries.map((entry, index) => {
+          const summary = entrySummary(field, entry);
+          return (
+            <li key={index}>
+              <span className="svc-cred-list-item-title">
+                {summary.title || `${field.item_label || 'entry'} ${index + 1}`}
+              </span>
+              {summary.details.map((detail) => (
+                <span key={detail} className="svc-cred-list-item-detail">
+                  {detail}
+                </span>
+              ))}
+            </li>
+          );
+        })}
+      </ul>
     );
   }
   const raw = creds[field.key];

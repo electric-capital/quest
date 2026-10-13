@@ -143,6 +143,7 @@ def form_fields_view(spec) -> list[dict]:
             "required_if": field.required_if,
             "visible_if": field.visible_if,
             "options": options.get(field.key, []),
+            "default": field.default,
         }
         for field in spec.fields
     ]

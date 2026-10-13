@@ -1626,7 +1626,9 @@ export interface ServiceCredentialSummary {
 }
 
 // Field types of a schema-rendered form (components/settings/SchemaForm).
-export type SchemaFieldType = 'text' | 'secret' | 'bool' | 'textarea' | 'select';
+// `list` (admin cards only) holds zero or more entries, each a sub-form of
+// `item_fields`, edited one entry at a time with add / edit / remove.
+export type SchemaFieldType = 'text' | 'secret' | 'bool' | 'textarea' | 'select' | 'list';
 
 // One field of a schema-rendered form: the common shape of the admin
 // credential schema (CredentialFieldSchema) and the per-user connection
@@ -1647,11 +1649,26 @@ export interface SchemaFormField {
   visible_if?: string | null;
   // select fields: the allowed choices.
   options?: string[];
+  // Initial value of a text / textarea / select field when nothing is
+  // stored (a fresh form, or a new entry of a list field).
+  default?: string;
+  // list fields: the entry sub-form (text / textarea / bool / select only),
+  // the singular noun for one entry ("server" -> "Add server") and the
+  // entry cap (0 or absent = unlimited).
+  item_fields?: SchemaFormField[];
+  item_label?: string;
+  max_items?: number;
 }
 
-// Form values keyed by field key: strings for text-like fields, booleans
-// for bool fields.
-export type SchemaFormValues = Record<string, string | boolean>;
+// One entry of a list field: its item fields' values.
+export type SchemaFormItem = Record<string, string | boolean>;
+
+// A form value: strings for text-like fields, booleans for bool fields, an
+// entry array for list fields.
+export type SchemaFormValue = string | boolean | SchemaFormItem[];
+
+// Form values keyed by field key.
+export type SchemaFormValues = Record<string, SchemaFormValue>;
 
 export interface CredentialFieldSchema extends SchemaFormField {
   required_if: string | null;
@@ -1668,8 +1685,9 @@ export interface ConnectionFormField extends SchemaFormField {
 
 // Masked form values keyed by field key: text/textarea fields round-trip
 // verbatim, bool fields are booleans, secret fields appear only as
-// `<key>_set` booleans (the server never returns secrets).
-export type ServiceCredentialForm = Record<string, string | boolean>;
+// `<key>_set` booleans (the server never returns secrets), list fields are
+// arrays of entry objects in the same masked form.
+export type ServiceCredentialForm = Record<string, string | boolean | SchemaFormItem[]>;
 
 export interface ServiceCredentialDetail extends ServiceCredentialSummary {
   fields: CredentialFieldSchema[];
@@ -1681,8 +1699,8 @@ export interface ServiceCredentialsListResponse {
 }
 
 // Generic PUT body: flat {field key: value}. An empty secret value keeps
-// the currently stored one.
-export type ServiceCredentialUpdate = Record<string, string | boolean>;
+// the currently stored one; a list field is sent as its full entry array.
+export type ServiceCredentialUpdate = Record<string, string | boolean | SchemaFormItem[]>;
 
 // Admin inference providers (LLM backend credentials/config)
 

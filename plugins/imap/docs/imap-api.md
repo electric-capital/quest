@@ -27,13 +27,17 @@ Three properties shape the plugin:
 
 ### Admin card
 
-Settings > Service Credentials > IMAP mailbox (store file `data/service_credentials/imap.json`, encrypted at rest, written by the generic `PUT /admin/service-credentials/imap`). One required textarea, `allowed_hosts`, labelled "IMAP servers" with a `help` line under the label: one server configuration per line, `host[:port] [ssl|starttls]`.
+Settings > Service Credentials > IMAP mailbox (store file `data/service_credentials/imap.json`, encrypted at rest, written by the generic `PUT /admin/service-credentials/imap`). One required **list** field, `allowed_hosts`, labelled "IMAP servers" (the generic `CredentialField` type `list`, see [Service Credentials](../../../docs/architecture/service-credentials.md)): the admin adds, edits and removes servers one at a time, each entry a sub-form of three fields:
 
-- Defaults (`parse_server_line`): no port and no mode = `993 ssl`; port `143` without a mode = `starttls`; any other port without a mode = `ssl`; `ssl` alone = port 993; `starttls` alone = port 143. Mode words are case-insensitive.
-- Host: a DNS name (lower-cased, trailing dot dropped, non-ASCII must be written in punycode), an IPv4 literal, or a bracketed IPv6 literal (no zone ids). A scheme (`imaps://`), a path, a user name (`@`), an unbracketed IPv6 address, a mode other than `ssl`/`starttls` (there is no plaintext mode), a port outside 1-65535, and more than two words on a line are rejected.
-- A host may appear on several lines with different port/mode; two lines naming the same configuration after defaults are applied are rejected (`Line N: duplicate of line M (...)`). Every parse error names its line; an empty list is rejected ("IMAP servers: list at least one server.").
-- Saving rewrites every line to the canonical form `host:port mode` (`ServerConfig.line()`, e.g. `imap.example.com:993 ssl`, `[::1]:143 starttls`) via `validate_imap_admin`.
-- `is_configured` (`imap_is_configured`) = at least one valid line; until then the connector row is `available: false` and hidden.
+- `host` (required text): a DNS name (lower-cased, trailing dot dropped, non-ASCII must be written in punycode), an IPv4 literal, or an IPv6 literal, bare (`::1`) or bracketed (`[::1]`; no zone ids). A scheme (`imaps://`), a path, a user name (`@`) and a port (`host:993` -- "write the port in the Port field") are rejected.
+- `security` (required select, default `ssl`): `ssl` (implicit TLS) or `starttls`; there is no plaintext mode.
+- `port` (optional text): empty means the mode's default, 993 for `ssl` and 143 for `starttls`; otherwise 1-65535.
+
+The generic layer resolves every entry first (required host, select choice, no unknown keys; errors read "IMAP servers, entry N: ..."), then `validate_imap_admin` parses the entries (`parse_allowed_servers` -> `parse_server_entry`): a host may appear in several entries with different port/mode, two entries naming the same configuration after defaults are applied are rejected (`Entry N: duplicate of entry M (host:port mode)`), every parse error names its entry and field (`Entry N: Port: ...`), and an empty list is rejected ("IMAP servers: add at least one server."). Saving stores each entry in canonical form (`ServerConfig.entry()`: `{"host": "imap.example.com", "port": "993", "security": "ssl"}`, IPv6 hosts bare, all strings). The canonical LINE form `host:port mode` (`ServerConfig.line()`, e.g. `imap.example.com:993 ssl`, `[::1]:143 starttls`) is what the per-user server select offers and what connection rows store.
+
+Legacy shape: cards saved before the list field hold `allowed_hosts` as text, one `host[:port][ ssl|starttls]` line per server (`parse_server_line`; the same defaults, plus `:143` without a mode meaning `starttls`). Every reader still accepts it (`parse_allowed_servers` takes a list or a string), the plugin's `credential_flatten` hook `imap_flatten` projects the lines into entries for the card's read view, a text value sent to the PUT (API callers, pre-baked configs) still validates, and the next save stores the list.
+
+`is_configured` (`imap_is_configured`) = at least one valid entry; until then the connector row is `available: false` and hidden.
 
 ### Per-user connection
 
