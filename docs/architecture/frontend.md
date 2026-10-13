@@ -241,7 +241,7 @@ Thin compatibility shim over the `persistentWebSocket` singleton. After devplan 
 When sending a message, the manager automatically captures the browser's timezone using `Intl.DateTimeFormat().resolvedOptions().timeZone` and includes it in the `send_message` payload.
 
 **Model Selection**:
-The `sendMessage` method accepts a `model` parameter that specifies which LLM model to use (any registry model ID, e.g. `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`, `gemini-4-argon`, `claude-haiku-4.5`, `claude-haiku-5-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-sonnet-5-5`, `claude-opus-5`, or `claude-opus-5-5`; deprecated Gemini models still work for conversations that already use them).
+The `sendMessage` method accepts a `model` parameter that specifies which LLM model to use (any id from the runtime model catalog in `frontend/src/constants/models.ts`; deprecated models still work for conversations that already use them).
 
 This is included in the `send_message` payload and passed to the backend, which uses the model registry in `chat/llm/config.py` to determine the appropriate provider and route the request accordingly.
 
@@ -949,7 +949,7 @@ interface ChatPanelProps {
   - Send is a two-phase op: `uploadComposerAttachments()` in `frontend/src/api/fileApi.ts` POSTs the bytes to `POST /conversations/{id}/composer-attachments` (see [Chat API -- Composer Attachments](../api/chat-api.md#composer-attachments)); on success the returned `ComposerAttachmentRef[]` rides on `WebSocketSendMessage.attachments`. Upload errors leave the queued thumbnails intact and re-surface the typed text so the user can retry without re-pasting.
   - The transcript renders persisted attachments under the user bubble via `Message.tsx`'s `message-attachments` block; clicking a thumbnail opens the existing `FileViewerModal`. See [Realtime -- Message Attachments](realtime.md#message-attachments) for the end-to-end (validation, provider multimodal hand-off, and the `attachments_unsupported_during_resume` rejection)
 - Auto-focus input after streaming ends
-- Model selector menu for choosing LLM model (Gemini Pro, Gemini Flash-Lite, Gemini Flash, Claude Haiku, Claude Sonnet, Claude Opus); filtered to same-provider models after first message (see Provider Locking)
+- Model selector menu for choosing LLM model (the admin-slotted picks from `getTopLevelModels()`, see [Model Selection](model-selection.md)); filtered to same-provider models after first message (see Provider Locking)
 - "+ Skill" button next to the model selector for loading skills into the current conversation; opens the `SkillSelectorModal` (see [Skill Library Architecture](skill-library.md) for the full conversation skill loader feature)
 - Flags icon button next to the skills icon button in the composer controls row, shown only on a fresh conversation (`messages.length === 0`); opens a checkbox popover of per-conversation opt-in behaviors (`AVAILABLE_FLAGS` in `frontend/src/constants/flags.ts`). Selected flags ride out-of-band on the first `send_message` payload. After the first message it becomes a read-only "N flag(s) enabled" label. See [Conversation Flags -- Composer UI](conversation-flags.md#composer-ui-out-of-band-selection)
 - Context usage indicator in the composer controls row via `ContextIndicator` component (percentage badge with color-coded thresholds, hover tooltip showing raw token counts, and info icon that opens `SystemPromptModal` to view the full system prompt)
@@ -1032,7 +1032,7 @@ Comprehensive CSS with dark/light mode support and animations:
 - No role header ("You" / "Quest"): the timestamp, plus the model display name for assistant replies, lives in a `.message-footer` absolutely positioned into the list gap under the bubble and revealed only on hover (`@media (hover: hover)`); inline `code` renders bold in the theme's `--accent-text` with no background, fenced blocks keep an accent-washed one; collapsed tool-call rows are deliberately low-contrast (opacity 0.55, raised on hover)
 
 **Message Headers**:
-- Role label ("You" vs "Quest"); hovering the "Quest" label shows a tooltip with the specific model display name (e.g., "Gemini 2.5 Pro", "Claude Sonnet 4"). Model ID resolved via `getModelDisplayName()` from `frontend/src/constants/models.ts`
+- Role label ("You" vs "Quest"); hovering the "Quest" label shows a tooltip with the specific model display name. Model ID resolved via `getModelDisplayName()` from `frontend/src/constants/models.ts`
 - Timestamp display
 - Small font size (0.75rem)
 - Reduced opacity for less prominence

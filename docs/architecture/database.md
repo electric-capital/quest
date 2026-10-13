@@ -430,32 +430,8 @@ The handler registry in `chat/action_request_types/registry.py` is the source of
 
 Two `StrEnum` enums are used by the LLM call analytics models (`LlmCallGemini` / `LlmCallAnthropic` / `LlmCallOpenRouter`):
 
-**`ModelId`** -- Known LLM model identifiers across all providers:
+**`ModelId`** -- Known LLM model identifiers across all providers. The members are in `db/models.py`; the runtime truth about each model (provider, context window, deprecation, Vertex id) is `MODEL_REGISTRY` in `chat/llm/config.py`, and retired ids are kept in the enum only so historical `llm_calls_*` rows stay interpretable (see [Deprecated Model Remapping](gemini-api.md#deprecated-model-remapping) for the runtime alias).
 
-| Value | String | Notes |
-|-------|--------|-------|
-| `GEMINI_3_1_PRO` | `"gemini-3.1-pro-preview"` | Deprecated (hidden from the model selector; existing conversations/routines still run it, now Vertex-backed). Remains the `server_config.json` schema default |
-| `GEMINI_3_1_FLASH_LITE` | `"gemini-3.1-flash-lite-preview"` | Deprecated (hidden from the model selector; existing conversations/routines still run it) |
-| `GEMINI_3_PRO` | `"gemini-3-pro-preview"` | Deprecated; preserved for historical analysis of past API calls. Silently remapped to `GEMINI_3_1_PRO` at runtime |
-| `GEMINI_3_FLASH` | `"gemini-3-flash-preview"` | Deprecated (hidden from the model selector; existing conversations/routines still run it) |
-| `GEMINI_3_5_FLASH` | `"gemini-3.5-flash"` | Deprecated (hidden from the model selector; existing conversations/routines still run it) |
-| `GEMINI_3_5_FLASH_LITE` | `"gemini-3.5-flash-lite"` | Vertex-backed Gemini Flash-Lite; cheapest/fastest option for the simplest tasks |
-| `GEMINI_3_6_FLASH` | `"gemini-3.6-flash"` | Vertex-backed Gemini Flash |
-| `GEMINI_3_7_FLASH` | `"gemini-3.7-flash"` | Vertex-backed Gemini Flash |
-| `GEMINI_3_8_FLASH` | `"gemini-3.8-flash"` | Vertex-backed Gemini Flash; newest Flash-class model |
-| `GEMINI_4_ARGON` | `"gemini-4-argon"` | Vertex-backed Gemini 4 Argon; Google's frontier model (GA 2026-10-13) |
-| `CLAUDE_HAIKU_4_5` | `"claude-haiku-4.5"` | Anthropic Claude Haiku on Vertex AI |
-| `CLAUDE_HAIKU_5_5` | `"claude-haiku-5-5"` | Anthropic Claude Haiku 5.5 on Vertex AI (1M-token input window) |
-| `CLAUDE_SONNET_4_6` | `"claude-sonnet-4-6"` | Anthropic Claude Sonnet on Vertex AI |
-| `CLAUDE_OPUS_4_6` | `"claude-opus-4-6"` | Anthropic Claude Opus 4.6 on Vertex AI |
-| `CLAUDE_OPUS_4_7` | `"claude-opus-4-7"` | Anthropic Claude Opus 4.7 on Vertex AI |
-| `CLAUDE_OPUS_4_8` | `"claude-opus-4-8"` | Anthropic Claude Opus 4.8 on Vertex AI (1M-token input window) |
-| `CLAUDE_SONNET_5` | `"claude-sonnet-5"` | Anthropic Claude Sonnet 5 on Vertex AI (1M-token input window) |
-| `CLAUDE_SONNET_5_5` | `"claude-sonnet-5-5"` | Anthropic Claude Sonnet 5.5 on Vertex AI (1M-token input window) |
-| `CLAUDE_OPUS_5` | `"claude-opus-5"` | Anthropic Claude Opus 5 on Vertex AI (1M-token input window) |
-| `CLAUDE_OPUS_5_5` | `"claude-opus-5-5"` | Anthropic Claude Opus 5.5 on Vertex AI (1M-token input window) |
-| `DEEPSEEK_V4_FLASH_0731` | `"deepseek/deepseek-v4-flash-0731"` | DeepSeek V4 Flash 0731 snapshot served via OpenRouter (API-key backend; 1.31M-token input window) |
-| `QWEN_3_8_27B` | `"qwen/qwen3.8-27b"` | Qwen3.8 27B served via OpenRouter (API-key backend; 1M-token input window) |
 
 **`ApiCallType`** -- Discriminator for the type of LLM API call:
 

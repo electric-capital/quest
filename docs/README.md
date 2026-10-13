@@ -9,7 +9,7 @@ Quest (branded as "DevQuest" in the UI when `QUEST_ENV=dev`) is a full-stack web
 - **Backend**: FastAPI-based REST and WebSocket API
 - **Frontend**: React + TypeScript single-page application (built with Vite)
 - **AI Integration**: Multi-provider LLM abstraction layer (`chat/llm/`) supporting Google Gemini (via `google-genai` SDK) and Anthropic Claude (via `anthropic[vertex]` SDK on Vertex AI)
-  - models available: Gemini 3.1 Flash-Lite, Gemini 3 Flash, Gemini 3.5 Flash, Claude Haiku 4.5, Claude Sonnet 4.6, Claude Opus 4.6, Claude Opus 4.7, and Claude Opus 4.8 (Claude Opus 4.8 has a 1M-token input window; the other Claude models are 200K. Gemini 3 Pro is deprecated and silently remapped to Gemini 3.1 Pro, which is itself deprecated -- Vertex-backed, hidden from the model selector, but still runnable by existing conversations and routines).
+  - models available: the Vertex catalog is `MODEL_REGISTRY` in `chat/llm/config.py` (per-model context windows, deprecation flags and provider ids live on the entries); admin-configured provider instances add more (see [Inference Providers](architecture/inference-providers.md)). Deprecated models stay runnable on conversations and routines that already use them but leave the picker.
   - Authenticated external API access via `authed_get` tool for server-side credential injection (supports Gmail Raw API, CoinGecko Pro API, Google Calendar API, Google Drive API, and Google Docs API with per-user OAuth and 401 retry) with large response protection (size gate, file-based blob storage, chunked reading via `get_response_content`), a `POST /api/authed-get` proxy endpoint for sandbox script access, and `download_drive_file` tool for Drive binary content downloads
 - **Authentication**: Two-tier Google OAuth (app login + separate Google Services authorization with `tasks.readonly` and `drive.file` scopes), per-service OAuth for plugin connectors (e.g. Slack, GitHub, Twitter/X), inline sign-in on `/`, dev-only email login (`POST /auth/dev-login` when `QUEST_ENV=dev`) for testing multi-user features without Google accounts
 - **Storage**: SQLite database for user data, memories, guides, projects, routines, routine schedules, conversation metadata including routine association, archive status, custom names, and model selection, action requests, skills with sharing and auto-load at both user and project levels (via SQLAlchemy + Alembic, with FTS5 for memory search), JSON files for chat message histories and per-conversation loaded skills
@@ -255,7 +255,7 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 #### App Integration
 - App layout with two-column + file browser layout, conditional rendering of RequestsView vs chat panel, global Cmd/Ctrl+K keyboard shortcut for search
 - Chat state management (conversationStore, WebSocketManager, the per-responsibility contexts under `frontend/src/contexts/`) with direct event subscriptions for component refresh
-- Model selector (Gemini 3.1 Flash-Lite, Gemini 3 Flash, Gemini 3.5 Flash, Claude Haiku 4.5, Claude Sonnet 4.6, Claude Opus 4.6, Claude Opus 4.7, Claude Opus 4.8; deprecated models such as Gemini 3.1 Pro are hidden but stay usable on conversations that already have them) with provider locking after first message (filters dropdown to same-provider models) and context usage indicator
+- Model selector (the catalog served by `GET /app/api/config` from `MODEL_REGISTRY` plus provider-instance models; deprecated models are hidden but stay usable on conversations that already have them) with provider locking after first message (filters dropdown to same-provider models) and context usage indicator
 - Authentication integration (session cookie, inline sign-in, dev email login when `QUEST_ENV=dev`)
 - Static file serving and production deployment (single-port)
 
@@ -524,7 +524,7 @@ quest/
 | Language (Backend) | Python 3.12 |
 | Package Manager (Backend) | uv |
 | Package Manager (Frontend) | npm |
-| AI Models | Google Gemini (3.1 Flash-Lite, 3 Flash, 3.5 Flash, 3.5 Flash-Lite, 3.6 Flash) and Anthropic Claude (Haiku 4.5 through Opus 5 on Vertex AI) -- user-selectable per conversation and per routine; Gemini 3 Pro silently remapped to Gemini 3.1 Pro, which is deprecated (Vertex-backed, hidden from pickers, still runnable on existing conversations/routines) |
+| AI Models | Google Gemini and Anthropic Claude on Vertex AI (`MODEL_REGISTRY` in `chat/llm/config.py`) plus admin-configured OpenRouter / Fireworks / NEAR AI / self-hosted instances (`config/inference_providers.py`) -- user-selectable per conversation and per routine |
 | Authentication | Google OAuth 2.0 (two-tier: app login + Google Services), inline sign-in on `/`, dev-only email login (`QUEST_ENV=dev`) |
 | User Storage | SQLite + SQLAlchemy + Alembic (FTS5 for memory search, guides table, projects table, routines table with model column, routine_schedules table, conversations table with routine_id FK, archived column, custom_name column, and model column, action_requests table) |
 | Chat Storage | JSON files (message history, with file-based search via `ChatStorage.search_conversations()`, `sub_agent_tool_calls` metadata on `tool_result` messages for sub-agent display); SQLite `conversations` table (ownership + timestamps + project association + routine association + archive status + custom name) |

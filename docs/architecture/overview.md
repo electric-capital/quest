@@ -90,24 +90,15 @@ This document provides a high-level overview of the Quest architecture, explaini
 ┌────────────▼────────────────────────────────────────────────────┐
 │                         LLM APIs                                │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │  Google Gemini API (google-genai SDK)                    │   │
-│  │  - gemini-3.5-flash-lite (Vertex)                        │   │
-│  │  - gemini-3.6-flash, 3.7-flash, 3.8-flash (Vertex)       │   │
-│  │  - deprecated (still runnable): gemini-3.1-pro-preview,  │   │
-│  │    gemini-3-flash-preview, 3.1-flash-lite, 3.5-flash     │   │
+│  │  Google Gemini on Vertex AI (google-genai SDK)           │   │
+│  │  Anthropic Claude on Vertex AI (anthropic[vertex] SDK)   │   │
+│  │  - model ids, Vertex ids, context windows, deprecation:  │   │
+│  │    MODEL_REGISTRY in chat/llm/config.py                  │   │
 │  └──────────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │  Anthropic Claude on Vertex AI (anthropic[vertex] SDK)  │   │
-│  │  - claude-haiku-4.5 (claude-haiku-4-5 on Vertex)        │   │
-│  │  - claude-haiku-5-5 (claude-haiku-5-5 on Vertex, 1M)    │   │
-│  │  - claude-sonnet-4-6 (claude-sonnet-4-6 on Vertex)      │   │
-│  │  - claude-opus-4-6 (claude-opus-4-6 on Vertex)          │   │
-│  │  - claude-opus-4-7 (claude-opus-4-7 on Vertex)          │   │
-│  │  - claude-opus-4-8 (claude-opus-4-8 on Vertex, 1M ctx)  │   │
-│  │  - claude-sonnet-5 (claude-sonnet-5 on Vertex, 1M ctx)  │   │
-│  │  - claude-sonnet-5-5 (claude-sonnet-5-5 on Vertex, 1M)  │   │
-│  │  - claude-opus-5 (claude-opus-5 on Vertex, 1M ctx)      │   │
-│  │  - claude-opus-5-5 (claude-opus-5-5 on Vertex, 1M ctx)  │   │
+│  │  OpenAI-compatible provider instances (openai SDK)       │   │
+│  │  - OpenRouter / Fireworks / NEAR AI / self-hosted,       │   │
+│  │    admin-configured: config/inference_providers.py       │   │
 │  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -386,12 +377,12 @@ alembic.ini                       # Alembic migration configuration
 
 Conversations run through the direct SDK integration in `chat/gemini_api/` (see [Gemini API Integration](gemini-api.md)) on top of the multi-provider abstraction in `chat/llm/` (see [LLM Provider Abstraction](llm-providers.md)):
 
-- **Model**: User-selectable per conversation via UI dropdown (`gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`, `gemini-4-argon`, `claude-haiku-4.5`, `claude-haiku-5-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-sonnet-5-5`, `claude-opus-5`, or `claude-opus-5-5`); after the first message, switching is restricted to models from the same provider. `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-flash-lite-preview`, and `gemini-3.5-flash` are deprecated: hidden from the dropdown for new picks but still runnable by conversations/routines that already use them
+- **Model**: User-selectable per conversation via UI dropdown; the selectable set is the non-deprecated, credentialed part of `MODEL_REGISTRY` in `chat/llm/config.py` plus provider-instance models (`get_available_models()`). After the first message, switching is restricted to models from the same provider. Entries flagged `deprecated` are hidden from the dropdown for new picks but still runnable by conversations/routines that already use them
 - **Vertex AI**: All models (Anthropic and Gemini) run on Vertex AI and use Google Cloud Application Default Credentials
 
 **Configuration System**:
 
-The default model is configured via `server_config.json` (key: `gemini.model`, default: `gemini-3.1-pro-preview` -- deprecated but still runnable; deployments should override this to a current model), loaded by `load_server_config()` in `config/server_config.py` along with the `anthropic.*` and `gemini_vertex.*` Vertex AI settings and their env-var overrides.
+The default model is configured via `server_config.json` (key: `gemini.model`; the schema default in `config/server_config.py` is a deprecated-but-runnable model, so deployments should override it with a current one), loaded by `load_server_config()` in `config/server_config.py` along with the `anthropic.*` and `gemini_vertex.*` Vertex AI settings and their env-var overrides.
 
 (The former Docker-based Gemini CLI chat mode -- `gemini.chat_mode`, `gemini.docker_image`, `Dockerfile.gemini`, and `chat/gemini_docker.py` -- was removed when gemini-cli was deprecated.)
 
@@ -488,7 +479,7 @@ System prompts (built in `chat/gemini_api/system_prompt.py`) include a user iden
 
 The main conversation loop has no turn limit (it runs until the model finishes responding; `turn_count` is tracked and included in the `stats` event for observability). Sub-agents (implemented in `chat/gemini_api/sub_agent.py`) have model-specific turn limits determined by `get_sub_agent_turn_limits(model)` in `chat/gemini_api/constants.py`:
 
-- 200K-token models (Claude Haiku 4.5, Claude Sonnet 4.6, Claude Opus 4.6, Claude Opus 4.7) get 20 turns max with warning at 15, while 1M-token models (Gemini variants, Claude Opus 4.8, and Claude Sonnet 5) and unknown models get the default 60/50
+- models whose registry `max_input_tokens` is 200K or less get 20 turns max with warning at 15, while 1M-token models and unknown models get the default 60/50
 - the turn warning is injected via `provider.inject_turn_warning()` to prompt graceful wind-down before the hard limit, and a context window warning is injected at `SUB_AGENT_CONTEXT_WARNING_THRESHOLD = 0.75` (75% of the model's `max_input_tokens`) via the same mechanism
 
 Top-level agents have access to:

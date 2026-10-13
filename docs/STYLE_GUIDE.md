@@ -31,6 +31,29 @@ export interface StreamMessage {
 }
 ```
 
+### 1b. Don't Replicate Lists or Plain Facts That Live in the Code
+
+The same rule applies to *data*, not just code. If a fact can be read straight out of a source file with no interpretation -- the members of a list, set, enum or registry, a default value, a date, a price, a limit, a mapping -- the doc names the symbol and file and stops there. It never copies the values. A copied list is stale the moment the code changes, nobody remembers to update it, and an agent that trusts the doc over the code then acts on wrong data.
+
+The canonical case is the model catalog. Every place a doc used to spell out "the available models are A, B, C, D" has been replaced by a pointer to `MODEL_REGISTRY` in `chat/llm/config.py`; the same goes for allow-lists such as `TEMPLATE_BATCH_ALLOWED_MODELS`, enums such as `ModelId` in `db/models.py`, and defaults such as `DEFAULT_ROUTINE_MODELS`.
+
+**Do this:**
+```
+Sub-agent batches may only run on the models in `TEMPLATE_BATCH_ALLOWED_MODELS`
+(`chat/gemini_api/constants.py`); the set is the cheaper Flash- and Haiku-class
+models because batch work is high-volume.
+```
+
+**Don't do this:**
+```
+Sub-agent batches may only run on `claude-haiku-4.5`, `claude-haiku-5-5`,
+`claude-sonnet-4-6`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, ...
+```
+
+What *does* belong in the doc is what the code cannot say on its own: why the list exists, what rule decides membership, which code paths branch on it, and the consequence of changing it. Describe the shape ("the newer Claude models", "every entry flagged `deprecated`", "models whose `max_input_tokens` is 200K or less") rather than the current members. A single illustrative example id is fine; an enumeration is not. The same goes for `docs/index.md` summaries.
+
+Per-model or per-entry rationale belongs as a comment next to the entry itself (the registry entries already carry theirs), so the doc can say "the reasons are on the entries" instead of restating them.
+
 ### 2. Document Flows with File References
 
 Show request/data flows as sequences of file references:
@@ -123,6 +146,7 @@ Authentication is handled in `chat/auth.py` (see `get_current_user` dependency).
 - **Phase labels or chronological organization** - Organize by topic; use git history for timeline
 - **Module dependency lists** - Import dependencies are apparent from the code itself
 - **Function/endpoint inventories or parameter listings** — Don't list out functions, endpoints, query parameters, request body fields, or response fields. These are in the code (Pydantic models, FastAPI signatures, function docstrings). Just reference the file and function name: "See `chat/routes/telegram.py` (`list_dialogs`)"
+- **Copies of lists, enums, registries, defaults, or any other fact readable verbatim from the code** — model ids, allow-lists, enum members, default values, dates, prices, limits. Name the symbol and file (see [1b](#1b-dont-replicate-lists-or-plain-facts-that-live-in-the-code)); describe the rule that decides membership, never the current members. "Currently X, Y and Z" phrasing is a red flag
 - **Human-oriented instructional content** — No curl examples, no "To create X, do Y" instructions, no step-by-step procedures aimed at a human reader. The audience is an agent that reads and executes code directly
 - **"Related Documentation" sections** - Don't add sections dedicated solely to linking other docs. The top-level `docs/index.md` (auto-included in `CLAUDE.md`) already serves as a cross-reference index
 
@@ -248,3 +272,4 @@ When making code changes:
 3. Update docs if constraints change (new env vars, new dependencies)
 4. Update `docs/index.md` if any doc file is added, removed, or renamed
 5. Don't update docs for implementation details that don't affect the above
+6. Adding, retiring or re-pricing a model, or changing any other list member or default, needs no doc edit when the doc already points at the symbol -- and if you find yourself updating a copied list, replace it with the pointer instead

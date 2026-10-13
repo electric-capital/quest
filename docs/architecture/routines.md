@@ -215,7 +215,7 @@ The `update_routine()` function needs to distinguish three states for both `guid
 The "run" action is just creating a conversation and sending a message -- two operations the frontend already handles. Keeping the logic in the frontend avoids adding a dedicated backend endpoint for an operation that composes existing primitives. The `pendingRoutineMessage` pattern in `NavigationContext` coordinates the creation and auto-send across components.
 
 **Why allow routines to specify a model?**
-Different routines may have different complexity levels. A simple data retrieval routine might work well with Gemini 3.1 Flash-Lite (fastest, cheapest), a daily summary routine with Gemini 3 Flash (faster, cheaper), while a complex analysis routine might need a more capable model like Claude Opus. Storing the model on the routine lets users configure this once and have it apply consistently across both manual and scheduled runs.
+Different routines may have different complexity levels. A simple data retrieval routine might work well with a Flash-Lite-class model (fastest, cheapest), a daily summary routine with a Flash-class model, while a complex analysis routine might need an Opus-class model. Storing the model on the routine lets users configure this once and have it apply consistently across both manual and scheduled runs.
 
 When no model is specified, manual runs use the user's current model selection and scheduled runs use the server config default. Deprecated model IDs stored on routines are silently remapped at runtime (see [Gemini API Integration](gemini-api.md) for the full remapping details).
 

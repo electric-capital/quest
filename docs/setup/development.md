@@ -69,13 +69,13 @@ Configuration priority: environment variables > `server_config.json` > built-in 
 
 Model settings are in `server_config.json`, loaded by `load_server_config()` in `config/server_config.py`.
 
-- `model`: Default model name. Valid values: `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite-preview`, `gemini-3-flash-preview`, `gemini-3.5-flash` (all four deprecated -- still runnable but hidden from the model picker; prefer a current model), `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`, `gemini-4-argon`, `claude-haiku-4.5`, `claude-haiku-5-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-sonnet-5-5`, `claude-opus-5`, `claude-opus-5-5`
+- `model`: Default model name. Valid values are the keys of `MODEL_REGISTRY` in `chat/llm/config.py` (prefer one without the `deprecated` flag: deprecated models still run but are hidden from the model picker)
 
 ### Anthropic Vertex AI
 
 To enable Claude models, add an `anthropic` section to `server_config.json` with `vertex_project_id` (required) and optionally `vertex_region` (default region: `us-east5`).
 
-The `vertex_region` value is the default; individual models can override it via a per-model `vertex_region` in `MODEL_REGISTRY` (Claude Opus 4.7, Opus 4.8, and Sonnet 5 are pinned to the `global` endpoint because Vertex serves them only there -- see [LLM Provider Abstraction -- Per-Model Vertex Region](../architecture/llm-providers.md#per-model-vertex-region)).
+The `vertex_region` value is the default; individual models can override it via a per-model `vertex_region` in `MODEL_REGISTRY` (the newer Claude models are pinned to the `global` endpoint because Vertex serves them only there -- see [LLM Provider Abstraction -- Per-Model Vertex Region](../architecture/llm-providers.md#per-model-vertex-region)).
 
 Uses Google Cloud Application Default Credentials (ADC). If `vertex_project_id` is not configured and a user selects a Claude model, the backend raises a descriptive error. Gemini models work regardless of Anthropic configuration.
 
