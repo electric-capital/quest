@@ -13,7 +13,7 @@ This document provides a high-level overview of the Quest architecture, explaini
              │ HTTP/WebSocket
              │
 ┌────────────▼────────────────────────────────────────────────────┐
-│                FastAPI Backend (Port 8000)                      │
+│                FastAPI Backend (single port)                    │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │              React + TypeScript Frontend                 │   │
 │  │  (served as static files from frontend/dist/)           │   │
@@ -41,11 +41,11 @@ This document provides a high-level overview of the Quest architecture, explaini
 │  │  Auth Module (auth/)                                    │   │
 │  │  ├── config.py - Constants, scopes, credential loaders  │   │
 │  │  ├── session.py - Cookie serializers, auth dependencies │   │
-│  │  ├── google_login.py - Google app login (5 endpoints)   │   │
+│  │  ├── google_login.py - Google app login endpoints       │   │
 │  │  ├── google_services.py - Google Services OAuth         │   │
 │  │  ├── slack.py - Slack OAuth flow                        │   │
 │  │  ├── airtable.py - Airtable token management           │   │
-│  │  ├── dev_login.py - Dev-only email login (QUEST_ENV=dev) │  │
+│  │  ├── dev_login.py - Dev-only email login (local mode)    │  │
 │  │  ├── google_credentials.py - Credential management     │   │
 │  │  └── popup_helpers.py - OAuth popup HTML generators     │   │
 │  └──────────────────────────────────────────────────────────┘   │
@@ -117,7 +117,7 @@ The frontend is a modern single-page application built with:
 **Main Components**:
 - **App**: Main application component with URL-based routing and three-column layout
   - Wrapped in `AppProviders` and `BrowserRouter` for global state and client-side routing
-  - Three route patterns: `/`, `/chats/:id`, `/projects/:pid/:id` -- URL params are the source of truth for active conversation
+  - Route patterns are the `<Route>` table in `frontend/src/App.tsx` (the conversation routes plus the main-pane takeovers such as the inbox, docs and admin views) -- URL params are the source of truth for active conversation
   - Sidebar (with Requests, Search, Projects, and Conversations sections) + ChatPanel + FileBrowser layout spanning full browser window
   - Session cookie auth with inline `SignInScreen` if not authenticated (no redirect to `/auth/`)
 - **Sidebar**: Multi-section navigation with Requests, Search, Projects, and Conversations
@@ -144,7 +144,7 @@ The frontend is a modern single-page application built with:
   - Structured message rendering for tool use display
   - Consecutive tool calls grouped into collapsible units via `ToolCallGroup` component; uses `groupConsecutiveToolCalls()` and `findToolResultById()` utilities
 - **Message**: Message display component with markdown rendering and syntax highlighting
-  - MessageContentRenderer for routing to appropriate component based on message type (text, tool_use, tool_result, action_request, stats)
+  - MessageContentRenderer for routing to appropriate component based on message type (the `type` discriminator of the `MessageContent` union in `frontend/src/api/types.ts`)
 - **ActionRequestMessage**: Inline rendering of agent-proposed action requests (e.g., `send_slack_message`, `send_telegram_message`, `create_calendar_invite`, plus plugin-registered types) with Approve/Revise/Stop buttons (labeled per the handler's verb -- "Send" for messaging requests, "Create"/"Save" for create/edit requests).
   - Non-blocking -- does not disable the chat input. State persisted in the database, so survives page reloads.
   - Displays resolved channel names (e.g., #general, @alice) for Slack message requests, resolved dialog names for Telegram message requests, and calendar invite details for invite requests.
@@ -169,7 +169,7 @@ The frontend is a modern single-page application built with:
   - 80% viewport modal rendered via `createPortal` to `document.body`
   - `SettingsModal.tsx` is a thin shell providing modal chrome, left nav sidebar, and section routing
   - `SettingsModal.css` retains shell/layout styles and shared utility classes
-  - 6 per-section sub-components in `frontend/src/components/settings/`, each managing its own state and data fetching, mounting/unmounting as the user navigates tabs:
+  - One sub-component per section in `frontend/src/components/settings/` (the roster is the directory itself, re-exported by its `index.ts`; the ones below are the originals), each managing its own state and data fetching, mounting/unmounting as the user navigates tabs:
     - `DataConnectionsSection` -- OAuth connectors (Google Services, Slack, Telegram, plugin rows like GitHub and Twitter/X) with Connect/Reconnect buttons and popup handling; API key connectors (Airtable, api_key-kind plugin rows) with shared `ApiKeyForm`; multi-connection plugin services (e.g. IMAP, `form` kind) render one `ConnectionCard` per connection and add accounts through `ConnectionForm` (the shared `SchemaForm`). See [OAuth Popup Flow](oauth-popup.md) and [User Connections](user-connections.md)
     - `MemoriesSection` -- Memory CRUD with archive toggle, inline editing, "Show archived" toggle
     - `GuidesSection` -- Guide CRUD with default guide handling, inline editing, save status feedback. After mutations, `refreshContextGuides()` updates `GuidesContext`
@@ -186,18 +186,18 @@ The frontend is a modern single-page application built with:
   - Popup-blocked fallback: shows direct link to open OAuth URL in a new tab if browser blocks the popup
   - Escape key closes modal; overlay click closes modal
 - **SignInScreen**: Inline sign-in component displayed for unauthenticated users
-  - Heading uses `appName` from `AppConfigContext` ("DevQuest" in dev mode, "Quest" in production)
+  - Heading uses `appName` from `AppConfigContext` (the per-mode names are the literals in `frontend/src/contexts/AppConfigContext.tsx`, keyed off `quest_env` from `GET /app/api/config`)
   - Fetches Google OAuth URL from `GET /auth/login-url` and displays a "Sign in with Google" button
   - When `isDevMode` is true (from AppConfigContext), shows a dev login section below the Google button: email input field + "Dev Login" button, separated by an "or" divider. Submits `POST /auth/dev-login` with `{"email": "..."}` and reloads the page on success
   - Replaces the previous redirect-to-`/auth/` behavior for fresh/unauthenticated users
 - **FileBrowser**: Right-side panel for workspace file management
   - List view of files/folders with icons and metadata
   - Upload files and folders via drag-and-drop (folders recursively traversed via `directoryTraversal.ts`), upload files via Upload Files button, create new folders in the current path via New Folder button (opens `NewFolderModal`), download files, download folders as zip
-  - Inline viewing of text files (`.md`, `.py`, `.txt`), images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp`, `.bmp`, `.ico`, `.avif`), and PDFs (`.pdf`, via the pdf.js-based `PdfViewer` with thumbnail rail) via FileViewerModal, with Save to Drive for `.md` files
+  - Inline viewing of text files, images, CSVs and PDFs (the pdf.js-based `PdfViewer` with thumbnail rail) via FileViewerModal, with Save to Drive for `.md` files. Which extensions open in the viewer is the `TEXT_EXTENSIONS` / `IMAGE_EXTENSIONS` / `PDF_EXTENSIONS` / `CSV_EXTENSIONS` sets in `frontend/src/components/FileBrowser.tsx`; the server's own text-preview allow-list is `VIEWABLE_EXTENSIONS` in `chat/file_storage.py`
   - Folder navigation with back/forward/up buttons
   - One card per file space (`source` prop): Chat Files (the conversation workspace) and, in project conversations and the home composer drilled into a project, Project Files (the project workspace; the drilled home composer shows Project Files + Tables without Chat Files), with Copy / Move between them
   - Per-space path and show-hidden state via `FileBrowserStateContext`
-  - Auto-refresh on `file_list_changed` per-user globals (emitted by workspace-mutating tools and REST routes), filtered by the card's own space (`scope` + conversation / project id), with a 200ms debounce
+  - Auto-refresh on `file_list_changed` per-user globals (emitted by workspace-mutating tools and REST routes), filtered by the card's own space (`scope` + conversation / project id), debounced by `FILE_LIST_REFRESH_DEBOUNCE_MS` in `frontend/src/components/FileBrowser.tsx`
   - Structured error display for partial upload failures
 - **API Client**: Type-safe REST API functions
 
@@ -245,7 +245,7 @@ This architecture enables seamless conversation switching during streaming - mes
 **Context Usage Indicator**:
 - Displays context window utilization as a small circular meter (Claude Code-style ring) on the composer controls row, right-aligned beside the Send button; the ring fills clockwise from 12 o'clock as the context is consumed and has a FIXED footprint whatever the percentage (a variable-width "NN% context" label used to push the Send button out of narrow phone rows)
 - Hover tooltip shows the figures (e.g., "14% of context used · 28K / 200K max"); the ring carries an `aria-label` with the same percentage
-- Color-coded thresholds on the ring fill: accent colour (under 70%), amber warning (70-90%), red danger (90%+)
+- Color-coded thresholds on the ring fill: accent colour, then amber warning, then red danger as usage climbs (the two percentage cut-offs are the literals in `ContextIndicator.tsx`)
 - Clicking the ring (it renders as a button when `onInfoClick` is given) opens a `SystemPromptModal` showing the full system prompt used for the current conversation; there is no separate info icon anymore
 - Backend emits `context_tokens` and `max_context_tokens` in the stats event via `compute_total_context_tokens()` in `chat/llm/base.py` (provider-specific: Anthropic sums input + cache tokens; Gemini uses raw input tokens)
 - Frontend: `ContextIndicator` component in `frontend/src/components/ContextIndicator.tsx` (with `onInfoClick` callback for system prompt viewer), hydrated from stats events during streaming (via `WebSocketManager`) and from historical messages on conversation load (via `useConversation` hook)
@@ -265,17 +265,17 @@ The frontend is built as static files and served by FastAPI on the same port as 
 The backend provides:
 
 1. **Authentication Layer**: Two-tier Google OAuth architecture with dual auth
-   - **App Login**: Minimal scopes (`openid`, `userinfo.email`, `userinfo.profile`) for user identity. Establishes session cookie and API key. Unauthenticated users see an inline `SignInScreen` on `/` that fetches the OAuth URL from `GET /auth/login-url`.
-   - **Google Services** (`/auth/google-services`): Separate OAuth flow for Google API access (Gmail, Calendar, Drive, Docs, Sheets, Tasks). Can be re-authorized independently without affecting login session or other integrations. Connect/Reconnect buttons available in the Data Connections section of the Settings panel. OAuth flows open in popup windows (see [OAuth Popup Flow](oauth-popup.md)). Users who connected before the `tasks.readonly` scope was added must re-authorize to grant the new scope.
+   - **App Login**: Minimal identity-only scopes (`LOGIN_SCOPES` in `auth/config.py`) for user identity. Establishes session cookie and API key. Unauthenticated users see an inline `SignInScreen` on `/` that fetches the OAuth URL from `GET /auth/login-url`.
+   - **Google Services** (`/auth/google-services`): Separate OAuth flow for Google API access (the per-service scopes in `GOOGLE_SERVICE_SCOPES` in `auth/config.py`, each with its reason on the entry). Can be re-authorized independently without affecting login session or other integrations. Connect/Reconnect buttons available in the Data Connections section of the Settings panel. OAuth flows open in popup windows (see [OAuth Popup Flow](oauth-popup.md)). Users who connected before the `tasks.readonly` scope was added must re-authorize to grant the new scope.
    - OAuth callback preserves all existing user data (Slack, Telegram, Airtable, GitHub, plugin-key connections) on re-auth
    - All OAuth callbacks either close the popup (when `?popup=1` is active) or redirect to `/` (non-popup fallback)
    - Login OAuth and Google Services OAuth are fully separated with no cross-pollination; after logout+disconnect and re-login, Google Services correctly shows "Not Connected"
    - **Dual auth on frontend endpoints**: All `/app/api/*` endpoints accept session cookie OR API key Bearer token. Cookie tried first (browser), then API key (scripts/LLM).
    - Frontend authenticates via session cookie directly (no API key stored in browser)
-   - Frontend retrieves user info via `GET /app/api/me` with session cookie (includes `google_services_connected`, `has_any_service_connected`, and `is_admin` booleans)
+   - Frontend retrieves user info via `GET /app/api/me` with session cookie (identity plus the connection/admin booleans; the response is built by `get_current_user_info()` in `chat/routes/user.py`)
    - Users can reset their API key via `POST /api/reset-api-key` (cookie or Bearer token auth, see `quest.py`; auth dependencies in `auth/session.py`)
-   - Domain restriction (the allowed login domain, see `auth/config.py`); relaxed in dev mode (`QUEST_ENV=dev`) via `check_user_allowed()` in `chat/auth.py` to allow any email domain
-   - **Dev Login** (`QUEST_ENV=dev` only): `POST /auth/dev-login` accepts `{"email": "..."}`, auto-creates user with deterministic name, sets session cookie. Returns 404 in non-dev mode. Users with existing Google OAuth credentials are blocked (403). See [Auth Submodule](auth.md) for details
+   - Domain restriction (the allowed login domain, see `auth/config.py`); relaxed in local mode (`QUEST_ENV=local`; `dev` is the legacy alias, see [Run Modes](run-modes.md)) via `check_user_allowed()` in `chat/auth.py` to allow any email domain
+   - **Dev Login** (local mode only): the `POST /auth/dev-login` route in `auth/dev_login.py` takes an email, auto-creates the user with a deterministic name and sets the session cookie. Returns 404 outside local mode. Users with existing Google OAuth credentials are blocked (403). See [Auth Submodule](auth.md) for details
 
 2. **Chat API**: RESTful endpoints and WebSocket streaming
    - Conversation CRUD operations (including rename)
@@ -284,12 +284,12 @@ The backend provides:
    - User info and settings endpoints (`GET /app/api/me`, `GET /app/api/settings`, `PUT /app/api/settings`)
    - Unauthenticated app config endpoint (`GET /app/api/config`) for frontend branding (returns `quest_env`)
    - Unauthenticated version endpoint (`GET /app/api/version`) returning the git commit hash and the release version derived from the nearest `v<semver>` git tag, captured at process startup (see `config/version.py`; shown in Settings > About)
-   - Memory CRUD, update, archive/unarchive, and search endpoints (`GET/POST /app/api/memories`, `GET/PUT/DELETE /app/api/memories/{id}`, `PUT /app/api/memories/{id}/archive`, `PUT /app/api/memories/{id}/unarchive`) -- see `chat/memory_routes.py`
-   - Guide CRUD endpoints (`GET/POST /app/api/guides`, `GET/PUT/DELETE /app/api/guides/{id}`) -- see `chat/guide_routes.py`
-   - Project CRUD and project-conversation endpoints (`GET/POST /app/api/projects`, `GET/PUT/DELETE /app/api/projects/{id}`, `GET/POST /app/api/projects/{id}/conversations`) -- see `chat/project_routes.py` and [Projects API](../api/projects-api.md)
-   - Routine CRUD endpoints (`GET/POST /app/api/projects/{id}/routines`, `GET/PUT/DELETE /app/api/projects/{id}/routines/{routine_id}`) -- see `chat/routine_routes.py` and [Routines API](../api/routines-api.md)
-   - Schedule CRUD endpoints (`GET/POST/PUT/DELETE /app/api/projects/{id}/routines/{routine_id}/schedule`) -- see `chat/schedule_routes.py` and [Schedules API](../api/schedules-api.md)
-   - Action request endpoints (`GET /app/api/action-requests`, `GET /app/api/action-requests/{id}`, `POST /app/api/action-requests/{id}/resolve`) -- see `chat/action_request_routes.py` and [Action Requests Architecture](action-requests.md)
+   - Memory CRUD, archive/unarchive, and search endpoints -- the router in `chat/memory_routes.py`
+   - Guide CRUD endpoints -- the router in `chat/guide_routes.py`
+   - Project CRUD and project-conversation endpoints -- the router in `chat/project_routes.py` and [Projects API](../api/projects-api.md)
+   - Routine CRUD endpoints (nested under a project) -- the router in `chat/routine_routes.py` and [Routines API](../api/routines-api.md)
+   - Schedule CRUD endpoints (one schedule per routine) -- the router in `chat/schedule_routes.py` and [Schedules API](../api/schedules-api.md)
+   - Action request list/detail/resolve endpoints -- the router in `chat/action_request_routes.py` and [Action Requests Architecture](action-requests.md)
    - Conversation search endpoint (`GET /app/api/search?q={query}`) -- file-based scanning with case-insensitive matching and highlighted snippets; see `chat/routes/conversations.py` and `chat/storage.py`
    - Connector status endpoint (`GET /app/api/connectors`)
    - Account management endpoints (`POST /app/api/logout`, `POST /app/api/logout-and-disconnect`, `POST /app/api/delete-account`)
@@ -297,10 +297,10 @@ The backend provides:
 
 3. **Background Scheduler**: Asyncio background task for automatic routine execution
    - Started via FastAPI's `lifespan` context manager in `quest.py`
-   - Polls every 30 seconds for due schedules across all users
+   - Polls for due schedules across all users every `POLL_INTERVAL_SECONDS` (`chat/scheduler.py`)
    - Executes scheduled routines headlessly (creates conversations, calls `run_conversation_turn()` with no-op callback)
-   - Supports daily, hourly, and interval-based schedules with timezone-aware DST handling
-   - Skip-if-running logic prevents overlapping interval-based runs; stale flag cleanup after 2 hours
+   - Supports the schedule kinds in `SCHEDULE_TYPES` (`db/schedule_timing.py`: the anchored daily/weekly/hourly kinds plus the interval kind) with timezone-aware DST handling
+   - Skip-if-running logic prevents overlapping interval-based runs; running flags older than `STALE_THRESHOLD_HOURS` (`chat/scheduler.py`) are cleared
    - Spawned execution tasks tracked in `_active_execution_tasks` set in `chat/scheduler.py`; `shutdown()` cancels all tracked tasks on server shutdown; `_execute_scheduled_run()` handles `CancelledError` gracefully
    - See [Scheduling Architecture](scheduling.md) for full details
 
@@ -323,7 +323,7 @@ User data, memories, guides, projects, routines, routine schedules, conversation
 data/
 ├── quest.db                    # SQLite database (user accounts, API keys, OAuth tokens, settings, memories, guides, projects, routines, routine schedules, conversation metadata including custom names, action requests)
 ├── logs/                        # Application log files (created automatically at startup)
-│   └── large_tool_results.jsonl  # Tool call results exceeding 2048 bytes (JSONL format, rotating, 50MB max, 3 backups)
+│   └── large_tool_results.jsonl  # Tool call results above _LARGE_RESULT_THRESHOLD (chat/gemini_api/tool_dispatch.py); JSONL, rotation per the large_tool_results_file handler in logging_config.json
 ├── projects/
 │   └── {project_id}/
 │       └── workspace/
@@ -342,15 +342,7 @@ alembic.ini                       # Alembic migration configuration
 
 **Database layer** (`db/` package):
 - `db/engine.py` -- Dual sync/async SQLAlchemy engines for the SQLite database (path from `DATABASE_PATH` in `config/paths.py`, defaults to `data/quest.db`): sync `engine` + `SessionLocal` (Alembic migrations only) and async `async_engine` + `AsyncSessionLocal` (all store modules and their FastAPI endpoint callers)
-- `db/models.py` -- `User`, `Memory`, `Guide`, `Project`, `Routine`, `RoutineSchedule`, `Conversation`, `ActionRequest`, `LlmCallGemini`, and `LlmCallAnthropic` ORM models:
-  - User has id (auto-increment integer PK), email (unique index), api_key (unique index), OAuth tokens as JSON columns, settings as JSON column
-  - Memory has id (UUID PK), user_id (FK to users.id, indexed), content (Text), created_at
-  - Guide has id (UUID PK), user_id (FK to users.id, indexed), name, content, is_default, created_at, updated_at
-  - Project has id (UUID PK), user_id (FK to users.id, CASCADE, indexed), name, guide, created_at, updated_at
-  - Routine has id (UUID PK), project_id (FK to projects.id, CASCADE), user_id (FK to users.id, CASCADE), name, prompt, guide_id (FK to guides.id, SET NULL)
-  - RoutineSchedule has id (UUID PK), routine_id (FK to routines.id, CASCADE, unique), user_id (FK to users.id, CASCADE), schedule_type, type-specific columns, scheduling state
-  - Conversation has id (Text PK, UUID), user_id (FK to users, indexed), project_id (nullable FK to projects.id, CASCADE, indexed), custom_name (nullable String(100)), created_at, last_message_at
-  - ActionRequest has id (auto-increment int PK), user_id (FK to users.id, CASCADE, indexed), conversation_id, request_type, params (JSON), reasoning, status, result (JSON), created_at, resolved_at
+- `db/models.py` -- the ORM models, one class per table (`User`, `Memory`, `Project`, `Conversation`, `ActionRequest`, the per-provider `LlmCall*` tables, ...), plus the `StrEnum` column vocabularies (`ActionRequestType`, `ActionRequestStatus`, `ToolWaitHandleKind`, ...). Columns, key types (integer vs UUID PKs), FK cascade choices and indexes are read from the class definitions; the recurring shape is a `user_id` FK to `users.id` with CASCADE delete so an account delete sweeps everything it owns
 - `db/user_store.py` -- User data access (async)
 - `db/memory_store.py` -- Memory CRUD and search (async)
 - `db/guide_store.py` -- Guide CRUD with default guide management (async)
@@ -389,28 +381,28 @@ The default model is configured via `server_config.json` (key: `gemini.model`; t
 **Gmail Integration Capabilities**:
 
 Quest provides both read and write access to Gmail:
-- **Read access**: Search messages, fetch message content (decoded/markdown), list labels (uses `gmail.readonly` scope)
-- **Write access**: Create draft emails via the `create_gmail_draft` dynamic tool / `POST /api/gmail-simple/drafts` (uses `gmail.compose` scope, does NOT send); send emails to self via the `send_gmail_to_self` dynamic tool / `POST /api/gmail-simple/send-self` (subject auto-prefixed with `[Quest]`, markdown body rendered to HTML, sent as multipart/alternative, same drive/workspace/gmail attachments + inline `cid:` images as drafts)
+- **Read access**: Search messages, fetch message content (decoded/markdown), list labels (the read-only Gmail scope in `GOOGLE_SERVICE_SCOPES`)
+- **Write access**: Create draft emails via the `create_gmail_draft` dynamic tool / `POST /api/gmail-simple/drafts` (the compose scope, does NOT send); send emails to self via the `send_gmail_to_self` dynamic tool / `POST /api/gmail-simple/send-self` (subject auto-prefixed with `_QUEST_SUBJECT_PREFIX` from `api/gmail/constants.py`, markdown body rendered to HTML, sent as multipart/alternative, same drive/workspace/gmail attachments + inline `cid:` images as drafts)
 - **Reply threading**: Simplified messages include `message_id_header` for constructing reply drafts with proper threading
 
-OAuth scopes are configured in the `SCOPES` and `GOOGLE_SERVICE_SCOPES` lists in `auth/config.py`. The `gmail.compose` scope allows sending, but direct sending is restricted to the authenticated user only (via `send-self`); emails to other recipients must go through draft creation. The `drive.file` scope enables Save to Drive functionality for workspace files. For details, see [Gmail API Documentation](../api/gmail-api.md) and [Drive API Documentation](../api/drive-api.md).
+OAuth scopes are configured in the `LOGIN_SCOPES` and `GOOGLE_SERVICE_SCOPES` lists in `auth/config.py` (`SCOPES` is their concatenation). The `gmail.compose` scope allows sending, but direct sending is restricted to the authenticated user only (via `send-self`); emails to other recipients must go through draft creation. The `drive.file` scope enables Save to Drive functionality for workspace files. For details, see [Gmail API Documentation](../api/gmail-api.md) and [Drive API Documentation](../api/drive-api.md).
 
 **Slack Integration Capabilities**:
 
 Quest provides both read and write access to Slack using a two-tier token architecture:
-- **Read access**: Dedicated dynamic tools dispatched via `tool_call` (`search_slack_messages`, `list_slack_conversations`, `get_slack_conversation_history`, `get_slack_conversation_replies`, `get_slack_user_info`, `list_slack_users`, `list_slack_teams`) wrapping the endpoint functions in `plugins/slack/upstream.py` directly (uses per-user token obtained via OAuth).
+- **Read access**: Dedicated dynamic tools dispatched via `tool_call` (the read tools in `ALL_TOOLS` in `plugins/slack/tools.py`: message search, conversation/history/replies reads, user and team lookups) wrapping the endpoint functions in `plugins/slack/upstream.py` directly (uses per-user token obtained via OAuth).
   - No per-method HTTP routes: the read routes were removed from quest.py -- sandbox scripts invoke the same tools through the script tool-call bridge (`POST /api/tool-call` with a `{tool_name, arguments}` body, see [Gemini API -- Script Tool-Call Bridge](gemini-api.md#script-tool-call-bridge-post-apitool-call)) -- and the `/api/slack` prefix is blocked in route dispatch so cached sessions still emitting `curl_proxy_get` get a use-the-dedicated-tool error.
-  - All list reads cap results to `MAX_LIMIT = 50` per request; when a higher limit is requested, a `ToolResultWithNotices` advisory directs the LLM to paginate via `next_cursor` (merged into the tool's JSON result under a `notices` key).
+  - All list reads cap results to `MAX_LIMIT` (`plugins/slack/upstream.py`) per request; when a higher limit is requested, a `ToolResultWithNotices` advisory directs the LLM to paginate via `next_cursor` (merged into the tool's JSON result under a `notices` key).
   - The workspace-scoped reads accept an optional `team_id` parameter for cross-workspace queries; defaults to the user's home workspace
-- **Channel search**: `find_slack_channel` dynamic tool (dispatched via `tool_call` meta tool) in `plugins/slack/tools.py` searches channels by name substring (case-insensitive) across all workspaces. Resolves E-prefix Enterprise IDs to T-prefix workspace IDs via `auth.teams.list` (bot token), then queries `conversations.list` (user token). Uses existing `channels:read` and `groups:read` scopes
-- **Write access (bot, self-messaging)**: Send DMs to the authenticated user via the `send_slack_dm_to_self` dynamic tool (uses shared bot token; messages appear from the Quest app), with optional workspace-file attachments (`files`: workspace-relative paths, max 10, 50 MB each).
-  - Attachments are uploaded through Slack's external upload flow (`conversations.open` for the DM channel, then `files.getUploadURLExternal` + `files.completeUploadExternal` with the message as initial comment, so text and files land as ONE Slack message; file sends need the `files:write` and `im:write` bot scopes on top of `chat:write`).
+- **Channel search**: `find_slack_channel` dynamic tool (dispatched via `tool_call` meta tool) in `plugins/slack/tools.py` searches channels by name substring (case-insensitive) across all workspaces. Resolves E-prefix Enterprise IDs to T-prefix workspace IDs via `auth.teams.list` (bot token), then queries `conversations.list` (user token). Needs no scopes beyond the channel-read ones already in `SLACK_USER_SCOPES` (`plugins/slack/upstream.py`)
+- **Write access (bot, self-messaging)**: Send DMs to the authenticated user via the `send_slack_dm_to_self` dynamic tool (uses shared bot token; messages appear from the Quest app), with optional workspace-file attachments (`files`: workspace-relative paths; the file-count cap is `_SLACK_DM_SELF_MAX_FILES` in `plugins/slack/tools.py`, the per-file size cap `_ATTACHMENT_MAX_SIZE_BYTES` of the shared `read_workspace_file_bytes()` reader in `chat/action_request_types/_io_attachments.py`).
+  - Attachments are uploaded through Slack's external upload flow (`conversations.open` for the DM channel, then `files.getUploadURLExternal` + `files.completeUploadExternal` with the message as initial comment, so text and files land as ONE Slack message; the extra bot scopes a file send needs are named on the `send_dm_to_self()` docstring in `plugins/slack/upstream.py`).
   - This is the preferred path when the user wants to message themselves (e.g., "send me a message", "DM me", "remind me") -- it requires no approval and works in automated/scheduled routines where there is no human to approve action requests. The system prompt, tool declaration, and API instructions all direct the model to prefer this tool for self-messaging over `send_slack_message` action requests.
   - It is also the sole connector tool available in [public-project](public-projects.md) conversations (outbound-only, fixed recipient). There is no HTTP route (the old `POST /api/slack-simple/dm-self` is retired); sandbox scripts send text-only self-DMs through the `/api/tool-call` bridge
-- **Write access (user, others/channels)**: Send messages to other people or Slack channels via `send_slack_message` action requests (uses per-user token, requires `chat:write` and `im:write` scopes, Block Kit formatted with dynamic Quest attribution that includes the sender's first name). Channel names resolved at creation time for preview display. Legacy `send_slack_dm` handler preserved for backward compatibility
+- **Write access (user, others/channels)**: Send messages to other people or Slack channels via `send_slack_message` action requests (uses per-user token with the write scopes in `SLACK_USER_SCOPES`, Block Kit formatted with dynamic Quest attribution that includes the sender's first name). Channel names resolved at creation time for preview display. Legacy `send_slack_dm` handler preserved for backward compatibility
 - **Org-wide queries**: List workspaces via the `list_slack_teams` tool (uses shared bot token)
 
-The bot token is a shared credential installed once by an org admin and stored in the `slack` section of `server_credentials.json` alongside `client_id` and `client_secret`. Per-user OAuth grants user tokens for both read operations and user-initiated write operations (sending Slack messages via action requests). For Slack setup and OAuth configuration, see [Slack App Setup Guide](../../plugins/slack/docs/slack-app-setup.md).
+The bot token is a shared credential installed once by an org admin and stored with the OAuth client id/secret in the `slack` entry of the per-service credential store (see [Service Credentials](service-credentials.md); the legacy `server_credentials.json` section migrates at startup). Per-user OAuth grants user tokens for both read operations and user-initiated write operations (sending Slack messages via action requests). For Slack setup and OAuth configuration, see [Slack App Setup Guide](../../plugins/slack/docs/slack-app-setup.md).
 
 **Telegram Integration** (the `plugins/telegram` plugin -- see [Plugin Architecture](plugins.md)):
 
@@ -419,7 +411,7 @@ Quest supports Telegram via Telethon:
 - **Session storage**: Telethon's StringSession in the user's `user_service_credentials` row (service `telegram`, `oauth_blob.session`; migration `d7a1f3c9e2b4` moved it out of the old `users.telegram_session` column)
 - **Configuration**: API credentials (`api_id`/`api_hash`) in the per-service credential store (admin Settings > Service Credentials; legacy `telegram_app_info` section of `server_config.json` migrated by the plugin's `post_load` hook)
 - **Client helpers**: `plugins/telegram/upstream.py` provides `create_telegram_client()`, credential loading, and the `TelegramClientManager` whose per-user connections the plugin's `on_shutdown` hook closes
-- **Read access**: List dialogs, fetch messages, list contacts via the dedicated `telegram_get_me` / `telegram_list_dialogs` / `telegram_get_messages` / `telegram_list_contacts` dynamic tools (`tool_call`; no `/api/telegram/*` HTTP routes -- the prefix is blocked in route dispatch; sandbox scripts use the `/api/tool-call` bridge)
+- **Read access**: Identity, dialogs, messages and contacts via the dedicated read tools in `TELEGRAM_TOOLS` (`plugins/telegram/tools.py`; dispatched via `tool_call`, no `/api/telegram/*` HTTP routes -- the prefix is blocked in route dispatch; sandbox scripts use the `/api/tool-call` bridge)
 - **Write access**: Send messages to any Telegram dialog (user, group, or channel) via `send_telegram_message` action requests (uses Telethon client, HTML-escaped messages with attribution footer, dialog names resolved at creation time for preview display)
 
 For Telegram setup and configuration, see [Telegram Setup Guide](../../plugins/telegram/docs/telegram-setup.md).
@@ -430,10 +422,10 @@ Quest provides read-only access to Airtable via Personal Access Tokens and the `
 - **Authentication**: Personal Access Token (PAT) stored in `airtable_token` column in `db/models.py`. PATs are used instead of OAuth to avoid token refresh complexity, conversation coordination issues, and background refresh requirements -- see [Airtable API Documentation](../api/airtable-api.md) for the full rationale
 - **Token management**: Endpoints in `auth/airtable.py` at `/auth/airtable/save-token` and `/auth/airtable/remove-token`
 - **API access**: Read-only access via `authed_get` tool with `https://api.airtable.com/v0/...` URLs; instruction text only in `api/airtable.py` (no proxy endpoints)
-- **Allowed endpoints**: Server-side URL path validation via `allowed_endpoints` regex patterns in `_SERVICE_REGISTRY` restricts access to five read-only API paths
+- **Allowed endpoints**: Server-side URL path validation via the `allowed_endpoints` regex patterns of the Airtable entry in `_SERVICE_REGISTRY` (`chat/gemini_api/authed_get.py`) restricts access to the read-only metadata and record paths
 - **Configuration**: Users paste their PAT in Settings > Data Connections via the shared `ApiKeyForm` component; when connected, shows "Connected" badge with key preview (...XXXX via `key_hint`) and Disconnect button
 - **Read access**: List bases, get base schemas, list/filter records, get individual records, list comments
-- **Token validation**: Tokens must start with "pat" prefix
+- **Token validation**: Tokens must carry Airtable's PAT prefix (the check in `save_airtable_token()` in `auth/airtable.py`)
 - **Session invalidation**: Token save/remove triggers system prompt refresh to include/exclude Airtable documentation
 
 For Airtable API details, see [Airtable API Documentation](../api/airtable-api.md).
@@ -443,11 +435,11 @@ For Airtable API details, see [Airtable API Documentation](../api/airtable-api.m
 Quest provides read-only access to GitHub via per-user OAuth tokens and the `authed_get` tool, packaged as the in-tree `plugins/github` plugin (the oauth-kind reference plugin -- see [Plugins](plugins.md)):
 - **Authentication**: Standard GitHub OAuth App flow. Tokens do not expire (no refresh logic needed). Admin client credentials in the `github` per-service credential store entry (legacy `server_credentials.json` `github` section migrates at startup)
 - **OAuth flow**: the plugin's router in `plugins/github/oauth.py` (`/auth/github`, `/auth/github/callback`, `/auth/github/disconnect`) with popup window support, mounted by `mount_plugin_oauth_routers()`
-- **Token storage**: `oauth_blob` of the user's `user_service_credentials` row for service `github` (`access_token`, `token_type`, `scope`, granted `scopes` list, `authorized_at`)
-- **Scopes**: `repo` (private repo access -- no read-only scope exists in GitHub) and `read:org` (organization membership). Defined in `GITHUB_SCOPES` in `plugins/github/upstream.py`; a stale grant (granted set no longer covering `GITHUB_SCOPES`) flags `needs_reauth` on the connector row
+- **Token storage**: `oauth_blob` of the user's `user_service_credentials` row for service `github` (the token fields plus the granted scopes list, as written by the callback in `plugins/github/oauth.py`)
+- **Scopes**: `GITHUB_SCOPES` in `plugins/github/upstream.py` (the reason each scope is needed -- GitHub has no read-only repo scope for OAuth apps -- is on the constant); a stale grant (granted set no longer covering `GITHUB_SCOPES`) flags `needs_reauth` on the connector row
 - **API access**: Read-only access via `authed_get` tool with `https://api.github.com/...` URLs; instruction text in `plugins/github/instructions.md` (the `system:github` skill). The plugin-registered `api.github.com` service entry provides the credential loader, Bearer auth injector, and allowed-endpoints list
-- **Allowed endpoints**: Server-side URL path validation via `allowed_endpoints` regex patterns in the service entry enforces the read-only allow-list (user profile, repos, branches, issues, PRs, commits, contents, org repos, search, Actions reads) regardless of what the `repo` OAuth scope grants at the token level
-- **Default headers**: The service entry's `default_headers` field injects `User-Agent: Quest/1.0` and `Accept: application/vnd.github+json` on every request (GitHub's REST API rejects requests without a `User-Agent`). See [Authenticated External API Requests](gemini-api.md#authenticated-external-api-requests-authed_get)
+- **Allowed endpoints**: Server-side URL path validation via the `allowed_endpoints` regex patterns of the service entry in `plugins/github/manifest.py` enforces the read-only allow-list regardless of what the `repo` OAuth scope grants at the token level
+- **Default headers**: The service entry's `default_headers` field (same file) injects a `User-Agent` and the GitHub JSON `Accept` header on every request (GitHub's REST API rejects requests without a `User-Agent`). See [Authenticated External API Requests](gemini-api.md#authenticated-external-api-requests-authed_get)
 - **Configuration**: Users connect via Settings > Data Connections using the OAuth popup flow
 - **Session invalidation**: Connect triggers system prompt refresh to include/exclude GitHub API documentation
 
@@ -457,18 +449,18 @@ For GitHub setup, see [GitHub App Setup Guide](../../plugins/github/docs/github-
 
 The project migrated from the original Docker-based Gemini CLI integration to a direct Python Gemini API integration using the `google-genai` SDK (the Docker mode has since been removed entirely). This migration has three layers:
 
-**Route Dispatch** (`chat/route_dispatch.py`) -- Internal tool call dispatch that lets the model's `curl_proxy_get` and `curl_proxy_post` tool calls invoke FastAPI endpoint handlers directly without HTTP. The dispatch pipeline validates URLs (must be `localhost/api/*` on an allowed port -- `8000` in production, both `8000` and `9000` in dev mode), resolves routes via Starlette's `route.matches()`, introspects handler signatures to build keyword arguments, and calls endpoints directly.
+**Route Dispatch** (`chat/route_dispatch.py`) -- Internal tool call dispatch that lets the model's `curl_proxy_get` and `curl_proxy_post` tool calls invoke FastAPI endpoint handlers directly without HTTP. The dispatch pipeline validates URLs (must be `localhost/api/*` on one of the ports `validate_url()` in `chat/route_dispatch.py` accepts: the production port, the configured proxy port and the sandbox tool-API port), resolves routes via Starlette's `route.matches()`, introspects handler signatures to build keyword arguments, and calls endpoints directly.
 
 Every successful dispatch is logged at INFO level with HTTP method, path, endpoint name, duration, user email, and result length; errors are logged with tool name, URL, and user email. This module established the `user=<email>` logging convention. See [Route Dispatch Architecture](route-dispatch.md).
 
 **LLM Provider Abstraction** (`chat/llm/` package) -- Multi-provider LLM abstraction layer with `LLMProvider` interface, model registry, and provider-agnostic tool definitions. Supports Google Gemini (via `google-genai` SDK) and Anthropic Claude (via `anthropic[vertex]` SDK on Vertex AI). See [LLM Provider Abstraction](llm-providers.md).
 
-**Conversation Loop** (`chat/gemini_api/` package) -- Provider-agnostic conversation loop using the `LLMProvider` interface for streaming and tool calling. Replaces the Docker container with in-process SDK chat sessions. The package defines tool declarations in three tiers in `chat/llm/tool_schemas.py` (`BASE_TOOLS` with 9 shared tools including the `tool_call` meta tool, `TOP_LEVEL_TOOLS` with 13 tools for top-level agents, `SUB_AGENT_TOOLS` with 10 tools for sub-agents), plus `TOOL_CALL_REGISTRY` with the dynamic tools dispatched via the `tool_call` meta tool (see [Conversation Loop and Tool Integration -- Tool Declarations](gemini-api.md#tool-declarations) for the roster).
+**Conversation Loop** (`chat/gemini_api/` package) -- Provider-agnostic conversation loop using the `LLMProvider` interface for streaming and tool calling. Replaces the Docker container with in-process SDK chat sessions. The package defines tool declarations as tiers in `chat/llm/tool_schemas.py` -- `BASE_TOOLS` (shared by every run kind, including the `tool_call` meta tool) extended per run kind into `TOP_LEVEL_TOOLS`, `SUB_AGENT_TOOLS` and the routine / Slack / user-subagent / inference-API / public variants defined alongside them -- plus `TOOL_CALL_REGISTRY` with the dynamic tools dispatched via the `tool_call` meta tool (see [Conversation Loop and Tool Integration -- Tool Declarations](gemini-api.md#tool-declarations) for the roster).
 
 The package manages in-memory chat sessions keyed by `(user_id, conversation_id)` in `chat/gemini_api/session.py`, and runs a streaming conversation loop in `chat/gemini_api/conversation.py` with UUID-based tool ID generation (`uuid.uuid4()`) for global uniqueness across turns that dispatches tool calls through a shared `_dispatch_tool_call()` function in `chat/gemini_api/tool_dispatch.py`. This function handles:
 
 - the `tool_call` meta tool (validates `tool_name` against `TOOL_CALL_REGISTRY`, delegates to the appropriate handler)
-- remaining direct local tools (`load_gmail_attachment`, `run_script`, `run_python`, `list_skills`, `search_skills`, `load_skills`) via handlers in the `chat/gemini_api/tool_handlers/` package (one module per tool domain)
+- the remaining direct local tools (the per-name arms of `_dispatch_tool_call_inner()`: attachment loading, the sandbox script tools, skill discovery/loading) via handlers in the `chat/gemini_api/tool_handlers/` package (one module per tool domain)
 - HTTP tools, by falling back to the route dispatch pipeline (`curl_proxy_get`, `curl_proxy_post`), which enforces a blocklist (`_BLOCKED_PROXY_PATHS` in `chat/route_dispatch.py`) preventing access to internal-only endpoints like `/api/authed-get`
 
 Backward compatibility dispatch paths for all converted tools are retained for cached sessions. Agent-specific tools (`agent_task`, `agent_task_parallel`, `create_action_request`, and the other loop-handled arms) are dispatched through the per-tool handler registry `TURN_TOOL_HANDLERS` in `chat/gemini_api/turn_tools.py` (`agent_task_response` is handled in the sub-agent loop).
@@ -479,26 +471,26 @@ System prompts (built in `chat/gemini_api/system_prompt.py`) include a user iden
 
 The main conversation loop has no turn limit (it runs until the model finishes responding; `turn_count` is tracked and included in the `stats` event for observability). Sub-agents (implemented in `chat/gemini_api/sub_agent.py`) have model-specific turn limits determined by `get_sub_agent_turn_limits(model)` in `chat/gemini_api/constants.py`:
 
-- models whose registry `max_input_tokens` is 200K or less get 20 turns max with warning at 15, while 1M-token models and unknown models get the default 60/50
-- the turn warning is injected via `provider.inject_turn_warning()` to prompt graceful wind-down before the hard limit, and a context window warning is injected at `SUB_AGENT_CONTEXT_WARNING_THRESHOLD = 0.75` (75% of the model's `max_input_tokens`) via the same mechanism
+- models whose registry `max_input_tokens` is 200K or less get the smaller (max, warning) pair hard-coded in that function because they fill their context faster, while 1M-token models and unknown models get the defaults `MAX_SUB_AGENT_TURNS` / `SUB_AGENT_TURN_WARNING_THRESHOLD`
+- the turn warning is injected via `provider.inject_turn_warning()` to prompt graceful wind-down before the hard limit, and a context window warning is injected once usage passes the `SUB_AGENT_CONTEXT_WARNING_THRESHOLD` fraction of the model's `max_input_tokens` via the same mechanism
 
 Top-level agents have access to:
 
 - `agent_task` for spawning a single sub-agent (with an optional `model` parameter to select the sub-agent's model, which can be from any provider; tool description directs the model to prefer `agent_task_parallel` for multiple independent tasks)
-- `agent_task_parallel` for spawning multiple sub-agents concurrently (up to `MAX_PARALLEL_TASKS = 10`, with per-task error isolation)
+- `agent_task_parallel` for spawning multiple sub-agents concurrently (up to `MAX_PARALLEL_TASKS`, with per-task error isolation)
 - `create_action_request` for proposing write operations (including memory writes via `request_type="create_memory"`) with user approval
 
-Sequential `agent_task` calls within a single model response are capped at `MAX_AGENT_TASKS_PER_TURN = 10` (returns error directing use of `agent_task_parallel`); sub-agents have `agent_task_response` for returning results. All limit constants are defined in `chat/gemini_api/constants.py`. Sub-agent spawn/completion, internal tool calls, and termination are all logged at INFO level with structured prefixes (`[agent_task]`, `[agent_task_parallel]`, `[sub-agent:<name>]`) and include `user=<email>` for per-user filtering.
+Sequential `agent_task` calls within a single model response are capped at `MAX_AGENT_TASKS_PER_TURN` (returns error directing use of `agent_task_parallel`); sub-agents have `agent_task_response` for returning results. All limit constants are defined in `chat/gemini_api/constants.py`. Sub-agent spawn/completion, internal tool calls, and termination are all logged at INFO level with structured prefixes (`[agent_task]`, `[agent_task_parallel]`, `[sub-agent:<name>]`) and include `user=<email>` for per-user filtering.
 
 The workspace file tools allow the model to list, read, write, and edit files in the conversation workspace (in project conversations the five scheme-qualified tools `list_files` / `read_file` / `write_file` / `edit_file` / `copy_file` replace them, addressing `chat://` or `proj://`, see [Conversation Loop -- Scheme-Qualified File Tools](gemini-api.md#scheme-qualified-file-tools)); binary/large files are uploaded via the provider's `upload_file()` method for native analysis (Gemini uses the File Upload API; Anthropic base64-encodes supported images and PDFs inline).
 
-`write_workspace_file` creates/overwrites text files with path traversal protection and a 1MB size limit; `edit_workspace_file` performs exact string replacement on existing text files with the same protections plus a read-before-edit gate tracked in a per-conversation `workspace_reads.json` sidecar (see [Conversation Loop and Tool Integration](gemini-api.md)).
+`write_workspace_file` creates/overwrites text files with path traversal protection and a size limit (`_WRITE_FILE_MAX_SIZE` in `chat/gemini_api/constants.py`); `edit_workspace_file` performs exact string replacement on existing text files with the same protections plus a read-before-edit gate tracked in a per-conversation `workspace_reads.json` sidecar (see [Conversation Loop and Tool Integration](gemini-api.md)).
 
 The memory tools (`memory_search`, `memory_list`) give agents read-only access to the user's saved memories via `db/memory_store.py`. Memory writes go through `create_action_request(request_type="create_memory", ...)`, which inserts an `action_requests` row plus a linked `kind="action_request"` wait-handle row and blocks the agent loop via `SuspendForActionRequest` until the user clicks Approve / Revise / Deny on the inline card.
 
 On Approve, `CreateMemoryHandler` calls `db.memory_store.create_memory` and returns the new `memory_id` on `result`. The DB rows are the source of truth, so the suspend/resume survives server restarts -- see [Wait Handles Architecture](wait-handles.md) and [Action Requests](action-requests.md).
 
-SDK history persistence is handled by `chat/gemini_api/history.py`. The `chat/gemini_api/__init__.py` re-exports `run_conversation_turn`, `remove_chat_session`, `invalidate_user_sessions`, and `cancel_pending_wait_handles_for_conversation`.
+SDK history persistence is handled by `chat/gemini_api/history.py`. The `chat/gemini_api/__init__.py` re-exports the package's public entry points (the turn runner from `conversation.py` and the session-lifecycle functions from `session.py`; the list is its import block).
 
 All application logging uses a unified configuration defined in `chat/logging_config.py`, and all user-driven log entries follow the `user=<email>` convention for consistent user identification across modules. See [Logging Architecture](logging.md) for details and [Gemini API Integration](gemini-api.md) for the Gemini-specific logging.
 
@@ -521,7 +513,7 @@ The system prompt embeds API documentation directly rather than pointing to an e
 System instructions sent to the LLM are conditionally built based on which services the user has connected. Instead of including all API endpoint documentation in every system prompt, only the documentation for connected services is included. This reduces context window usage and prevents the model from attempting to use APIs the user has not authorized.
 
 The implementation uses a composable architecture:
-- `get_user_connected_services(user)` in `api/instructions.py` extracts connection status from the user dict, returning a dict with boolean keys: `google_services`, `airtable`, `ramp`, plus one key per loaded plugin (e.g. `slack`, `telegram`, `github`, `twitter`)
+- `get_user_connected_services(user)` in `api/instructions.py` extracts connection status from the user dict, returning a dict of booleans: one key per core service backed by a dedicated user-dict field (the literal dict at the top of the function), one key per loaded plugin (server-configured AND user-connected), plus the capability pseudo-keys in `PSEUDO_SERVICE_KEYS` (feature gates that gate tools the same way without being connections)
 - Each API submodule (e.g., `api/gmail/`, `api/drive.py`, `api/airtable.py`) defines a `get_instructions()` function containing the system prompt documentation for that service; `get_instructions_content()` in `api/instructions.py` aggregates them
 - When `connected_services` is `None` (the default), all services are included for backward compatibility (used by the `/api/instructions` endpoint)
 - The tool usage examples in the system prompt are also filtered by connection status via `_build_service_examples()` in `chat/gemini_api/system_prompt.py`
@@ -556,9 +548,10 @@ The `run_script` and `run_python` tools execute scripts in ephemeral Podman cont
 1. User types message in ChatPanel textarea and presses Enter
 2. ChatPanel calls useConversation.sendMessage(text)
 3. useConversation adds user message optimistically to conversationStore
-4. WebSocketManager opens WebSocket: /app/api/conversations/{id}/message (cookie sent automatically)
-5. Backend validates session cookie (or API key query param) and conversation ownership
-6. WebSocketManager sends JSON: {"message": "user's text", "timezone": "America/Los_Angeles", "model": "gemini-3.1-pro-preview", "guide_id": "uuid"}
+4. WebSocketManager sends the frame on the persistent WebSocket WS /app/api/stream (cookie sent automatically)
+5. Backend validates session cookie (or API key) and conversation ownership
+6. WebSocketManager sends the send_message envelope (shape: WebSocketSendMessage in
+   frontend/src/api/types.ts; parsed by _handle_send_message() in chat/realtime/socket.py)
    - Timezone captured from browser via Intl.DateTimeFormat().resolvedOptions().timeZone
    - Model selected by user via dropdown in ChatPanel (persisted server-side on conversation record; hydrated from server on load; filtered to same-provider models after first message)
    - Guide ID selected by user via dropdown in ChatPanel (persisted per-conversation in localStorage; omitted for old conversations without guides)
@@ -572,11 +565,15 @@ The `run_script` and `run_python` tools execute scripts in ephemeral Podman cont
    9e. Tool calls are dispatched through route_dispatch.execute_tool_call()
 
 10. Backend forwards events to the persistent WebSocket on the per-conversation channel:
-    - Transient: text_delta, tool_started, sub_agent_tool_use / sub_agent_tool_result / sub_agent_finished, conversation_updated
+    - Transient: streaming text deltas, the tool-started hint and sub-agent updates, mirrored
+      by _publish_transient_event() in chat/realtime/socket.py (envelope builders in chat/realtime/events.py)
     - Durable (via flush callback): message_appended {seq} -- client REST-fetches the new tail
-    - Run lifecycle: send_message_finished {interrupted}, stop_acknowledged, send_message_rejected
-    - Per-user globals: file_list_changed {conversation_id, project_id, scope}, conversation_list_changed, request_count_changed, wait_handle_resolved
-    - Tool / approval payloads (tool_use, tool_result, action_request, stats) are persisted to chat_history.json by the flush callback and surface in the next message_appended round trip
+    - Run lifecycle: send_message_finished / stop_acknowledged / send_message_rejected (see realtime.md)
+    - Per-user globals: the make_*() envelopes in chat/realtime/events.py (file lists, conversation
+      lists, request counts, wait handles, docs)
+    - Every structured message whose type is in FLUSH_EVENT_TYPES (chat/_flush_helper.py -- tool
+      use/result, approval cards, stats, durable error and notice rows) is persisted to
+      chat_history.json by the flush callback and surfaces in the next message_appended round trip
 11. WebSocketManager receives messages and updates conversationStore:
     - Text chunks accumulated in partialResponse
     - Tool use/result messages added to streamingMessages
@@ -595,8 +592,8 @@ When the LLM uses tools during response generation, the system handles them spec
 1. Gemini decides to use a tool (e.g., read a file, make an API call, spawn a sub-agent)
 2. Backend receives tool_use event from Gemini CLI stream
 3. Backend saves any accumulated text as a separate message
-4. Backend sends structured tool_use message to frontend:
-   {"type": "tool_use", "tool_name": "...", "tool_input": {...}, "tool_id": "...", "intent_message": "..."}
+4. Backend sends a structured tool_use message to the frontend (shape: ToolUseMessage in
+   frontend/src/api/types.ts -- tool name, input, id and the optional intent_message)
 5. Frontend renders ToolUseMessage component with "running..." status
    - For regular tools: displays intent_message (description) as primary label, tool name as secondary label
    - Falls back to tool name as primary label if no intent_message is available
@@ -609,8 +606,8 @@ When the LLM uses tools during response generation, the system handles them spec
      in chat/gemini_api/sub_agent.py (all run silently; individual failures are isolated)
    - For other tools: executes via route dispatch or local handler
 7. Backend receives tool_result event
-8. Backend sends tool_result to frontend:
-   {"type": "tool_result", "tool_id": "...", "tool_output": "..."}
+8. Backend sends the tool_result to the frontend (shape: ToolResultMessage in the same file,
+   paired to its tool_use by tool_id)
 9. Frontend updates ToolUseMessage to show "completed" status
 10. User can expand the component to see full input/output
 11. Process repeats if Gemini uses more tools
@@ -653,7 +650,7 @@ Folder Download:
 Viewing Files:
 1. User clicks a viewable file (text, image, or PDF) in the file list
 2. FileViewerModal opens -- text files fetched via content endpoint, images and PDFs fetched via download endpoint
-3. Text rendered in scrollable <pre>; images rendered with checkerboard background, responsive scaling, and dimension/size metadata in title bar; PDFs rendered by PdfViewer (pdf.js, thumbnail rail + lazy fit-to-width pages, 100 MB preview cap)
+3. Text rendered in scrollable <pre>; images rendered with checkerboard background, responsive scaling, and dimension/size metadata in title bar; PDFs rendered by PdfViewer (pdf.js, thumbnail rail + lazy fit-to-width pages, preview cap PDF_MAX_PREVIEW_BYTES in FileViewerModal.tsx)
 
 Auto-Refresh on Workspace Mutation:
 1. Backend tool handler (e.g., write_workspace_file) or mutating REST route
@@ -662,8 +659,8 @@ Auto-Refresh on Workspace Mutation:
    conversation_id, project_id, and scope ("project" or "conversation")
 3. PersistentWebSocket forwards the per-user global to onGlobalEvent listeners
 4. Each FileBrowser card filters by its own space (Chat Files: scope="conversation"
-   + conversation_id; Project Files: scope="project" + project_id), debounces 200ms,
-   then calls silentRefresh()
+   + conversation_id; Project Files: scope="project" + project_id), debounces by
+   FILE_LIST_REFRESH_DEBOUNCE_MS, then calls silentRefresh()
 5. useFileBrowser hook fetches updated file list (stale-while-revalidate)
 ```
 
@@ -729,7 +726,8 @@ Disconnect resilience is implemented in `_run_send_message` (`chat/realtime/sock
 4. Frontend → GET /app/api/search?q={query} (cookie sent automatically)
 5. Backend validates session, calls ChatStorage.search_conversations() in `chat/storage.py`
 6. search_conversations() scans chat_history.json files with case-insensitive matching
-7. Backend returns highlighted snippets (max 3 per conversation, 50 total)
+7. Backend returns highlighted snippets (per-conversation and total caps are the
+   max_per_conversation / max_results defaults of search_conversations())
 8. SearchModal displays results with keyboard navigation
 9. User clicks/selects a result → navigates to conversation URL and sets scrollToMessageIndex in NavigationContext
 10. ChatPanel loads conversation and scrolls to the target message with highlight animation
@@ -749,27 +747,27 @@ The chat app uses an inline sign-in screen on `/` instead of redirecting to a se
 5. Google OAuth flow (authorize → callback → exchange code for tokens)
 6. Quest validates the email against the allowed login domain
 7. Quest generates API key and stores user in the database via `db/user_store.py` (including name from Google user info)
-8. Quest sets session cookie (name determined by `COOKIE_NAME` in `auth/config.py`, environment-dependent; see [Auth Submodule](auth.md)) with signed, versioned payload (`{"v": COOKIE_VERSION, "uid": user_id}`)
+8. Quest sets session cookie (name determined by `COOKIE_NAME` in `auth/config.py`, environment-dependent; see [Auth Submodule](auth.md)) with the signed, versioned payload built by `set_session_cookie()` in `auth/session.py` (version + user id, plus the optional password-fingerprint and impersonation fields)
 9. OAuth callback redirects to /
 10. Frontend detects valid session and renders the chat interface
 ```
 
-### Dev Email Login (QUEST_ENV=dev Only)
+### Dev Email Login (local mode only)
 
 ```
 1. User visits / in browser
-2. AppConfigContext fetches GET /app/api/config, detects quest_env === "dev", sets isDevMode = true
+2. AppConfigContext fetches GET /app/api/config, derives isDevMode from quest_env (the mode literals are in AppConfigContext.tsx)
 3. SignInScreen shows dev login section: email input + "Dev Login" button below the Google sign-in button
 4. User enters any email address and clicks "Dev Login"
 5. Frontend POSTs {"email": "..."} to /auth/dev-login
 6. Backend validates email, looks up or creates user with deterministic name from canned lists
 7. If user has existing google_oauth credentials → 403 (must use Google sign-in)
-8. Backend sets session cookie (same format as Google OAuth: {"v": COOKIE_VERSION, "uid": user_id})
+8. Backend sets session cookie (same set_session_cookie() payload as Google OAuth)
 9. Frontend reloads the page
 10. Session check succeeds, chat interface loads
 ```
 
-The domain check (`check_user_allowed()` in `chat/auth.py`) is relaxed in dev mode to allow any email domain, not just the allowed login domain.
+The domain check (`check_user_allowed()` in `chat/auth.py`) is relaxed in local mode to allow any email domain, not just the allowed login domain.
 
 ### Cookie-Based Frontend Auth
 
@@ -777,10 +775,10 @@ When the user visits the chat app after logging in, the frontend authenticates d
 
 ```
 1. User visits / (session cookie already set from OAuth login)
-2. AppConfigContext fetches GET /app/api/config to determine appName ("DevQuest" or "Quest")
+2. AppConfigContext fetches GET /app/api/config to determine appName (per-mode literals in AppConfigContext.tsx)
 3. App.tsx sets document.title to appName; frontend shows loading state with appName heading
 4. AuthContext calls checkSession() which hits GET /app/api/me with cookie
-4. Backend validates session cookie (named `COOKIE_NAME` from `auth/config.py`, environment-dependent) via `get_user_from_cookie()` in `auth/session.py` (strict type checks on `uid` and `v` fields: must be int, not bool, and uid must be positive), returns { email, name, google_services_connected, has_any_service_connected }
+4. Backend validates session cookie (named `COOKIE_NAME` from `auth/config.py`, environment-dependent) via `get_user_from_cookie()` in `auth/session.py` (strict type checks on `uid` and `v` fields: must be int, not bool, and uid must be positive), returns the identity + connection-flag payload built by `get_current_user_info()` in `chat/routes/user.py`
 5. Frontend sets isAuthenticated = true, stores userEmail, userName, googleServicesConnected, and hasAnyServiceConnected
 6. If has_any_service_connected is false (no services connected at all), settings auto-opens to Data Connections section
 7. Frontend renders chat interface with Sidebar (Projects section + Conversations list), ChatPanel, and FileBrowser
@@ -797,7 +795,7 @@ If the session check fails (not logged in, expired session, etc.):
 User Info Flow:
 1. AuthContext calls checkSession() on mount
 2. checkSession() calls GET /app/api/me with credentials: 'include' (cookie auth)
-3. Backend returns { email, name, google_services_connected, has_any_service_connected } from the database
+3. Backend returns the get_current_user_info() payload (chat/routes/user.py) from the database
 4. AuthContext stores userEmail, userName, googleServicesConnected, hasAnyServiceConnected, sets isAuthenticated = true
 5. If hasAnyServiceConnected is false (no services connected at all), settings auto-opens to Data Connections
 6. Sidebar renders UserInfoBar at bottom with name, email, avatar initial, and gear icon
@@ -817,9 +815,10 @@ Settings Flow (Custom Instructions):
 Settings Flow (Data Connections):
 1. User clicks "Data Connections" in the Settings nav sidebar
 2. DataConnectionsSection fetches connector status: GET /app/api/connectors (cookie auth)
-3. Backend returns connection status for all connectors (Google Services, Slack, GitHub,
-   Telegram, Airtable, plugin rows) with connect/reconnect URLs; api_key rows include `key_hint`
-   (last 4 characters of the stored key) when connected
+3. Backend returns connection status for every supported connector (core rows plus one per
+   loaded plugin with a user connection, built by the /connectors handler in chat/routes/user.py)
+   with connect/reconnect URLs; api_key rows include a `key_hint` tail of the stored key when
+   connected (the tail length is the slice literal in that handler)
 4. OAuth connectors (Google Services, Slack, GitHub, Telegram) show Connect/Reconnect button
    and optional "needs new scopes" badge
 5. API key connectors (Airtable, api_key-kind plugin rows) use a shared ApiKeyForm component: text field to paste
@@ -852,10 +851,7 @@ Settings Flow (Sign Out):
 
 **User Identity in System Prompts**:
 
-Both `get_system_prompt()` and `get_sub_agent_system_prompt()` in `chat/gemini_api/system_prompt.py` accept optional `user_name` and `user_email` parameters. When `user_email` is present, an identity line is injected after the role description so the LLM knows who it is assisting. The identity line format is:
-- With name and email: "You are an AI agent helping {name} ({email})."
-- With email only: "You are an AI agent helping {email}."
-- No email: no identity line added
+Both `get_system_prompt()` and `get_sub_agent_system_prompt()` in `chat/gemini_api/system_prompt.py` accept optional `user_name` and `user_email` parameters. When `user_email` is present, an identity line ("You are an AI agent helping ...", the `identity_line` literals in those functions) is injected after the role description so the LLM knows who it is assisting; it names the user by name and email when a name is known, by email alone otherwise, and is omitted entirely without an email.
 
 User data comes from the `user` dict at call sites (`user.get("name", "")` and `user["email"]`; the user's integer `id` is used for storage paths and session keys).
 
@@ -895,7 +891,7 @@ System instructions are filtered based on the user's connected services. Only do
 
 - `run_conversation_turn()` calls `get_user_connected_services(user)` from `api.instructions` and passes the result to `get_system_prompt()` and `get_sub_agent_system_prompt()`, along with the user's name and email for identity injection. Both functions forward `connected_services` to `get_instructions_content()` in `api.instructions` for documentation filtering, and to `_build_service_examples()` in `chat/gemini_api/system_prompt.py` for example filtering. Auth dependencies are imported from the `auth/` submodule.
 - **`/api/instructions` endpoint**: Always shows all services regardless of connection status (passes `connected_services=None`).
-- **Service groups**: `google_services` (Gmail, Calendar, Drive, Docs, Sheets, Tasks), `airtable`, `ramp`, plus loaded plugins (e.g. `slack`, `telegram`, `github`, `twitter`).
+- **Service groups**: the keys of the `get_user_connected_services()` map -- the core services with a dedicated user-dict field, one key per loaded plugin, and the `PSEUDO_SERVICE_KEYS` capability gates (all Google APIs share the single `google_services` key because they ride on one OAuth grant).
 - **Key files**:
   - `api/instructions.py` (`get_user_connected_services()`, `get_instructions_content()`)
   - per-service `get_instructions()` functions in each API submodule (`api/gmail/instructions.py`, `api/calendar.py` (instruction text only; reads use `authed_get`), `api/drive.py` (instruction text only; reads use `authed_get`, binary downloads use `download_drive_file`), `api/docs.py`, `api/sheets.py`, `api/tasks.py`, `api/airtable.py` (instruction text only; reads use `authed_get`))
@@ -914,10 +910,10 @@ System instructions are filtered based on the user's connected services. Only do
    - Configurable for future domain changes
 
 2. **Dual Authentication**: Frontend endpoints (`/app/api/*`) accept session cookie OR API key Bearer token
-   - Browser frontend uses session cookie (name determined by `COOKIE_NAME` in `auth/config.py`: `quest_session` in prod, `quest_session_dev` in dev; no API key stored in browser)
+   - Browser frontend uses session cookie (name determined by `COOKIE_NAME` in `auth/config.py`, which takes the per-mode name from `cookie_name()` in `config/environment.py` -- the bare name in prod, a mode-suffixed one otherwise; no API key stored in browser)
    - Scripts and LLM agents use `Authorization: Bearer <api_key>` header
    - Upstream service endpoints (`/api/gmail-*`, `/api/docs-*`, etc.) require API key only
-   - Keys are randomly generated (32+ bytes), stored in `data/quest.db` (indexed for fast lookup)
+   - Keys are randomly generated by `generate_api_key()` in `auth/config.py` (URL-safe token, size literal there), stored in `data/quest.db` (indexed for fast lookup)
    - Keys can be reset via `POST /api/reset-api-key` (cookie auth; no Settings UI for this anymore). Preserves all other user data.
    - Users can manage connected services via the Settings panel ("Data Connections" section)
    - Users can log out or delete their account via the Settings panel ("Sign Out" section)
@@ -960,18 +956,18 @@ Future improvements for scale:
 
 ## Development vs Production
 
-### Development Mode
-- Frontend built to static assets and served by FastAPI (port 9000 via `run.py --dev`)
+### Development (local) Mode
+- Frontend built to static assets and served by FastAPI (the local-mode default port is the literal in `run.py`'s `main()`, overridable per checkout via the `dev_port` key of the gitignored `dev_config.json`; `run.py --local`, with `--dev` as the deprecated alias)
 - Backend runs on Uvicorn with --reload
-- `QUEST_ENV=dev` set by `run.py --dev`, resulting in cookie name `quest_session_dev` and "DevQuest" UI branding (page title, headings)
-- Logging configured via `--log-config logging_config.json` in `run.py`; `chat`, `auth`, and `quest` loggers set to DEBUG level
+- `QUEST_ENV=local` set by `run.py`, resulting in the mode-suffixed cookie name (`cookie_name()` in `config/environment.py`) and the dev UI branding (page title, headings; literals in `AppConfigContext.tsx`)
+- Logging configured via `--log-config logging_config.json` in `run.py` (per-logger levels are in that file)
 - Source maps enabled
 
 ### Production Mode
 - Frontend builds to static assets (`frontend/dist/`)
 - Backend serves static files at `/` path
-- Single port deployment (8000)
-- `QUEST_ENV=prod` set by `run.py --prod` (or unset), resulting in cookie name `quest_session` and "Quest" UI branding
+- Single port deployment (the production port literal in `run.py`'s `main()`)
+- `QUEST_ENV=prod` set by `run.py --prod`, resulting in the bare cookie name and the production UI branding
 - Logging configured via `--log-config logging_config.json` in `run.py`
 - Minified and optimized bundles
 - Source maps enabled for debugging
@@ -987,8 +983,8 @@ Future improvements for scale:
    - Requires authentication via session cookie (`COOKIE_NAME` from `auth/config.py`)
    - Unauthenticated users see the inline `SignInScreen` component (the frontend handles auth state)
 
-3. **SPA Catch-All Routes**: `/chats/{rest:path}`, `/projects/{rest:path}`, and `/admin/{rest:path}` serve `index.html`
-   - Enables deep linking for URL-based routing (e.g., `/chats/<uuid>`, `/projects/<pid>/<uuid>`, `/admin/system-monitor`)
+3. **SPA Catch-All Routes**: the `serve_spa_*` handlers in `quest.py` (one per client-side URL prefix: chats, projects, admin, inbox, docs, set-password) serve `index.html`
+   - Enables deep linking for URL-based routing (e.g., `/chats/<uuid>`, `/projects/<pid>/<uuid>`)
    - React Router handles client-side route matching after the HTML loads
    - Registered before the `/{filename}` fallback to prevent static file matching
 
@@ -1003,7 +999,7 @@ Future improvements for scale:
 1. `/assets/*` - Static file mount (highest priority)
 2. `/app/api/*` - API endpoints (chat routes)
 3. `/` - HTML entry point with auth
-4. `/chats/*`, `/projects/*`, `/admin/*` - SPA catch-all routes (serve `index.html` for deep links)
+4. The `serve_spa_*` prefixes - SPA catch-all routes (serve `index.html` for deep links)
 5. `/{filename}` - Root-level static files
 6. `/chat*` - 301 redirect to `/*` (backward compatibility)
 
@@ -1018,26 +1014,15 @@ frontend/dist/
     └── index-D_IOohIK.css
 ```
 
-**Deployment Process**:
-```bash
-# Option 1: Use startup script (recommended)
-python3 run.py --prod   # Production mode (port 8000, QUEST_ENV=prod)
-python3 run.py --dev    # Development mode (port 9000, QUEST_ENV=dev)
-python3 run.py          # Defaults to --dev
+**Deployment Process**: `run.py` is the launcher (mode flags, ports and the uvicorn invocation are in its `main()`; see [Development Setup](../setup/development.md) and [Production](../setup/production.md)). The equivalent manual steps are the ones it automates below.
 
-# Option 2: Manual steps
-cd frontend && npm install && npm run build && cd ..
-uv sync
-QUEST_ENV=prod uv run uvicorn quest:app --host 0.0.0.0 --port 8000 --log-config logging_config.json
-```
-
-The startup script (`run.py`, Python 3.8+ standard library only) automates:
-1. Setting `QUEST_ENV` (`prod` or `dev`) for environment-based cookie names and UI branding
+The startup script (`run.py`, standard library only) automates:
+1. Setting `QUEST_ENV` from the mode flag for environment-based cookie names and UI branding
 2. Frontend dependency installation and build (`npm install` + `npm run build`)
 3. Backend dependency installation (`uv sync`)
 4. Database migrations (`uv run alembic upgrade head`)
 5. Script-runner Podman image validation
-6. Server startup (port 8000 for `--prod`, port 9000 for `--dev`)
+6. Server startup on the mode's port (literals in `main()`, local mode overridable via `dev_config.json`)
 
 ## Technology Choices Rationale
 

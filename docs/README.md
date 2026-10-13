@@ -4,19 +4,19 @@ Welcome to the Quest documentation. This chat application provides a ChatGPT-sty
 
 ## Overview
 
-Quest (branded as "DevQuest" in the UI when `QUEST_ENV=dev`) is a full-stack web application that combines:
+Quest (branded as "DevQuest" in the UI in local mode -- `is_local()` in `config/environment.py`, the run mode `QUEST_ENV` selects) is a full-stack web application that combines:
 
 - **Backend**: FastAPI-based REST and WebSocket API
 - **Frontend**: React + TypeScript single-page application (built with Vite)
 - **AI Integration**: Multi-provider LLM abstraction layer (`chat/llm/`) supporting Google Gemini (via `google-genai` SDK) and Anthropic Claude (via `anthropic[vertex]` SDK on Vertex AI)
   - models available: the Vertex catalog is `MODEL_REGISTRY` in `chat/llm/config.py` (per-model context windows, deprecation flags and provider ids live on the entries); admin-configured provider instances add more (see [Inference Providers](architecture/inference-providers.md)). Deprecated models stay runnable on conversations and routines that already use them but leave the picker.
-  - Authenticated external API access via `authed_get` tool for server-side credential injection (supports Gmail Raw API, CoinGecko Pro API, Google Calendar API, Google Drive API, and Google Docs API with per-user OAuth and 401 retry) with large response protection (size gate, file-based blob storage, chunked reading via `get_response_content`), a `POST /api/authed-get` proxy endpoint for sandbox script access, and `download_drive_file` tool for Drive binary content downloads
-- **Authentication**: Two-tier Google OAuth (app login + separate Google Services authorization with `tasks.readonly` and `drive.file` scopes), per-service OAuth for plugin connectors (e.g. Slack, GitHub, Twitter/X), inline sign-in on `/`, dev-only email login (`POST /auth/dev-login` when `QUEST_ENV=dev`) for testing multi-user features without Google accounts
+  - Authenticated external API access via `authed_get` tool for server-side credential injection (one entry per upstream service in `_SERVICE_REGISTRY` in `chat/gemini_api/authed_get.py` -- the Google APIs over per-user OAuth with 401 retry, key-based services, and plugin-registered entries) with large response protection (size gate, file-based blob storage, chunked reading via `get_response_content`), a `POST /api/authed-get` proxy endpoint for sandbox script access, and `download_drive_file` tool for Drive binary content downloads
+- **Authentication**: Two-tier Google OAuth (app login + separate Google Services authorization with the scopes in `GOOGLE_SERVICE_SCOPES` in `auth/config.py`), per-service OAuth for plugin connectors (e.g. Slack, GitHub, Twitter/X), inline sign-in on `/`, local-mode-only email login (`POST /auth/dev-login`, gated by `allow_dev_login()` in `config/environment.py`) for testing multi-user features without Google accounts
 - **Storage**: SQLite database for user data, memories, guides, projects, routines, routine schedules, conversation metadata including routine association, archive status, custom names, and model selection, action requests, skills with sharing and auto-load at both user and project levels (via SQLAlchemy + Alembic, with FTS5 for memory search), JSON files for chat message histories and per-conversation loaded skills
 
 The application provides isolated chat workspaces where each conversation maintains its own Gemini state, allowing users to have multiple independent chat sessions. Conversations can be organized into Projects that share a project workspace (next to each conversation's own workspace, which stays the default for everything a conversation produces), optional project guide, and optional project-level skills (auto-loaded into all project conversations).
 
-Projects can have Routines -- canned prompts that run in one click to create a new conversation with an auto-sent prompt, optional guide override, and optional model specification. Routines can have automatic Schedules attached, allowing them to run on a timer (daily, hourly, or at a fixed interval) without user interaction.
+Projects can have Routines -- canned prompts that run in one click to create a new conversation with an auto-sent prompt, optional guide override, and optional model specification. Routines can have automatic Schedules attached, allowing them to run on a timer (the schedule types are the `RoutineSchedule.schedule_type` discriminator values in `db/models.py`, anchored clock-time types plus a fixed-interval one) without user interaction.
 
 Conversations created by routines are linked back via `routine_id` and grouped under collapsible routine entries in the sidebar for organized navigation. Conversations can be renamed via an inline rename UI in the sidebar; custom names are stored in a `custom_name` column on the `Conversation` model and take priority over auto-generated titles.
 
@@ -36,7 +36,7 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 - [Route Dispatch](architecture/route-dispatch.md) - Internal tool call dispatch, including `conversation_id` auto-injection into Pydantic body models and blocked proxy paths for internal-only endpoints
 - [LLM Provider Abstraction](architecture/llm-providers.md) - Multi-provider abstraction layer (`chat/llm/`), model registry, provider-agnostic tool definitions, Gemini and Anthropic provider implementations, Vertex AI configuration
 - [Gemini API Integration](architecture/gemini-api.md) - Conversation loop, streaming, chat route wiring, memory read tools, skill discovery and loading tools (`list_skills`, `search_skills`, `load_skills`), Slack channel search
-  - authenticated external API requests (`authed_get` with Gmail Raw API, CoinGecko Pro, Google Calendar, Google Drive, and Google Docs support, per-user OAuth, 401 retry, large response protection with `get_response_content` chunked reading, and `POST /api/authed-get` proxy endpoint for sandbox scripts), `download_drive_file` for Drive binary content downloads, `archive_gmail_message` for Gmail message archiving with `[Quest]/archived` label, shared tool dispatch
+  - authenticated external API requests (`authed_get` over the services registered in `_SERVICE_REGISTRY` in `chat/gemini_api/authed_get.py`, per-user OAuth, 401 retry, large response protection with `get_response_content` chunked reading, and `POST /api/authed-get` proxy endpoint for sandbox scripts), `download_drive_file` for Drive binary content downloads, `archive_gmail_message` for Gmail message archiving under the Quest archive label (`_QUEST_ARCHIVED_LABEL_NAME` in `chat/gemini_api/tool_handlers/gmail_labels.py`), shared tool dispatch
   - generic durable wait-handle mechanism (`wait_for_handles` tool plus the `tool_wait_handles` table; `send_slack_reply_and_get_response` and `create_action_request` -- including the `create_memory` request type -- block via the same row -- see [Wait Handles Architecture](architecture/wait-handles.md)), large data processing strategy (Scout/Batch/Aggregate pattern), and inline Python execution (`run_python`)
 - [Conversation Flags](architecture/conversation-flags.md) - Per-conversation opt-in behaviors set at the start of a conversation via a magic `%%flags[...]` first line (web-only); verbatim-persist vs stripped-to-model vs clean-title; flags registry and threading into the run; first flag `nested_subagents`
 - [Database Architecture](architecture/database.md) - SQLite database, SQLAlchemy ORM, Alembic migrations, encrypted secret columns
@@ -46,13 +46,13 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 - [Quest Docs Architecture](architecture/quest-docs.md) - User- and project-owned markdown documents stored as `doc.md` + `assets/` + `revisions/` under `DOCS_DIR`, private/public modes mirroring public projects, the single access rule (`resolve_doc_access`), the seven doc tools, the `write_doc` action request for shared private docs, sharing, human editing and History (restore, copy) in the UI, and the `docs` feature gate
 - [Run Modes](architecture/run-modes.md) - The three run modes (local/staging/prod): central environment module, local-mode throwaway seeded database, canned-account login, and graceful degradation without credentials
 - [Routines Architecture](architecture/routines.md) - Canned prompts attached to projects that run in one click, combining a prompt, optional guide override, and optional model specification
-- [Scheduling Architecture](architecture/scheduling.md) - Automatic routine scheduling with daily, hourly, and interval-based schedule types, background asyncio scheduler daemon, timezone-aware DST handling
+- [Scheduling Architecture](architecture/scheduling.md) - Automatic routine scheduling over the schedule types of `RoutineSchedule.schedule_type` (`db/models.py`), background asyncio scheduler daemon, timezone-aware DST handling
 - [Action Requests Architecture](architecture/action-requests.md) - Agent-proposed write operations to external services (e.g., Slack messages, Telegram messages, calendar invites, plus plugin-registered types) with user approval, handler registry pattern with server-side preview rendering, non-blocking inline chat UI
-- [Slack Pending-Request Notifier](architecture/slack-pending-request-notifier.md) - Background daemon that DMs users via the Slack bot about action requests left unanswered, at most once per tunable per-user interval (default 60 minutes, disableable in Settings > Slack)
+- [Slack Pending-Request Notifier](architecture/slack-pending-request-notifier.md) - Background daemon that DMs users via the Slack bot about action requests left unanswered, at most once per tunable per-user interval (default and clamp bounds are the `*_INTERVAL_MINUTES` constants in `chat/slack_notifier.py`, disableable in Settings > Slack)
 - [Plugin Architecture](architecture/plugins.md) - Filesystem-discovered integration plugins (`plugins/*/plugin.py`): manifest dataclasses, loader validation and registry fan-out, schema-driven config surfaces, combined server+user gating, and external plugin roots (loaded via `QUEST_PLUGIN_PATH`)
 - [Voice Input](architecture/voice-input.md) - Dictated prompts: composer mic button, browser `MediaRecorder` capture, server-side transcription on the deployment's own Gemini Vertex model behind the admin `voice_input` feature gate (cannot be enabled without a configured Gemini Vertex model)
 - [Wait Handles Architecture](architecture/wait-handles.md) - Durable DB-backed wait handles plus the generic `wait_for_handles` tool that lets the model block on tools awaiting human input, with restart-resilient suspend / resume and headless continuation on resolve
-- [Skill Library Architecture](architecture/skill-library.md) - Reusable DB-backed skill definitions with four-level visibility (private, shared, public, project), sharing via junction table, SET NULL on creator deletion, user auto-load via `user_skill_autoloads` junction table, project auto-load via `project_skill_autoloads` junction table
+- [Skill Library Architecture](architecture/skill-library.md) - Reusable DB-backed skill definitions with the visibility levels of the `SkillVisibility` enum (`db/models.py`), sharing via junction table, SET NULL on creator deletion, user auto-load via `user_skill_autoloads` junction table, project auto-load via `project_skill_autoloads` junction table
   - auto-loaded skill injection into system prompts (user + project auto-loads merged with deduplication), per-conversation skill loading via Skill Selector Modal with `<conversation_skills_loaded>` XML injection
   - tabbed settings UI ("My Skills" / "Shared with Me"), project skills UI in ProjectSettingsModal ("Project Skills" / "My Skills" / "Shared with Me"), LLM skill discovery and loading tools (`list_skills`, `search_skills`, `load_skills`).
   - Also covers hardcoded **system skills** (`system:*` ids) in `chat/system_skills/catalog.py` that carry per-backend API docs and are loadable on demand via the same tools; enumerated in the system prompt and filtered by `connected_services` / project status
@@ -69,7 +69,7 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 - [Ramp App Setup](setup/ramp-setup.md) - Creating and configuring Ramp OAuth integration
 - [Telegram Setup](../plugins/telegram/docs/telegram-setup.md) - Configuring the Telegram integration (served by the plugins/telegram plugin)
 - [Tailscale Setup](../plugins/tailscale/docs/tailscale-setup.md) - Connecting a tailnet with a read-scoped OAuth client or an API access token (served by the plugins/tailscale plugin)
-- [IMAP Setup](../plugins/imap/docs/imap-setup.md) - Admin IMAP server list (one `host[:port] [ssl|starttls]` per line), per-user mailbox connections with app passwords, several accounts per user, and troubleshooting (served by the plugins/imap plugin)
+- [IMAP Setup](../plugins/imap/docs/imap-setup.md) - Admin IMAP server list (one host / security / port entry per server, the `list` field of the plugin's credential schema), per-user mailbox connections with app passwords, several accounts per user, and troubleshooting (served by the plugins/imap plugin)
 
 ### API Reference
 - [Chat API](api/chat-api.md) - REST endpoints for conversation CRUD plus the persistent multiplexed WebSocket (`WS /app/api/stream`) carrying chat traffic and live updates
@@ -80,12 +80,12 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 - [Skills API](api/skills-api.md) - Skill Library CRUD, sharing, auto-load, search, and user search endpoints (create, list, get, update, delete skills; search skills by keyword; get/toggle auto-load; list shared-with-me; add, list, remove shares; type-ahead user search); project skill CRUD and project auto-load endpoints
 - [File Browser API](api/file-browser-api.md) - File management endpoints for conversation workspaces (list, upload, download, download folder as zip, read content, file info, delete, save to Drive)
 - [Inference API](api/inference-api.md) - One-shot non-streaming inference endpoint (`POST /api/inference`) for internal applications, authenticated by named per-user bearer tokens from Settings > Inference API; runs a single prompt headlessly as the user and returns the final markdown captured via the `return_final_response` tool
-- [Gmail API](api/gmail-api.md) - Gmail Simple dynamic tools (`get_gmail_messages`, `list_gmail_labels`, `get_gmail_message_urls`, `create_gmail_draft`, `send_gmail_to_self`; HTTP `/api/gmail-simple/*` endpoints kept for sandboxed scripts) and Gmail Raw API access via `authed_get` (read messages with attachment metadata, automatic email cleanup and URL replacement for token reduction, URL lookup, fetch raw attachments, create drafts with drive/workspace/gmail attachment and markdown body support, forward draft workflow, send emails to self, archive messages with `[Quest]/archived` label via `archive_gmail_message` dynamic tool)
+- [Gmail API](api/gmail-api.md) - Gmail Simple dynamic tools (the Gmail entries of `TOOL_CALL_REGISTRY` in `chat/llm/tool_schemas.py`, handlers in `chat/gemini_api/tool_handlers/gmail_simple.py`; HTTP `/api/gmail-simple/*` endpoints kept for sandboxed scripts) and Gmail Raw API access via `authed_get` (read messages with attachment metadata, automatic email cleanup and URL replacement for token reduction, URL lookup, fetch raw attachments, create drafts with drive/workspace/gmail attachment and markdown body support, forward draft workflow, send emails to self, archive messages under the Quest archive label via the `archive_gmail_message` dynamic tool)
 - [Drive API](api/drive-api.md) - Google Drive access via `authed_get` (metadata, permissions, revisions, comments, changes feed, quota and shared-drive reads), `download_drive_file` tool (binary content downloads), the `google_export_doc` / `google_export_sheet` / `google_export_slides` Workspace export tools, Save to Drive from the file browser (markdown to Google Docs conversion), and the `upload_to_drive` / `create_drive_folder` action requests (raw-bytes workspace-file uploads and folder creation, with on-the-fly destination-folder creation on upload)
-- [Docs API](api/docs-api.md) - Google Docs access via `authed_get` (document reads) and Drive API (document listing), plus `google_export_doc` (export a Doc to the workspace as pdf/docx/odt/rtf/txt/md/html/epub/zip)
+- [Docs API](api/docs-api.md) - Google Docs access via `authed_get` (document reads) and Drive API (document listing), plus `google_export_doc` (export a Doc to the workspace in any of the formats in `GOOGLE_DOC_EXPORT_FORMATS` in `chat/gemini_api/tool_handlers/drive.py`)
 - [Quest Docs API](api/quest-docs-api.md) - Quest Docs UI endpoints under `/app/api/docs` (own / project / shared-with-me lists with keyset paging, create, read, rename with optimistic concurrency, a mode route that refuses every doc (user docs are always private), embedded images, md/zip download, delete, sharing, content save, image upload / delete, revisions / diff / restore / copy) and the `doc_list_changed` / `doc_changed` realtime events sent to a doc's audience; not the Google Docs integration
-- [Sheets API](api/sheets-api.md) - Google Sheets access via `authed_get` (spreadsheet reads) and Drive API (spreadsheet listing), plus `google_export_sheet` (export a spreadsheet to the workspace as xlsx/ods/pdf/csv/tsv/zip)
-- [Slides API](api/slides-api.md) - Read-only Google Slides access via `authed_get` (presentation + page reads) and Drive API (listing), plus `google_export_slides` (export a deck to the workspace as pptx/odp/pdf/txt/png/jpeg/svg)
+- [Sheets API](api/sheets-api.md) - Google Sheets access via `authed_get` (spreadsheet reads) and Drive API (spreadsheet listing), plus `google_export_sheet` (export a spreadsheet to the workspace in any of the formats in `GOOGLE_SHEET_EXPORT_FORMATS` in `chat/gemini_api/tool_handlers/drive.py`)
+- [Slides API](api/slides-api.md) - Read-only Google Slides access via `authed_get` (presentation + page reads) and Drive API (listing), plus `google_export_slides` (export a deck to the workspace in any of the formats in `GOOGLE_SLIDES_EXPORT_FORMATS` in `chat/gemini_api/tool_handlers/drive.py`)
 - [Calendar API](api/calendar-api.md) - Google Calendar access via `authed_get` (reads) and the `create_calendar_invite` / `edit_calendar_event` action requests (writes), includes cross-org calendar visibility
 - [Tasks API](api/tasks-api.md) - Google Tasks access via `authed_get` (read-only task lists and tasks)
 - [Telegram API](../plugins/telegram/docs/telegram-api.md) - Telegram dialogs, messages, contacts as dedicated `telegram_*` dynamic tools (no HTTP routes), the Telethon login flow, and the send message action request (plugins/telegram plugin)
@@ -104,16 +104,16 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 ### Backend
 - Chat message storage with JSON-based persistence (`data/chats/{conversation_id}/chat_history.json`); conversation ownership, last-message timestamps, archive status, custom names, and model selection stored in SQLite (`conversations` table via `db/conversation_store.py`)
 - User data stored in SQLite via SQLAlchemy ORM (`db/` package), with Alembic migrations (`alembic/`)
-- User memories: markdown text blobs (max 4KB) with full-text search via SQLite FTS5, inline editing, and soft-delete via archiving
-  - `Memory` model in `db/models.py` with `updated_at` (DateTime, nullable) and `archived` (Boolean, default false) fields; data access layer in `db/memory_store.py`
+- User memories: markdown text blobs (size cap `MAX_MEMORY_SIZE` in `db/memory_store.py`, enforced by the store and the route validators) with full-text search via SQLite FTS5, inline editing, and soft-delete via archiving
+  - `Memory` model in `db/models.py` (the `updated_at` and `archived` columns back inline editing and soft-delete); data access layer in `db/memory_store.py`
   - CRUD + update + archive/unarchive API endpoints at `/app/api/memories` (see `chat/memory_routes.py`)
   - FTS5 virtual table (`memories_fts`) with sync triggers for search (Alembic migration `94c49d92fea7`); `updated_at`, `archived`, and composite index added in migration `861a7abe9a23`
   - `list_memories()` and `search_memories()` exclude archived memories by default
   - Cascade deletion of memories when user account is deleted
-- Skill Library: reusable skill definitions (instructions/prompts) with four-level visibility (private, shared, public, project), sharing via junction table, user auto-load via `user_skill_autoloads` junction table, project auto-load via `project_skill_autoloads` junction table, system prompt injection for auto-loaded skills (user + project auto-loads merged with deduplication), and per-conversation skill loading via the Skill Selector Modal
-  - `Skill`, `SkillShare`, `UserSkillAutoload`, and `ProjectSkillAutoload` models in `db/models.py`; `SkillVisibility` enum; data access layer in `db/skill_store.py` (includes `get_user_autoloaded_skills()` and `get_project_autoloaded_skills()` for auto-loaded skill resolution, `list_shared_with_me_skills()` for shared skills listing, `search_accessible_skills()` for keyword search, `get_accessible_skills_by_ids()` for batch fetch, project skill CRUD functions)
-  - 13 REST API endpoints for user-level CRUD + auto-load + share management + search + user search (see `chat/skill_routes.py`): 12 at `/app/api/skills` plus `GET /app/api/users/search` for type-ahead autocomplete; plus `GET /app/api/conversations/{id}/loaded-skills` for per-conversation loaded skills retrieval (see `chat/routes/conversations.py`)
-  - 7 REST API endpoints for project skill CRUD + project auto-load (see `chat/project_skill_routes.py`): at `/app/api/projects/{project_id}/skills`
+- Skill Library: reusable skill definitions (instructions/prompts) with the visibility levels of the `SkillVisibility` enum in `db/models.py`, sharing via junction table, user auto-load via `user_skill_autoloads` junction table, project auto-load via `project_skill_autoloads` junction table, system prompt injection for auto-loaded skills (user + project auto-loads merged with deduplication), and per-conversation skill loading via the Skill Selector Modal
+  - `Skill`, `SkillShare`, `UserSkillAutoload`, and `ProjectSkillAutoload` models in `db/models.py`; `SkillVisibility` enum; data access layer in `db/skill_store.py` (auto-load resolution per tier, shared-with-me listing, keyword search, batch fetch by id, project skill CRUD)
+  - REST API endpoints for user-level CRUD + auto-load + share management + search + user search (see `chat/skill_routes.py`): under `/app/api/skills` plus `GET /app/api/users/search` for type-ahead autocomplete; plus `GET /app/api/conversations/{id}/loaded-skills` for per-conversation loaded skills retrieval (see `chat/routes/conversations.py`)
+  - REST API endpoints for project skill CRUD + project auto-load (see `chat/project_skill_routes.py`): at `/app/api/projects/{project_id}/skills`
   - User auto-loaded skill IDs stored in `user_skill_autoloads` junction table; project auto-loaded skill IDs stored in `project_skill_autoloads` junction table; both resolved on each message and merged with deduplication, injected into system prompt as "Enabled Skills" section
   - Project skills have `visibility='project'` and a non-NULL `project_id` column; explicitly deleted before project deletion (non-cascading FK)
   - Conversation-loaded skills: users can load skills into a specific conversation via the "+ Skill" button in ChatPanel; selected skills are sent as `skill_ids` in the WebSocket payload, resolved via `get_accessible_skills_by_ids()`, and injected as a `<conversation_skills_loaded>` XML section in the user message envelope; persisted to `loaded_skills.json` per conversation via `ChatStorage` in `chat/storage.py`
@@ -125,18 +125,18 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 - Workspace management for isolated Gemini environments
 - Slack integration with two-tier token architecture, packaged as the in-tree `plugins/slack` plugin (tools, action requests, OAuth flow, `system:slack` skill, admin credential card -- the Slack-driven Socket Mode runtime stays core)
   - Shared bot token: Installed once by an org admin, stored in the `slack` service credential store entry (`bot_token` alongside `client_id`/`client_secret`). Used for write operations (`chat.postMessage`) and org-wide queries (`auth.teams.list`)
-  - Per-user OAuth: Grants user tokens only (`access_token`, `default_team_id`, `user_id`, `authorized_at`) for read operations (search, channel history, user listings). Any user can connect
-  - Read access: Dedicated dynamic tools dispatched via `tool_call` (`search_slack_messages`, `list_slack_conversations`, `get_slack_conversation_history`, `get_slack_conversation_replies`, `get_slack_user_info`, `list_slack_users`, `list_slack_teams`) wrapping the endpoint functions in `plugins/slack/upstream.py` directly -- no per-method HTTP routes (sandbox scripts invoke the same tools via the script tool-call bridge `POST /api/tool-call`; `/api/slack` is a blocked proxy prefix so cached sessions get a use-the-dedicated-tool error) (user token). `team_id` parameter on `list_slack_conversations`, `search_slack_messages`, and `list_slack_users` for cross-workspace queries
-  - Channel search: `find_slack_channel` dynamic tool (dispatched via `tool_call` meta tool) in `plugins/slack/tools.py` searches channels by name substring (case-insensitive) across all workspaces. Uses `auth.teams.list` (bot token) to resolve E-prefix Enterprise IDs to T-prefix workspace IDs, then `conversations.list` (user token) to fetch channels. No new scopes needed (uses existing `channels:read` and `groups:read`)
+  - Per-user OAuth: Grants user tokens only (the `oauth_blob` shape is built by the callback in `plugins/slack/oauth.py`: the user token plus the workspace/user identity captured at authorization) for read operations (search, channel history, user listings). Any user can connect
+  - Read access: Dedicated dynamic tools dispatched via `tool_call` (the read `PluginTool` specs in `plugins/slack/tools.py`) wrapping the endpoint functions in `plugins/slack/upstream.py` directly -- no per-method HTTP routes (sandbox scripts invoke the same tools via the script tool-call bridge `POST /api/tool-call`; `/api/slack` is a blocked proxy prefix so cached sessions get a use-the-dedicated-tool error) (user token). The workspace-listing tools take a `team_id` parameter for cross-workspace queries
+  - Channel search: `find_slack_channel` dynamic tool (dispatched via `tool_call` meta tool) in `plugins/slack/tools.py` searches channels by name substring (case-insensitive) across all workspaces. Uses `auth.teams.list` (bot token) to resolve E-prefix Enterprise IDs to T-prefix workspace IDs, then `conversations.list` (user token) to fetch channels. No new scopes needed (covered by the read scopes already in `SLACK_USER_SCOPES` in `plugins/slack/upstream.py`)
   - Write access (self-messaging): Send DMs to authenticated user via the `send_slack_dm_to_self` dynamic tool (shared bot token, messages from Quest bot, no approval needed, optional workspace-file attachments; also the sole connector tool in public-project conversations). This is the preferred path for self-messaging (e.g., "send me a message", "DM me", "remind me") and works in automated/scheduled routines where there is no human to approve action requests. No HTTP route (the old `POST /api/slack-simple/dm-self` is retired); sandbox scripts send text-only self-DMs via the `/api/tool-call` bridge
-  - Write access (others/channels): Send messages to other people or Slack channels via `send_slack_message` action requests (user token, requires `chat:write` and `im:write` scopes, Block Kit formatted with dynamic Quest attribution including sender's first name, channel names resolved at creation time for preview display, optional `thread_ts` parameter for thread replies with thread context preview)
+  - Write access (others/channels): Send messages to other people or Slack channels via `send_slack_message` action requests (user token, needs the write scopes in `SLACK_USER_SCOPES`, Block Kit formatted with dynamic Quest attribution including sender's first name, channel names resolved at creation time for preview display, optional `thread_ts` parameter for thread replies with thread context preview)
   - Org-wide queries: List workspaces via the `list_slack_teams` tool (shared bot token)
   - Connector status checks for `access_token` in the user's `user_service_credentials` slack row (`oauth_blob`; the plugin's `slack_connected` predicate)
-  - All list reads cap results to `MAX_LIMIT = 50` per request (`plugins/slack/upstream.py`); when the LLM requests a higher limit, a `ToolResultWithNotices` advisory directs it to paginate via `next_cursor` (merged into the tool's JSON result under a `notices` key)
-  - Shared `httpx.AsyncClient` connection pool in `plugins/slack/upstream.py` (`max_connections=20`, `max_keepalive_connections=10`) with `_slack_request_with_retry()` helper (up to 3 attempts on timeouts and HTTP 429 rate limits)
+  - All list reads cap results to `MAX_LIMIT` per request (`plugins/slack/upstream.py`); when the LLM requests a higher limit, a `ToolResultWithNotices` advisory directs it to paginate via `next_cursor` (merged into the tool's JSON result under a `notices` key)
+  - Shared `httpx.AsyncClient` connection pool in `plugins/slack/upstream.py` (pool limits are the `httpx.Limits` literal in the client factory) with `_slack_request_with_retry()` helper (bounded retries on timeouts and HTTP 429 rate limits; the attempt cap is the literal in that function)
 - GitHub integration with per-user OAuth (packaged as the in-tree `plugins/github` plugin)
-  - Per-user OAuth: Each user connects via standard GitHub OAuth App flow, granting `repo` and `read:org` scopes. Tokens do not expire (no refresh logic needed)
-  - Read access: 19 GET-only proxy endpoints covering repos, issues, PRs, commits, file contents, org repos, and search (repositories, issues, code)
+  - Per-user OAuth: Each user connects via the GitHub OAuth flow, granting the scopes in `GITHUB_SCOPES` (`plugins/github/upstream.py`). Classic OAuth App tokens never expire; GitHub App user tokens do and are refreshed by the credential loader `get_github_token()` in the same file
+  - Read access: GET-only `authed_get` allow-list (the `allowed_endpoints` of the service entry in `plugins/github/manifest.py`) covering repos, issues, PRs, commits, file contents, org repos, and search
   - OAuth flow: `plugins/github/oauth.py` handles authorize and callback; popup-based with `?popup=1` support
   - Connector status checks the user's `user_service_credentials` github row (`oauth_blob.access_token`) AND the admin-configured OAuth app credentials
 - Twitter/X integration with per-user OAuth 2.0 PKCE, packaged as the in-tree `plugins/twitter` plugin
@@ -148,16 +148,16 @@ Conversations created by routines are linked back via `routine_id` and grouped u
   - Access tier: DM endpoints require the Twitter/X Basic API tier ($100/month); bookmarks and tweet lookup work on all tiers
   - Scope migration: connections granted before `bookmark.read` was added get the re-authorize badge and must reconnect to pick up the new scope
 - Ramp integration with per-user OAuth 2.0
-  - Per-user OAuth: Each user connects individually via the authorization-code flow (confidential client, no PKCE), granting every read scope plus `offline_access`; `cards:read_vault` (full card numbers) is excluded. Tokens expire; refresh tokens rotate on every use and are renewed automatically
+  - Per-user OAuth: Each user connects individually via the authorization-code flow (confidential client, no PKCE), granting the scopes in `RAMP_SCOPES` in `auth/config.py` -- every read scope plus offline access, with the card-vault scope (full card numbers) deliberately excluded. Tokens expire; refresh tokens rotate on every use and are renewed automatically
   - Read access: `authed_get` against `https://api.ramp.com/developer/v1/...` (transactions, cards, bills, reimbursements, vendors, statements, accounting, audit logs), gated by a read-only allow-list that excludes card-vault, token, and webhook paths
   - OAuth flow: `auth/ramp.py` handles authorize, callback, and disconnect; popup-based with `?popup=1` support
   - Connector status checks for presence of `ramp_oauth` on user record; connector hidden until an admin configures Ramp client credentials in Settings > Service Credentials
 - Script runner: `run_script` and `run_python` tools execute scripts in ephemeral Podman containers with sandboxed networking (iptables rules restrict host access to only the API proxy port; no external internet)
-  - conversation workspace mounted at `/workspace` (plus the project workspace at `/project` in project conversations), API proxy access via `localhost:<port>` with injected `QUEST_API_KEY` (an ephemeral per-run sandbox token from `chat/sandbox_tokens.py`, valid only while the container runs and accepted only by the sandbox tool API port), `QUEST_PORT`, `QUEST_RUN_UID`, and `QUEST_RUN_GID` env vars.
+  - conversation workspace mounted at `/workspace` (plus the project workspace at `/project` in project conversations), API proxy access via `localhost:<port>` with the env vars injected by `_build_script_podman_cmd()` in `chat/gemini_api/tool_handlers/sandbox.py` -- `QUEST_API_KEY` (an ephemeral per-run sandbox token from `chat/sandbox_tokens.py`, valid only while the container runs and accepted only by the sandbox tool API port), the proxy port, and the host uid/gid to drop to.
   - `run_script` runs workspace files (Python, Bash); `run_python` runs inline Python code piped via stdin, avoiding throwaway `.py` files for one-off tasks. Both share the same container, networking, mounts, and security.
-  - Pre-installed Python libraries: requests, openpyxl, python-docx, matplotlib, seaborn (`MPLBACKEND=Agg` for headless chart rendering), pypdf (PDF merge/split/rotate/extract), PyPDFForm (inspect/fill PDF form fields).
+  - Pre-installed Python libraries: the `pip install` line of `Dockerfile.script-runner` (office formats, charting with `MPLBACKEND=Agg` for headless rendering, PDF manipulation and form filling).
   - The entrypoint runs as root inside the container to set up iptables, then drops to the unprivileged user via `setpriv` with all capabilities cleared. See `Dockerfile.script-runner`, `script-runner-entry.sh`
-- Container image management in `run.py` - auto-builds the missing script-runner Podman image at startup, rebuilds when the Dockerfile is modified, uses `--network=host` for builds. Image names include an environment suffix based on `QUEST_ENV` (e.g., `quest-script-runner-dev`/`quest-script-runner-prod`)
+- Container image management in `run.py` - auto-builds the missing script-runner Podman image at startup, rebuilds when the Dockerfile is modified, uses `--network=host` for builds. Image names carry the run-mode suffix (`get_script_runner_image()` / `get_public_script_runner_image()` in `chat/gemini_api/constants.py` over `image_suffix()` in `config/environment.py`) so side-by-side modes never share an image
 
 ### API Layer
 - REST endpoints for conversation management (list, create, get history, search)
@@ -182,7 +182,7 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 #### Provider Abstraction Layer
 - Multi-provider LLM abstraction in `chat/llm/` package
   - `LLMProvider` abstract base class with unified interface for session management, streaming, tool results, usage tracking, history persistence, text part creation (`make_text_part()` for advisory `extra_parts`), and turn warning injection
-  - `UsageStats` dataclass with `cache_creation_tokens` and `cache_read_tokens` fields for provider-specific cache breakdown; `compute_new_input_tokens()` helper for uniform new-input calculation across providers (Gemini: `input - cached`; Anthropic: `input + cache_creation`); `compute_total_context_tokens()` helper for total context window usage (Gemini: raw `input_tokens`; Anthropic: `input + cache_read + cache_creation`)
+  - `UsageStats` dataclass with `cache_creation_tokens` and `cache_read_tokens` fields for provider-specific cache breakdown; `compute_new_input_tokens()` helper for uniform new-input calculation across providers and `compute_total_context_tokens()` helper for total context window usage (both in `chat/llm/base.py`; the per-provider formulas differ because Gemini reports cached tokens inside `input_tokens` while Anthropic reports cache reads and writes beside it)
   - Model registry in `chat/llm/config.py` mapping model IDs to providers (Gemini, Anthropic)
   - Provider-agnostic tool definitions in JSON Schema format (`chat/llm/tool_schemas.py`) with converter functions for each provider's native format, `provider_descriptions` support for provider-specific tool description overrides, and `TOOL_CALL_REGISTRY` for dynamic tools dispatched via the meta `tool_call` tool
   - Lazy singleton provider instances -- providers are only instantiated when first needed
@@ -197,8 +197,8 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 - `AnthropicProvider` in `chat/llm/anthropic_provider.py` wrapping the `anthropic[vertex]` SDK
   - Google Cloud Application Default Credentials (ADC) -- no API key needed
   - Vertex AI project and region configured in `server_config.json` (`anthropic.vertex_project_id`, `anthropic.vertex_region`)
-  - File support for images (JPEG, PNG, GIF, WebP) and PDFs via base64-encoded inline content blocks in tool results, with size caps from `chat/llm/file_limits.py` (see [LLM Provider Abstraction -- Attachment Size Limits](architecture/llm-providers.md#attachment-size-limits))
-  - Prompt caching via `cache_control: {"type": "ephemeral"}` breakpoints on system prompt, last tool definition, and last 2 user messages (4 breakpoints, the Vertex AI per-request limit); cache stats logged at DEBUG level; session data never mutated; `get_usage()` populates `UsageStats` with `cache_creation_tokens` and `cache_read_tokens` from session usage
+  - File support for images and PDFs (the MIME types in `_ANTHROPIC_IMAGE_MIME_TYPES` / `_ANTHROPIC_DOCUMENT_MIME_TYPES` in `chat/llm/anthropic_provider.py`) via base64-encoded inline content blocks in tool results, with size caps from `chat/llm/file_limits.py` (see [LLM Provider Abstraction -- Attachment Size Limits](architecture/llm-providers.md#attachment-size-limits))
+  - Prompt caching via `cache_control` ephemeral breakpoints on the system prompt, the last tool definition and the most recent user messages (placement and the Vertex AI per-request breakpoint budget it has to fit are in `send_message_stream()` in `chat/llm/anthropic_provider.py`); cache stats logged at DEBUG level; session data never mutated; `get_usage()` populates `UsageStats` with `cache_creation_tokens` and `cache_read_tokens` from session usage
 
 #### Conversation Loop
 - Route Dispatch: Internal tool call dispatch for direct endpoint invocation (`chat/route_dispatch.py`)
@@ -207,13 +207,13 @@ Conversations created by routines are linked back via `routine_id` and grouped u
   - Auto-injects `conversation_id` into Pydantic body models that declare the field
   - See [Route Dispatch Architecture](architecture/route-dispatch.md) for details
 - Conversation Loop: Provider-agnostic streaming conversation loop (`chat/gemini_api/` package)
-  - Three-tier tool declarations (9 base, 13 top-level, 10 sub-agent) defined in `chat/llm/tool_schemas.py`, with a meta `tool_call` tool for dynamic dispatch of the registry tools (workspace tools -- the four `*_workspace_file` tools in standalone conversations, the five `chat://` / `proj://` scheme-qualified file tools in project conversations --, memory read tools, `get_current_time`, `download_drive_file`, `archive_gmail_message`, `set_conversation_name`, `authed_get`, `get_response_content`, `project_db_query`, plus plugin-registered tools like the Slack family)
+  - Tiered tool declarations (`BASE_TOOLS`, `TOP_LEVEL_TOOLS`, `SUB_AGENT_TOOLS` and the nested variant in `chat/llm/tool_schemas.py`), with a meta `tool_call` tool for dynamic dispatch of the `TOOL_CALL_REGISTRY` tools (workspace tools -- the four `*_workspace_file` tools in standalone conversations, the five `chat://` / `proj://` scheme-qualified file tools in project conversations --, memory read tools, Drive/Gmail/authed-API tools, `project_db_query`, plus plugin-registered tools like the Slack family)
   - Streaming conversation loop with tool execution
-  - Sub-agent spawning (single, parallel, and template-based parallel) with per-agent model selection (can mix providers), model-specific turn limits via `get_sub_agent_turn_limits(model)` (200K-token models: 20/15, 1M-token models: 60/50) with warning injection via `inject_turn_warning()`, sub-agent tool call events streamed to frontend for tree display, persisted as metadata on tool_result messages
+  - Sub-agent spawning (single, parallel, and template-based parallel) with per-agent model selection (can mix providers), model-specific turn limits via `get_sub_agent_turn_limits(model)` in `chat/gemini_api/constants.py` (the limit/warning pair scales with the model's context window) with warning injection via `inject_turn_warning()`, sub-agent tool call events streamed to frontend for tree display, persisted as metadata on tool_result messages
   - Memory read tools (`memory_search`, `memory_list`); memory writes ride on `create_action_request(request_type="create_memory", ...)`
   - Skill discovery and loading tools (`list_skills`, `search_skills`, `load_skills`) for on-demand skill browsing and retrieval via `db/skill_store.py`
   - Action request tool (`create_action_request`) for proposing external write operations with user approval, including calendar invites via `create_calendar_invite`
-  - Workspace file tools (list, get, write) with unsupported MIME type pre-checking (Office, OpenDocument, archives, executables are denied before upload with structured error responses suggesting `run_script`/`run_python` with python-docx/openpyxl)
+  - Workspace file tools (list, get, write) with unsupported MIME type pre-checking (the deny-list is `_UNSUPPORTED_GEMINI_MIME_TYPES` in `chat/gemini_api/constants.py` -- types the Gemini content API rejects -- denied before upload with structured error responses suggesting `run_script`/`run_python` with python-docx/openpyxl)
   - Script runner tools (`run_script`, `run_python`) for executing workspace scripts and inline Python code in sandboxed Podman containers
   - MIME type rejection recovery in the conversation loop (`ClientError` catch strips file URI parts and retries the turn)
   - Conditional system instructions and user identity injection
@@ -225,7 +225,7 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 ### Frontend
 
 #### Build and Development Environment
-- Vite + React 19 + TypeScript configuration
+- Vite + React + TypeScript configuration (versions pinned in `frontend/package.json`)
 - Development proxy for API integration
 - Build tooling and hot module replacement
 
@@ -236,7 +236,7 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 - Comprehensive error handling strategy
 
 #### UI Components
-- Sidebar (wrapped with `React.memo`): Requests section with `RequestsBadge` component (event-driven refresh via `requestEvents.ts` with 30-second polling fallback and visibility-change awareness for open request count), Search section with magnifier icon (opens SearchModal via Cmd/Ctrl+K), Projects section with drill-down navigation (auto-selects latest project conversation on entry, restores previous top-level conversation on back), always-visible routines section (with create/settings/play controls), conversations list, routine grouping, conversation archive and rename, project conversation polling (30-second auto-refresh for server-created conversations)
+- Sidebar (wrapped with `React.memo`): Requests section with `RequestsBadge` component (event-driven refresh via `requestEvents.ts` and the persistent WebSocket's `request_count_changed` global, which replaced the earlier polling fallback), Search section with magnifier icon (opens SearchModal via Cmd/Ctrl+K), Projects section with drill-down navigation (auto-selects latest project conversation on entry, restores previous top-level conversation on back), always-visible routines section (with create/settings/play controls), conversations list, routine grouping, conversation archive and rename, project conversation polling (`PROJECT_CONVERSATIONS_POLL_INTERVAL_MS` in `hooks/useProjectConversations.ts`, for server-created conversations)
 - SearchModal: Debounced typeahead search across conversation messages, keyboard navigation, result display with highlighted snippets, click-to-navigate with scroll-to-message
 - ChatPanel (wrapped with `React.memo`): Message display with `data-message-index` attributes for scroll targeting, input, streaming, model selector (locks to same-provider models after first message), "+ Skill" button for per-conversation skill loading via SkillSelectorModal, context usage indicator (fixed-size circular meter with color-coded thresholds and hover tooltip on the composer controls row) that opens the system prompt via SystemPromptModal on click, scroll-to-message with highlight animation
 - Message: Markdown rendering with syntax highlighting (190+ languages) and `remark-breaks` for consistent newline preservation, unified token display showing `NEW INPUT` with provider-aware hover tooltips (Gemini: total/cached/new; Anthropic: non-cached/cache_creation/cache_read/new), sub-agent line with `SUBAGENTS {new_input} / {output} ({N} calls)` and tooltip, backward-compatible fallback to `INPUT (cached)` for older stats
@@ -244,19 +244,19 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 - Error Display: Collapsible stack traces, dismiss button
 - Tool Use Display: Collapsible tool invocations, grouped consecutive calls, sub-agent tool call tree (expandable tree structure nested under `agent_task`/`agent_task_parallel`/`agent_task_parallel_template` parent calls, with per-agent grouping for parallel tasks, persisted in `chat_history.json` and hydrated on reload)
 - Action Request Display: Inline rendering of agent-proposed actions with Approve / Revise / Stop buttons (Stop discards the request and halts the conversation until the user's next message; only `subagent_return` cards show Deny); renders server-provided `preview_fields` generically (no type-specific frontend rendering logic); falls back to fetching preview from API for older messages lacking `preview_fields`; approve button label driven by server-provided `approve_label` (e.g., "Send" for messaging requests)
-- Requests View: Full-pane single view for all action requests across conversations, with filter tabs (Open default/Executed/Denied/Stopped/All) showing server-provided counts, request cards with Approve / Revise / Stop buttons (approve label from server), routine/project context display, conversation navigation links, generic server-rendered preview field display, live updates via WebSocket subscription + 30s polling fallback, and non-disruptive "N new requests" banner
-- File Browser: Workspace file management panel with file and folder drag-and-drop upload, inline file viewing via FileViewerModal (text files: `.md`, `.py`, `.txt`; images: `.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp`, `.bmp`, `.ico`, `.avif`; PDFs via the pdf.js-based PdfViewer with thumbnail rail; `.md` files render as HTML by default via react-markdown with a "Show rendered" toggle for raw source), Save to Drive for `.md` files (converts markdown to Google Docs), folder download as zip, and file/folder deletion via meatball menu with confirmation dialog
+- Requests View: Full-pane single view for all action requests across conversations, with one filter tab per action-request status (`filterOptions` in `RequestsView.tsx`, Open default) showing server-provided counts, request cards with Approve / Revise / Stop buttons (approve label from server), routine/project context display, conversation navigation links, generic server-rendered preview field display, live updates via WebSocket subscription, and non-disruptive "N new requests" banner
+- File Browser: Workspace file management panel with file and folder drag-and-drop upload, inline file viewing via FileViewerModal (text files: `VIEWABLE_EXTENSIONS` in `chat/file_storage.py`; images: `IMAGE_EXTENSIONS` in `FileBrowser.tsx`; PDFs via the pdf.js-based PdfViewer with thumbnail rail; `.md` files render as HTML by default via react-markdown with a "Show rendered" toggle for raw source), Save to Drive for `.md` files (converts markdown to Google Docs), folder download as zip, and file/folder deletion via meatball menu with confirmation dialog
 - Stop/Interrupt: Stop button during streaming, partial response recovery
 - Admin Ops Menu: Wrench icon button in the sidebar's user info bar next to the settings gear (inline variant; the System Reports page, which has no sidebar, keeps the floating fixed bottom-right variant), only visible to admin users (emails in `server_config.json` `admin_emails`), upward dropdown with "System Reports" (navigates to `/admin/system-reports`, hidden during impersonation), "Impersonate user", and "Shut down server" with two-step confirmation
 - Admin System Reports: Admin-only operator dashboard at `/admin/system-reports` (legacy `/admin/system-monitor` redirects; deep links served by the `/admin/{rest:path}` SPA catch-all in `quest.py`) -- shell page with a left-hand section nav.
-  - "Latest Conversations" polls the latest active conversations across all users every 60s with tab-visibility pause, in-flight dedupe, a live "Updated Xs ago" header timer, and a manual refresh button; "Total Usage" is a period-comparison matrix (today / 7 / 30 / 90 / 365 days / all time against conversations, active users, new users, calls, tokens and cost, each with its change vs the previous period) over daily / weekly / monthly trend charts; "Cost Analysis" shows the top-30 most-expensive conversations for a selectable date range.
+  - "Latest Conversations" polls the latest active conversations across all users (`POLL_INTERVAL_MS` in `LatestActiveConversationsTable.tsx`) with tab-visibility pause, in-flight dedupe, a live "Updated Xs ago" header timer, and a manual refresh button; "Total Usage" is a period-comparison matrix (today / 7 / 30 / 90 / 365 days / all time against conversations, active users, new users, calls, tokens and cost, each with its change vs the previous period) over daily / weekly / monthly trend charts; "Cost Analysis" shows the most-expensive conversations for a selectable date range (row count is the `limit` default of the route in `chat/routes/admin.py`).
   - Both show per-conversation token usage, estimated cost, latest context size, and active user-message days. See [Admin System Reports Architecture](architecture/admin-system-monitor.md)
 
 #### App Integration
 - App layout with two-column + file browser layout, conditional rendering of RequestsView vs chat panel, global Cmd/Ctrl+K keyboard shortcut for search
 - Chat state management (conversationStore, WebSocketManager, the per-responsibility contexts under `frontend/src/contexts/`) with direct event subscriptions for component refresh
 - Model selector (the catalog served by `GET /app/api/config` from `MODEL_REGISTRY` plus provider-instance models; deprecated models are hidden but stay usable on conversations that already have them) with provider locking after first message (filters dropdown to same-provider models) and context usage indicator
-- Authentication integration (session cookie, inline sign-in, dev email login when `QUEST_ENV=dev`)
+- Authentication integration (session cookie, inline sign-in, dev email login in local mode)
 - Static file serving and production deployment (single-port)
 
 #### User Profile and Settings
@@ -272,26 +272,26 @@ Conversations created by routines are linked back via `routine_id` and grouped u
 ```
 quest/
 ├── auth/                    # Auth submodule (OAuth flows, session management, credentials)
-│   ├── __init__.py         # Re-exports + router references (7 routers including dev_login_router; plugin OAuth routers mounted separately)
-│   ├── config.py           # Constants, scopes, environment-based cookie name (QUEST_ENV), cookie version, credential loaders (including load_coingecko_api_key()); QUEST_ENV also drives UI branding via /app/api/config and enables dev email login
+│   ├── __init__.py         # Re-exports + the core router references registered by quest.py (plugin OAuth routers mounted separately)
+│   ├── config.py           # Constants, scopes, run-mode-based cookie name, cookie version, credential loaders (including load_coingecko_api_key()); the run mode also drives UI branding via /app/api/config and enables dev email login
 │   ├── session.py          # Cookie serializers, FastAPI auth dependencies, strict cookie validation (bool exclusion, positive-int uid check)
-│   ├── google_login.py     # Google app login flow (5 endpoints)
-│   ├── google_services.py  # Google Services OAuth flow (2 endpoints)
-│   ├── dev_login.py        # Dev-only email login (POST /auth/dev-login, QUEST_ENV=dev only); deterministic name generation from canned lists, 404 in non-dev mode, 403 for users with Google OAuth credentials
+│   ├── google_login.py     # Google app login flow
+│   ├── google_services.py  # Google Services OAuth flow
+│   ├── dev_login.py        # Local-mode-only email login (POST /auth/dev-login, gated by allow_dev_login()); deterministic name generation from canned lists, 404 outside local mode, 403 for users with Google OAuth credentials
 │   ├── google_credentials.py # Credential management + make_authenticated_request()
 │   └── popup_helpers.py    # OAuth popup HTML generators
 ├── api/                     # API endpoint modules and instruction text
 │   ├── __init__.py         # Re-exports get_instructions_content, get_user_connected_services from api.instructions
 │   ├── instructions.py     # Aggregation layer: get_instructions_content(), get_user_connected_services(); composes per-service get_instructions() into full instruction document
 │   ├── gmail/              # Gmail package (endpoints, models, helpers, instructions)
-│   │   ├── __init__.py    # Re-exports all 16 public symbols for backward compatibility
+│   │   ├── __init__.py    # Re-exports the package's public symbols (`__all__`) for backward compatibility
 │   │   ├── constants.py   # API URLs, size limits, regexes, unicode sets
-│   │   ├── models.py      # Pydantic models (DraftAttachment, CreateDraftRequest, SendEmailToSelfRequest)
-│   │   ├── helpers.py     # 15 pure helper functions (clean_email_markdown, replace_urls_with_identifiers, etc.)
-│   │   ├── raw_endpoints.py     # Batch POST proxy endpoint (batch_request); 7 former GET proxy endpoints migrated to authed_get
-│   │   ├── simple_endpoints.py  # 6 LLM-friendly read endpoints
+│   │   ├── models.py      # Pydantic request models (draft attachments, draft creation, send-to-self)
+│   │   ├── helpers.py     # Pure helper functions (clean_email_markdown, replace_urls_with_identifiers, etc.)
+│   │   ├── raw_endpoints.py     # Batch POST proxy endpoint (batch_request); the former GET proxy endpoints migrated to authed_get
+│   │   ├── simple_endpoints.py  # LLM-friendly read endpoints
 │   │   ├── draft_endpoints.py   # Draft creation, send-to-self, attachment resolvers
-│   │   └── instructions.py      # 4 instruction text generators, get_instructions()
+│   │   └── instructions.py      # Instruction text generators, get_instructions()
 │   ├── calendar.py         # Calendar get_instructions() for system prompt (no endpoints; reads use authed_get)
 │   ├── drive.py            # Drive get_instructions() for system prompt (no endpoints; reads use authed_get, binary downloads use download_drive_file)
 │   ├── docs.py             # Docs endpoints and get_instructions()
@@ -303,20 +303,20 @@ quest/
 │   ├── _example/           # Single-file smoke-test fixture (loaded only by tests)
 │   └── github/, m365/, slack/, twitter/, twilio/, unifi/, iru/, telegram/, google_admin/, tailscale/, sec_edgar/, imap/  # In-tree plugins (see architecture/plugins.md)
 ├── config/                  # Configuration modules
-│   └── paths.py            # Centralized data-directory path constants (PROJECT_ROOT, DATA_DIR, DATABASE_PATH, CHATS_DIR, PROJECTS_DIR, SECRET_KEY_FILE, LOG_DIR); reads optional data_dir from server_config.json
+│   └── paths.py            # Centralized data-directory path constants (PROJECT_ROOT, DATA_DIR and one `*_DIR` / `*_FILE` constant per data-dir child); reads optional data_dir from server_config.json
 ├── db/                      # Database layer (user data, memories, guides, projects, routines, routine schedules, conversation metadata, action requests, skills, skill shares, skill auto-loads, API call usage)
 │   ├── __init__.py         # Package init
 │   ├── engine.py           # Dual sync/async SQLAlchemy engines (both with PRAGMA foreign_keys=ON): sync engine + SessionLocal + get_db() for Alembic only; async engine (sqlite+aiosqlite) + AsyncSessionLocal + get_async_db() for all store modules
-│   ├── models.py           # User, Memory, Guide, Project, Routine (includes model column), RoutineSchedule, Conversation (includes model column), ActionRequest, Skill, SkillShare, UserSkillAutoload, LlmCallGemini, and LlmCallAnthropic ORM models; ActionRequestType, ModelId, ApiCallType, and SkillVisibility enums; indexes declared in __table_args__ to keep Base.metadata in sync with DB
-│   ├── user_store.py       # User data access layer, async (get_user_by_*, create_user, update_user_field, search_users, etc.)
-│   ├── memory_store.py     # Memory data access layer, async (create, get, list, search, update, archive, unarchive, delete) with FTS5 search
-│   ├── guide_store.py      # Guide data access layer, async (create, get, get_default, list, update, delete, ensure_default, delete_all_user_guides)
-│   ├── project_store.py    # Project data access layer, async (create, get, list, update, delete, delete_all_user_projects)
-│   ├── routine_store.py    # Routine data access layer, async (create, get, list, update, delete, delete_all_project_routines, delete_all_user_routines); create/update accept model parameter with ellipsis sentinel
-│   ├── schedule_store.py   # Schedule data access layer, async (create, get, list_enabled, update, delete, mark_run_started/completed/failed, clear_stale_running_flags)
-│   ├── conversation_store.py # Conversation metadata access layer, async (create with optional project_id and routine_id, get_meta, list_meta with include_archived filtering, update_last_message_at, delete, delete_all_user_conversations, list_project_conversations_meta with include_archived filtering, get_project_for_conversation, archive_conversation, unarchive_conversation, rename_conversation)
-│   ├── action_request_store.py # Action request data access layer, async (create_action_request, get_action_request, list_action_requests, resolve_action_request, delete_all_user_action_requests, count_action_requests, count_action_requests_by_status, list_action_requests_enriched)
-│   └── llm_call_store.py   # Per-provider raw LLM call token usage data access layer, async (record_api_call provider dispatcher, get_conversation_usage, get_usage_by_model_for_conversations)
+│   ├── models.py           # Every ORM model (one class per table, incl. the per-provider `LlmCall*` raw usage tables) and the StrEnum column types (`ModelId`, `ActionRequestType`, `SkillVisibility`, status/kind enums); indexes declared in __table_args__ to keep Base.metadata in sync with DB
+│   ├── user_store.py       # User data access layer, async
+│   ├── memory_store.py     # Memory data access layer, async, with FTS5 search
+│   ├── guide_store.py      # Guide data access layer, async
+│   ├── project_store.py    # Project data access layer, async
+│   ├── routine_store.py    # Routine data access layer, async; create/update accept model parameter with ellipsis sentinel
+│   ├── schedule_store.py   # Schedule data access layer, async, incl. the run-ledger state transitions
+│   ├── conversation_store.py # Conversation metadata access layer, async (creation with optional project/routine association, include_archived filtering on the list queries, archive/rename)
+│   ├── action_request_store.py # Action request data access layer, async (CRUD, resolve, per-status counts, enriched listing)
+│   └── llm_call_store.py   # Per-provider raw LLM call token usage data access layer, async (record_api_call provider dispatcher plus the usage read queries)
 ├── alembic/                 # Database migrations
 │   ├── env.py              # Alembic environment (imports Base.metadata from db/models.py; PRAGMA foreign_keys=ON for cascade-safe migrations; include_name callback excludes FTS5 virtual/shadow tables from autogenerate; process_revision_directives hook suppresses spurious PK nullable detection caused by SQLite quirk)
 │   └── versions/           # Migration scripts
@@ -324,7 +324,7 @@ quest/
 ├── chat/                    # Chat backend modules
 │   ├── __init__.py         # Package init (logging delegated to logging_config.py)
 │   ├── logging_config.py   # Unified logging configuration for all loggers (includes `auth` and `large_tool_results` logger namespaces); creates `data/logs/` at import time
-│   ├── auth.py             # Authentication helpers (imports from auth.config, auth.session); `check_user_allowed()` relaxes domain restriction in dev mode (QUEST_ENV=dev); `is_admin()` case-insensitive check against `admin_emails` from server config
+│   ├── auth.py             # Authentication helpers (imports from auth.config, auth.session); `check_user_allowed()` relaxes domain restriction in local mode (`enforce_domain()` in config/environment.py); `is_admin()` case-insensitive check against `admin_emails` from server config
 │   ├── file_routes.py      # File browser API endpoints (list, upload, download, download folder as zip, read content, file info, delete, save to Drive; flat and folder upload with optional `paths` parameter)
 │   ├── file_storage.py     # File operations, path validation, filename sanitization, `save_uploaded_file_with_path()` for folder uploads, `_check_dir_conflicts()` for directory conflict detection, `get_file_content()` for text file viewing, `count_workspace_item_files()` for file/folder info, `delete_workspace_item()` for deletion, `create_folder_zip()` for folder zip download
 │   ├── gemini_api/         # Conversation loop and tool dispatch submodule package
@@ -346,7 +346,7 @@ quest/
 │   │   │   ├── sandbox.py       # run_script, run_python, _build_script_podman_cmd
 │   │   │   ├── project_db.py    # project_db_query
 │   │   │   └── response_blobs.py # get_response_content chunked reading
-│   │   ├── tool_dispatch.py    # Shared tool call routing (_dispatch_tool_call) with tool_call meta tool dispatch branch (includes download_drive_file, archive_gmail_message, set_conversation_name, and authed_get dispatch)
+│   │   ├── tool_dispatch.py    # Shared tool call routing (_dispatch_tool_call) with the tool_call meta tool dispatch branch over TOOL_CALL_REGISTRY
 │   │   ├── system_prompt.py    # System prompt builders (top-level and sub-agent) with skills_content injection and auto-generated dynamic tools section from TOOL_CALL_REGISTRY
 │   │   ├── history.py         # SDK history persistence (save/load sdk_history.json)
 │   │   ├── session.py         # Client singleton, session store, pending confirmations
@@ -359,7 +359,7 @@ quest/
 │   │   ├── config.py      # Model registry (MODEL_REGISTRY), provider lookup, singleton management
 │   │   ├── gemini_provider.py    # GeminiProvider implementation (google-genai SDK)
 │   │   ├── anthropic_provider.py # AnthropicProvider implementation (anthropic[vertex] SDK, Vertex AI)
-│   │   └── tool_schemas.py      # Provider-agnostic tool definitions (JSON Schema), TOOL_CALL_SPEC, TOOL_CALL_REGISTRY (dynamic tools including edit_workspace_file, download_drive_file, archive_gmail_message, set_conversation_name, and authed_get), converter functions (to_gemini_declarations, to_anthropic_tools)
+│   │   └── tool_schemas.py      # Provider-agnostic tool definitions (JSON Schema), TOOL_CALL_SPEC, TOOL_CALL_REGISTRY (the dynamic tools reachable through the tool_call meta tool), the tool tiers, converter functions (to_gemini_declarations, to_anthropic_tools)
 │   ├── tool_notices.py     # ToolResultWithNotices dataclass for attaching advisory notices to route handler responses
 │   ├── route_dispatch.py   # Internal route dispatch for tool calls with logging, conversation_id auto-injection, ToolResultWithNotices extraction, _BLOCKED_PROXY_PATHS blocklist for internal-only endpoints
 │   ├── memory_routes.py    # Memory CRUD + update + archive/unarchive REST endpoints (/app/api/memories)
@@ -381,14 +381,14 @@ quest/
 ├── frontend/                # React frontend application
 │   ├── src/
 │   │   ├── api/            # API client and types
-│   │   │   ├── client.ts   # REST API client functions (includes guide CRUD, skill CRUD + sharing + auto-load: fetchSkills, createSkill, updateSkill, deleteSkill, fetchSkillShares, addSkillShares, removeSkillShare, searchUsers, fetchAutoloadedSkillIds, setSkillAutoload, fetchSharedWithMeSkills; fetchConversationLoadedSkills for per-conversation loaded skills; fetchSystemPrompt for system prompt viewer; project CRUD, routine CRUD, schedule CRUD: fetchRoutineSchedule, createRoutineSchedule, updateRoutineSchedule, deleteRoutineSchedule; createProjectConversation accepts optional routineId; archiveConversation, unarchiveConversation, renameConversation; fetchConversations and fetchProjectConversations accept includeArchived param; action request functions: fetchActionRequests, fetchActionRequestsEnriched, fetchActionRequestCount, fetchActionRequestCounts, fetchActionRequest, resolveActionRequest; searchConversations; triggerAdminShutdown)
-│   │   │   ├── config.ts   # API configuration and endpoints (includes guides(), guide(id), skills(), skill(id), skillAutoload(skillId), skillsAutoloaded(), skillsSharedWithMe(), skillShares(skillId), skillShare(skillId, userId), userSearch(query), conversationLoadedSkills(conversationId), conversationSystemPrompt(conversationId), projectRoutines(projectId), projectRoutine(projectId, routineId), routineSchedule(projectId, routineId), actionRequestsCount(), actionRequestsCounts(), adminShutdown() builders)
+│   │   │   ├── client.ts   # REST API client functions, one exported function per backend endpoint (conversations incl. archive/rename/search, guides, skills + sharing + auto-load, projects, routines, schedules, action requests, admin)
+│   │   │   ├── config.ts   # API configuration and the endpoint URL builders the client functions call
 │   │   │   ├── fileApi.ts  # File browser API client functions, parameterised by a `FileSource` (conversation or project space; includes `uploadFilesWithPaths()` for folder uploads, `fetchFileContent()` for text viewing, `downloadFolder()` for folder zip download, `saveFileToDrive()` for saving .md files to Google Drive, the project twins and the `copyFileToProject()` / `copyFileFromProject()` copy-route calls)
-│   │   │   └── types.ts    # TypeScript type definitions (includes Guide, GuidesListResponse, GuideSnapshot, Skill, SkillsListResponse, SkillShare, SkillSharesResponse, UserSearchResult, UserSearchResponse, UserSettings, Routine with model field, RoutineSchedule, RoutinesListResponse, WebSocketSendMessage with guide_id and skill_ids, Conversation with routine_id, archived, custom_name, and model, ActionRequest with preview_fields/display_name/approve_label, ActionRequestMessage with preview_fields/approve_label, EnrichedActionRequest, EnrichedActionRequestsListResponse, ActionRequestCountResponse, ActionRequestCountsResponse, FileContentResponse, ConnectorStatus, ConnectorsResponse, SearchResult, SearchResponse, StreamEvent with conversation_updated type (conversation_id and custom_name fields), SubAgentToolCallInfo, SubAgentToolUseMessage, SubAgentToolResultMessage, PersistedSubAgentEvent, UsageStats with new_input_tokens/provider/cache_creation_tokens/cache_read_tokens/context_tokens/max_context_tokens and per-call-type breakdown fields)
+│   │   │   └── types.ts    # TypeScript type definitions mirroring the backend response shapes and the WebSocket envelope (`StreamEvent` and its per-type payloads, incl. the sub-agent event types and `UsageStats` with the provider-specific cache fields)
 │   │   ├── constants/      # Shared constants
-│   │   │   └── models.ts   # AVAILABLE_MODELS array with model IDs, display names, provider tags, maxInputTokens, and an optional deprecated flag per model; SELECTABLE_MODELS filtered view (excludes deprecated models, e.g. Gemini 3.1 Pro) used by all pickers; getProviderForModel() helper; getModelDisplayName() helper for resolving model IDs to human-readable names; isDeprecatedModel() helper; DEPRECATED_MODEL_MAP for silent remapping of retired models
+│   │   │   └── models.ts   # Runtime model catalog fed by setModelCatalog() from the `models` field of GET /app/api/config (a Vertex-only static fallback until then); getKnownModels() / getSelectableModels(visibility) / getTopLevelModels(visibility) / getModelInfo() lookups used by all pickers, provider and display-name helpers, isDeprecatedModel(), DEPRECATED_MODEL_MAP for silent remapping of retired models
 │   │   ├── components/     # React UI components
-│   │   │   ├── Sidebar.tsx        # Sidebar with Requests section (badge counter with event-driven refresh via requestEvents.ts and 30-second polling fallback), Search section with magnifier icon (opens SearchModal), projects section (drill-down navigation with conversation auto-selection and top-level conversation restore), always-visible routines section, and conversations list (includes UserInfoBar); subscribes directly to `webSocketManager.onStreamComplete` for conversation list refresh using stale-while-revalidate (`silentLoadConversations`); subscribes to `webSocketManager.onConversationRenamed` for real-time sidebar name updates when the model sets a name via `set_conversation_name`; routine conversation grouping with collapsible entries; model propagation when running routines; conversation archive and rename with meatball menu and optimistic UI updates; per-section filter popover (filter icon with "Show Archived" and "Show Slack Conversations" checkboxes, both unchecked by default, no persistence); inline rename UI (text input, Enter to save, Escape to cancel); 30-second project conversation polling for server-created conversations (with visibility-aware scheduling and in-flight guard)
+│   │   │   ├── Sidebar.tsx        # Sidebar with Requests section (badge counter with event-driven refresh via requestEvents.ts and the WS request_count_changed global), Search section with magnifier icon (opens SearchModal), projects section (drill-down navigation with conversation auto-selection and top-level conversation restore), always-visible routines section, and conversations list (includes UserInfoBar); subscribes directly to `webSocketManager.onStreamComplete` for conversation list refresh using stale-while-revalidate (`silentLoadConversations`); subscribes to `webSocketManager.onConversationRenamed` for real-time sidebar name updates when the model sets a name via `set_conversation_name`; routine conversation grouping with collapsible entries; model propagation when running routines; conversation archive and rename with meatball menu and optimistic UI updates; per-section filter popover (the origin/archive checkboxes of ConversationFilterMenu.tsx, all unchecked by default, no persistence); inline rename UI (text input, Enter to save, Escape to cancel); project conversation polling for server-created conversations (PROJECT_CONVERSATIONS_POLL_INTERVAL_MS in hooks/useProjectConversations.ts, with visibility-aware scheduling and in-flight guard)
 │   │   │   ├── sidebar/           # Sidebar section components (Sidebar.tsx is the shell; data lives in the hooks above)
 │   │   │   │   ├── ConversationsSection.tsx  # Top-level Conversations header + paged list + auto-paging Load more row
 │   │   │   │   ├── ProjectPanel.tsx          # Drilled project: header, Routines section, grouped conversation list
@@ -416,7 +416,7 @@ quest/
 │   │   │   ├── ToolCallGroup.css  # ToolCallGroup styles (dark/light mode)
 │   │   │   ├── FileBrowser.tsx    # File browser card for one file space (`source` prop: Chat Files or Project Files; file and folder drag-and-drop upload with structured error display, opens FileViewerModal for viewable files including images and PDFs, folder download as zip with notification bar); subscribes to `persistentWebSocket.onGlobalEvent` for `file_list_changed` per-user globals (200ms debounce) and silent-refreshes mid-turn after each workspace mutation, filtered by active conversation / project
 │   │   │   ├── FileBrowser.css    # File browser styles (includes multi-line error display and zipping notification bar)
-│   │   │   ├── FileViewerModal.tsx # Full-screen modal for viewing text files, images, and PDFs with download button and Save to Drive for .md files; PDFs fetched as ArrayBuffer with a 100 MB preview cap; .md files render as HTML by default via react-markdown (reusing the chat renderer's markdownComponents) with a "Show rendered" header toggle for raw source
+│   │   │   ├── FileViewerModal.tsx # Full-screen modal for viewing text files, images, and PDFs with download button and Save to Drive for .md files; PDFs fetched as ArrayBuffer with a preview cap (PDF_MAX_PREVIEW_BYTES); .md files render as HTML by default via react-markdown (reusing the chat renderer's markdownComponents) with a "Show rendered" header toggle for raw source
 │   │   │   ├── FileViewerModal.css # FileViewerModal styles (includes checkerboard background for image transparency)
 │   │   │   ├── PdfViewer.tsx      # pdf.js-based PDF viewer (thumbnail rail + fit-to-width pages, IntersectionObserver-lazy canvas rendering with eviction, self-hosted worker/cmaps/fonts/wasm assets)
 │   │   │   ├── PdfViewer.css      # PdfViewer styles (two-pane layout, thumbnail rail, dark/light mode)
@@ -440,7 +440,7 @@ quest/
 │   │   │   ├── SignInScreen.css   # SignInScreen styles (includes dev login section: divider, form, input, button, note)
 │   │   │   ├── ActionRequestMessage.tsx  # Inline action request UI with Approve / Revise / Stop buttons (non-blocking, database-persisted); renders server-provided preview_fields generically; falls back to fetching preview from API for older messages; approve button label from server-provided approve_label; calendar invites collapse to a Created summary; emits request count change events after resolution
 │   │   │   ├── ActionRequestMessage.css  # ActionRequestMessage styles
-│   │   │   ├── RequestsView.tsx         # Full-pane Requests view with filter tabs (Open default, Executed, Denied, Stopped, All), request cards, Approve / Revise / Stop, routine/project context, live updates via WebSocket + 30s polling, "N new requests" banner
+│   │   │   ├── RequestsView.tsx         # Full-pane Requests view with per-status filter tabs (filterOptions, Open default), request cards, Approve / Revise / Stop, routine/project context, live updates via WebSocket, "N new requests" banner
 │   │   │   ├── RequestsView.css         # RequestsView styles
 │   │   │   ├── AdminOpsMenu.tsx         # Admin operations menu (wrench icon, visible to admins only); inline variant rendered in UserInfoBar next to the settings gear, floating bottom-right variant on the sidebar-less System Reports page; server shutdown with two-step confirmation; reads isAdmin from AuthContext
 │   │   │   ├── AdminOpsMenu.css         # AdminOpsMenu styles (dark/light theme support)
@@ -451,7 +451,7 @@ quest/
 │   │   │   ├── ProjectSkillsSection.tsx  # Project skills section with three tabs (Project Skills CRUD, My Skills read-only, Shared with Me read-only), project auto-load toggle
 │   │   │   ├── NewRoutineModal.tsx       # Dedicated modal for creating new routines (name, prompt, guide, model)
 │   │   │   ├── NewRoutineModal.css       # NewRoutineModal styles
-│   │   │   ├── RoutineSettingsModal.tsx  # Dedicated modal (720px) with left nav sidebar (Prompt, Schedule, Delete sections), auto-growing prompt textarea
+│   │   │   ├── RoutineSettingsModal.tsx  # Dedicated modal (width in RoutineSettingsModal.css) with left nav sidebar (Prompt, Schedule, Delete sections), auto-growing prompt textarea
 │   │   │   └── RoutineSettingsModal.css  # RoutineSettingsModal styles (left nav layout, section content, disabled schedule fields)
 │   │   ├── contexts/       # React contexts
 │   │   │   ├── AppProviders.tsx             # Composes the per-responsibility contexts below; App.tsx wraps the routes in it
@@ -482,14 +482,14 @@ quest/
 │   │   │   ├── directoryTraversal.ts # Recursive directory traversal for folder drag-and-drop uploads via `webkitGetAsEntry()` API; exports `FileWithPath` and `extractFilesFromDataTransfer()`
 │   │   │   ├── formatters.ts    # Formatting utilities (formatTimestamp, parseUTCTimestamp, formatNumber)
 │   │   │   └── oauthPopup.ts    # OAuth popup window utility (openOAuthPopup())
-│   │   ├── App.tsx         # Main app with react-router-dom Routes (/,  /chats/:id, /projects/:pid/:id); URL params synced to context via useEffect; navigate() for conversation selection; handleProjectIdLoaded redirect
+│   │   ├── App.tsx         # Main app with react-router-dom Routes (the `<Route>` table in App.tsx: home, chat, project chat, inbox, docs, set-password, admin pages); URL params synced to context via useEffect; navigate() for conversation selection; handleProjectIdLoaded redirect
 │   │   └── main.tsx        # Application entry point; wraps App in BrowserRouter
 │   ├── vite.config.ts      # Vite configuration (includes vite-plugin-static-copy targets that self-host the pdf.js cmaps/standard_fonts/wasm/iccs assets under dist/assets/pdfjs/)
 │   └── package.json        # Frontend dependencies
 ├── data/
 │   ├── quest.db           # SQLite database (user accounts, API keys, OAuth tokens, settings, memories, guides, projects, routines, routine schedules, conversation metadata with routine_id association, archived flag, and custom_name, action requests)
 │   ├── logs/               # Application log files (created automatically at startup)
-│   │   └── large_tool_results.jsonl  # Tool call results exceeding 2048 bytes (JSONL format, RotatingFileHandler, 50MB max, 3 backups)
+│   │   └── large_tool_results.jsonl  # Tool call results exceeding `_LARGE_RESULT_THRESHOLD` in chat/gemini_api/tool_dispatch.py (JSONL format, RotatingFileHandler sized by the handler config in chat/logging_config.py)
 │   ├── projects/           # Per-project data (project workspace shared across conversations in a project, project.db)
 │   │   └── {project_id}/
 │   │       └── workspace/
@@ -503,14 +503,14 @@ quest/
 ├── docs/                    # This documentation
 ├── quest.py               # Main FastAPI application (registers auth/ routers including dev_login_router, guide_router, project_router, routine_router, and schedule_router; lifespan handler starts/stops the background scheduler, creates shutdown_event for admin-triggered shutdown, cancels all in-progress execution tasks via scheduler.shutdown(); `/api/instructions` and `/api/reset-api-key` endpoints; static file serving; instruction functions extracted to api/instructions.py and per-service get_instructions() in each API submodule), uses "quest" logger
 ├── logging_config.json     # Logging config for CLI-based uvicorn invocations (run.py); includes `large_tool_results` file handler
-├── run.py                  # Startup script (--prod/--dev flags, sets QUEST_ENV, installs frontend deps and builds, syncs backend deps, runs migrations, creates `data/logs/` directory, auto-builds missing container images with env suffix); catches exit codes 130 (SIGINT) and 143 (SIGTERM) for clean "Server stopped." message
-├── Dockerfile.script-runner # Podman image for run_script tool (Python 3.12-slim + curl, jq, bash, zip, unzip, requests, openpyxl, python-docx, matplotlib, seaborn, pypdf, PyPDFForm, socat, iptables)
+├── run.py                  # Startup script (one flag per run mode -- the mutually exclusive argparse group, --dev kept as a deprecated alias --, sets QUEST_ENV, installs frontend deps and builds, syncs backend deps, runs migrations, creates `data/logs/` directory, auto-builds missing container images with the mode suffix); treats the SIGINT/SIGTERM exit codes as a clean "Server stopped."
+├── Dockerfile.script-runner # Podman image for run_script tool (Python slim base plus the apt/pip package lines in the file: shell tools, the socat bridge, iptables, the pre-installed Python libraries)
 ├── script-runner-entry.sh  # Entrypoint for script-runner container (iptables setup, privilege drop via setpriv)
-├── tests/                   # Pytest test suite (dev dependency: pytest>=8.0.0)
-│   ├── test_email_cleanup.py     # 30 tests for clean_email_markdown() in api/gmail/helpers.py
-│   ├── test_url_replacement.py  # 22 tests for replace_urls_with_identifiers() in api/gmail/helpers.py
+├── tests/                   # Pytest test suite (pytest pinned in the pyproject.toml dev group)
+│   ├── test_email_cleanup.py     # Tests for clean_email_markdown() in api/gmail/helpers.py
+│   ├── test_url_replacement.py  # Tests for replace_urls_with_identifiers() in api/gmail/helpers.py
 │   └── test_syntax.py           # Parametrized syntax validation (py_compile on all .py files)
-└── pyproject.toml          # Python dependencies (uv); dev group includes pytest>=8.0.0
+└── pyproject.toml          # Python dependencies (uv); dev group holds the test tooling
 ```
 
 ## Technology Stack
@@ -518,17 +518,17 @@ quest/
 | Component | Technology |
 |-----------|-----------|
 | Backend Framework | FastAPI |
-| Frontend Framework | React 19 |
-| Build Tool | Vite 7 |
+| Frontend Framework | React (version pinned in `frontend/package.json`) |
+| Build Tool | Vite (version pinned in `frontend/package.json`) |
 | Language (Frontend) | TypeScript |
-| Language (Backend) | Python 3.12 |
+| Language (Backend) | Python (`requires-python` in `pyproject.toml`) |
 | Package Manager (Backend) | uv |
 | Package Manager (Frontend) | npm |
 | AI Models | Google Gemini and Anthropic Claude on Vertex AI (`MODEL_REGISTRY` in `chat/llm/config.py`) plus admin-configured OpenRouter / Fireworks / NEAR AI / self-hosted instances (`config/inference_providers.py`) -- user-selectable per conversation and per routine |
-| Authentication | Google OAuth 2.0 (two-tier: app login + Google Services), inline sign-in on `/`, dev-only email login (`QUEST_ENV=dev`) |
-| User Storage | SQLite + SQLAlchemy + Alembic (FTS5 for memory search, guides table, projects table, routines table with model column, routine_schedules table, conversations table with routine_id FK, archived column, custom_name column, and model column, action_requests table) |
+| Authentication | Google OAuth 2.0 (two-tier: app login + Google Services), inline sign-in on `/`, local-mode-only email login |
+| User Storage | SQLite + SQLAlchemy + Alembic (FTS5 for memory search; one ORM model per table in `db/models.py`) |
 | Chat Storage | JSON files (message history, with file-based search via `ChatStorage.search_conversations()`, `sub_agent_tool_calls` metadata on `tool_result` messages for sub-agent display); SQLite `conversations` table (ownership + timestamps + project association + routine association + archive status + custom name) |
-| Containerization | Podman (for script runner, env-suffixed images e.g. `quest-script-runner-dev`/`quest-script-runner-prod`) |
+| Containerization | Podman (for script runner, run-mode-suffixed images named by `get_script_runner_image()` / `get_public_script_runner_image()` in `chat/gemini_api/constants.py`) |
 
 ## Getting Started
 

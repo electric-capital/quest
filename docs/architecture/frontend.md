@@ -109,7 +109,7 @@ React Components
 
 Centralized configuration for API endpoints and URL building:
 
-The `endpoints` object in `frontend/src/api/config.ts` provides centralized URL builders for all API endpoints: `conversations()`, `conversation(id)`, `persistentStream()` (the `WS /app/api/stream` endpoint), `settings()`, `me()`, `memories()`, `memory(id)`, `guides()`, `guide(id)`, `conversationLoadedSkills(conversationId)`, `actionRequestsCount()`, and `version()`.
+The `endpoints` object in `frontend/src/api/config.ts` provides centralized URL builders for all API endpoints (one builder per route family, e.g. `persistentStream()` for the `WS /app/api/stream` endpoint); read the object for the full set.
 
 **Features**:
 - Centralized endpoint management
@@ -125,7 +125,7 @@ Every function is a single call to the shared `apiGet`/`apiPost`/`apiPut`/`apiDe
 
 #### 3. Persistent WebSocket (`src/services/PersistentWebSocket.ts`)
 
-Singleton client for `WS /app/api/stream`. Owns connect / reconnect / heartbeat / watchdog / per-conversation subscription-refresh timers (every 3 min while a conversation is in the `subscribed` set, against the 5-min server TTL) and exposes `subscribe(id)` / `unsubscribe(id)` / `send(payload)` / `onGlobalEvent(handler)` / `onConversationEvent(id, handler)` / `setLastSeq(id, seq)` / `getLastSeq(id)`. See [Realtime Architecture](realtime.md).
+Singleton client for `WS /app/api/stream`. Owns connect / reconnect / heartbeat / watchdog / per-conversation subscription-refresh timers (`SUBSCRIPTION_REFRESH_INTERVAL_MS` in the file, fired while a conversation is in the `subscribed` set and chosen to be well inside the server's `SUBSCRIPTION_TTL_SECONDS` in `chat/realtime/socket.py`; the reconnect backoff, ping and watchdog intervals are the sibling constants at the top of the file) and exposes `subscribe(id)` / `unsubscribe(id)` / `send(payload)` / `onGlobalEvent(handler)` / `onConversationEvent(id, handler)` / `setLastSeq(id, seq)` / `getLastSeq(id)`. See [Realtime Architecture](realtime.md).
 
 #### 4. Authentication Utilities (`src/utils/auth.ts`)
 
@@ -217,11 +217,11 @@ Thin compatibility shim over the `persistentWebSocket` singleton. After devplan 
 
 **Responsibilities**:
 - Forwards `sendMessage` / `stopStreaming` / `sendConfirmationResult` to `persistentWebSocket.send(...)` (`{op: "send_message"}`, `{op: "stop"}`)
-- Tracks every `sendMessage` as a `PendingSend` keyed by the bubble's `client_send_id`: a `send()` that returns `false` (socket closed) or a 15s silence without the server's `send_message_accepted` receipt flips the optimistic bubble into the failed state (`send_failed: "not_connected" | "unconfirmed"`, rendered by `Message.tsx` with Retry / Discard) and tears down the streaming state; `retryFailedSend` re-dispatches the identical envelope, `discardFailedSend` drops the bubble, and a late receipt clears the failure. See [Realtime -- Delivery Receipt and Failed Sends](realtime.md#delivery-receipt-and-failed-sends)
+- Tracks every `sendMessage` as a `PendingSend` keyed by the bubble's `client_send_id`: a `send()` that returns `false` (socket closed) or a silence of `SEND_ACK_TIMEOUT_MS` (in the file) without the server's `send_message_accepted` receipt flips the optimistic bubble into the failed state (`send_failed: "not_connected" | "unconfirmed"`, rendered by `Message.tsx` with Retry / Discard) and tears down the streaming state; `retryFailedSend` re-dispatches the identical envelope, `discardFailedSend` drops the bubble, and a late receipt clears the failure. See [Realtime -- Delivery Receipt and Failed Sends](realtime.md#delivery-receipt-and-failed-sends)
 - On per-conversation `text_delta` events, accumulates `responseParts` and syncs the running text into `partialResponse`; bundles the accumulated text into a synthetic `text` message at the next `message_appended` flush boundary so `streamingMessages` stays consistent with the durable record
 - On `message_appended` for an assistant text boundary (i.e. while `partialResponse` is non-empty), calls `conversationStore.finalizeStreamingTextInPlace(conversationId, seq)` to swap the streaming bubble for a synthetic persisted entry at the event's seq in a single store update -- this avoids the unmount + remount flash that would otherwise happen during the tail-fetch latency. At tool boundaries (or on subscribed tabs that never accumulated text), this is a no-op and the canonical row inserts normally when the tail-fetch lands
 - Routes durable-event types from the persistent WS (`tool_use`, `tool_result`, `action_request`, `stats`, `sub_agent_*`, `conversation_updated`) into the conversation store's `streamingMessages` and updates ancillary state (sub-agent map, context usage)
-- Handles `subscription_expired` by clearing the streaming buffer for that conversation, so the next durable `message_appended` boundary triggers a tail fetch and rebuilds canonical state from disk; the singleton's 3-min refresh `setInterval` re-subscribes automatically while the conv stays in the `subscribed` set. See [Realtime -- Subscription TTL](realtime.md#subscription-ttl-and-refresh)
+- Handles `subscription_expired` by clearing the streaming buffer for that conversation, so the next durable `message_appended` boundary triggers a tail fetch and rebuilds canonical state from disk; the singleton's refresh `setInterval` re-subscribes automatically while the conv stays in the `subscribed` set. See [Realtime -- Subscription TTL](realtime.md#subscription-ttl-and-refresh)
 - Notifies `onStreamComplete` listeners when a `send_message_finished` envelope arrives (for sidebar refresh fallback)
 - Parses `preview_fields` and `approve_label` from `action_request` messages and stores them alongside the request data
 - Emits the local same-tab `emitRequestCountChange()` from `frontend/src/services/requestEvents.ts` when an `action_request` event arrives, so the sidebar badge updates without waiting for the server's `request_count_changed` round-trip
@@ -248,7 +248,7 @@ This is included in the `send_message` payload and passed to the backend, which 
 After the first message is sent, the conversation's provider is locked (see Provider Locking below), so only models from the same provider can be selected for subsequent messages.
 
 **Desktop Notifications**:
-`frontend/src/services/desktopNotifications.ts` wraps the browser Notification API. `WebSocketManager.sendMessage()` calls `requestNotificationPermission()` on user-initiated sends so the permission prompt happens lazily rather than on page load. `sendDesktopNotification()` only fires when the browser supports notifications, permission is `granted`, and `document.hidden` is `true`. Notifications auto-close after 7 seconds, and clicking one focuses the Quest tab.
+`frontend/src/services/desktopNotifications.ts` wraps the browser Notification API. `WebSocketManager.sendMessage()` calls `requestNotificationPermission()` on user-initiated sends so the permission prompt happens lazily rather than on page load. `sendDesktopNotification()` only fires when the browser supports notifications, permission is `granted`, and `document.hidden` is `true`. Notifications auto-close after `NOTIFICATION_AUTO_CLOSE_MS` (in the file), and clicking one focuses the Quest tab.
 
 **Message Handling**:
 1. Text chunks accumulated in `responseParts` and synced to `partialResponse`
@@ -271,7 +271,7 @@ The `stopStreaming(conversationId)` method sends `{op: "stop", conversation_id}`
 
 `AuthContext.tsx` calls `persistentWebSocket.connect()` once when `isAuthenticated` becomes true and `disconnect()` on logout / account-delete. The socket is shared across every conversation: subscribing to a conversation is `persistentWebSocket.subscribe(id)`.
 
-Subscriptions live until the 5-min server-side TTL expires (the singleton refreshes every 3 min while interested), so the React lifecycle does NOT fire `unsubscribe` on tab switch / unmount -- transient `text_delta` events for the away-conversation still land in the conversation store.
+Subscriptions live until the server-side TTL expires (`SUBSCRIPTION_TTL_SECONDS` in `chat/realtime/socket.py`; the singleton refreshes on `SUBSCRIPTION_REFRESH_INTERVAL_MS` while interested), so the React lifecycle does NOT fire `unsubscribe` on tab switch / unmount -- transient `text_delta` events for the away-conversation still land in the conversation store.
 
 Explicit `persistentWebSocket.unsubscribe(id)` exists for genuine teardown but is not on the lifecycle path. Reconnect / heartbeat / watchdog / subscription refresh are owned by the singleton (see [Realtime Architecture](realtime.md)).
 
@@ -304,21 +304,21 @@ App-wide state is split into one React context per responsibility, composed by `
 - `setDefaultModel(model, visibility?)`: In-memory-only setter reflecting a picker change in the current composer's display. Does NOT write the server default or localStorage
 - `getModelForConversation(conversationId)` / `setModelForConversation(conversationId, model)` / `hydrateModelForConversation(conversationId, model)`: the per-conversation override (`setModelForConversation` PATCHes `/conversations/{id}/model`; `hydrate*` only sets the in-memory value from a server response). Deprecated ids are remapped on read via `DEPRECATED_MODEL_MAP`
 - `setDraftModelForConversation(conversationId, model, visibility?)`: Draft-safe model setter for the home composer -- updates the in-memory per-conversation model map (and the visibility's default for display) but does NOT PATCH the server and does NOT persist the user-level default (the draft "conversation" doesn't exist yet; the default is persisted only on first send via `persistDefaultModel`). No localStorage
-- `getLockedProvider(conversationId)` / `lockConversationProvider(conversationId, provider)` / `isProviderLocked(conversationId)`: per-conversation provider locks, persisted in localStorage under `quest_locked_providers`. The lazy initializer migrates the pre-rename `praixy_locked_providers` key and strips any legacy `HOME_DRAFT_KEY` entry on load (see Provider Locking under the Model Selector section)
+- `getLockedProvider(conversationId)` / `lockConversationProvider(conversationId, provider)` / `isProviderLocked(conversationId)`: per-conversation provider locks, persisted in localStorage (key literal in the lazy initializer in `ConversationModelsContext.tsx`). The lazy initializer migrates the pre-rename key and strips any legacy `HOME_DRAFT_KEY` entry on load (see Provider Locking under the Model Selector section)
 
 **AppearanceContext values**:
-- `theme` / `setTheme`: Settings > Appearance colour scheme (`'light' | 'dark' | 'auto'`, helpers in `frontend/src/utils/theme.ts`).
-  - Boots from the `quest_theme` localStorage cache (an inline `<script>` in `frontend/index.html` has already applied it to `<html data-theme>` before the first paint, so a forced scheme never flashes the OS scheme), then re-synced from `theme` on `GET /app/api/me` -- the server value in `users.settings.theme` is the source of truth and follows the user across devices.
+- `theme` / `setTheme`: Settings > Appearance colour scheme (`ThemePreference` / `THEME_OPTIONS` in `frontend/src/utils/theme.ts`, a forced scheme or follow-the-OS; helpers in the same file).
+  - Boots from the localStorage cache (`THEME_STORAGE_KEY` there) (an inline `<script>` in `frontend/index.html` has already applied it to `<html data-theme>` before the first paint, so a forced scheme never flashes the OS scheme), then re-synced from `theme` on `GET /app/api/me` -- the server value in `users.settings.theme` is the source of truth and follows the user across devices.
   - `setTheme` applies the attribute immediately (auto removes it), updates the cache, and persists via `PUT /app/api/settings { theme }`, rejecting on a failed save so `AppearanceSection.tsx` can show the error while the local choice stays applied.
   - `index.css` also sets `color-scheme: light|dark` on `:root[data-theme]` so native controls and scrollbars match; the media-query side is handled by the build-time theme override plugin (see Vite Configuration)
-- `colorTheme` / `setColorTheme`: Settings > Appearance colour theme (`'prototype' | 'electric-blue' | 'alloy' | 'recall'`, registry + helpers in `frontend/src/utils/colorTheme.ts`). Same cycle as `theme`: boots from the `quest_color_theme` localStorage cache (the `index.html` boot script sets `<html data-color-theme>` pre-paint; the default `prototype` is never cached), re-synced from `color_theme` on `GET /app/api/me` (`users.settings.color_theme`, `null` = default), and persisted via `PUT /app/api/settings { color_theme }` (server validates against `COLOR_THEME_CHOICES`, `""` clears). `applyColorTheme` also keeps the `<meta name="theme-color">` in step with the computed `--accent`
+- `colorTheme` / `setColorTheme`: Settings > Appearance colour theme (`ColorThemeId` + the `COLOR_THEMES` registry and helpers in `frontend/src/utils/colorTheme.ts`). Same cycle as `theme`: boots from the localStorage cache (`COLOR_THEME_STORAGE_KEY`; the `index.html` boot script sets `<html data-color-theme>` pre-paint; `DEFAULT_COLOR_THEME` is never cached), re-synced from `color_theme` on `GET /app/api/me` (`users.settings.color_theme`, `null` = default), and persisted via `PUT /app/api/settings { color_theme }` (server validates against `COLOR_THEME_CHOICES` in `chat/routes/user.py`, `""` clears). `applyColorTheme` also keeps the `<meta name="theme-color">` in step with the computed `--accent`
 
 **NavigationContext hand-offs**:
 - `pendingRoutineMessage` / `setPendingRoutineMessage`: `{ conversationId, prompt, guideId }`, set by the Sidebar when a routine is run and consumed by ChatPanel's auto-send effect
-- `pendingFirstMessage` / `setPendingFirstMessage`: First-message carry-forward set by `HomeComposer` and consumed by `ChatPanel`'s auto-send effect (shape `{ conversationId, prompt, model, skillIds, flags, isPublicProject, attachedFilenames, attachments }`); distinct from `pendingRoutineMessage` because it carries model + skillIds + flags, the public-project flag for persisting the right default, the workspace-relative names of files uploaded before the first send, and pasted-image refs (see the HomeComposer first-send flow)
+- `pendingFirstMessage` / `setPendingFirstMessage`: First-message carry-forward set by `HomeComposer` and consumed by `ChatPanel`'s auto-send effect (shape: the `PendingFirstMessage` interface in `frontend/src/contexts/NavigationContext.tsx`); distinct from `pendingRoutineMessage` (`PendingRoutineMessage` there) because it carries model + skillIds + flags, the public-project flag for persisting the right default, the workspace-relative names of files uploaded before the first send, and pasted-image refs (see the HomeComposer first-send flow)
 
 **Automatic behaviors** (by owner):
-- `AppConfigContext`: fetches `GET /app/api/config` on mount (unauthenticated) to determine `appName`, `isDevMode`, the sign-in method and the model catalog (`setModelCatalog()` runs before `availableModelIds` is set, since consumers read the module-state catalog during the re-render); fetches the server git hash via `fetchVersion()` on mount (the same `GET /app/api/version` response also carries the release `version`/`tag`/`released`/`commits_since_tag` fields that `AboutSection.tsx` fetches on its own mount -- see [Development Workflows -- Releases](../setup/development-workflows.md#releases)) and polls it every 60 seconds (`VERSION_POLL_INTERVAL_MS`), skipping hidden tabs and checking immediately on `visibilitychange`; when the hash changes, sets `updateAvailable` and stops polling. If the initial fetch fails, the hash ref stays `null` and polling is a no-op
+- `AppConfigContext`: fetches `GET /app/api/config` on mount (unauthenticated) to determine `appName`, `isDevMode`, the sign-in method and the model catalog (`setModelCatalog()` runs before `availableModelIds` is set, since consumers read the module-state catalog during the re-render); fetches the server git hash via `fetchVersion()` on mount (the same `GET /app/api/version` response also carries the release `version`/`tag`/`released`/`commits_since_tag` fields that `AboutSection.tsx` fetches on its own mount -- see [Development Workflows -- Releases](../setup/development-workflows.md#releases)) and polls it on `VERSION_POLL_INTERVAL_MS` (in the file), skipping hidden tabs and checking immediately on `visibilitychange`; when the hash changes, sets `updateAvailable` and stops polling. If the initial fetch fails, the hash ref stays `null` and polling is a no-op
 - `AuthContext`: checks the session via `checkSession()` on mount (`GET /app/api/me` with cookie), then stores identity / flags and sets `isAuthenticated`. App.tsx auto-opens the settings modal to Data Connections when `hasAnyServiceConnected` is false -- desktop layout only; the mobile shell never auto-opens settings (its full-screen settings takeover would hijack the first view)
 - `ProjectsContext` loads the project list once authenticated; `GuidesContext` loads the guide list while the `guides` gate is on
 - `ConversationModelsContext`: hydrates the per-visibility defaults from the session snapshot, re-fetches them on every fresh new-chat composer mount via `refreshDefaultModel` (cross-tab correctness, no localStorage), and persists the chosen model server-side via `persistDefaultModel` (`PUT /app/api/settings`) only on the first send of a new chat. The per-conversation override (`PATCH /conversations/{id}/model`) is separate and unchanged
@@ -327,17 +327,8 @@ App-wide state is split into one React context per responsibility, composed by `
 
 React hook for subscribing to a specific conversation's state.
 
-**Parameters**: `conversationId`
+**Parameters and return values**: see `UseConversationOptions` / `UseConversationResult` in the file -- the per-conversation store slice (messages, streaming state, errors, load state) plus the send / optimistic-add functions.
 
-**Return Values**:
-- `messages`: Loaded messages for this conversation
-- `isStreaming`: Whether streaming is active
-- `partialResponse`: Current partial text during streaming
-- `streamingMessages`: Structured messages during streaming
-- `error`/`stacktrace`: Error state
-- `isLoaded`/`isLoading`: Loading state
-- `sendMessage(text, model)`: Function to send a message with specified model
-- `addUserMessage(text)`: Function to add user message without sending
 **Implementation**:
 - Uses `useSyncExternalStore` with `getConversationSnapshot(id)` as the snapshot function. Because the snapshot is a per-conversation state reference (not a global version counter), the component only re-renders when its specific conversation's state changes
 - Automatically loads conversation from API when conversationId changes
@@ -414,7 +405,7 @@ Each conversation has a unique URL, enabling deep linking, page reload, and brow
 | `frontend/src/hooks/useConversation.ts` | Reads `project_id` from conversation detail API response and fires the `onProjectIdLoaded` callback |
 | `chat/routes/conversations.py` | Includes `project_id` in conversation detail responses so the frontend can detect project membership |
 | `frontend/src/utils/docsRoute.ts` | `parseDocsRoute()` / `docsListPath()` / `docViewerPath()` for the Quest Docs routes (no context state) |
-| `quest.py` | SPA catch-all routes for `/chats/{rest:path}`, `/projects/{rest:path}`, and `/admin/{rest:path}`, plus `/inbox`, `/set-password`, and `/docs` + `/docs/{rest:path}` (`serve_spa_docs`), that serve `index.html` so deep links work on page reload |
+| `quest.py` | The `serve_spa_*` catch-all routes (one per client-side URL family: chats, projects, admin, inbox, set-password, docs) that serve `index.html` so deep links work on page reload |
 
 ### Navigation Flow
 
@@ -437,7 +428,7 @@ When a user navigates directly to `/chats/<id>` but the conversation actually be
 
 ### Backend SPA Support
 
-Since the frontend is a single-page application, direct navigation to `/chats/<uuid>`, `/projects/<pid>/<uuid>`, or `/admin/system-monitor` would return a 404 without server-side support. `quest.py` registers three catch-all routes -- `/chats/{rest:path}`, `/projects/{rest:path}`, and `/admin/{rest:path}` -- (before the `/{filename}` static file fallback) that serve `frontend/dist/index.html` for these URL patterns, allowing React Router to handle the route client-side. The `/admin` catch-all cannot shadow admin API routes because those all live under `/app/api/admin/...`. The Quest Docs routes `/docs` and `/docs/{rest:path}` (`serve_spa_docs`) required moving FastAPI's interactive docs off their defaults, which FastAPI registers in its constructor ahead of every app route: Swagger UI is at `/api-docs` (OAuth2 redirect `/api-docs/oauth2-redirect`), ReDoc at `/api-redoc`, `/openapi.json` unchanged (pinned by `tests/test_spa_docs_routes.py`).
+Since the frontend is a single-page application, direct navigation to a client-side URL such as `/chats/<uuid>` would return a 404 without server-side support. `quest.py` registers one `serve_spa_*` catch-all route per client-side URL family (before the `/{filename}` static file fallback) that serves `frontend/dist/index.html`, allowing React Router to handle the route client-side. The `/admin` catch-all cannot shadow admin API routes because those all live under `/app/api/admin/...`. The Quest Docs catch-all (`serve_spa_docs`) required moving FastAPI's interactive docs off their `/docs` default, which FastAPI registers in its constructor ahead of every app route: the Swagger UI / ReDoc paths are the `docs_url` / `redoc_url` arguments of the `FastAPI(...)` constructor in `quest.py`, `/openapi.json` unchanged (pinned by `tests/test_spa_docs_routes.py`).
 
 ### Design Decisions
 
@@ -449,7 +440,7 @@ Since the frontend is a single-page application, direct navigation to `/chats/<u
 
 **Structure.** `Sidebar.tsx` is a shell: the brand bar, the two sliding panels, the update banner, the user bar, the modals, and the cross-list flows (drilling in and out of a project, New Chat, Run Routine, project/routine CRUD follow-ups). Everything else is delegated:
 
-- Data: `hooks/useTopLevelConversations.ts` (paged standalone list -- filters, keyset `loadMore`, stale-while-revalidate `refreshSilently` on `stream complete` / `conversation_list_changed`, in-place renames, optimistic `updateConversations`), `hooks/useProjectConversations.ts` (per-project lists -- on-demand `load`, the 30s visibility-aware poll while drilled, WS refresh of the drilled list, `update` / `seedEmpty`), `hooks/useProjectRoutines.ts` (per-project routines + `routine_list_changed`) and two `hooks/useDocs.ts` instances (the user's own and the drilled project's latest Quest Docs, limit 5, debounced refresh on `doc_list_changed`; disabled while the `docs` gate is closed). Each hook owns its own realtime subscriptions, so the Sidebar has none.
+- Data: `hooks/useTopLevelConversations.ts` (paged standalone list -- filters, keyset `loadMore`, stale-while-revalidate `refreshSilently` on `stream complete` / `conversation_list_changed`, in-place renames, optimistic `updateConversations`), `hooks/useProjectConversations.ts` (per-project lists -- on-demand `load`, the visibility-aware poll on `PROJECT_CONVERSATIONS_POLL_INTERVAL_MS` while drilled, WS refresh of the drilled list, `update` / `seedEmpty`), `hooks/useProjectRoutines.ts` (per-project routines + `routine_list_changed`) and two `hooks/useDocs.ts` instances (the user's own and the drilled project's latest Quest Docs, `SIDEBAR_DOC_LIMIT` in `utils/sidebarDocs.ts` rows each, debounced refresh on `doc_list_changed`; disabled while the `docs` gate is closed). Each hook owns its own realtime subscriptions, so the Sidebar has none.
 - Row UI state and mutations: `hooks/useConversationListActions.ts` -- one instance per list (open options menu, inline rename, optimistic archive / unarchive / rename against the list's `update`).
 - Pure list derivation: `utils/sidebarItems.ts` (`applyConversationFilters`, `groupConversationsByRoutine`, `buildSortedSidebarItems`, `deriveProjectSidebarItems`, `formatRoutineTimestamp`) and `utils/sidebarDocs.ts` (doc row order, compact row time), unit-tested without React.
 - Rendering: `components/sidebar/` -- `ProjectsSection`, `DocsSection` (the Docs block, see [Quest Docs UI](#quest-docs-ui)), `ConversationsSection` (header + list + the auto-paging Load more row, whose IntersectionObserver re-observes whenever `loadMore` changes identity), `ProjectPanel` (drill-down header, the project's `DocsSection`, `RoutinesSection`, grouped list), the shared `ConversationRow` (one component for the top-level, project and routine-run rows; the routine-run `variant` shows the run timestamp and has no FLIP id), `ConversationFilterMenu`, `RequestsBadge` and `icons.tsx`. The section components render fragments where the stylesheet uses child selectors (`.sidebar-panel-main > .section-header`, `.drill-down-conversations > .section-header`), so the DOM shape is unchanged.
@@ -462,11 +453,11 @@ Sections are separated by vertical spacing under bold sentence-case headers rath
 
 Section headers carry their actions on the right: the Conversations header (top level and inside a project) has a `+` New Chat icon button plus a vertical-ellipsis options menu holding the Show Archived / Show Slack / Show Inference API toggles -- there is no inline New Chat row in the list anymore; the project Routines header always shows its `+` New Routine button, even when the project has no routines yet.
 
-Conversation and routine rows share one compact text style (0.825rem, weight 400, 6px vertical padding) so a project's Routines and Conversations read as one list; inside the phone drawer (`MobileShell.css`, `.mobile-drawer` scope) rows get 0.875rem text and 8px vertical padding for larger tap targets. The scrollable panels and the chat messages container carry a transparent right border so their scrollbars sit inset from the edge instead of flush against it.
+Conversation and routine rows share one compact text style (the row rules in `Sidebar.css`) so a project's Routines and Conversations read as one list; inside the phone drawer (`MobileShell.css`, `.mobile-drawer` scope) rows get larger text and vertical padding for bigger tap targets. The scrollable panels and the chat messages container carry a transparent right border so their scrollbars sit inset from the edge instead of flush against it.
 
 ### Implemented Components
 
-#### 1. RequestsBadge Component (`src/components/Sidebar.tsx`)
+#### 1. RequestsBadge Component (`src/components/sidebar/RequestsBadge.tsx`)
 
 Self-contained component that fetches the open action request count. Extracted as a separate component so that count changes only re-render the badge, not the entire Sidebar.
 
@@ -498,7 +489,7 @@ A sidebar component that displays projects, conversations, a Requests section, a
 **Features**:
 - Automatic conversation and project list fetching on mount
 - Brand bar (`.sidebar-brand`) at the top of the sidebar: the `QuestLogo` mark + `appName` on the left, and two icon buttons on the right -- a search magnifier that opens the `SearchModal` (also toggled by the Cmd/Ctrl+K keyboard shortcut) and a requests inbox tray (Lucide `Inbox`) that activates the `RequestsView` in the main content area (via `setShowRequestsView` in `NavigationContext`).
-  - The inbox button carries the `RequestsBadge` component pinned to its top-right corner (open action request count via event-driven refresh, see above; renders `9+` above nine) and takes an accent `active` state while the Requests view is showing.
+  - The inbox button carries the `RequestsBadge` component pinned to its top-right corner (open action request count via event-driven refresh, see above; counts above the cap in the component's render expression collapse to a "+" label) and takes an accent `active` state while the Requests view is showing.
   - Positioned outside `.sidebar-panels` so it stays visible when drilled into a project
 - Layout: the brand bar sits above the sliding panels container; within the panels, there is a Projects section (always visible) and Conversations list, separated by spacing under bold headers (no hairline dividers)
 - Projects section shows a dotted-border "Create Project" button when no projects exist; when projects exist, a "+" button appears in the section header for creating new projects
@@ -520,47 +511,29 @@ A sidebar component that displays projects, conversations, a Requests section, a
 - Conversation list filter: filter icon button (lucide `Filter`) in each Conversations section header opens a popover with checkboxes ("Show Archived", "Show Slack Conversations", and top-level only "Show Inference API Runs"). All default to unchecked on every page load (no persistence) and unchecked means hide that category.
   - For the top-level list all three filters are enforced server-side via `GET /conversations` query params (`include_archived`, `include_slack`, `include_inference`; see [Chat API](../api/chat-api.md)); `applyConversationFilters()` is kept as an instant client-side pass so unchecking hides rows immediately while the refetch (triggered by the toggle-change effect) restores a full page and reveals newly included rows.
   - The project drill-down list still filters Slack client-side. Separate filter state for the top-level list and the project drill-down list
-- Paged top-level conversation list: the top-level Conversations section fetches `CONVERSATIONS_PAGE_SIZE` (30) rows at a time with `exclude_projects=true` (project conversations are never rendered there) instead of the user's entire history.
-  - Older pages auto-load as the user scrolls: an `IntersectionObserver` (150px `rootMargin` prefetch, re-observed on every page append so a still-visible pager keeps paging until it leaves the viewport or the cursor runs out) watches the "Load more" row at the bottom of the list, which stays clickable as a manual fallback; each page is fetched via the response's `next_cursor` keyset cursor and appended deduped by id.
+- Paged top-level conversation list: the top-level Conversations section fetches `CONVERSATIONS_PAGE_SIZE` (`frontend/src/hooks/useTopLevelConversations.ts`) rows at a time with `exclude_projects=true` (project conversations are never rendered there) instead of the user's entire history.
+  - Older pages auto-load as the user scrolls: an `IntersectionObserver` (prefetch `rootMargin` literal in `components/sidebar/ConversationsSection.tsx`, re-observed on every page append so a still-visible pager keeps paging until it leaves the viewport or the cursor runs out) watches the "Load more" row at the bottom of the list, which stays clickable as a manual fallback; each page is fetched via the response's `next_cursor` keyset cursor and appended deduped by id.
   - Background refreshes (WS `conversation_list_changed` / stream-complete) re-fetch the window the user has already loaded (`max(loadedCount, page size)`), reading the current filter toggles through `topFiltersRef` so long-lived WS closures never refetch with stale filter state; toggling a filter resets to page one.
   - The drilled project list refreshes the same way on those events (`loadProjectConversations(id, /* silent */ true)`, stale-while-revalidate): the non-silent loader is reserved for the initial drill-in and the project archive-filter toggle, because it swaps the whole drill-down panel (routines + rows) for a "Loading..." placeholder
 - Animated re-sorts: when a background refresh re-orders the list (a conversation with new activity jumps to the top), rows glide to their new slot instead of snapping, via the FLIP hook `useFlipListAnimation` in `frontend/src/hooks/useFlipListAnimation.ts`.
-  - The container ref goes on `.conversation-list` (one ref each for the top-level list and the drilled project list, whose routine groups carry a `routine-group-<id>` flip id), each row carries `data-flip-id={conversation.id}`, and the hook measures container-relative row tops on every commit (deliberately no dep array: rendered order can change without a prop identity change) and plays a `translateY` Web Animations API tween (250ms ease-in-out) for rows that moved.
+  - The container ref goes on `.conversation-list` (one ref each for the top-level list and the drilled project list, whose routine groups carry a `routine-group-<id>` flip id), each row carries `data-flip-id={conversation.id}`, and the hook measures container-relative row tops on every commit (deliberately no dep array: rendered order can change without a prop identity change) and plays a `translateY` Web Animations API tween (`ANIMATION_MS`, ease-in-out) for rows that moved.
   - Newly mounted rows don't animate and `prefers-reduced-motion` disables it entirely
-- Conversation rename: meatball menu "Rename" option triggers an inline text input replacing the conversation title. The input is pre-selected for immediate typing. Press Enter to save, Escape to cancel. Custom names are stored in the `custom_name` column on the `Conversation` model (max 100 chars). Custom names take priority over auto-generated titles. For routine sub-item conversations, custom names display with the timestamp in parentheses after (e.g., "Custom Name (2:30 PM)"). Clearing the name (empty input) reverts to the auto-generated title
-- Project conversation polling: when drilled into a project, the sidebar polls `fetchProjectConversations()` every 30 seconds to pick up conversations created server-side by scheduled routines. Polling skips when the browser tab is hidden (`document.hidden`) and triggers an immediate refresh when the tab becomes visible again via `visibilitychange` event. An in-flight guard (`pollInFlightRef`) prevents overlapping fetches. Errors are silently logged since the user did not initiate the request. The interval is defined as `PROJECT_CONVERSATIONS_POLL_INTERVAL_MS` (30,000 ms) at the top of the file
+- Conversation rename: meatball menu "Rename" option triggers an inline text input replacing the conversation title. The input is pre-selected for immediate typing. Press Enter to save, Escape to cancel. Custom names are stored in the `custom_name` column on the `Conversation` model (`db/models.py`; the column length is the cap). Custom names take priority over auto-generated titles. For routine sub-item conversations, custom names display with the timestamp in parentheses after (e.g., "Custom Name (2:30 PM)"). Clearing the name (empty input) reverts to the auto-generated title
+- Project conversation polling: when drilled into a project, the sidebar polls `fetchProjectConversations()` on `PROJECT_CONVERSATIONS_POLL_INTERVAL_MS` (`frontend/src/hooks/useProjectConversations.ts`) to pick up conversations created server-side by scheduled routines. Polling skips when the browser tab is hidden (`document.hidden`) and triggers an immediate refresh when the tab becomes visible again via `visibilitychange` event. An in-flight guard prevents overlapping fetches. Errors are silently logged since the user did not initiate the request
 - Version update banner: when `updateAvailable` is `true` (from `AppConfigContext`), renders a sticky orange banner between the sidebar panels and the user info bar saying "Quest has updated. Please reload ASAP!" with a clickable "reload" link that calls `window.location.reload()`
 - Loading state ("Loading conversations...")
 - Error state with user-friendly error messages
 - Empty state ("No conversations yet. Start a new chat!")
 - Click handlers for conversation and project selection
 
-**State Management**:
-- `conversations`: List of standalone conversations from API
-- `projects`: List of projects from API
-- `loading`: Whether data is being fetched
-- `error`: Error message to display (or null)
-- `creating`: Whether a new conversation is being created
-- `activeProject`: Currently selected project (for drill-down view)
-- `showArchivedTop` / `showArchivedProject`: Whether archived conversations are shown in the top-level / project drill-down list (drives the `include_archived` query param on fetch)
-- `showSlackTop` / `showSlackProject`: Whether Slack-origin conversations are shown in the top-level / project drill-down list (top-level: server-side via `include_slack` + instant client-side pass; project list: client-side via `applyConversationFilters()`)
-- `showInferenceTop`: Whether Inference-API-origin conversations are shown in the top-level list (server-side via `include_inference` + instant client-side pass)
-- `nextCursor` / `loadingMore`: Keyset cursor for the next older page of the top-level list (null when fully loaded; drives the "Load more" button) and its in-flight flag
-- `topFiltersRef` / `loadedCountRef`: Refs mirroring the top-level filter toggles and the loaded-row count so background refreshes from long-lived WS closures use current filters and preserve the loaded page window
-- `filterMenuOpenTop` / `filterMenuOpenProject`: Whether the filter popover is open in each section
-- `openMenuConversationId`: ID of the conversation whose meatball menu is currently open (or null)
-- `renamingConversationId`: ID of the conversation currently being renamed (or null); controls inline rename input visibility
-- `previousTopLevelConversationId`: Ref storing the conversation ID that was active before drilling into a project, used to restore context on drill-down back
-- `pollInFlightRef`: Ref guard preventing overlapping project conversation poll fetches
-- `showNewRoutineModal`: Whether the NewRoutineModal is open
-- `settingsRoutine`: The routine whose RoutineSettingsModal is open (or null)
+**State Management**: the list data and its filter / paging / polling state live in the data hooks named under Structure above (`useTopLevelConversations` owns the top-level filters, keyset cursor and the refs that keep long-lived WS closures on current filters; `useProjectConversations` owns the drilled list and its poll guard; `useConversationListActions` owns the open-menu / inline-rename row state); `Sidebar.tsx` itself keeps only the cross-list UI state (slide direction, drill-back ref, modal open flags) -- read the `useState` / `useRef` declarations at the top of the component.
 
 #### 3. Sidebar Styling (`src/components/Sidebar.css`)
 
 Comprehensive CSS styles with dark/light mode support:
 
 **Layout**:
-- Fixed width: 260px
+- Fixed width (the `.sidebar` width rule in `Sidebar.css`; every layout diagram below that mentions the sidebar width means this rule)
 - Full viewport height: 100vh
 - Flexbox column layout
 - Raised-ground background (`--surface-raised` token, the theme's nav/composer/panel colour; identical to the chat ground in the prototype light scheme) with only a faint right edge (`--border`); all colours come from the design tokens declared on `:root` in `frontend/src/index.css` (dark values on `:root`, light overrides in the `prefers-color-scheme: light` block), so the stylesheet has no separate light-mode block
@@ -597,8 +570,7 @@ Comprehensive CSS styles with dark/light mode support:
 
 **Conversations List**:
 - "New Chat" inline button at the top of the list
-- Scrollable container with custom scrollbar
-- 6px width scrollbar with rounded thumb
+- Scrollable container with a thin custom scrollbar and rounded thumb
 - Hover effects on scrollbar (opacity changes)
 - Flexbox flex-grow to fill remaining space
 
@@ -613,24 +585,24 @@ Comprehensive CSS styles with dark/light mode support:
 - Archived conversations: dimmed opacity and italic title text when they are shown (filter popover "Show Archived" checked)
 
 **Conversation List Filter**:
-- Filter icon button (lucide `Filter`) in each Conversations section header opens a small popover with two checkboxes: "Show Archived" and "Show Slack Conversations". Both default to unchecked on every page load (component-local `useState`, no localStorage/URL/server persistence); unchecked means hide that category
+- Filter icon button (lucide `Filter`) in each Conversations section header opens a small popover of show/hide checkboxes (`ConversationFilterMenu` in `components/sidebar/`; the toggles are listed under Features above). All default to unchecked on every page load (hook-local `useState`, no localStorage/URL/server persistence); unchecked means hide that category
 - Separate filter state and popover state for the top-level list and the project drill-down list, so each section is filtered independently
 - Popover follows the same inline-dropdown pattern as the conversation meatball menu: absolutely positioned below the icon, dismissed by a `document.addEventListener('click', ...)` click-outside handler, with `e.stopPropagation()` on the button to prevent immediate close on open
 - Archive filter is server-driven: the "Show Archived" checkbox is passed through to `fetchConversations(includeArchived)` / `fetchProjectConversations(projectId, includeArchived)` via the `showArchivedTop` / `showArchivedProject` state, and toggling triggers a list reload
-- Slack filter is client-side: `applyConversationFilters()` in `frontend/src/components/Sidebar.tsx` composes the archive and Slack predicates against the fetched list. Used by the top-level list, the project ungrouped list, and the routine-grouped sub-items so all three listing surfaces respect the filter
+- Slack filter is client-side: `applyConversationFilters()` in `frontend/src/utils/sidebarItems.ts` composes the archive and Slack predicates against the fetched list. Used by the top-level list, the project ungrouped list, and the routine-grouped sub-items so all three listing surfaces respect the filter
 - The `SlackConversationIcon` still renders next to Slack-origin entries regardless of the filter so the user can identify them when "Show Slack Conversations" is checked
 - CSS classes `.conversation-filter-button`, `.conversation-filter-menu`, and `.conversation-filter-menu-item` in `frontend/src/components/Sidebar.css`, with a light-mode override block
 
 **States**:
 - Loading: Centered text with reduced opacity
-- Error: Red text (#ff6b6b in dark mode, #d32f2f in light mode)
+- Error: Red text (`.sidebar-error` in `Sidebar.css`)
 - Empty: Centered help text with reduced opacity
 - Hover: Subtle background highlight
-- Active: Blue accent color with background tint
+- Active: Accent color with background tint
 
 **Light Mode Support**:
 Uses `@media (prefers-color-scheme: light)` to adapt:
-- Light background (#f5f5f5)
+- Light background
 - Dark text colors
 - Adjusted opacity values for contrast
 - Same interactive states with inverted colors
@@ -646,7 +618,7 @@ Authentication is handled by `AuthContext` using session cookies. The App compon
 **Layout Structure**:
 ```
 app-container
-├── Sidebar (260px fixed width)
+├── Sidebar (fixed width, `.sidebar` in Sidebar.css)
 │   ├── sidebar-content (flex column)
 │   │   ├── Brand bar (logo + app name; search icon button; requests inbox icon button with open-count badge)
 │   │   ├── sidebar-panels (flex: 1, slides between main and project drill-down)
@@ -752,12 +724,11 @@ On top of the scheme sits a user-selectable **colour theme** (Settings > Appeara
 
 The neutral chrome tokens (`--text*`, `--border*`, `--hover`, and the derived `--logo-grad-from`/`--logo-grad-to` stops of the `QuestLogo` mark's diagonal wash) may also be tuned.
 
-The `:root` defaults in `index.css` ARE the `prototype` theme (indigo `#646cff` on neutral greys).
+The `:root` defaults in `index.css` ARE the `DEFAULT_COLOR_THEME` (`prototype`, indigo on neutral greys).
 
-- `electric-blue` (Electric Capital brand ramp: cyan `#00bbf2` as the accent fill in both schemes -- light keeps the darker `#1c95c0` only for `--accent-text` and uses dark `--accent-contrast` text on the fill -- over greys `#161616`/`#2a2a2a` dark and `#f6f6f6`/white light) overrides them under `:root[data-color-theme="electric-blue"]` with its light values in a `prefers-color-scheme: light` block that the theme override plugin rewrites like any other.
-- `alloy` (forest green + cream: forest-green grounds `#0b1914`/`#11251b`/`#193224` with cream type and a cream `#e2e5dd` accent fill in dark, cream grounds `#fffcec`/`#f6f3e1` with a forest-green `#326849` accent and warm charcoal text in light) and `recall` (sage mint on near-black: sage-mint `#8db5ac` accent with near-black type on it over a `#111111` ground and green-tinted `#1a1d1c`/`#242827` raised surfaces in dark, deepened sage `#4f7d72` on mint-tinted off-white `#f5f8f7`/white in light) follow the same shape.
+Every other theme in the `COLOR_THEMES` registry (`frontend/src/utils/colorTheme.ts`) overrides those tokens under its own `:root[data-color-theme="<id>"]` block in `frontend/src/themes.css`, with its light values in a `prefers-color-scheme: light` block that the theme override plugin rewrites like any other; the palettes themselves (accent, grounds, type colours per scheme) are the values in those blocks, each annotated with its intent.
 
-The `index.html` boot script carries its own hardcoded list of known ids for the pre-paint attribute, so a new theme also touches it. Component stylesheets no longer hardcode the accent -- every former `#646cff` / `rgba(100, 108, 255, a)` / hover variant is a token reference -- so a new theme is one block in `themes.css` plus a `COLOR_THEMES` registry entry and a `COLOR_THEME_CHOICES` server allow-list entry (`chat/routes/user.py`); the three lists are hand-mirrored.
+The `index.html` boot script carries its own hardcoded list of known ids for the pre-paint attribute, so a new theme also touches it. Component stylesheets no longer hardcode the accent -- every former literal indigo / `rgba(...)` / hover variant is a token reference -- so a new theme is one block in `themes.css` plus a `COLOR_THEMES` registry entry and a `COLOR_THEME_CHOICES` server allow-list entry (`chat/routes/user.py`); the three lists are hand-mirrored.
 
 Tokenized too, so their tints follow the colour theme:
 
@@ -798,12 +769,11 @@ className={`conversation-item ${activeConversationId === id ? 'active' : ''}`}
 #### 4. CSS Custom Properties
 
 The `:root` block in `frontend/src/index.css` defines shared CSS variables:
-- `--font-mono`: Unified monospace font stack headed by JetBrains Mono (loaded via Google Fonts in `frontend/index.html`), followed by SF Mono, Fira Code, Cascadia Code, Consolas, and Monaco. All components reference this single variable instead of declaring their own font stacks.
-
-Standard colors are otherwise specified as direct hex/rgba values (e.g., `#646cff` for the primary accent).
+- `--font-mono`: Unified monospace font stack (the `--font-mono` declaration in `index.css`; its first family is loaded via Google Fonts in `frontend/index.html`). All components reference this single variable instead of declaring their own font stacks.
+- the colour tokens described under Colour Scheme and Colour Themes above; the accent is never written as a literal in component stylesheets.
 
 #### 5. Responsive Design
-Currently uses `@media (prefers-color-scheme: light)` for theme support. Responsive breakpoints not yet implemented since this is a desktop-first application.
+Theme support uses `@media (prefers-color-scheme: light)` blocks. The one responsive breakpoint is `MOBILE_BREAKPOINT_PX` in `frontend/src/hooks/useIsMobile.ts`, hand-mirrored by the phone `@media (max-width: ...)` block at the end of `ChatPanel.css` (see the Composer section); below it `App.tsx` swaps the desktop two-column layout for `MobileShell`.
 
 ## Composer Component
 
@@ -833,9 +803,9 @@ Styling reuses `ChatPanel.css` (`.input-area.composer`, `.composer-bubble`, `.co
 
 No text labels; every icon button carries a `title` tooltip.
 
-**Overflow rule:** the model pill (`.model-menu-container` / `.model-menu-trigger`, `flex: 0 1 auto; min-width: 0`) is the ONLY shrinkable item in the row; every icon button, the mic timer, the no-credentials warning, the context ring and the Send button are `flex-shrink: 0`. When the row runs out of room (phone widths, long self-hosted model names, mic + flags buttons present) the model name ellipsizes down to just its chevron and the Send button never leaves the bubble. Read-only conversations show the disabled model trigger + context gauge in the row and no send button. On desktop the bubble sits in the flex column below the messages, centered and capped at the 720px messages-list width, and the controls row is ALWAYS visible.
+**Overflow rule:** the model pill (`.model-menu-container` / `.model-menu-trigger`, `flex: 0 1 auto; min-width: 0`) is the ONLY shrinkable item in the row; every icon button, the mic timer, the no-credentials warning, the context ring and the Send button are `flex-shrink: 0`. When the row runs out of room (phone widths, long self-hosted model names, mic + flags buttons present) the model name ellipsizes down to just its chevron and the Send button never leaves the bubble. Read-only conversations show the disabled model trigger + context gauge in the row and no send button. On desktop the bubble sits in the flex column below the messages, centered and capped at the same max-width as `.messages-list`, and the controls row is ALWAYS visible.
 
-On phone widths (`useIsMobile`, the same 768px breakpoint as `MobileShell`):
+On phone widths (`useIsMobile`, i.e. `MOBILE_BREAKPOINT_PX` in `frontend/src/hooks/useIsMobile.ts`, the same test `App.tsx` uses to pick `MobileShell`):
 
 - the bubble overlays the bottom of the messages area (absolute inside `.chat-panel`, with matching `messages-list` bottom padding + `scroll-padding-bottom`)
 - collapses to a single input pill until focus is inside the composer or any draft state exists (text, attachments, queued skills/flags)
@@ -845,11 +815,11 @@ On phone widths (`useIsMobile`, the same 768px breakpoint as `MobileShell`):
 - the flags popover re-anchors to the bubble as a full-width sheet
 - the model menu is a full-screen sheet instead of a popover (see Model Selector below); while it is open the bubble stays expanded (`isModelMenuOpen`, fed by the selector's `onOpenChange`) even though the sheet takes focus out of the composer
 
-All phone-only rules live behind one `@media (max-width: 768px)` block at the end of `ChatPanel.css`; the home screen just zeroes the strip padding around the bubble (`HomeComposer.css`) since the bubble is its own card.
+All phone-only rules live behind one `@media (max-width: ...)` block at the end of `ChatPanel.css` (hand-mirroring `MOBILE_BREAKPOINT_PX`); the home screen just zeroes the strip padding around the bubble (`HomeComposer.css`) since the bubble is its own card.
 
 **Generic file attachments (distinct from clipboard-image paste):** a paperclip attach icon button sits in the bubble's `.composer-controls` row next to the skills / flags icon buttons. It opens a file picker and queues arbitrary files (any extension) into a chips row (per-extension icon, filename, human-readable size via `formatBytes`, remove button).
 
-Caps are client-side: `MAX_ATTACH_FILE_SIZE = 200 MB` per file (matching the backend `MAX_FILE_SIZE`) and `MAX_PENDING_FILES = 20`, both surfaced as inline notices when exceeded. Send stays gated on non-empty trimmed text -- queued files alone do NOT enable send.
+Caps are client-side: `MAX_ATTACH_FILE_SIZE` per file (hand-mirroring the backend `MAX_FILE_SIZE` in `chat/file_storage.py` so oversize files are rejected before the upload starts) and `MAX_PENDING_FILES`, both constants at the top of `Composer.tsx` and both surfaced as inline notices when exceeded. Send stays gated on non-empty trimmed text -- queued files alone do NOT enable send.
 
 On send the composer forwards the raw `File[]` to the host via `onSend`'s trailing `files?` param; the host (not the composer) owns the upload, because the home screen has no workspace until it creates the conversation.
 
@@ -863,11 +833,11 @@ The per-feature composer behaviors described below under ChatPanel (clipboard pa
 
 It renders a large greeting above a centered, pre-focused shared `<Composer>`, with a branding footer pinned to the bottom of the screen (two centered muted lines: `Remember AI can make mistakes, but <appName> keeps you in control.` and `Made with <heart> by Electric Capital`).
 
-The heart is the monochrome `currentColor` `HeartBoltMorph` SVG from `frontend/src/components/HeartBoltMorph.tsx` -- one closed path of eight cubic segments SMIL-animated between a heart and the Electric lightning bolt:
+The heart is the monochrome `currentColor` `HeartBoltMorph` SVG from `frontend/src/components/HeartBoltMorph.tsx` -- one closed path (the `HEART` / `BOLT` path strings, same segment count so they interpolate) SMIL-animated between a heart and the Electric lightning bolt:
 
-- tall ~1:2.7 mark with vertical inner step edges spanning the 24-unit box; the heart is drawn smaller inside the same box, and the box is rendered taller than the line and centred on the text with negative vertical margins
-- on a 14s loop (5s heart hold, 2s ease-in-out morph, 5s bolt hold, 2s morph back; SMIL rather than the CSS `d` property because Safari lacks the latter)
-- static heart under `prefers-reduced-motion`
+- a tall mark with vertical inner step edges spanning the view box; the heart is drawn smaller inside the same box, and the box is rendered taller than the line and centred on the text with negative vertical margins
+- on a hold / morph / hold / morph loop whose timings are `HOLD_S` / `MORPH_S` / `CYCLE_S` in the file (SMIL rather than the CSS `d` property because Safari lacks the latter)
+- static heart under `prefers-reduced-motion` (`REDUCED_MOTION_QUERY`)
 
 The same glyph replaces the former pink ♥ in Settings > About so both credits are monochrome.
 
@@ -877,7 +847,7 @@ Every "New Chat" entry point (Sidebar brand bar, both Conversations header `+` b
 
 **Project awareness:** the home composer can be on screen while the Sidebar is drilled into a project -- most commonly right after creating a new (empty) project, which drills in without changing the URL from `/`. In that state the first send creates the conversation INSIDE the drilled project (`createProjectConversation(drilledProjectId)`) and navigates to `/projects/<pid>/<id>`, instead of a standalone chat. The drill state is read from the context field `drilledProjectId` (owned by the Sidebar; distinct from `activeProjectId`, which mirrors the URL and is null at `/`), and a `New chat in <project name>` hint under the greeting names the destination. The right panel meanwhile shows that project's Project Files and Tables cards over the project routes (see [Right Panel](#right-panel-file-browser-and-project-tables)); there is no chat yet, so no Chat Files card.
 
-There is no live conversation yet, so the composer is bound to a stable in-memory draft key (`HOME_DRAFT_KEY = '__home_draft__'` in `frontend/src/constants/drafts.ts`) used only for the context-keyed model/skills lookups, and its `onModelChange` is wired to `setDraftModelForConversation` (in-memory map + `defaultModel`/localStorage only, no server PATCH). HomeComposer also passes the composer's `skipSendLocks` prop so the send path never writes a provider lock for the draft key -- see Provider Locking under the Model Selector section for why locking the draft key is destructive and how legacy entries are healed.
+There is no live conversation yet, so the composer is bound to a stable in-memory draft key (`HOME_DRAFT_KEY` in `frontend/src/constants/drafts.ts`) used only for the context-keyed model/skills lookups, and its `onModelChange` is wired to `setDraftModelForConversation` (in-memory map + `defaultModel`/localStorage only, no server PATCH). HomeComposer also passes the composer's `skipSendLocks` prop so the send path never writes a provider lock for the draft key -- see Provider Locking under the Model Selector section for why locking the draft key is destructive and how legacy entries are healed.
 
 **First-send flow** (`handleSend` in `HomeComposer.tsx`): on submit it:
 
@@ -889,7 +859,7 @@ There is no live conversation yet, so the composer is bound to a stable in-memor
 
 `ChatPanel`'s auto-send effect (gated on `isLoaded && !isStreaming && messages.length === 0`) then clears the field, performs the real first send carrying the model/skills/flags (and the attached filenames -- see below), and locks the provider -- mirroring the existing `pendingRoutineMessage` auto-send pattern. This effect is the sole lock point for home-originated conversations, since the home composer sends with `skipSendLocks`.
 
-`pendingFirstMessage` (shape `{ conversationId, prompt, model, skillIds, flags, attachedFilenames }`) is defined on `NavigationContext` (see Application Contexts section).
+`pendingFirstMessage` (the `PendingFirstMessage` interface in `frontend/src/contexts/NavigationContext.tsx`) is defined on `NavigationContext` (see Application Contexts section).
 
 **Generic file upload on first send:** when the home composer's `onSend` carries queued `files`, `handleSend` uploads them via `uploadFiles(newId, files, '')` (the existing workspace `POST /files/upload` route -- no new endpoint) AFTER `createConversation()` resolves (so the workspace exists) and BEFORE navigation / the first send.
 
@@ -903,11 +873,11 @@ The Quest Docs UI (browse, create, rename, download, delete; sharing, human edit
 
 **Routes.** `/docs` (All Docs), `/docs?project=<id>` (filtered to one project) and `/docs/<id>` (viewer) are URL-only state like `/inbox`: `parseDocsRoute()` in `frontend/src/utils/docsRoute.ts` is read on every render by `App.tsx` and the Sidebar, with no `NavigationContext` field. A docs route is a full main-pane takeover like `RequestsView` (`.main-content.docs-main`, no RightPanel, `activeConversationId` null). `showRequestsView` still wins the render, so the Sidebar clears it before navigating. While the `docs` gate is closed (`enabled_features` on GET /me, `DOCS_FEATURE`), a docs URL renders `DocsGateClosed`.
 
-**Sidebar.** `DocsSection` (`components/sidebar/DocsSection.tsx`) renders the user's five latest own user docs (docs shared with them appear only in All Docs) between Projects and Conversations, with a header button that opens `/docs`. `ProjectPanel` renders the drilled project's docs below Routines (Routines, Docs, Conversations), with a header that opens `/docs?project=<id>`. Both are fed by Sidebar-owned `useDocs` instances and hidden while the gate is closed. The Sidebar's `onNavigateAway` prop lets `MobileShell` close the phone drawer after a doc or All Docs click.
+**Sidebar.** `DocsSection` (`components/sidebar/DocsSection.tsx`) renders the user's `SIDEBAR_DOC_LIMIT` latest own user docs (docs shared with them appear only in All Docs) between Projects and Conversations, with a header button that opens `/docs`. `ProjectPanel` renders the drilled project's docs below Routines (Routines, Docs, Conversations), with a header that opens `/docs?project=<id>`. Both are fed by Sidebar-owned `useDocs` instances and hidden while the gate is closed. The Sidebar's `onNavigateAway` prop lets `MobileShell` close the phone drawer after a doc or All Docs click.
 
-**All Docs.** `components/docs/DocsListView.tsx` takes over the main pane: "Your docs" from `useDocs({limit: 50})` (own user docs), "Shared with you" from `useDocs({shared: true, limit: 50})` (docs other people shared, user and project docs, its own keyset stream and Load more, hidden while empty, scope cell "Shared by <owner>"), plus one group per project, archived ones included, from `hooks/useProjectDocsIndex.ts` (one `fetchDocs` per project, because the backend has no cross-project list of the user's own projects; `doc_list_changed` refreshes behind a 600 ms debounce, `useDocs` behind 300 ms). It adds client-side search (shared rows also match their owner's name / email), grouping via `utils/allDocsGrouping.ts`, and `NewDocModal` (title, description, location; no mode picker and never a `mode` in the request, since a user doc is always private and a project doc takes its project's mode; a read-only "inherited from the project" line only for a public project).
+**All Docs.** `components/docs/DocsListView.tsx` takes over the main pane: "Your docs" from `useDocs` (own user docs, the view's `PAGE_SIZE`), "Shared with you" from `useDocs({shared: true})` (docs other people shared, user and project docs, its own keyset stream and Load more, hidden while empty, scope cell "Shared by <owner>"), plus one group per project, archived ones included, from `hooks/useProjectDocsIndex.ts` (one `fetchDocs` per project, because the backend has no cross-project list of the user's own projects; `doc_list_changed` refreshes behind its `REFRESH_DEBOUNCE_MS`, `useDocs` behind `DOCS_REFRESH_DEBOUNCE_MS` -- the index debounces longer because it fans out one request per project). It adds client-side search (shared rows also match their owner's name / email), grouping via `utils/allDocsGrouping.ts`, and `NewDocModal` (title, description, location; no mode picker and never a `mode` in the request, since a user doc is always private and a project doc takes its project's mode; a read-only "inherited from the project" line only for a public project).
 
-**Viewer.** `components/docs/DocViewer.tsx` (`hooks/useDoc.ts`) renders the body with the chat's shared `markdownComponents` under `MarkdownWorkspaceContext.assetBase` (see Message Component above), with a Show source toggle and a "Last written by ... / Updated ..." footer (from `last_write_source` + `last_write_user`: "you", a person's name, "<name> (approved change)" or "a deleted user (approved change)", an action request or a linked conversation; image uploads and deletes keep the body's writer). `useDoc` re-fetches only on `doc_changed` for its own doc (a null `updated_at` = deleted or access changed, always re-fetch) and ignores the install-wide `doc_list_changed`, which only the lists consume. `DocHeader.tsx` is modeled on `ConversationHeader.tsx`: a title + chevron dropdown with R / E / H / S / D key hints, offering Rename (inline, `expected_updated_at`, 409 `stale_update` reloads the row), Edit and History (`can_edit`, view mode only), Share (`can_share`), the md / zip downloads and Delete (confirmed in `components/docs/DocConfirmDialog.tsx`, the shared confirm: named by its title through ModalShell's optional `ariaLabelledBy` prop, Cancel focused on open, focus back to the opener on close), each gated by the row's `access` flags; beside the title, a share chip (the owner's "Shared with N people / everyone", opening Share; a recipient's "Shared by X · Can edit / Can view", from `utils/docSharing.ts`) and a project chip that is plain text for a project the viewer does not own. The viewer body has three modes kept per doc id (`view`, `edit` = `DocEditor.tsx`, `history` = `DocHistory.tsx`; root class `doc-viewer--<mode>`); save and restore responses merge through `useDoc.applyContent()`, and `useDoc.applyRow()` re-fetches whenever a row's `updated_at` is newer than the shown one. `DocShareDialog.tsx` (owner only, over any mode): a debounced `/users/search` typeahead with a Can view / Can edit select (text without "@" resolves only from a single matching suggestion), an "Everyone on this install" select whose new grant or view -> edit widening goes through a confirm, the roster with per-person permission and remove, notes from `shareDialogNotes()`, the add row resetting to "Can view" after each grant, and no closing while a request is in flight. `DocEditor.tsx` (owner or write share): textarea + live preview (250 ms debounce, manual "Refresh preview" above ~200 KB; hidden-preview choice in localStorage `quest_doc_editor_preview`), Ctrl/Cmd+S scoped to the editor, image upload by button / paste / drop (5 MB client-side pre-check, an upload placeholder at the caret), a 409 that re-reads the doc and silently re-saves once when only metadata moved (the server body still equals the body the token belongs to), unless an image the draft added was deleted meanwhile (then a notice and no save), else a conflict banner (overwrite or discard), one confirm on every discard path, and an unsaved-changes guard (`hooks/useUnsavedChangesGuard.ts`: `beforeunload` plus capture-phase interception of same-origin `<a href>` clicks). Back / forward and button `navigate()` cannot be intercepted under the plain `BrowserRouter`, so the draft is also backed up per user in localStorage (`utils/docDraftBackup.ts`, key `quest_doc_draft:<encoded lower-cased email>:<docId>` because `GET /me` exposes no user id; pruned after 30 days; cleared on logout, logout-and-disconnect and account delete by `components/settings/SignOutSection.tsx`). The viewer offers "You have unsaved changes from <time>. Resume editing" in view mode, the editor offers the restore on open, and when the doc 404s (deleted, share revoked) or the viewer lost edit access, `DocDraftRecovery.tsx` shows the draft read-only with Copy / Download .md / Discard. `DocHistory.tsx` (owner or write share): version list + rendered version, bounded diff to the current body, Restore (with the token as of the confirm) and Copy to a new private doc. There is no mode switch for any doc (user docs are always private, project docs keep their project's mode; the header ignores `access.can_switch_mode`, which is always false). `DocModeBadge` (`components/docs/DocModeBadge.tsx`, the Private lock / Public globe pill) appears only on public docs, on sidebar rows, All Docs rows (the "Mode" column label only while a visible row is public) and the viewer header (`utils/docMode.ts` `shouldShowDocModeBadge(mode)` = `mode === 'public'`). `DocAssetsPanel.tsx` lists the detail's `assets` (`[{name, size, mime}]`) as a `.right-panel-card` in a 280px right gutter beside the doc column (thumbnails from the doc asset route, click -> `DocImageLightbox.tsx` on ModalShell with a Download link, empty state; the owner gets a per-image delete in view mode, confirmed, with 409 `asset_in_use` shown in the dialog); it drops under the body at <=1024px and becomes a collapsed `<details>` section on phones.
+**Viewer.** `components/docs/DocViewer.tsx` (`hooks/useDoc.ts`) renders the body with the chat's shared `markdownComponents` under `MarkdownWorkspaceContext.assetBase` (see Message Component above), with a Show source toggle and a "Last written by ... / Updated ..." footer (from `last_write_source` + `last_write_user`: "you", a person's name, "<name> (approved change)" or "a deleted user (approved change)", an action request or a linked conversation; image uploads and deletes keep the body's writer). `useDoc` re-fetches only on `doc_changed` for its own doc (a null `updated_at` = deleted or access changed, always re-fetch) and ignores the install-wide `doc_list_changed`, which only the lists consume. `DocHeader.tsx` is modeled on `ConversationHeader.tsx`: a title + chevron dropdown with R / E / H / S / D key hints, offering Rename (inline, `expected_updated_at`, 409 `stale_update` reloads the row), Edit and History (`can_edit`, view mode only), Share (`can_share`), the md / zip downloads and Delete (confirmed in `components/docs/DocConfirmDialog.tsx`, the shared confirm: named by its title through ModalShell's optional `ariaLabelledBy` prop, Cancel focused on open, focus back to the opener on close), each gated by the row's `access` flags; beside the title, a share chip (the owner's "Shared with N people / everyone", opening Share; a recipient's "Shared by X · Can edit / Can view", from `utils/docSharing.ts`) and a project chip that is plain text for a project the viewer does not own. The viewer body has three modes kept per doc id (`view`, `edit` = `DocEditor.tsx`, `history` = `DocHistory.tsx`; root class `doc-viewer--<mode>`); save and restore responses merge through `useDoc.applyContent()`, and `useDoc.applyRow()` re-fetches whenever a row's `updated_at` is newer than the shown one. `DocShareDialog.tsx` (owner only, over any mode): a debounced `/users/search` typeahead with a Can view / Can edit select (text without "@" resolves only from a single matching suggestion), an "Everyone on this install" select whose new grant or view -> edit widening goes through a confirm, the roster with per-person permission and remove, notes from `shareDialogNotes()`, the add row resetting to "Can view" after each grant, and no closing while a request is in flight. `DocEditor.tsx` (owner or write share): textarea + live preview (debounced by `PREVIEW_DEBOUNCE_MS`, manual "Refresh preview" above `LARGE_PREVIEW_CHARS`; hidden-preview choice in localStorage under `PREVIEW_PREF_KEY` -- all constants at the top of the file), Ctrl/Cmd+S scoped to the editor, image upload by button / paste / drop (`MAX_IMAGE_BYTES` client-side pre-check, an upload placeholder at the caret), a 409 that re-reads the doc and silently re-saves once when only metadata moved (the server body still equals the body the token belongs to), unless an image the draft added was deleted meanwhile (then a notice and no save), else a conflict banner (overwrite or discard), one confirm on every discard path, and an unsaved-changes guard (`hooks/useUnsavedChangesGuard.ts`: `beforeunload` plus capture-phase interception of same-origin `<a href>` clicks). Back / forward and button `navigate()` cannot be intercepted under the plain `BrowserRouter`, so the draft is also backed up per user in localStorage (`utils/docDraftBackup.ts`, key `DOC_DRAFT_KEY_PREFIX` + encoded lower-cased email + doc id because `GET /me` exposes no user id; pruned after `DOC_DRAFT_MAX_AGE_MS`; cleared on logout, logout-and-disconnect and account delete by `components/settings/SignOutSection.tsx`). The viewer offers "You have unsaved changes from <time>. Resume editing" in view mode, the editor offers the restore on open, and when the doc 404s (deleted, share revoked) or the viewer lost edit access, `DocDraftRecovery.tsx` shows the draft read-only with Copy / Download .md / Discard. `DocHistory.tsx` (owner or write share): version list + rendered version, bounded diff to the current body, Restore (with the token as of the confirm) and Copy to a new private doc. There is no mode switch for any doc (user docs are always private, project docs keep their project's mode; the header ignores `access.can_switch_mode`, which is always false). `DocModeBadge` (`components/docs/DocModeBadge.tsx`, the Private lock / Public globe pill) appears only on public docs, on sidebar rows, All Docs rows (the "Mode" column label only while a visible row is public) and the viewer header (`utils/docMode.ts` `shouldShowDocModeBadge(mode)` = `mode === 'public'`). `DocAssetsPanel.tsx` lists the detail's `assets` as a `.right-panel-card` in a right gutter sized to match the RightPanel's footprint beside the doc column (the grid in `DocViewer.css`; thumbnails from the doc asset route, click -> `DocImageLightbox.tsx` on ModalShell with a Download link, empty state; the owner gets a per-image delete in view mode, confirmed, with 409 `asset_in_use` shown in the dialog); it drops under the body below the width breakpoint in that stylesheet and becomes a collapsed `<details>` section on phones.
 
 **write_doc card.** `ActionRequestPreviewFields` renders the `doc_image` preview field with `DocImagePreview.tsx` (a workspace thumbnail via the card conversation's `files/download` route, click opens `FileViewerModal`). `SkillContentDiffPreview.tsx` renders a bounded `skill_content_diff` window, recognized by `total_old_lines` / `total_new_lines`, with "lines above / below not shown" edge separators, a "Show context lines" toggle and a truncation note. Whole-body skill and routine diffs are unchanged.
 
@@ -923,13 +893,7 @@ The ChatPanel is the main chat interface for displaying and sending messages in 
 
 The main chat interface that handles message display, real-time streaming, and the shared `<Composer>` footer. Wrapped with `React.memo` so it only re-renders when its props change (primarily `conversationId`).
 
-**Props Interface**:
-```typescript
-interface ChatPanelProps {
-  conversationId: string;              // ID of the conversation to display
-  onConversationUpdate?: () => void;   // Callback to refresh sidebar after messages
-}
-```
+**Props Interface**: `ChatPanelProps` in the file (the conversation id plus the sidebar-refresh and project-redirect callbacks).
 
 **Features**:
 - Conversation title unit at the top of the panel (`src/components/ConversationHeader.tsx`, styled after the Claude.ai chat header): the title (`customName` from `useConversation`, else the first-user-message slice) followed by a chevron; clicking opens a dropdown with Rename (inline input replacing the title; Enter/blur submits, Escape cancels, empty reverts to the auto title) and Archive/Unarchive (an "Archived" pill shows on the title while archived).
@@ -943,9 +907,9 @@ interface ChatPanelProps {
 - Optimistic UI updates (user messages appear immediately)
 - Smart auto-scroll behavior that respects user scroll position
 - Typing indicator with animated dots during streaming
-- Auto-resizing textarea (grows up to 200px height)
+- Auto-resizing textarea (grows up to the height literal in `Composer.tsx`'s `handleInputChange`, lower on phones)
 - Enter to send (with IME composition guard), Shift+Enter for newline
-- Clipboard paste-to-attach for PNG/JPEG images: the `handlePaste` handler in `frontend/src/components/ChatPanel.tsx` filters `event.clipboardData.items` by MIME, queues each as a `PastedImage` with an `URL.createObjectURL` preview, caps the queue at `MAX_COMPOSER_ATTACHMENTS = 10`, and renders a row of removable thumbnails between the textarea and the action row.
+- Clipboard paste-to-attach for images: the `handlePaste` handler in `frontend/src/components/Composer.tsx` filters `event.clipboardData.items` by `ALLOWED_PASTE_MIME_TYPES`, queues each as a `PastedImage` with an `URL.createObjectURL` preview, caps the queue at `MAX_COMPOSER_ATTACHMENTS`, and renders a row of removable thumbnails between the textarea and the action row.
   - Send is a two-phase op: `uploadComposerAttachments()` in `frontend/src/api/fileApi.ts` POSTs the bytes to `POST /conversations/{id}/composer-attachments` (see [Chat API -- Composer Attachments](../api/chat-api.md#composer-attachments)); on success the returned `ComposerAttachmentRef[]` rides on `WebSocketSendMessage.attachments`. Upload errors leave the queued thumbnails intact and re-surface the typed text so the user can retry without re-pasting.
   - The transcript renders persisted attachments under the user bubble via `Message.tsx`'s `message-attachments` block; clicking a thumbnail opens the existing `FileViewerModal`. See [Realtime -- Message Attachments](realtime.md#message-attachments) for the end-to-end (validation, provider multimodal hand-off, and the `attachments_unsupported_during_resume` rejection)
 - Auto-focus input after streaming ends
@@ -963,25 +927,7 @@ interface ChatPanelProps {
 
 **State Management**:
 
-The ChatPanel uses the `useConversation` hook for all conversation state, with only UI-local state managed via useState:
-
-```typescript
-// From useConversation hook - per-conversation state from global store
-const {
-  messages,           // Loaded messages from API
-  isStreaming,        // Whether currently streaming
-  partialResponse,    // Accumulated text during streaming
-  streamingMessages,  // Structured messages during streaming
-  error,              // Error message (if any)
-  isLoaded,           // Whether conversation loaded
-  isLoading,          // Whether currently loading
-  sendMessage,        // Function to send a message
-} = useConversation(conversationId);
-
-// Local UI state
-const [inputValue, setInputValue] = useState('');               // Current input text
-const [wasNearBottom, setWasNearBottom] = useState(true);       // Auto-scroll tracking
-```
+The ChatPanel uses the `useConversation` hook for all conversation state (`UseConversationResult` in `frontend/src/hooks/useConversation.ts`), with only UI-local state (scroll tracking, viewer / modal flags) managed via `useState`; the composer text itself lives in `Composer.tsx`.
 
 This separation ensures per-conversation state persists when switching conversations (see State Management Architecture section).
 
@@ -993,8 +939,8 @@ The component implements smart auto-scroll that:
 - Re-anchors to bottom when post-stream tail-fetches grow the messages array (length-keyed effect), so settled DOM still ends up at the bottom
 - Force-scrolls to bottom on the streaming-to-finalized transition (`partialResponse` non-empty -> empty) regardless of the near-bottom heuristic, since the user was clearly tracking the stream and the heuristic can go stale-false during smooth-scroll animation
 - Doesn't interrupt user if they scroll up to read history
-- Uses 100px threshold to determine "near bottom"
-- `.messages-list` carries a 3rem `padding-bottom` (in `ChatPanel.css`) so the scroll-to-bottom anchor leaves ~3 lines of slack below the last message
+- "Near bottom" is the `threshold` default of `isNearBottom()` in `ChatPanel.tsx`
+- `.messages-list` carries a `padding-bottom` (in `ChatPanel.css`) so the scroll-to-bottom anchor leaves a few lines of slack below the last message
 
 **Timestamp Formatting**:
 Handled by `formatTimestamp()` in `frontend/src/utils/formatters.ts`. Shows time only for today ("2:30 PM"), date + time for older messages ("Jan 30, 2:30 PM").
@@ -1021,20 +967,19 @@ Comprehensive CSS with dark/light mode support and animations:
 - Full viewport height (100vh) flex container
 - Messages container with custom scrollbar (inset from the panel edge via a transparent right border), 2rem side gutters on desktop (1rem on phones)
 - Fixed input area at bottom
-- Max-width: 720px for messages (centered); the composer bubble shares the cap so both line up
+- A fixed max-width for messages (the `.messages-list` rule in `ChatPanel.css`, centered); the composer bubble shares the cap so both line up
 
 **Message Bubbles**:
-- **User messages**: Right-aligned, blue background (#646cff)
-- **Quest messages**: Left-aligned, gray background (#2a2a2a)
-- 80% max-width for readability
-- Rounded corners (12px border-radius)
+- **User messages**: Right-aligned, accent background
+- **Quest messages**: Left-aligned, neutral background
+- Percentage max-width for readability, rounded corners (the bubble rules in `Message.css`)
 - Fade-in animation on appearance
-- No role header ("You" / "Quest"): the timestamp, plus the model display name for assistant replies, lives in a `.message-footer` absolutely positioned into the list gap under the bubble and revealed only on hover (`@media (hover: hover)`); inline `code` renders bold in the theme's `--accent-text` with no background, fenced blocks keep an accent-washed one; collapsed tool-call rows are deliberately low-contrast (opacity 0.55, raised on hover)
+- No role header ("You" / "Quest"): the timestamp, plus the model display name for assistant replies, lives in a `.message-footer` absolutely positioned into the list gap under the bubble and revealed only on hover (`@media (hover: hover)`); inline `code` renders bold in the theme's `--accent-text` with no background, fenced blocks keep an accent-washed one; collapsed tool-call rows are deliberately low-contrast (the `.tool-use-message.collapsed` opacity in `ToolUseMessage.css`, raised on hover)
 
 **Message Headers**:
 - Role label ("You" vs "Quest"); hovering the "Quest" label shows a tooltip with the specific model display name. Model ID resolved via `getModelDisplayName()` from `frontend/src/constants/models.ts`
 - Timestamp display
-- Small font size (0.75rem)
+- Small font size
 - Reduced opacity for less prominence
 
 **Streaming Indicators**:
@@ -1043,17 +988,17 @@ Comprehensive CSS with dark/light mode support and animations:
 - Smooth opacity transitions
 
 **Input Area**:
-- Auto-resizing textarea (min: 44px, max: 200px)
+- Auto-resizing textarea (min height from the stylesheet, max from the literal in `Composer.tsx`'s resize handlers)
 - Custom scrollbar for long inputs
 - Send button with disabled states
-- Focus highlight with primary color (#646cff)
+- Focus highlight with the accent token
 - Disabled state during streaming
 - Model selector menu below textarea
 
 **Model Selector**:
 - Two-level menu (`frontend/src/components/ModelSelector.tsx`) positioned below the message input: a trigger button showing the current model's display name opens an upward popover (Flags-popover interaction pattern: outside-click and Escape close)
-- Top level shows the admin's slotted picks from `getTopLevelModels()` in `frontend/src/constants/models.ts` (Settings > Model Selection, see [Model Selection](model-selection.md); the server defaults are "Smart ($$$)" Claude Opus 4.8, "Faster ($$)" Claude Sonnet 5, "Fastest ($)" Gemini 3.8 Flash) -- each shown as its descriptor sublabeled with its concrete model name, or the bare name when the descriptor is empty -- plus an "All models" row whose flyout submenu (hover or click to open) lists the full selectable model list (already filtered by the conversation's private/public visibility via `getSelectableModels(visibility)`), scrolling with the current selection auto-scrolled into view
-- The model list is a **runtime catalog** (`frontend/src/constants/models.ts`): `GET /app/api/config` returns `models` (every known model -- the fixed Vertex registry plus each admin-configured OpenRouter instance's models under their `<instance>:<wire_id>` ids, incl. deprecated / admin-disabled ones so old conversations still label correctly -- with `display_name`, `provider`, `provider_label`, `max_input_tokens`, `deprecated`), and `AppConfigContext` feeds it to `setModelCatalog()` before applying `available_models`. A hand-mirrored Vertex-only list is the pre-fetch fallback. Instance models get their instance label folded into the display name ("DeepSeek V4 Flash (OpenRouter)") so two instances of the same model are distinguishable. Lookups go through `getKnownModels()` / `getModelInfo()` / `getModelDisplayName()` / `getProviderForModel()` / `isDeprecatedModel()`; pickers use `getSelectableModels()` (deprecated entries excluded)
+- Top level shows the admin's slotted picks from `getTopLevelModels()` in `frontend/src/constants/models.ts` (Settings > Model Selection, see [Model Selection](model-selection.md); with no admin file the slots come from `DEFAULT_MODEL_SELECTION` in `config/model_selection.py`, the three curated speed/cost picks) -- each shown as its descriptor sublabeled with its concrete model name, or the bare name when the descriptor is empty -- plus an "All models" row whose flyout submenu (hover or click to open) lists the full selectable model list (already filtered by the conversation's private/public visibility via `getSelectableModels(visibility)`), scrolling with the current selection auto-scrolled into view
+- The model list is a **runtime catalog** (`frontend/src/constants/models.ts`): `GET /app/api/config` returns `models` (every known model -- the fixed Vertex registry plus each admin-configured OpenRouter instance's models under their `<instance>:<wire_id>` ids, incl. deprecated / admin-disabled ones so old conversations still label correctly -- shaped as `AppModelInfo` in `frontend/src/api/types.ts`), and `AppConfigContext` feeds it to `setModelCatalog()` before applying `available_models`. A hand-mirrored Vertex-only list is the pre-fetch fallback. Instance models get their instance label folded into the display name ("DeepSeek V4 Flash (OpenRouter)") so two instances of the same model are distinguishable. Lookups go through `getKnownModels()` / `getModelInfo()` / `getModelDisplayName()` / `getProviderForModel()` / `isDeprecatedModel()`; pickers use `getSelectableModels()` (deprecated entries excluded)
 - The host (`Composer.tsx`) passes the selectable list already narrowed to `getSelectableModels()`, credentialed models, and the conversation's provider lock; recommended picks not in that list are hidden (a Gemini-only local instance shows no recommended rows, just "All models"). A current selection that isn't offered stays visible suffixed "(deprecated)" or "(no credentials)" so a conversation already on it keeps it and the user can switch away. The Slack read-only case renders the trigger disabled with a "Server default" label when the conversation has no explicit model
 - **Phone widths** (`useIsMobile`): the popover is replaced by a full-screen sheet (`.model-sheet` in `ChatPanel.css`) -- a "Model" header with a close button over one scrolling list: the top-level picks, then every selectable model under an "All models" heading, no drill-in. A popover anchored above the composer cannot fit a long model list in the strip left above the on-screen keyboard (its top rows were unreachable), so the sheet:
   - is portaled into `.mobile-shell`, which `MobileShell` keeps sized to the visual viewport, so `position: absolute; inset: 0` covers exactly the visible area above the top bar and drawers
@@ -1066,7 +1011,7 @@ Comprehensive CSS with dark/light mode support and animations:
 - Selected model passed in the `send_message` payload on the persistent WS
 
 **Provider Locking**:
-After the first message in a conversation, the provider (Gemini or Anthropic) is locked. The model dropdown filters to only show models from the locked provider, preventing cross-provider switching mid-conversation. Provider locking is managed in `ConversationModelsContext.tsx` (`lockedProviders` state, persisted in localStorage under `quest_locked_providers`).
+After the first message in a conversation, the provider (Gemini or Anthropic) is locked. The model dropdown filters to only show models from the locked provider, preventing cross-provider switching mid-conversation. Provider locking is managed in `ConversationModelsContext.tsx` (`lockedProviders` state, persisted in localStorage under the key literal in its lazy initializer).
 
 Locking is triggered in four scenarios: on first message send in the shared composer (`handleSend` in `frontend/src/components/Composer.tsx`, skipped when the host sets `skipSendLocks`), and in `ChatPanel.tsx` when loading an existing conversation that already has messages, during routine auto-send, and in the `pendingFirstMessage` auto-send effect for home-originated conversations.
 
@@ -1078,16 +1023,7 @@ The home composer must never write a lock: it is keyed by the stable draft key `
 
 To heal browsers poisoned by older builds, `ConversationModelsContext.tsx`'s lazy initializer for `lockedProviders` strips any `HOME_DRAFT_KEY` entry on load; the localStorage blob is deliberately left stale and gets re-serialized on the next lock write. This is why `HOME_DRAFT_KEY` must stay byte-identical to the historical `'__home_draft__'` string.
 
-**Custom Scrollbars**:
-```css
-.messages-container::-webkit-scrollbar {
-  width: 8px;
-}
-.messages-container::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
-}
-```
+**Custom Scrollbars**: the `.messages-container::-webkit-scrollbar*` rules in `ChatPanel.css` (thin track, translucent rounded thumb).
 
 **Animations**:
 - Fade-in on message appearance
@@ -1097,11 +1033,10 @@ To heal browsers poisoned by older builds, `ConversationModelsContext.tsx`'s laz
 
 **Light Mode Support**:
 Uses `@media (prefers-color-scheme: light)` to adapt:
-- White background (#ffffff)
-- Light gray message bubbles (#f5f5f5)
+- Light background and message bubbles
 - Dark text colors
 - Inverted scrollbar colors
-- Adjusted error colors (#d32f2f)
+- Adjusted error colors
 
 #### 3. App Integration (`src/App.tsx`)
 
@@ -1110,7 +1045,7 @@ The main App component now displays ChatPanel when a conversation is selected:
 **Layout Structure**:
 ```
 app-container
-├── Sidebar (260px fixed width)
+├── Sidebar (fixed width, `.sidebar` in Sidebar.css)
 │   ├── Brand bar (logo + name, search icon, requests inbox icon with badge)
 │   ├── Projects section (always visible)
 │   └── Conversations list with inline "New Chat" button
@@ -1208,13 +1143,7 @@ ChatPanel
 
 The ChatPanel implements intelligent auto-scroll:
 
-**Near-Bottom Detection**:
-```typescript
-function isNearBottom(container: HTMLElement, threshold: number = 100): boolean {
-  const { scrollTop, scrollHeight, clientHeight } = container;
-  return scrollHeight - scrollTop - clientHeight < threshold;
-}
-```
+**Near-Bottom Detection**: `isNearBottom()` in `frontend/src/components/ChatPanel.tsx` -- the remaining scroll distance compared against its default `threshold`.
 
 **Scroll Position Tracking**:
 - Tracks `wasNearBottom` state on scroll events
@@ -1233,10 +1162,10 @@ This prevents interrupting users who are reading message history while new messa
 ### Input Handling
 
 **Auto-Resize Textarea**:
-The textarea auto-resizes up to 200px height as the user types. See `handleInputChange` in `frontend/src/components/ChatPanel.tsx`.
+The textarea auto-resizes up to a max height (lower on phones) as the user types. See `handleInputChange` in `frontend/src/components/Composer.tsx`.
 
 **Keyboard Shortcuts**:
-- **Enter**: Send message (guarded by `!e.nativeEvent.isComposing` to prevent IME composition confirmation from triggering send — see `handleKeyDown` in `frontend/src/components/ChatPanel.tsx`)
+- **Enter**: Send message (guarded by `!e.nativeEvent.isComposing` to prevent IME composition confirmation from triggering send — see `handleKeyDown` in `frontend/src/components/Composer.tsx`)
 - **Shift+Enter**: Insert newline
 - **Disabled during streaming**: Prevents multiple sends
 
@@ -1265,19 +1194,7 @@ If message streaming fails, shows error banner via the `.stream-error` element i
 
 The ChatPanel uses the `useConversation` hook for state management and messaging:
 
-**Hook Usage**:
-```typescript
-const {
-  messages,           // Loaded messages from conversationStore
-  isStreaming,        // Whether currently streaming
-  partialResponse,    // Accumulated text during streaming
-  streamingMessages,  // Structured messages (tool_use, tool_result, stats)
-  error,              // Error message (if any)
-  isLoaded,           // Whether conversation loaded from API
-  isLoading,          // Whether currently loading
-  sendMessage,        // Function to send messages via WebSocketManager
-} = useConversation(conversationId);
-```
+**Hook Usage**: `useConversation(conversationId)` returns `UseConversationResult` (`frontend/src/hooks/useConversation.ts`); ChatPanel destructures the store slice and `sendMessage` from it.
 
 **Hook Features**:
 - Subscribes to `conversationStore` via `useSyncExternalStore`
@@ -1356,7 +1273,7 @@ The `CopyableTable` component in `frontend/src/components/Message.tsx` wraps eac
 
 Clicking it copies the table to the clipboard in two formats simultaneously via `navigator.clipboard.write()` with `ClipboardItem`: `text/plain` (tab-separated values for spreadsheets) and `text/html` (the table's `outerHTML` for rich-text apps). TSV extraction walks the table DOM (`tr` > `th`/`td`), escaping tabs and newlines in cell text.
 
-After a successful copy the button shows a green checkmark for 2 seconds. Styling is in `frontend/src/components/Message.css` (`.table-copy-wrapper`, `.table-copy-btn`) with dark and light mode variants.
+After a successful copy the button shows a green checkmark briefly (the `setTimeout` literal in `CopyableTable`). Styling is in `frontend/src/components/Message.css` (`.table-copy-wrapper`, `.table-copy-btn`) with dark and light mode variants.
 
 **Shared `markdownComponents`**:
 The `markdownComponents` object is exported from `frontend/src/components/Message.tsx` and provides custom ReactMarkdown `components` overrides shared by both the Message component (persisted messages) and ChatPanel (streaming messages). It includes a custom `a` renderer (opens links in new tabs with `target="_blank"`, `rel="noopener noreferrer"`), a custom `table` renderer (wraps tables in `CopyableTable` for the hover-copy widget), and a custom `img` renderer (`MarkdownImage`) for inline workspace images (see below)
@@ -1389,18 +1306,17 @@ Comprehensive CSS with markdown element styling and syntax highlighting:
 - Fade-in animation on message appearance
 
 **Message Bubbles**:
-- User messages: Blue background (#646cff)
-- Quest messages: Dark gray background (#2a2a2a)
-- Max-width: 80% for readability
-- Rounded corners (12px border-radius)
+- User messages: accent background
+- Quest messages: neutral dark background
+- Percentage max-width for readability, rounded corners (the `.message-content` rules)
 - Word wrapping and pre-wrap whitespace
 
 **Markdown Element Styles**:
 - **Headings**: Font-size hierarchy (h1-h6), top/bottom margins
 - **Paragraphs**: Vertical spacing with margin collapse
-- **Links**: Blue color (#58a6ff) with dotted underline, solid on hover; all links open in new tabs via custom anchor renderer
-- **Code blocks**: Dark blue-tinted background (#1a1b2e), `var(--font-mono)` font, subtle border, explicit base text color (#e4e4e8, ~13:1 contrast ratio), overflow-x auto
-- **Inline code**: Dark mode gets lavender tint (#e8d4f8); light mode gets dark purple tint (#3b2e58 on #f4f5f9). Uses `var(--font-mono)`, smaller padding, rounded corners
+- **Links**: `--accent-text` with dotted underline, solid on hover; all links open in new tabs via custom anchor renderer
+- **Code blocks**: accent-washed background, `var(--font-mono)` font, subtle border, explicit base text color chosen for WCAG AA contrast (the ratio is annotated on the rule), overflow-x auto
+- **Inline code**: `--accent-text`, bold, no background (see Colour Scheme and Colour Themes). Uses `var(--font-mono)`, smaller padding, rounded corners
 - **Lists**: Proper indentation and spacing, nested list support
 - **Blockquotes**: Left border accent, increased padding, dimmed text
 - **Tables**: Full-width, bordered cells, striped rows, header styling. Each table is wrapped by `CopyableTable` in a `.table-copy-wrapper` div with a `.table-copy-btn` overlay (see Table Copy Hover Widget above)
@@ -1409,38 +1325,15 @@ Comprehensive CSS with markdown element styling and syntax highlighting:
 - **Task lists**: Checkbox support for GFM task lists
 
 **Syntax Highlighting**:
-Custom color scheme for code blocks (overrides highlight.js theme):
-
-**Dark Mode Colors**:
-- Keywords: Bright pink (#ff79c6) with bold weight
-- Function keywords: Bright purple (#e66aff) with bold weight
-- Strings: Bright green (#50fa7b)
-- Numbers/Built-ins: Bright orange (#ffb86c)
-- Types/Titles: Bright yellow (#f1fa8c) with bold weight
-- Comments: Muted blue-gray (#8b95b5, ~5.5:1 contrast ratio on #1a1b2e) with italic style
-- Variables: Bright orange (#ffb86c)
-- Names: Cyan (#8be9fd)
-- Parameters: Almost white (#f8f8f2)
-
-**Light Mode Colors**:
-- Keywords: Red (#d73a49) with bold weight
-- Function keywords: Purple (#6f42c1) with bold weight
-- Strings: Dark green (#22863a)
-- Numbers/Built-ins: Blue (#005cc5)
-- Types/Titles: Purple (#6f42c1) with bold weight
-- Comments: Dark gray (#57606a, ~5.8:1 contrast ratio on #f4f5f9) with italic style
-- Variables: Orange (#e36209)
-- Names: Blue (#005cc5)
-- Parameters: Dark gray (#24292e)
+Custom color scheme for code blocks (overrides the highlight.js theme): one `.message-content pre code .hljs-*` rule per token class in `Message.css`, a dark palette on `:root` and a light palette in the `prefers-color-scheme: light` block, keywords / titles bold and comments italic. Every colour was picked to pass WCAG AA against its code-block background and the contrast ratio is annotated on the rule, so a palette change must keep the annotation honest.
 
 **Light Mode Support**:
 Uses `@media (prefers-color-scheme: light)` to adapt:
-- Light gray message bubbles (#f5f5f5)
+- Light message bubbles
 - Dark text colors
 - Adjusted markdown element colors
-- Blue-tinted code block background (#f4f5f9) with explicit base text color (#24292f)
-- Inline code with dark purple tint (#3b2e58) for visual distinction from prose
-- GitHub-style link colors (#0969da)
+- Light code block background with its own explicit base text color
+- The light syntax palette
 
 #### 3. Shared Formatters Utility (`src/utils/formatters.ts`)
 
@@ -1582,8 +1475,7 @@ The component uses highlight.js with custom color schemes for both light and dar
 **Features**:
 - Automatic language detection
 - 190+ language support
-- Custom color schemes with all colors passing WCAG AA (4.5:1 minimum contrast ratio)
-- Dark mode uses #1a1b2e background with #e4e4e8 base text; light mode uses #f4f5f9 background with #24292f base text
+- Custom color schemes with all colors passing WCAG AA (4.5:1 minimum contrast ratio) against the code-block background of their scheme (both backgrounds and base text colours are the `.message-content pre` rules in `Message.css`)
 - Font weight variations for emphasis
 - Italic styling for comments
 - `var(--font-mono)` (JetBrains Mono stack) applied explicitly to code blocks
@@ -1613,9 +1505,7 @@ Different rendering paths for user vs assistant messages:
 
 #### 2. Plugin Configuration
 
-Markdown plugins configured as arrays in `frontend/src/components/Message.tsx` and `frontend/src/components/ChatPanel.tsx`:
-- **remarkPlugins**: `[remarkGfm, remarkBreaks]`
-- **rehypePlugins**: `[rehypeHighlight]`
+Markdown plugins are configured as the `remarkPlugins` / `rehypePlugins` arrays on each `<ReactMarkdown>` in `frontend/src/components/Message.tsx`, `frontend/src/components/ChatPanel.tsx` and `frontend/src/components/FileViewerModal.tsx` (GFM, breaks, math + the currency guard; highlighting and KaTeX -- the same stack everywhere, read one call site for the list).
 
 Both the Message component (final rendered messages) and the ChatPanel streaming render use the same plugin configuration and the shared `markdownComponents` object (exported from `Message.tsx`, imported by `ChatPanel.tsx`) for consistent output, including the table copy hover widget and new-tab link behavior.
 
@@ -1670,9 +1560,7 @@ The Message component follows accessibility best practices:
 - Code blocks use `<pre>` and `<code>` elements
 
 **Contrast Ratios**:
-- All syntax highlighting colors pass WCAG AA (4.5:1 minimum contrast ratio)
-- Dark mode: comment color #8b95b5 at ~5.5:1 on #1a1b2e; base text #e4e4e8 at ~13:1
-- Light mode: comment color #57606a at ~5.8:1 on #f4f5f9; base text #24292f
+- All syntax highlighting colors pass WCAG AA (4.5:1 minimum contrast ratio); the measured ratio of the tightest colours (comments, base text) is annotated next to the rule in `Message.css`
 - Different colors in light/dark mode for optimal contrast
 
 **Keyboard Navigation**:
@@ -1749,9 +1637,9 @@ A collapsible component for displaying tool invocations:
 - Status indicator: "running..." (animated pulse), "completed" (green), or "errored" (red, sub-agent rows only)
 - Expandable/collapsible design with chevron toggle
 - **Collapsed state**: Compact single-line appearance with improved contrast
-  - 85% opacity (hover: 100%) for readable but unobtrusive tool messages
+  - Reduced opacity, full on hover, for readable but unobtrusive tool messages (`.tool-use-message.collapsed` in `ToolUseMessage.css`)
   - Boosted alpha values on text, icons, status badges, and chevrons for better legibility
-  - 16x16px icon, 0.75rem font size
+  - Small icon and font size
   - No background or border (transparent)
   - Timestamp hidden (only shown when expanded)
   - No preview section -- just description (or tool name/sub-agent name), secondary label (or description), and status
@@ -1776,39 +1664,37 @@ Comprehensive CSS with animations, collapsed/expanded states, and dark/light mod
 
 **Collapsed State** (default):
 - Compact single-line appearance with improved contrast
-- 85% opacity with hover transition to 100% (increased from previous 50%/80% for better legibility)
+- Reduced opacity with a hover transition to full (`.tool-use-message.collapsed`; raised from the original lower values for legibility, see Design Decisions)
 - Transparent background, no border
-- Compact sizing: 16x16px icon, 0.75rem font
-- Reduced padding (0.25rem)
+- Compact icon, font and padding
 - Status badges have transparent background with boosted alpha on text colors
 - Boosted alpha on icon colors, tool name, tool intent, and chevrons in both dark and light modes
 - Human-readable descriptions (from `intent_message`) use proportional sans-serif font via `tool-name-description` class
 
 **Expanded State**:
-- Full visibility with styled background (#1a1a2e dark, #f0f0f8 light)
+- Full visibility with a styled background (accent-tinted via the tokens, see Colour Scheme and Colour Themes)
 - Border and rounded corners
-- Full-size icon (28x28px) and standard font
+- Full-size icon and standard font
 - Timestamp visible
 - Input/Output sections with scrollable content
 - Improved tool-intent contrast
 
 **Color Scheme**:
-- Tool icon: Purple accent (#a0a0ff dark, #6060a0 light)
+- Tool icon: accent-tinted
 - Primary label: When showing a human-readable description, uses proportional sans-serif font (`.tool-name-description` class); when showing a raw tool name, uses monospace font
 - Secondary label: Reduced opacity text shown alongside the primary label (see `.tool-intent` in `frontend/src/components/ToolUseMessage.css`)
-- Running status: Amber (#ffb400) with pulse animation
-- Completed status: Green (#50c878)
+- Running status: amber with pulse animation; completed status: green (the semantic status colours are the one place the stylesheet keeps literal colours, see Colour Scheme and Colour Themes)
 - Output text: Green tint for visual distinction
 
 **Animations**:
 - Fade-in animation on new tool messages
 - Pulse animation for running status
-- Chevron rotation (180deg when expanded)
-- Opacity transitions on hover (0.2s ease)
+- Chevron rotation when expanded
+- Opacity transitions on hover
 
 **Interactive Elements**:
 - Header clickable to expand/collapse
-- Hover effect increases opacity from 85% to 100% (collapsed)
+- Hover effect raises the collapsed row to full opacity
 - Smooth transitions throughout
 
 #### 3. ToolCallGroup Component (`src/components/ToolCallGroup.tsx`)
@@ -1840,7 +1726,7 @@ The Message component includes a `MessageContentRenderer` (in `frontend/src/comp
 
 `WebSocketManager` consumes per-conversation events from `persistentWebSocket` and writes them into the conversation store:
 
-**Types**: See `StructuredStreamEvent` in `frontend/src/api/types.ts` -- discriminated union for text, tool_use, and tool_result events. The `tool_use` variant includes `intent_message` for displaying as the primary label (with the tool name shown as the secondary label).
+**Types**: See `StreamEvent` in `frontend/src/api/types.ts` -- the per-conversation event envelope with a `type` discriminator. The `tool_use` variant includes `intent_message` for displaying as the primary label (with the tool name shown as the secondary label).
 
 **Wire to UI mapping** (see `frontend/src/services/WebSocketManager.ts`):
 - `text_delta` -- accumulates `responseParts` in the per-conversation buffer and syncs `partialResponse` so the UI shows the streaming text live
@@ -1881,19 +1767,19 @@ Types for tool use and streaming are defined in `frontend/src/api/types.ts`:
 
 - `ToolUseMessage` -- Tool invocation message from Gemini (includes `intent_message` for displaying as the primary label; tool name shown as secondary label)
 - `ToolResultMessage` -- Output from tool execution
-- `ActionRequestMessage` -- Inline action-request card (`request_type`, `request_id`, `params`, `preview_fields`, `approve_label`, `wait_handle_id`, optional resolved `status` / `result` / `feedback`); see [Action Requests](action-requests.md)
+- `ActionRequestMessage` -- Inline action-request card (the request identity, params and card preview fields plus the resolved outcome once answered); see [Action Requests](action-requests.md)
 - `MessageContent` -- Union type for all message content types
-- `StreamEvent` -- persistent-WS event with type discriminator (text_delta, tool_use, tool_result, action_request, stats, sub_agent_*, message_appended, send_message_finished, etc.) and optional `intent_message`, `action_type`, `payload`, `seq`, `conversation_id`
-- `UsageStats` -- Usage statistics (input/output/cached tokens, `new_input_tokens`, `provider`, `model`, `cache_creation_tokens`, `cache_read_tokens`, `context_tokens`, `max_context_tokens`, duration, tool calls, breakdown by call type including per-type `new_input_tokens`, `cache_creation_tokens`, `cache_read_tokens`)
+- `StreamEvent` -- persistent-WS event with a `type` discriminator (durable, transient and lifecycle events alike, see [Realtime Architecture](realtime.md)) and the optional per-type fields
+- `UsageStats` -- Usage statistics (the coalesced token counts plus each provider's cache split, context size, duration and the per-call-type breakdown; the fields mirror the backend `UsageStats`)
 - `StatsMessage` -- Stats message type for rendering usage metadata
 
 ### Backend Integration
 
 The persistent-WS run task in `chat/realtime/socket.py:_run_send_message` drives the model loop and emits the events the frontend consumes.
 
-The shared `make_flush_callback` from `chat/_flush_helper.py` writes structured messages to `chat_history.json` on `FLUSH_EVENT_TYPES` boundaries (`tool_use`, `tool_result`, `action_request`, `stats`) -- each append publishes a `message_appended` envelope on the conversation channel via `ChatStorage._publish_appended_to_bus`.
+The shared `make_flush_callback` from `chat/_flush_helper.py` writes structured messages to `chat_history.json` on `FLUSH_EVENT_TYPES` boundaries (the frozenset in the same file: every event type that must survive a reload) -- each append publishes a `message_appended` envelope on the conversation channel via `ChatStorage._publish_appended_to_bus`.
 
-Transient streaming events (`text`, `sub_agent_*`, `tool_started`, `conversation_updated`) are mirrored to the same channel by `_publish_transient_event`. See [Realtime Architecture](realtime.md) and [Gemini API -- Chat Route Wiring](gemini-api.md#chat-route-wiring).
+Every other streaming event (the transient ones, which are not in `FLUSH_EVENT_TYPES`) is mirrored to the same channel by `_publish_transient_event` in `chat/realtime/socket.py`. See [Realtime Architecture](realtime.md) and [Gemini API -- Chat Route Wiring](gemini-api.md#chat-route-wiring).
 
 ### User Experience
 
@@ -1917,7 +1803,7 @@ Transient streaming events (`text`, `sub_agent_*`, `tool_started`, `conversation
 
 3. **Visual Design**:
    - Consecutive tool calls grouped into collapsible units: collapsed shows latest call + "and N more tools"; expanded shows all calls individually expandable
-   - Individual tool call collapsed state: Compact single-line appearance with 85% opacity (hover: 100%) for readable but unobtrusive tool messages
+   - Individual tool call collapsed state: Compact single-line appearance at reduced opacity (full on hover) for readable but unobtrusive tool messages
    - Individual tool call collapsed state: Description (or tool name) as primary label, tool name (or nothing) as secondary label, and status on one line
    - Descriptions use proportional sans-serif font; raw tool names use monospace font
    - Expanded state: Full detailed view with timestamp, input, and output sections
@@ -1979,13 +1865,13 @@ The App component uses `AuthContext` for session-based auth state (`isAuthentica
 - Conditional rendering of RequestsView vs chat panel + file browser based on `showRequestsView` state from `NavigationContext`
 - Callback-based communication between components
 - Empty state handling when no conversation is selected
-- Sets `document.title` to `appName` from `AppConfigContext` ("DevQuest" in dev mode, "Quest" in production)
+- Sets `document.title` to `appName` from `AppConfigContext` (the two name literals in `AppConfigContext.tsx`, picked by the config's dev-mode flag -- a dev instance is visibly labelled)
 - Loading screen heading uses `appName` for environment-aware branding
 
 **Layout Structure**:
 ```
 app-container (flex row, 100vh)
-├── Sidebar (260px fixed width)
+├── Sidebar (fixed width, `.sidebar` in Sidebar.css)
 │   ├── sidebar-content (flex column)
 │   │   ├── Brand bar (logo + app name; search icon button; requests inbox icon button with open-count badge)
 │   │   └── sidebar-panels (flex: 1, slides between main and project drill-down)
@@ -2019,7 +1905,7 @@ The admin operations menu (`AdminOpsMenu`) is not an App-level overlay; it rende
 
 - **Direct Event Subscriptions**: Components subscribe to realtime events instead of relying on context-level state changes
   - Sidebar subscribes to `webSocketManager.onStreamComplete` for conversation list refresh
-  - FileBrowser subscribes to `persistentWebSocket.onGlobalEvent` filtered for `file_list_changed` (per-user global) and silent-refreshes after a 200ms debounce
+  - FileBrowser subscribes to `persistentWebSocket.onGlobalEvent` filtered for `file_list_changed` (per-user global) and silent-refreshes after a short debounce (`FILE_LIST_REFRESH_DEBOUNCE_MS` in `FileBrowser.tsx`)
   - ProjectTables subscribes to `webSocketManager.onStreamComplete` for the project DB table list refresh
 
 #### 2. Direct WebSocket Event Subscriptions
@@ -2027,7 +1913,7 @@ The admin operations menu (`AdminOpsMenu`) is not an App-level overlay; it rende
 Components that need to refresh after streaming or workspace mutations subscribe directly to realtime events via `useEffect`, rather than relying on context-level state changes. This avoids unnecessary re-renders of unrelated context consumers.
 
 - **Sidebar** subscribes to `webSocketManager.onStreamComplete` and calls `silentLoadConversations()`, which uses stale-while-revalidate (keeps existing list visible while fetching) to avoid a "Loading..." flash
-- **FileBrowser** subscribes to `persistentWebSocket.onGlobalEvent` and filters for `file_list_changed` envelopes that match its own card's space (`fileListEventMatchesSource()`: `scope: "conversation"` + matching `conversation_id` for Chat Files, `scope: "project"` + matching `project_id` for Project Files), debouncing 200ms before calling `silentRefresh()`. The trigger is the workspace-mutating tool / REST event itself, not a streaming-lifecycle boundary, so the file list refreshes mid-turn after each successful write
+- **FileBrowser** subscribes to `persistentWebSocket.onGlobalEvent` and filters for `file_list_changed` envelopes that match its own card's space (`fileListEventMatchesSource()`: `scope: "conversation"` + matching `conversation_id` for Chat Files, `scope: "project"` + matching `project_id` for Project Files), debouncing by `FILE_LIST_REFRESH_DEBOUNCE_MS` before calling `silentRefresh()`. The trigger is the workspace-mutating tool / REST event itself, not a streaming-lifecycle boundary, so the file list refreshes mid-turn after each successful write
 - **ProjectTables** subscribes to `webSocketManager.onStreamComplete` and calls `loadTables(true)` for a silent table list refresh at end-of-turn
 
 See `frontend/src/services/WebSocketManager.ts` for the `onStreamComplete` callback API and `frontend/src/services/PersistentWebSocket.ts` for `onGlobalEvent` (used for `file_list_changed` and other per-user globals).
@@ -2035,7 +1921,7 @@ See `frontend/src/services/WebSocketManager.ts` for the `onStreamComplete` callb
 #### 3. App Layout Styling (`src/App.css`)
 
 Flexbox layout (see `frontend/src/App.css`):
-- Sidebar: Fixed 260px width (defined in `frontend/src/components/Sidebar.css`)
+- Sidebar: Fixed width (the `.sidebar` rule in `frontend/src/components/Sidebar.css`)
 - Main content: Flexes to fill remaining space (`flex: 1`)
 - Full viewport height (100vh), full width
 - No max-width constraints (spans full browser window)
@@ -2065,8 +1951,8 @@ See [Admin Impersonation](admin-impersonation.md) for the full impersonation flo
 
 Defines shared CSS variables and minimal body resets:
 
-- `:root` defines `--font-mono` CSS variable (JetBrains Mono stack) used by all components that render monospace text (code blocks, tool names, stack traces, settings panels). The font is loaded via Google Fonts in `frontend/index.html`
-- Body reset: `margin: 0`, `min-width: 320px`, `min-height: 100vh` (centering properties removed to let App.tsx control layout)
+- `:root` defines the `--font-mono` CSS variable used by all components that render monospace text (code blocks, tool names, stack traces, settings panels). Its first family is loaded via Google Fonts in `frontend/index.html`
+- Body reset: margin, minimum width and full-height rules (centering properties removed to let App.tsx control layout)
 
 ### User Flow: Complete Journey
 
@@ -2074,7 +1960,7 @@ Defines shared CSS variables and minimal body resets:
 ```
 1. User visits / (or /chats/<id> or /projects/<pid>/<id> via deep link)
 2. React Router matches URL to route pattern
-3. AppConfigContext fetches GET /app/api/config → derives appName ("DevQuest" or "Quest")
+3. AppConfigContext fetches GET /app/api/config → derives appName from the dev-mode flag
 4. AuthContext calls checkSession() → GET /app/api/me with cookie
 5. App.tsx sets document.title to appName
 6. If session valid → isAuthenticated = true → main app shown
@@ -2220,7 +2106,7 @@ App.tsx (State Container, wrapped in AppProviders, with React Router)
     └── Realtime event subscriptions (not via context)
         ├── WebSocketManager.onStreamComplete → Sidebar (silentLoadConversations)
         ├── WebSocketManager.onStreamComplete → ProjectTables (loadTables(true))
-        └── persistentWebSocket.onGlobalEvent ('file_list_changed') → FileBrowser (silentRefresh, 200ms debounce)
+        └── persistentWebSocket.onGlobalEvent ('file_list_changed') → FileBrowser (silentRefresh, FILE_LIST_REFRESH_DEBOUNCE_MS debounce)
 ```
 
 ### State Management Patterns
@@ -2249,24 +2135,7 @@ const [inputValue, setInputValue] = useState('');
 ### Layout CSS Architecture
 
 #### Flexbox-Based Two-Column Layout
-```css
-.app-container {
-  display: flex;
-  flex-direction: row;  /* Side-by-side columns */
-  height: 100vh;         /* Full viewport height */
-}
-
-/* Column 1: Sidebar (fixed width) */
-.sidebar {
-  width: 260px;
-  flex-shrink: 0;  /* Don't shrink */
-}
-
-/* Column 2: Main content (flexible) */
-.main-content {
-  flex: 1;         /* Take remaining space */
-}
-```
+`.app-container` in `frontend/src/App.css` is a full-height flex row: `.sidebar` (`Sidebar.css`) is a fixed-width non-shrinking column and `.main-content` takes the remaining space with `flex: 1`.
 
 #### Full-Window Layout Strategy
 1. **Remove body centering** (index.css)
@@ -2275,15 +2144,7 @@ const [inputValue, setInputValue] = useState('');
 4. **Set height: 100vh on containers** (App.css)
 
 #### Responsive Considerations
-Current implementation is desktop-first:
-- Fixed sidebar width (260px)
-- No mobile breakpoints yet
-- Horizontal scrolling on small screens
-
-Future improvements:
-- Collapsible sidebar on mobile
-- Hamburger menu for small screens
-- Responsive sidebar width
+The desktop layout is fixed-sidebar two-column; below `MOBILE_BREAKPOINT_PX` (`frontend/src/hooks/useIsMobile.ts`) `App.tsx` renders `MobileShell` instead -- a top bar with drawers for the sidebar and the workspace panel (see the Composer and Right Panel sections for the phone-specific behaviours).
 
 ### Component Hierarchy
 
@@ -2312,7 +2173,7 @@ BrowserRouter (from react-router-dom, wraps entire app in main.tsx)
                     │   │       ├── "New Chat" inline button
                     │   │       └── Map → Conversation items (compact, title only)
                     │   ├── NewRoutineModal (portal, opened from routines section)
-                    │   └── RoutineSettingsModal (portal, 720px, left nav with Prompt/Schedule/Delete sections)
+                    │   └── RoutineSettingsModal (portal, fixed width, left nav with Prompt/Schedule/Delete sections)
                     │
                     └── Main Content
                         ├── ChatPanel (conditional, receives onProjectIdLoaded callback)
@@ -2431,103 +2292,34 @@ The streaming `ReactMarkdown` render in `frontend/src/components/ChatPanel.tsx` 
 
 Added visual feedback before streaming begins:
 
-**Implementation**:
-```typescript
-{isStreaming && !partialResponse && (
-  <div className="typing-placeholder">
-    <span className="typing-dots">
-      <span></span>
-      <span></span>
-      <span></span>
-    </span>
-    Generating response...
-  </div>
-)}
-```
+**Implementation**: the pre-stream block rendered by `frontend/src/components/ChatPanel.tsx` while `isStreaming` is true and neither `partialResponse` nor any streaming structured message has arrived (a `.typing-indicator` of three `.dot` spans plus the `.typing-placeholder` "Generating response..." text).
 
 **Features**:
 - Displays "Generating response..." with animated dots
 - Shows immediately when streaming state begins
 - Disappears once first chunk arrives
-- Provides feedback during Docker container startup delay
+- Provides feedback during the model's time-to-first-token
 
-**CSS Animation**:
-```css
-.typing-placeholder {
-  padding: 1rem;
-  color: rgba(255, 255, 255, 0.6);
-  font-style: italic;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-@keyframes blink {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
-}
-
-.typing-dots span {
-  animation: blink 1.4s infinite;
-}
-```
+**CSS Animation**: `.typing-placeholder`, `.typing-indicator .dot` and the `typing` keyframes in `ChatPanel.css`.
 
 #### 3. Blinking Cursor on Streaming Text
 
 Added visual indicator at the end of streaming content:
 
-**Implementation**: See `frontend/src/components/ChatPanel.tsx` for the streaming message content rendering (ReactMarkdown with `remarkGfm`, `remarkBreaks`, `rehypeHighlight` plugins, followed by cursor span).
+**Implementation**: See `frontend/src/components/ChatPanel.tsx` for the streaming message content rendering (ReactMarkdown with the shared plugin stack, followed by the `.streaming-cursor` span).
 
-**CSS**:
-```css
-.streaming-cursor {
-  display: inline-block;
-  width: 8px;
-  height: 1em;
-  background-color: #646cff;
-  margin-left: 2px;
-  animation: blink 1s infinite;
-  vertical-align: text-bottom;
-}
-
-@keyframes blink {
-  0%, 49% { opacity: 1; }
-  50%, 100% { opacity: 0; }
-}
-```
+**CSS**: the `.streaming-cursor` rule and its `blink` keyframes in `ChatPanel.css`.
 
 **Features**:
 - Blinking cursor positioned after streaming text
-- Primary color (#646cff) for visibility
-- 1s blink cycle (on for 0.5s, off for 0.5s)
+- Light-on-dark for visibility (its colour is a literal in the rule, not the accent token)
+- Step-end blink cycle (equal on / off halves)
 - Vertical alignment matches text baseline
 - Light mode support with same color
 
 #### 4. Backend Conversation Memory
 
-Enhanced Gemini CLI integration to remember conversation history:
-
-**Changes in `chat/gemini_docker.py` (line 144)**:
-```python
-# Old: Without conversation memory
-cmd = [
-    "gemini",
-    "--yolo",
-    "--model", "gemini-3.1-pro-preview",
-    "--output-format=stream-json",
-    "-p", prompt
-]
-
-# New: With conversation memory (-r flag)
-cmd = [
-    "gemini",
-    "--yolo",
-    "-r",  # Remember conversation history
-    "--model", "gemini-3.1-pro-preview",
-    "--output-format=stream-json",
-    "-p", prompt
-]
-```
+Enhanced Gemini CLI integration to remember conversation history. (Historical: the Gemini CLI / Docker transport this described -- `chat/gemini_docker.py` -- no longer exists; conversation memory is now the session history the providers in `chat/llm/` replay, see [LLM Providers](llm-providers.md). The flags it added are not in the tree.)
 
 **Impact**:
 - Gemini now maintains context across messages in the same conversation
@@ -2550,8 +2342,8 @@ cmd = [
    - Streaming cursor span after markdown content
 
 2. `frontend/src/components/ChatPanel.css`
-   - `.typing-placeholder` styles with flexbox layout
-   - `.typing-dots` animation for bouncing dots
+   - `.typing-placeholder` styles
+   - `.typing-indicator .dot` animation for bouncing dots
    - `.streaming-cursor` styles with blink animation
    - `.message.streaming .message-content` uses `white-space: normal` (newlines handled by `remark-breaks` `<br>` elements)
    - Light mode support for streaming elements
@@ -2633,23 +2425,12 @@ Cursor and typing indicator gone
 
 ### CSS Animations
 
-**Blink Animation** (used by cursor):
-```css
-@keyframes blink {
-  0%, 49% { opacity: 1; }    /* Visible */
-  50%, 100% { opacity: 0; }  /* Hidden */
-}
-```
+**Blink Animation** (used by cursor): the `blink` keyframes in `ChatPanel.css` -- a square wave between visible and hidden.
 
-**Bounce Animation** (used by typing dots):
-```css
-.typing-dots span:nth-child(1) { animation-delay: 0s; }
-.typing-dots span:nth-child(2) { animation-delay: 0.2s; }
-.typing-dots span:nth-child(3) { animation-delay: 0.4s; }
-```
+**Bounce Animation** (used by typing dots): the `.typing-indicator .dot:nth-child(n)` rules in `ChatPanel.css` stagger the `typing` keyframes with increasing delays.
 
 **Light Mode Adaptations**:
-- Cursor color remains #646cff (consistent brand color)
+- Cursor colour has its own light-mode value in the `prefers-color-scheme: light` block
 - Typing placeholder uses lighter opacity
 - All animations work identically in both modes
 
@@ -2706,7 +2487,7 @@ Cursor and typing indicator gone
 
 ## Authentication Integration
 
-The frontend implements session-based authentication using the session cookie (named `COOKIE_NAME` from `auth/config.py`; `quest_session` in production, `quest_session_dev` in development). The frontend authenticates directly via the cookie -- no API key is stored or transmitted by the browser.
+The frontend implements session-based authentication using the session cookie (named `COOKIE_NAME` from `auth/config.py`, which `environment.cookie_name()` in `config/environment.py` derives per run mode so a staging and a prod instance on one host never share a cookie). The frontend authenticates directly via the cookie -- no API key is stored or transmitted by the browser.
 
 ### Implemented Features
 
@@ -2724,7 +2505,7 @@ The frontend implements session-based authentication using the session cookie (n
 
 #### 2. Loading State
 
-Shows a loading indicator while checking session. The page displays the `appName` heading ("DevQuest" in dev mode, "Quest" in production) with a "Loading..." message during `isCheckingAuth`.
+Shows a loading indicator while checking session. The page displays the `appName` heading (dev-mode-dependent, see `AppConfigContext.tsx`) with a "Loading..." message during `isCheckingAuth`.
 
 **User Experience**:
 - Brief "Loading..." message on initial page load
@@ -2748,7 +2529,7 @@ If the session check fails, the frontend renders the `SignInScreen` component in
 
 **Authentication**: Session cookie or API key Bearer token (dual auth)
 
-**Response shape**: `{ email, name }`
+**Response shape**: the dict built by the `/me` handler in `chat/routes/user.py` (identity plus the per-user settings and feature / connection flags the contexts hydrate from; see the Application Contexts section)
 
 **Error Responses**:
 - `401 Unauthorized`: No valid session or API key
@@ -2760,7 +2541,7 @@ If the session check fails, the frontend renders the `SignInScreen` component in
 
 ```
 1. User visits / (or /chats/<id> or /projects/<pid>/<id>) → React Router matches route → AppProviders mounts
-2. Fetches GET /app/api/config → derives appName ("DevQuest" or "Quest"), sets isDevMode
+2. Fetches GET /app/api/config → derives appName from the dev-mode flag, sets isDevMode
 3. checkSession() calls GET /app/api/me with cookie
 4. App.tsx sets document.title to appName
 5. Session valid? → YES → isAuthenticated = true → Show chat interface (URL params synced to context)
@@ -2782,7 +2563,7 @@ If the session check fails, the frontend renders the `SignInScreen` component in
 ### Security Considerations
 
 **Cookie Security**:
-- Session cookie (name from `COOKIE_NAME` in `auth/config.py`, environment-dependent) is signed (itsdangerous) and uses a versioned payload (`{"v": COOKIE_VERSION, "uid": user_id}`)
+- Session cookie (name from `COOKIE_NAME` in `auth/config.py`, environment-dependent) is signed (itsdangerous) and uses a versioned payload (`COOKIE_VERSION` in `auth/config.py` plus the user id; bumping the version signs everyone out)
 - `get_user_from_cookie()` in `auth/session.py` enforces strict type checks: `uid` and `v` must be `int` but not `bool`, and `uid` must be positive (prevents `bool` subclass of `int` from allowing `uid: true` to resolve to user ID 1)
 - Same-origin policy protects cookie access
 - `credentials: 'include'` required for cross-origin requests in dev
@@ -2816,7 +2597,7 @@ Each `FileBrowser` takes a `source` prop (`conversationSource(cid)` / `projectSo
 
 The file browser provides a right-side panel in the chat interface that allows users to:
 - Browse files and folders created by the model or the user in the card's space (dot-prefixed entries like `.responses/` / `.temp/` are hidden by default, revealable via an Eye/EyeOff toggle)
-- View text file content (`.md`, `.py`, `.txt`, `.json`), images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp`, `.bmp`, `.ico`, `.avif`), PDFs (`.pdf`), and CSVs (`.csv`) in a full-screen modal by clicking on the file; JSON files render in a collapsible tree viewer; PDFs render in a two-pane pdf.js viewer with a thumbnail rail; `.md` files render as HTML by default (react-markdown, reusing the chat renderer's `markdownComponents`) with a "Show rendered" header toggle to flip to the raw source; `.csv` files render as a styled sortable table by default (reusing the project-tables visual styling, client-side parse/sort) with a "Show raw" header toggle to flip to the raw source
+- View text files, images, PDFs and CSVs (the `TEXT_EXTENSIONS` / `IMAGE_EXTENSIONS` / `PDF_EXTENSIONS` / `CSV_EXTENSIONS` sets in `FileBrowser.tsx`) in a full-screen modal by clicking on the file; JSON files render in a collapsible tree viewer; PDFs render in a two-pane pdf.js viewer with a thumbnail rail; `.md` files render as HTML by default (react-markdown, reusing the chat renderer's `markdownComponents`) with a "Show rendered" header toggle to flip to the raw source; `.csv` files render as a styled sortable table by default (reusing the project-tables visual styling, client-side parse/sort) with a "Show raw" header toggle to flip to the raw source
 - Upload files and folders via drag-and-drop (folders are recursively traversed, preserving directory structure)
 - Upload files via the Upload Files button
 - Create new folders in the currently-viewed directory via the New Folder button (opens `NewFolderModal`)
@@ -2834,7 +2615,7 @@ The file browser provides a right-side panel in the chat interface that allows u
 | `frontend/src/hooks/useWorkspaceCopy.ts` | Copy / Move between Chat Files and Project Files in a project conversation: both cards' `rowActions`, the 409 overwrite prompt state, per-card notices, actions disabled while their copy is in flight |
 | `frontend/src/components/RightPanel.css` | RightPanel styling (transparent gutter column; `.right-panel-card` floating-card chrome for each unit; hover-revealed `::after` pills on the left-edge width handle `.right-panel-resize-handle` and the inter-card `.right-panel-divider`, kept visible mid-drag by `.resizing-width` / `.resizing-split`) |
 | `frontend/src/components/FileBrowser.tsx` | Main file browser UI component (supports file and folder drag-and-drop, opens FileViewerModal for viewable files including JSON and images, folder download as zip, split Upload Files + New Folder action buttons with Lucide icons, opens NewFolderModal on click, hides dot-prefixed entries by default behind a stateful Eye/EyeOff toggle); uses Lucide icons via `getFileIconInfo()` for extension-specific file icons and `Folder` for directories |
-| `frontend/src/components/FileBrowser.css` | File browser styling (flex layout, multi-line error display, upload progress bar, zipping notification bar, equal-width action button row via `.file-browser-action-buttons` / `.action-button`, show-hidden toggle button, hidden-count empty-state hint, and 16 icon color classes for file-type icons in dark/light mode) |
+| `frontend/src/components/FileBrowser.css` | File browser styling (flex layout, multi-line error display, upload progress bar, zipping notification bar, equal-width action button row via `.file-browser-action-buttons` / `.action-button`, show-hidden toggle button, hidden-count empty-state hint, and one icon color class per file-type category in dark/light mode) |
 | `frontend/src/components/NewFolderModal.tsx` | Portal modal for creating a new folder in the current workspace path; mirrors `NewProjectModal` (auto-focus, trim, disabled-while-empty, inline error display, closes on success) |
 | `frontend/src/components/NewFolderModal.css` | NewFolderModal styling with dark/light mode variants |
 | `frontend/src/components/FileViewerModal.tsx` | Full-screen modal for viewing text files, JSON files (via `JsonTreeViewer`), images, PDFs (via `PdfViewer`), and CSVs (rendered as a sortable table) with download button, Save to Drive button (for `.md` files), and image blob display with metadata; `.md` files render as HTML via `react-markdown` (reusing the chat renderer's `markdownComponents` from `Message.tsx`) with a "Show rendered" sliding toggle in the header to flip to the raw `<pre>` source; `.csv` files parse client-side (`frontend/src/utils/csv.ts`) and render as a styled sortable table with a "Show raw" toggle to flip to the raw `<pre>` source |
@@ -2854,10 +2635,10 @@ The file browser provides a right-side panel in the chat interface that allows u
 | `frontend/src/hooks/useWorkspaceDownload.ts` | `useWorkspaceDownload()` -- the component-side way to download a workspace file: `confirmDownload`, then `downloadFile()`, then `saveBlobToDisk()`; used by the chat attachment viewer (`ChatPanel.tsx`), `SubagentReturnFilesPreview.tsx` and `DocImagePreview.tsx` |
 | `frontend/src/utils/downloadWarnings.ts` | Pure rule `getDownloadWarning(target)`: which file types warn, with which category explanation and severity (`INERT_TEXT_EXTENSIONS` allow-list, `CATEGORY_EXTENSIONS` incl. the `markup` / `code` text splits, `CATEGORY_DETAILS`, `SEVERE_CATEGORIES`) |
 | `frontend/src/api/projectDbApi.ts` | API client for project database table browsing and management (`fetchProjectTables()`, `fetchTableData()`, `deleteProjectTable()`) |
-| `frontend/src/utils/fileIcons.ts` | Extension-to-icon mapping utility; maps ~50 file extensions across 16 categories to Lucide icon components and CSS color classes via `getFileIconInfo()` |
+| `frontend/src/utils/fileIcons.ts` | Extension-to-icon mapping utility; the `extensionMap` table maps file extensions to Lucide icon components and per-category CSS color classes, looked up via `getFileIconInfo()` (unknown extensions get `defaultIcon`) |
 | `frontend/src/utils/directoryTraversal.ts` | Recursive directory traversal via `webkitGetAsEntry()` API; exports `FileWithPath` interface and `extractFilesFromDataTransfer()` |
 | `chat/file_routes.py` | Backend API endpoints (list, upload, download, download folder as zip, read content, file info, delete, create folder, save to Drive) for both the conversation routes and the `/projects/{pid}/files...` mirror, plus the copy-to-project / copy-from-project routes |
-| `chat/file_storage.py` | File operations, path validation, directory conflict detection, upload size limit (`MAX_FILE_SIZE`, 200MB), text content reading (`get_file_content()`, `VIEWABLE_EXTENSIONS`, `MAX_VIEW_SIZE`), file/folder info (`count_workspace_item_files()`), deletion (`delete_workspace_item()`), folder zipping (`create_folder_zip()`), and folder creation (`create_workspace_folder()`) |
+| `chat/file_storage.py` | File operations, path validation, directory conflict detection, upload size limit (`MAX_FILE_SIZE`), text content reading (`get_file_content()`, `VIEWABLE_EXTENSIONS`, `MAX_VIEW_SIZE`), file/folder info (`count_workspace_item_files()`), deletion (`delete_workspace_item()`), folder zipping (`create_folder_zip()`), and folder creation (`create_workspace_folder()`) |
 | `chat/project_db_routes.py` | Backend API endpoints for project database table browsing and management (`list_project_tables`, `get_project_table_data`, `delete_project_table`) |
 
 ### Implemented Components
@@ -2875,13 +2656,13 @@ The main file browser panel displayed on the right side of the chat interface.
 - Header by source: "Chat Files" for a conversation, "Project Files" for a project
 - List view of files and folders with extension-specific Lucide icons (folders use `Folder` icon; files use `getFileIconInfo()` from `frontend/src/utils/fileIcons.ts` to select icon and color class by extension)
 - File metadata display (size, modification date)
-- Click-to-view for text files, JSON files, images, PDFs, and CSVs: clicking a viewable file opens a `FileViewerModal`. Text files (`.md`, `.py`, `.txt`, `.json`), image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp`, `.bmp`, `.ico`, `.avif`), PDFs (`.pdf`), and CSVs (`.csv`) are viewable.
-  - Extensions are defined in `TEXT_EXTENSIONS`, `IMAGE_EXTENSIONS`, `PDF_EXTENSIONS`, and `CSV_EXTENSIONS` constants in `FileBrowser.tsx`; text and CSV extensions match `VIEWABLE_EXTENSIONS` in `chat/file_storage.py`.
+- Click-to-view for text files, JSON files, images, PDFs, and CSVs: clicking a viewable file opens a `FileViewerModal`.
+  - Viewable extensions are the `TEXT_EXTENSIONS`, `IMAGE_EXTENSIONS`, `PDF_EXTENSIONS`, and `CSV_EXTENSIONS` constants in `FileBrowser.tsx`; the text and CSV sets hand-mirror `VIEWABLE_EXTENSIONS` in `chat/file_storage.py` (the server's text-content route refuses anything else), while images and PDFs go through the download route instead.
   - JSON files render in a collapsible tree viewer (`JsonTreeViewer`) with syntax coloring; malformed JSON falls back to raw `<pre>` display. PDFs render via `PdfViewer` (pdf.js). CSVs render as a styled sortable table (client-side parse via `frontend/src/utils/csv.ts`); a parse failure falls back to raw `<pre>` display
 - Meatball menu (three-dot icon) on each file and folder with "Download" (files only), "Download as Zip" (folders only), and "Delete" (files and folders) options
 - Deletion with `window.confirm()` confirmation; for folders, shows total file count (e.g., "This will delete 5 files.")
 - Action bar with two equal-width buttons -- Upload Files (Lucide `Upload` icon) and New Folder (Lucide `FolderPlus` icon) -- sharing the `uploadProgress || isInitialLoading` disabled condition so the workspace cannot be mutated mid-upload. Layout classes `.file-browser-action-buttons` and `.action-button` are defined in `FileBrowser.css`
-- Drag-and-drop upload support (files and folders); maximum file size is 200MB (`MAX_FILE_SIZE` in `chat/file_storage.py`)
+- Drag-and-drop upload support (files and folders); the per-file size cap is `MAX_FILE_SIZE` in `chat/file_storage.py`
 - New folder creation: clicking the New Folder button opens `NewFolderModal` (`frontend/src/components/NewFolderModal.tsx`), which calls `createFolder(name)` from `useFileBrowser`; the folder is created in the currently-viewed directory and the listing auto-refreshes on success
 - Upload progress tracking: displays real-time upload percentage and a progress bar during file uploads (driven by `uploadPercent` state from `useFileBrowser`)
 - Folder drag-and-drop: uses `extractFilesFromDataTransfer()` from `frontend/src/utils/directoryTraversal.ts` to recursively traverse dropped directories and upload with preserved directory structure
@@ -2891,7 +2672,7 @@ The main file browser panel displayed on the right side of the chat interface.
 - Navigation controls (back, forward, up buttons)
 - Current path breadcrumb display
 - Hidden-entry filtering: files and folders whose names start with `.` (e.g. `.responses/`, `.temp/`) are filtered out of the rendered list by default. A stateful Eye/EyeOff toolbar toggle reveals/hides them, and an empty-state hint reports how many hidden items exist. This is purely client-side -- the list REST endpoint (`chat/file_routes.py`) still returns every entry; see [File Browser API](../api/file-browser-api.md)
-- Silent auto-refresh on `file_list_changed` per-user globals (200ms debounce; no loading flicker), filtered by the card's own space (scope `conversation` + its conversation id, or scope `project` + its project id). See [Realtime Architecture](realtime.md)
+- Silent auto-refresh on `file_list_changed` per-user globals (`FILE_LIST_REFRESH_DEBOUNCE_MS` debounce; no loading flicker), filtered by the card's own space (scope `conversation` + its conversation id, or scope `project` + its project id). See [Realtime Architecture](realtime.md)
 - Loading and error states
 - Structured error display: when some files in a batch fail, errors are shown in a scrollable list with per-file details (summary line plus individual error items)
 
@@ -2911,7 +2692,7 @@ Comprehensive CSS with dark/light mode support. `FileViewerModal.css` includes a
 - Responsive file item rows
 
 **File Items**:
-- Extension-specific Lucide icons with per-category color classes (16 categories covering Python, JavaScript, TypeScript, HTML, CSS, JSON, data/config, markdown/text, images, PDF, Word, Excel, PowerPoint, archives, databases, and shell scripts); color classes defined in `FileBrowser.css` with dark/light mode variants
+- Extension-specific Lucide icons with per-category color classes (the categories are the distinct `className` values in `extensionMap`, `frontend/src/utils/fileIcons.ts`); color classes defined in `FileBrowser.css` with dark/light mode variants
 - Filename with ellipsis overflow
 - Size and date metadata
 - Hover effects
@@ -2930,27 +2711,7 @@ React hook managing file browser state and operations.
 **Parameters**:
 - `source`: the file space to browse (`FileSource`, or null for the empty state); re-derived from its primitives so callers may pass a fresh object every render
 
-**Return Values**:
-- `files`: Array of file/folder entries
-- `currentPath`: Current browsing path
-- `loading`: Whether loading file list
-- `error`: Error message if any
-- `uploadProgress`: Whether upload is in progress
-- `uploadPercent`: Current upload progress as a percentage (0-100), or null when not uploading; drives the progress bar and percentage text in the FileBrowser UI
-- `canGoUp`, `canGoBack`, `canGoForward`: Navigation availability flags
-- `navigateToFolder(name)`: Navigate into a folder
-- `goUp()`: Go to parent directory
-- `goBack()`: Go to previous path in history
-- `goForward()`: Go to next path in history
-- `refresh()`: Reload current file list (shows loading state)
-- `silentRefresh()`: Reload without showing loading state (for auto-refresh)
-- `uploadFiles(files)`: Upload flat files to current path
-- `uploadFilesWithPaths(files)`: Upload files with relative paths for folder uploads (uses `uploadFilesWithPaths()` from `frontend/src/api/fileApi.ts`)
-- `downloadFile(path)`: Download a file -- after `confirmDownload()` from `DownloadWarningContext` when the type warns (a cancelled warning returns without fetching or setting an error)
-- `downloadFolder(path)`: Download a folder as a zip archive (always behind `confirmDownload()`; sets `zippingFolder` state for the notification bar only once acknowledged)
-- `zippingFolder`: Name of the folder currently being zipped (null when not zipping)
-- `deleteItem(path)`: Delete a file or folder (fetches info for confirmation, then deletes on user confirm)
-- `createFolder(name)`: Create a new folder inside the current path via `createFolder()` in `frontend/src/api/fileApi.ts`; refreshes the listing on success
+**Return Values**: `UseFileBrowserResult` in the file -- the listing and its load / upload-progress / zipping state, the navigation flags and actions, `refresh()` vs `silentRefresh()` (see Stale-While-Revalidate below), and the mutation actions. Two behaviours the type cannot say: `downloadFile(path)` and `downloadFolder(path)` run behind `confirmDownload()` from `DownloadWarningContext` (a cancelled warning returns without fetching or setting an error, and the zipping notification only starts once acknowledged), and `deleteItem(path)` fetches the item's info first so the confirm can state the file count.
 
 **Path State**:
 - Per-file-space path, history and show-hidden state stored in `FileBrowserStateContext` under `fileSourceKey(source)`
@@ -2981,7 +2742,7 @@ A prompt-injected agent can write files into the workspace that carry informatio
 **Flow** (every one of the nine UI download triggers follows it):
 
 1. A component calls `confirmDownload({name, kind})` from `useDownloadWarning()` and gets a `DownloadDecision` back -- `'cancel'`, `'original'` or `'sanitized'` -- which it passes to `fileApi.downloadFile(target, path, variant)` as the variant (`frontend/src/contexts/DownloadWarningContext.tsx`), either directly (`hooks/useFileBrowser.ts` `downloadFile` / `downloadFolder`, which keep their own error surface and zipping toast) or through `hooks/useWorkspaceDownload.ts` (the chat attachment / markdown-image viewer in `ChatPanel.tsx`, `SubagentReturnFilesPreview.tsx`, `DocImagePreview.tsx`).
-2. `getDownloadWarning()` (`frontend/src/utils/downloadWarnings.ts`) decides. Text is split three ways: a file whose extension is in `INERT_TEXT_EXTENSIONS` (txt, log, json, yaml, toml, ini, ...: nothing happens when it is opened) resolves `'original'` at once; `markup` (md, rst, xml, css, csv, tsv) warns because the program rendering it resolves the references it contains -- a markdown image URL fetches a remote resource, a spreadsheet application evaluates a CSV's formula cells (`=HYPERLINK`, `=IMPORTXML`), and the request itself can carry leaked data; `code` (py, ts, js, sh, sql, ipynb, patch, ...) is its own **severe** category because the hazard is running it. A folder is always an `archive`; every other extension -- including an unknown or missing one, since the agent picks the name -- warns with the category explanation from `CATEGORY_DETAILS` (`web`, `image`, `document`, `archive`, `media`, `executable`, `other`). `severity` is `severe` for `code` and `executable` (`SEVERE_CATEGORIES`), `warning` otherwise. An `image` whose extension is in `SANITIZABLE_IMAGE_EXTENSIONS` (png, jpg, jpeg, gif, webp -- hand-mirrored from the formats `chat/image_sanitizer.py` handles; the server picks by magic bytes and 400s the rest) additionally carries `sanitizer: 'image'`.
+2. `getDownloadWarning()` (`frontend/src/utils/downloadWarnings.ts`) decides. Text is split three ways: a file whose extension is in `INERT_TEXT_EXTENSIONS` (plain data formats: nothing happens when it is opened) resolves `'original'` at once; the `markup` category of `CATEGORY_EXTENSIONS` warns because the program rendering it resolves the references it contains -- a markdown image URL fetches a remote resource, a spreadsheet application evaluates a CSV's formula cells (`=HYPERLINK`, `=IMPORTXML`), and the request itself can carry leaked data; the `code` category is its own **severe** category because the hazard is running it. A folder is always an `archive`; every other extension -- including an unknown or missing one, since the agent picks the name -- warns with its category's explanation from `CATEGORY_DETAILS` (the categories are the `DownloadWarningCategory` union). `severity` is `severe` for the categories in `SEVERE_CATEGORIES` (the ones whose hazard is execution), `warning` otherwise. An `image` whose extension is in `SANITIZABLE_IMAGE_EXTENSIONS` (hand-mirrored from the formats `chat/image_sanitizer.py` handles; the server picks by magic bytes and 400s the rest) additionally carries `sanitizer: 'image'`.
 3. `DownloadWarningProvider` (mounted once in `AppProviders`) opens its `DocConfirmDialog` (`components/docs/DocConfirmDialog.tsx`, the shared confirm) -- for a severe warning with the "This download may be harmful to run" title, the danger tone and a boxed do-not-run / -import / -compile / -install paragraph (`.download-warning-severe`) -- and resolves the promise with the user's answer; only then does the caller fetch (`fileApi.downloadFile` / `downloadFolder`) and hand the blob to the browser (`fileApi.saveBlobToDisk`).
 4. For a warning with `sanitizer` the dialog is titled "This image may carry hidden data", says in one plain sentence what the sanitized copy is (`SANITIZED_IMAGE_EXPLANATION`, boxed `.download-warning-sanitized`; all copy on both dialogs is short and non-technical by design) and has three actions: Cancel, "Download Original..." (`DocConfirmDialog`'s optional `secondaryLabel` / `onSecondary`) and the primary "Download Sanitized Copy" (resolves `'sanitized'`). "Download Original..." swaps in a second, danger-toned `DocConfirmDialog` ("Download the original file?") whose "Download Original" button stays disabled (`confirmDisabled`) until the "I understand the risk and want the original file" checkbox (`.download-warning-ack`) is ticked; Cancel or Escape there returns to the first dialog with the checkbox cleared, so the sanitized copy is still one click away. A sanitized fetch that fails (400 `unsanitizable_image`: the bytes are not a PNG/JPEG/GIF/WebP whatever the name says) surfaces through the caller's usual error path, never as a silent fallback to the original.
 
@@ -2999,41 +2760,18 @@ Type-safe API client functions for file operations. Upload functions use XMLHttp
 
 Every file function below (except the `xhrUpload` / `saveBlobToDisk` helpers) takes a `FileTarget` as its first argument: a `FileSource` (`conversationSource(cid)` -> `/conversations/{cid}/files...`, `projectSource(pid)` -> `/projects/{pid}/files...`) or a bare string, which means a conversation id, so chat-side callers (composer uploads, HomeComposer, inline images) are unchanged. The project-side named twins (`listProjectFiles`, `uploadProjectFiles(WithPaths)`, `getProjectFileContent`, `downloadProjectFile`, `downloadProjectFolder`, `getProjectFileInfo`, `deleteProjectFile`, `createProjectFolder`, `saveProjectFileToDrive`, `projectFileDownloadUrl`) are thin wrappers. `copyFileToProject(cid, opts)` / `copyFileFromProject(cid, opts)` (`{path, dest?, overwrite?, move?, includeHidden?}`) call the copy routes and resolve to `{type, path, files_copied, skipped, moved}`; failures reject as `FileApiError` (status + error code), with `isDestinationExistsError()` for the 409. The parameters below are written for the conversation case.
 
-**Functions**:
-- `xhrUpload(url, formData, onProgress)`: Internal helper that performs file uploads via XMLHttpRequest with cookie auth. Accepts an optional `onProgress` callback receiving `(loaded, total)` byte counts from `xhr.upload.onprogress`. Returns a Promise.
-- `listFiles(conversationId, path)`: List files at path (cookie auth via `credentials: 'include'`)
-- `uploadFiles(conversationId, files, path, onProgress)`: Upload flat files via XHR. Accepts optional `onProgress` callback for upload progress tracking.
-- `uploadFilesWithPaths(conversationId, files, path, onProgress)`: Upload files with relative paths for folder uploads via XHR. Sends parallel `files` and `paths` form data arrays so the backend can recreate directory structure. Accepts `FileWithPath[]` from `frontend/src/utils/directoryTraversal.ts`. Accepts optional `onProgress` callback.
-- `downloadFile(conversationId, filePath, variant?)`: Fetch a file as a blob URL + filename (cookie auth via `credentials: 'include'`); does NOT trigger the browser download itself. `variant` is a `DownloadVariant`: `'original'` (default, `/files/download`) or `'sanitized'` (`/files/download-sanitized`, the server's metadata-stripped copy of a raster image)
-- `downloadFolder(conversationId, folderPath)`: Same for a folder as a zip archive (`{folder-name}.zip`)
+**Functions**: one exported function per file route (list, the two uploads, content, info, delete, create folder, save to Drive, the two downloads) plus the helpers; read the exports in the file. What the signatures cannot say:
+- `xhrUpload(url, formData, onProgress)` and the two upload functions use XMLHttpRequest rather than fetch so `xhr.upload.onprogress` can drive the progress bar; `uploadFilesWithPaths` sends parallel `files` and `paths` form arrays (`FileWithPath[]` from `frontend/src/utils/directoryTraversal.ts`) so the backend can recreate the dropped directory structure.
+- `downloadFile(target, filePath, variant?)` resolves to a blob URL + filename and does NOT trigger the browser download itself; `variant` is a `DownloadVariant` -- the original bytes, or the server's metadata-stripped copy of a raster image from `/files/download-sanitized`. `downloadFolder` is the zip twin.
 - `saveBlobToDisk({url, filename})`: Temporary `<a download>` click + deferred `URL.revokeObjectURL`. Every workspace download ends here, and callers reach it only through `useWorkspaceDownload` / `useFileBrowser`, i.e. after the download warning (see [Workspace Download Warning](#workspace-download-warning)).
-- `fetchFileContent(conversationId, filePath)`: Fetch text content of a viewable file (cookie auth via `credentials: 'include'`). Returns `FileContentResponse`.
-- `getFileInfo(conversationId, filePath)`: Get file/folder info with file count (cookie auth via `credentials: 'include'`). Returns `FileInfoResponse`.
-- `deleteFile(conversationId, filePath)`: Delete a file or folder (cookie auth via `credentials: 'include'`). Returns `DeleteFileResponse`.
-- `createFolder(conversationId, parentPath, name)`: Create a new empty folder under `parentPath` (cookie auth via `credentials: 'include'`). Returns `CreateFolderResponse`.
 
-**Response Types**:
-- `FileEntry`: File/folder metadata (name, is_dir, size, modified)
-- `FileContentResponse`: Text file content (name, path, content, size)
-- `FileInfoResponse`: File/folder info with file count (name, type, file_count)
-- `DeleteFileResponse`: Deletion result (name, type, deleted_count)
-- `CreateFolderResponse`: Created folder metadata (name, path)
+**Response Types**: `FileEntry`, `FileContentResponse`, `FileInfoResponse`, `DeleteFileResponse` and `CreateFolderResponse` in `frontend/src/api/types.ts`, mirroring the route responses in `chat/file_routes.py`.
 
 #### 5. FileViewerModal Component (`src/components/FileViewerModal.tsx`)
 
 Full-screen modal for viewing text files, JSON files, images, PDFs, and CSVs inline, with a Save to Drive option for markdown files, an HTML-rendered view for markdown files, and a sortable-table view for CSV files.
 
-**Props Interface**:
-- `isOpen`: Whether the modal is visible
-- `source`: the file space that owns the file (`FileSource`; a legacy `conversationId` prop is still accepted and means a conversation source) -- selects the content, download and Save to Drive routes and the `.md` preview's image resolution
-- `filePath`: Full path within workspace (e.g., `/script.py`)
-- `fileName`: Display name for the header
-- `isImage`: Whether the file is an image (determines rendering mode)
-- `isJson`: Whether the file is JSON (renders via `JsonTreeViewer` instead of `<pre>`)
-- `isPdf`: Whether the file is a PDF (renders via `PdfViewer` instead of `<pre>`)
-- `isCsv`: Whether the file is a CSV (renders as a sortable table instead of `<pre>`)
-- `onClose`: Callback to close the modal
-- `onDownload`: Callback to trigger the existing download flow
+**Props Interface**: `FileViewerModalProps` in the file -- the open flag, the file's path and display name, one boolean per rendering mode (image / JSON / PDF / CSV, else raw text), and the close / download callbacks. `source` (`FileViewerSourceProps`: a `FileSource`, or the legacy `conversationId` prop meaning a conversation source) selects the content, download and Save to Drive routes and the `.md` preview's image resolution.
 
 **Behavior (text files)**:
 - Fetches file content via `fetchFileContent()` from `frontend/src/api/fileApi.ts` when opened
@@ -3051,10 +2789,10 @@ Full-screen modal for viewing text files, JSON files, images, PDFs, and CSVs inl
 - Falls back to raw `<pre>` display if the JSON is malformed (parse fails)
 
 **Behavior (CSV files -- `.csv`)**:
-- Fetches content via `fetchFileContent()` like other text files (no backend change -- `.csv` is in `VIEWABLE_EXTENSIONS`, subject to the 1 MB `MAX_VIEW_SIZE` cap)
+- Fetches content via `fetchFileContent()` like other text files (no backend change -- `.csv` is in `VIEWABLE_EXTENSIONS`, subject to the `MAX_VIEW_SIZE` cap in `chat/file_storage.py`)
 - Parses client-side with `parseCsv()` from `frontend/src/utils/csv.ts` (RFC-4180-aware, never throws) and renders as a styled sortable table reusing the project-tables visual styling (`.file-viewer-csv-*` classes)
 - Sticky headers with a 3-state sort cycle (none -> asc -> desc -> none) copied from `TableViewerModal.handleSort`; sorting is numeric-aware (empties sorted last) and done client-side
-- Cell values truncated at 200 chars with the full text in a `title` tooltip; a 5000-row render cap (`CSV_MAX_RENDER_ROWS`) shows a footer note pointing at Download for the full file; header-only files show a "No data rows." note
+- Cell values truncated at `CSV_MAX_CELL_LENGTH` with the full text in a `title` tooltip; a row render cap (`CSV_MAX_RENDER_ROWS`, both constants at the top of the file) shows a footer note pointing at Download for the full file; header-only files show a "No data rows." note
 - A "Show raw" header toggle (mirroring the markdown "Show rendered" toggle) flips to the raw `<pre>` source; a parse failure also falls through to the raw `<pre>`
 
 **Behavior (images)**:
@@ -3067,7 +2805,7 @@ Full-screen modal for viewing text files, JSON files, images, PDFs, and CSVs inl
 
 **Behavior (PDF files)**:
 - Fetches the whole file as an `ArrayBuffer` via the existing cookie-authed download endpoint (`GET /files/download`); the `/files/content` text endpoint is restricted to text extensions, so PDFs reuse the download path the same way images do
-- Refuses to preview files over `PDF_MAX_PREVIEW_BYTES` (100 MB, checked against both the `Content-Length` header and the actual buffer) and shows an error pointing the user at Download instead
+- Refuses to preview files over `PDF_MAX_PREVIEW_BYTES` (checked against both the `Content-Length` header and the actual buffer) and shows an error pointing the user at Download instead
 - Hands the buffer to `PdfViewer` and receives `numPages` back via the `onMetadata` callback; the title bar shows "N pages · size"
 - The modal content area uses the `file-viewer-content--pdf` variant so the viewer fills it edge-to-edge
 
@@ -3097,7 +2835,7 @@ In-modal PDF preview built directly on pdfjs-dist (no wrapper library). Receives
 **Rendering strategy** (all in `PdfViewer.tsx`):
 - Pages and thumbnails render lazily into canvases via `IntersectionObserver`s (main pages pre-render one viewport ahead, thumbnails further), so large documents don't kick off hundreds of render tasks at open
 - A second observer evicts far-offscreen main-page canvases (resetting them to placeholders) to bound bitmap memory; in-flight render tasks for a canvas are cancelled before re-render, and `RenderingCancelledException` is expected and swallowed
-- Canvas backing-store resolution follows `devicePixelRatio` capped at 2 (`getDpr()`)
+- Canvas backing-store resolution follows `devicePixelRatio` capped by `getDpr()` (the literal in that helper bounds bitmap memory on high-DPR displays)
 - The current page for the scroll-spy highlight is recomputed in a `requestAnimationFrame`-throttled scroll handler
 - Fit-to-width rescaling re-renders visible pages when the container width changes
 
@@ -3113,19 +2851,19 @@ Wrapper component that replaced the direct `<FileBrowser>` usage in `App.tsx` (a
 
 **Behavior**:
 - Card set by what is on screen (see the table at the top of this section): one card for a standalone chat or nothing, two for the drilled home composer, three for a project conversation
-- Cards are flex items weighted by their share of the cards' free space (panel height minus padding and gaps; percentages summing to 100), each with an 80px `min-height`; each gap between two cards is a pointer-event drag handle (`setPointerCapture`, `touch-action: none`, so touch drags work in the MobileShell drawer too) that moves only the boundary between its two neighbours, delta-based so pointer-down never jumps
-- The split is persisted to `localStorage` per project, one key per layout: the two-card layout keeps `quest_project_tables_split_{projectId}` (top card's percentage, default 60%); the three-card layout uses `quest_project_panel_split3_{projectId}` (JSON `[chatPercent, projectPercent]`, Tables takes the rest, default `[40, 35]`) and, until first dragged, derives its shares from the two-card key (Tables keeps its old share, the file area is split evenly); loaded shares are renormalised so none is below 5% (garbage or out-of-range values fall back to the defaults), and a split is saved only when a drag actually moved it
-- During a drag the 80px minimum is measured against the free space; a pair of cards too small for two minimums is split evenly
+- Cards are flex items weighted by their share of the cards' free space (panel height minus padding and gaps; percentages summing to 100), each with a `min-height` of `MIN_PANEL_HEIGHT`; each gap between two cards is a pointer-event drag handle (`setPointerCapture`, `touch-action: none`, so touch drags work in the MobileShell drawer too) that moves only the boundary between its two neighbours, delta-based so pointer-down never jumps
+- The split is persisted to `localStorage` per project, one key per layout (the two key-builder helpers in `RightPanel.tsx`): the two-card layout keeps the top card's percentage (default `DEFAULT_SPLIT_PERCENT`); the three-card layout keeps a JSON `[chatPercent, projectPercent]` pair (Tables takes the rest, default `DEFAULT_SPLIT3`) and, until first dragged, derives its shares from the two-card key (Tables keeps its old share, the file area is split evenly); loaded shares are renormalised so none is below `MIN_SHARE_PERCENT` (garbage or out-of-range values fall back to the defaults), and a split is saved only when a drag actually moved it
+- During a drag the `MIN_PANEL_HEIGHT` minimum is measured against the free space; a pair of cards too small for two minimums is split evenly
 - FileBrowser.css uses flex layout (dimensions controlled by RightPanel) rather than fixed width/height
 
 **Floating cards**:
-- The `.right-panel` column is a transparent gutter (padding on the top/right/bottom, none on the left) hosting each unit -- FileBrowser and ProjectTables -- as a `.right-panel-card` (raised `--surface-raised` background, `--border` edge, 12px radius, `--shadow-card`); `FileBrowser.css` / `ProjectTables.css` containers are transparent and their `h3` titles are small uppercase labels
-- Both resize affordances are invisible until needed: the left-edge width handle (`.right-panel-resize-handle`, 12px hit area straddling the panel edge) and each gap between two cards (`.right-panel-divider`, `row-resize`) draw a short pill via `::after` that fades in while the panel is hovered, turns accent on handle hover (and on the divider being dragged, `.active`), and stays visible during a drag via the `resizing-width` / `resizing-split` classes RightPanel sets on the container from a `resizing` state
+- The `.right-panel` column is a transparent gutter (padding on the top/right/bottom, none on the left) hosting each unit -- FileBrowser and ProjectTables -- as a `.right-panel-card` (raised `--surface-raised` background, `--border` edge, rounded, `--shadow-card`); `FileBrowser.css` / `ProjectTables.css` containers are transparent and their `h3` titles are small uppercase labels
+- Both resize affordances are invisible until needed: the left-edge width handle (`.right-panel-resize-handle`, a narrow hit area straddling the panel edge) and each gap between two cards (`.right-panel-divider`, `row-resize`) draw a short pill via `::after` that fades in while the panel is hovered, turns accent on handle hover (and on the divider being dragged, `.active`), and stays visible during a drag via the `resizing-width` / `resizing-split` classes RightPanel sets on the container from a `resizing` state
 
 **Horizontal resize**:
 - The panel's width is user-adjustable via the `col-resize` drag handle on its LEFT edge (`.right-panel-resize-handle`)
-- The width is persisted browser-wide (not per-conversation or per-project) in `localStorage` under the key `quest_right_panel_width`, so the chosen width applies across all conversations in that browser
-- 280px (the prior fixed width) is now both the default and the minimum; the maximum is viewport-relative (`Math.min(700, window.innerWidth - 600)`)
+- The width is persisted browser-wide (not per-conversation or per-project) in `localStorage` under `WIDTH_STORAGE_KEY`, so the chosen width applies across all conversations in that browser
+- `MIN_PANEL_WIDTH` (the prior fixed width) is both the default and the minimum; the maximum is viewport-relative (`getMaxPanelWidth()`, a helper rather than a constant so it re-evaluates against the live window width and the chat panel keeps a minimum width)
 - The stored width is read on mount only -- no cross-tab live sync
 - A window `resize` listener (removed on unmount) re-clamps an over-wide stored width down to fit smaller viewports
 
@@ -3153,10 +2891,10 @@ Full-screen modal for viewing table data, rendered via `createPortal` to `docume
 
 **Features**:
 - Sticky column headers
-- Pagination with Previous/Next buttons (page size 100, configurable via `PAGE_SIZE` constant)
+- Pagination with Previous/Next buttons (page size via the `PAGE_SIZE` constant)
 - Shows "Showing N-M of T" row range indicator
 - NULL values styled distinctly (`.cell-null` CSS class)
-- Long cell values truncated at 200 characters (`MAX_CELL_LENGTH`) with full text shown in a `title` tooltip
+- Long cell values truncated at `MAX_CELL_LENGTH` with full text shown in a `title` tooltip
 - Close via Escape key, close button, or overlay click
 
 **API**: Uses `fetchTableData()` from `frontend/src/api/projectDbApi.ts`. Response type is `TableDataResponse` in `frontend/src/api/types.ts`.
@@ -3167,7 +2905,7 @@ Both the file browser and project tables auto-refresh when the LLM (or another t
 
 1. **FileBrowser** subscribes to `persistentWebSocket.onGlobalEvent` and listens for `file_list_changed` envelopes.
    - The backend emits this event from each workspace-mutating tool handler (`write_workspace_file`, `edit_workspace_file`, `write_file`, `edit_file`, `copy_file`, `download_drive_file`, `google_export_doc`, `github_get_job_log`, `run_script`, `run_python`) -- the tool handlers on a successful write, `run_script` / `run_python` for every mounted scope after each container run whatever its exit (`_publish_mount_changes` in `tool_handlers/sandbox.py`) -- from the mutating REST routes (upload, delete, create folder) of both the conversation and the project file routes, and from the copy routes (one event per scope) for multi-tab consistency.
-   - Each card filters by its own source: a Chat Files card on `scope === "conversation"` envelopes with its `conversation_id`, a Project Files card on `scope === "project"` envelopes with its `project_id`; it debounces bursts within a 200ms window, and calls `silentRefresh()`. This refreshes the file list mid-turn after each write rather than waiting for the streaming lifecycle to end. See [Realtime Architecture](realtime.md#backend-publish-sites-per-user-globals).
+   - Each card filters by its own source: a Chat Files card on `scope === "conversation"` envelopes with its `conversation_id`, a Project Files card on `scope === "project"` envelopes with its `project_id`; it debounces bursts within the `FILE_LIST_REFRESH_DEBOUNCE_MS` window, and calls `silentRefresh()`. This refreshes the file list mid-turn after each write rather than waiting for the streaming lifecycle to end. See [Realtime Architecture](realtime.md#backend-publish-sites-per-user-globals).
 2. **ProjectTables** subscribes to `WebSocketManager.onStreamComplete` (i.e. `send_message_finished`) and calls `loadTables(true)` for a silent reload at end-of-turn.
 
 The silent refresh approach prevents UI flickering during active chat sessions by keeping the existing list visible while new data loads in the background (stale-while-revalidate pattern). Subscribing directly to realtime events instead of using context-level triggers avoids unnecessary re-renders of unrelated components.
@@ -3178,7 +2916,7 @@ The App component now uses a three-column layout:
 
 ```
 app-container
-├── Sidebar (260px fixed width)
+├── Sidebar (fixed width, `.sidebar` in Sidebar.css)
 │   ├── Brand bar (logo + name, search icon, requests inbox icon with badge)
 │   ├── Projects section (always visible)
 │   │   └── Drill-down: Routines section (always visible) + Conversations section
@@ -3220,7 +2958,7 @@ app-container
 4. Upload sent via xhrUpload() (XMLHttpRequest) for progress tracking
 5. xhr.upload.onprogress fires → uploadPercent state updates → progress bar and percentage text render
 6. POST /app/api/conversations/{id}/files/upload?path=/current with files + paths form data
-7. Backend validates file size against MAX_FILE_SIZE (200MB) and saves files to workspace
+7. Backend validates file size against MAX_FILE_SIZE and saves files to workspace
 8. useFileBrowser calls refresh()
 9. File list updated; uploadPercent reset to null
 10. If partial failures, buildUploadErrorMessage() formats error summary for display
@@ -3235,18 +2973,18 @@ app-container
 5. Returns FileWithPath[] with relative paths (e.g., "folder/sub/file.txt")
 6. useFileBrowser.uploadFilesWithPaths() sends files + paths arrays via xhrUpload()
 7. Upload progress tracked via onProgress callback → uploadPercent state → progress bar
-8. Backend validates each file against MAX_FILE_SIZE (200MB) and uses save_uploaded_file_with_path() to recreate directory structure
+8. Backend validates each file against MAX_FILE_SIZE and uses save_uploaded_file_with_path() to recreate directory structure
 9. File list refreshes showing new folder hierarchy
 ```
 
 **Viewing Text File Content**:
 ```
-1. User clicks a .md, .py, .txt, or .json file in the file list
+1. User clicks a text file in the file list
 2. FileBrowser.handleItemClick() checks isViewableFile() (matches TEXT_EXTENSIONS)
 3. Sets viewerFile state with path, name, isImage: false, and isJson flag
 4. FileViewerModal opens, calls fetchFileContent() from fileApi.ts
 5. GET /app/api/conversations/{id}/files/content?path=/file.py
-6. Backend validates path, checks extension against VIEWABLE_EXTENSIONS, checks size against MAX_VIEW_SIZE (1MB)
+6. Backend validates path, checks extension against VIEWABLE_EXTENSIONS, checks size against MAX_VIEW_SIZE
 7. Returns JSON with name, path, content, size
 8. For JSON files: parses content and renders via JsonTreeViewer (collapsible tree); falls back to <pre> on parse failure
    For other text files: renders content in scrollable <pre> element
@@ -3255,7 +2993,7 @@ app-container
 
 **Viewing Image Files**:
 ```
-1. User clicks an image file (.png, .jpg, .jpeg, .gif, .svg, .webp, .bmp, .ico, .avif)
+1. User clicks an image file
 2. FileBrowser.handleItemClick() checks isViewableFile() (matches IMAGE_EXTENSIONS)
 3. Sets viewerFile state with path, name, and isImage: true
 4. FileViewerModal opens, fetches image as blob via download endpoint
@@ -3274,7 +3012,7 @@ app-container
 3. Sets viewerFile state with path, name, and isPdf: true
 4. FileViewerModal opens, fetches the file as an ArrayBuffer via the download endpoint
 5. GET /app/api/conversations/{id}/files/download?path=/report.pdf
-6. Size checked against PDF_MAX_PREVIEW_BYTES (100 MB); oversize shows an error pointing at Download
+6. Size checked against PDF_MAX_PREVIEW_BYTES; oversize shows an error pointing at Download
 7. Buffer handed to PdfViewer, which copies it and calls pdf.js getDocument (self-hosted worker + assets)
 8. Thumbnail rail and fit-to-width pages render lazily via IntersectionObservers; scroll-spy tracks the current page
 9. PdfViewer reports numPages via onMetadata; title bar shows "N pages · size"
@@ -3287,10 +3025,10 @@ app-container
 2. FileBrowser.handleItemClick() checks isViewableFile() (matches CSV_EXTENSIONS)
 3. Sets viewerFile state with path, name, and isCsv: true
 4. FileViewerModal opens, calls fetchFileContent() (same text-content endpoint as other text files)
-5. GET /app/api/conversations/{id}/files/content?path=/data.csv (.csv is in VIEWABLE_EXTENSIONS; 1MB MAX_VIEW_SIZE cap)
+5. GET /app/api/conversations/{id}/files/content?path=/data.csv (.csv is in VIEWABLE_EXTENSIONS; MAX_VIEW_SIZE cap)
 6. parseCsv() (frontend/src/utils/csv.ts) parses the raw text client-side
 7. Renders as a styled sortable table; sticky headers cycle none->asc->desc->none on click (numeric-aware, empties last)
-8. Rows capped at 5000 (CSV_MAX_RENDER_ROWS) with a footer note; "Show raw" toggle or a parse failure falls back to <pre>
+8. Rows capped at CSV_MAX_RENDER_ROWS with a footer note; "Show raw" toggle or a parse failure falls back to <pre>
 9. User can download via header button or close via Escape / overlay click / close button
 ```
 
@@ -3329,7 +3067,7 @@ app-container
 3. PersistentWebSocket forwards the per-user global to onGlobalEvent listeners
 4. Each FileBrowser card (subscribed directly) filters by its own source: Chat Files by
    conversation_id (scope="conversation"), Project Files by project_id (scope="project")
-5. 200ms debounce coalesces bursts (e.g., ten write_workspace_file calls in one turn)
+5. The FILE_LIST_REFRESH_DEBOUNCE_MS debounce coalesces bursts (e.g., ten write_workspace_file calls in one turn)
 6. silentRefresh() called (no loading spinner shown)
 7. Files fetched in background, existing list stays visible
 8. Updated file list replaces stale data seamlessly
@@ -3347,12 +3085,12 @@ The deployment has no network egress, so CDN-served workers/cmaps/fonts would fa
 Same rationale as images: the existing cookie-authed download endpoint already serves the bytes with no backend changes. The text-content endpoint is restricted to text extensions by design.
 
 **Why lazy canvas rendering and eviction?**
-Rendering every page of a large PDF at open would spawn hundreds of render tasks and hold every page bitmap in memory. IntersectionObservers render only near-viewport pages and evict far-offscreen canvases, keeping memory bounded for arbitrarily long documents (combined with the DPR cap of 2).
+Rendering every page of a large PDF at open would spawn hundreds of render tasks and hold every page bitmap in memory. IntersectionObservers render only near-viewport pages and evict far-offscreen canvases, keeping memory bounded for arbitrarily long documents (combined with the DPR cap in `getDpr()`).
 
 ### Design Decisions (CSV Preview)
 
 **Why parse and sort CSV client-side instead of a backend query layer?**
-Unlike project tables (which sort server-side via SQLite `ORDER BY`; see [Project DB](project-db.md)), a CSV file is just bytes on disk with no backing database. The whole file already arrives via the existing text-content endpoint (capped at `MAX_VIEW_SIZE` = 1 MB), so parsing and sorting in the browser avoids any new backend endpoint or query plumbing. The 5000-row render cap (`CSV_MAX_RENDER_ROWS`) bounds DOM size for files near the size cap, with Download offered for the full file.
+Unlike project tables (which sort server-side via SQLite `ORDER BY`; see [Project DB](project-db.md)), a CSV file is just bytes on disk with no backing database. The whole file already arrives via the existing text-content endpoint (capped at `MAX_VIEW_SIZE` in `chat/file_storage.py`), so parsing and sorting in the browser avoids any new backend endpoint or query plumbing. The row render cap (`CSV_MAX_RENDER_ROWS` in `FileViewerModal.tsx`) bounds DOM size for files near the size cap, with Download offered for the full file.
 
 **Why a dependency-free parser (`frontend/src/utils/csv.ts`)?**
 The parser is RFC-4180-aware (quoted fields with embedded commas/newlines, `""` escapes, mixed line endings, ragged rows) and never throws -- on any malformed input the modal falls through to the raw `<pre>` view, the same fallback used for malformed JSON. A hand-rolled parser keeps the bundle lean and the failure mode predictable.
@@ -3374,10 +3112,7 @@ Output will be in `frontend/dist/` directory. The `run.py` script handles this a
 
 Use `run.py` to build and start the full application:
 
-```bash
-python3 run.py --dev    # Development mode (port 9000)
-python3 run.py --prod   # Production mode (port 8000)
-```
+`run.py` takes one run-mode flag (`--local` default, `--staging`, `--prod`; the port each mode listens on is set in `run.py` -- local mode reads `dev_port` from the checkout's `dev_config.json`). See [Run Modes](run-modes.md) and [Development](../setup/development.md).
 
 ## Troubleshooting
 
@@ -3408,7 +3143,7 @@ The frontend uses a layered memoization strategy to prevent unnecessary re-rende
 
 **Stable callback references** -- `App.tsx` wraps `handleConversationSelect` and `handleNewConversation` in `useCallback` so that `Sidebar` (wrapped in `React.memo`) receives stable function references and does not re-render when `AppContent` re-renders.
 
-**Isolated polling via component extraction** -- The `RequestsBadge` component in `frontend/src/components/Sidebar.tsx` encapsulates its own refresh state (event-driven via `requestEvents.ts` + 30-second polling fallback + visibility-change refresh). Because it is a separate component, count updates re-render only the badge, not the entire Sidebar. The event emitter lives outside the React context system to avoid cascading re-renders.
+**Isolated refresh via component extraction** -- The `RequestsBadge` component in `frontend/src/components/sidebar/RequestsBadge.tsx` encapsulates its own refresh state (event-driven via `requestEvents.ts` and the `request_count_changed` persistent-WS global; the former polling fallback is gone, see the RequestsBadge section). Because it is a separate component, count updates re-render only the badge, not the entire Sidebar. The event emitter lives outside the React context system to avoid cascading re-renders.
 
 ### Build Performance
 
