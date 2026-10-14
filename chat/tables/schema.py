@@ -9,17 +9,26 @@ Canonical logical values (what :func:`canonicalize` returns, what column
 defaults hold and what models see):
 
 - ``text``: the string, NFC-normalized, CRLF and lone CR turned into LF,
-  at most ``TABLE_TEXT_MAX_CHARS`` code points after normalization.
+  at most ``TABLE_TEXT_MAX_CHARS`` code points after normalization; no
+  NUL and no unpaired surrogates (neither can be stored as UTF-8 text).
 - ``number``: a decimal string with no exponent, no leading ``+``, no
   trailing fractional zeros, every zero as ``"0"``; at most
   ``TABLE_NUMBER_MAX_DIGITS`` rendered digits (a lone leading ``0`` of a
   value below 1 does not count), rounded half-even to the column
-  ``precision`` when set.
-- ``url``: the stripped ``http``/``https`` string exactly as given.
+  ``precision`` when set (a value that rounds to zero is ``"0"``).
+- ``url``: the stripped ``http``/``https`` string exactly as given; no
+  whitespace, control characters, backslashes or unpaired surrogates.
 - ``boolean``: ``True`` / ``False`` (stored as 1 / 0).
 - ``enum``: the option string; a ``multiple`` enum holds a deduplicated
   list sorted by option order (stored as compact JSON), an empty list
-  being no value.
+  being no value. A :class:`Column` holds a multi-enum default as a tuple
+  (so columns stay immutable and hashable); every value this module hands
+  out (:func:`coerce_value`, :func:`canonicalize`, :func:`apply_default`,
+  :meth:`Column.to_dict`) is a fresh list.
+
+:class:`TableValueError` codes: ``wrong_type``, ``too_long``,
+``invalid_text``, ``invalid_number``, ``too_many_digits``,
+``invalid_url``, ``unknown_option``, ``required``.
 """
 
 from collections.abc import Collection, Mapping, Sequence
@@ -90,15 +99,20 @@ class ColumnSpecError(TableSchemaError):
 class TableValueError(ValueError):
     """A cell value refused by :func:`canonicalize` / :func:`coerce_value`.
 
-    Attributes: ``code``, ``message`` (human text naming the column, usable
-    as the ``reason`` of an invalid_rows problem) and ``column`` (the
-    column name).
+    Attributes: ``code`` (one of the codes in the module docstring),
+    ``message`` (human text prefixed with the column, also ``str(err)``),
+    ``detail`` (the same reason without the column prefix, for an
+    invalid_rows problem whose ``column`` is reported separately) and
+    ``column`` (the column name).
     """
 
-    def __init__(self, code: str, message: str, *, column: str):
+    def __init__(
+        self, code: str, message: str, *, column: str, detail: str | None = None
+    ):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.detail = message if detail is None else detail
         self.column = column
 
 
@@ -126,7 +140,10 @@ _KEY_RE = re.compile(
 @dataclass(frozen=True)
 class Column:
     """One schema column. ``key`` is immutable; ``name`` is what people and
-    models use. ``default`` is a canonical logical value or None."""
+    models use. ``default`` is a canonical logical value or None, except
+    that a multi-enum default is held as a tuple; ``options`` is a tuple.
+    Both are normalized on construction (lists are copied into tuples), so
+    a column is immutable and hashable however it was built."""
 
     key: str
     name: str
@@ -139,9 +156,15 @@ class Column:
     multiple: bool = False
     precision: int | None = None
 
+    def __post_init__(self) -> None:
+        if self.options is not None and not isinstance(self.options, tuple):
+            object.__setattr__(self, "options", tuple(self.options))
+        if isinstance(self.default, list):
+            object.__setattr__(self, "default", tuple(self.default))
+
     def to_dict(self) -> dict:
         """JSON-ready dict with every field, in the stored key order."""
-        default = list(self.default) if isinstance(self.default, list) else self.default
+        default = list(self.default) if isinstance(self.default, tuple) else self.default
         return {
             "key": self.key,
             "name": self.name,
@@ -215,8 +238,8 @@ def new_column_key(existing_keys: Collection[str]) -> str:
 
 def validate_column_name(name: object) -> str:
     """Check a column name's shape (string, 1..80 chars, no leading or
-    trailing whitespace) and return it unchanged. Uniqueness is the
-    caller's job (:func:`name_taken`)."""
+    trailing whitespace, no control characters or unpaired surrogates) and
+    return it unchanged. Uniqueness is the caller's job (:func:`name_taken`)."""
     if not isinstance(name, str):
         raise ColumnSpecError(
             "invalid_name", "Column name must be a string.", field="name"
@@ -241,7 +264,49 @@ def validate_column_name(name: object) -> str:
             column=name,
             field="name",
         )
+    problem = _text_problem(name, controls=False)
+    if problem:
+        raise ColumnSpecError(
+            "invalid_name",
+            f"Column name {name!r} {problem}.",
+            column=name,
+            field="name",
+        )
     return name
+
+
+def validate_column_description(description: object, name: str | None) -> str:
+    """Check a column description (None or a string of at most
+    ``TABLE_COLUMN_DESCRIPTION_MAX_LEN`` characters after stripping; line
+    breaks and tabs allowed, NUL and unpaired surrogates not) and return it
+    stripped, None as ``""``. ``name`` labels the error."""
+    if description is None:
+        return ""
+    label = f"Column {name!r}: description" if name is not None else "Column description"
+    if not isinstance(description, str):
+        raise ColumnSpecError(
+            "invalid_description",
+            f"{label} must be a string.",
+            column=name,
+            field="description",
+        )
+    description = description.strip()
+    if len(description) > TABLE_COLUMN_DESCRIPTION_MAX_LEN:
+        raise ColumnSpecError(
+            "invalid_description",
+            f"{label} is longer than {TABLE_COLUMN_DESCRIPTION_MAX_LEN} characters.",
+            column=name,
+            field="description",
+        )
+    problem = _text_problem(description, controls=True)
+    if problem:
+        raise ColumnSpecError(
+            "invalid_description",
+            f"{label} {problem}.",
+            column=name,
+            field="description",
+        )
+    return description
 
 
 def name_taken(
@@ -260,6 +325,26 @@ def find_column(columns: Sequence[Column], name: str) -> Column | None:
     for column in columns:
         if column.name == name:
             return column
+    return None
+
+
+_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+# Unicode category Cc is exactly C0, DEL and C1.
+_CONTROL_RE = re.compile("[\x00-\x1f\x7f-\x9f]")
+
+
+def _text_problem(text: str, *, controls: bool) -> str | None:
+    """Why ``text`` cannot be stored, or None. Unpaired surrogates never can
+    (they do not encode as UTF-8). ``controls`` True allows control
+    characters except NUL (free text); False refuses every Cc character
+    (names and options)."""
+    if _SURROGATE_RE.search(text):
+        return "contains an unpaired surrogate (not valid Unicode text)"
+    if controls:
+        if "\x00" in text:
+            return "contains a NUL character"
+    elif _CONTROL_RE.search(text):
+        return "contains a control character"
     return None
 
 
@@ -305,6 +390,14 @@ def _check_options(raw: object, name: str) -> tuple[str, ...]:
                 "invalid_option",
                 f"Column {name!r}: option {option!r} must not start or end with "
                 "whitespace.",
+                name,
+                "options",
+            )
+        problem = _text_problem(option, controls=False)
+        if problem:
+            raise _spec_error(
+                "invalid_option",
+                f"Column {name!r}: option {option!r} {problem}.",
                 name,
                 "options",
             )
@@ -364,25 +457,7 @@ def _build_column(spec: Mapping, *, existing: Sequence[Column]) -> Column:
             )
         flags[field] = value
 
-    description = spec.get("description")
-    if description is None:
-        description = ""
-    if not isinstance(description, str):
-        raise _spec_error(
-            "invalid_description",
-            f"Column {name!r}: description must be a string.",
-            name,
-            "description",
-        )
-    description = description.strip()
-    if len(description) > TABLE_COLUMN_DESCRIPTION_MAX_LEN:
-        raise _spec_error(
-            "invalid_description",
-            f"Column {name!r}: description is longer than "
-            f"{TABLE_COLUMN_DESCRIPTION_MAX_LEN} characters.",
-            name,
-            "description",
-        )
+    description = validate_column_description(spec.get("description"), name)
 
     raw_options = spec.get("options")
     if col_type == "enum":
@@ -586,13 +661,45 @@ _DECIMAL_CONTEXT = Context(
 _URL_SCHEMES = ("http", "https")
 
 
+# Raw text longer than this is refused before NFC: normalization expands a
+# character at most about 3x and composition only shrinks, so no value
+# that is valid after normalization is longer than this before it.
+_TEXT_INPUT_MAX_CHARS = 4 * TABLE_TEXT_MAX_CHARS
+
+# How many options an unknown_option message lists.
+_OPTIONS_HINT_MAX = 10
+
+
 def _value_error(column: Column, code: str, detail: str) -> TableValueError:
-    return TableValueError(code, f"Column {column.name!r}: {detail}", column=column.name)
+    return TableValueError(
+        code, f"Column {column.name!r}: {detail}", column=column.name, detail=detail
+    )
+
+
+def _unknown_option(column: Column, value: str) -> TableValueError:
+    options = list(column.options or ())
+    listed = ", ".join(repr(o) for o in options[:_OPTIONS_HINT_MAX])
+    if len(options) > _OPTIONS_HINT_MAX:
+        listed += f" and {len(options) - _OPTIONS_HINT_MAX} more"
+    return _value_error(
+        column,
+        "unknown_option",
+        f"{value[:100]!r} is not one of the options (options: {listed}).",
+    )
 
 
 def _coerce_text(column: Column, value: Any) -> str:
     if not isinstance(value, str):
         raise _value_error(column, "wrong_type", "expected a string.")
+    if len(value) > _TEXT_INPUT_MAX_CHARS:
+        raise _value_error(
+            column,
+            "too_long",
+            f"text is longer than {TABLE_TEXT_MAX_CHARS} characters ({len(value)}).",
+        )
+    problem = _text_problem(value, controls=True)
+    if problem:
+        raise _value_error(column, "invalid_text", f"text {problem}.")
     text = unicodedata.normalize("NFC", value)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     if len(text) > TABLE_TEXT_MAX_CHARS:
@@ -638,19 +745,32 @@ def _coerce_number(column: Column, value: Any) -> str:
                 f"{literal[:40]!r} is not a plain decimal number (no thousands "
                 "separators, units or NaN/Infinity).",
             )
+        # Zero is zero whatever its exponent (0e999999999999999999999999).
+        if not re.split("[eE]", literal, maxsplit=1)[0].strip("+-.0"):
+            return "0"
         try:
             number = Decimal(literal)
         except InvalidOperation:  # exponent beyond what decimal represents
             raise _too_many_digits(column) from None
+        # Decimal() signals through the caller's thread context: with
+        # InvalidOperation untrapped an unrepresentable exponent comes back
+        # as NaN instead of raising.
+        if not number.is_finite():
+            raise _too_many_digits(column)
     else:
         raise _value_error(column, "wrong_type", "expected a number or numeric string.")
 
     if number.is_zero():
         return "0"
+    adjusted = number.adjusted()
+    # Below 10**-(precision+1) the value rounds to zero at ``precision``
+    # (it is under half a unit of the last place); answer before the
+    # magnitude guard, which would call 1e-39 too long.
+    if column.precision is not None and adjusted <= -(column.precision + 2):
+        return "0"
     # Magnitude guard before any arithmetic, so 1e999999999 never expands:
     # 10**38 and up has 39+ integer digits, below 10**-38 needs 39+
     # fractional digits.
-    adjusted = number.adjusted()
     if adjusted >= TABLE_NUMBER_MAX_DIGITS or adjusted < -TABLE_NUMBER_MAX_DIGITS:
         raise _too_many_digits(column)
 
@@ -688,10 +808,17 @@ def _coerce_url(column: Column, value: Any) -> str:
         raise _value_error(
             column, "too_long", f"URL is longer than {TABLE_URL_MAX_CHARS} characters."
         )
-    if any(ch <= " " or ch == "\x7f" for ch in url):
+    if any(ch <= " " or ch == "\x7f" or ch.isspace() for ch in url):
         raise _value_error(
             column, "invalid_url", "URL contains spaces or control characters."
         )
+    # urlsplit reads http://evil.com\@good.com/ as host good.com; browsers
+    # treat the backslash as a slash and go to evil.com.
+    if "\\" in url:
+        raise _value_error(column, "invalid_url", "URL contains a backslash.")
+    problem = _text_problem(url, controls=True)
+    if problem:
+        raise _value_error(column, "invalid_url", f"URL {problem}.")
     bad = _value_error(
         column, "invalid_url", "expected an http:// or https:// URL with a host."
     )
@@ -711,9 +838,7 @@ def _coerce_enum(column: Column, value: Any) -> str | list[str] | None:
         if not isinstance(value, str):
             raise _value_error(column, "wrong_type", "expected one option string.")
         if value not in options:
-            raise _value_error(
-                column, "unknown_option", f"{value[:100]!r} is not one of the options."
-            )
+            raise _unknown_option(column, value)
         return value
     if not isinstance(value, (list, tuple)):
         raise _value_error(column, "wrong_type", "expected a list of option strings.")
@@ -723,19 +848,39 @@ def _coerce_enum(column: Column, value: Any) -> str | list[str] | None:
         if not isinstance(item, str):
             raise _value_error(column, "wrong_type", "every element must be a string.")
         if item not in order:
-            raise _value_error(
-                column, "unknown_option", f"{item[:100]!r} is not one of the options."
-            )
+            raise _unknown_option(column, item)
         chosen.add(item)
     if not chosen:
         return None
     return sorted(chosen, key=order.__getitem__)
 
 
+def coerce_option(column: Column, value: Any) -> str:
+    """One option of an enum column (single or multiple), checked by exact
+    match: the operand of a multi-enum ``contains`` filter. Raises
+    :class:`TableValueError` (``wrong_type``, ``unknown_option``), or
+    ValueError when ``column`` is not an enum (a caller bug)."""
+    if column.type != "enum":
+        raise ValueError(f"coerce_option needs an enum column, not {column.type!r}.")
+    if not isinstance(value, str):
+        raise _value_error(column, "wrong_type", "expected one option string.")
+    if value not in (column.options or ()):
+        raise _unknown_option(column, value)
+    return value
+
+
 def coerce_value(column: Column, value: Any) -> Any:
     """Canonicalize ``value`` for ``column``'s type (see the module
     docstring). None stays None; ``required`` is not checked. Raises
-    :class:`TableValueError`."""
+    :class:`TableValueError`.
+
+    Filter operands reuse this for ``eq`` / ``ne`` / ``in`` and the number
+    comparisons, but not everywhere: the text/url substring ops
+    (``contains``, ``starts_with``, ``ends_with``) take plain substrings,
+    which need not be valid URLs; a multi-enum ``contains`` takes one
+    option (:func:`coerce_option`); and ``[]`` on a multi-enum column
+    coerces to None, so ``contains_any`` / ``contains_all`` must check for
+    an empty list themselves."""
     if value is None:
         return None
     if column.type == "text":
@@ -768,7 +913,7 @@ def apply_default(column: Column, present: bool, value: Any = None) -> Any:
     value. An explicit null does not pick up the default."""
     if not present and column.default is not None:
         default = column.default
-        return list(default) if isinstance(default, list) else default
+        return list(default) if isinstance(default, tuple) else default
     return canonicalize(column, value if present else None)
 
 

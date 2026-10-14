@@ -22,6 +22,7 @@ from chat.tables.schema import (
     TableValueError,
     apply_default,
     canonicalize,
+    coerce_option,
     coerce_value,
     dump_schema,
     find_column,
@@ -84,10 +85,22 @@ TEXT_ACCEPT = [
         "\n" * TABLE_TEXT_MAX_CHARS,
     ),
     ("whitespace-kept", "  x  ", "  x  "),
+    ("cr-cr-lf", "a\r\r\nb", "a\n\nb"),
+    ("controls-kept", "a\tb\x01\x7f", "a\tb\x01\x7f"),
+    ("surrogate-pair-ok", "\U0001F600", "\U0001F600"),
+    (
+        "raw-4x-bound-shrinks",
+        "e\u0301" * TABLE_TEXT_MAX_CHARS,
+        "\u00e9" * TABLE_TEXT_MAX_CHARS,
+    ),
 ]
 
 TEXT_REJECT = [
     ("too-long", "x" * (TABLE_TEXT_MAX_CHARS + 1), "too_long"),
+    ("too-long-raw", "\r\n" * (2 * TABLE_TEXT_MAX_CHARS) + "x", "too_long"),
+    ("lone-surrogate", "\ud800", "invalid_text"),
+    ("lone-surrogate-json", json.loads('"a\\udc00b"'), "invalid_text"),
+    ("nul", "a\x00b", "invalid_text"),
     ("int", 5, "wrong_type"),
     ("float", 1.5, "wrong_type"),
     ("bool", True, "wrong_type"),
@@ -128,6 +141,23 @@ NUMBER_ACCEPT = [
     ("frac-38-digits", None, "0." + "1" * 38, "0." + "1" * 38),
     ("frac-38-tiny", None, "1e-38", "0." + "0" * 37 + "1"),
     ("plus-sign", None, "+5", "5"),
+    ("zero-huge-exp", None, "0e999999999999999999999999", "0"),
+    ("neg-zero-huge-exp", None, "-0.0E+999999999999999999999999", "0"),
+    ("p2-1e-38-to-zero", 2, "1e-38", "0"),
+    ("p2-1e-39-to-zero", 2, "1e-39", "0"),
+    ("p2-tiny-exp", 2, "1e-999999999", "0"),
+    ("p2-neg-tiny", 2, "-1e-50", "0"),
+    ("p2-boundary-1e-4", 2, "0.0001", "0"),
+    ("p2-below-half", 2, "0.0049", "0"),
+    ("p2-half-even-down", 2, "0.005", "0"),
+    ("p2-above-half", 2, "0.0051", "0.01"),
+    ("p2-rounds-up", 2, "0.0099", "0.01"),
+    ("p0-boundary", 0, "0.09", "0"),
+    ("p0-half-even", 0, "0.5", "0"),
+    ("p0-above-half", 0, "0.51", "1"),
+    ("p10-boundary", 10, "1e-12", "0"),
+    ("p10-keeps", 10, "6e-11", "0.0000000001"),
+    ("p2-float-subnormal", 2, 5e-324, "0"),
     ("leading-dot", None, ".5", "0.5"),
     ("trailing-dot", None, "5.", "5"),
     ("surrounding-space", None, "  42  ", "42"),
@@ -157,7 +187,6 @@ NUMBER_REJECT = [
     ("1e-39", None, "1e-39", "too_many_digits"),
     ("huge-exp", None, "1e999999999", "too_many_digits"),
     ("huge-exp-p2", 2, "1e999999999", "too_many_digits"),
-    ("tiny-exp-p2", 2, "1e-999999999", "too_many_digits"),
     ("enormous-exp", None, "1e99999999999999999999999", "too_many_digits"),
     ("float-huge", None, 1e300, "too_many_digits"),
     ("rounds-up-to-39", 0, "9" * 38 + ".5", "too_many_digits"),
@@ -203,9 +232,22 @@ def test_number_huge_exponent_is_fast():
     start = time.perf_counter()
     for value in ("1e999999999", "1e-999999999", "-9e999999999"):
         for precision in (None, 2):
+            if precision is not None and "e-" in value:
+                assert coerce_value(num(precision), value) == "0"
+                continue
             with pytest.raises(TableValueError):
                 coerce_value(num(precision), value)
     assert time.perf_counter() - start < 1
+
+
+@pytest.mark.parametrize("precision", [None, 2], ids=["no-precision", "p2"])
+def test_number_unrepresentable_exponent_with_traps_off(precision):
+    import decimal
+
+    with decimal.localcontext() as ctx:
+        ctx.traps[decimal.InvalidOperation] = False
+        assert_value_error(num(precision), "1e99999999999999999999999", "too_many_digits")
+        assert coerce_value(num(precision), "1.5") == "1.5"
 
 
 def test_number_ignores_thread_decimal_context():
@@ -233,6 +275,13 @@ URL_ACCEPT = [
     ("ipv6", "http://[::1]:8080/x", "http://[::1]:8080/x"),
     ("port", "http://host:8080", "http://host:8080"),
     ("max-len", _MAX_URL, _MAX_URL),
+    ("port-0", "http://host:0/", "http://host:0/"),
+    ("port-65535", "https://host:65535", "https://host:65535"),
+    ("idn-host", "http://bücher.de/straße", "http://bücher.de/straße"),
+    ("percent-encoded", "https://example.com/a%20b?q=%E2%9C%93#x%2Fy",
+     "https://example.com/a%20b?q=%E2%9C%93#x%2Fy"),
+    ("stripped-unicode-space", "\u3000https://example.com/\u00a0",
+     "https://example.com/"),
 ]
 
 URL_REJECT = [
@@ -249,6 +298,14 @@ URL_REJECT = [
     ("tab", "http://example.com/\tx", "invalid_url"),
     ("bad-ipv6", "http://[::1", "invalid_url"),
     ("bad-port", "http://host:99999", "invalid_url"),
+    ("port-65536", "https://host:65536", "invalid_url"),
+    ("backslash-userinfo", "http://evil.com\\@good.com/", "invalid_url"),
+    ("backslash-path", "https://example.com/a\\b", "invalid_url"),
+    ("nbsp", "http://exa\u00a0mple.com", "invalid_url"),
+    ("ideographic-space", "https://example.com/\u3000x", "invalid_url"),
+    ("line-separator", "https://example.com/\u2028x", "invalid_url"),
+    ("lone-surrogate", "https://example.com/\ud800", "invalid_url"),
+    ("nul", "https://example.com/\x00", "invalid_url"),
     ("empty", "", "invalid_url"),
     ("whitespace-only", "   ", "invalid_url"),
     ("int", 5, "wrong_type"),
@@ -386,7 +443,9 @@ def test_apply_default_required(column, present):
 def test_apply_default_returns_a_copy_of_list_default():
     value = apply_default(MULTI_DEFAULT, False)
     value.append("B")
-    assert MULTI_DEFAULT.default == ["A"]
+    assert MULTI_DEFAULT.default == ("A",)
+    assert apply_default(MULTI_DEFAULT, False) == ["A"]
+    assert type(apply_default(MULTI_DEFAULT, False)) is list
 
 
 # --- storage --------------------------------------------------------------------
@@ -470,9 +529,15 @@ def test_new_column_key_shape():
         ("tab\t", False),
         (5, False),
         (None, False),
+        ("a\x00b", False),
+        ("a\nb", False),
+        ("a\x85b", False),
+        ("a\ud800", False),
+        ("Prix é 東京", True),
     ],
     ids=["simple", "max-len", "inner-space", "empty", "too-long", "leading-space",
-         "trailing-space", "whitespace-only", "trailing-tab", "int", "none"],
+         "trailing-space", "whitespace-only", "trailing-tab", "int", "none",
+         "nul", "inner-newline", "c1-control", "surrogate", "unicode"],
 )
 def test_validate_column_name(name, ok):
     if ok:
@@ -525,6 +590,9 @@ SPEC_ACCEPT = [
     ("description-stripped", {"name": "N", "type": "text", "description": "  hi  "},
      {"description": "hi"}),
     ("description-null", {"name": "N", "type": "text", "description": None}, {"description": ""}),
+    ("description-newlines-tabs", {"name": "N", "type": "text",
+                                   "description": "line 1\n\tline 2"},
+     {"description": "line 1\n\tline 2"}),
     ("description-max", {"name": "N", "type": "text",
                          "description": "d" * TABLE_COLUMN_DESCRIPTION_MAX_LEN},
      {"description": "d" * TABLE_COLUMN_DESCRIPTION_MAX_LEN}),
@@ -554,7 +622,7 @@ SPEC_ACCEPT = [
     ("default-enum", {"name": "N", "type": "enum", "options": ["A", "B"], "default": "B"},
      {"default": "B"}),
     ("default-multi", {"name": "N", "type": "enum", "options": ["A", "B"], "multiple": True,
-                       "default": ["B", "A"]}, {"default": ["A", "B"]}),
+                       "default": ["B", "A"]}, {"default": ("A", "B")}),
     ("default-multi-empty", {"name": "N", "type": "enum", "options": ["A"], "multiple": True,
                              "default": []}, {"default": None}),
     ("default-null", {"name": "N", "type": "text", "default": None}, {"default": None}),
@@ -618,6 +686,17 @@ SPEC_REJECT = [
     ("option-whitespace-only", {"name": "N", "type": "enum", "options": ["  "]},
      "invalid_option"),
     ("option-int", {"name": "N", "type": "enum", "options": [1]}, "invalid_option"),
+    ("option-surrogate", {"name": "N", "type": "enum", "options": ["A\ud800"]},
+     "invalid_option"),
+    ("option-tab", {"name": "N", "type": "enum", "options": ["a\tb"]}, "invalid_option"),
+    ("option-nul", {"name": "N", "type": "enum", "options": ["a\x00"]}, "invalid_option"),
+    ("description-nul", {"name": "N", "type": "text", "description": "a\x00b"},
+     "invalid_description"),
+    ("description-surrogate", {"name": "N", "type": "text", "description": "\udfff"},
+     "invalid_description"),
+    ("name-surrogate", {"name": "\ud800", "type": "text"}, "invalid_name"),
+    ("default-text-surrogate", {"name": "N", "type": "text", "default": "\ud800"},
+     "invalid_default"),
     ("option-duplicate-case", {"name": "N", "type": "enum", "options": ["Done", "done"]},
      "duplicate_option"),
     ("options-on-text", {"name": "N", "type": "text", "options": ["A"]}, "field_not_allowed"),
@@ -858,3 +937,78 @@ def test_column_spec_error_attributes():
     assert (err.code, err.message, err.column, err.field) == ("invalid_name", "bad", "X", "name")
     assert str(err) == "bad"
     assert isinstance(err, TableSchemaError) and isinstance(err, ValueError)
+
+
+def test_table_value_error_detail_has_no_column_prefix():
+    with pytest.raises(TableValueError) as info:
+        coerce_value(NUMBER, "abc")
+    err = info.value
+    assert err.message == f"Column 'Price': {err.detail}"
+    assert "Price" not in err.detail
+    plain = TableValueError("x", "msg", column="C")
+    assert plain.detail == "msg"
+
+
+def test_unknown_option_message_lists_options():
+    with pytest.raises(TableValueError) as info:
+        coerce_value(ENUM, "Z")
+    assert info.value.detail == "'Z' is not one of the options (options: 'A', 'B', 'C')."
+    many = Column(key="c_00000008", name="Many", type="enum",
+                  options=tuple(f"o{i}" for i in range(13)), multiple=True)
+    with pytest.raises(TableValueError) as info:
+        coerce_value(many, ["o1", "nope"])
+    assert info.value.code == "unknown_option"
+    assert "'o9' and 3 more" in info.value.detail
+    assert "'o10'" not in info.value.detail
+
+
+# --- coerce_option --------------------------------------------------------------
+
+
+def test_coerce_option():
+    assert coerce_option(MULTI, "B") == "B"
+    assert coerce_option(ENUM, "C") == "C"
+    assert_option_error = [(MULTI, "b", "unknown_option"), (MULTI, ["B"], "wrong_type"),
+                           (MULTI, None, "wrong_type"), (ENUM, 1, "wrong_type")]
+    for column, value, code in assert_option_error:
+        with pytest.raises(TableValueError) as info:
+            coerce_option(column, value)
+        assert info.value.code == code
+    with pytest.raises(ValueError):
+        coerce_option(TEXT, "B")
+
+
+# --- immutability ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("column", ROUND_TRIP_COLUMNS, ids=lambda c: f"{c.type}-{c.key}")
+def test_column_is_hashable(column):
+    hash(column)
+    assert column in {column}
+    assert Column.from_dict(column.to_dict()) in {column}
+
+
+def test_column_copies_input_lists():
+    options = ["A", "B"]
+    default = ["B"]
+    direct = Column(key="c_0000000a", name="L", type="enum", options=options,
+                    multiple=True, default=default)
+    parsed = parse_column_spec({"name": "P", "type": "enum", "options": options,
+                                "multiple": True, "default": default})
+    options.append("Z")
+    default.append("A")
+    for column in (direct, parsed):
+        assert column.options == ("A", "B")
+        assert column.default == ("B",)
+        assert column.to_dict()["options"] == ["A", "B"]
+        assert column.to_dict()["default"] == ["B"]
+        hash(column)
+    assert dataclasses.replace(direct, default=["A"]).default == ("A",)
+
+
+def test_from_dict_normalizes_stored_values():
+    data = dataclasses.replace(NUMBER, default="1").to_dict()
+    data.update(description=" pad ", default=1.5)
+    column = Column.from_dict(data)
+    assert column.description == "pad"
+    assert column.default == "1.5"

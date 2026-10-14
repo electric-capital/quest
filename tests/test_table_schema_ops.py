@@ -280,7 +280,7 @@ SUCCESS_CASES = [
         [],
         [{"op": "set_default", "name": "Tags", "default": ["red", "green"],
           "key": K_TAGS}],
-        lambda c: by_key(c, K_TAGS).default == ["red", "green"],
+        lambda c: by_key(c, K_TAGS).default == ("red", "green"),
         id="set_default-multi",
     ),
     pytest.param(
@@ -346,7 +346,7 @@ SUCCESS_CASES = [
           "new_option": "navy", "multiple": True}],
         None,
         lambda c: by_key(c, K_TAGS).options == ("red", "green", "navy")
-        and by_key(c, K_TAGS).default == ["red", "navy"],
+        and by_key(c, K_TAGS).default == ("red", "navy"),
         id="rename_enum_option-multi-rewrites-default",
     ),
     pytest.param(
@@ -384,7 +384,7 @@ SUCCESS_CASES = [
         [{"kind": "wrap_multi", "column_key": K_STATUS}],
         [{"op": "set_enum_multiple", "name": "Status", "multiple": True,
           "key": K_STATUS}],
-        lambda c: by_key(c, K_STATUS).multiple and by_key(c, K_STATUS).default == ["Todo"],
+        lambda c: by_key(c, K_STATUS).multiple and by_key(c, K_STATUS).default == ("Todo",),
         id="set_enum_multiple-wraps-default",
     ),
     pytest.param(
@@ -581,6 +581,19 @@ REFUSAL_CASES = [
                  "default_uses_option", id="default-uses-option-single"),
     pytest.param({"op": "remove_enum_option", "name": "Tags", "option": "blue"}, False,
                  "default_uses_option", id="default-uses-option-multi"),
+    pytest.param({"op": "set_description", "name": "Price", "description": "a\x00b"},
+                 False, "invalid_description", id="description-nul"),
+    pytest.param({"op": "set_description", "name": "Price", "description": "\ud800"},
+                 False, "invalid_description", id="description-surrogate"),
+    pytest.param({"op": "rename_column", "name": "Price", "new_name": "a\x00b"},
+                 False, "invalid_name", id="rename-column-control-char"),
+    pytest.param({"op": "rename_column", "name": "Price", "new_name": "\ud800"},
+                 False, "invalid_name", id="rename-column-surrogate"),
+    pytest.param({"op": "add_enum_option", "name": "Status", "option": "a\tb"},
+                 False, "invalid_option", id="add-option-control-char"),
+    pytest.param({"op": "rename_enum_option", "name": "Status", "option": "Doing",
+                  "new_option": "\ud800"}, False, "invalid_option",
+                 id="rename-option-surrogate"),
     pytest.param({"op": "reorder_columns", "names": NAMES[:-1]}, False,
                  "not_a_permutation", id="reorder-missing"),
     pytest.param({"op": "reorder_columns", "names": NAMES + ["Extra"]}, False,
@@ -797,7 +810,7 @@ def test_enum_ops_chain(cols):
     plan = run(cols, ops)
     status = by_key(plan.columns, K_STATUS)
     assert status.options == ("Doing", "Stuck", "Done")
-    assert status.multiple and status.default == ["Stuck"]
+    assert status.multiple and status.default == ("Stuck",)
     assert effects(plan) == [
         {"kind": "enum_rewrite", "column_key": K_STATUS, "old_option": "Blocked",
          "new_option": "Stuck", "multiple": False},
@@ -1006,3 +1019,43 @@ def test_diff_combined_from_plan(cols):
     assert diff["changed"] is True
     assert diff["before_order"] == NAMES
     assert diff["after_order"] == ["Name", "Qty", "Status", "Price", "Website", "Tags"]
+
+
+# --- Multi-enum defaults: tuple inside the column, lists outside ---------------
+
+
+def test_multi_default_backfill_and_ops_are_lists(cols):
+    plan = run(cols, [
+        {"op": "add_column", "column": {
+            "key": K_NEW, "name": "Labels", "type": "enum", "options": ["x", "y"],
+            "multiple": True, "required": True, "default": ["y", "x"]}},
+        {"op": "set_default", "name": "Tags", "default": ["green"]},
+    ])
+    backfill = next(e for e in plan.effects if isinstance(e, Backfill))
+    assert backfill.value == ["x", "y"] and isinstance(backfill.value, list)
+    assert plan.operations[0]["column"]["default"] == ["x", "y"]
+    assert plan.operations[1]["default"] == ["green"]
+    assert by_key(plan.columns, K_NEW).default == ("x", "y")
+    for column in plan.columns:
+        hash(column)
+    json.dumps(plan.operations)
+
+
+def test_multi_default_rewrite_and_wrap_keep_columns_hashable(cols):
+    plan = run(cols, [
+        {"op": "rename_enum_option", "name": "Tags", "option": "red", "new_option": "rose"},
+        {"op": "set_enum_multiple", "name": "Status", "multiple": True},
+    ])
+    tags, status = by_key(plan.columns, K_TAGS), by_key(plan.columns, K_STATUS)
+    assert tags.default == ("rose", "blue")
+    assert status.default == ("Todo",)
+    assert {tags, status}
+
+
+def test_diff_multi_default_change_is_json_lists(cols):
+    plan = run(cols, [{"op": "set_default", "name": "Tags", "default": ["green"]}])
+    diff = schema_diff(cols, plan.columns)
+    change = entry(diff, K_TAGS)["changes"]["default"]
+    assert change == {"before": ["red", "blue"], "after": ["green"]}
+    assert type(change["before"]) is list and type(change["after"]) is list
+    json.dumps(diff)

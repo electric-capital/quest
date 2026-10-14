@@ -14,7 +14,6 @@ from dataclasses import dataclass, fields, replace
 from typing import Any, ClassVar, Union
 
 from chat.tables.constants import (
-    TABLE_COLUMN_DESCRIPTION_MAX_LEN,
     TABLE_NUMBER_MAX_PRECISION,
     TABLE_SCHEMA_MAX_OPERATIONS,
     TABLE_TITLE_MAX_LEN,
@@ -30,6 +29,7 @@ from chat.tables.schema import (
     name_taken,
     new_column_key,
     parse_column_spec,
+    validate_column_description,
     validate_column_name,
 )
 
@@ -62,6 +62,8 @@ class SchemaOperationError(TableSchemaError):
 
 
 def _copy_value(value: Any) -> Any:
+    """A JSON-ready copy: a list or tuple (a multi-enum value, or a
+    :class:`Column`'s tuple-held multi default) becomes a fresh list."""
     return list(value) if isinstance(value, (list, tuple)) else value
 
 
@@ -115,7 +117,8 @@ class DropUniqueIndex(_Effect):
 
 @dataclass(frozen=True)
 class Backfill(_Effect):
-    """Set ``value`` (canonical logical value) on every existing row."""
+    """Set ``value`` (canonical logical value, a list for a multi enum) on
+    every existing row."""
 
     column_key: str
     value: Any
@@ -506,15 +509,10 @@ def _reorder_columns(b: _Batch, op: Mapping) -> dict:
 def _set_description(b: _Batch, op: Mapping) -> dict:
     column = b.column(op)
     description = b.str_param(op, "description", nullable=True)
-    description = (description or "").strip()
-    if len(description) > TABLE_COLUMN_DESCRIPTION_MAX_LEN:
-        raise b.error(
-            "invalid_description",
-            f"Operation {b.index + 1} (set_description): description is longer than "
-            f"{TABLE_COLUMN_DESCRIPTION_MAX_LEN} characters.",
-            column=column.name,
-            field="description",
-        )
+    try:
+        description = validate_column_description(description, column.name)
+    except ColumnSpecError as exc:
+        raise b.wrap(exc) from None
     b.put(replace(column, description=description))
     return {"op": "set_description", "name": column.name, "description": description,
             "key": column.key}
@@ -619,9 +617,9 @@ def _rename_enum_option(b: _Batch, op: Mapping) -> dict:
     if new == old:
         return normalized
     options = [new if o == old else o for o in column.options or ()]
-    default = column.default
+    default = column.default  # a tuple for a multi enum
     if column.multiple and default is not None:
-        default = [new if o == old else o for o in default]
+        default = tuple(new if o == old else o for o in default)
     elif default == old:
         default = new
     b.put(replace(column, options=b.check_options(column, options), default=default))
@@ -642,7 +640,7 @@ def _remove_enum_option(b: _Batch, op: Mapping) -> dict:
             field="option",
         )
     default = column.default
-    if default == option or (isinstance(default, list) and option in default):
+    if default == option or (isinstance(default, tuple) and option in default):
         raise b.error(
             "default_uses_option",
             f"Operation {b.index + 1} (remove_enum_option): the default of "
@@ -670,7 +668,7 @@ def _set_enum_multiple(b: _Batch, op: Mapping) -> dict:
             field="multiple",
         )
     if multiple and not column.multiple:
-        default = None if column.default is None else [column.default]
+        default = None if column.default is None else (column.default,)
         b.put(replace(column, multiple=True, default=default))
         b.effects.append(WrapMulti(column.key))
     return {"op": "set_enum_multiple", "name": column.name, "multiple": multiple,
