@@ -18,7 +18,8 @@ from api.tasks import get_instructions as tasks_instructions
 from api.airtable import get_instructions as airtable_instructions
 from api.ramp import get_instructions as ramp_instructions
 from chat.docs.constants import DOCS_SERVICE_KEY
-from config.feature_gates import docs_enabled_for
+from chat.tables.constants import TABLES_SERVICE_KEY
+from config.feature_gates import docs_enabled_for, tables_enabled_for
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 # (``SystemSkill.requires``) like a connected service does, but nothing is
 # "connected" -- so aggregates such as GET /me's has_any_service_connected
 # must skip them.
-PSEUDO_SERVICE_KEYS = frozenset({DOCS_SERVICE_KEY})
+PSEUDO_SERVICE_KEYS = frozenset({DOCS_SERVICE_KEY, TABLES_SERVICE_KEY})
 
 
 def get_user_connected_services(user: dict) -> dict[str, bool]:
@@ -46,8 +47,8 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
     visible after an admin disables the plugin's service server-side.
 
     The map also carries capability pseudo-keys (:data:`PSEUDO_SERVICE_KEYS`,
-    today only ``"docs"`` for the Quest Docs feature gate) that gate tools
-    and skills the same way but are not connections. A plugin with neither
+    ``"docs"`` and ``"tables"`` for the Quest Docs and Quest Tables feature
+    gates) that gate tools and skills the same way but are not connections. A plugin with neither
     a credential schema nor a user connection (a free public API, e.g.
     ``sec_edgar``) is always true here; GET /me's aggregate skips those
     ids via :func:`config.plugins.connectionless_plugin_ids`.
@@ -94,12 +95,15 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
                     )
         services[plugin.id] = connected and plugin_server_available(plugin)
 
-    # Capability pseudo-key (PSEUDO_SERVICE_KEYS), not a connector: mirrors
-    # the per-user Quest Docs feature gate so the doc tools (registry specs
-    # with ``requires_service: "docs"``) and the ``system:quest_docs``
-    # skill are hidden from prompts while the gate is closed for this user.
-    # Set after the plugin loop so the gate always decides this key.
-    services[DOCS_SERVICE_KEY] = docs_enabled_for(user.get("email") or "")
+    # Capability pseudo-keys (PSEUDO_SERVICE_KEYS), not connectors: they
+    # mirror the per-user Quest Docs / Quest Tables feature gates so the doc
+    # and table tools (registry specs with ``requires_service: "docs"`` /
+    # ``"tables"``) and their system skills are hidden from prompts while
+    # the gate is closed for this user. Set after the plugin loop so the
+    # gate always decides these keys.
+    email = user.get("email") or ""
+    services[DOCS_SERVICE_KEY] = docs_enabled_for(email)
+    services[TABLES_SERVICE_KEY] = tables_enabled_for(email)
     return services
 
 

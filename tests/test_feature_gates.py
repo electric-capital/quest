@@ -152,6 +152,16 @@ class TestPerUserAccess:
         persisted = json.loads(gates_file.read_text())
         assert persisted[fg.FEATURE_DOCS] is True
 
+    def test_tables_gate_registered_per_user(self, gates_file):
+        assert fg.FEATURE_TABLES in fg.KNOWN_FEATURES
+        assert fg.FEATURE_TABLES in fg.PER_USER_ACCESS_FEATURES
+        assert fg.FEATURE_TABLES in fg.FEATURE_LABELS
+        assert not fg.is_feature_enabled(fg.FEATURE_TABLES)
+        fg.set_feature_enabled(fg.FEATURE_TABLES, True)
+        fg.set_feature_allowed_users(fg.FEATURE_TABLES, ["alice@example.com"])
+        assert fg.tables_enabled_for("ALICE@example.com")
+        assert not fg.tables_enabled_for("eve@example.com")
+
     def test_non_per_user_feature_rejects_list(self, gates_file):
         assert fg.FEATURE_USER_SUBAGENTS not in fg.PER_USER_ACCESS_FEATURES
         with pytest.raises(ValueError, match="per-user access"):

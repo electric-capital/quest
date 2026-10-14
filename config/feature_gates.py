@@ -89,6 +89,21 @@ FEATURE_VOICE_INPUT = "voice_input"
 # to specific users (PER_USER_ACCESS_FEATURES).
 FEATURE_DOCS = "docs"
 
+# Quest Tables (see spec issue #110): user- and project-owned typed tables
+# stored one SQLite file per table (``<data_dir>/tables/<id>/table.db``,
+# resolved only via ``ChatStorage.get_table_dir``) that conversations read
+# and write only through the dedicated table tools. Schema changes
+# (create_table / change_table_schema) always need a user-approved action
+# request or the UI; no model-facing tool mutates a schema. Closed for a
+# user = the table tools and the system skill are hidden from the prompt
+# (connected-services pseudo-key "tables"), every table tool returns the
+# structured ``tables_disabled`` error before touching the DB, the
+# /app/api/tables routes 403 and the sidebar section is hidden. Nothing is
+# deleted: the rows and files are preserved, so reopening the gate restores
+# them. Access can be restricted to specific users
+# (PER_USER_ACCESS_FEATURES).
+FEATURE_TABLES = "tables"
+
 # All admin-gateable features. Extend this tuple (and FEATURE_LABELS) when a
 # new optional feature gets a gate. Every feature is off until an admin
 # enables it.
@@ -98,6 +113,7 @@ KNOWN_FEATURES = (
     FEATURE_GUIDES,
     FEATURE_VOICE_INPUT,
     FEATURE_DOCS,
+    FEATURE_TABLES,
 )
 
 # Features whose gate can be narrowed to specific users via
@@ -109,6 +125,7 @@ PER_USER_ACCESS_FEATURES = frozenset({
     FEATURE_GUIDES,
     FEATURE_VOICE_INPUT,
     FEATURE_DOCS,
+    FEATURE_TABLES,
 })
 
 # Human text for the admin Settings > Features section, keyed by feature.
@@ -168,6 +185,17 @@ FEATURE_LABELS: dict[str, dict[str, str]] = {
             "is deleted."
         ),
     },
+    FEATURE_TABLES: {
+        "label": "Quest Tables",
+        "description": (
+            "Lets users keep typed tables inside Quest that conversations "
+            "read and write through dedicated table tools (list, query, "
+            "add, update and delete rows). Schema changes, including "
+            "creating a table, always need the user's approval. Access can "
+            "be granted to all users or only to specific users. Turning it "
+            "off hides the tools and the Tables API; nothing is deleted."
+        ),
+    },
 }
 
 
@@ -179,6 +207,16 @@ def docs_enabled_for(user_email: str) -> bool:
     the write_doc action request, the connected-services prompt gating).
     """
     return is_feature_enabled_for_user(FEATURE_DOCS, user_email)
+
+
+def tables_enabled_for(user_email: str) -> bool:
+    """Whether Quest Tables is on for this user.
+
+    Convenience wrapper over :func:`is_feature_enabled_for_user` for the
+    table enforcement points (the table tools and routes, the table action
+    requests, the connected-services prompt gating).
+    """
+    return is_feature_enabled_for_user(FEATURE_TABLES, user_email)
 
 
 def guides_enabled_for(user_email: str) -> bool:

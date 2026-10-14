@@ -1137,3 +1137,16 @@ def test_core_auth_namespace_plugin_ids_are_reserved(pid):
     assert plugin_auth_prefix(pid) in ("/auth/connections", "/auth/service-key")
     with pytest.raises(ValueError, match="reserved"):
         validate_plugin(QuestPlugin(id=pid, label="X"), set())
+
+
+@pytest.mark.parametrize("pid", ["docs", "tables"])
+def test_pseudo_service_key_plugin_ids_are_reserved(pid):
+    """The connected-services map carries feature-gate pseudo-keys; a plugin
+    of that id would have its connected state overwritten by the gate."""
+    from api.instructions import PSEUDO_SERVICE_KEYS
+    from config.plugins import validate_plugin
+    from config.plugin_types import QuestPlugin
+
+    assert pid in PSEUDO_SERVICE_KEYS
+    with pytest.raises(ValueError, match="pseudo-key"):
+        validate_plugin(QuestPlugin(id=pid, label="X"), set())

@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Optional
 
-from config.paths import CHATS_DIR, DOCS_DIR, PROJECTS_DIR
+from config.paths import CHATS_DIR, DOCS_DIR, PROJECTS_DIR, TABLES_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -149,12 +149,13 @@ def _publish_appended_to_bus(
 
 
 class InvalidStorageIdError(ValueError):
-    """A conversation, project or doc id cannot be turned into an on-disk path.
+    """A conversation, project, doc or table id cannot be turned into an on-disk path.
 
     Raised by the central path resolvers on ``ChatStorage`` for ids that are
     not a single canonical path segment (empty, ``.``, ``..``, containing a
     separator, absolute) or whose resolved directory would not live under
-    ``CHATS_DIR`` / ``PROJECTS_DIR`` / ``DOCS_DIR`` (e.g. a planted symlink). Subclasses
+    ``CHATS_DIR`` / ``PROJECTS_DIR`` / ``DOCS_DIR`` / ``TABLES_DIR`` (e.g. a planted
+    symlink). Subclasses
     ``ValueError`` so callers that already treat a bad id as a cache miss or
     a 4xx keep working.
     """
@@ -218,11 +219,13 @@ class ChatStorage:
     (data/chats/{conversation_id}/) makes the user dimension unnecessary.
     Ownership is authoritative in the conversations SQLite table.
 
-    ``get_conversation_dir`` / ``get_project_dir`` / ``get_doc_dir`` (and the
+    ``get_conversation_dir`` / ``get_project_dir`` / ``get_doc_dir`` /
+    ``get_table_dir`` (and the
     helpers built on them) are the ONLY places that turn an id into a
     filesystem path. They validate the id and containment-check the result,
     so every caller is safe by construction; production code must not join
-    ``CHATS_DIR`` / ``PROJECTS_DIR`` / ``DOCS_DIR`` with an id itself.
+    ``CHATS_DIR`` / ``PROJECTS_DIR`` / ``DOCS_DIR`` / ``TABLES_DIR`` with an id
+    itself.
     Ownership is deliberately NOT
     checked here -- schedulers, migrations and cross-user subagents resolve
     paths without a "current user"; HTTP routes go through
@@ -315,6 +318,19 @@ class ChatStorage:
         """
         _validate_id_segment(doc_id, "doc")
         return _resolve_contained_dir(DOCS_DIR, doc_id)
+
+    @staticmethod
+    def get_table_dir(table_id: str) -> Path:
+        """Return ``TABLES_DIR / table_id`` for a canonical, contained id.
+
+        The sole id-to-path resolver for Quest Tables (``table.db`` lives
+        under it). The directory is NOT created here.
+
+        Raises:
+            InvalidStorageIdError: non-canonical id or path outside TABLES_DIR.
+        """
+        _validate_id_segment(table_id, "table")
+        return _resolve_contained_dir(TABLES_DIR, table_id)
 
     @staticmethod
     def _get_chat_history_file(conversation_id: str) -> Path:

@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import config.feature_gates as fg
 from chat.docs.constants import DOCS_SERVICE_KEY
+from chat.tables.constants import TABLES_SERVICE_KEY
 
 DOC_TOOLS = (
     "list_docs", "search_docs", "read_doc", "create_doc", "edit_doc",
@@ -81,8 +82,9 @@ def _connected(user):
 class TestConnectedServicesDocsKey:
     def test_pseudo_key_constant(self):
         from api.instructions import PSEUDO_SERVICE_KEYS
-        assert PSEUDO_SERVICE_KEYS == frozenset({DOCS_SERVICE_KEY})
+        assert PSEUDO_SERVICE_KEYS == frozenset({DOCS_SERVICE_KEY, TABLES_SERVICE_KEY})
         assert DOCS_SERVICE_KEY == "docs"
+        assert TABLES_SERVICE_KEY == "tables"
 
     def test_follows_gate(self, gates_file, no_plugins):
         user = {"email": "u@example.com"}
@@ -106,6 +108,42 @@ class TestConnectedServicesDocsKey:
         assert services["airtable"] is True
         assert services["google_services"] is False
         assert services[DOCS_SERVICE_KEY] is True
+
+
+class TestConnectedServicesTablesKey:
+    def test_follows_gate(self, gates_file, no_plugins):
+        user = {"email": "u@example.com"}
+        assert _connected(user)[TABLES_SERVICE_KEY] is False
+        fg.set_feature_enabled(fg.FEATURE_TABLES, True)
+        assert _connected(user)[TABLES_SERVICE_KEY] is True
+        fg.set_feature_enabled(fg.FEATURE_TABLES, False)
+        assert _connected(user)[TABLES_SERVICE_KEY] is False
+
+    def test_follows_allowed_users(self, gates_file, no_plugins):
+        fg.set_feature_enabled(fg.FEATURE_TABLES, True)
+        fg.set_feature_allowed_users(fg.FEATURE_TABLES, ["ada@example.com"])
+        assert _connected({"email": "Ada@Example.com"})[TABLES_SERVICE_KEY] is True
+        assert _connected({"email": "bob@example.com"})[TABLES_SERVICE_KEY] is False
+        assert _connected({})[TABLES_SERVICE_KEY] is False
+
+    def test_independent_of_docs_gate(self, gates_file, no_plugins):
+        user = {"email": "u@example.com"}
+        fg.set_feature_enabled(fg.FEATURE_DOCS, True)
+        services = _connected(user)
+        assert services[DOCS_SERVICE_KEY] is True
+        assert services[TABLES_SERVICE_KEY] is False
+        fg.set_feature_enabled(fg.FEATURE_DOCS, False)
+        fg.set_feature_enabled(fg.FEATURE_TABLES, True)
+        services = _connected(user)
+        assert services[DOCS_SERVICE_KEY] is False
+        assert services[TABLES_SERVICE_KEY] is True
+
+    def test_tables_alone_is_not_a_connected_service(self, gates_file, no_plugins):
+        import chat.routes.user as user_routes
+        fg.set_feature_enabled(fg.FEATURE_TABLES, True)
+        user = {"email": "u@example.com", "name": "U"}
+        info = _run(user_routes.get_current_user_info(user=user))
+        assert info["has_any_service_connected"] is False
 
 
 class TestMeAggregate:
