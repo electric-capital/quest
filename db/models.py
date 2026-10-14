@@ -1614,6 +1614,137 @@ class DocShare(Base):
     )
 
 
+class DataTable(Base):
+    """A Quest Table: metadata row for a typed table stored on disk.
+
+    The rows and the change log live in ``<data_dir>/tables/<id>/table.db``
+    (resolved only via ``ChatStorage.get_table_dir``). Rows are read and
+    written through db/table_store.py, which also enforces case-insensitive
+    title uniqueness per ``(owner_id, project_id, mode)`` exactly as for
+    :class:`Doc` (a plain unique index cannot, because the NULL
+    ``project_id`` case never collides in SQLite). The SQL table is
+    ``data_tables`` because ``tables`` reads badly next to SQLAlchemy
+    metadata.
+    """
+
+    __tablename__ = "data_tables"
+    __table_args__ = (
+        sa.Index("ix_data_tables_owner_id", "owner_id"),
+        sa.Index("ix_data_tables_project_id", "project_id"),
+        sa.Index("ix_data_tables_updated_at", "updated_at"),
+    )
+
+    # UUID string primary key
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+
+    # Owner (project tables are owned by the project owner)
+    owner_id: Mapped[int] = mapped_column(
+        sa.Integer,
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # NULL = user table; non-NULL = project table (deleted with the project)
+    project_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        sa.ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=True,
+        default=None,
+    )
+
+    # 1..200 chars, 0..500 chars (enforced in db/table_store.py)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
+
+    # "private" | "public" (chat/tables/constants.py TABLE_MODES). Project
+    # tables copy the project's immutable ``public`` flag at creation; user
+    # tables (NULL project_id) are always "private".
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    # Ordered column list (DB column ``schema``; the attribute is renamed so
+    # it never reads as a SQL schema name). ``schema_version`` is bumped on
+    # every schema change and is the concurrency token for schema edits.
+    table_schema: Mapped[list] = mapped_column("schema", JSON, nullable=False)
+    schema_version: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=1, server_default="1"
+    )
+
+    # Cached row count of table.db, maintained on every row write.
+    row_count: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+
+    # Owner's switch, as docs.require_approval.
+    require_approval: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
+
+    # "conversation:<id>" | "ui:<user_id>" | "action_request:<id>" |
+    # "revert:<change_id>"
+    last_write_source: Mapped[Optional[str]] = mapped_column(
+        String(80), nullable=True, default=None
+    )
+
+    # Timestamps; updated_at doubles as the metadata concurrency token.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class DataTableShare(Base):
+    """A read or write grant on a Quest Table to one user, or to everyone.
+
+    ``user_id`` NULL means everyone on the install; the partial unique
+    index plus db/table_store.py keep at most one everyone row per table
+    (same rule as :class:`DocShare`). Cascade-deletes with the table or the
+    recipient user.
+    """
+
+    __tablename__ = "data_table_shares"
+    __table_args__ = (
+        sa.Index(
+            "ix_data_table_shares_table_id_user_id", "table_id", "user_id",
+            unique=True,
+        ),
+        sa.Index("ix_data_table_shares_user_id", "user_id"),
+        # At most one "everyone" (user_id IS NULL) row per table; SQLite
+        # treats NULLs as distinct in the composite unique index above.
+        sa.Index(
+            "ix_data_table_shares_everyone", "table_id", unique=True,
+            sqlite_where=sa.text("user_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    table_id: Mapped[str] = mapped_column(
+        String(36),
+        sa.ForeignKey("data_tables.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # NULL = everyone on the install
+    user_id: Mapped[Optional[int]] = mapped_column(
+        sa.Integer,
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+
+    # "read" | "write" (chat/tables/constants.py TABLE_SHARE_PERMISSIONS)
+    permission: Mapped[str] = mapped_column(String(8), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+
 class UserSkillAutoload(Base):
     """Junction table tracking which skills a user has auto-loaded.
 
