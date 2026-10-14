@@ -58,7 +58,7 @@ A `Column` is frozen (tuples inside, fresh lists handed out). Its `key` is immut
 
 **Column specs** go through `parse_column_spec()` (one column joining existing ones) or `parse_columns()` (a new table's full list). Each rule has its own `ColumnSpecError` code:
 
-- Names: `validate_column_name()` checks the shape; uniqueness is case-insensitive (`name_taken()`), while operations address a column by its exact name (`find_column()`).
+- Names: `validate_column_name()` checks the shape (no control characters, format characters such as zero-width or bidi controls, or line and paragraph separators; the same rule covers enum options and table titles); uniqueness is case-insensitive (`name_taken()`), while operations address a column by its exact name (`find_column()`).
 - Enum options: a bounded, non-empty list of bounded strings with no surrounding whitespace or control characters, unique case-insensitively. `options` and `multiple` are refused on other types.
 - `unique` is allowed only on the types in `TABLE_UNIQUE_COLUMN_TYPES`; `precision` only on numbers, bounded by `TABLE_NUMBER_MAX_PRECISION`.
 - A `default` is canonicalized with the column's own value rules, so a stored default is always a canonical value.
@@ -69,7 +69,7 @@ Every cell value has one canonical logical form, which defaults hold, models see
 
 - **text**: NFC-normalized, CRLF and lone CR turned into LF, capped after normalization. NUL and unpaired surrogates are refused, since neither can be stored as UTF-8 text.
 - **number**: a decimal string with no exponent, no leading `+`, no trailing fractional zeros, every zero as `"0"`. Input is a JSON number or a plain decimal string (an exponent is allowed; separators, units, NaN and Infinity are not); a float goes through its `repr`, so `0.1` stays `0.1`. `TABLE_NUMBER_MAX_DIGITS` counts the digits of the rendered string. A column `precision` rounds half-even, and a value below half a unit of the last place becomes `"0"`.
-- **url**: the stripped string as given, `http` or `https` with a host and a valid port. Internal whitespace, control characters and backslashes are refused; with a backslash the parser and browsers disagree on the host.
+- **url**: the stripped string as given, `http` or `https` with a host and a valid port. Internal whitespace, control characters (C1 included), format characters, line and paragraph separators and backslashes are refused; with a backslash the parser and browsers disagree on the host.
 - **boolean**: JSON `true` or `false` only.
 - **enum**: one option by exact match. A `multiple` enum takes a list, deduplicated and sorted by option order; an empty list is no value.
 
@@ -90,7 +90,7 @@ The `table.db` cell form differs from the logical form only for booleans (1 / 0)
 
 **Effects** are frozen dataclasses with a `kind` and `to_dict()`; the table storage layer executes them in order within one change: column DDL (`AddColumnDDL`, `DropColumnDDL`), `CaptureDroppedValues` (every value of a dropped column saved into the change's before-image, always ahead of its drop), unique index creation and removal, `Backfill` (a new required column's default written to every row), `EnumRewrite` (an option rename applied to every cell, inside the JSON list for a multi enum), `WrapMulti` (single-enum cells wrapped into lists), and `ViolationCheck`. A violation check refuses the whole change with `rows_violate`, naming at most `TABLE_ROWS_VIOLATE_MAX_IDS` rows, when existing rows break a `required`, `unique` or removed-option rule; a unique check always precedes its index creation.
 
-After the last operation, checks and backfills that the rest of the batch made moot are dropped, judged against the final columns: a `required` or `unique` check whose column is gone or no longer has the flag, and an option check or backfill whose column is gone. DDL, rewrites, wraps and captures are always kept.
+After the last operation, checks and backfills that the rest of the batch made moot are dropped, judged against the final columns: a `required` or `unique` check whose column is gone or no longer has the flag, and an option check or backfill whose column is gone. A dropped unique check takes with it the index creation its own operation emitted and the first later index removal for that column, since building that transient index unchecked over duplicate values would fail; removing an index that existed before the batch is kept. Column DDL, rewrites, wraps and captures are always kept.
 
 **Refusals** carry a code (see the handlers). The structural ones: a column's type never changes (`type_change_not_supported`, for the reserved type-change operation names and for any operation with a `type` field), the last column and the last enum option cannot be removed, an option the default uses cannot be removed, and a multi enum never becomes single.
 

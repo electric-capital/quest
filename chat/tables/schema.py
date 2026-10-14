@@ -17,7 +17,9 @@ defaults hold and what models see):
   value below 1 does not count), rounded half-even to the column
   ``precision`` when set (a value that rounds to zero is ``"0"``).
 - ``url``: the stripped ``http``/``https`` string exactly as given; no
-  whitespace, control characters, backslashes or unpaired surrogates.
+  whitespace, control characters (C0, DEL, C1), format characters
+  (category Cf), line or paragraph separators, backslashes or unpaired
+  surrogates.
 - ``boolean``: ``True`` / ``False`` (stored as 1 / 0).
 - ``enum``: the option string; a ``multiple`` enum holds a deduplicated
   list sorted by option order (stored as compact JSON), an empty list
@@ -266,8 +268,9 @@ def new_column_key(existing_keys: Collection[str]) -> str:
 
 def validate_column_name(name: object) -> str:
     """Check a column name's shape (string, 1..80 chars, no leading or
-    trailing whitespace, no control characters or unpaired surrogates) and
-    return it unchanged. Uniqueness is the caller's job (:func:`name_taken`)."""
+    trailing whitespace, no control characters, format characters (category
+    Cf, e.g. zero-width and bidi controls), line or paragraph separators or
+    unpaired surrogates) and return it unchanged. Uniqueness is the caller's job (:func:`name_taken`)."""
     if not isinstance(name, str):
         raise ColumnSpecError(
             "invalid_name", "Column name must be a string.", field="name"
@@ -342,7 +345,8 @@ def validate_column_description(description: object, name: str | None) -> str:
 def validate_table_title(title: object) -> str:
     """Check a table title (a string of 1..``TABLE_TITLE_MAX_LEN``
     characters after stripping, no control characters, line breaks
-    included, and no unpaired surrogates) and return it stripped. Raises
+    included, no format characters (category Cf), line or paragraph
+    separators or unpaired surrogates) and return it stripped. Raises
     :class:`TableSchemaError` with code ``invalid_title``."""
     if not isinstance(title, str):
         raise TableSchemaError(
@@ -385,20 +389,33 @@ def find_column(columns: Sequence[Column], name: str) -> Column | None:
 _SURROGATE_RE = re.compile("[\ud800-\udfff]")
 # Unicode category Cc is exactly C0, DEL and C1.
 _CONTROL_RE = re.compile("[\x00-\x1f\x7f-\x9f]")
+# Categories refused in names, options, titles and URLs besides Cc: Cf
+# (zero-width and bidi format characters such as U+200B and U+202E), Zl
+# and Zp (U+2028 and U+2029). They are invisible or reorder text, so two
+# names that look alike could differ, or a URL could hide its real host.
+_INVISIBLE_CATEGORIES = frozenset(("Cf", "Zl", "Zp"))
 
 
 def _text_problem(text: str, *, controls: bool) -> str | None:
     """Why ``text`` cannot be stored, or None. Unpaired surrogates never can
-    (they do not encode as UTF-8). ``controls`` True allows control
-    characters except NUL (free text); False refuses every Cc character
-    (names and options)."""
+    (they do not encode as UTF-8). ``controls`` True allows control and
+    format characters except NUL (free text); False refuses every Cc
+    character and every Cf, Zl and Zp character (names, options, titles
+    and URLs)."""
     if _SURROGATE_RE.search(text):
         return "contains an unpaired surrogate (not valid Unicode text)"
     if controls:
         if "\x00" in text:
             return "contains a NUL character"
-    elif _CONTROL_RE.search(text):
+        return None
+    if _CONTROL_RE.search(text):
         return "contains a control character"
+    for ch in text:
+        if unicodedata.category(ch) in _INVISIBLE_CATEGORIES:
+            return (
+                f"contains an invisible format or separator character "
+                f"(U+{ord(ch):04X})"
+            )
     return None
 
 
@@ -892,7 +909,7 @@ def _coerce_url(column: Column, value: Any) -> str:
     # treat the backslash as a slash and go to evil.com.
     if "\\" in url:
         raise _value_error(column, "invalid_url", "URL contains a backslash.")
-    problem = _text_problem(url, controls=True)
+    problem = _text_problem(url, controls=False)
     if problem:
         raise _value_error(column, "invalid_url", f"URL {problem}.")
     bad = _value_error(

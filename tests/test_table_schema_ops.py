@@ -12,7 +12,13 @@ from chat.tables.constants import (
     TABLE_SCHEMA_MAX_OPERATIONS,
     TABLE_TITLE_MAX_LEN,
 )
-from chat.tables.schema import Column, TableSchemaError, new_column_key, parse_columns
+from chat.tables.schema import (
+    Column,
+    TableSchemaError,
+    dump_schema,
+    new_column_key,
+    parse_columns,
+)
 from chat.tables.schema_ops import (
     AddColumnDDL,
     Backfill,
@@ -100,6 +106,29 @@ def test_effect_to_dict_shapes():
         "option": None, "multiple": False}
     with pytest.raises(dataclasses.FrozenInstanceError):
         AddColumnDDL("c_1").column_key = "x"  # type: ignore[misc]
+
+
+def test_every_effect_type_hashes():
+    instances = [
+        AddColumnDDL("c_1"), DropColumnDDL("c_1"), CaptureDroppedValues("c_1"),
+        CreateUniqueIndex("c_1"), DropUniqueIndex("c_1"), Backfill("c_1", "x"),
+        Backfill("c_1", ["a", "b"]), EnumRewrite("c_1", "a", "b", True),
+        ViolationCheck("enum_option", "c_1", option="a", multiple=True), WrapMulti("c_1"),
+    ]
+    assert {type(e) for e in instances} == set(schema_ops.SchemaSideEffect.__args__)
+    for effect in instances:
+        hash(effect)
+    assert Backfill("c_1", ["a"]) == Backfill("c_1", ("a",))
+    assert Backfill("c_1", ["a"]).to_dict()["value"] == ["a"]
+
+
+def test_multi_enum_backfill_hashes(cols):
+    plan = run(cols, [{"op": "add_column", "column": {
+        "name": "M", "type": "enum", "options": ["A", "B"], "multiple": True,
+        "required": True, "default": ["B", "A"]}}])
+    assert len(set(plan.effects)) == len(plan.effects)
+    assert effects(plan)[1] == {"kind": "backfill", "column_key": K_NEW,
+                                "value": ["A", "B"]}
 
 
 # --- Single operations: success ----------------------------------------------
@@ -799,13 +828,11 @@ def test_drop_column_added_in_same_batch(cols):
     ]
     plan = run(cols, ops)
     assert plan.columns == cols
-    # The unique check on a column the batch drops again is moot; the DDL
-    # pairs stay.
+    # The unique check on a column the batch drops again is moot, and so
+    # is the transient index it guarded; the column DDL pair stays.
     assert effects(plan) == [
         {"kind": "add_column", "column_key": K_NEW},
-        {"kind": "create_unique_index", "column_key": K_NEW},
         {"kind": "capture_dropped", "column_key": K_NEW},
-        {"kind": "drop_unique_index", "column_key": K_NEW},
         {"kind": "drop_column", "column_key": K_NEW},
     ]
 
@@ -1061,7 +1088,7 @@ def test_diff_combined_from_plan(cols):
 # --- Multi-enum defaults: tuple inside the column, lists outside ---------------
 
 
-def test_multi_default_backfill_and_ops_are_lists(cols):
+def test_multi_default_backfill_is_tuple_inside_list_outside(cols):
     plan = run(cols, [
         {"op": "add_column", "column": {
             "name": "Labels", "type": "enum", "options": ["x", "y"],
@@ -1069,7 +1096,9 @@ def test_multi_default_backfill_and_ops_are_lists(cols):
         {"op": "set_default", "name": "Tags", "default": ["green"]},
     ])
     backfill = next(e for e in plan.effects if isinstance(e, Backfill))
-    assert backfill.value == ["x", "y"] and isinstance(backfill.value, list)
+    assert backfill.value == ("x", "y")
+    hash(backfill)
+    assert backfill.to_dict()["value"] == ["x", "y"]
     assert plan.operations[0]["column"]["default"] == ["x", "y"]
     assert plan.operations[1]["default"] == ["green"]
     assert by_key(plan.columns, K_NEW).default == ("x", "y")
@@ -1157,12 +1186,52 @@ def test_base_ops_are_valid(cols):
         run(cols, [{"op": op, **params}])
 
 
+def _assert_utf8_json(value):
+    json.dumps(value, ensure_ascii=False).encode("utf-8")
+
+
 def _assert_only_operation_errors(columns, ops, table_empty=False):
     try:
-        run(columns, ops, table_empty)
+        plan = run(columns, ops, table_empty)
     except SchemaOperationError as exc:
         assert len(exc.message) < 1000
-    # Anything else propagates and fails the test.
+        return
+    # Anything else propagates and fails the test. A success must be
+    # storable as UTF-8 JSON (no surrogate or tuple leaks).
+    _assert_utf8_json(plan.operations)
+    _assert_utf8_json([e.to_dict() for e in plan.effects])
+    _assert_utf8_json(dump_schema(plan.columns))
+
+
+@pytest.mark.parametrize("value", ["\ud800", "a\udc00b", "a\x00b"],
+                         ids=["lone-high", "lone-low", "nul"])
+@pytest.mark.parametrize(
+    "op, code",
+    [
+        pytest.param({"op": "drop_column", "name": None}, "unknown_column", id="name"),
+        pytest.param({"op": "rename_column", "name": "Link", "new_name": None},
+                     "invalid_name", id="new_name"),
+        pytest.param({"op": "add_column", "column": {"name": None, "type": "text"}},
+                     "invalid_name", id="column.name"),
+        pytest.param({"op": "add_enum_option", "name": "Status", "option": None},
+                     "invalid_option", id="add-option"),
+        pytest.param({"op": "remove_enum_option", "name": "Status", "option": None},
+                     "unknown_option", id="option"),
+        pytest.param({"op": "rename_enum_option", "name": "Status", "option": "Todo",
+                      "new_option": None}, "invalid_option", id="new_option"),
+        pytest.param({"op": "rename_table", "title": None}, "invalid_title", id="title"),
+    ],
+)
+def test_unstorable_strings_refused(cols, op, code, value):
+    op = copy.deepcopy(op)
+    if "column" in op:
+        op["column"]["name"] = value
+    else:
+        field = next(k for k, v in op.items() if v is None)
+        op[field] = value
+    with pytest.raises(SchemaOperationError) as info:
+        run(cols, [op])
+    assert info.value.code == code
 
 
 @pytest.mark.parametrize("value", ODD_VALUES)
@@ -1259,19 +1328,76 @@ def test_required_check_kept_through_rename(cols):
     assert plan.effects == [ViolationCheck("required", K_LINK)]
 
 
-def test_unique_check_dropped_when_unset_again(cols):
+def test_unique_set_then_unset_leaves_no_effects(cols):
+    # The transient index goes with its pruned check: building it unchecked
+    # over duplicate values would fail in storage.
     plan = run(cols, [{"op": "set_unique", "name": "Link", "unique": True},
                       {"op": "set_unique", "name": "Link", "unique": False}])
-    assert plan.effects == [CreateUniqueIndex(K_LINK), DropUniqueIndex(K_LINK)]
+    assert plan.effects == []
+
+
+def test_unique_set_then_drop_column(cols):
+    plan = run(cols, [{"op": "set_unique", "name": "Link", "unique": True},
+                      {"op": "drop_column", "name": "Link"}])
+    assert plan.effects == [CaptureDroppedValues(K_LINK), DropColumnDDL(K_LINK)]
+
+
+@pytest.mark.parametrize("table_empty", [False, True])
+def test_add_unique_then_unset(cols, table_empty):
+    plan = run(cols, [{"op": "add_column", "column": {"name": "C", "type": "text",
+                                                      "required": True, "unique": True,
+                                                      "default": "x"}},
+                      {"op": "set_unique", "name": "C", "unique": False}], table_empty)
+    expected = [AddColumnDDL(K_NEW)] if table_empty else [AddColumnDDL(K_NEW),
+                                                          Backfill(K_NEW, "x")]
+    assert plan.effects == expected
+
+
+def test_unique_unset_then_set_on_unique_column(cols):
+    # The pre-existing index is dropped and rebuilt; the check stays because
+    # the column ends unique.
+    plan = run(cols, [{"op": "set_unique", "name": "Name", "unique": False},
+                      {"op": "set_unique", "name": "Name", "unique": True}])
+    assert plan.effects == [DropUniqueIndex(K_NAME), ViolationCheck("unique", K_NAME),
+                            CreateUniqueIndex(K_NAME)]
+
+
+def test_unique_unset_set_then_drop_keeps_preexisting_index_drop(cols):
+    plan = run(cols, [{"op": "set_unique", "name": "Name", "unique": False},
+                      {"op": "set_unique", "name": "Name", "unique": True},
+                      {"op": "drop_column", "name": "Name"}])
+    assert plan.effects == [DropUniqueIndex(K_NAME), CaptureDroppedValues(K_NAME),
+                            DropColumnDDL(K_NAME)]
+
+
+def test_unique_drop_of_preexisting_index_kept(cols):
+    plan = run(cols, [{"op": "set_unique", "name": "Name", "unique": False}])
+    assert plan.effects == [DropUniqueIndex(K_NAME)]
+    plan = run(cols, [{"op": "drop_column", "name": "Name"}])
+    assert plan.effects == [CaptureDroppedValues(K_NAME), DropUniqueIndex(K_NAME),
+                            DropColumnDDL(K_NAME)]
+
+
+def test_unique_toggled_twice_leaves_no_effects(cols):
+    on = {"op": "set_unique", "name": "Link", "unique": True}
+    off = {"op": "set_unique", "name": "Link", "unique": False}
+    assert run(cols, [on, off, on, off]).effects == []
+
+
+def test_unique_toggled_back_on_keeps_checks(cols):
+    on = {"op": "set_unique", "name": "Link", "unique": True}
+    off = {"op": "set_unique", "name": "Link", "unique": False}
+    assert run(cols, [on, off, on]).effects == [
+        ViolationCheck("unique", K_LINK), CreateUniqueIndex(K_LINK),
+        DropUniqueIndex(K_LINK), ViolationCheck("unique", K_LINK),
+        CreateUniqueIndex(K_LINK)]
 
 
 def test_add_unique_then_drop(cols):
     plan = run(cols, [{"op": "add_column", "column": {"name": "Tmp", "type": "text",
                                                       "unique": True}},
                       {"op": "drop_column", "name": "Tmp"}])
-    assert not any(isinstance(e, ViolationCheck) for e in plan.effects)
-    assert plan.effects == [AddColumnDDL(K_NEW), CreateUniqueIndex(K_NEW),
-                            CaptureDroppedValues(K_NEW), DropUniqueIndex(K_NEW),
+    assert plan.effects == [AddColumnDDL(K_NEW), CaptureDroppedValues(K_NEW),
                             DropColumnDDL(K_NEW)]
 
 

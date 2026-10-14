@@ -119,12 +119,17 @@ class DropUniqueIndex(_Effect):
 
 @dataclass(frozen=True)
 class Backfill(_Effect):
-    """Set ``value`` (canonical logical value, a list for a multi enum) on
-    every existing row."""
+    """Set ``value`` (canonical logical value) on every existing row. A
+    multi-enum value is held as a tuple so the effect stays hashable;
+    :meth:`to_dict` hands it out as a list."""
 
     column_key: str
     value: Any
     kind: ClassVar[str] = "backfill"
+
+    def __post_init__(self) -> None:
+        if isinstance(self.value, list):
+            object.__setattr__(self, "value", tuple(self.value))
 
 
 @dataclass(frozen=True)
@@ -188,11 +193,11 @@ class SchemaChangePlan:
     image, not a replay input: it is not accepted back by
     :func:`apply_schema_operations` (it carries server-assigned keys, which
     operations may not name). Each op that addresses a column carries that
-    column's immutable key so undo (A6) can locate the column after later
+    column's immutable key so undo can locate the column after later
     renames. Undo does not re-run inverse operations (several changes have
     no inverse op: a multi-option enum cannot become single again, and
     ``add_column`` cannot insert at position 0); it rebuilds the table from
-    the before schema, which the change log (A5) must store in the change's
+    the before schema, which the change log must store in the change's
     ``before`` image, the values captured by :class:`CaptureDroppedValues`,
     and ``effects``.
     """
@@ -243,10 +248,15 @@ class _Batch:
         # different columns.
         self.seen_keys: set[str] = {c.key for c in columns}
         self.table_empty = table_empty
-        self.effects: list[SchemaSideEffect] = []
+        # (index of the op that emitted it, effect): pruning pairs a
+        # unique check with the index its own op created.
+        self.effects: list[tuple[int, SchemaSideEffect]] = []
         self.title: str | None = None
         self.index = 0
         self.op = ""
+
+    def emit(self, effect: SchemaSideEffect) -> None:
+        self.effects.append((self.index, effect))
 
     # -- errors
 
@@ -449,12 +459,12 @@ def _add_column(b: _Batch, op: Mapping) -> dict:
         b.columns.insert(position, column)
     b.seen_keys.add(column.key)
 
-    b.effects.append(AddColumnDDL(column.key))
+    b.emit(AddColumnDDL(column.key))
     if column.required and column.default is not None and not b.table_empty:
-        b.effects.append(Backfill(column.key, _copy_value(column.default)))
+        b.emit(Backfill(column.key, _copy_value(column.default)))
     if column.unique:
-        b.effects.append(ViolationCheck("unique", column.key))
-        b.effects.append(CreateUniqueIndex(column.key))
+        b.emit(ViolationCheck("unique", column.key))
+        b.emit(CreateUniqueIndex(column.key))
     return {"op": "add_column", "column": column.to_dict(), "after": after_name,
             "after_key": after_key}
 
@@ -491,10 +501,10 @@ def _drop_column(b: _Batch, op: Mapping) -> dict:
             field="name",
         )
     b.columns = [c for c in b.columns if c.key != column.key]
-    b.effects.append(CaptureDroppedValues(column.key))
+    b.emit(CaptureDroppedValues(column.key))
     if column.unique:
-        b.effects.append(DropUniqueIndex(column.key))
-    b.effects.append(DropColumnDDL(column.key))
+        b.emit(DropUniqueIndex(column.key))
+    b.emit(DropColumnDDL(column.key))
     return {"op": "drop_column", "name": column.name, "key": column.key}
 
 
@@ -540,7 +550,7 @@ def _set_required(b: _Batch, op: Mapping) -> dict:
     column = b.column(op)
     required = b.bool_param(op, "required")
     if required and not column.required:
-        b.effects.append(ViolationCheck("required", column.key))
+        b.emit(ViolationCheck("required", column.key))
     b.put(replace(column, required=required))
     return {"op": "set_required", "name": column.name, "required": required,
             "key": column.key}
@@ -559,10 +569,10 @@ def _set_unique(b: _Batch, op: Mapping) -> dict:
             field="unique",
         )
     if unique and not column.unique:
-        b.effects.append(ViolationCheck("unique", column.key))
-        b.effects.append(CreateUniqueIndex(column.key))
+        b.emit(ViolationCheck("unique", column.key))
+        b.emit(CreateUniqueIndex(column.key))
     elif not unique and column.unique:
-        b.effects.append(DropUniqueIndex(column.key))
+        b.emit(DropUniqueIndex(column.key))
     b.put(replace(column, unique=unique))
     return {"op": "set_unique", "name": column.name, "unique": unique, "key": column.key}
 
@@ -641,7 +651,7 @@ def _rename_enum_option(b: _Batch, op: Mapping) -> dict:
     elif default == old:
         default = new
     b.put(replace(column, options=b.check_options(column, options), default=default))
-    b.effects.append(EnumRewrite(column.key, old, new, column.multiple))
+    b.emit(EnumRewrite(column.key, old, new, column.multiple))
     return normalized
 
 
@@ -667,7 +677,7 @@ def _remove_enum_option(b: _Batch, op: Mapping) -> dict:
             field="option",
         )
     b.put(replace(column, options=tuple(o for o in options if o != option)))
-    b.effects.append(
+    b.emit(
         ViolationCheck("enum_option", column.key, option=option, multiple=column.multiple)
     )
     return {"op": "remove_enum_option", "name": column.name, "option": option,
@@ -688,7 +698,7 @@ def _set_enum_multiple(b: _Batch, op: Mapping) -> dict:
     if multiple and not column.multiple:
         default = None if column.default is None else (column.default,)
         b.put(replace(column, multiple=True, default=default))
-        b.effects.append(WrapMulti(column.key))
+        b.emit(WrapMulti(column.key))
     return {"op": "set_enum_multiple", "name": column.name, "multiple": multiple,
             "key": column.key}
 
@@ -721,25 +731,55 @@ _HANDLERS = {
 
 
 def _live_effects(
-    effects: Sequence[SchemaSideEffect], columns: Sequence[Column]
+    effects: Sequence[tuple[int, SchemaSideEffect]], columns: Sequence[Column]
 ) -> list[SchemaSideEffect]:
-    """Drop the checks and backfills the batch made moot (see
-    :func:`apply_schema_operations`)."""
+    """Drop the checks, backfills and transient unique indexes the batch
+    made moot (see :func:`apply_schema_operations`). ``effects`` pairs each
+    effect with the index of the op that emitted it."""
     final = {c.key: c for c in columns}
-    kept: list[SchemaSideEffect] = []
-    for effect in effects:
+    dropped: set[int] = set()  # positions in ``effects``
+    for pos, (op_index, effect) in enumerate(effects):
         column = final.get(effect.column_key)
         if isinstance(effect, Backfill) and column is None:
-            continue
-        if isinstance(effect, ViolationCheck):
+            dropped.add(pos)
+        elif isinstance(effect, ViolationCheck):
             if column is None:
-                continue
-            if effect.check == "required" and not column.required:
-                continue
-            if effect.check == "unique" and not column.unique:
-                continue
-        kept.append(effect)
-    return kept
+                dropped.add(pos)
+            elif effect.check == "required" and not column.required:
+                dropped.add(pos)
+            elif effect.check == "unique" and not column.unique:
+                dropped.add(pos)
+            if pos in dropped and effect.check == "unique":
+                dropped.update(_transient_index(effects, pos, op_index))
+    return [effect for pos, (_, effect) in enumerate(effects) if pos not in dropped]
+
+
+def _transient_index(
+    effects: Sequence[tuple[int, SchemaSideEffect]], check_pos: int, op_index: int
+) -> list[int]:
+    """Positions of the :class:`CreateUniqueIndex` the same op emitted with
+    the unique check at ``check_pos``, and of the first later
+    :class:`DropUniqueIndex` of that key, which removes that index again."""
+    key = effects[check_pos][1].column_key
+    positions: list[int] = []
+    create = next(
+        (
+            pos for pos in range(check_pos + 1, len(effects))
+            if effects[pos][0] == op_index
+            and isinstance(effects[pos][1], CreateUniqueIndex)
+            and effects[pos][1].column_key == key
+        ),
+        None,
+    )
+    if create is None:
+        return positions
+    positions.append(create)
+    for pos in range(create + 1, len(effects)):
+        effect = effects[pos][1]
+        if isinstance(effect, DropUniqueIndex) and effect.column_key == key:
+            positions.append(pos)
+            break
+    return positions
 
 
 def apply_schema_operations(
@@ -775,10 +815,14 @@ def apply_schema_operations(
     :class:`ViolationCheck` when the column is gone or no longer required,
     a ``unique`` check when it is gone or no longer unique, an
     ``enum_option`` check when the column is gone, and a :class:`Backfill`
-    when the column is gone. DDL effects (column add/drop, index
-    create/drop), :class:`EnumRewrite`, :class:`WrapMulti` and
-    :class:`CaptureDroppedValues` are always kept, in order, so the
-    storage executes every step it was told about.
+    when the column is gone. A dropped ``unique`` check takes with it the
+    :class:`CreateUniqueIndex` its own operation emitted and the first
+    later :class:`DropUniqueIndex` of the same column, which removed that
+    transient index again (an unchecked unique index over duplicate data
+    would fail); dropping an index that existed before the batch is kept.
+    Every other effect (column add/drop DDL, :class:`EnumRewrite`,
+    :class:`WrapMulti`, :class:`CaptureDroppedValues`) is always kept, in
+    order, so the storage executes every step it was told about.
     """
     batch = _Batch(columns, table_empty)
     if not isinstance(ops, (list, tuple)):
@@ -923,10 +967,10 @@ def schema_diff(before: Sequence[Column], after: Sequence[Column]) -> dict:
 
     This compares columns only. A ``rename_enum_option`` therefore shows
     as the old option in ``options_removed`` and the new one in
-    ``options_added``; the preview (A12) labels renames, and the number of
-    cells each rewrites, from the plan's :class:`EnumRewrite` effects,
-    taken in sequence (a later rewrite of the same column applies to the
-    result of the earlier ones).
+    ``options_added``; the change_table_schema action request's preview
+    labels renames, and the number of cells each rewrites, from the plan's
+    :class:`EnumRewrite` effects, taken in sequence (a later rewrite of the
+    same column applies to the result of the earlier ones).
     """
     before_by_key = {c.key: c for c in before}
     after_by_key = {c.key: c for c in after}
