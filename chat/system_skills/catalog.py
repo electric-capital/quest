@@ -184,13 +184,13 @@ unavailable there. If the user asks you to remember something in Slack,
 acknowledge it in your reply and mention that persisting memories
 requires the web UI.
 
-### Project memories (private project conversations only)
+### Project memories (project conversations only)
 
 A project also keeps its own memory store: *project memories* are facts
 about the PROJECT, shared by every conversation in it, separate from the
-user's personal memories above. They exist only in conversations of a
-private project (public projects have no memories of either kind, and the
-tools below are hidden elsewhere).
+user's personal memories above. The tools below exist only in project
+conversations (public projects included, where they are the only memories
+in reach).
 
 - **project_memory_search(query)** / **project_memory_list()** -- same
   shapes as the personal reads, scoped to the conversation's project.
@@ -198,12 +198,11 @@ tools below are hidden elsewhere).
 - **suggest_project_memory(content, reasoning?, replaces_memory_id?)** --
   the non-blocking proposal, exactly like `suggest_memory`, reviewed in a
   separate "suggested project memories" bubble (`replaces_memory_id` must
-  be a project memory id). Top-level only, hidden in routine runs.
-- `create_action_request(request_type="create_project_memory",
-  params={"content": "..."}, reasoning="...")` -- the blocking card for an
-  explicit "remember this for the project"; same verdicts as
-  `create_memory`, `result.project_memory_id` on `executed`. The card names
-  the project.
+  be a project memory id). Top-level only, hidden in routine runs. It is
+  the ONLY way to write a project memory: there is no action-request card.
+  Call it proactively whenever you learn a durable project fact, and also
+  when the user asks you to remember something for the project (then tell
+  them it is waiting in the bubble).
 
 **Which store?** Ask whether the fact would still be true, and useful, in
 a different project. Yes -> it is about the user (role, preferences,
@@ -1385,7 +1384,7 @@ _register(SystemSkill(
 _register(SystemSkill(
     id="system:memory",
     name="Memory",
-    description="Personal and project memories: search/list reads, non-blocking suggest_* proposals, create_* action-request writes.",
+    description="Personal and project memories: search/list reads, non-blocking suggest_* proposals, create_memory action requests.",
     when_to_load="Load when the user refers to saved context, preferences, or asks you to remember.",
     requires=None,
     content_builder=_memory_content,

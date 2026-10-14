@@ -66,7 +66,6 @@ class ActionRequestType(StrEnum):
     CREATE_CALENDAR_INVITE = "create_calendar_invite"
     EDIT_CALENDAR_EVENT = "edit_calendar_event"
     CREATE_MEMORY = "create_memory"
-    CREATE_PROJECT_MEMORY = "create_project_memory"
     UPLOAD_TO_DRIVE = "upload_to_drive"
     CREATE_DRIVE_FOLDER = "create_drive_folder"
     CREATE_SKILL = "create_skill"

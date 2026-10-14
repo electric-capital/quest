@@ -1,7 +1,6 @@
 """Project memories: the project-scoped memory store, the non-blocking
-``suggest_project_memory`` tool and its review path, the read tools, the
-``create_project_memory`` action request, the prompt tiers and the REST
-routes (db/project_memory_store.py, db/project_memory_suggestion_store.py,
+``suggest_project_memory`` tool and its review path, the read tools (in
+private and public projects alike), the prompt tiers and the REST routes (db/project_memory_store.py, db/project_memory_suggestion_store.py,
 chat/project_memories.py, chat/project_memory_routes.py).
 """
 
@@ -59,8 +58,8 @@ def _fk_on(dbapi_connection, _record):
 
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
-    """Isolated DB: alice owns a private project (with one project
-    conversation) and a public one; bob owns nothing. Events captured."""
+    """Isolated DB: alice owns a private and a public project, each with one
+    conversation; bob owns nothing. Events captured."""
     db_path = tmp_path / "quest.db"
     sync_engine = create_engine(
         f"sqlite:///{db_path}", connect_args={"check_same_thread": False},
@@ -113,6 +112,10 @@ def env(tmp_path, monkeypatch):
     _run(conversation_store.create_conversation(
         alice, cid, datetime.now(timezone.utc), project_id=project["id"],
     ))
+    public_cid = str(uuid.uuid4())
+    _run(conversation_store.create_conversation(
+        alice, public_cid, datetime.now(timezone.utc), project_id=public_project["id"],
+    ))
 
     class Env:
         pass
@@ -122,6 +125,7 @@ def env(tmp_path, monkeypatch):
     e.project_id = project["id"]
     e.public_project_id = public_project["id"]
     e.cid = cid
+    e.public_cid = public_cid
     e.published = published
     e.session_local = session_local
     e.models = models
@@ -270,11 +274,11 @@ class TestSuggestions:
 # ---------------------------------------------------------------------------
 
 
-def _dispatch(env, tool, arguments, **kwargs):
+def _dispatch(env, tool, arguments, conversation_id=None, **kwargs):
     from chat.gemini_api.tool_dispatch import _dispatch_tool_call
     result, _ = _run(_dispatch_tool_call(
         app=None, provider=None, user=env.users["alice"],
-        conversation_id=env.cid, timezone="UTC",
+        conversation_id=conversation_id or env.cid, timezone="UTC",
         tool_name="tool_call",
         args={"tool_name": tool, "arguments": arguments},
         **kwargs,
@@ -321,59 +325,30 @@ class TestTools:
         )
         assert result["memory_count"] == 0
 
-    def test_public_conversations_are_refused(self, env):
-        from chat.llm.tool_schemas import PROJECT_MEMORY_TOOLS, PUBLIC_TOOL_CALL_ALLOWLIST
-        assert not (PROJECT_MEMORY_TOOLS & PUBLIC_TOOL_CALL_ALLOWLIST)
-        for tool in PROJECT_MEMORY_TOOLS:
-            result = _dispatch(
-                env, tool, {"query": "x", "content": "x"},
-                project_id=env.public_project_id, is_public=True,
-            )
-            assert "public-project" in result["error"]
+    def test_public_conversations_use_their_own_project(self, env):
+        from chat.llm.tool_schemas import PUBLIC_TOOL_CALL_ALLOWLIST
+        assert {
+            "project_memory_search", "project_memory_list", "suggest_project_memory",
+        } <= PUBLIC_TOOL_CALL_ALLOWLIST
+        pub = env.public_project_id
+        _run(env.memories.create_project_memory(pub, "Public fact about EUR"))
+        _run(env.memories.create_project_memory(env.project_id, "Private fact about EUR"))
+        kw = dict(project_id=pub, is_public=True, conversation_id=env.public_cid)
+
+        found = _dispatch(env, "project_memory_search", {"query": "EUR"}, **kw)
+        assert [m["content"] for m in found["project_memories"]] == ["Public fact about EUR"]
+        result = _dispatch(env, "suggest_project_memory", {"content": "Uses ISO dates"}, **kw)
+        assert result["status"] == "suggested"
+        [row] = _run(env.store.list_pending(_uid(env), env.public_cid))
+        assert row["project_id"] == pub
+        # Personal memories stay out of reach.
+        assert "public-project" in _dispatch(env, "memory_search", {"query": "x"}, **kw)["error"]
 
     def test_unknown_tool_listing_hides_them_outside_projects(self, env):
         result = _dispatch(env, "nope", {})
         assert "project_memory_search" not in result["error"]
         result = _dispatch(env, "nope", {}, project_id=env.project_id)
         assert "project_memory_search" in result["error"]
-
-
-# ---------------------------------------------------------------------------
-# create_project_memory action request
-# ---------------------------------------------------------------------------
-
-
-class TestActionRequest:
-    def test_precard_and_execute(self, env):
-        from chat.action_request_types import get_handler
-        from chat.action_request_types.create_project_memory import (
-            project_memory_precard_check,
-        )
-        alice = env.users["alice"]
-        handler = get_handler("create_project_memory")
-        params = handler.validate_params({"content": "  Figures in EUR "})
-        assert params == {"content": "Figures in EUR"}
-        with pytest.raises(ValueError):
-            handler.validate_params({"content": "x", "project_name": "spoof"})
-
-        with pytest.raises(ValueError, match="only available in project"):
-            _run(project_memory_precard_check(dict(params), alice, None))
-        with pytest.raises(ValueError, match="Public projects"):
-            _run(project_memory_precard_check(dict(params), alice, env.public_project_id))
-        with pytest.raises(ValueError, match="not found"):
-            _run(project_memory_precard_check(dict(params), env.users["bob"], env.project_id))
-
-        _run(project_memory_precard_check(params, alice, env.project_id))
-        assert params["project_name"] == "Launch"
-        preview = _run(handler.render_preview(params, alice))
-        assert {"key": "Project", "value": "Launch"} in preview
-
-        result = _run(handler.execute(params, alice, project_id=env.project_id))
-        assert result["success"] is True
-        [memory] = _run(env.memories.list_project_memories(env.project_id))
-        assert memory["id"] == result["project_memory_id"]
-        with pytest.raises(ValueError):
-            _run(handler.execute(params, alice, project_id=None))
 
 
 # ---------------------------------------------------------------------------
@@ -388,8 +363,9 @@ class TestPromptTiers:
         for tool in ("project_memory_search", "project_memory_list", "suggest_project_memory"):
             assert _bullet(tool) in prompt
         assert "**Project Memories:**" in prompt
-        assert 'request_type="create_project_memory"' in prompt
+        assert "without being asked" in prompt
         assert "suggested project memories" in prompt
+        assert "create_project_memory" not in prompt
         # Personal suggestions stay offered beside them.
         assert _bullet("suggest_memory") in prompt
 
@@ -408,7 +384,7 @@ class TestPromptTiers:
         assert _bullet("project_memory_search") in prompt
         assert _bullet("suggest_project_memory") not in prompt
         assert "**Project Memories:**" in prompt
-        assert "create_project_memory" not in prompt
+        assert "without being asked" not in prompt
 
     def test_other_tiers(self):
         from chat.gemini_api.system_prompt import (
@@ -430,17 +406,35 @@ class TestPromptTiers:
                 target_user_email="t@example.com", caller_email="c@example.com",
             ),
             get_inference_api_system_prompt("", base_url=BASE_URL, user_email="u@example.com"),
-            get_public_project_system_prompt(),
         ):
             for tool in ("project_memory_search", "suggest_project_memory"):
                 assert _bullet(tool) not in prompt
+
+    def test_public_projects_get_them_without_personal_memories(self):
+        from chat.gemini_api.system_prompt import get_public_project_system_prompt
+        prompt = get_public_project_system_prompt()
+        for tool in ("project_memory_search", "project_memory_list", "suggest_project_memory"):
+            assert _bullet(tool) in prompt
+        assert "**Project Memories:**" in prompt
+        assert "without being asked" in prompt
+        assert "personal memories (`suggest_memory`" not in prompt
+        assert _bullet("suggest_memory") not in prompt
+        routine = get_public_project_system_prompt(is_routine=True)
+        assert _bullet("project_memory_search") in routine
+        assert _bullet("suggest_project_memory") not in routine
 
     def test_skill_describes_project_memories(self):
         from chat.system_skills.catalog import _memory_content
         content = _memory_content(BASE_URL, API_KEY)
         assert "suggest_project_memory" in content
-        assert "create_project_memory" in content
+        assert "no action-request card" in content
         assert "Which store?" in content
+
+    def test_card_is_gone(self):
+        from chat.action_request_types import get_handler
+        from chat.llm.tool_schemas import ACTION_REQUEST_TYPE_ENUM
+        assert get_handler("create_project_memory") is None
+        assert "create_project_memory" not in ACTION_REQUEST_TYPE_ENUM
 
 
 # ---------------------------------------------------------------------------
@@ -492,9 +486,9 @@ class TestRoutes:
         base = f"/app/api/projects/{env.project_id}/memories"
         assert _client(env, "bob").get(base).status_code == 404
         assert _client(env, "bob").post(base, json={"content": "x"}).status_code == 404
-        resp = _client(env).get(f"/app/api/projects/{env.public_project_id}/memories")
-        assert resp.status_code == 400
-        assert resp.json()["detail"]["error"] == "public_project_no_memories"
+        public = f"/app/api/projects/{env.public_project_id}/memories"
+        assert _client(env).post(public, json={"content": "Public fact"}).status_code == 201
+        assert [m["content"] for m in _client(env).get(public).json()["memories"]] == ["Public fact"]
 
     def test_suggestion_routes(self, env):
         alice, pid, cid = _uid(env), env.project_id, env.cid

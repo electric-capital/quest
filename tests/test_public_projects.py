@@ -11,6 +11,7 @@ Covers the prototype's three enforcement layers:
 * The ``projects.public`` flag: creation-time only, immutable via update.
 """
 
+import re
 import asyncio
 import json
 import os
@@ -261,6 +262,10 @@ class TestPublicSystemPrompt:
             # would be overkill -- assert on the doc bullet instead.
             if term == "authed_get":
                 assert "- **authed_get**" not in p
+                continue
+            if term == "memory_search":
+                # The project's own project_memory_search is allowed.
+                assert not re.search(r"(?<!project_)memory_search", p)
                 continue
             assert term not in p, term
 

@@ -49,11 +49,11 @@ const MAIN_SECTIONS: SectionEntry[] = [
 ];
 
 /**
- * Public projects cannot have project skills or project memories and never
- * read other projects' docs, so those sections are hidden.
+ * Public projects cannot have project skills and never read other
+ * projects' docs, so the Skills and Docs Access sections are hidden.
  */
 const PUBLIC_MAIN_SECTIONS: SectionEntry[] = MAIN_SECTIONS.filter(
-  (s) => s.id !== 'skills' && s.id !== 'docs' && s.id !== 'memories'
+  (s) => s.id !== 'skills' && s.id !== 'docs'
 );
 
 const DANGER_ZONE_SECTION: SectionEntry = { id: 'danger-zone', label: 'Danger Zone' };

@@ -339,17 +339,14 @@ async def _tool_project_memory_list(ctx: ToolContext, args: dict) -> str:
 
 
 async def _tool_suggest_project_memory(ctx: ToolContext, args: dict) -> str:
-    # Same top-level-only backstop as suggest_memory; public-project
-    # conversations never get here (the tool is not in
-    # PUBLIC_TOOL_CALL_ALLOWLIST), the is_public check is defense in depth.
-    if (
-        ctx.is_sub_agent or ctx.is_user_subagent or ctx.is_inference_api
-        or ctx.is_script or ctx.is_public
-    ):
+    # Same top-level-only backstop as suggest_memory. Public-project
+    # conversations may suggest: the memory belongs to their own project and
+    # waits for the user's accept.
+    if ctx.is_sub_agent or ctx.is_user_subagent or ctx.is_inference_api or ctx.is_script:
         return json.dumps({
             "error": (
                 "suggest_project_memory is only available to the top-level "
-                "agent of a private project conversation. Include the "
+                "agent of a project conversation. Include the "
                 "proposed project memory text in your response so the "
                 "caller can suggest it."
             ),
@@ -964,12 +961,11 @@ async def _dispatch_tool_call_inner(
             # project, the *_workspace_file tools only outside one.
             from chat.llm.tool_schemas import (
                 PROJECT_HIDDEN_WORKSPACE_TOOLS,
-                PROJECT_MEMORY_TOOLS,
-                PROJECT_ONLY_TOOL_CALL_TOOLS,
+                            PROJECT_ONLY_TOOL_CALL_TOOLS,
             )
             hidden = (
                 PROJECT_HIDDEN_WORKSPACE_TOOLS if project_id
-                else PROJECT_ONLY_TOOL_CALL_TOOLS | PROJECT_MEMORY_TOOLS
+                else PROJECT_ONLY_TOOL_CALL_TOOLS
             )
             names = [n for n in TOOL_CALL_REGISTRY if n not in hidden]
             available = ", ".join(sorted(names))

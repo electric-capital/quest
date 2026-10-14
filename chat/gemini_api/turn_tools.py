@@ -1175,15 +1175,6 @@ async def _handle_create_action_request(
             await routine_precard_check(
                 req_type, validated_params, ctx.user, ctx.project_id,
             )
-        # Project memory saves need a private project conversation; the
-        # check also injects the project's name for the card.
-        if req_type == "create_project_memory":
-            from chat.action_request_types.create_project_memory import (
-                project_memory_precard_check,
-            )
-            await project_memory_precard_check(
-                validated_params, ctx.user, ctx.project_id,
-            )
         # Quest Docs write_doc pre-card check: the doc access rule must say
         # "approval" (a directly writable doc is refused -- call the tool;
         # hidden / denied / unread docs get the tool's own error), and the

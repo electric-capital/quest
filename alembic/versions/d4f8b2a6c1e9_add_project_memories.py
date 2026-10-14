@@ -1,7 +1,7 @@
 """add project_memories and project_memory_suggestions
 
 Revision ID: d4f8b2a6c1e9
-Revises: c7e2a9b4d1f8
+Revises: e5c97b362821
 Create Date: 2026-10-14 18:00:00.000000
 
 Project memories are the project-scoped twin of ``memories``: one row per
@@ -19,7 +19,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'd4f8b2a6c1e9'
-down_revision: Union[str, Sequence[str], None] = 'c7e2a9b4d1f8'
+down_revision: Union[str, Sequence[str], None] = 'e5c97b362821'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

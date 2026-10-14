@@ -77,7 +77,9 @@ def _assert_offered(prompt: str, project: bool) -> None:
 
 class TestRegistrySpecs:
     def test_project_only_set(self):
-        assert PROJECT_ONLY_TOOL_CALL_TOOLS == frozenset(ALL_PROJECT_ONLY)
+        assert PROJECT_ONLY_TOOL_CALL_TOOLS == frozenset(ALL_PROJECT_ONLY) | {
+            "project_memory_search", "project_memory_list", "suggest_project_memory",
+        }
         assert PROJECT_ONLY_TOOL_CALL_TOOLS <= set(TOOL_CALL_REGISTRY)
 
     def test_hidden_workspace_set(self):

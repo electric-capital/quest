@@ -3,9 +3,7 @@
 The project twin of chat/memory_routes.py (see chat/project_memories.py):
 CRUD under ``/app/api/projects/{project_id}/memories`` for the project's
 owner, plus the review endpoints of the model's ``suggest_project_memory``
-proposals. Public projects have no project memories (their conversations
-are cut off from memories of either kind), so every project route answers
-them with 400 ``public_project_no_memories``.
+proposals. Public projects have project memories too.
 """
 
 import logging
@@ -37,19 +35,6 @@ router = APIRouter(
 )
 
 
-async def _require_private_project(user_id: int, project_id: str) -> dict:
-    project = await require_owned_project(user_id, project_id)
-    if project.get("public"):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "public_project_no_memories",
-                "message": "Public projects do not have project memories.",
-            },
-        )
-    return project
-
-
 def _memory_not_found(memory_id: str) -> HTTPException:
     return HTTPException(
         status_code=404,
@@ -74,7 +59,7 @@ async def list_project_memories(
     include_archived: bool = Query(default=False, description="Include archived memories"),
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    await _require_private_project(user["id"], project_id)
+    await require_owned_project(user["id"], project_id)
     if q:
         try:
             results = await store.search_project_memories(project_id, q)
@@ -99,7 +84,7 @@ async def create_project_memory(
     body: CreateMemoryRequest,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    await _require_private_project(user["id"], project_id)
+    await require_owned_project(user["id"], project_id)
     try:
         memory = await store.create_project_memory(project_id, body.content)
     except ValueError as e:
@@ -118,7 +103,7 @@ async def update_project_memory(
     body: UpdateMemoryRequest,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    await _require_private_project(user["id"], project_id)
+    await require_owned_project(user["id"], project_id)
     try:
         memory = await store.update_project_memory(project_id, memory_id, body.content)
     except ValueError as e:
@@ -134,7 +119,7 @@ async def archive_project_memory(
     memory_id: str,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    await _require_private_project(user["id"], project_id)
+    await require_owned_project(user["id"], project_id)
     memory = await store.set_project_memory_archived(project_id, memory_id, True)
     if not memory:
         raise _memory_not_found(memory_id)
@@ -147,7 +132,7 @@ async def unarchive_project_memory(
     memory_id: str,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    await _require_private_project(user["id"], project_id)
+    await require_owned_project(user["id"], project_id)
     memory = await store.set_project_memory_archived(project_id, memory_id, False)
     if not memory:
         raise _memory_not_found(memory_id)
@@ -160,7 +145,7 @@ async def delete_project_memory(
     memory_id: str,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    await _require_private_project(user["id"], project_id)
+    await require_owned_project(user["id"], project_id)
     if not await store.delete_project_memory(project_id, memory_id):
         raise _memory_not_found(memory_id)
     logger.info(

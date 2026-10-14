@@ -402,7 +402,8 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
     },
     # Project memories (chat/project_memories.py): facts about the PROJECT,
     # shared by every conversation in it, beside the user's own memories.
-    # Listed only in private project conversations (PROJECT_MEMORY_TOOLS).
+    # Listed only in project conversations (PROJECT_ONLY_TOOL_CALL_TOOLS),
+    # public ones included.
     "project_memory_search": {
         "name": "project_memory_search",
         "description": (
@@ -410,9 +411,8 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "search. Project memories are facts about the project itself -- its "
             "goals, conventions, decisions, stakeholders, data sources and "
             "recurring pitfalls -- shared by every conversation in the project, "
-            "separate from the user's personal memories (memory_search). Same "
-            "query syntax as memory_search: keywords, \"exact phrase\", prefix*, "
-            "AND / OR / NOT. Search them at the start of non-trivial project "
+            "separate from the user's personal memories. Supports keywords, "
+            "\"exact phrase\", prefix*, and AND / OR / NOT. Search them at the start of non-trivial project "
             "work and whenever the user refers to something the project should "
             "already know."
         ),
@@ -459,13 +459,13 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "and this call returns at once; the user sees a separate 'suggested "
             "project memories' bubble above their message box and accepts or "
             "dismisses each one when they like. Nothing is saved until they "
-            "accept, so never claim it was saved. Use it for project facts "
-            "(conventions, decisions and their reasons, stakeholders, data "
-            "sources, recurring pitfalls, status of long-running workstreams) "
-            "the user did NOT explicitly ask you to record; when they DO ask, "
-            "use create_action_request(request_type=\"create_project_memory\") "
-            "instead. Facts about the user as a person (their role, "
-            "preferences, style) belong in suggest_memory, not here. Search "
+            "accept, so never claim it was saved. Call it proactively whenever "
+            "you learn a durable project fact (conventions, decisions and their "
+            "reasons, stakeholders, data sources, recurring pitfalls, status of "
+            "long-running workstreams), and also when the user asks you to "
+            "remember something for the project. Facts about the user as a "
+            "person (their role, preferences, style) are personal memories "
+            "(suggest_memory where available), not project memories. Search "
             "first (project_memory_search) and do not suggest a fact a project "
             "memory already covers; when one is outdated, suggest the new text "
             "and pass its id as replaces_memory_id. One fact per call, concise "
@@ -2783,8 +2783,6 @@ _CREATE_ACTION_REQUEST: ToolSpec = {
         "invites in `system:calendar`, Telegram in `system:telegram`, "
         "Twitter DMs in `system:twitter`, memory writes "
         "(`request_type=\"create_memory\"`, `params={\"content\": \"...\"}`) "
-        "and project memory writes (`create_project_memory`, same params, "
-        "project conversations only) "
         "in `system:memory`, skill create/edit in `system:skill_management`, "
         "routine create/edit (`create_routine` / `edit_routine`) in "
         "`system:routines`, "
@@ -3087,22 +3085,14 @@ MUTATING_PROXY_PATHS: frozenset[str] = frozenset({
 # never offer them (standalone), and never have a project_id.
 PROJECT_ONLY_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
     "project_db_query",
+    "project_memory_search",
+    "project_memory_list",
+    "suggest_project_memory",
     "list_files",
     "read_file",
     "write_file",
     "edit_file",
     "copy_file",
-})
-
-# Project memory tools (chat/project_memories.py): like the project-only
-# tools above they are hidden outside a project, but unlike them they are NOT
-# public-allowlisted -- a public-project conversation is cut off from
-# memories of either kind, so they stay out of PUBLIC_TOOL_CALL_ALLOWLIST and
-# are hard-rejected there at dispatch.
-PROJECT_MEMORY_TOOLS: frozenset[str] = frozenset({
-    "project_memory_search",
-    "project_memory_list",
-    "suggest_project_memory",
 })
 
 # The four conversation-workspace tools, hidden from every prompt of a
@@ -3156,8 +3146,12 @@ PUBLIC_ROUTINE_TOOLS: list[ToolSpec] = PUBLIC_TOOLS + [_ROUTINE_COMPLETED]
 # is_public=True) hides every private doc from a public conversation --
 # it behaves exactly like a nonexistent id -- and lets it create and write
 # only public docs, which hold sandbox-originated content by construction.
+# The project memory tools are allowed: they read and propose only the
+# memories of the conversation's own (public) project, every suggestion
+# waits for the user's accept, and a public project's memories are never
+# visible anywhere else. The user's personal memories stay unreachable.
 # Everything else in TOOL_CALL_REGISTRY reads internal data (connectors,
-# memories, authed APIs) and is hard-rejected at dispatch time.
+# personal memories, authed APIs) and is hard-rejected at dispatch time.
 PUBLIC_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     "get_current_time",
     "list_workspace_files",
@@ -3172,6 +3166,9 @@ PUBLIC_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     "write_file",
     "edit_file",
     "copy_file",
+    "project_memory_search",
+    "project_memory_list",
+    "suggest_project_memory",
     "send_slack_dm_to_self",
     "list_docs",
     "search_docs",

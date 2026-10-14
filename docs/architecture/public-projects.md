@@ -1,6 +1,6 @@
 # Public Projects Architecture
 
-This document describes **public projects**: a project mode chosen at creation time that inverts Quest's normal security posture. Conversations in a public project get an **internet-enabled script sandbox** and are **cut off from every internal resource** (skills, memories, connectors, action requests, sub-agents, authed APIs), so a public project can never become a data-exfiltration path for internal data.
+This document describes **public projects**: a project mode chosen at creation time that inverts Quest's normal security posture. Conversations in a public project get an **internet-enabled script sandbox** and are **cut off from every internal resource** (skills, personal memories, connectors, action requests, sub-agents, authed APIs), so a public project can never become a data-exfiltration path for internal data. The project's own [project memories](project-memories.md) stay available, since they never leave the project.
 
 ## Overview
 

@@ -17,7 +17,6 @@ from chat.gemini_api.constants import (
 )
 from chat.llm.tool_schemas import (
     PROJECT_HIDDEN_WORKSPACE_TOOLS,
-    PROJECT_MEMORY_TOOLS,
     PROJECT_ONLY_TOOL_CALL_TOOLS,
     TOOL_CALL_REGISTRY,
     mutating_tool_call_tools,
@@ -103,15 +102,26 @@ _CONVERTED_FROM_STANDALONE_NOTE = (
 )
 
 
-def _project_memories_section(can_suggest: bool) -> str:
-    """The "Project Memories" paragraph of a private project's top-level
-    prompt (chat/project_memories.py): what project memories are, how they
-    differ from the user's personal memories, and -- unless the run cannot
-    suggest (routine runs) -- when to propose one and through which path."""
+def _project_memories_section(can_suggest: bool, personal_memories: bool = True) -> str:
+    """The "Project Memories" paragraph of a project prompt
+    (chat/project_memories.py): what project memories are and -- unless the
+    run cannot suggest (routine runs, sub-agents) -- that the model proposes
+    them proactively through ``suggest_project_memory``. ``personal_memories``
+    is False in public projects, where the user's own memories are out of
+    reach, so the paragraph does not contrast the two kinds there."""
+    if personal_memories:
+        intro = (
+            "Besides the user's personal memories, this project keeps its own "
+            "*project memories*: facts about the project, shared by every "
+            "conversation in it."
+        )
+    else:
+        intro = (
+            "This project keeps its own *project memories*: facts about the "
+            "project, shared by every conversation in it."
+        )
     text = (
-        "\n\n**Project Memories:** Besides the user's personal memories, this "
-        "project keeps its own *project memories*: facts about the project, "
-        "shared by every conversation in it. Read them with "
+        f"\n\n**Project Memories:** {intro} Read them with "
         '`tool_call(tool_name="project_memory_search", arguments={"query": "..."})` '
         "(or `project_memory_list`) at the start of non-trivial project work and "
         "whenever the user refers to something the project should already know; "
@@ -120,29 +130,34 @@ def _project_memories_section(can_suggest: bool) -> str:
     )
     if not can_suggest:
         return text
-    return text + (
-        "Keep the two kinds apart. A fact about the user as a person -- true in "
-        "any project (their role, preferences, working or writing style) -- is a "
-        "personal memory (`suggest_memory` / `create_memory`). A fact about THIS "
-        "project -- its goals and scope, conventions and terminology, decisions "
-        "and the reasons behind them, stakeholders, data sources and where they "
-        "live, recurring pitfalls, the state of long-running workstreams with "
-        "absolute dates -- is a project memory. When the user explicitly asks you "
-        "to remember something for the project, use "
-        '`create_action_request(request_type="create_project_memory", '
-        'params={"content": "..."}, reasoning="...")` (a blocking Approve / '
-        "Revise / Stop card, like `create_memory`). When you notice one "
-        "unprompted, call "
+    if personal_memories:
+        kinds = (
+            "Keep the two kinds apart. A fact about the user as a person -- true "
+            "in any project (their role, preferences, working or writing style) "
+            "-- is a personal memory (`suggest_memory` / `create_memory`). A fact "
+            "about THIS project is a project memory. "
+        )
+    else:
+        kinds = ""
+    return text + kinds + (
+        "Project memories build up automatically from your suggestions: "
+        "whenever you learn something durable about the project -- its goals "
+        "and scope, conventions and terminology, decisions and the reasons "
+        "behind them, stakeholders, data sources and where they live, recurring "
+        "pitfalls, the state of long-running workstreams with absolute dates -- "
+        "call "
         '`tool_call(tool_name="suggest_project_memory", arguments={"content": '
-        '"...", "reasoning": "..."})`: it returns at once and the user reviews it '
-        "in a separate \"suggested project memories\" bubble above their "
-        "message box, so keep working, do not restate it and never claim it was "
-        "saved. The personal-memory rules apply: suggest sparingly, only stable "
-        "facts likely to matter in later conversations of this project, nothing "
-        "derivable from the project files, docs, database or instructions, "
-        "nothing that only matters in this conversation; `project_memory_search` "
-        "first and pass `replaces_memory_id` when a project memory is outdated; "
-        "one self-contained fact per suggestion.\n"
+        '"...", "reasoning": "..."})` without being asked. It returns at once and '
+        "the user accepts or dismisses it later from a separate \"suggested "
+        "project memories\" bubble above their message box, so keep working and "
+        "never claim it was saved. Use the same tool when the user asks you to "
+        "remember something for the project, and tell them in a few words that "
+        "it is waiting in that bubble. Only stable facts likely to matter in "
+        "later conversations of this project; nothing derivable from the "
+        "project files, docs, database or instructions, nothing that only "
+        "matters in this conversation; `project_memory_search` first and pass "
+        "`replaces_memory_id` when a project memory is outdated; one "
+        "self-contained fact per suggestion.\n"
     )
 
 
@@ -559,7 +574,7 @@ Facts the user has saved about themselves and how they want you to work, newest 
         # The scheme-qualified file tools replace the four workspace tools.
         top_level_exclude |= PROJECT_HIDDEN_WORKSPACE_TOOLS
     else:
-        top_level_exclude |= PROJECT_ONLY_TOOL_CALL_TOOLS | PROJECT_MEMORY_TOOLS
+        top_level_exclude |= PROJECT_ONLY_TOOL_CALL_TOOLS
     if is_slack:
         # Slack-driven runs have no web UI to resolve the
         # create_action_request approval card, so hide it from the
@@ -812,7 +827,7 @@ def get_user_subagent_system_prompt(
         exclude=(
             {"wait_for_handles", "set_conversation_name", "suggest_memory"}
             | PROJECT_ONLY_TOOL_CALL_TOOLS
-            | PROJECT_MEMORY_TOOLS
+           
             | _doc_write_tool_names()
         ),
         connected_services=connected_services,
@@ -916,7 +931,7 @@ def get_inference_api_system_prompt(
         exclude=(
             {"wait_for_handles", "set_conversation_name", "suggest_memory"}
             | PROJECT_ONLY_TOOL_CALL_TOOLS
-            | PROJECT_MEMORY_TOOLS
+           
             | mutating_tool_call_tools()
         ),
         connected_services=connected_services,
@@ -1029,7 +1044,9 @@ def get_public_project_system_prompt(
         "across all conversations in the project. Use "
         '`tool_call(tool_name="project_db_query", arguments={"query": "..."})` '
         "to create tables, store data, and query it.\n"
-    ) + _project_files_section(legacy_shared_workspace, converted_from_standalone)
+    ) + _project_files_section(
+        legacy_shared_workspace, converted_from_standalone,
+    ) + _project_memories_section(can_suggest=not is_routine, personal_memories=False)
     if project_guide and project_guide.strip():
         project_section = f"""
 
@@ -1059,6 +1076,7 @@ def get_public_project_system_prompt(
     public_exclude |= PROJECT_HIDDEN_WORKSPACE_TOOLS
     if is_routine:
         public_exclude.add("set_conversation_name")
+        public_exclude.add("suggest_project_memory")
     if not docs_enabled:
         public_exclude |= _doc_tool_names()
     dynamic_tools_section = _build_dynamic_tools_section(exclude=public_exclude)
@@ -1110,7 +1128,7 @@ You have three tools available:
 **Showing images to the user:** the chat renders standard markdown images inline. To display a workspace image (e.g. a chart you generated with matplotlib) directly in your reply, reference it by its workspace-relative path: `![Revenue by quarter](chart.png)`. Paths resolve from this conversation's workspace root (`copy_file` a project image from `proj://` to `chat://` first); only PNG/JPEG/GIF/WebP files render. External image URLs are never rendered inline (they display as plain links) -- download a remote image into the workspace first to show it.
 
 **Boundaries (this is a public project):**
-- You have NO access to the user's internal data or connected services: no email, Slack reading, calendar, Drive, memories, or skills, and no authenticated internal APIs. There is no proxy endpoint and no API key in this conversation or its sandbox. The single connector exception is `send_slack_dm_to_self` (outbound-only, delivers a message and optional workspace files to the user themselves).
+- You have NO access to the user's internal data or connected services: no email, Slack reading, calendar, Drive, personal memories, or skills, and no authenticated internal APIs (this project's own project memories, described above, are available). There is no proxy endpoint and no API key in this conversation or its sandbox. The single connector exception is `send_slack_dm_to_self` (outbound-only, delivers a message and optional workspace files to the user themselves).
 - You cannot propose write actions (`create_action_request` is unavailable) and cannot spawn sub-agents (`agent_task*` is unavailable).
 - If the user asks for something that needs internal data or a connected service, tell them plainly that it requires a regular (private) conversation outside this public project -- do not attempt workarounds.
 - Files the user uploads to this conversation or to the project workspace are fair game: the user chose to bring them into a public project.
@@ -1272,7 +1290,7 @@ def get_sub_agent_system_prompt(
     if has_project:
         sub_agent_exclude |= PROJECT_HIDDEN_WORKSPACE_TOOLS
     else:
-        sub_agent_exclude |= PROJECT_ONLY_TOOL_CALL_TOOLS | PROJECT_MEMORY_TOOLS
+        sub_agent_exclude |= PROJECT_ONLY_TOOL_CALL_TOOLS
     sub_agent_dynamic_tools = _build_dynamic_tools_section(
         exclude=sub_agent_exclude, connected_services=connected_services,
     )
