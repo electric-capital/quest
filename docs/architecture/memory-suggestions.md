@@ -4,7 +4,7 @@
 
 The model can propose a memory about the user **without interrupting the conversation**: the `suggest_memory` dynamic tool registers a pending row and returns at once, the turn keeps going, and the web UI shows a "N suggested memories" bubble above the composer. Clicking the bubble opens a panel over the conversation where the user edits, accepts (creating a `memories` row) or dismisses each suggestion. Nothing is saved until the user accepts.
 
-This sits beside the blocking `create_memory` action request (see [Action Requests](action-requests.md)): an explicit "remember that ..." still opens the Approve / Revise / Stop card so the user confirms at once; unprompted observations go through the suggestion path. The system prompt tells the model which to use and what is worth suggesting.
+This sits beside the blocking `create_memory` action request (see [Action Requests](action-requests.md)): an explicit "remember that ..." still opens the Approve / Revise / Stop card so the user confirms at once; unprompted observations go through the suggestion path. The system prompt tells the model which to use and what is worth suggesting. Facts about a project rather than the user go to [Project Memories](project-memories.md), which reuse this machinery with their own bubble.
 
 ## Key Files
 

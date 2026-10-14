@@ -149,6 +149,23 @@ def make_memory_suggestions_changed(
     }
 
 
+def make_project_memory_suggestions_changed(
+    conversation_id: str,
+    pending_count: int,
+) -> dict[str, Any]:
+    """Envelope for ``project_memory_suggestions_changed``.
+
+    The project-memory twin of ``memory_suggestions_changed``: published
+    when a conversation's pending ``suggest_project_memory`` set changes,
+    driving the composer's separate project-memory bubble.
+    """
+    return {
+        "type": "project_memory_suggestions_changed",
+        "conversation_id": conversation_id,
+        "pending_count": pending_count,
+    }
+
+
 def make_wait_handle_resolved(
     conversation_id: str,
     handle_id: str,

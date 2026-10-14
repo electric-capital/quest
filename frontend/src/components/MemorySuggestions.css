@@ -1,14 +1,42 @@
-/* Suggested-memories bubble above the composer plus the review panel that
-   pops up over the conversation. Token-only colours (the accent family and
-   the surface / text / border tokens), so both colour schemes and every
-   colour theme work without an override block. */
+/* Suggested-memories bubbles above the composer plus the review panel that
+   pops up over the conversation. Personal memories use the accent family;
+   project memories (.memory-suggestions--project) swap in a fixed amber so
+   the two bubbles read apart under every colour theme. Both kinds draw
+   through the --suggestion-* variables below. */
 
-.memory-suggestions {
+/* Row holding the personal and project bubbles side by side; the panels
+   position against it so either one spans the chat column. */
+.memory-suggestions-bar {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
+  gap: 0.5rem;
   padding: 0 1rem 0.35rem;
   z-index: 20;
+}
+
+.memory-suggestions {
+  --suggestion-rgb: var(--accent-rgb);
+  --suggestion-solid: var(--accent);
+  --suggestion-contrast: var(--accent-contrast, #fff);
+  --suggestion-text: var(--accent-text);
+  display: flex;
+  justify-content: center;
+}
+
+.memory-suggestions--project {
+  --suggestion-rgb: 245 158 11;
+  --suggestion-solid: #d97706;
+  --suggestion-contrast: #fff;
+  --suggestion-text: #fbbf24;
+}
+
+@media (prefers-color-scheme: light) {
+  .memory-suggestions--project {
+    --suggestion-solid: #b45309;
+    --suggestion-text: #a3540a;
+  }
 }
 
 .memory-suggestions-bubble {
@@ -17,8 +45,8 @@
   gap: 0.4rem;
   padding: 0.35rem 0.85rem;
   border-radius: 999px;
-  border: 1px solid rgb(var(--accent-rgb) / 0.45);
-  background: rgb(var(--accent-rgb) / 0.14);
+  border: 1px solid rgb(var(--suggestion-rgb) / 0.45);
+  background: rgb(var(--suggestion-rgb) / 0.14);
   color: var(--text);
   font-size: 0.8rem;
   font-weight: 500;
@@ -29,12 +57,12 @@
 
 .memory-suggestions-bubble:hover,
 .memory-suggestions-bubble.is-open {
-  background: rgb(var(--accent-rgb) / 0.24);
-  border-color: rgb(var(--accent-rgb) / 0.7);
+  background: rgb(var(--suggestion-rgb) / 0.24);
+  border-color: rgb(var(--suggestion-rgb) / 0.7);
 }
 
 .memory-suggestions-bubble:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--suggestion-solid);
   outline-offset: 2px;
 }
 
@@ -85,7 +113,7 @@
 }
 
 .memory-suggestions-header-icon {
-  color: var(--accent-text);
+  color: var(--suggestion-text);
   flex-shrink: 0;
 }
 
@@ -98,8 +126,8 @@
 .memory-suggestions-count {
   padding: 0.05rem 0.45rem;
   border-radius: 999px;
-  background: rgb(var(--accent-rgb) / 0.18);
-  color: var(--accent-text);
+  background: rgb(var(--suggestion-rgb) / 0.18);
+  color: var(--suggestion-text);
   font-size: 0.72rem;
   font-weight: 600;
 }
@@ -215,7 +243,7 @@
 
 .memory-suggestion-content:focus {
   outline: none;
-  border-color: rgb(var(--accent-rgb) / 0.6);
+  border-color: rgb(var(--suggestion-rgb) / 0.6);
   background: var(--surface-raised);
 }
 
@@ -236,8 +264,8 @@
 .memory-suggestion-replaces {
   padding: 0.05rem 0.45rem;
   border-radius: 999px;
-  border: 1px solid rgb(var(--accent-rgb) / 0.4);
-  color: var(--accent-text);
+  border: 1px solid rgb(var(--suggestion-rgb) / 0.4);
+  color: var(--suggestion-text);
   font-style: normal;
   white-space: nowrap;
 }
@@ -262,7 +290,7 @@
   padding: 0.3rem 0.5rem;
   border-bottom: 1px solid var(--border);
   font-size: 0.72rem;
-  color: var(--accent-text);
+  color: var(--suggestion-text);
 }
 
 .memory-suggestion-diff-note {
@@ -335,12 +363,11 @@
 
 .memory-suggestion-accept {
   border: 1px solid transparent;
-  background: var(--accent);
-  color: #fff;
+  background: var(--suggestion-solid);
+  color: var(--suggestion-contrast);
 }
 
 .memory-suggestion-accept:hover:not(:disabled) {
-  background: var(--accent-hover, var(--accent));
   filter: brightness(1.08);
 }
 
@@ -372,7 +399,7 @@
   /* The phone composer overlays the bottom of .chat-panel (ChatPanel.css),
      so the bubble leaves the flex flow too and floats just above the
      collapsed input pill; the panel then opens over the composer. */
-  .chat-panel > .memory-suggestions {
+  .chat-panel > .memory-suggestions-bar {
     position: absolute;
     left: 0;
     right: 0;

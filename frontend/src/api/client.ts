@@ -35,6 +35,11 @@ import type {
   MemorySuggestion,
   MemorySuggestionsListResponse,
   AcceptMemorySuggestionResponse,
+  ProjectMemory,
+  ProjectMemoriesListResponse,
+  ProjectMemorySuggestion,
+  ProjectMemorySuggestionsListResponse,
+  AcceptProjectMemorySuggestionResponse,
   Guide,
   GuidesListResponse,
   Skill,
@@ -269,6 +274,65 @@ export function acceptMemorySuggestion(
 
 export function dismissMemorySuggestion(suggestionId: string): Promise<{ suggestion: MemorySuggestion }> {
   return apiPost(`${endpoints.memorySuggestion(suggestionId)}/dismiss`);
+}
+
+// Project memories (chat/project_memory_routes.py)
+
+export function fetchProjectMemories(
+  projectId: string,
+  includeArchived: boolean = false,
+): Promise<ProjectMemoriesListResponse> {
+  return apiGet(endpoints.projectMemories(projectId), {
+    query: { include_archived: includeArchived || undefined },
+  });
+}
+
+export function createProjectMemory(projectId: string, content: string): Promise<ProjectMemory> {
+  return apiPost(endpoints.projectMemories(projectId), { body: { content } });
+}
+
+export function updateProjectMemory(
+  projectId: string,
+  memoryId: string,
+  content: string,
+): Promise<ProjectMemory> {
+  return apiPut(endpoints.projectMemory(projectId, memoryId), { body: { content } });
+}
+
+export function archiveProjectMemory(projectId: string, memoryId: string): Promise<ProjectMemory> {
+  return apiPut(`${endpoints.projectMemory(projectId, memoryId)}/archive`);
+}
+
+export function unarchiveProjectMemory(projectId: string, memoryId: string): Promise<ProjectMemory> {
+  return apiPut(`${endpoints.projectMemory(projectId, memoryId)}/unarchive`);
+}
+
+export function deleteProjectMemory(
+  projectId: string,
+  memoryId: string,
+): Promise<{ success: boolean }> {
+  return apiDelete(endpoints.projectMemory(projectId, memoryId));
+}
+
+export function fetchProjectMemorySuggestions(
+  conversationId: string,
+): Promise<ProjectMemorySuggestionsListResponse> {
+  return apiGet(endpoints.conversationProjectMemorySuggestions(conversationId));
+}
+
+export function acceptProjectMemorySuggestion(
+  suggestionId: string,
+  content?: string,
+): Promise<AcceptProjectMemorySuggestionResponse> {
+  return apiPost(`${endpoints.projectMemorySuggestion(suggestionId)}/accept`, {
+    body: content !== undefined ? { content } : {},
+  });
+}
+
+export function dismissProjectMemorySuggestion(
+  suggestionId: string,
+): Promise<{ suggestion: ProjectMemorySuggestion }> {
+  return apiPost(`${endpoints.projectMemorySuggestion(suggestionId)}/dismiss`);
 }
 
 // Inference API key functions (Settings > Inference API)

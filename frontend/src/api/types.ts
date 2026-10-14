@@ -508,6 +508,10 @@ export interface ConversationDetail {
   /** Count of model-proposed memories awaiting review in this conversation
    *  (the composer bubble); kept fresh by ``memory_suggestions_changed``. */
   pending_memory_suggestions?: number;
+  /** The same for ``suggest_project_memory`` proposals (the separate
+   *  project-memory bubble); kept fresh by
+   *  ``project_memory_suggestions_changed``. */
+  pending_project_memory_suggestions?: number;
 }
 
 export interface CreateConversationResponse {
@@ -891,6 +895,37 @@ export interface AcceptMemorySuggestionResponse {
 
 export interface MemoriesListResponse {
   memories: Memory[];
+}
+
+/** A memory attached to a project (chat/project_memories.py): same shape
+ *  as a user ``Memory`` but scoped to ``project_id``. */
+export interface ProjectMemory {
+  id: string;
+  project_id: string;
+  content: string;
+  created_at: string;
+  updated_at: string | null;
+  archived: boolean;
+}
+
+export interface ProjectMemoriesListResponse {
+  memories: ProjectMemory[];
+}
+
+/** A project memory the model proposed via ``suggest_project_memory``;
+ *  same fields as ``MemorySuggestion`` plus the project it belongs to. */
+export interface ProjectMemorySuggestion extends MemorySuggestion {
+  project_id: string;
+}
+
+export interface ProjectMemorySuggestionsListResponse {
+  suggestions: ProjectMemorySuggestion[];
+  pending_count: number;
+}
+
+export interface AcceptProjectMemorySuggestionResponse {
+  suggestion: ProjectMemorySuggestion;
+  memory: ProjectMemory;
 }
 
 // Guide types

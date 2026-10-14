@@ -40,7 +40,7 @@ target_metadata = Base.metadata
 # _config, _data, _docsize, _idx) are created via raw SQL in Alembic
 # migrations, not via SQLAlchemy ORM models.  Without this exclusion,
 # autogenerate would propose dropping them on every run.
-_FTS_VIRTUAL_TABLES = {"memories_fts"}
+_FTS_VIRTUAL_TABLES = {"memories_fts", "project_memories_fts"}
 _FTS_SHADOW_SUFFIXES = ("_config", "_data", "_docsize", "_idx")
 
 

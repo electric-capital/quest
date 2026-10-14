@@ -14,6 +14,12 @@ const mocks = vi.hoisted(() => ({
   archiveMemory: vi.fn(),
   unarchiveMemory: vi.fn(),
   deleteMemory: vi.fn(),
+  fetchProjectMemories: vi.fn(),
+  createProjectMemory: vi.fn(),
+  updateProjectMemory: vi.fn(),
+  archiveProjectMemory: vi.fn(),
+  unarchiveProjectMemory: vi.fn(),
+  deleteProjectMemory: vi.fn(),
 }));
 
 vi.mock('../../api/client', () => mocks);
@@ -133,5 +139,34 @@ describe('MemoriesSection', () => {
     expect(within(archivedRow).getByText('Archived')).not.toBeNull();
     expect(within(archivedRow).queryByRole('button', { name: 'Edit' })).toBeNull();
     expect(within(archivedRow).getByRole('button', { name: 'Unarchive' })).not.toBeNull();
+  });
+});
+
+describe('MemoriesSection with a projectId', () => {
+  it('lists, creates and deletes through the project endpoints', async () => {
+    mocks.fetchProjectMemories.mockResolvedValue({
+      memories: [memory('pm1', 'Figures are in EUR')],
+    });
+    mocks.createProjectMemory.mockResolvedValue(memory('pm2', 'Board meets monthly'));
+    mocks.deleteProjectMemory.mockResolvedValue({ success: true });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<MemoriesSection projectId="proj-1" />);
+
+    expect(screen.getByRole('heading', { name: 'Project Memories' })).not.toBeNull();
+    await screen.findByText('Figures are in EUR');
+    expect(mocks.fetchProjectMemories).toHaveBeenCalledWith('proj-1', false);
+    expect(mocks.fetchMemories).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '+ New memory' }));
+    const editor = screen.getByLabelText('New memory');
+    expect((editor as HTMLTextAreaElement).placeholder).toContain('about this project');
+    fireEvent.change(editor, { target: { value: 'Board meets monthly' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mocks.createProjectMemory).toHaveBeenCalledWith('proj-1', 'Board meets monthly'));
+    await screen.findByText('Board meets monthly');
+
+    fireEvent.click(within(rows()[0]).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(mocks.deleteProjectMemory).toHaveBeenCalledWith('proj-1', 'pm2'));
+    expect(mocks.createMemory).not.toHaveBeenCalled();
   });
 });

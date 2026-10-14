@@ -42,6 +42,10 @@ export interface ConversationState {
   // Seeded from ``pending_memory_suggestions`` on the GET payload, then
   // replaced by every ``memory_suggestions_changed`` event's count.
   pendingMemorySuggestions: number;
+  // The same for ``suggest_project_memory`` proposals (the separate
+  // project-memory bubble), fed by ``pending_project_memory_suggestions``
+  // and ``project_memory_suggestions_changed``.
+  pendingProjectMemorySuggestions: number;
 }
 
 /**
@@ -65,6 +69,7 @@ function createDefaultState(): ConversationState {
     expensiveResume: null,
     expensiveResumeAcknowledged: false,
     pendingMemorySuggestions: 0,
+    pendingProjectMemorySuggestions: 0,
   };
 }
 
@@ -549,6 +554,12 @@ class ConversationStore {
   setPendingMemorySuggestions(id: string, count: number): void {
     if (this.getConversation(id).pendingMemorySuggestions === count) return;
     this.updateConversation(id, { pendingMemorySuggestions: count });
+  }
+
+  /** Project-memory twin of ``setPendingMemorySuggestions``. */
+  setPendingProjectMemorySuggestions(id: string, count: number): void {
+    if (this.getConversation(id).pendingProjectMemorySuggestions === count) return;
+    this.updateConversation(id, { pendingProjectMemorySuggestions: count });
   }
 
   /**

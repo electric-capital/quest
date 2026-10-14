@@ -1,5 +1,7 @@
 """Memory handlers: memory_search, memory_list and the non-blocking
-suggest_memory (chat/memory_suggestions.py).
+suggest_memory (chat/memory_suggestions.py), plus their project-scoped
+twins project_memory_search, project_memory_list and
+suggest_project_memory (chat/project_memories.py).
 """
 
 import json
@@ -103,3 +105,88 @@ async def _handle_suggest_memory(
         return json.dumps({"error": f"Failed to register suggestion: {e}"})
     return json.dumps(result)
 
+
+
+# ---------------------------------------------------------------------------
+# Project memory tool handlers (chat/project_memories.py)
+# ---------------------------------------------------------------------------
+
+_NO_PROJECT_ERROR = (
+    "Project memories exist only in project conversations; this "
+    "conversation does not belong to a project."
+)
+
+
+def _project_memory_view(m: dict) -> dict:
+    return {
+        "id": m["id"],
+        "content": m["content"],
+        "created_at": m["created_at"],
+        "updated_at": m.get("updated_at"),
+    }
+
+
+async def _handle_project_memory_search(project_id: str | None, query: str) -> str:
+    """FTS5 search over the conversation's project memories.
+
+    Args:
+        project_id: The conversation's project; None is refused.
+        query: FTS5 query, same syntax as memory_search.
+
+    Returns:
+        JSON string with the matching project memories.
+    """
+    if not project_id:
+        return json.dumps({"error": _NO_PROJECT_ERROR})
+    from db.project_memory_store import search_project_memories
+    try:
+        results = await search_project_memories(project_id, query)
+    except Exception as e:
+        return json.dumps({"error": f"Search failed: {e}"})
+    return json.dumps({
+        "match_count": len(results),
+        "project_memories": [_project_memory_view(m) for m in results],
+    })
+
+
+async def _handle_project_memory_list(project_id: str | None) -> str:
+    """All active memories of the conversation's project, newest first."""
+    if not project_id:
+        return json.dumps({"error": _NO_PROJECT_ERROR})
+    from db.project_memory_store import list_project_memories
+    results = await list_project_memories(project_id)
+    return json.dumps({
+        "memory_count": len(results),
+        "project_memories": [_project_memory_view(m) for m in results],
+    })
+
+
+async def _handle_suggest_project_memory(
+    user_id: int,
+    project_id: str | None,
+    conversation_id: str | None,
+    content: object,
+    reasoning: object = None,
+    replaces_memory_id: object = None,
+) -> str:
+    """Register a project memory suggestion for the user's review.
+
+    Returns:
+        JSON string: ``status`` suggested / already_saved /
+        already_suggested with ids and the pending count, or ``error``.
+    """
+    if not project_id:
+        return json.dumps({"error": _NO_PROJECT_ERROR})
+    if not conversation_id:
+        return json.dumps({
+            "error": "suggest_project_memory needs a conversation context.",
+        })
+    from chat.project_memories import register_suggestion
+    try:
+        result = await register_suggestion(
+            user_id, project_id, conversation_id, content,
+            reasoning=reasoning, replaces_memory_id=replaces_memory_id,
+        )
+    except Exception as e:
+        return json.dumps({"error": f"Failed to register suggestion: {e}"})
+    return json.dumps(result)

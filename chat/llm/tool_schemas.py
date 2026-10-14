@@ -400,6 +400,115 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "required": ["content"],
         },
     },
+    # Project memories (chat/project_memories.py): facts about the PROJECT,
+    # shared by every conversation in it, beside the user's own memories.
+    # Listed only in private project conversations (PROJECT_MEMORY_TOOLS).
+    "project_memory_search": {
+        "name": "project_memory_search",
+        "description": (
+            "Search this project's saved project memories using full-text "
+            "search. Project memories are facts about the project itself -- its "
+            "goals, conventions, decisions, stakeholders, data sources and "
+            "recurring pitfalls -- shared by every conversation in the project, "
+            "separate from the user's personal memories (memory_search). Same "
+            "query syntax as memory_search: keywords, \"exact phrase\", prefix*, "
+            "AND / OR / NOT. Search them at the start of non-trivial project "
+            "work and whenever the user refers to something the project should "
+            "already know."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "FTS5 search query. Example: 'naming conventions', '\"quarterly report\"', 'deploy OR release'.",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Search project memories'.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    "project_memory_list": {
+        "name": "project_memory_list",
+        "description": (
+            "List all of this project's saved project memories (active ones, "
+            "newest first). Use it for a complete picture of what the project "
+            "has recorded, or when the user asks what you remember about the "
+            "project."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "intent_message": {
+                    "type": "string",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'List project memories'.",
+                },
+            },
+            "required": [],
+        },
+    },
+    "suggest_project_memory": {
+        "name": "suggest_project_memory",
+        "description": (
+            "Propose a PROJECT memory -- a fact about this project, useful to "
+            "every future conversation in it -- for the user to review later, "
+            "WITHOUT interrupting the conversation. It is registered on the side "
+            "and this call returns at once; the user sees a separate 'suggested "
+            "project memories' bubble above their message box and accepts or "
+            "dismisses each one when they like. Nothing is saved until they "
+            "accept, so never claim it was saved. Use it for project facts "
+            "(conventions, decisions and their reasons, stakeholders, data "
+            "sources, recurring pitfalls, status of long-running workstreams) "
+            "the user did NOT explicitly ask you to record; when they DO ask, "
+            "use create_action_request(request_type=\"create_project_memory\") "
+            "instead. Facts about the user as a person (their role, "
+            "preferences, style) belong in suggest_memory, not here. Search "
+            "first (project_memory_search) and do not suggest a fact a project "
+            "memory already covers; when one is outdated, suggest the new text "
+            "and pass its id as replaces_memory_id. One fact per call, concise "
+            "and self-contained; do not restate the suggestion in your reply."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": (
+                        "The project memory text exactly as it should be "
+                        "saved: one concise, self-contained fact about the "
+                        "project, useful in a future conversation with no "
+                        "other context (relative dates made absolute). "
+                        "Example: 'Revenue figures in this project are "
+                        "reported in EUR, net of VAT'. Max 4KB."
+                    ),
+                },
+                "reasoning": {
+                    "type": "string",
+                    "description": (
+                        "One sentence, shown to the user under the "
+                        "suggestion: why the project should remember this."
+                    ),
+                },
+                "replaces_memory_id": {
+                    "type": "string",
+                    "description": (
+                        "Id of an existing project memory (from "
+                        "project_memory_search / project_memory_list) this "
+                        "suggestion supersedes; it is archived when the user "
+                        "accepts. Omit for a new fact."
+                    ),
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Suggest project memory: EUR'.",
+                },
+            },
+            "required": ["content"],
+        },
+    },
     "wait_for_handles": {
         "name": "wait_for_handles",
         "description": (
@@ -2674,6 +2783,8 @@ _CREATE_ACTION_REQUEST: ToolSpec = {
         "invites in `system:calendar`, Telegram in `system:telegram`, "
         "Twitter DMs in `system:twitter`, memory writes "
         "(`request_type=\"create_memory\"`, `params={\"content\": \"...\"}`) "
+        "and project memory writes (`create_project_memory`, same params, "
+        "project conversations only) "
         "in `system:memory`, skill create/edit in `system:skill_management`, "
         "routine create/edit (`create_routine` / `edit_routine`) in "
         "`system:routines`, "
@@ -2981,6 +3092,17 @@ PROJECT_ONLY_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
     "write_file",
     "edit_file",
     "copy_file",
+})
+
+# Project memory tools (chat/project_memories.py): like the project-only
+# tools above they are hidden outside a project, but unlike them they are NOT
+# public-allowlisted -- a public-project conversation is cut off from
+# memories of either kind, so they stay out of PUBLIC_TOOL_CALL_ALLOWLIST and
+# are hard-rejected there at dispatch.
+PROJECT_MEMORY_TOOLS: frozenset[str] = frozenset({
+    "project_memory_search",
+    "project_memory_list",
+    "suggest_project_memory",
 })
 
 # The four conversation-workspace tools, hidden from every prompt of a

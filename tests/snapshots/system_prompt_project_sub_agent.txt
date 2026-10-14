@@ -16,6 +16,9 @@ Snapshot project instructions.
 **Converted chat:** This chat was converted from a standalone chat into this project. Files it created before the conversion are in this chat's workspace (`chat://`), not the project workspace; use `copy_file` from `chat://` to `proj://` for any that should become shared project files, or when the user asks.
 
 
+**Project Memories:** Besides the user's personal memories, this project keeps its own *project memories*: facts about the project, shared by every conversation in it. Read them with `tool_call(tool_name="project_memory_search", arguments={"query": "..."})` (or `project_memory_list`) at the start of non-trivial project work and whenever the user refers to something the project should already know; they complement the project's instructions, which the user writes by hand.
+
+
 ---
 
 
@@ -62,6 +65,10 @@ The following tools are called through `tool_call(tool_name="<name>", arguments=
 - **memory_search** -- Search the user's saved memories using full-text search. Memories are personal notes and facts the user has asked you to remember, or that have been saved from previous conversations. Use this to recall information about the user's preferences, past requests, or any facts they wanted remembered. The search supports keywords, phrases ("exact phrase"), prefix matching (meet*), and boolean operators (AND, OR, NOT). Always search memories when the user refers to something you should already know, or at the start of complex tasks to check for relevant context. Arguments: `query` (string (required)) -- FTS5 search query. Use keywords, phrases, prefix matching, or boolean operators. Example: 'meeting preferences', '"project alpha"', 'coffee OR tea'..
 
 - **memory_list** -- List all of the user's saved memories. Returns all active (non-archived) memories ordered by creation time (newest first). Use this when you need a complete picture of what you know about the user, or when the user asks something like 'what do you remember about me?' or 'show me my memories'. No required arguments.
+
+- **project_memory_search** -- Search this project's saved project memories using full-text search. Project memories are facts about the project itself -- its goals, conventions, decisions, stakeholders, data sources and recurring pitfalls -- shared by every conversation in the project, separate from the user's personal memories (memory_search). Same query syntax as memory_search: keywords, "exact phrase", prefix*, AND / OR / NOT. Search them at the start of non-trivial project work and whenever the user refers to something the project should already know. Arguments: `query` (string (required)) -- FTS5 search query. Example: 'naming conventions', '"quarterly report"', 'deploy OR release'..
+
+- **project_memory_list** -- List all of this project's saved project memories (active ones, newest first). Use it for a complete picture of what the project has recorded, or when the user asks what you remember about the project. No required arguments.
 
 - **download_drive_file** -- Download a Google Drive file's binary content to this conversation's workspace. Use this to download PDFs, images, spreadsheets, and other files from Google Drive. After downloading, use get_workspace_file to read or analyze the file. Requires Google Services to be connected. Arguments: `file_id` (string (required)) -- The Google Drive file ID. Found in Drive URLs or from the Drive API files list endpoint.; `filename` (string) -- Optional filename to save the file as in the workspace. If not provided, the original filename from Drive metadata is used..
 
@@ -134,7 +141,7 @@ Size limit, force_large_response, and output_file behave exactly as for authed_g
 The following built-in skills contain detailed API docs for each backend or topic. They are NOT loaded automatically -- call `load_skills(skill_ids=[...])` with the skill id(s) when you need them. You can load multiple at once. Loaded skill content stays in the conversation for the rest of the turn (and remains visible to you in subsequent turns of the same conversation).
 
 - `system:federal_register` -- Search/read US Federal Register documents, agencies, public-inspection docs via authed_get (no auth). Load when the user asks about federal rules, regulations, notices, executive orders, or agency filings.
-- `system:memory` -- Reads via memory_search / memory_list; suggest_memory proposals; writes via create_action_request(create_memory). Load when the user refers to saved context, preferences, or asks you to remember.
+- `system:memory` -- Personal and project memories: search/list reads, non-blocking suggest_* proposals, create_* action-request writes. Load when the user refers to saved context, preferences, or asks you to remember.
 - `system:workspace` -- list/get/write workspace files plus run_python / run_script patterns. Load for file-heavy tasks, generated artifacts, charts, or sandbox script work.
 - `system:action_requests` -- Full reference for create_action_request types and their param shapes. Load before sending messages, scheduling events, or other approval-gated writes.
 - `system:skill_management` -- Inspect skills (list_my_skills/get_skill) and create/edit them via create_action_request(create_skill/edit_skill). Load when the user asks to list, read, create, edit, share, or auto-load a skill.

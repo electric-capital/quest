@@ -209,6 +209,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
     acknowledgeExpensiveResume,
     clearExpensiveResume,
     pendingMemorySuggestions,
+    pendingProjectMemorySuggestions,
     customName,
     setCustomName,
     archived,
@@ -803,13 +804,23 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
 
       {/* Stream errors are now shown inline as error bubbles in the chat */}
 
-      {/* Suggested-memories bubble (the model's non-blocking suggest_memory
-          proposals awaiting review); click opens the review panel over the
-          conversation. Hidden while nothing is pending. */}
-      <MemorySuggestions
-        conversationId={conversationId}
-        pendingCount={pendingMemorySuggestions}
-      />
+      {/* Suggested-memories bubbles (the model's non-blocking suggest_memory
+          and suggest_project_memory proposals awaiting review), side by side;
+          click opens the kind's review panel over the conversation. Each is
+          hidden while nothing of its kind is pending. */}
+      {(pendingMemorySuggestions > 0 || pendingProjectMemorySuggestions > 0) && (
+        <div className="memory-suggestions-bar">
+          <MemorySuggestions
+            conversationId={conversationId}
+            pendingCount={pendingMemorySuggestions}
+          />
+          <MemorySuggestions
+            conversationId={conversationId}
+            pendingCount={pendingProjectMemorySuggestions}
+            kind="project"
+          />
+        </div>
+      )}
 
       {/* Expensive-resume warning: blocks the composer on a long-idle,
           long-context conversation until the user picks an alternative or

@@ -1,12 +1,64 @@
 // Settings > Memories: a compact table of the user's memories, filtered
 // inline by a search box, with click-to-expand rows and in-row editing so
-// dozens of memories fit on one screen.
+// dozens of memories fit on one screen. Given a ``projectId`` the same table
+// manages that project's memories instead (Project Settings > Memories).
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { KeyboardEvent } from 'react';
 import { Archive, ArchiveRestore, Pencil, Search, Trash2, X } from 'lucide-react';
-import { fetchMemories, createMemory, updateMemory, archiveMemory, unarchiveMemory, deleteMemory } from '../../api/client';
-import type { Memory } from '../../api/types';
+import {
+  fetchMemories,
+  createMemory,
+  updateMemory,
+  archiveMemory,
+  unarchiveMemory,
+  deleteMemory,
+  fetchProjectMemories,
+  createProjectMemory,
+  updateProjectMemory,
+  archiveProjectMemory,
+  unarchiveProjectMemory,
+  deleteProjectMemory,
+} from '../../api/client';
 import './MemoriesSection.css';
+
+/** The fields the table uses; both ``Memory`` and ``ProjectMemory`` fit. */
+interface Memory {
+  id: string;
+  content: string;
+  created_at: string;
+  updated_at: string | null;
+  archived: boolean;
+}
+
+/** The store the table edits: the user's memories or one project's. */
+interface MemoryApi {
+  list: (includeArchived: boolean) => Promise<{ memories: Memory[] }>;
+  create: (content: string) => Promise<Memory>;
+  update: (id: string, content: string) => Promise<Memory>;
+  archive: (id: string) => Promise<Memory>;
+  unarchive: (id: string) => Promise<Memory>;
+  remove: (id: string) => Promise<unknown>;
+}
+
+const USER_MEMORY_API: MemoryApi = {
+  list: fetchMemories,
+  create: createMemory,
+  update: updateMemory,
+  archive: archiveMemory,
+  unarchive: unarchiveMemory,
+  remove: deleteMemory,
+};
+
+function projectMemoryApi(projectId: string): MemoryApi {
+  return {
+    list: (includeArchived) => fetchProjectMemories(projectId, includeArchived),
+    create: (content) => createProjectMemory(projectId, content),
+    update: (id, content) => updateProjectMemory(projectId, id, content),
+    archive: (id) => archiveProjectMemory(projectId, id),
+    unarchive: (id) => unarchiveProjectMemory(projectId, id),
+    remove: (id) => deleteProjectMemory(projectId, id),
+  };
+}
 
 /** "Oct 14" within the current year, "Oct 14, 2025" otherwise. */
 function shortDate(iso: string): string {
@@ -76,7 +128,17 @@ function MemoryEditor({ value, onChange, onSave, onCancel, saving, placeholder, 
   );
 }
 
-export function MemoriesSection() {
+interface MemoriesSectionProps {
+  /** Manage this project's memories instead of the user's own. */
+  projectId?: string;
+}
+
+export function MemoriesSection({ projectId }: MemoriesSectionProps = {}) {
+  const api = useMemo(
+    () => (projectId ? projectMemoryApi(projectId) : USER_MEMORY_API),
+    [projectId],
+  );
+  const isProject = Boolean(projectId);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [isLoadingMemories, setIsLoadingMemories] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -94,7 +156,7 @@ export function MemoriesSection() {
     const loadMemories = async () => {
       setIsLoadingMemories(true);
       try {
-        const response = await fetchMemories(showArchived);
+        const response = await api.list(showArchived);
         setMemories(response.memories);
       } catch (error) {
         console.error('Failed to load memories:', error);
@@ -104,7 +166,7 @@ export function MemoriesSection() {
     };
 
     loadMemories();
-  }, [showArchived]);
+  }, [showArchived, api]);
 
   // Cleanup timeouts on unmount
   useEffect(() => {
@@ -125,7 +187,7 @@ export function MemoriesSection() {
     if (!newMemoryContent.trim()) return;
     setMemorySaveStatus('saving');
     try {
-      const memory = await createMemory(newMemoryContent);
+      const memory = await api.create(newMemoryContent);
       setMemories(prev => [memory, ...prev]);
       setNewMemoryContent('');
       setIsCreating(false);
@@ -134,13 +196,13 @@ export function MemoriesSection() {
       console.error('Failed to create memory:', error);
       flashStatus('error');
     }
-  }, [newMemoryContent, flashStatus]);
+  }, [newMemoryContent, flashStatus, api]);
 
   const handleUpdateMemory = useCallback(async (memoryId: string) => {
     if (!editingContent.trim()) return;
     setMemorySaveStatus('saving');
     try {
-      const updated = await updateMemory(memoryId, editingContent);
+      const updated = await api.update(memoryId, editingContent);
       setMemories(prev => prev.map(m => m.id === memoryId ? updated : m));
       setEditingMemoryId(null);
       setEditingContent('');
@@ -149,11 +211,11 @@ export function MemoriesSection() {
       console.error('Failed to update memory:', error);
       flashStatus('error');
     }
-  }, [editingContent, flashStatus]);
+  }, [editingContent, flashStatus, api]);
 
   const handleArchiveMemory = useCallback(async (memoryId: string) => {
     try {
-      await archiveMemory(memoryId);
+      await api.archive(memoryId);
       if (showArchived) {
         setMemories(prev => prev.map(m => m.id === memoryId ? { ...m, archived: true } : m));
       } else {
@@ -162,28 +224,28 @@ export function MemoriesSection() {
     } catch (error) {
       console.error('Failed to archive memory:', error);
     }
-  }, [showArchived]);
+  }, [showArchived, api]);
 
   const handleUnarchiveMemory = useCallback(async (memoryId: string) => {
     try {
-      const updated = await unarchiveMemory(memoryId);
+      const updated = await api.unarchive(memoryId);
       setMemories(prev => prev.map(m => m.id === memoryId ? updated : m));
     } catch (error) {
       console.error('Failed to unarchive memory:', error);
     }
-  }, []);
+  }, [api]);
 
   const handleDeleteMemory = useCallback(async (memoryId: string) => {
     if (!confirm('Are you sure you want to permanently delete this memory? This cannot be undone.')) {
       return;
     }
     try {
-      await deleteMemory(memoryId);
+      await api.remove(memoryId);
       setMemories(prev => prev.filter(m => m.id !== memoryId));
     } catch (error) {
       console.error('Failed to delete memory:', error);
     }
-  }, []);
+  }, [api]);
 
   const startEditing = useCallback((memory: Memory) => {
     setEditingMemoryId(memory.id);
@@ -227,10 +289,13 @@ export function MemoriesSection() {
 
   return (
     <div className="settings-section">
-      <h3>Memories</h3>
+      <h3>{isProject ? 'Project Memories' : 'Memories'}</h3>
       <p className="settings-description">
-        Notes and context the assistant uses to personalize your experience.
-        Click a memory to expand it.
+        {isProject
+          ? 'Facts about this project that the assistant reads in every chat of the '
+            + 'project, separate from your personal memories. Click a memory to expand it.'
+          : 'Notes and context the assistant uses to personalize your experience. '
+            + 'Click a memory to expand it.'}
       </p>
 
       <div className="memories-toolbar">
@@ -300,7 +365,9 @@ export function MemoriesSection() {
                     onSave={handleCreateMemory}
                     onCancel={cancelCreating}
                     saving={memorySaveStatus === 'saving'}
-                    placeholder="What should the assistant remember?"
+                    placeholder={isProject
+                      ? 'What should the assistant remember about this project?'
+                      : 'What should the assistant remember?'}
                   />
                 </td>
               </tr>

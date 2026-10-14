@@ -7,15 +7,23 @@
  * (kept fresh by ``memory_suggestions_changed`` events via useConversation);
  * clicking it opens a panel that overlays the conversation, where each
  * suggestion can be edited, accepted (creating the memory) or dismissed.
+ *
+ * ``kind="project"`` renders the project-memory twin for the model's
+ * ``suggest_project_memory`` proposals (chat/project_memories.py): same
+ * mechanics against the project-memory endpoints, but its own amber colour,
+ * folder icon and wording, so the two bubbles never read as one.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { TextareaHTMLAttributes } from 'react';
-import { Brain, Check, ChevronDown, ChevronUp, LoaderCircle, X } from 'lucide-react';
+import { Brain, Check, ChevronDown, ChevronUp, FolderBookmark, LoaderCircle, X } from 'lucide-react';
 import {
   acceptMemorySuggestion,
+  acceptProjectMemorySuggestion,
   dismissMemorySuggestion,
+  dismissProjectMemorySuggestion,
   fetchMemorySuggestions,
+  fetchProjectMemorySuggestions,
 } from '../api/client';
 import { ApiClientError } from '../api/request';
 import type { MemorySuggestion } from '../api/types';
@@ -23,11 +31,53 @@ import { conversationStore } from '../store/conversationStore';
 import { wordDiff } from '../utils/wordDiff';
 import './MemorySuggestions.css';
 
+export type MemorySuggestionKind = 'user' | 'project';
+
 interface MemorySuggestionsProps {
   conversationId: string;
   /** Pending count from the store; the bubble hides at zero. */
   pendingCount: number;
+  /** Personal memories (default) or the conversation's project memories. */
+  kind?: MemorySuggestionKind;
 }
+
+/** Everything that differs between the two kinds. */
+const KIND_CONFIG = {
+  user: {
+    Icon: Brain,
+    title: 'Suggested memories',
+    countLabel: (n: number) => (n === 1 ? '1 suggested memory' : `${n} suggested memories`),
+    hint: 'The assistant thought these were worth remembering across chats. Edit '
+      + 'the text if you like, then accept to save it as a memory or dismiss it. '
+      + 'Nothing is saved until you accept.',
+    textLabel: 'Memory text',
+    replacesLabel: 'Replaces an existing memory',
+    replacesTitle: 'Accepting archives the memory this one updates',
+    saveError: 'Failed to save memory',
+    fetchList: fetchMemorySuggestions,
+    accept: acceptMemorySuggestion,
+    dismiss: dismissMemorySuggestion,
+    setCount: (id: string, n: number) => conversationStore.setPendingMemorySuggestions(id, n),
+  },
+  project: {
+    Icon: FolderBookmark,
+    title: 'Suggested project memories',
+    countLabel: (n: number) => (
+      n === 1 ? '1 suggested project memory' : `${n} suggested project memories`
+    ),
+    hint: 'The assistant thought these facts about this project are worth keeping '
+      + 'for every chat in it. Edit the text if you like, then accept to save it '
+      + 'to the project\'s memories or dismiss it. Nothing is saved until you accept.',
+    textLabel: 'Project memory text',
+    replacesLabel: 'Replaces an existing project memory',
+    replacesTitle: 'Accepting archives the project memory this one updates',
+    saveError: 'Failed to save project memory',
+    fetchList: fetchProjectMemorySuggestions,
+    accept: acceptProjectMemorySuggestion,
+    dismiss: dismissProjectMemorySuggestion,
+    setCount: (id: string, n: number) => conversationStore.setPendingProjectMemorySuggestions(id, n),
+  },
+} as const;
 
 /** Textarea that grows with its (wrapped) content instead of clipping it. */
 function AutoGrowTextarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
@@ -51,15 +101,18 @@ function errorMessage(err: unknown, fallback: string): string {
  * the words the draft drops struck through on red and the words it adds on
  * green. Follows the draft as the user edits it.
  */
-function ReplacementDiff({ before, after }: { before: string; after: string }) {
+function ReplacementDiff({
+  before,
+  after,
+  label,
+  title,
+}: { before: string; after: string; label: string; title: string }) {
   const segments = useMemo(() => wordDiff(before, after.trim()), [before, after]);
   const unchanged = segments.every((s) => s.type === 'equal');
   return (
     <div className="memory-suggestion-diff" data-testid="memory-suggestion-diff">
       <div className="memory-suggestion-diff-label">
-        <span title="Accepting archives the memory this one updates">
-          Replaces an existing memory
-        </span>
+        <span title={title}>{label}</span>
         {unchanged ? (
           <span className="memory-suggestion-diff-note">(same text)</span>
         ) : (
@@ -86,7 +139,14 @@ function ReplacementDiff({ before, after }: { before: string; after: string }) {
   );
 }
 
-export function MemorySuggestions({ conversationId, pendingCount }: MemorySuggestionsProps) {
+export function MemorySuggestions({
+  conversationId,
+  pendingCount,
+  kind = 'user',
+}: MemorySuggestionsProps) {
+  const config = KIND_CONFIG[kind];
+  const { Icon } = config;
+  const titleId = `memory-suggestions-title-${kind}`;
   const [isOpen, setIsOpen] = useState(false);
   const [suggestions, setSuggestions] = useState<MemorySuggestion[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -119,12 +179,12 @@ export function MemorySuggestions({ conversationId, pendingCount }: MemorySugges
     const generation = listGenerationRef.current;
     setIsLoading(true);
     setLoadError(null);
-    fetchMemorySuggestions(conversationId)
+    config.fetchList(conversationId)
       .then((resp) => {
         if (cancelled || generation !== listGenerationRef.current) return;
         // The list is the source of truth for the count too: it reconciles
         // the bubble after a dropped socket missed an event.
-        conversationStore.setPendingMemorySuggestions(conversationId, resp.pending_count);
+        config.setCount(conversationId, resp.pending_count);
         setSuggestions(resp.suggestions);
         setDrafts((prev) => {
           const live = new Set(resp.suggestions.map((s) => s.id));
@@ -145,7 +205,7 @@ export function MemorySuggestions({ conversationId, pendingCount }: MemorySugges
     return () => {
       cancelled = true;
     };
-  }, [isOpen, conversationId, pendingCount]);
+  }, [isOpen, conversationId, pendingCount, config]);
 
   // Close once the last suggestion is gone (accepted / dismissed here or
   // elsewhere); the bubble disappears with it.
@@ -207,9 +267,9 @@ export function MemorySuggestions({ conversationId, pendingCount }: MemorySugges
       if (action === 'accept') {
         const draft = drafts[suggestion.id];
         const edited = draft !== undefined && draft.trim() !== suggestion.content.trim();
-        await acceptMemorySuggestion(suggestion.id, edited ? draft.trim() : undefined);
+        await config.accept(suggestion.id, edited ? draft.trim() : undefined);
       } else {
-        await dismissMemorySuggestion(suggestion.id);
+        await config.dismiss(suggestion.id);
       }
       removeRow(suggestion.id);
       return true;
@@ -224,14 +284,14 @@ export function MemorySuggestions({ conversationId, pendingCount }: MemorySugges
         ...prev,
         [suggestion.id]: errorMessage(
           err,
-          action === 'accept' ? 'Failed to save memory' : 'Failed to dismiss',
+          action === 'accept' ? config.saveError : 'Failed to dismiss',
         ),
       }));
       return false;
     } finally {
       setBusy(suggestion.id, false);
     }
-  }, [drafts, removeRow, setBusy]);
+  }, [drafts, removeRow, setBusy, config]);
 
   const resolveAll = useCallback(async (action: 'accept' | 'dismiss') => {
     if (isBulkBusy) return;
@@ -249,12 +309,10 @@ export function MemorySuggestions({ conversationId, pendingCount }: MemorySugges
 
   if (pendingCount <= 0 && !isOpen) return null;
 
-  const countLabel = pendingCount === 1
-    ? '1 suggested memory'
-    : `${pendingCount} suggested memories`;
+  const countLabel = config.countLabel(pendingCount);
 
   return (
-    <div className="memory-suggestions">
+    <div className={`memory-suggestions memory-suggestions--${kind}`}>
       {isOpen && (
         <>
           <div
@@ -266,12 +324,12 @@ export function MemorySuggestions({ conversationId, pendingCount }: MemorySugges
             ref={panelRef}
             className="memory-suggestions-panel"
             role="dialog"
-            aria-labelledby="memory-suggestions-title"
+            aria-labelledby={titleId}
           >
             <div className="memory-suggestions-header">
-              <Brain size={16} className="memory-suggestions-header-icon" aria-hidden="true" />
-              <h3 id="memory-suggestions-title" className="memory-suggestions-title">
-                Suggested memories
+              <Icon size={16} className="memory-suggestions-header-icon" aria-hidden="true" />
+              <h3 id={titleId} className="memory-suggestions-title">
+                {config.title}
               </h3>
               <span className="memory-suggestions-count" aria-hidden="true">
                 {suggestions.length}
@@ -301,17 +359,13 @@ export function MemorySuggestions({ conversationId, pendingCount }: MemorySugges
                 type="button"
                 className="memory-suggestions-close"
                 onClick={() => setIsOpen(false)}
-                aria-label="Close suggested memories"
+                aria-label={`Close ${config.title.toLowerCase()}`}
                 title="Close"
               >
                 <X size={16} />
               </button>
             </div>
-            <p className="memory-suggestions-hint">
-              The assistant thought these were worth remembering across chats. Edit
-              the text if you like, then accept to save it as a memory or dismiss it.
-              Nothing is saved until you accept.
-            </p>
+            <p className="memory-suggestions-hint">{config.hint}</p>
             <div className="memory-suggestions-list">
               {loadError && (
                 <div className="memory-suggestions-error" role="alert">{loadError}</div>
@@ -344,10 +398,15 @@ export function MemorySuggestions({ conversationId, pendingCount }: MemorySugges
                       value={draft}
                       onChange={(e) => setDrafts((prev) => ({ ...prev, [suggestion.id]: e.target.value }))}
                       disabled={busy}
-                      aria-label="Memory text"
+                      aria-label={config.textLabel}
                     />
                     {replacedText !== null && (
-                      <ReplacementDiff before={replacedText} after={draft} />
+                      <ReplacementDiff
+                        before={replacedText}
+                        after={draft}
+                        label={config.replacesLabel}
+                        title={config.replacesTitle}
+                      />
                     )}
                     {(suggestion.reasoning || (suggestion.replaces_memory_id && replacedText === null)) && (
                       <div className="memory-suggestion-meta">
@@ -355,8 +414,8 @@ export function MemorySuggestions({ conversationId, pendingCount }: MemorySugges
                           <span className="memory-suggestion-reasoning">{suggestion.reasoning}</span>
                         )}
                         {suggestion.replaces_memory_id && replacedText === null && (
-                          <span className="memory-suggestion-replaces" title="Accepting archives the memory this one updates">
-                            Replaces an existing memory
+                          <span className="memory-suggestion-replaces" title={config.replacesTitle}>
+                            {config.replacesLabel}
                           </span>
                         )}
                       </div>
@@ -402,7 +461,7 @@ export function MemorySuggestions({ conversationId, pendingCount }: MemorySugges
         aria-expanded={isOpen}
         aria-haspopup="dialog"
       >
-        <Brain size={14} aria-hidden="true" />
+        <Icon size={14} aria-hidden="true" />
         <span>{countLabel}</span>
         {isOpen ? (
           <ChevronDown size={14} aria-hidden="true" />

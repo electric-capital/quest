@@ -82,6 +82,16 @@ export const endpoints = {
 
   memorySuggestion: (id: string) => `${API_BASE_URL}/memory-suggestions/${id}`,
 
+  projectMemories: (projectId: string) => `${API_BASE_URL}/projects/${projectId}/memories`,
+
+  projectMemory: (projectId: string, id: string) =>
+    `${API_BASE_URL}/projects/${projectId}/memories/${id}`,
+
+  conversationProjectMemorySuggestions: (conversationId: string) =>
+    `${API_BASE_URL}/conversations/${conversationId}/project-memory-suggestions`,
+
+  projectMemorySuggestion: (id: string) => `${API_BASE_URL}/project-memory-suggestions/${id}`,
+
   guides: () => `${API_BASE_URL}/guides`,
 
   guide: (id: string) => `${API_BASE_URL}/guides/${id}`,

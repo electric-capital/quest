@@ -470,6 +470,7 @@ app.post("/api/inference")(inference_endpoint)
 from chat.routes import router as chat_router
 from chat.file_routes import router as file_router
 from chat.memory_routes import router as memory_router
+from chat.project_memory_routes import router as project_memory_router
 from chat.guide_routes import router as guide_router
 from chat.project_routes import router as project_router
 from chat.routine_routes import router as routine_router
@@ -488,6 +489,7 @@ from chat.realtime import realtime_router
 app.include_router(chat_router)
 app.include_router(file_router)
 app.include_router(memory_router)
+app.include_router(project_memory_router)
 app.include_router(guide_router)
 app.include_router(project_router)
 app.include_router(routine_router)

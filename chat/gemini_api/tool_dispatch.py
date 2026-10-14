@@ -54,6 +54,9 @@ from chat.gemini_api.tool_handlers import (
     _handle_memory_search,
     _handle_memory_list,
     _handle_suggest_memory,
+    _handle_project_memory_search,
+    _handle_project_memory_list,
+    _handle_suggest_project_memory,
     _handle_list_skills,
     _handle_search_skills,
     _handle_load_skills,
@@ -322,6 +325,37 @@ async def _tool_suggest_memory(ctx: ToolContext, args: dict) -> str:
         })
     return await _handle_suggest_memory(
         ctx.user["id"], ctx.conversation_id, args.get("content"),
+        reasoning=args.get("reasoning"),
+        replaces_memory_id=args.get("replaces_memory_id"),
+    )
+
+
+async def _tool_project_memory_search(ctx: ToolContext, args: dict) -> str:
+    return await _handle_project_memory_search(ctx.project_id, args.get("query", ""))
+
+
+async def _tool_project_memory_list(ctx: ToolContext, args: dict) -> str:
+    return await _handle_project_memory_list(ctx.project_id)
+
+
+async def _tool_suggest_project_memory(ctx: ToolContext, args: dict) -> str:
+    # Same top-level-only backstop as suggest_memory; public-project
+    # conversations never get here (the tool is not in
+    # PUBLIC_TOOL_CALL_ALLOWLIST), the is_public check is defense in depth.
+    if (
+        ctx.is_sub_agent or ctx.is_user_subagent or ctx.is_inference_api
+        or ctx.is_script or ctx.is_public
+    ):
+        return json.dumps({
+            "error": (
+                "suggest_project_memory is only available to the top-level "
+                "agent of a private project conversation. Include the "
+                "proposed project memory text in your response so the "
+                "caller can suggest it."
+            ),
+        })
+    return await _handle_suggest_project_memory(
+        ctx.user["id"], ctx.project_id, ctx.conversation_id, args.get("content"),
         reasoning=args.get("reasoning"),
         replaces_memory_id=args.get("replaces_memory_id"),
     )
@@ -611,6 +645,9 @@ TOOL_CALL_HANDLERS: dict[str, ToolHandler] = {
     "memory_search": _tool_memory_search,
     "memory_list": _tool_memory_list,
     "suggest_memory": _tool_suggest_memory,
+    "project_memory_search": _tool_project_memory_search,
+    "project_memory_list": _tool_project_memory_list,
+    "suggest_project_memory": _tool_suggest_project_memory,
     "wait_for_handles": _tool_wait_for_handles_stub,
     "download_drive_file": _tool_download_drive_file,
     "google_export_doc": _tool_google_export_doc,
@@ -927,11 +964,12 @@ async def _dispatch_tool_call_inner(
             # project, the *_workspace_file tools only outside one.
             from chat.llm.tool_schemas import (
                 PROJECT_HIDDEN_WORKSPACE_TOOLS,
+                PROJECT_MEMORY_TOOLS,
                 PROJECT_ONLY_TOOL_CALL_TOOLS,
             )
             hidden = (
                 PROJECT_HIDDEN_WORKSPACE_TOOLS if project_id
-                else PROJECT_ONLY_TOOL_CALL_TOOLS
+                else PROJECT_ONLY_TOOL_CALL_TOOLS | PROJECT_MEMORY_TOOLS
             )
             names = [n for n in TOOL_CALL_REGISTRY if n not in hidden]
             available = ", ".join(sorted(names))

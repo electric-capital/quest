@@ -13,12 +13,18 @@ const mocks = vi.hoisted(() => ({
   fetchMemorySuggestions: vi.fn(),
   acceptMemorySuggestion: vi.fn(),
   dismissMemorySuggestion: vi.fn(),
+  fetchProjectMemorySuggestions: vi.fn(),
+  acceptProjectMemorySuggestion: vi.fn(),
+  dismissProjectMemorySuggestion: vi.fn(),
 }));
 
 vi.mock('../api/client', () => ({
   fetchMemorySuggestions: mocks.fetchMemorySuggestions,
   acceptMemorySuggestion: mocks.acceptMemorySuggestion,
   dismissMemorySuggestion: mocks.dismissMemorySuggestion,
+  fetchProjectMemorySuggestions: mocks.fetchProjectMemorySuggestions,
+  acceptProjectMemorySuggestion: mocks.acceptProjectMemorySuggestion,
+  dismissProjectMemorySuggestion: mocks.dismissProjectMemorySuggestion,
 }));
 
 const suggestion = (id: string, content: string, extra: Partial<MemorySuggestion> = {}): MemorySuggestion => ({
@@ -43,6 +49,9 @@ beforeEach(() => {
   mocks.fetchMemorySuggestions.mockReset();
   mocks.acceptMemorySuggestion.mockReset().mockResolvedValue({});
   mocks.dismissMemorySuggestion.mockReset().mockResolvedValue({});
+  mocks.fetchProjectMemorySuggestions.mockReset();
+  mocks.acceptProjectMemorySuggestion.mockReset().mockResolvedValue({});
+  mocks.dismissProjectMemorySuggestion.mockReset().mockResolvedValue({});
 });
 
 afterEach(cleanup);
@@ -208,5 +217,41 @@ describe('MemorySuggestions', () => {
     await screen.findByRole('dialog');
     fireEvent.click(container.querySelector('.memory-suggestions-backdrop')!);
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+});
+
+describe('MemorySuggestions kind="project"', () => {
+  it('uses the project endpoints, wording and store count', async () => {
+    mocks.fetchProjectMemorySuggestions.mockResolvedValue({
+      suggestions: [
+        suggestion('p1', 'Revenue is reported in EUR', {
+          replaces_memory_id: 'pm-old',
+          replaces_content: 'Revenue is reported in USD',
+        }),
+        suggestion('p2', 'Board meets on the first Monday'),
+      ],
+      pending_count: 2,
+    });
+    const { container } = render(
+      <MemorySuggestions conversationId="c-proj" pendingCount={1} kind="project" />,
+    );
+    expect(container.querySelector('.memory-suggestions--project')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /1 suggested project memory/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Suggested project memories' });
+    expect(mocks.fetchProjectMemorySuggestions).toHaveBeenCalledWith('c-proj');
+    expect(mocks.fetchMemorySuggestions).not.toHaveBeenCalled();
+    await screen.findByDisplayValue('Revenue is reported in EUR');
+    expect(dialog.textContent).toContain('Replaces an existing project memory');
+    expect(screen.getAllByLabelText('Project memory text')).toHaveLength(2);
+    // The list reconciles the project count, never the personal one.
+    expect(conversationStore.getConversation('c-proj').pendingProjectMemorySuggestions).toBe(2);
+    expect(conversationStore.getConversation('c-proj').pendingMemorySuggestions).toBe(0);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Accept' })[0]);
+    await waitFor(() => expect(mocks.acceptProjectMemorySuggestion).toHaveBeenCalledWith('p1', undefined));
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    await waitFor(() => expect(mocks.dismissProjectMemorySuggestion).toHaveBeenCalledWith('p2'));
+    expect(mocks.acceptMemorySuggestion).not.toHaveBeenCalled();
   });
 });

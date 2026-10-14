@@ -66,6 +66,7 @@ class ActionRequestType(StrEnum):
     CREATE_CALENDAR_INVITE = "create_calendar_invite"
     EDIT_CALENDAR_EVENT = "edit_calendar_event"
     CREATE_MEMORY = "create_memory"
+    CREATE_PROJECT_MEMORY = "create_project_memory"
     UPLOAD_TO_DRIVE = "upload_to_drive"
     CREATE_DRIVE_FOLDER = "create_drive_folder"
     CREATE_SKILL = "create_skill"
@@ -521,6 +522,109 @@ class MemorySuggestion(Base):
     memory_id: Mapped[Optional[str]] = mapped_column(
         String(36),
         sa.ForeignKey("memories.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, default=None
+    )
+
+
+class ProjectMemory(Base):
+    """A memory attached to a project rather than to the user.
+
+    The project-scoped twin of ``Memory``: same 4KB markdown text, archive
+    flag and FTS5 search (``project_memories_fts``, kept in sync by the
+    triggers in the Alembic migration), read by the model only in that
+    project's conversations (chat/project_memories.py). Rows cascade with
+    their project.
+    """
+
+    __tablename__ = "project_memories"
+    __table_args__ = (
+        sa.Index(
+            "ix_project_memories_project_id_archived", "project_id", "archived",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        sa.ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Memory content (markdown text, max MAX_MEMORY_SIZE enforced in the store)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, default=None
+    )
+    archived: Mapped[bool] = mapped_column(
+        default=False, server_default="0"
+    )
+
+
+class ProjectMemorySuggestion(Base):
+    """A project memory the model proposed via ``suggest_project_memory``.
+
+    Same lifecycle as ``MemorySuggestion`` (pending -> accepted / dismissed,
+    reviewed from the composer's project-memory bubble), but accepting
+    creates a ``project_memories`` row of ``project_id``.
+    """
+
+    __tablename__ = "project_memory_suggestions"
+    __table_args__ = (
+        sa.Index(
+            "ix_project_memory_suggestions_conversation_status",
+            "conversation_id", "status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[int] = mapped_column(
+        sa.Integer,
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        sa.ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    conversation_id: Mapped[str] = mapped_column(
+        String(36),
+        sa.ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    # Optional project memory this suggestion supersedes; archived on accept.
+    replaces_memory_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        sa.ForeignKey("project_memories.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default=MemorySuggestionStatus.PENDING,
+        server_default=MemorySuggestionStatus.PENDING.value,
+    )
+    # The project memory created on accept.
+    memory_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        sa.ForeignKey("project_memories.id", ondelete="SET NULL"),
         nullable=True,
         default=None,
     )

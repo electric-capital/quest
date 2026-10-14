@@ -395,6 +395,14 @@ async def get_conversation(conversation_id: str, user: dict = Depends(get_curren
     conversation["pending_memory_suggestions"] = await count_pending(
         user_id, conversation_id,
     )
+    # ... and the project-memory twin (chat/project_memories.py), which
+    # drives the composer's separate project-memory bubble.
+    from db.project_memory_suggestion_store import (
+        count_pending as count_pending_project,
+    )
+    conversation["pending_project_memory_suggestions"] = await count_pending_project(
+        user_id, conversation_id,
+    )
 
     return conversation
 

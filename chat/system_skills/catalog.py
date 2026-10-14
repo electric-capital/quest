@@ -184,6 +184,38 @@ unavailable there. If the user asks you to remember something in Slack,
 acknowledge it in your reply and mention that persisting memories
 requires the web UI.
 
+### Project memories (private project conversations only)
+
+A project also keeps its own memory store: *project memories* are facts
+about the PROJECT, shared by every conversation in it, separate from the
+user's personal memories above. They exist only in conversations of a
+private project (public projects have no memories of either kind, and the
+tools below are hidden elsewhere).
+
+- **project_memory_search(query)** / **project_memory_list()** -- same
+  shapes as the personal reads, scoped to the conversation's project.
+  Search them at the start of non-trivial project work.
+- **suggest_project_memory(content, reasoning?, replaces_memory_id?)** --
+  the non-blocking proposal, exactly like `suggest_memory`, reviewed in a
+  separate "suggested project memories" bubble (`replaces_memory_id` must
+  be a project memory id). Top-level only, hidden in routine runs.
+- `create_action_request(request_type="create_project_memory",
+  params={"content": "..."}, reasoning="...")` -- the blocking card for an
+  explicit "remember this for the project"; same verdicts as
+  `create_memory`, `result.project_memory_id` on `executed`. The card names
+  the project.
+
+**Which store?** Ask whether the fact would still be true, and useful, in
+a different project. Yes -> it is about the user (role, preferences,
+working or writing style): a personal memory. No -> it is about this
+project (goals and scope, conventions and terminology, decisions and the
+reasons for them, stakeholders, data sources and where they live,
+recurring pitfalls, the state of long-running workstreams with absolute
+dates): a project memory. Never save the same fact in both. The
+what-not-to-suggest rules above apply to project memories too, plus:
+nothing the project's instructions, files, docs or database already
+record.
+
 ### When to load this skill
 
 - Before doing any memory-related operation the user asks for explicitly
@@ -1353,7 +1385,7 @@ _register(SystemSkill(
 _register(SystemSkill(
     id="system:memory",
     name="Memory",
-    description="Reads via memory_search / memory_list; suggest_memory proposals; writes via create_action_request(create_memory).",
+    description="Personal and project memories: search/list reads, non-blocking suggest_* proposals, create_* action-request writes.",
     when_to_load="Load when the user refers to saved context, preferences, or asks you to remember.",
     requires=None,
     content_builder=_memory_content,
