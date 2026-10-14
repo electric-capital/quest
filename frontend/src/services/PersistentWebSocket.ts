@@ -320,6 +320,7 @@ class PersistentWebSocketClient {
       || type === 'wait_handle_resolved'
       || type === 'request_count_changed'
       || type === 'file_list_changed'
+      || type === 'memory_suggestions_changed'
     );
     if (conversationId && !isPerUserGlobalWithConversationId) {
       // Track high-water seq from durable events so a reconnect can issue

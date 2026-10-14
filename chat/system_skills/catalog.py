@@ -87,6 +87,54 @@ user (preferences, ongoing context, things they've asked you to remember).
   asks "what do you know about me", or when you want a complete view of
   saved context before answering a personal question.
 
+### Suggestions (non-blocking, reviewed by the user later)
+
+When you notice -- unprompted -- a fact worth keeping across conversations,
+propose it on the side instead of interrupting the turn:
+
+```
+tool_call(tool_name="suggest_memory", arguments={
+    "content": "<the memory text exactly as it should be saved>",
+    "reasoning": "<one sentence: why this is worth remembering>",
+    "replaces_memory_id": "<optional id of the memory this supersedes>",
+})
+```
+
+The call returns at once (`status: "suggested"` with a `suggestion_id` and
+the conversation's `pending_count`; `already_saved` / `already_suggested`
+when the exact text already exists). The user sees a "N suggested
+memories" bubble above their message box and accepts or dismisses each
+suggestion from a panel whenever they like -- nothing is saved until they
+accept, so never say a suggestion was saved, and do not restate it in your
+reply (at most a brief "I suggested a memory about X"). Accepting a
+suggestion with `replaces_memory_id` archives that older memory.
+
+**What to suggest.** Facts that are stable over time, likely to matter
+again, and clearly about the user rather than the task at hand:
+
+- who they are: role, expertise, preferences, working and writing style,
+  recurring responsibilities;
+- how you should work for them: corrections and confirmed approaches,
+  with the reason ("wants PR descriptions short because reviewers skim");
+- ongoing work, goals and constraints that files or history do not already
+  record, with relative dates made absolute ("launch deadline is 2026-11-30");
+- pointers to resources they will want again: URLs, dashboards, tickets.
+
+**What NOT to suggest.** One-off task details; temporary states ("at the
+airport today"); anything derivable from the workspace, project files, docs
+or chat history; anything that only matters in this conversation; and
+sensitive information -- health, finances, credentials, secrets, other
+people's private details -- unless the user asked to keep it.
+
+**Before suggesting**, `memory_search` the topic (one call per cluster of
+facts, not per fact). Skip anything a memory already covers; if a saved
+memory is outdated or wrong, suggest the corrected text with that memory's
+id as `replaces_memory_id`. Suggest sparingly -- a handful per conversation
+at most -- one self-contained fact per call. The tool is top-level only and
+hidden in routine runs; when the user explicitly asks you to remember
+something, use the blocking action request below instead so they confirm
+at once.
+
 ### Writes (always go through an action request)
 
 To save a new memory, call:
@@ -1300,7 +1348,7 @@ _register(SystemSkill(
 _register(SystemSkill(
     id="system:memory",
     name="Memory",
-    description="Reads via memory_search / memory_list; writes via create_action_request(create_memory).",
+    description="Reads via memory_search / memory_list; suggest_memory proposals; writes via create_action_request(create_memory).",
     when_to_load="Load when the user refers to saved context, preferences, or asks you to remember.",
     requires=None,
     content_builder=_memory_content,

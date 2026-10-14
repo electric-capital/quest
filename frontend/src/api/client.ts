@@ -32,6 +32,9 @@ import type {
   LogoutResponse,
   Memory,
   MemoriesListResponse,
+  MemorySuggestion,
+  MemorySuggestionsListResponse,
+  AcceptMemorySuggestionResponse,
   Guide,
   GuidesListResponse,
   Skill,
@@ -245,6 +248,27 @@ export function unarchiveMemory(memoryId: string): Promise<Memory> {
 
 export function deleteMemory(memoryId: string): Promise<{ success: boolean }> {
   return apiDelete(endpoints.memory(memoryId));
+}
+
+// Memory suggestions (model-proposed, reviewed from the composer panel)
+
+export function fetchMemorySuggestions(conversationId: string): Promise<MemorySuggestionsListResponse> {
+  return apiGet(endpoints.conversationMemorySuggestions(conversationId));
+}
+
+/** Accept a suggestion; ``content`` overrides the proposed text when the
+ *  user edited it in the panel. */
+export function acceptMemorySuggestion(
+  suggestionId: string,
+  content?: string,
+): Promise<AcceptMemorySuggestionResponse> {
+  return apiPost(`${endpoints.memorySuggestion(suggestionId)}/accept`, {
+    body: content !== undefined ? { content } : {},
+  });
+}
+
+export function dismissMemorySuggestion(suggestionId: string): Promise<{ suggestion: MemorySuggestion }> {
+  return apiPost(`${endpoints.memorySuggestion(suggestionId)}/dismiss`);
 }
 
 // Inference API key functions (Settings > Inference API)

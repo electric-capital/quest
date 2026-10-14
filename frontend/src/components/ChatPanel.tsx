@@ -26,6 +26,7 @@ import type { ModelVisibility } from '../constants/models';
 import { Composer } from './Composer';
 import { ConvertToProjectModal } from './ConvertToProjectModal';
 import { ExpensiveResumeWarning } from './ExpensiveResumeWarning';
+import { MemorySuggestions } from './MemorySuggestions';
 import { ConversationHeader } from './ConversationHeader';
 import { FileViewerModal } from './FileViewerModal';
 import { uploadFiles } from '../api/fileApi';
@@ -207,6 +208,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
     expensiveResumeBlocked,
     acknowledgeExpensiveResume,
     clearExpensiveResume,
+    pendingMemorySuggestions,
     customName,
     setCustomName,
     archived,
@@ -800,6 +802,14 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       </div>
 
       {/* Stream errors are now shown inline as error bubbles in the chat */}
+
+      {/* Suggested-memories bubble (the model's non-blocking suggest_memory
+          proposals awaiting review); click opens the review panel over the
+          conversation. Hidden while nothing is pending. */}
+      <MemorySuggestions
+        conversationId={conversationId}
+        pendingCount={pendingMemorySuggestions}
+      />
 
       {/* Expensive-resume warning: blocks the composer on a long-idle,
           long-context conversation until the user picks an alternative or

@@ -130,6 +130,25 @@ def make_doc_changed(doc_id: str, updated_at: Optional[str]) -> dict[str, Any]:
     }
 
 
+def make_memory_suggestions_changed(
+    conversation_id: str,
+    pending_count: int,
+) -> dict[str, Any]:
+    """Envelope for ``memory_suggestions_changed``.
+
+    Per-user global published whenever a conversation's pending
+    memory-suggestion set changes (the ``suggest_memory`` tool registered
+    one, or the user accepted / dismissed one from any tab). Carries the
+    conversation's new pending count so the composer bubble updates
+    without a fetch; the open panel re-fetches the list.
+    """
+    return {
+        "type": "memory_suggestions_changed",
+        "conversation_id": conversation_id,
+        "pending_count": pending_count,
+    }
+
+
 def make_wait_handle_resolved(
     conversation_id: str,
     handle_id: str,

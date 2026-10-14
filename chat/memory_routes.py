@@ -7,6 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
 from chat.auth import get_current_user_cookie_or_apikey_checked
+from chat.conversation_access import require_owned_conversation
+from chat.memory_suggestions import (
+    SuggestionAlreadyResolvedError,
+    accept_suggestion,
+    dismiss_suggestion,
+)
+from db.memory_suggestion_store import list_pending
 from db.memory_store import (
     MAX_MEMORY_SIZE,
     create_memory,
@@ -281,3 +288,94 @@ async def unarchive_user_memory(
 
     logger.info("[memory] Unarchived memory %s for user_id %s", memory_id, user_id)
     return memory
+
+
+# ---------------------------------------------------------------------------
+# Memory suggestions (model-proposed, reviewed from the composer panel --
+# see chat/memory_suggestions.py)
+# ---------------------------------------------------------------------------
+
+class AcceptSuggestionRequest(BaseModel):
+    """Optional edited text to save instead of the proposed content."""
+    content: Optional[str] = None
+
+
+def _suggestion_not_found(suggestion_id: str) -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail={
+            "error": "suggestion_not_found",
+            "message": f"Memory suggestion {suggestion_id} not found.",
+        },
+    )
+
+
+def _suggestion_resolved(exc: SuggestionAlreadyResolvedError) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "error": "suggestion_resolved",
+            "message": f"This suggestion was already {exc.status}.",
+            "status": exc.status,
+        },
+    )
+
+
+@router.get("/conversations/{conversation_id}/memory-suggestions")
+async def list_conversation_memory_suggestions(
+    conversation_id: str,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Pending suggestions of a conversation the user owns, oldest first."""
+    user_id = user["id"]
+    await require_owned_conversation(user_id, conversation_id)
+    suggestions = await list_pending(user_id, conversation_id)
+    return {"suggestions": suggestions, "pending_count": len(suggestions)}
+
+
+@router.post("/memory-suggestions/{suggestion_id}/accept")
+async def accept_memory_suggestion(
+    suggestion_id: str,
+    body: AcceptSuggestionRequest | None = None,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Accept a pending suggestion: creates the memory (optionally with
+    edited text) and archives the memory it replaces, if any."""
+    user_id = user["id"]
+    content = body.content if body is not None else None
+    try:
+        result = await accept_suggestion(user_id, suggestion_id, content)
+    except SuggestionAlreadyResolvedError as exc:
+        raise _suggestion_resolved(exc)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_memory", "message": str(exc)},
+        )
+    if result is None:
+        raise _suggestion_not_found(suggestion_id)
+    suggestion, memory = result
+    logger.info(
+        "[memory] Accepted suggestion %s -> memory %s for user_id %s",
+        suggestion_id, memory["id"], user_id,
+    )
+    return {"suggestion": suggestion, "memory": memory}
+
+
+@router.post("/memory-suggestions/{suggestion_id}/dismiss")
+async def dismiss_memory_suggestion(
+    suggestion_id: str,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Dismiss a pending suggestion; nothing is saved."""
+    user_id = user["id"]
+    try:
+        suggestion = await dismiss_suggestion(user_id, suggestion_id)
+    except SuggestionAlreadyResolvedError as exc:
+        raise _suggestion_resolved(exc)
+    if suggestion is None:
+        raise _suggestion_not_found(suggestion_id)
+    logger.info(
+        "[memory] Dismissed suggestion %s for user_id %s", suggestion_id, user_id,
+    )
+    return {"suggestion": suggestion}

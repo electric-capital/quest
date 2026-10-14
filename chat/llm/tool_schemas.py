@@ -344,6 +344,62 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "required": [],
         },
     },
+    "suggest_memory": {
+        "name": "suggest_memory",
+        "description": (
+            "Propose a memory about the user for them to review later, WITHOUT "
+            "interrupting the conversation. The suggestion is registered on the "
+            "side and this call returns at once; the user sees a 'suggested "
+            "memories' bubble above their message box and accepts or dismisses "
+            "each one when they like. Nothing is saved until they accept, so "
+            "never claim a suggestion was saved. Use it for facts worth keeping "
+            "across conversations that the user did NOT explicitly ask you to "
+            "remember (see the system prompt's memory guidance); when they DO "
+            "ask ('remember that ...'), use create_action_request("
+            "request_type=\"create_memory\") instead so they confirm at once. "
+            "Search existing memories first (memory_search) and do not suggest "
+            "a fact a memory already covers; when a saved memory is outdated, "
+            "suggest the new text and pass its id as replaces_memory_id so "
+            "accepting replaces it. One fact per call, concise and "
+            "self-contained; do not restate the suggestion in your reply."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": (
+                        "The memory text exactly as it should be saved: one "
+                        "concise, self-contained fact, written to be useful in a "
+                        "future conversation with no other context (relative "
+                        "dates made absolute). Example: 'Prefers Python examples "
+                        "over TypeScript ones'. Max 4KB."
+                    ),
+                },
+                "reasoning": {
+                    "type": "string",
+                    "description": (
+                        "One sentence, shown to the user under the suggestion: "
+                        "why this is worth remembering. Example: 'Mentioned twice "
+                        "that code samples should be in Python.'"
+                    ),
+                },
+                "replaces_memory_id": {
+                    "type": "string",
+                    "description": (
+                        "Id of an existing memory (from memory_search / "
+                        "memory_list) this suggestion supersedes; it is archived "
+                        "when the user accepts. Omit for a new fact."
+                    ),
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Suggest memory: Python preference'.",
+                },
+            },
+            "required": ["content"],
+        },
+    },
     "wait_for_handles": {
         "name": "wait_for_handles",
         "description": (

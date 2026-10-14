@@ -70,6 +70,7 @@ from chat.gemini_api.tool_handlers.gmail_simple import (
 from chat.gemini_api.tool_handlers.memory import (
     _handle_memory_search,
     _handle_memory_list,
+    _handle_suggest_memory,
 )
 from chat.gemini_api.tool_handlers.skills import (
     _handle_list_skills,
@@ -145,6 +146,7 @@ __all__ = [
     "_handle_send_gmail_to_self",
     "_handle_memory_search",
     "_handle_memory_list",
+    "_handle_suggest_memory",
     "_handle_list_skills",
     "_handle_search_skills",
     "_handle_load_skills",

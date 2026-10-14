@@ -506,8 +506,10 @@ def get_system_prompt(
         top_level_exclude.add("create_action_request")
     if is_routine:
         # Routine conversations already carry the routine's name; the model
-        # has nothing to name.
+        # has nothing to name. A routine run is a canned task, not a
+        # conversation with the user, so it proposes no memories either.
         top_level_exclude.add("set_conversation_name")
+        top_level_exclude.add("suggest_memory")
     dynamic_tools_section = _build_dynamic_tools_section(
         exclude=top_level_exclude, connected_services=connected_services,
     )
@@ -600,7 +602,7 @@ You have thirteen tools available:
 - **Converting documents (e.g. a Word file to PDF):** headless LibreOffice is installed in the sandbox -- run `soffice --headless --convert-to pdf --outdir /workspace <file>` via `run_python` / `run_script` (also `.doc` / `.odt` / `.rtf` / `.html` / `.xlsx` / `.pptx` sources and other target formats such as `docx`). Use it for every document conversion unless the user asks for another route; never build a PDF from `python-docx` output. For a document stored in Google Drive, `download_drive_file` it first; native Google Docs / Sheets / Slides are exported with `google_export_doc` / `google_export_sheet` / `google_export_slides` instead. Load `system:workspace` for details.
 - **Showing images to the user:** the web chat renders standard markdown images inline. To display a workspace image (a generated chart, a downloaded figure, a photo) directly in your reply, reference it by its workspace-relative path: `![Revenue by quarter](revenue.png)` or `![](reports/figure1.png)`. Paths always resolve from the workspace root. Only PNG/JPEG/GIF/WebP files render; avoid spaces in filenames you plan to embed (or percent-encode them as `%20`). External image URLs are never rendered inline (they display as plain links) -- to show a remote image, save it into the workspace first. This works only in the web chat -- Slack replies cannot render workspace images.
 - Use `tool_call(tool_name="memory_search", arguments={{"query": "..."}})` to check for relevant context when the user mentions preferences, past interactions, or information they've asked you to remember. Load `system:memory` for full memory tool semantics.
-- When the user shares a preference, personal fact, or explicitly asks you to remember something, use `create_action_request(request_type="create_memory", params={{"content": "..."}}, reasoning="...")` to propose saving it. The user is shown an Approve / Revise / Deny card and the call blocks until they resolve it -- the verdict comes back on the return value. Load `system:memory` for the full memory tool semantics.
+- **Memories.** When the user explicitly asks you to remember something, use `create_action_request(request_type="create_memory", params={{"content": "..."}}, reasoning="...")`: an Approve / Revise / Stop card that blocks until they resolve it, with the verdict on the return value. When you notice, unprompted, a fact worth keeping across conversations, call `tool_call(tool_name="suggest_memory", arguments={{"content": "...", "reasoning": "..."}})` instead -- it registers the suggestion on the side and returns at once (the user reviews a "suggested memories" bubble above their message box whenever they like), so keep working, do not restate the suggestion in your reply, and never claim it was saved. Suggest sparingly (a handful per conversation at most) and only facts that are stable over time, likely to matter again, and clearly about the user rather than the task at hand: who they are (role, expertise, preferences, working and writing style, recurring responsibilities), guidance on how you should work (corrections and confirmed approaches, with the reason), ongoing work, goals and constraints that files or history do not already record (relative dates made absolute), and pointers to resources they will want again (URLs, dashboards, tickets). Do NOT suggest one-off task details, temporary states ("at the airport today"), anything derivable from the workspace, project files or docs, anything that only matters in this conversation, or sensitive information (health, finances, credentials, secrets, other people's private details) unless the user asked to keep it. Before suggesting, `memory_search` the topic: skip facts a memory already covers; when a memory is outdated, suggest the replacement text with `replaces_memory_id` so accepting swaps it in. One fact per suggestion, concise and self-contained. Load `system:memory` for the full memory tool semantics.
 - When the user asks you to send a message or perform an action in an external service, use `create_action_request()`. Do NOT call write endpoints directly with `curl_proxy_post`. **Exception:** to send a message to the user themselves (e.g. "send me a reminder", "DM me"), use `tool_call(tool_name="send_slack_dm_to_self", arguments={{"message": "...", "files": ["optional/workspace/path.pdf"]}})` directly -- this needs no approval, works in scheduled routines, and can attach workspace files. Load `system:action_requests` for the full reference.
 - When you need to run multiple independent sub-agent tasks, prefer `agent_task_parallel` over multiple sequential `agent_task` calls.
 - When spawning many sub-agents with the same prompt structure but different parameters, prefer `agent_task_parallel_template` to save output tokens. Use `agent_task_parallel` when each sub-agent needs a substantially different prompt.
@@ -657,6 +659,10 @@ To search memories:
 To save a memory about the user:
   create_action_request(request_type="create_memory", params={{"content": "Prefers window seats on flights"}}, reasoning="The user mentioned this preference in their last reply.")
   -- this BLOCKS until the user resolves the inline card. The return value is `{{"verdict": "executed"|"denied"|"stopped", ...}}`. On `executed`, `result.memory_id` carries the new id. On `denied`, an optional `feedback` string carries any Revise reason -- read it and re-issue with corrected content if appropriate. On `stopped`, the user halted the conversation and has sent a new message (in this turn) -- act on that instead.
+
+To suggest a memory without pausing (the user reviews it later):
+  tool_call(tool_name="suggest_memory", arguments={{"content": "Prefers Python examples over TypeScript ones", "reasoning": "Asked for Python twice in this conversation."}})
+  -- returns at once with `{{"status": "suggested", ...}}`; nothing is saved until the user accepts it in the suggestions panel, so do not mention it as saved.
 
 To run a quick one-off Python computation:
   run_python(script="import json\\ndata = [1,2,3,4,5]\\nprint(json.dumps({{'sum': sum(data), 'mean': sum(data)/len(data)}}))"))
@@ -735,7 +741,7 @@ def get_user_subagent_system_prompt(
     # project-only tools never apply.
     dynamic_tools = _build_dynamic_tools_section(
         exclude=(
-            {"wait_for_handles", "set_conversation_name"}
+            {"wait_for_handles", "set_conversation_name", "suggest_memory"}
             | PROJECT_ONLY_TOOL_CALL_TOOLS
             | _doc_write_tool_names()
         ),
@@ -838,7 +844,7 @@ def get_inference_api_system_prompt(
     # Inference runs are standalone conversations: no project-only tools.
     dynamic_tools = _build_dynamic_tools_section(
         exclude=(
-            {"wait_for_handles", "set_conversation_name"}
+            {"wait_for_handles", "set_conversation_name", "suggest_memory"}
             | PROJECT_ONLY_TOOL_CALL_TOOLS
             | mutating_tool_call_tools()
         ),
@@ -1185,7 +1191,7 @@ def get_sub_agent_system_prompt(
     # project-only tools when not in a project conversation. Sub-agents are
     # read-only for Quest Docs (access rule run_kind "sub_agent": "only the
     # top-level agent writes docs"), so the doc write tools are hidden too.
-    sub_agent_exclude = {"wait_for_handles", "set_conversation_name"}
+    sub_agent_exclude = {"wait_for_handles", "set_conversation_name", "suggest_memory"}
     sub_agent_exclude |= _doc_write_tool_names()
     if has_project:
         sub_agent_exclude |= PROJECT_HIDDEN_WORKSPACE_TOOLS

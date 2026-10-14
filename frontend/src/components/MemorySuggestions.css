@@ -1,0 +1,306 @@
+/* Suggested-memories bubble above the composer plus the review panel that
+   pops up over the conversation. Token-only colours (the accent family and
+   the surface / text / border tokens), so both colour schemes and every
+   colour theme work without an override block. */
+
+.memory-suggestions {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding: 0 1rem 0.35rem;
+  z-index: 20;
+}
+
+.memory-suggestions-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid rgb(var(--accent-rgb) / 0.45);
+  background: rgb(var(--accent-rgb) / 0.14);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.18);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.memory-suggestions-bubble:hover,
+.memory-suggestions-bubble.is-open {
+  background: rgb(var(--accent-rgb) / 0.24);
+  border-color: rgb(var(--accent-rgb) / 0.7);
+}
+
+.memory-suggestions-bubble:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Click-away layer over the whole chat panel (the panel's positioned
+   ancestor), under the card. */
+.memory-suggestions-backdrop {
+  position: absolute;
+  inset: auto -100vw 0;
+  top: -100vh;
+  background: rgb(0 0 0 / 0.25);
+  z-index: 0;
+}
+
+.memory-suggestions-panel {
+  position: absolute;
+  left: 1rem;
+  right: 1rem;
+  bottom: 100%;
+  margin: 0 auto 0.5rem;
+  max-width: 720px;
+  max-height: min(60vh, 520px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.35);
+  z-index: 1;
+  animation: memory-suggestions-rise 0.15s ease-out;
+}
+
+@keyframes memory-suggestions-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .memory-suggestions-panel {
+    animation: none;
+  }
+}
+
+.memory-suggestions-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 0.9rem 0.5rem;
+}
+
+.memory-suggestions-header-icon {
+  color: var(--accent-text);
+  flex-shrink: 0;
+}
+
+.memory-suggestions-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.memory-suggestions-count {
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: rgb(var(--accent-rgb) / 0.18);
+  color: var(--accent-text);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.memory-suggestions-spacer {
+  flex: 1;
+}
+
+.memory-suggestions-bulk {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.75rem;
+  padding: 0.25rem 0.55rem;
+  cursor: pointer;
+}
+
+.memory-suggestions-bulk:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.memory-suggestions-bulk-dismiss {
+  color: var(--text-secondary);
+}
+
+.memory-suggestions-bulk:disabled,
+.memory-suggestion-accept:disabled,
+.memory-suggestion-dismiss:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.memory-suggestions-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.memory-suggestions-close:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.memory-suggestions-hint {
+  margin: 0;
+  padding: 0 0.9rem 0.6rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.memory-suggestions-list {
+  overflow-y: auto;
+  padding: 0 0.9rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.memory-suggestions-empty {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.75rem 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.memory-suggestions-error {
+  font-size: 0.78rem;
+  color: #e05d5d;
+}
+
+.memory-suggestion-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.memory-suggestion-row.is-busy {
+  opacity: 0.7;
+}
+
+.memory-suggestion-content {
+  width: 100%;
+  resize: vertical;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.memory-suggestion-content:hover:not(:disabled) {
+  border-color: var(--border);
+}
+
+.memory-suggestion-content:focus {
+  outline: none;
+  border-color: rgb(var(--accent-rgb) / 0.6);
+  background: var(--surface-raised);
+}
+
+.memory-suggestion-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.5rem;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.memory-suggestion-reasoning {
+  font-style: italic;
+}
+
+.memory-suggestion-replaces {
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid rgb(var(--accent-rgb) / 0.4);
+  color: var(--accent-text);
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.memory-suggestion-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.memory-suggestion-accept,
+.memory-suggestion-dismiss {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.memory-suggestion-accept {
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: #fff;
+}
+
+.memory-suggestion-accept:hover:not(:disabled) {
+  background: var(--accent-hover, var(--accent));
+  filter: brightness(1.08);
+}
+
+.memory-suggestion-dismiss {
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text-secondary);
+}
+
+.memory-suggestion-dismiss:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.memory-suggestions-spinner {
+  animation: memory-suggestions-spin 0.9s linear infinite;
+}
+
+@keyframes memory-suggestions-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 640px) {
+  .memory-suggestions {
+    padding: 0 0.5rem 0.35rem;
+  }
+
+  .memory-suggestions-panel {
+    left: 0.5rem;
+    right: 0.5rem;
+    max-height: 70vh;
+  }
+
+  .memory-suggestions-hint {
+    display: none;
+  }
+}

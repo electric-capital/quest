@@ -53,6 +53,7 @@ from chat.gemini_api.tool_handlers import (
     _handle_set_conversation_name,
     _handle_memory_search,
     _handle_memory_list,
+    _handle_suggest_memory,
     _handle_list_skills,
     _handle_search_skills,
     _handle_load_skills,
@@ -304,6 +305,26 @@ async def _tool_memory_search(ctx: ToolContext, args: dict) -> str:
 
 async def _tool_memory_list(ctx: ToolContext, args: dict) -> str:
     return await _handle_memory_list(ctx.user["id"])
+
+
+async def _tool_suggest_memory(ctx: ToolContext, args: dict) -> str:
+    # Top-level web/Slack conversations only: a suggestion is reviewed in
+    # the conversation's own composer panel, which sub-agent, cross-user
+    # subagent, inference-API and sandbox-script runs never have. The
+    # prompts hide the tool there (system_prompt.py); this is the backstop.
+    if ctx.is_sub_agent or ctx.is_user_subagent or ctx.is_inference_api or ctx.is_script:
+        return json.dumps({
+            "error": (
+                "suggest_memory is only available to the top-level agent of "
+                "a user's own conversation. Include the proposed memory text "
+                "in your response so the caller can suggest it."
+            ),
+        })
+    return await _handle_suggest_memory(
+        ctx.user["id"], ctx.conversation_id, args.get("content"),
+        reasoning=args.get("reasoning"),
+        replaces_memory_id=args.get("replaces_memory_id"),
+    )
 
 
 async def _tool_wait_for_handles_stub(ctx: ToolContext, args: dict) -> str:
@@ -589,6 +610,7 @@ TOOL_CALL_HANDLERS: dict[str, ToolHandler] = {
     "copy_file": _tool_copy_file,
     "memory_search": _tool_memory_search,
     "memory_list": _tool_memory_list,
+    "suggest_memory": _tool_suggest_memory,
     "wait_for_handles": _tool_wait_for_handles_stub,
     "download_drive_file": _tool_download_drive_file,
     "google_export_doc": _tool_google_export_doc,

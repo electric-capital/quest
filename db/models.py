@@ -461,6 +461,77 @@ class Memory(Base):
     )
 
 
+class MemorySuggestionStatus(StrEnum):
+    """Lifecycle of a model-proposed memory (see chat/memory_suggestions.py)."""
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    DISMISSED = "dismissed"
+
+
+class MemorySuggestion(Base):
+    """A memory the model proposed mid-conversation via ``suggest_memory``.
+
+    Unlike the blocking ``create_memory`` action request, a suggestion is
+    registered on the side and the turn keeps going; the user reviews the
+    conversation's pending suggestions in the composer's suggestions panel
+    and accepts (creating a ``memories`` row) or dismisses each one.
+    """
+
+    __tablename__ = "memory_suggestions"
+    __table_args__ = (
+        sa.Index(
+            "ix_memory_suggestions_conversation_status",
+            "conversation_id", "status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[int] = mapped_column(
+        sa.Integer,
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    conversation_id: Mapped[str] = mapped_column(
+        String(36),
+        sa.ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Proposed memory text (same cap as memories.content: MAX_MEMORY_SIZE).
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # The model's one-line justification, shown under the suggestion.
+    reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    # Optional existing memory this suggestion supersedes; archived when the
+    # suggestion is accepted. Nulled by the DB when that memory is deleted.
+    replaces_memory_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        sa.ForeignKey("memories.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default=MemorySuggestionStatus.PENDING,
+        server_default=MemorySuggestionStatus.PENDING.value,
+    )
+    # The memory created on accept (NULL while pending / when dismissed).
+    memory_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        sa.ForeignKey("memories.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, default=None
+    )
+
+
 class Guide(Base):
     """A named system prompt preset for a user.
 

@@ -226,6 +226,8 @@ interface UseConversationResult {
   /** Drop the warning entirely (no acknowledgement flag on later sends);
    *  used after a successful server-side compaction. */
   clearExpensiveResume: () => void;
+  /** Model-proposed memories awaiting review (the composer bubble count). */
+  pendingMemorySuggestions: number;
 }
 
 /**
@@ -326,6 +328,12 @@ export function useConversation(conversationId: string, options?: UseConversatio
         conversationStore.setExpensiveResume(
           conversationId,
           response.expensive_resume ?? null,
+        );
+
+        // Seed the suggested-memories bubble count.
+        conversationStore.setPendingMemorySuggestions(
+          conversationId,
+          response.pending_memory_suggestions ?? 0,
         );
 
         // Seed the persistent-WS last-seq cache from the server's high-water
@@ -520,6 +528,12 @@ export function useConversation(conversationId: string, options?: UseConversatio
                   conversationId,
                   full.expensive_resume ?? null,
                 );
+                // The suggestion count rides on non-durable globals that a
+                // dropped socket loses, so a resync re-reads it too.
+                conversationStore.setPendingMemorySuggestions(
+                  conversationId,
+                  full.pending_memory_suggestions ?? 0,
+                );
               } catch {
                 // Silently ignore; next event or reload recovers.
               }
@@ -553,6 +567,10 @@ export function useConversation(conversationId: string, options?: UseConversatio
                 conversationId,
                 full.pending_wait_handles ?? [],
               );
+              conversationStore.setPendingMemorySuggestions(
+                conversationId,
+                full.pending_memory_suggestions ?? 0,
+              );
             } catch {
               // ignore
             }
@@ -580,6 +598,20 @@ export function useConversation(conversationId: string, options?: UseConversatio
       const handleId = event.handle_id as string | undefined;
       if (!handleId) return;
       conversationStore.removePendingWaitHandle(conversationId, handleId);
+    });
+  }, [conversationId]);
+
+  // Keep the suggested-memories bubble count in sync: the ``suggest_memory``
+  // tool, and accept / dismiss from any tab, publish the conversation's new
+  // pending count as a per-user global.
+  useEffect(() => {
+    if (!conversationId) return;
+    return persistentWebSocket.onGlobalEvent((event) => {
+      if (event.type !== 'memory_suggestions_changed') return;
+      if ((event.conversation_id as string | undefined) !== conversationId) return;
+      const count = event.pending_count;
+      if (typeof count !== 'number') return;
+      conversationStore.setPendingMemorySuggestions(conversationId, count);
     });
   }, [conversationId]);
 
@@ -716,5 +748,6 @@ export function useConversation(conversationId: string, options?: UseConversatio
     expensiveResumeBlocked: state.expensiveResume !== null && !state.expensiveResumeAcknowledged,
     acknowledgeExpensiveResume,
     clearExpensiveResume,
+    pendingMemorySuggestions: state.pendingMemorySuggestions,
   };
 }

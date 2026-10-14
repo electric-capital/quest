@@ -388,6 +388,14 @@ async def get_conversation(conversation_id: str, user: dict = Depends(get_curren
         conversation_id, meta,
     )
 
+    # Pending model-proposed memories (chat/memory_suggestions.py) so the
+    # composer bubble shows the right count on load; later changes arrive
+    # as ``memory_suggestions_changed`` events.
+    from db.memory_suggestion_store import count_pending
+    conversation["pending_memory_suggestions"] = await count_pending(
+        user_id, conversation_id,
+    )
+
     return conversation
 
 

@@ -77,6 +77,11 @@ export const endpoints = {
 
   memory: (id: string) => `${API_BASE_URL}/memories/${id}`,
 
+  conversationMemorySuggestions: (conversationId: string) =>
+    `${API_BASE_URL}/conversations/${conversationId}/memory-suggestions`,
+
+  memorySuggestion: (id: string) => `${API_BASE_URL}/memory-suggestions/${id}`,
+
   guides: () => `${API_BASE_URL}/guides`,
 
   guide: (id: string) => `${API_BASE_URL}/guides/${id}`,

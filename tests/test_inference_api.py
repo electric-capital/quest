@@ -366,6 +366,9 @@ _CORE_READ_OR_WORKSPACE_TOOLS = {
     "list_workspace_files", "get_workspace_file",
     "write_workspace_file", "edit_workspace_file",  # workspace-local only
     "memory_search", "memory_list",
+    # Registers a pending row in the user's own account for later review;
+    # nothing external changes, and the handler refuses inference runs.
+    "suggest_memory",
     "wait_for_handles",
     "download_drive_file", "google_export_doc",  # external read -> workspace
     "google_export_sheet", "google_export_slides",

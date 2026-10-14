@@ -505,6 +505,9 @@ export interface ConversationDetail {
   /** Non-null when resuming this conversation is expensive; the FE blocks
    *  the composer with a warning card until acknowledged. */
   expensive_resume?: ExpensiveResumeInfo | null;
+  /** Count of model-proposed memories awaiting review in this conversation
+   *  (the composer bubble); kept fresh by ``memory_suggestions_changed``. */
+  pending_memory_suggestions?: number;
 }
 
 export interface CreateConversationResponse {
@@ -855,6 +858,33 @@ export interface Memory {
   created_at: string;
   updated_at: string | null;
   archived: boolean;
+}
+
+/** A memory the model proposed via ``suggest_memory``, reviewed from the
+ *  composer's suggestions panel (chat/memory_suggestions.py). */
+export interface MemorySuggestion {
+  id: string;
+  user_id: number;
+  conversation_id: string;
+  content: string;
+  /** The model's one-line justification, or null. */
+  reasoning: string | null;
+  /** Existing memory archived when this suggestion is accepted, or null. */
+  replaces_memory_id: string | null;
+  status: 'pending' | 'accepted' | 'dismissed';
+  memory_id: string | null;
+  created_at: string | null;
+  resolved_at: string | null;
+}
+
+export interface MemorySuggestionsListResponse {
+  suggestions: MemorySuggestion[];
+  pending_count: number;
+}
+
+export interface AcceptMemorySuggestionResponse {
+  suggestion: MemorySuggestion;
+  memory: Memory;
 }
 
 export interface MemoriesListResponse {

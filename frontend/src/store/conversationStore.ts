@@ -38,6 +38,10 @@ export interface ConversationState {
   // on the send_message envelope as ``expensive_resume_acknowledged`` so the
   // server-side gate lets the turn through.
   expensiveResumeAcknowledged: boolean;
+  // Model-proposed memories awaiting review (the composer bubble count).
+  // Seeded from ``pending_memory_suggestions`` on the GET payload, then
+  // replaced by every ``memory_suggestions_changed`` event's count.
+  pendingMemorySuggestions: number;
 }
 
 /**
@@ -60,6 +64,7 @@ function createDefaultState(): ConversationState {
     pendingWaitHandles: [],
     expensiveResume: null,
     expensiveResumeAcknowledged: false,
+    pendingMemorySuggestions: 0,
   };
 }
 
@@ -534,6 +539,16 @@ class ConversationStore {
    */
   hasPendingWaitHandle(id: string): boolean {
     return this.getConversation(id).pendingWaitHandles.length > 0;
+  }
+
+  /**
+   * Replace the pending memory-suggestion count (GET payload seed and every
+   * ``memory_suggestions_changed`` event). No-op when unchanged so a burst
+   * of events doesn't re-render the panel.
+   */
+  setPendingMemorySuggestions(id: string, count: number): void {
+    if (this.getConversation(id).pendingMemorySuggestions === count) return;
+    this.updateConversation(id, { pendingMemorySuggestions: count });
   }
 
   /**

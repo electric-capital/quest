@@ -69,6 +69,10 @@ Memory content is searchable via an FTS5 virtual table (`memories_fts`) kept in 
 
 **Search capabilities**: The `search_memories()` function in `db/memory_store.py` supports FTS5 query syntax including simple words, quoted phrases, prefix matching (`meet*`), and boolean operators (`AND`, `OR`, `NOT`). Results are ordered by FTS5 relevance rank.
 
+### Memory suggestions
+
+The `MemorySuggestion` model maps to `memory_suggestions`: memories the model proposed via the non-blocking `suggest_memory` tool, awaiting the user's review (see [Memory Suggestions](memory-suggestions.md)). Rows cascade with their user and conversation; the `memory_id` created on accept and the optional `replaces_memory_id` are nulled when that memory is deleted. Data access is in `db/memory_suggestion_store.py`; the table is created by `alembic/versions/c7e2a9b4d1f8_add_memory_suggestions.py`.
+
 ### Cascade Deletion
 
 When a user account is deleted, all of that user's memories are automatically removed via the database-level `ON DELETE CASCADE` foreign key from `memories.user_id` to `users.id`. Additionally, `delete_all_user_memories()` in `db/memory_store.py` is available for explicit bulk deletion at the application layer (e.g., during account deletion flows that need to perform additional cleanup).

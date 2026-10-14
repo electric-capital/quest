@@ -121,7 +121,7 @@ Size limit, force_large_response, and output_file behave exactly as for authed_g
 The following built-in skills contain detailed API docs for each backend or topic. They are NOT loaded automatically -- call `load_skills(skill_ids=[...])` with the skill id(s) when you need them. You can load multiple at once. Loaded skill content stays in the conversation for the rest of the turn (and remains visible to you in subsequent turns of the same conversation).
 
 - `system:federal_register` -- Search/read US Federal Register documents, agencies, public-inspection docs via authed_get (no auth). Load when the user asks about federal rules, regulations, notices, executive orders, or agency filings.
-- `system:memory` -- Reads via memory_search / memory_list; writes via create_action_request(create_memory). Load when the user refers to saved context, preferences, or asks you to remember.
+- `system:memory` -- Reads via memory_search / memory_list; suggest_memory proposals; writes via create_action_request(create_memory). Load when the user refers to saved context, preferences, or asks you to remember.
 - `system:workspace` -- list/get/write workspace files plus run_python / run_script patterns. Load for file-heavy tasks, generated artifacts, charts, or sandbox script work.
 - `system:action_requests` -- Full reference for create_action_request types and their param shapes. Load before sending messages, scheduling events, or other approval-gated writes.
 - `system:skill_management` -- Inspect skills (list_my_skills/get_skill) and create/edit them via create_action_request(create_skill/edit_skill). Load when the user asks to list, read, create, edit, share, or auto-load a skill.
