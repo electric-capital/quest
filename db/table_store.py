@@ -505,8 +505,11 @@ async def update_table_metadata(
     ``updated_at`` ISO string, else :class:`StaleTableError` (carrying the
     current row) is raised before anything changes -- also when another
     writer lands between the read and this write (the UPDATE is
-    conditional on the ``updated_at`` that was read). ``updated_at`` is
-    bumped only when a field actually changes.
+    conditional on the ``updated_at`` that was read, so ``updated_at`` must
+    only ever be written through the ORM to keep its stored format). A call
+    that changes nothing returns the row as read without re-checking the
+    token. ``updated_at`` is bumped only when a field actually changes. The
+    rename title check is check-then-write, like :func:`create_table`'s.
 
     Returns:
         The updated table dict with shares, or None when it does not exist.
