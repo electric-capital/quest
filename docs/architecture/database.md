@@ -1,12 +1,10 @@
 # Database Architecture
 
-This document describes the SQLite database layer that stores user data, replacing the previous `data/users.json` file-based approach.
-
 ## Overview
 
-Every piece of structured user data -- accounts and their secrets, memories, guides, projects, routines and schedules, conversation metadata, action requests, skills and their shares/auto-loads, wait handles, Quest Doc metadata and LLM call analytics -- is stored in a SQLite database at `data/quest.db`, managed by SQLAlchemy ORM with Alembic for schema migrations. The set of tables is the set of `Base` subclasses in `db/models.py` (one ORM class per table, columns, indexes and FK actions declared there); the `db/` package provides the engine configuration, those models, and one `*_store.py` data access module per concern that other modules use to read and write rows.
+Every piece of structured user data -- accounts and their secrets, memories, guides, projects, routines and schedules, conversation metadata, action requests, skills and their shares/auto-loads, wait handles, Quest Doc and Quest Table metadata and LLM call analytics -- is stored in a SQLite database at `data/quest.db`, managed by SQLAlchemy ORM with Alembic for schema migrations. The set of tables is the set of `Base` subclasses in `db/models.py` (one ORM class per table, columns, indexes and FK actions declared there); the `db/` package provides the engine configuration, those models, and one `*_store.py` data access module per concern that other modules use to read and write rows.
 
-Chat message history remains in JSON files (`data/chats/{conversation_id}/chat_history.json`). Conversation ownership, timing metadata (user association, `created_at`, `last_message_at`), custom names, and model selection now live in SQLite instead of being derived from the filesystem.
+Chat message history remains in JSON files (`data/chats/{conversation_id}/chat_history.json`). Conversation ownership, timing metadata, custom names and model selection live in the `conversations` table.
 
 ## Database Location
 
@@ -228,6 +226,10 @@ The columns are on the class (`skill_id` = the shared skill, `user_id` = the rec
 
 See [Quest Docs -- Tables](quest-docs.md#tables).
 
+## DataTable and DataTableShare Models
+
+`DataTable` (`data_tables`) and `DataTableShare` (`data_table_shares`) in `db/models.py` (Alembic migration `e5c97b362821`) hold the metadata of [Quest Tables](quest-tables.md); rows live on disk under `TABLES_DIR`. FK actions, the mode rule, the everyone-share index and per-mode title uniqueness mirror the Doc models above; see [Quest Tables -- Tables](quest-tables.md#tables).
+
 ## UserSkillAutoload Model
 
 The `UserSkillAutoload` model in `db/models.py` maps to the `user_skill_autoloads` table. This is a junction table that tracks which skills a user has auto-loaded (automatically included in every conversation).
@@ -345,13 +347,15 @@ The long-context flag (per-call context above the model's tier threshold -- `LON
 
 **`db/doc_store.py`** -- Quest Docs metadata: CRUD, per-mode title uniqueness (`_title_taken()`), the keyset candidate list `list_accessible_docs()`, `update_doc_metadata()` (raises `StaleDocError` on an `expected_updated_at` mismatch), `update_after_write()`, the id collectors used by the project- and account-delete directory sweeps, and the share helpers. Access decisions are NOT made here (see `chat/docs/access.py`); body writes go through `chat/docs/service.py`. See [Quest Docs](quest-docs.md).
 
+**`db/table_store.py`** -- Quest Tables metadata, shaped like `db/doc_store.py`, plus the per-owner cap and the `expected_schema_version` token on `update_schema()`. See [Quest Tables](quest-tables.md#store-rules).
+
 ## Engine and Sessions
 
 `db/engine.py` provides two engines that share the same SQLite database file (path from `DATABASE_PATH` in `config/paths.py`, defaults to `data/quest.db`):
 
 ### Sync Engine
 
-Used by Alembic migrations only. All store modules have been ported to the async engine.
+Used by Alembic migrations only; every store module uses the async engine.
 
 - **`engine`**: `create_engine("sqlite:///...")` with `check_same_thread=False` (required for FastAPI's threaded request handling)
 - **Connect PRAGMAs**: `@event.listens_for(engine, "connect")` (`_set_sqlite_pragma`) runs the per-connection PRAGMAs described in [Connection PRAGMAs](#connection-pragmas) on every new DBAPI connection
@@ -438,7 +442,7 @@ The ORM provides type-safe column definitions, automatic JSON serialization for 
 Alembic tracks schema versions and applies incremental migrations, making it safe to add columns or change types without manual SQL. The `run.py` integration ensures migrations run automatically on deploy.
 
 **Why granular update functions instead of load/modify/save?**
-The old pattern loaded all users into memory, modified one, and saved the entire file back. This was simple but had race conditions under concurrent requests. The new functions use database transactions and only touch the specific user record being modified.
+Each function changes only its own row inside a transaction, so concurrent requests cannot overwrite each other's edits.
 
 **Why store OAuth tokens as JSON columns?**
 OAuth token dicts have varying structures (different fields for Google vs Slack vs Google Services). JSON columns preserve the exact dict structure without requiring separate tables or flattening the data. SQLite's JSON support handles this cleanly through SQLAlchemy's `JSON` column type.
@@ -464,7 +468,7 @@ SQLite does not enforce foreign key constraints by default -- `ON DELETE CASCADE
 Without it, deleting a user would leave orphaned rows in every table whose FK to `users.id` is declared `ON DELETE CASCADE` (most per-user tables in `db/models.py`) instead of cascading, and `skills.creator_id` would not be set to NULL. The same pragma is set in `alembic/env.py` (`run_migrations_online()`) so that any DELETE operations within migration scripts also respect cascade constraints.
 
 **Why move conversation ownership to SQLite instead of inferring it from the filesystem?**
-Deriving ownership from the path `data/chats/{user_id}/{conversation_id}/` coupled storage layout to business logic. Moving ownership to a `conversations` table makes it explicit, enables indexed queries (`list_conversations_meta` does a single DB lookup instead of directory traversal), and decouples the on-disk layout from access control. The path is now flat (`data/chats/{conversation_id}/`), which simplifies `ChatStorage` helpers.
+Deriving ownership from the path `data/chats/{user_id}/{conversation_id}/` coupled storage layout to business logic. Moving ownership to a `conversations` table makes it explicit, enables indexed queries (`list_conversations_meta` does a single DB lookup instead of directory traversal), and decouples the on-disk layout from access control.
 
 **Why snapshot guide content into conversations instead of referencing by ID?**
 If guides were referenced by ID, editing a guide would retroactively change the system prompt for all conversations using it. Snapshotting the guide content on first message (in `chat_history.json` via `ChatStorage.set_guide_snapshot()`) preserves the instructions as they were when the conversation started.
@@ -473,7 +477,7 @@ If guides were referenced by ID, editing a guide would retroactively change the 
 Guide names should be unique per user to avoid confusion in the dropdown selector. The database-level constraint prevents race conditions that application-level checks alone could miss.
 
 **Why declare indexes in `__table_args__` on the model instead of only in migrations?**
-Alembic autogenerate compares `Base.metadata` (the ORM models) against the actual database schema. If indexes exist in the database but are not declared on the models, autogenerate proposes dropping them on every run. Declaring all indexes in `__table_args__` keeps `Base.metadata` in sync with the DB, so `alembic revision --autogenerate` produces empty migrations when no model changes exist. This replaced an earlier convention where indexes were created only in Alembic migration scripts.
+Alembic autogenerate compares `Base.metadata` (the ORM models) against the actual database schema. If indexes exist in the database but are not declared on the models, autogenerate proposes dropping them on every run. Declaring all indexes in `__table_args__` keeps `Base.metadata` in sync with the DB, so `alembic revision --autogenerate` produces empty migrations when no model changes exist.
 
 **Why suppress PK nullable detection in `alembic/env.py`?**
 SQLite's `PRAGMA table_info` reports `notnull=0` for PRIMARY KEY columns. Alembic interprets this as the column being nullable and proposes an `alter_column(nullable=False)` operation on every autogenerate run. The `process_revision_directives` hook strips these no-op directives. For `INTEGER PRIMARY KEY` columns this is purely cosmetic (SQLite enforces NOT NULL via the rowid mechanism). For non-integer PK columns like `memories.id` (`VARCHAR(36)`), SQLite has a documented bug-turned-feature where NULL values are actually allowed unless `NOT NULL` is explicit in the DDL, but in practice this codebase always generates UUIDs at the application layer.
@@ -514,12 +518,10 @@ Per-turn granularity allows distinguishing top-level agent usage from sub-agent 
 
 ## Constraints
 
-- `data/users.json` is no longer used by the application. User data is exclusively in `data/quest.db`.
 - The SQLite database must exist and have the correct schema before the server starts. In production, `run.py` handles this via `alembic upgrade head`. In development, run `uv run alembic upgrade head` after pulling schema changes.
 - SQLAlchemy's `check_same_thread=False` is required on the sync engine because FastAPI processes requests across threads. This is safe for the read-heavy, low-write workload of user account and memory management.
 - The async engine requires the `aiosqlite` driver (`sqlite+aiosqlite://` URL scheme). This is a Python dependency managed in `pyproject.toml`.
 - SQLite foreign key enforcement (`PRAGMA foreign_keys=ON`) is set on every connection for both the sync engine and async engine via event listeners in `db/engine.py`, and explicitly in `alembic/env.py` for migrations. Without this, `ON DELETE CASCADE` and `ON DELETE SET NULL` constraints are silently ignored by SQLite. This is a per-connection setting, not a persistent database property.
-- All store functions are `async` and must be `await`ed by callers. Calling them without `await` returns a coroutine object instead of the result.
 - The `api_key` unique index means API key collisions will raise an `IntegrityError`. The key generation function produces cryptographically random keys, making collisions effectively impossible.
 - Memory content is capped by `MAX_MEMORY_SIZE` in `db/memory_store.py`, enforced at both the data access layer and the API validation layer (`chat/memory_routes.py`).
 - The `memories_fts` virtual table and its sync triggers must exist for search to work. They are created by the Alembic migration `94c49d92fea7`.

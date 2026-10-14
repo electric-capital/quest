@@ -44,6 +44,7 @@ This doc is the map: where each piece lives, how a turn moves through them, and 
 | `chat/wait_handles/` | Blocking-tool resume machinery | [Wait Handles](wait-handles.md) |
 | `chat/system_skills/` | `system:*` skill catalog and prompt enumeration | [Skill Library](skill-library.md) |
 | `chat/docs/` | Quest Docs | [Quest Docs](quest-docs.md) |
+| `chat/tables/` | Quest Tables | [Quest Tables](quest-tables.md) |
 | `chat/scheduler.py`, `chat/routine_runs.py` | Scheduled and one-click routine runs | [Scheduling](scheduling.md), [Routines](routines.md) |
 | `chat/slack_socket_mode.py`, `chat/slack_driven_runtime.py`, `chat/slack_notifier.py` | Slack-driven conversations, pending-request DMs | [Slack Socket Mode](slack-socket-mode.md), [Slack Pending-Request Notifier](slack-pending-request-notifier.md) |
 | `chat/sandbox_api.py`, `chat/sandbox_tokens.py` | Loopback tool API for sandbox scripts and its per-run tokens | [Script Runner](script-runner.md) |
