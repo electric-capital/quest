@@ -123,6 +123,27 @@ async def _sql(env, statement, **params):
         await db.commit()
 
 
+def _slow_session(monkeypatch, delay=0.2):
+    """Sleep after every AsyncSession.get / execute so two concurrent store
+    calls interleave between their read and their write."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    orig_get, orig_execute = AsyncSession.get, AsyncSession.execute
+
+    async def slow_get(self, *args, **kwargs):
+        result = await orig_get(self, *args, **kwargs)
+        await asyncio.sleep(delay)
+        return result
+
+    async def slow_execute(self, *args, **kwargs):
+        result = await orig_execute(self, *args, **kwargs)
+        await asyncio.sleep(delay)
+        return result
+
+    monkeypatch.setattr(AsyncSession, "get", slow_get)
+    monkeypatch.setattr(AsyncSession, "execute", slow_execute)
+
+
 # ---------------------------------------------------------------------------
 # create / get
 # ---------------------------------------------------------------------------
@@ -315,6 +336,27 @@ class TestListing:
         with pytest.raises(store.TableValidationError):
             ids(mode="secret")
 
+    def test_source_project_ids(self, env):
+        # A private project's linked sources: only their PUBLIC tables.
+        store = env["store"]
+        p1_t = _create(env, title="P1", project_id=env["p1"])
+        pub_t = _create(env, title="Pub", project_id=env["pub"], mode="public")
+        legacy = _create(env, title="Pub private", project_id=env["pub"], mode="public")
+        _run(_sql(env, "UPDATE data_tables SET mode = 'private' WHERE id = :id",
+                  id=legacy["id"]))
+
+        def ids(**kw):
+            return {t["id"] for t in _run(store.list_accessible_tables(env["alice"], **kw))}
+
+        assert ids(include_user_tables=False, source_project_ids=[env["pub"]]) == {
+            pub_t["id"],
+        }
+        assert ids(
+            project_id=env["p1"], include_project_tables=True,
+            include_user_tables=False, source_project_ids={env["pub"]},
+        ) == {p1_t["id"], pub_t["id"]}
+        assert ids(include_user_tables=False, source_project_ids=[env["p2"]]) == set()
+
     def test_order_and_keyset_paging(self, env):
         store = env["store"]
         tables = [_create(env, title=f"T {i}") for i in range(7)]
@@ -335,6 +377,21 @@ class TestListing:
             seen.extend(t["id"] for t in page)
             before = (datetime.fromisoformat(page[-1]["updated_at"]), page[-1]["id"])
         assert seen == [t["id"] for t in full]  # no gaps, no duplicates
+
+    def test_paging_real_timestamps(self, env):
+        # Cursor round trip through the stored microsecond ISO strings.
+        store = env["store"]
+        tables = [_create(env, title=f"R {i}") for i in range(5)]
+        for t in tables:
+            _run(store.update_after_write(t["id"], row_count=1, last_write_source="ui:1"))
+        full = _run(store.list_accessible_tables(env["alice"]))
+        assert len({t["updated_at"] for t in full}) == 5
+        assert any(datetime.fromisoformat(t["updated_at"]).microsecond for t in full)
+        seen, before = [], None
+        while page := _run(store.list_accessible_tables(env["alice"], limit=2, before=before)):
+            seen.extend(t["id"] for t in page)
+            before = (datetime.fromisoformat(page[-1]["updated_at"]), page[-1]["id"])
+        assert seen == [t["id"] for t in full]
 
     def test_shared_with_paging(self, env):
         store = env["store"]
@@ -393,6 +450,42 @@ class TestUpdateMetadata:
         assert exc.value.current["title"] == "Old"
         assert "shares" in exc.value.current
         assert _run(store.get_table(table["id"]))["title"] == "Old"
+
+    def test_stale_update_same_token(self, env):
+        store = env["store"]
+        table = _create(env, title="Old")
+        _run(_set_updated_at(env, table["id"], datetime(2026, 1, 1)))
+        token = _run(store.get_table(table["id"]))["updated_at"]
+        first = _run(store.update_table_metadata(
+            table["id"], title="First", expected_updated_at=token,
+        ))
+        assert first["title"] == "First"
+        with pytest.raises(store.StaleTableError) as exc:
+            _run(store.update_table_metadata(
+                table["id"], title="Second", expected_updated_at=token,
+            ))
+        assert exc.value.current["title"] == "First"
+        assert exc.value.current["updated_at"] == first["updated_at"]
+
+    def test_concurrent_metadata_updates_one_wins(self, env, monkeypatch):
+        store = env["store"]
+        table = _create(env, title="Old")
+        _run(_set_updated_at(env, table["id"], datetime(2026, 1, 1)))
+        token = _run(store.get_table(table["id"]))["updated_at"]
+        _slow_session(monkeypatch)
+
+        async def _both():
+            return await asyncio.gather(
+                store.update_table_metadata(table["id"], title="A", expected_updated_at=token),
+                store.update_table_metadata(table["id"], title="B", expected_updated_at=token),
+                return_exceptions=True,
+            )
+
+        results = _run(_both())
+        wins = [r for r in results if isinstance(r, dict)]
+        stale = [r for r in results if isinstance(r, store.StaleTableError)]
+        assert len(wins) == 1 and len(stale) == 1, results
+        assert _run(store.get_table(table["id"]))["title"] == wins[0]["title"]
 
     def test_rename_collision(self, env):
         store = env["store"]
@@ -459,6 +552,28 @@ class TestWriteSetters:
         assert reverted["schema_version"] == 3
         assert reverted["row_count"] == 3
         assert reverted["schema"] == SCHEMA
+
+    def test_concurrent_update_schema_one_wins(self, env, monkeypatch):
+        store = env["store"]
+        table = _create(env)
+        _slow_session(monkeypatch)
+
+        async def _both():
+            return await asyncio.gather(*(
+                store.update_schema(
+                    table["id"], schema=SCHEMA + [{"key": k, "name": k, "type": "text"}],
+                    expected_schema_version=1, last_write_source=f"ui:{k}",
+                )
+                for k in ("c2", "c3")
+            ), return_exceptions=True)
+
+        results = _run(_both())
+        wins = [r for r in results if isinstance(r, dict)]
+        stale = [r for r in results if isinstance(r, store.StaleTableSchemaError)]
+        assert len(wins) == 1 and len(stale) == 1, results
+        final = _run(store.get_table(table["id"]))
+        assert final["schema_version"] == 2
+        assert final["schema"] == wins[0]["schema"]
 
     def test_update_schema_stale(self, env):
         store = env["store"]
@@ -550,6 +665,40 @@ class TestDeleteAndShares:
             _run(store.add_share("nope", env["bob"], "read"))
         with pytest.raises(store.TableValidationError):
             _run(store.add_share(table["id"], True, "read"))
+
+    def test_add_share_integrity_fallback(self, env, monkeypatch):
+        # A competing add_share lands between the pre-check SELECT and the
+        # INSERT: the unique index refuses ours and the store updates the
+        # winner's row instead of failing.
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        store = env["store"]
+        table = _create(env)
+        original = AsyncSession.execute
+        state = {"armed": True}
+
+        async def racing_execute(self, statement, *args, **kwargs):
+            result = await original(self, statement, *args, **kwargs)
+            if state["armed"] and "data_table_shares" in str(statement):
+                state["armed"] = False
+                result = result.freeze()  # buffer before the competing write
+                await _sql(
+                    env,
+                    "INSERT INTO data_table_shares (table_id, user_id, permission, created_at) "
+                    "VALUES (:t, :u, 'read', '2026-01-01')",
+                    t=table["id"], u=env["bob"],
+                )
+                return result()
+            return result
+
+        monkeypatch.setattr(AsyncSession, "execute", racing_execute)
+        share = _run(store.add_share(table["id"], env["bob"], "write"))
+        monkeypatch.setattr(AsyncSession, "execute", original)
+        assert state["armed"] is False
+        rows = _run(_share_rows(env, table["id"]))
+        assert len(rows) == 1
+        assert share["id"] == rows[0].id
+        assert rows[0].permission == "write" and share["permission"] == "write"
 
     def test_share_target_gone(self, env):
         store = env["store"]

@@ -1617,9 +1617,10 @@ class DocShare(Base):
 class DataTable(Base):
     """A Quest Table: metadata row for a typed table stored on disk.
 
-    The rows and the change log live in ``<data_dir>/tables/<id>/table.db``
-    (resolved only via ``ChatStorage.get_table_dir``). Rows are read and
-    written through db/table_store.py, which also enforces case-insensitive
+    This row holds the table's metadata only and is read and written
+    through db/table_store.py; the table's data rows and change log live in
+    ``<data_dir>/tables/<id>/table.db`` (resolved only via
+    ``ChatStorage.get_table_dir``). The store also enforces case-insensitive
     title uniqueness per ``(owner_id, project_id, mode)`` exactly as for
     :class:`Doc` (a plain unique index cannot, because the NULL
     ``project_id`` case never collides in SQLite). The SQL table is
@@ -1668,6 +1669,8 @@ class DataTable(Base):
     # Ordered column list (DB column ``schema``; the attribute is renamed so
     # it never reads as a SQL schema name). ``schema_version`` is bumped on
     # every schema change and is the concurrency token for schema edits.
+    # In-place mutation of the list is NOT tracked by the ORM (plain JSON,
+    # no MutableList): always assign a new list.
     table_schema: Mapped[list] = mapped_column("schema", JSON, nullable=False)
     schema_version: Mapped[int] = mapped_column(
         sa.Integer, nullable=False, default=1, server_default="1"

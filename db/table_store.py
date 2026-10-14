@@ -20,11 +20,12 @@ tables service, which calls :func:`update_after_write` /
 :func:`update_schema` once the ``table.db`` write landed.
 """
 
+from collections.abc import Collection
 from datetime import datetime, timezone
 from typing import Iterable, Optional
 import uuid
 
-from sqlalchemy import and_, delete, exists, func, or_, select
+from sqlalchemy import and_, delete, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from chat.tables.constants import (
@@ -334,6 +335,11 @@ async def create_table(
             or a public user table (user tables are always private).
         DuplicateTableTitleError: title collision in the same scope.
         TableLimitError: the owner already has ``TABLE_MAX_PER_OWNER`` tables.
+
+    The title check and the per-owner cap are both check-then-insert: two
+    simultaneous creates can both pass (a duplicate title, or one table
+    over the cap). The tables service serializes creates per owner, so the
+    store documents the race instead of guarding it.
     """
     clean_title = _validate_title(title)
     clean_description = _validate_description(description)
@@ -397,6 +403,7 @@ async def list_accessible_tables(
     project_id: Optional[str] = None,
     include_user_tables: bool = True,
     include_project_tables: bool = False,
+    source_project_ids: Collection[str] = (),
     mode: Optional[str] = None,
     owned_only: bool = False,
     limit: Optional[int] = None,
@@ -409,15 +416,20 @@ async def list_accessible_tables(
     ``owned_only``. This is the candidate set only: the caller still runs
     every row through the access rule.
 
-    Scope filter (OR-ed): ``include_user_tables`` (``project_id IS NULL``)
-    and ``include_project_tables`` with ``project_id`` (that project's
-    tables). With neither, the result is empty.
+    Scope filter (OR-ed):
+        - ``include_user_tables``: user tables (``project_id IS NULL``);
+        - ``include_project_tables`` with ``project_id``: that project's tables;
+        - ``source_project_ids``: the public tables (``mode="public"``) of
+          those projects -- a private project's linked sources, readable
+          from its conversations.
+      With none, the result is empty.
 
     Args:
         user_id: The viewing user.
         project_id: Project whose tables to include (with include_project_tables).
         include_user_tables: Include user (non-project) tables.
         include_project_tables: Include ``project_id``'s tables.
+        source_project_ids: Projects whose public tables to include.
         mode: Optional ``"private"`` / ``"public"`` filter, so the SQL
             ``LIMIT`` applies to the set a public caller can see.
         owned_only: Only tables ``user_id`` owns.
@@ -433,6 +445,13 @@ async def list_accessible_tables(
         scope_conds.append(DataTable.project_id.is_(None))
     if include_project_tables and project_id:
         scope_conds.append(DataTable.project_id == project_id)
+    if source_project_ids:
+        scope_conds.append(
+            and_(
+                DataTable.project_id.in_(list(source_project_ids)),
+                DataTable.mode == "public",
+            )
+        )
     if not scope_conds:
         return []
     if mode is not None:
@@ -484,7 +503,9 @@ async def update_table_metadata(
 
     ``expected_updated_at``, when given, must equal the row's current
     ``updated_at`` ISO string, else :class:`StaleTableError` (carrying the
-    current row) is raised before anything changes. ``updated_at`` is
+    current row) is raised before anything changes -- also when another
+    writer lands between the read and this write (the UPDATE is
+    conditional on the ``updated_at`` that was read). ``updated_at`` is
     bumped only when a field actually changes.
 
     Returns:
@@ -508,24 +529,36 @@ async def update_table_metadata(
         if expected_updated_at is not None and _iso(table.updated_at) != expected_updated_at:
             raise StaleTableError(current=await _table_dict_with_shares(db, table))
 
-        changed = False
+        values = {}
         if clean_title is not None and clean_title != table.title:
             if await _title_taken(
                 db, table.owner_id, table.project_id, table.mode, clean_title,
                 exclude_table_id=table.id,
             ):
                 raise _duplicate_title_error(clean_title, table.project_id)
-            table.title = clean_title
-            changed = True
+            values["title"] = clean_title
         if clean_description is not None and clean_description != table.description:
-            table.description = clean_description
-            changed = True
+            values["description"] = clean_description
         if require_approval is not None and require_approval != bool(table.require_approval):
-            table.require_approval = require_approval
-            changed = True
+            values["require_approval"] = require_approval
 
-        if changed:
-            table.updated_at = datetime.now(timezone.utc)
+        if values:
+            # Conditional UPDATE: with a token, the row must still carry the
+            # updated_at read above, so a writer that landed in between makes
+            # this a stale update instead of a silent lost update.
+            stmt = update(DataTable).where(DataTable.id == table_id)
+            if expected_updated_at is not None:
+                stmt = stmt.where(DataTable.updated_at == table.updated_at)
+            values["updated_at"] = datetime.now(timezone.utc)
+            result = await db.execute(
+                stmt.values(**values).execution_options(synchronize_session=False)
+            )
+            if result.rowcount != 1:
+                await db.rollback()
+                current = await db.get(DataTable, table_id, populate_existing=True)
+                if current is None:
+                    return None
+                raise StaleTableError(current=await _table_dict_with_shares(db, current))
             await db.commit()
             await db.refresh(table)
         return await _table_dict_with_shares(db, table)
@@ -582,20 +615,34 @@ async def update_schema(
     _validate_count(expected_schema_version, "expected_schema_version")
     if row_count is not None:
         _validate_count(row_count, "row_count")
+    values = {
+        DataTable.table_schema: schema,
+        DataTable.schema_version: DataTable.schema_version + 1,
+        DataTable.last_write_source: last_write_source,
+        DataTable.updated_at: datetime.now(timezone.utc),
+    }
+    if row_count is not None:
+        values[DataTable.row_count] = row_count
     async with AsyncSessionLocal() as db:
-        table = await db.get(DataTable, table_id)
-        if table is None:
-            return None
-        if table.schema_version != expected_schema_version:
-            raise StaleTableSchemaError(current=await _table_dict_with_shares(db, table))
-        table.table_schema = schema
-        table.schema_version = table.schema_version + 1
-        if row_count is not None:
-            table.row_count = row_count
-        table.last_write_source = last_write_source
-        table.updated_at = datetime.now(timezone.utc)
+        # One conditional UPDATE: of two writers holding the same version,
+        # exactly one matches the WHERE; the other sees rowcount 0.
+        result = await db.execute(
+            update(DataTable)
+            .where(
+                DataTable.id == table_id,
+                DataTable.schema_version == expected_schema_version,
+            )
+            .values(values)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            await db.rollback()
+            current = await db.get(DataTable, table_id, populate_existing=True)
+            if current is None:
+                return None
+            raise StaleTableSchemaError(current=await _table_dict_with_shares(db, current))
         await db.commit()
-        await db.refresh(table)
+        table = await db.get(DataTable, table_id, populate_existing=True)
         return await _table_dict_with_shares(db, table)
 
 
@@ -715,7 +762,9 @@ async def add_share(table_id: str, user_id: Optional[int], permission: str) -> d
 
 
 async def remove_share(table_id: str, share_id: int) -> bool:
-    """Delete one share row of a table. False when no such row on that table."""
+    """Delete one share row of a table. False when no such row on that table.
+
+    Like :func:`add_share`, does not bump the table's ``updated_at``."""
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             delete(DataTableShare).where(
