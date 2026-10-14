@@ -800,6 +800,15 @@ async def run_conversation_turn(
         legacy_shared_workspace = bool(notice_flags.get("legacy_shared_workspace"))
         converted_from_standalone = bool(notice_flags.get("converted_from_standalone"))
 
+        # The user's saved memories go into the standard prompt only: a
+        # public-project run must not see internal data, a cross-user
+        # subagent runs in the target's account for a caller who must not
+        # read their memories, and an inference run is headless.
+        memories_content = ""
+        if not (is_public or is_user_subagent or is_inference_api):
+            from chat.memory_prompt import load_memories_content
+            memories_content = await load_memories_content(user["id"])
+
         from api.instructions import get_user_connected_services
         from config.user_connections import build_connected_accounts_paragraph
         connected_services = get_user_connected_services(user)
@@ -871,6 +880,7 @@ async def run_conversation_turn(
                 legacy_shared_workspace=legacy_shared_workspace,
                 converted_from_standalone=converted_from_standalone,
                 connected_accounts=connected_accounts,
+                memories_content=memories_content,
             )
         ChatStorage.set_system_prompt(conversation_id, system_prompt)
         # Always load saved SDK history from disk so it's available as a

@@ -77,15 +77,20 @@ def _memory_content(_base_url: str, _api_key: str) -> str:
 
 Quest maintains a per-user "memory" store of small factual notes about the
 user (preferences, ongoing context, things they've asked you to remember).
+A top-level conversation starts with the user's memories in its system
+prompt ("Saved Memories", newest first, capped: a trailing line says how
+many older ones were left out), so for most tasks you already have them.
 
 ### Reads (call directly via `tool_call`)
 
-- **memory_search(query)** — semantic substring search over saved memories.
-  Use this when the user mentions a preference, a past interaction, or
-  something they've asked you to remember.
+- **memory_search(query)** — full-text search over saved memories. Use
+  this when the prompt's memory section says some were not shown, when
+  the user refers to something they asked you to remember that is not
+  listed, or for memories saved after this session started.
 - **memory_list()** — return every active memory. Use this when the user
-  asks "what do you know about me", or when you want a complete view of
-  saved context before answering a personal question.
+  asks "what do you know about me", or when the prompt's section was
+  capped and you want the complete view before answering a personal
+  question.
 
 ### Suggestions (non-blocking, reviewed by the user later)
 
