@@ -53,6 +53,11 @@ TABLE_NUMBER_MAX_PRECISION = 10  # column ``precision`` is 0..10
 TABLE_URL_MAX_CHARS = 2048
 TABLE_ENUM_MAX_OPTIONS = 200
 TABLE_ENUM_OPTION_MAX_LEN = 100
+# Column ``description``; matches the table description cap.
+TABLE_COLUMN_DESCRIPTION_MAX_LEN = 500
+
+# Operations in one schema change (one change_table_schema card or UI save).
+TABLE_SCHEMA_MAX_OPERATIONS = 200
 
 # Schema operations refused because of existing rows (``rows_violate``)
 # name at most this many offending row ids.

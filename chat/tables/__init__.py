@@ -5,4 +5,8 @@ Modules:
 
 - ``constants`` -- size caps, change-log retention, modes, the
   connected-services pseudo-key, and the shared error texts.
+- ``schema`` -- the column model, column-spec validation, stored schema
+  load/dump, and cell value canonicalization.
+- ``schema_ops`` -- schema operations, their side effects and the schema
+  diff.
 """
