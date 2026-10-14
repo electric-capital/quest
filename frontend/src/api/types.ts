@@ -871,6 +871,8 @@ export interface MemorySuggestion {
   reasoning: string | null;
   /** Existing memory archived when this suggestion is accepted, or null. */
   replaces_memory_id: string | null;
+  /** Current text of that memory (list endpoint only), for the panel's diff. */
+  replaces_content?: string | null;
   status: 'pending' | 'accepted' | 'dismissed';
   memory_id: string | null;
   created_at: string | null;

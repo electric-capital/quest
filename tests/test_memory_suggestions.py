@@ -133,6 +133,7 @@ class TestStore:
 
         pending = _run(store.list_pending(alice, cid))
         assert [s["id"] for s in pending] == [first["id"], second["id"]]
+        assert [s["replaces_content"] for s in pending] == [None, None]
         assert _run(store.count_pending(alice, cid)) == 2
         # Scoped to the conversation and the user.
         assert _run(store.count_pending(alice, env.conversations["bob"])) == 0
@@ -163,6 +164,10 @@ class TestStore:
         s = _run(store.create_suggestion(
             alice, cid, "Drinks pour-over coffee", replaces_memory_id=old["id"],
         ))
+        # The list carries the replaced memory's text for the panel's diff.
+        [listed] = _run(store.list_pending(alice, cid))
+        assert listed["replaces_memory_id"] == old["id"]
+        assert listed["replaces_content"] == "Drinks drip coffee"
 
         suggestion, memory = _run(store.accept_suggestion(alice, s["id"]))
         assert suggestion["status"] == "accepted"
@@ -428,12 +433,19 @@ class TestRoutes:
     def test_list_scoped_to_owned_conversation(self, env):
         alice, cid = _uid(env, "alice"), env.conversations["alice"]
         s = _run(env.store.create_suggestion(alice, cid, "Fact", reasoning="why"))
+        old = _run(env.memory_store.create_memory(alice, "Old fact"))
+        r = _run(env.store.create_suggestion(
+            alice, cid, "New fact", replaces_memory_id=old["id"],
+        ))
         resp = _client(env).get(f"/app/api/conversations/{cid}/memory-suggestions")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["pending_count"] == 1
+        assert body["pending_count"] == 2
         assert body["suggestions"][0]["id"] == s["id"]
         assert body["suggestions"][0]["reasoning"] == "why"
+        assert body["suggestions"][0]["replaces_content"] is None
+        assert body["suggestions"][1]["id"] == r["id"]
+        assert body["suggestions"][1]["replaces_content"] == "Old fact"
         # Bob cannot even see that the conversation exists.
         resp = _client(env, "bob").get(f"/app/api/conversations/{cid}/memory-suggestions")
         assert resp.status_code == 404

@@ -103,10 +103,16 @@ async def get_suggestion(user_id: int, suggestion_id: str) -> Optional[dict]:
 
 
 async def list_pending(user_id: int, conversation_id: str) -> list[dict]:
-    """Pending suggestions of one conversation, oldest first."""
+    """Pending suggestions of one conversation, oldest first.
+
+    Each dict also carries ``replaces_content``: the current text of the
+    memory ``replaces_memory_id`` points at (None without one), so the
+    review panel can show what accepting would change.
+    """
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            select(MemorySuggestion)
+            select(MemorySuggestion, Memory.content)
+            .outerjoin(Memory, Memory.id == MemorySuggestion.replaces_memory_id)
             .where(
                 MemorySuggestion.user_id == user_id,
                 MemorySuggestion.conversation_id == conversation_id,
@@ -114,7 +120,10 @@ async def list_pending(user_id: int, conversation_id: str) -> list[dict]:
             )
             .order_by(MemorySuggestion.created_at.asc(), MemorySuggestion.id.asc())
         )
-        return [_to_dict(row) for row in result.scalars().all()]
+        return [
+            {**_to_dict(row), "replaces_content": replaced_content}
+            for row, replaced_content in result.all()
+        ]
 
 
 async def count_pending(user_id: int, conversation_id: str) -> int:

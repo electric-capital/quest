@@ -9,7 +9,7 @@
  * suggestion can be edited, accepted (creating the memory) or dismissed.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { TextareaHTMLAttributes } from 'react';
 import { Brain, Check, ChevronDown, ChevronUp, LoaderCircle, X } from 'lucide-react';
 import {
@@ -20,6 +20,7 @@ import {
 import { ApiClientError } from '../api/request';
 import type { MemorySuggestion } from '../api/types';
 import { conversationStore } from '../store/conversationStore';
+import { wordDiff } from '../utils/wordDiff';
 import './MemorySuggestions.css';
 
 interface MemorySuggestionsProps {
@@ -43,6 +44,46 @@ function AutoGrowTextarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
 function errorMessage(err: unknown, fallback: string): string {
   if (err instanceof Error && err.message) return err.message;
   return fallback;
+}
+
+/**
+ * What accepting a replacement changes: the replaced memory's text with
+ * the words the draft drops struck through on red and the words it adds on
+ * green. Follows the draft as the user edits it.
+ */
+function ReplacementDiff({ before, after }: { before: string; after: string }) {
+  const segments = useMemo(() => wordDiff(before, after.trim()), [before, after]);
+  const unchanged = segments.every((s) => s.type === 'equal');
+  return (
+    <div className="memory-suggestion-diff" data-testid="memory-suggestion-diff">
+      <div className="memory-suggestion-diff-label">
+        <span title="Accepting archives the memory this one updates">
+          Replaces an existing memory
+        </span>
+        {unchanged ? (
+          <span className="memory-suggestion-diff-note">(same text)</span>
+        ) : (
+          <span className="memory-suggestion-diff-legend" aria-hidden="true">
+            <span className="memory-suggestion-diff-del">removed</span>
+            <span className="memory-suggestion-diff-add">added</span>
+          </span>
+        )}
+      </div>
+      <div className="memory-suggestion-diff-body">
+        {segments.map((segment, i) => {
+          if (segment.type === 'equal') return <span key={i}>{segment.text}</span>;
+          // The whitespace before a changed word is spacing, not a change.
+          const [, lead, text] = /^(\s*)([\s\S]*)$/.exec(segment.text)!;
+          return (
+            <span key={i}>
+              {lead}
+              <span className={`memory-suggestion-diff-${segment.type}`}>{text}</span>
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 export function MemorySuggestions({ conversationId, pendingCount }: MemorySuggestionsProps) {
@@ -288,6 +329,11 @@ export function MemorySuggestions({ conversationId, pendingCount }: MemorySugges
                 const busy = busyIds.has(suggestion.id);
                 const draft = drafts[suggestion.id] ?? suggestion.content;
                 const rowError = rowErrors[suggestion.id];
+                // A replacement with the old text in hand gets the diff; one
+                // without (memory deleted meanwhile) keeps the plain pill.
+                const replacedText = suggestion.replaces_memory_id
+                  ? suggestion.replaces_content ?? null
+                  : null;
                 return (
                   <div
                     key={suggestion.id}
@@ -300,12 +346,15 @@ export function MemorySuggestions({ conversationId, pendingCount }: MemorySugges
                       disabled={busy}
                       aria-label="Memory text"
                     />
-                    {(suggestion.reasoning || suggestion.replaces_memory_id) && (
+                    {replacedText !== null && (
+                      <ReplacementDiff before={replacedText} after={draft} />
+                    )}
+                    {(suggestion.reasoning || (suggestion.replaces_memory_id && replacedText === null)) && (
                       <div className="memory-suggestion-meta">
                         {suggestion.reasoning && (
                           <span className="memory-suggestion-reasoning">{suggestion.reasoning}</span>
                         )}
-                        {suggestion.replaces_memory_id && (
+                        {suggestion.replaces_memory_id && replacedText === null && (
                           <span className="memory-suggestion-replaces" title="Accepting archives the memory this one updates">
                             Replaces an existing memory
                           </span>

@@ -242,6 +242,79 @@
   white-space: nowrap;
 }
 
+/* Word diff from the replaced memory to the draft: removed words on red,
+   added words on green. Dark-first like the other diff views; the light
+   block below is rewritten by themeOverridePlugin.ts to follow the
+   Settings > Appearance override. */
+.memory-suggestion-diff {
+  margin: 0 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.memory-suggestion-diff-label {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.72rem;
+  color: var(--accent-text);
+}
+
+.memory-suggestion-diff-note {
+  color: var(--text-secondary);
+}
+
+.memory-suggestion-diff-legend {
+  display: inline-flex;
+  gap: 0.4rem;
+  margin-left: auto;
+  color: var(--text-secondary);
+}
+
+.memory-suggestion-diff-legend > span {
+  padding: 0 0.3rem;
+  border-radius: 3px;
+}
+
+.memory-suggestion-diff-body {
+  padding: 0.4rem 0.5rem;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-suggestion-diff-del {
+  background: rgb(255 100 100 / 0.28);
+  color: rgb(255 170 170);
+  text-decoration: line-through;
+  text-decoration-color: rgb(255 140 140 / 0.8);
+  border-radius: 2px;
+}
+
+.memory-suggestion-diff-add {
+  background: rgb(80 200 120 / 0.28);
+  color: #9fe8b4;
+  border-radius: 2px;
+}
+
+@media (prefers-color-scheme: light) {
+  .memory-suggestion-diff-del {
+    background: rgb(255 120 120 / 0.3);
+    color: #a32a2a;
+    text-decoration-color: rgb(192 48 48 / 0.7);
+  }
+
+  .memory-suggestion-diff-add {
+    background: rgb(80 200 120 / 0.32);
+    color: #156b2f;
+  }
+}
+
 .memory-suggestion-actions {
   display: flex;
   gap: 0.5rem;

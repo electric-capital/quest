@@ -74,6 +74,37 @@ describe('MemorySuggestions', () => {
     expect(screen.getByRole('button', { name: 'Accept all' })).not.toBeNull();
   });
 
+  it('shows a word diff against the replaced memory that follows the draft', async () => {
+    serve([
+      suggestion('s1', 'Drinks pour-over coffee', {
+        replaces_memory_id: 'm-old',
+        replaces_content: 'Drinks drip coffee',
+      }),
+      // Replaced memory deleted meanwhile: no diff, just the plain pill.
+      suggestion('s2', 'Works in UTC', { replaces_memory_id: 'm-gone', replaces_content: null }),
+    ]);
+    render(<MemorySuggestions conversationId="c1" pendingCount={2} />);
+    fireEvent.click(screen.getByRole('button', { name: /suggested memories/ }));
+    await screen.findByDisplayValue('Drinks pour-over coffee');
+
+    const diffs = screen.getAllByTestId('memory-suggestion-diff');
+    expect(diffs).toHaveLength(1);
+    const body = diffs[0].querySelector('.memory-suggestion-diff-body')!;
+    expect(body.textContent).toBe('Drinks drip pour-over coffee');
+    expect(body.querySelector('.memory-suggestion-diff-del')!.textContent).toBe('drip');
+    expect(body.querySelector('.memory-suggestion-diff-add')!.textContent).toBe('pour-over');
+    expect(screen.getAllByText('Replaces an existing memory')).toHaveLength(2);
+    expect(document.querySelectorAll('.memory-suggestion-replaces')).toHaveLength(1);
+
+    // Editing the draft re-diffs; restoring the old text shows no change.
+    fireEvent.change(screen.getByDisplayValue('Drinks pour-over coffee'), {
+      target: { value: 'Drinks drip coffee ' },
+    });
+    expect(body.querySelector('.memory-suggestion-diff-del')).toBeNull();
+    expect(body.querySelector('.memory-suggestion-diff-add')).toBeNull();
+    expect(diffs[0].textContent).toContain('(same text)');
+  });
+
   it('accepts with the proposed text, or the edited text when changed', async () => {
     serve([suggestion('s1', 'Likes tea'), suggestion('s2', 'Likes rain')]);
     render(<MemorySuggestions conversationId="c1" pendingCount={2} />);
