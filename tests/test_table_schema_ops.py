@@ -6,12 +6,13 @@ import json
 
 import pytest
 
+from chat.tables import schema_ops
 from chat.tables.constants import (
     TABLE_MAX_COLUMNS,
     TABLE_SCHEMA_MAX_OPERATIONS,
     TABLE_TITLE_MAX_LEN,
 )
-from chat.tables.schema import Column, TableSchemaError, parse_columns
+from chat.tables.schema import Column, TableSchemaError, new_column_key, parse_columns
 from chat.tables.schema_ops import (
     AddColumnDDL,
     Backfill,
@@ -50,7 +51,21 @@ NAMES = ["Name", "Price", "Link", "Done", "Status", "Tags"]
 
 @pytest.fixture
 def cols():
-    return parse_columns(SPECS)
+    return parse_columns(SPECS, allow_key=True)
+
+
+@pytest.fixture(autouse=True)
+def predictable_keys(monkeypatch):
+    """Server-assigned keys are K_NEW, then K_NEW2, then random ones, each
+    skipping keys already taken, so expected effects can name them."""
+
+    def fake(existing_keys):
+        for key in (K_NEW, K_NEW2):
+            if key not in existing_keys:
+                return key
+        return new_column_key(existing_keys)
+
+    monkeypatch.setattr(schema_ops, "new_column_key", fake)
 
 
 def by_key(columns, key):
@@ -92,7 +107,7 @@ def test_effect_to_dict_shapes():
 # (ops, table_empty, expected effects, expected normalized ops, check(columns))
 SUCCESS_CASES = [
     pytest.param(
-        [{"op": "add_column", "column": {"key": K_NEW, "name": "Notes", "type": "text"}}],
+        [{"op": "add_column", "column": {"name": "Notes", "type": "text"}}],
         False,
         [{"kind": "add_column", "column_key": K_NEW}],
         [{"op": "add_column",
@@ -105,7 +120,7 @@ SUCCESS_CASES = [
     ),
     pytest.param(
         [{"op": "add_column", "after": "Name",
-          "column": {"key": K_NEW, "name": "Qty", "type": "number", "default": 3}}],
+          "column": {"name": "Qty", "type": "number", "default": 3}}],
         False,
         [{"kind": "add_column", "column_key": K_NEW}],
         [{"op": "add_column",
@@ -117,7 +132,7 @@ SUCCESS_CASES = [
         id="add_column-after",
     ),
     pytest.param(
-        [{"op": "add_column", "column": {"key": K_NEW, "name": "Must", "type": "text",
+        [{"op": "add_column", "column": {"name": "Must", "type": "text",
                                           "required": True}}],
         True,
         [{"kind": "add_column", "column_key": K_NEW}],
@@ -126,7 +141,7 @@ SUCCESS_CASES = [
         id="add_column-required-no-default-empty-table",
     ),
     pytest.param(
-        [{"op": "add_column", "column": {"key": K_NEW, "name": "Must", "type": "text",
+        [{"op": "add_column", "column": {"name": "Must", "type": "text",
                                           "required": True, "default": "x"}}],
         False,
         [{"kind": "add_column", "column_key": K_NEW},
@@ -136,7 +151,7 @@ SUCCESS_CASES = [
         id="add_column-required-default-backfill",
     ),
     pytest.param(
-        [{"op": "add_column", "column": {"key": K_NEW, "name": "Must", "type": "text",
+        [{"op": "add_column", "column": {"name": "Must", "type": "text",
                                           "required": True, "default": "x"}}],
         True,
         [{"kind": "add_column", "column_key": K_NEW}],
@@ -145,7 +160,7 @@ SUCCESS_CASES = [
         id="add_column-required-default-empty-no-backfill",
     ),
     pytest.param(
-        [{"op": "add_column", "column": {"key": K_NEW, "name": "Sku", "type": "text",
+        [{"op": "add_column", "column": {"name": "Sku", "type": "text",
                                           "unique": True}}],
         False,
         [{"kind": "add_column", "column_key": K_NEW},
@@ -157,7 +172,7 @@ SUCCESS_CASES = [
         id="add_column-unique",
     ),
     pytest.param(
-        [{"op": "add_column", "column": {"key": K_NEW, "name": "Sku", "type": "text",
+        [{"op": "add_column", "column": {"name": "Sku", "type": "text",
                                           "unique": True, "required": True,
                                           "default": "a"}}],
         False,
@@ -523,10 +538,19 @@ REFUSAL_CASES = [
                  False, "invalid_default", id="add-invalid-default"),
     pytest.param({"op": "add_column", "column": {"name": "X", "type": "text",
                                                  "key": K_LINK}},
-                 False, "duplicate_key", id="add-duplicate-key"),
+                 False, "unknown_field", id="add-key-existing"),
     pytest.param({"op": "add_column", "column": {"name": "X", "type": "text",
-                                                 "key": "bad"}},
-                 False, "invalid_key", id="add-invalid-key"),
+                                                 "key": "c_12345678"}},
+                 False, "unknown_field", id="add-key-valid"),
+    pytest.param({"op": "add_column", "column": {"name": "X", "type": "text",
+                                                 "key": None}},
+                 False, "unknown_field", id="add-key-null"),
+    pytest.param({"op": "add_column", "column": {"name": "X", "type": "text",
+                                                 "key": ["a"]}},
+                 False, "unknown_field", id="add-key-list"),
+    pytest.param({"op": "add_column", "column": {"name": "X", "type": "text",
+                                                 "key": {}}},
+                 False, "unknown_field", id="add-key-dict"),
     pytest.param({"op": "change_column_type", "name": "Link", "to": "text"}, False,
                  "type_change_not_supported", id="type-change-change_column_type"),
     pytest.param({"op": "set_type", "name": "Link"}, False,
@@ -608,6 +632,12 @@ REFUSAL_CASES = [
                  False, "invalid_title", id="title-too-long"),
     pytest.param({"op": "rename_table", "title": 7}, False, "invalid_title",
                  id="title-not-string"),
+    pytest.param({"op": "rename_table", "title": "a\nb"}, False, "invalid_title",
+                 id="title-newline"),
+    pytest.param({"op": "rename_table", "title": "a\x07b"}, False, "invalid_title",
+                 id="title-control"),
+    pytest.param({"op": "rename_table", "title": "a\ud800"}, False, "invalid_title",
+                 id="title-surrogate"),
 ]
 
 
@@ -717,7 +747,7 @@ def test_max_operations_accepted(cols):
 
 def test_add_rename_reorder(cols):
     ops = [
-        {"op": "add_column", "column": {"key": K_NEW, "name": "Qty", "type": "number"}},
+        {"op": "add_column", "column": {"name": "Qty", "type": "number"}},
         {"op": "rename_column", "name": "Qty", "new_name": "Quantity"},
         {"op": "reorder_columns", "names": ["Quantity"] + NAMES},
     ]
@@ -745,7 +775,7 @@ def test_rename_then_refer_by_new_name(cols):
 def test_rename_frees_old_name(cols):
     ops = [
         {"op": "rename_column", "name": "Link", "new_name": "Website"},
-        {"op": "add_column", "column": {"key": K_NEW, "name": "link", "type": "text"}},
+        {"op": "add_column", "column": {"name": "link", "type": "text"}},
     ]
     plan = run(cols, ops)
     assert [c.name for c in plan.columns][-2:] == ["Tags", "link"]
@@ -763,16 +793,16 @@ def test_duplicate_name_after_add_in_batch(cols):
 
 def test_drop_column_added_in_same_batch(cols):
     ops = [
-        {"op": "add_column", "column": {"key": K_NEW, "name": "Tmp", "type": "text",
+        {"op": "add_column", "column": {"name": "Tmp", "type": "text",
                                          "unique": True}},
         {"op": "drop_column", "name": "Tmp"},
     ]
     plan = run(cols, ops)
     assert plan.columns == cols
+    # The unique check on a column the batch drops again is moot; the DDL
+    # pairs stay.
     assert effects(plan) == [
         {"kind": "add_column", "column_key": K_NEW},
-        {"kind": "violation_check", "check": "unique", "column_key": K_NEW,
-         "option": None, "multiple": False},
         {"kind": "create_unique_index", "column_key": K_NEW},
         {"kind": "capture_dropped", "column_key": K_NEW},
         {"kind": "drop_unique_index", "column_key": K_NEW},
@@ -780,14 +810,21 @@ def test_drop_column_added_in_same_batch(cols):
     ]
 
 
-def test_dropped_key_not_reused_in_batch(cols):
+def test_dropped_key_not_reused_in_batch(cols, monkeypatch):
+    seen = []
+
+    def recording(existing_keys):
+        seen.append(set(existing_keys))
+        return new_column_key(existing_keys)
+
+    monkeypatch.setattr(schema_ops, "new_column_key", recording)
     ops = [
         {"op": "drop_column", "name": "Link"},
-        {"op": "add_column", "column": {"key": K_LINK, "name": "Link", "type": "url"}},
+        {"op": "add_column", "column": {"name": "Link", "type": "url"}},
     ]
-    with pytest.raises(SchemaOperationError) as info:
-        run(cols, ops)
-    assert (info.value.code, info.value.op_index) == ("duplicate_key", 1)
+    plan = run(cols, ops)
+    assert K_LINK in seen[0]
+    assert find_name(plan.columns, "Link").key != K_LINK
 
 
 def test_rename_table_twice_last_wins(cols):
@@ -987,7 +1024,7 @@ def test_diff_reorder_only(cols):
 def test_diff_combined_from_plan(cols):
     ops = [
         {"op": "add_column", "after": "Name",
-         "column": {"key": K_NEW, "name": "Qty", "type": "number", "default": 0}},
+         "column": {"name": "Qty", "type": "number", "default": 0}},
         {"op": "rename_column", "name": "Link", "new_name": "Website"},
         {"op": "drop_column", "name": "Done"},
         {"op": "set_required", "name": "Website", "required": True},
@@ -1027,7 +1064,7 @@ def test_diff_combined_from_plan(cols):
 def test_multi_default_backfill_and_ops_are_lists(cols):
     plan = run(cols, [
         {"op": "add_column", "column": {
-            "key": K_NEW, "name": "Labels", "type": "enum", "options": ["x", "y"],
+            "name": "Labels", "type": "enum", "options": ["x", "y"],
             "multiple": True, "required": True, "default": ["y", "x"]}},
         {"op": "set_default", "name": "Tags", "default": ["green"]},
     ])
@@ -1059,3 +1096,341 @@ def test_diff_multi_default_change_is_json_lists(cols):
     assert change == {"before": ["red", "blue"], "after": ["green"]}
     assert type(change["before"]) is list and type(change["after"]) is list
     json.dumps(diff)
+
+
+# --- Odd input shapes never raise anything but SchemaOperationError -----------
+
+ODD_VALUES = [
+    pytest.param([], id="empty-list"),
+    pytest.param(["a"], id="list"),
+    pytest.param([["a"]], id="nested-list"),
+    pytest.param([{}], id="list-of-dict"),
+    pytest.param({}, id="empty-dict"),
+    pytest.param({"a": 1}, id="dict"),
+    pytest.param(("a",), id="tuple"),
+    pytest.param(None, id="none"),
+    pytest.param(0, id="zero"),
+    pytest.param(-1, id="negative"),
+    pytest.param(10**400, id="huge-int"),
+    pytest.param(1.5, id="float"),
+    pytest.param(float("nan"), id="nan"),
+    pytest.param(float("inf"), id="inf"),
+    pytest.param(True, id="true"),
+    pytest.param(False, id="false"),
+    pytest.param("", id="empty-string"),
+    pytest.param("x" * 100_000, id="huge-string"),
+    pytest.param("\ud800", id="surrogate"),
+    pytest.param("a\x00b", id="nul"),
+]
+
+# A valid instance of every operation; each param is swapped for odd values.
+BASE_OPS = {
+    "add_column": {"column": {"name": "X", "type": "text"}, "after": "Name"},
+    "rename_column": {"name": "Link", "new_name": "Web"},
+    "drop_column": {"name": "Link"},
+    "reorder_columns": {"names": NAMES},
+    "set_description": {"name": "Link", "description": "d"},
+    "set_required": {"name": "Link", "required": True},
+    "set_unique": {"name": "Link", "unique": True},
+    "set_default": {"name": "Status", "default": "Doing"},
+    "set_precision": {"name": "Price", "precision": 1},
+    "add_enum_option": {"name": "Status", "option": "X", "after": "Todo"},
+    "rename_enum_option": {"name": "Status", "option": "Todo", "new_option": "Open"},
+    "remove_enum_option": {"name": "Status", "option": "Doing"},
+    "set_enum_multiple": {"name": "Status", "multiple": True},
+    "rename_table": {"title": "T"},
+}
+
+FUZZ_TARGETS = [
+    pytest.param(op, field, id=f"{op}.{field}")
+    for op, params in BASE_OPS.items()
+    for field in params
+] + [
+    pytest.param("add_column", f"column.{field}", id=f"add_column.column.{field}")
+    for field in ("name", "type", "required", "unique", "default", "options",
+                  "multiple", "precision", "description", "key")
+]
+
+
+def test_base_ops_are_valid(cols):
+    for op, params in BASE_OPS.items():
+        run(cols, [{"op": op, **params}])
+
+
+def _assert_only_operation_errors(columns, ops, table_empty=False):
+    try:
+        run(columns, ops, table_empty)
+    except SchemaOperationError as exc:
+        assert len(exc.message) < 1000
+    # Anything else propagates and fails the test.
+
+
+@pytest.mark.parametrize("value", ODD_VALUES)
+@pytest.mark.parametrize("op, field", FUZZ_TARGETS)
+def test_odd_param_values(cols, op, field, value):
+    params = copy.deepcopy(BASE_OPS[op])
+    if field.startswith("column."):
+        spec_field = field.split(".", 1)[1]
+        for spec_type in ("text", "number", "enum"):
+            spec = {"name": "X", "type": spec_type}
+            if spec_type == "enum":
+                spec["options"] = ["A", "B"]
+            spec[spec_field] = value
+            for empty in (False, True):
+                _assert_only_operation_errors(
+                    cols, [{"op": op, **params, "column": spec}], empty)
+    else:
+        params[field] = value
+        _assert_only_operation_errors(cols, [{"op": op, **params}])
+        _assert_only_operation_errors(cols, [{"op": op, **params}], True)
+
+
+@pytest.mark.parametrize("value", ODD_VALUES)
+def test_odd_values_as_list_elements(cols, value):
+    _assert_only_operation_errors(
+        cols, [{"op": "reorder_columns", "names": NAMES[:-1] + [value]}])
+    _assert_only_operation_errors(
+        cols, [{"op": "set_default", "name": "Tags", "default": ["red", value]}])
+    _assert_only_operation_errors(
+        cols, [{"op": "add_column", "column": {"name": "E", "type": "enum",
+                                               "options": ["A", value]}}])
+
+
+@pytest.mark.parametrize("value", ODD_VALUES)
+def test_odd_values_as_op_and_spec(cols, value):
+    _assert_only_operation_errors(cols, [{"op": value}])
+    _assert_only_operation_errors(cols, [value])
+    _assert_only_operation_errors(cols, [{"op": "add_column", "column": value}])
+    _assert_only_operation_errors(cols, value if isinstance(value, list) else [value])
+
+
+@pytest.mark.parametrize(
+    "field", [5, None, ("a",), 1.5, 10**5000, "f" * 100_000],
+    ids=["int", "none", "tuple", "float", "huge-int", "huge-string"],
+)
+def test_odd_field_names(cols, field):
+    _assert_only_operation_errors(cols, [{"op": "drop_column", "name": "Link", field: 1}])
+    _assert_only_operation_errors(
+        cols, [{"op": "add_column", "column": {"name": "X", "type": "text", field: 1}}])
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        pytest.param({"op": "drop_column", "name": "n" * 100_000}, id="unknown-column"),
+        pytest.param({"op": "f" * 100_000}, id="unknown-operation"),
+        pytest.param({"op": "remove_enum_option", "name": "Status", "option": "o" * 100_000},
+                     id="unknown-option"),
+        pytest.param({"op": "rename_column", "name": "Link", "new_name": "n" * 100_000},
+                     id="rename-too-long"),
+        pytest.param({"op": "add_column", "column": {"name": "n" * 100_000, "type": "text"}},
+                     id="add-too-long"),
+        pytest.param({"op": "drop_column", "name": "Link", "f" * 100_000: 1},
+                     id="unknown-field"),
+        pytest.param({"op": "set_default", "name": "Status", "default": "d" * 100_000},
+                     id="default-unknown-option"),
+    ],
+)
+def test_error_messages_are_bounded(cols, op):
+    with pytest.raises(SchemaOperationError) as info:
+        run(cols, [op])
+    assert len(info.value.message) < 500
+    assert "…" in info.value.message
+
+
+# --- Effects the rest of the batch makes moot ---------------------------------
+
+
+def test_required_check_dropped_with_column(cols):
+    plan = run(cols, [{"op": "set_required", "name": "Link", "required": True},
+                      {"op": "drop_column", "name": "Link"}])
+    assert plan.effects == [CaptureDroppedValues(K_LINK), DropColumnDDL(K_LINK)]
+
+
+def test_required_check_dropped_when_unset_again(cols):
+    plan = run(cols, [{"op": "set_required", "name": "Link", "required": True},
+                      {"op": "set_required", "name": "Link", "required": False}])
+    assert plan.effects == []
+
+
+def test_required_check_kept_through_rename(cols):
+    plan = run(cols, [{"op": "set_required", "name": "Link", "required": True},
+                      {"op": "rename_column", "name": "Link", "new_name": "Web"}])
+    assert plan.effects == [ViolationCheck("required", K_LINK)]
+
+
+def test_unique_check_dropped_when_unset_again(cols):
+    plan = run(cols, [{"op": "set_unique", "name": "Link", "unique": True},
+                      {"op": "set_unique", "name": "Link", "unique": False}])
+    assert plan.effects == [CreateUniqueIndex(K_LINK), DropUniqueIndex(K_LINK)]
+
+
+def test_add_unique_then_drop(cols):
+    plan = run(cols, [{"op": "add_column", "column": {"name": "Tmp", "type": "text",
+                                                      "unique": True}},
+                      {"op": "drop_column", "name": "Tmp"}])
+    assert not any(isinstance(e, ViolationCheck) for e in plan.effects)
+    assert plan.effects == [AddColumnDDL(K_NEW), CreateUniqueIndex(K_NEW),
+                            CaptureDroppedValues(K_NEW), DropUniqueIndex(K_NEW),
+                            DropColumnDDL(K_NEW)]
+
+
+def test_backfill_dropped_with_column(cols):
+    plan = run(cols, [{"op": "add_column", "column": {"name": "Must", "type": "text",
+                                                      "required": True, "default": "x"}},
+                      {"op": "drop_column", "name": "Must"}])
+    assert plan.effects == [AddColumnDDL(K_NEW), CaptureDroppedValues(K_NEW),
+                            DropColumnDDL(K_NEW)]
+
+
+def test_enum_option_check_dropped_with_column(cols):
+    plan = run(cols, [{"op": "remove_enum_option", "name": "Status", "option": "Doing"},
+                      {"op": "drop_column", "name": "Status"}])
+    assert plan.effects == [CaptureDroppedValues(K_STATUS), DropColumnDDL(K_STATUS)]
+
+
+# --- Enum operation sequences -------------------------------------------------
+
+
+def test_set_multiple_then_rename_option_rewrites_lists(cols):
+    plan = run(cols, [{"op": "set_enum_multiple", "name": "Status", "multiple": True},
+                      {"op": "rename_enum_option", "name": "Status", "option": "Todo",
+                       "new_option": "Open"}])
+    assert plan.effects == [WrapMulti(K_STATUS),
+                            EnumRewrite(K_STATUS, "Todo", "Open", True)]
+    assert by_key(plan.columns, K_STATUS).default == ("Open",)
+
+
+def test_remove_option_then_rename_onto_its_name(cols):
+    plan = run(cols, [{"op": "remove_enum_option", "name": "Status", "option": "Doing"},
+                      {"op": "rename_enum_option", "name": "Status", "option": "Done",
+                       "new_option": "Doing"}])
+    assert plan.effects == [
+        ViolationCheck("enum_option", K_STATUS, option="Doing", multiple=False),
+        EnumRewrite(K_STATUS, "Done", "Doing", False),
+    ]
+    assert by_key(plan.columns, K_STATUS).options == ("Todo", "Doing")
+
+
+def test_rename_option_then_remove_new_name(cols):
+    plan = run(cols, [{"op": "rename_enum_option", "name": "Status", "option": "Done",
+                       "new_option": "Finished"},
+                      {"op": "remove_enum_option", "name": "Status", "option": "Finished"}])
+    assert plan.effects == [
+        EnumRewrite(K_STATUS, "Done", "Finished", False),
+        ViolationCheck("enum_option", K_STATUS, option="Finished", multiple=False),
+    ]
+    assert by_key(plan.columns, K_STATUS).options == ("Todo", "Doing")
+
+
+# --- More batches -------------------------------------------------------------
+
+
+def test_drop_then_readd_same_name_gets_fresh_key(cols):
+    plan = run(cols, [{"op": "drop_column", "name": "Link"},
+                      {"op": "add_column", "column": {"name": "Link", "type": "url"},
+                       "after": "Price"}])
+    assert find_name(plan.columns, "Link").key == K_NEW
+    assert plan.effects == [CaptureDroppedValues(K_LINK), DropColumnDDL(K_LINK),
+                            AddColumnDDL(K_NEW)]
+    diff = schema_diff(cols, plan.columns)
+    assert entry(diff, K_LINK)["status"] == "dropped"
+    assert entry(diff, K_NEW)["status"] == "added"
+    assert [e["key"] for e in diff["columns"]] == [
+        K_NAME, K_PRICE, K_LINK, K_NEW, K_DONE, K_STATUS, K_TAGS]
+    assert not any(e["moved"] for e in diff["columns"])
+
+
+def test_add_unique_required_default_on_empty_table(cols):
+    plan = run(cols, [{"op": "add_column", "column": {
+        "name": "Sku", "type": "text", "unique": True, "required": True,
+        "default": "a"}}], table_empty=True)
+    assert plan.effects == [AddColumnDDL(K_NEW), ViolationCheck("unique", K_NEW),
+                            CreateUniqueIndex(K_NEW)]
+
+
+def test_operations_and_effects_json_round_trip(cols):
+    plan = run(cols, [
+        {"op": "add_column", "after": "Name", "column": {
+            "name": "Labels", "type": "enum", "options": ["x", "y"], "multiple": True,
+            "required": True, "default": ["y", "x"], "description": "L"}},
+        {"op": "rename_column", "name": "Link", "new_name": "Web"},
+        {"op": "set_unique", "name": "Web", "unique": True},
+        {"op": "set_required", "name": "Web", "required": True},
+        {"op": "set_default", "name": "Tags", "default": ["green"]},
+        {"op": "set_precision", "name": "Price", "precision": 1},
+        {"op": "add_enum_option", "name": "Status", "option": "Blocked", "after": "Todo"},
+        {"op": "rename_enum_option", "name": "Status", "option": "Blocked",
+         "new_option": "Stuck"},
+        {"op": "remove_enum_option", "name": "Status", "option": "Done"},
+        {"op": "set_enum_multiple", "name": "Status", "multiple": True},
+        {"op": "set_description", "name": "Done", "description": "flag"},
+        {"op": "drop_column", "name": "Name"},
+        {"op": "reorder_columns",
+         "names": ["Labels", "Price", "Web", "Done", "Status", "Tags"]},
+        {"op": "rename_table", "title": "T"},
+    ])
+    effect_dicts = [e.to_dict() for e in plan.effects]
+    assert {d["kind"] for d in effect_dicts} >= {
+        "add_column", "backfill", "violation_check", "create_unique_index",
+        "enum_rewrite", "wrap_multi", "capture_dropped", "drop_unique_index",
+        "drop_column"}
+    assert json.loads(json.dumps(plan.operations)) == plan.operations
+    assert json.loads(json.dumps(effect_dicts)) == effect_dicts
+
+
+# --- schema_diff moved flag ---------------------------------------------------
+
+
+def moved(diff):
+    return {e["key"] for e in diff["columns"] if e["moved"]}
+
+
+def test_diff_moved_none_when_identical(cols):
+    diff = schema_diff(cols, list(cols))
+    assert all(e["moved"] is False for e in diff["columns"])
+
+
+def test_diff_moved_single_column(cols):
+    after = [by_key(cols, K_TAGS)] + [c for c in cols if c.key != K_TAGS]
+    assert moved(schema_diff(cols, after)) == {K_TAGS}
+    after = [c for c in cols if c.key != K_NAME] + [by_key(cols, K_NAME)]
+    assert moved(schema_diff(cols, after)) == {K_NAME}
+    after = [by_key(cols, k) for k in (K_NAME, K_DONE, K_PRICE, K_LINK, K_STATUS, K_TAGS)]
+    assert moved(schema_diff(cols, after)) == {K_DONE}
+
+
+def test_diff_moved_swap_and_reverse_are_deterministic(cols):
+    after = [by_key(cols, k) for k in (K_PRICE, K_NAME, K_LINK, K_DONE, K_STATUS, K_TAGS)]
+    assert moved(schema_diff(cols, after)) == {K_NAME}
+    reverse = schema_diff(cols, list(reversed(cols)))
+    assert moved(reverse) == {K_NAME, K_PRICE, K_LINK, K_DONE, K_STATUS}
+    assert moved(schema_diff(cols, list(reversed(cols)))) == moved(reverse)
+
+
+def test_diff_adds_and_drops_move_nothing(cols):
+    new = Column(key=K_NEW, name="Qty", type="number")
+    after = [new] + [c for c in cols if c.key != K_LINK]
+    diff = schema_diff(cols, after)
+    assert moved(diff) == set()
+    assert entry(diff, K_NEW)["moved"] is False
+    assert entry(diff, K_LINK)["moved"] is False
+
+
+def test_diff_renamed_and_moved(cols):
+    plan = run(cols, [{"op": "rename_column", "name": "Link", "new_name": "Web"},
+                      {"op": "reorder_columns",
+                       "names": ["Web", "Name", "Price", "Done", "Status", "Tags"]}])
+    diff = schema_diff(cols, plan.columns)
+    e = entry(diff, K_LINK)
+    assert (e["status"], e["moved"]) == ("renamed", True)
+    assert moved(diff) == {K_LINK}
+    assert diff["order_changed"] is True
+    json.dumps(diff)
+
+
+def test_diff_entry_keys(cols):
+    plan = run(cols, [{"op": "drop_column", "name": "Link"}])
+    for e in schema_diff(cols, plan.columns)["columns"]:
+        assert set(e) == {"key", "status", "moved", "before", "after", "changes",
+                          "options_added", "options_removed"}

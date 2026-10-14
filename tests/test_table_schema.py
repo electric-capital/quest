@@ -13,6 +13,7 @@ from chat.tables.constants import (
     TABLE_ENUM_OPTION_MAX_LEN,
     TABLE_MAX_COLUMNS,
     TABLE_TEXT_MAX_CHARS,
+    TABLE_TITLE_MAX_LEN,
     TABLE_URL_MAX_CHARS,
 )
 from chat.tables.schema import (
@@ -22,6 +23,7 @@ from chat.tables.schema import (
     TableValueError,
     apply_default,
     canonicalize,
+    clip_repr,
     coerce_option,
     coerce_value,
     dump_schema,
@@ -35,6 +37,7 @@ from chat.tables.schema import (
     parse_columns,
     to_storage,
     validate_column_name,
+    validate_table_title,
 )
 
 TEXT = Column(key="c_00000001", name="Notes", type="text")
@@ -635,7 +638,7 @@ SPEC_ACCEPT = [
 
 @pytest.mark.parametrize("spec,expected", _cases(SPEC_ACCEPT))
 def test_parse_column_spec_accept(spec, expected):
-    column = parse_column_spec(spec, existing=EXISTING)
+    column = parse_column_spec(spec, existing=EXISTING, allow_key="key" in spec)
     assert isinstance(column, Column)
     assert is_valid_column_key(column.key)
     assert column.key != EXISTING[0].key
@@ -735,13 +738,36 @@ SPEC_REJECT = [
 
 @pytest.mark.parametrize("spec,code", _cases(SPEC_REJECT))
 def test_parse_column_spec_reject(spec, code):
+    allow_key = isinstance(spec, dict) and "key" in spec
     with pytest.raises(ColumnSpecError) as info:
-        parse_column_spec(spec, existing=EXISTING)
+        parse_column_spec(spec, existing=EXISTING, allow_key=allow_key)
     assert info.value.code == code
     assert isinstance(info.value, TableSchemaError)
     assert str(info.value) == info.value.message
     if isinstance(spec, dict) and isinstance(spec.get("name"), str):
         assert info.value.column == spec["name"]
+
+
+@pytest.mark.parametrize(
+    "key", ["c_0123abcd", None, "bad", 5, ["a"], {}, "c_aaaaaaaa"],
+    ids=["valid", "null", "malformed", "int", "list", "dict", "existing"],
+)
+def test_parse_column_spec_refuses_key_by_default(key):
+    with pytest.raises(ColumnSpecError) as info:
+        parse_column_spec({"name": "N", "type": "text", "key": key}, existing=EXISTING)
+    assert (info.value.code, info.value.field) == ("unknown_field", "key")
+    assert "assigned by the server" in info.value.message
+
+
+def test_parse_columns_refuses_key_by_default():
+    specs = [{"name": "A", "type": "text"}, {"name": "B", "type": "text",
+                                             "key": "c_11111111"}]
+    with pytest.raises(ColumnSpecError) as info:
+        parse_columns(specs)
+    assert (info.value.code, info.value.field) == ("unknown_field", "key")
+    columns = parse_columns(specs, allow_key=True)
+    assert columns[1].key == "c_11111111"
+    assert is_valid_column_key(columns[0].key)
 
 
 def test_parse_column_spec_default_error_names_reason():
@@ -806,7 +832,7 @@ def test_parse_columns_max():
 )
 def test_parse_columns_reject(specs, code):
     with pytest.raises(ColumnSpecError) as info:
-        parse_columns(specs)
+        parse_columns(specs, allow_key=True)
     assert info.value.code == code
 
 
@@ -1012,3 +1038,73 @@ def test_from_dict_normalizes_stored_values():
     column = Column.from_dict(data)
     assert column.description == "pad"
     assert column.default == "1.5"
+
+
+# --- validate_table_title -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "title, expected",
+    [
+        pytest.param("Inventory", "Inventory", id="plain"),
+        pytest.param("  Inventory \n", "Inventory", id="stripped"),
+        pytest.param("t" * TABLE_TITLE_MAX_LEN, "t" * TABLE_TITLE_MAX_LEN, id="max"),
+        pytest.param("Caf\u00e9 \U0001f600", "Caf\u00e9 \U0001f600", id="unicode"),
+    ],
+)
+def test_validate_table_title_accept(title, expected):
+    assert validate_table_title(title) == expected
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("   ", id="blank"),
+        pytest.param("t" * (TABLE_TITLE_MAX_LEN + 1), id="too-long"),
+        pytest.param(7, id="int"),
+        pytest.param(None, id="none"),
+        pytest.param(["a"], id="list"),
+        pytest.param("a\nb", id="newline"),
+        pytest.param("a\tb", id="tab"),
+        pytest.param("a\x00b", id="nul"),
+        pytest.param("a\x85b", id="c1-control"),
+        pytest.param("a\ud800b", id="surrogate"),
+    ],
+)
+def test_validate_table_title_reject(title):
+    with pytest.raises(TableSchemaError) as info:
+        validate_table_title(title)
+    assert (info.value.code, info.value.field) == ("invalid_title", "title")
+
+
+# --- Error message echo limits ----------------------------------------------------
+
+
+def test_clip_repr():
+    assert clip_repr("abc") == "'abc'"
+    assert clip_repr(5) == "'5'"
+    clipped = clip_repr("x" * 1000)
+    assert clipped == repr("x" * 100) + "\u2026"
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        pytest.param({"name": "n" * 100_000, "type": "text"}, id="long-name"),
+        pytest.param({"name": " " + "n" * 50, "type": "text"}, id="name-whitespace"),
+        pytest.param({"name": "N", "type": "text", "f" * 100_000: 1}, id="unknown-field"),
+        pytest.param({"name": "N", "type": "enum", "options": [" " + "o" * 99]},
+                     id="option-whitespace"),
+    ],
+)
+def test_error_messages_are_bounded(spec):
+    with pytest.raises(ColumnSpecError) as info:
+        parse_column_spec(spec)
+    assert len(info.value.message) < 400
+
+
+def test_unknown_option_message_is_bounded():
+    with pytest.raises(TableValueError) as info:
+        coerce_value(ENUM, "z" * 100_000)
+    assert len(info.value.message) < 400

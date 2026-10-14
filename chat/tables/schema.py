@@ -61,6 +61,7 @@ from chat.tables.constants import (
     TABLE_NUMBER_MAX_DIGITS,
     TABLE_NUMBER_MAX_PRECISION,
     TABLE_TEXT_MAX_CHARS,
+    TABLE_TITLE_MAX_LEN,
     TABLE_UNIQUE_COLUMN_TYPES,
     TABLE_URL_MAX_CHARS,
 )
@@ -114,6 +115,33 @@ class TableValueError(ValueError):
         self.message = message
         self.detail = message if detail is None else detail
         self.column = column
+
+
+# Longest stretch of a user-supplied name, option or field echoed in an
+# error message; a longer one is cut and marked with an ellipsis.
+_ECHO_MAX_CHARS = 100
+
+
+def field_label(value: object) -> str:
+    """A user-supplied field name as text: a string unchanged, anything
+    else through ``str`` (with a placeholder when even that fails, as for
+    an int too long to print)."""
+    if isinstance(value, str):
+        return value
+    try:
+        return str(value)
+    except Exception:  # noqa: BLE001 - any odd object must still be labelled
+        return f"<{type(value).__name__}>"
+
+
+def clip_repr(value: object) -> str:
+    """``repr`` of a user-supplied string for an error message, cut to
+    100 characters with a trailing ellipsis when longer (non-strings go
+    through :func:`field_label` first)."""
+    text = field_label(value)
+    if len(text) > _ECHO_MAX_CHARS:
+        return repr(text[:_ECHO_MAX_CHARS]) + "\u2026"
+    return repr(text)
 
 
 # --- Column ------------------------------------------------------------------
@@ -189,9 +217,9 @@ class Column:
         if unknown:
             raise ColumnSpecError(
                 "unknown_field",
-                f"Unknown column field: {unknown[0]!r}.",
+                f"Unknown column field: {clip_repr(unknown[0])}.",
                 column=name,
-                field=str(unknown[0]),
+                field=field_label(unknown[0]),
             )
         for field in _SPEC_FIELDS:
             if field not in data:
@@ -244,7 +272,6 @@ def validate_column_name(name: object) -> str:
         raise ColumnSpecError(
             "invalid_name", "Column name must be a string.", field="name"
         )
-    label = name[:TABLE_COLUMN_NAME_MAX_LEN]
     if not name or not name.strip():
         raise ColumnSpecError(
             "invalid_name", "Column name must not be empty.", column=name, field="name"
@@ -252,7 +279,7 @@ def validate_column_name(name: object) -> str:
     if len(name) > TABLE_COLUMN_NAME_MAX_LEN:
         raise ColumnSpecError(
             "invalid_name",
-            f"Column name {label!r}... is longer than "
+            f"Column name {clip_repr(name)} is longer than "
             f"{TABLE_COLUMN_NAME_MAX_LEN} characters.",
             column=name,
             field="name",
@@ -260,7 +287,7 @@ def validate_column_name(name: object) -> str:
     if name != name.strip():
         raise ColumnSpecError(
             "invalid_name",
-            f"Column name {name!r} must not start or end with whitespace.",
+            f"Column name {clip_repr(name)} must not start or end with whitespace.",
             column=name,
             field="name",
         )
@@ -268,7 +295,7 @@ def validate_column_name(name: object) -> str:
     if problem:
         raise ColumnSpecError(
             "invalid_name",
-            f"Column name {name!r} {problem}.",
+            f"Column name {clip_repr(name)} {problem}.",
             column=name,
             field="name",
         )
@@ -282,7 +309,10 @@ def validate_column_description(description: object, name: str | None) -> str:
     stripped, None as ``""``. ``name`` labels the error."""
     if description is None:
         return ""
-    label = f"Column {name!r}: description" if name is not None else "Column description"
+    label = (
+        f"Column {clip_repr(name)}: description" if name is not None
+        else "Column description"
+    )
     if not isinstance(description, str):
         raise ColumnSpecError(
             "invalid_description",
@@ -307,6 +337,30 @@ def validate_column_description(description: object, name: str | None) -> str:
             field="description",
         )
     return description
+
+
+def validate_table_title(title: object) -> str:
+    """Check a table title (a string of 1..``TABLE_TITLE_MAX_LEN``
+    characters after stripping, no control characters, line breaks
+    included, and no unpaired surrogates) and return it stripped. Raises
+    :class:`TableSchemaError` with code ``invalid_title``."""
+    if not isinstance(title, str):
+        raise TableSchemaError(
+            "invalid_title", "The table title must be a string.", field="title"
+        )
+    stripped = title.strip()
+    if not stripped or len(stripped) > TABLE_TITLE_MAX_LEN:
+        raise TableSchemaError(
+            "invalid_title",
+            f"The table title must be 1 to {TABLE_TITLE_MAX_LEN} characters.",
+            field="title",
+        )
+    problem = _text_problem(stripped, controls=False)
+    if problem:
+        raise TableSchemaError(
+            "invalid_title", f"The table title {problem}.", field="title"
+        )
+    return stripped
 
 
 def name_taken(
@@ -356,14 +410,14 @@ def _check_options(raw: object, name: str) -> tuple[str, ...]:
     if not isinstance(raw, (list, tuple)):
         raise _spec_error(
             "invalid_options",
-            f"Column {name!r}: options must be a list of strings.",
+            f"Column {clip_repr(name)}: options must be a list of strings.",
             name,
             "options",
         )
     if not 1 <= len(raw) <= TABLE_ENUM_MAX_OPTIONS:
         raise _spec_error(
             "invalid_options",
-            f"Column {name!r}: an enum needs 1 to {TABLE_ENUM_MAX_OPTIONS} options "
+            f"Column {clip_repr(name)}: an enum needs 1 to {TABLE_ENUM_MAX_OPTIONS} options "
             f"(got {len(raw)}).",
             name,
             "options",
@@ -373,14 +427,14 @@ def _check_options(raw: object, name: str) -> tuple[str, ...]:
         if not isinstance(option, str):
             raise _spec_error(
                 "invalid_option",
-                f"Column {name!r}: every option must be a string.",
+                f"Column {clip_repr(name)}: every option must be a string.",
                 name,
                 "options",
             )
         if not 1 <= len(option) <= TABLE_ENUM_OPTION_MAX_LEN:
             raise _spec_error(
                 "invalid_option",
-                f"Column {name!r}: options must be 1 to {TABLE_ENUM_OPTION_MAX_LEN} "
+                f"Column {clip_repr(name)}: options must be 1 to {TABLE_ENUM_OPTION_MAX_LEN} "
                 "characters.",
                 name,
                 "options",
@@ -388,7 +442,7 @@ def _check_options(raw: object, name: str) -> tuple[str, ...]:
         if option != option.strip():
             raise _spec_error(
                 "invalid_option",
-                f"Column {name!r}: option {option!r} must not start or end with "
+                f"Column {clip_repr(name)}: option {clip_repr(option)} must not start or end with "
                 "whitespace.",
                 name,
                 "options",
@@ -397,7 +451,7 @@ def _check_options(raw: object, name: str) -> tuple[str, ...]:
         if problem:
             raise _spec_error(
                 "invalid_option",
-                f"Column {name!r}: option {option!r} {problem}.",
+                f"Column {clip_repr(name)}: option {clip_repr(option)} {problem}.",
                 name,
                 "options",
             )
@@ -405,7 +459,7 @@ def _check_options(raw: object, name: str) -> tuple[str, ...]:
         if folded in seen:
             raise _spec_error(
                 "duplicate_option",
-                f"Column {name!r}: option {option!r} is listed twice "
+                f"Column {clip_repr(name)}: option {clip_repr(option)} is listed twice "
                 "(options are compared case-insensitively).",
                 name,
                 "options",
@@ -424,7 +478,7 @@ def _build_column(spec: Mapping, *, existing: Sequence[Column]) -> Column:
     if name_taken(existing, name):
         raise _spec_error(
             "duplicate_name",
-            f"A column named {name!r} already exists (names are compared "
+            f"A column named {clip_repr(name)} already exists (names are compared "
             "case-insensitively).",
             name,
             "name",
@@ -432,13 +486,13 @@ def _build_column(spec: Mapping, *, existing: Sequence[Column]) -> Column:
 
     if "type" not in spec:
         raise _spec_error(
-            "missing_field", f"Column {name!r} needs a type.", name, "type"
+            "missing_field", f"Column {clip_repr(name)} needs a type.", name, "type"
         )
     col_type = spec["type"]
     if not isinstance(col_type, str) or col_type not in TABLE_COLUMN_TYPES:
         raise _spec_error(
             "invalid_type",
-            f"Column {name!r}: type must be one of {', '.join(TABLE_COLUMN_TYPES)}.",
+            f"Column {clip_repr(name)}: type must be one of {', '.join(TABLE_COLUMN_TYPES)}.",
             name,
             "type",
         )
@@ -451,7 +505,7 @@ def _build_column(spec: Mapping, *, existing: Sequence[Column]) -> Column:
         if not isinstance(value, bool):
             raise _spec_error(
                 "invalid_field",
-                f"Column {name!r}: {field} must be true or false.",
+                f"Column {clip_repr(name)}: {field} must be true or false.",
                 name,
                 field,
             )
@@ -464,7 +518,7 @@ def _build_column(spec: Mapping, *, existing: Sequence[Column]) -> Column:
         if raw_options is None:
             raise _spec_error(
                 "missing_field",
-                f"Column {name!r}: an enum column needs options.",
+                f"Column {clip_repr(name)}: an enum column needs options.",
                 name,
                 "options",
             )
@@ -473,7 +527,7 @@ def _build_column(spec: Mapping, *, existing: Sequence[Column]) -> Column:
         if raw_options is not None:
             raise _spec_error(
                 "field_not_allowed",
-                f"Column {name!r}: options are only allowed on enum columns.",
+                f"Column {clip_repr(name)}: options are only allowed on enum columns.",
                 name,
                 "options",
             )
@@ -481,7 +535,7 @@ def _build_column(spec: Mapping, *, existing: Sequence[Column]) -> Column:
         if flags["multiple"]:
             raise _spec_error(
                 "field_not_allowed",
-                f"Column {name!r}: multiple is only allowed on enum columns.",
+                f"Column {clip_repr(name)}: multiple is only allowed on enum columns.",
                 name,
                 "multiple",
             )
@@ -491,7 +545,7 @@ def _build_column(spec: Mapping, *, existing: Sequence[Column]) -> Column:
         if col_type != "number":
             raise _spec_error(
                 "field_not_allowed",
-                f"Column {name!r}: precision is only allowed on number columns.",
+                f"Column {clip_repr(name)}: precision is only allowed on number columns.",
                 name,
                 "precision",
             )
@@ -502,7 +556,7 @@ def _build_column(spec: Mapping, *, existing: Sequence[Column]) -> Column:
         ):
             raise _spec_error(
                 "invalid_precision",
-                f"Column {name!r}: precision must be a whole number from 0 to "
+                f"Column {clip_repr(name)}: precision must be a whole number from 0 to "
                 f"{TABLE_NUMBER_MAX_PRECISION}.",
                 name,
                 "precision",
@@ -511,7 +565,7 @@ def _build_column(spec: Mapping, *, existing: Sequence[Column]) -> Column:
     if flags["unique"] and col_type not in TABLE_UNIQUE_COLUMN_TYPES:
         raise _spec_error(
             "unique_not_allowed",
-            f"Column {name!r}: unique is only allowed on "
+            f"Column {clip_repr(name)}: unique is only allowed on "
             f"{', '.join(TABLE_UNIQUE_COLUMN_TYPES)} columns.",
             name,
             "unique",
@@ -524,7 +578,7 @@ def _build_column(spec: Mapping, *, existing: Sequence[Column]) -> Column:
     elif not is_valid_column_key(key):
         raise _spec_error(
             "invalid_key",
-            f"Column {name!r}: key must be {TABLE_COLUMN_KEY_PREFIX!r} followed by "
+            f"Column {clip_repr(name)}: key must be {TABLE_COLUMN_KEY_PREFIX!r} followed by "
             f"{TABLE_COLUMN_KEY_HEX_LEN} lowercase hex digits.",
             name,
             "key",
@@ -532,7 +586,7 @@ def _build_column(spec: Mapping, *, existing: Sequence[Column]) -> Column:
     elif key in existing_keys:
         raise _spec_error(
             "duplicate_key",
-            f"Column {name!r}: key {key!r} is already used by another column.",
+            f"Column {clip_repr(name)}: key {clip_repr(key)} is already used by another column.",
             name,
             "key",
         )
@@ -563,10 +617,19 @@ def _build_column(spec: Mapping, *, existing: Sequence[Column]) -> Column:
     return replace(column, default=default)
 
 
-def parse_column_spec(spec: Mapping, *, existing: Sequence[Column] = ()) -> Column:
+def parse_column_spec(
+    spec: Mapping, *, existing: Sequence[Column] = (), allow_key: bool = False
+) -> Column:
     """Validate a model- or UI-supplied column spec against the columns it
-    joins and return the :class:`Column`, with a fresh key when the spec
-    has none and the default canonicalized. Raises :class:`ColumnSpecError`."""
+    joins and return the :class:`Column` with a fresh key and the default
+    canonicalized. Raises :class:`ColumnSpecError`.
+
+    Column keys are server-assigned and never exposed to models, so a
+    ``key`` field is refused with ``unknown_field`` unless ``allow_key``
+    is True. With ``allow_key`` (server code that assigns keys itself) a
+    ``key`` must be well formed (``invalid_key``) and unused by
+    ``existing`` (``duplicate_key``); a missing or null key gets a fresh
+    one."""
     if not isinstance(spec, Mapping):
         raise ColumnSpecError("invalid_spec", "A column spec must be an object.")
     name = spec.get("name") if isinstance(spec.get("name"), str) else None
@@ -576,17 +639,30 @@ def parse_column_spec(spec: Mapping, *, existing: Sequence[Column] = ()) -> Colu
             f"A table can have at most {TABLE_MAX_COLUMNS} columns.",
             name,
         )
+    if "key" in spec and not allow_key:
+        raise _spec_error(
+            "unknown_field",
+            "Unknown column field: 'key' (column keys are assigned by the server).",
+            name,
+            "key",
+        )
     for field in spec:
         if field not in _SPEC_FIELDS:
             raise _spec_error(
-                "unknown_field", f"Unknown column field: {field!r}.", name, str(field)
+                "unknown_field",
+                f"Unknown column field: {clip_repr(field)}.",
+                name,
+                field_label(field),
             )
     return _build_column(spec, existing=existing)
 
 
-def parse_columns(specs: Sequence[Mapping]) -> list[Column]:
+def parse_columns(
+    specs: Sequence[Mapping], *, allow_key: bool = False
+) -> list[Column]:
     """Validate the full column list of a new table: 1..TABLE_MAX_COLUMNS
-    specs, each checked against the ones before it."""
+    specs, each checked against the ones before it. ``allow_key`` as for
+    :func:`parse_column_spec`."""
     if not isinstance(specs, (list, tuple)):
         raise ColumnSpecError("invalid_spec", "Columns must be a list of column specs.")
     if not specs:
@@ -598,7 +674,7 @@ def parse_columns(specs: Sequence[Mapping]) -> list[Column]:
         )
     columns: list[Column] = []
     for spec in specs:
-        columns.append(parse_column_spec(spec, existing=columns))
+        columns.append(parse_column_spec(spec, existing=columns, allow_key=allow_key))
     return columns
 
 
@@ -618,7 +694,7 @@ def load_schema(data: list) -> list[Column]:
         if name_taken(columns, column.name):
             raise _spec_error(
                 "duplicate_name",
-                f"Stored schema has two columns named {column.name!r}.",
+                f"Stored schema has two columns named {clip_repr(column.name)}.",
                 column.name,
                 "name",
             )
@@ -672,19 +748,19 @@ _OPTIONS_HINT_MAX = 10
 
 def _value_error(column: Column, code: str, detail: str) -> TableValueError:
     return TableValueError(
-        code, f"Column {column.name!r}: {detail}", column=column.name, detail=detail
+        code, f"Column {clip_repr(column.name)}: {detail}", column=column.name, detail=detail
     )
 
 
 def _unknown_option(column: Column, value: str) -> TableValueError:
     options = list(column.options or ())
-    listed = ", ".join(repr(o) for o in options[:_OPTIONS_HINT_MAX])
+    listed = ", ".join(clip_repr(o) for o in options[:_OPTIONS_HINT_MAX])
     if len(options) > _OPTIONS_HINT_MAX:
         listed += f" and {len(options) - _OPTIONS_HINT_MAX} more"
     return _value_error(
         column,
         "unknown_option",
-        f"{value[:100]!r} is not one of the options (options: {listed}).",
+        f"{clip_repr(value)} is not one of the options (options: {listed}).",
     )
 
 

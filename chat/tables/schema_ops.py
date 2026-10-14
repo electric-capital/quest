@@ -16,7 +16,6 @@ from typing import Any, ClassVar, Union
 from chat.tables.constants import (
     TABLE_NUMBER_MAX_PRECISION,
     TABLE_SCHEMA_MAX_OPERATIONS,
-    TABLE_TITLE_MAX_LEN,
     TABLE_UNIQUE_COLUMN_TYPES,
 )
 from chat.tables.schema import (
@@ -24,13 +23,16 @@ from chat.tables.schema import (
     ColumnSpecError,
     TableSchemaError,
     TableValueError,
+    clip_repr,
     coerce_value,
+    field_label,
     find_column,
     name_taken,
     new_column_key,
     parse_column_spec,
     validate_column_description,
     validate_column_name,
+    validate_table_title,
 )
 
 # --- Errors ------------------------------------------------------------------
@@ -180,8 +182,19 @@ class SchemaChangePlan:
 
     ``columns``: the new schema. ``effects``: the side effects in execution
     order. ``new_title``: the last ``rename_table`` title (stripped), else
-    None. ``operations``: one normalized dict per input operation, for the
-    change log's after-image (see :func:`apply_schema_operations`).
+    None. ``operations``: one normalized dict per input operation.
+
+    ``operations`` is the audit record for the change log's ``after``
+    image, not a replay input: it is not accepted back by
+    :func:`apply_schema_operations` (it carries server-assigned keys, which
+    operations may not name). Each op that addresses a column carries that
+    column's immutable key so undo (A6) can locate the column after later
+    renames. Undo does not re-run inverse operations (several changes have
+    no inverse op: a multi-option enum cannot become single again, and
+    ``add_column`` cannot insert at position 0); it rebuilds the table from
+    the before schema, which the change log (A5) must store in the change's
+    ``before`` image, the values captured by :class:`CaptureDroppedValues`,
+    and ``effects``.
     """
 
     columns: list[Column]
@@ -245,7 +258,7 @@ class _Batch:
             code, message, op_index=self.index, op=self.op, column=column, field=field
         )
 
-    def wrap(self, exc: ColumnSpecError) -> SchemaOperationError:
+    def wrap(self, exc: TableSchemaError) -> SchemaOperationError:
         prefix = f"Operation {self.index + 1} ({self.op}): "
         return self.error(
             exc.code, prefix + exc.message, column=exc.column, field=exc.field
@@ -281,7 +294,8 @@ class _Batch:
         if column is None:
             raise self.error(
                 "unknown_column",
-                f"Operation {self.index + 1} ({self.op}): no column named {name!r}.",
+                f"Operation {self.index + 1} ({self.op}): no column named "
+                f"{clip_repr(name)}.",
                 column=name,
                 field=field,
             )
@@ -292,7 +306,7 @@ class _Batch:
         if column.type != "enum":
             raise self.error(
                 "wrong_column_type",
-                f"Operation {self.index + 1} ({self.op}): column {column.name!r} is "
+                f"Operation {self.index + 1} ({self.op}): column {clip_repr(column.name)} is "
                 f"{column.type}, not enum.",
                 column=column.name,
                 field="name",
@@ -316,8 +330,8 @@ class _Batch:
         if option not in (column.options or ()):
             raise self.error(
                 "unknown_option",
-                f"Operation {self.index + 1} ({self.op}): column {column.name!r} has "
-                f"no option {option[:100]!r}.",
+                f"Operation {self.index + 1} ({self.op}): column {clip_repr(column.name)} has "
+                f"no option {clip_repr(option)}.",
                 column=column.name,
                 field=field,
             )
@@ -355,16 +369,18 @@ def _validate_op_shape(batch: _Batch, op: Any) -> str:
         )
     batch.op = name
     if name in _TYPE_CHANGE_OPS or "type" in op:
+        label = name if len(name) <= 100 else name[:100] + "\u2026"
         raise batch.error(
             "type_change_not_supported",
-            f"Operation {batch.index + 1} ({name}): column types cannot be changed. "
+            f"Operation {batch.index + 1} ({label}): column types "
+            "cannot be changed. "
             "Add a new column of the new type and copy the values with row writes.",
             field="type" if "type" in op else "op",
         )
     if name not in _OP_PARAMS:
         raise batch.error(
             "unknown_operation",
-            f"Operation {batch.index + 1}: unknown operation {name[:80]!r}. Known "
+            f"Operation {batch.index + 1}: unknown operation {clip_repr(name)}. Known "
             f"operations: {', '.join(_OP_PARAMS)}.",
             field="op",
         )
@@ -373,8 +389,9 @@ def _validate_op_shape(batch: _Batch, op: Any) -> str:
         if field != "op" and field not in required and field not in optional:
             raise batch.error(
                 "unknown_field",
-                f"Operation {batch.index + 1} ({name}): unknown field {str(field)!r}.",
-                field=str(field),
+                f"Operation {batch.index + 1} ({name}): unknown field "
+                f"{clip_repr(field)}.",
+                field=field_label(field),
             )
     for field in required:
         if field not in op:
@@ -400,25 +417,24 @@ def _add_column(b: _Batch, op: Mapping) -> dict:
         )
     after_name = b.str_param(op, "after", nullable=True)
     spec = dict(spec)
-    key = spec.get("key")
-    if key is None:
-        spec["key"] = new_column_key(b.seen_keys)
-    elif key in b.seen_keys:
+    if "key" in spec:
         name = spec.get("name") if isinstance(spec.get("name"), str) else None
         raise b.error(
-            "duplicate_key",
-            f"Operation {b.index + 1} (add_column): key {key!r} is already used.",
+            "unknown_field",
+            f"Operation {b.index + 1} (add_column): unknown column field 'key' "
+            "(column keys are assigned by the server).",
             column=name,
             field="key",
         )
+    spec["key"] = new_column_key(b.seen_keys)
     try:
-        column = parse_column_spec(spec, existing=b.columns)
+        column = parse_column_spec(spec, existing=b.columns, allow_key=True)
     except ColumnSpecError as exc:
         raise b.wrap(exc) from None
     if column.required and column.default is None and not b.table_empty:
         raise b.error(
             "required_needs_default",
-            f"Operation {b.index + 1} (add_column): column {column.name!r} is required "
+            f"Operation {b.index + 1} (add_column): column {clip_repr(column.name)} is required "
             "but the table has rows; give it a default to fill them.",
             column=column.name,
             field="default",
@@ -453,7 +469,8 @@ def _rename_column(b: _Batch, op: Mapping) -> dict:
     if name_taken(b.columns, new_name, except_key=column.key):
         raise b.error(
             "duplicate_name",
-            f"Operation {b.index + 1} (rename_column): a column named {new_name!r} "
+            f"Operation {b.index + 1} (rename_column): a column named "
+            f"{clip_repr(new_name)} "
             "already exists (names are compared case-insensitively).",
             column=new_name,
             field="new_name",
@@ -468,7 +485,7 @@ def _drop_column(b: _Batch, op: Mapping) -> dict:
     if len(b.columns) == 1:
         raise b.error(
             "last_column",
-            f"Operation {b.index + 1} (drop_column): {column.name!r} is the only "
+            f"Operation {b.index + 1} (drop_column): {clip_repr(column.name)} is the only "
             "column; a table needs at least one.",
             column=column.name,
             field="name",
@@ -497,7 +514,8 @@ def _reorder_columns(b: _Batch, op: Mapping) -> dict:
         raise b.error(
             "not_a_permutation",
             f"Operation {b.index + 1} (reorder_columns): names must list every current "
-            f"column exactly once (current columns: {current}).",
+            f"column exactly once (current columns: "
+            f"{', '.join(clip_repr(n) for n in current)}).",
             field="names",
         )
     by_name = {c.name: c for c in b.columns}
@@ -535,7 +553,7 @@ def _set_unique(b: _Batch, op: Mapping) -> dict:
         raise b.error(
             "unique_not_allowed",
             f"Operation {b.index + 1} (set_unique): unique is only allowed on "
-            f"{', '.join(TABLE_UNIQUE_COLUMN_TYPES)} columns; {column.name!r} is "
+            f"{', '.join(TABLE_UNIQUE_COLUMN_TYPES)} columns; {clip_repr(column.name)} is "
             f"{column.type}.",
             column=column.name,
             field="unique",
@@ -573,7 +591,7 @@ def _set_precision(b: _Batch, op: Mapping) -> dict:
     if column.type != "number":
         raise b.error(
             "wrong_column_type",
-            f"Operation {b.index + 1} (set_precision): column {column.name!r} is "
+            f"Operation {b.index + 1} (set_precision): column {clip_repr(column.name)} is "
             f"{column.type}; precision is only for number columns.",
             column=column.name,
             field="name",
@@ -634,8 +652,8 @@ def _remove_enum_option(b: _Batch, op: Mapping) -> dict:
     if len(options) == 1:
         raise b.error(
             "last_option",
-            f"Operation {b.index + 1} (remove_enum_option): {option!r} is the only "
-            f"option of {column.name!r}; an enum needs at least one.",
+            f"Operation {b.index + 1} (remove_enum_option): {clip_repr(option)} is the only "
+            f"option of {clip_repr(column.name)}; an enum needs at least one.",
             column=column.name,
             field="option",
         )
@@ -644,7 +662,7 @@ def _remove_enum_option(b: _Batch, op: Mapping) -> dict:
         raise b.error(
             "default_uses_option",
             f"Operation {b.index + 1} (remove_enum_option): the default of "
-            f"{column.name!r} uses {option!r}; change the default first.",
+            f"{clip_repr(column.name)} uses {clip_repr(option)}; change the default first.",
             column=column.name,
             field="option",
         )
@@ -662,7 +680,7 @@ def _set_enum_multiple(b: _Batch, op: Mapping) -> dict:
     if not multiple and column.multiple:
         raise b.error(
             "multi_to_single",
-            f"Operation {b.index + 1} (set_enum_multiple): {column.name!r} allows "
+            f"Operation {b.index + 1} (set_enum_multiple): {clip_repr(column.name)} allows "
             "several options; it cannot be turned back into a single-option column.",
             column=column.name,
             field="multiple",
@@ -676,15 +694,10 @@ def _set_enum_multiple(b: _Batch, op: Mapping) -> dict:
 
 
 def _rename_table(b: _Batch, op: Mapping) -> dict:
-    title = op["title"]
-    stripped = title.strip() if isinstance(title, str) else ""
-    if not stripped or len(stripped) > TABLE_TITLE_MAX_LEN:
-        raise b.error(
-            "invalid_title",
-            f"Operation {b.index + 1} (rename_table): the title must be text of 1 to "
-            f"{TABLE_TITLE_MAX_LEN} characters.",
-            field="title",
-        )
+    try:
+        stripped = validate_table_title(op["title"])
+    except TableSchemaError as exc:
+        raise b.wrap(exc) from None
     b.title = stripped
     return {"op": "rename_table", "title": stripped}
 
@@ -707,6 +720,28 @@ _HANDLERS = {
 }
 
 
+def _live_effects(
+    effects: Sequence[SchemaSideEffect], columns: Sequence[Column]
+) -> list[SchemaSideEffect]:
+    """Drop the checks and backfills the batch made moot (see
+    :func:`apply_schema_operations`)."""
+    final = {c.key: c for c in columns}
+    kept: list[SchemaSideEffect] = []
+    for effect in effects:
+        column = final.get(effect.column_key)
+        if isinstance(effect, Backfill) and column is None:
+            continue
+        if isinstance(effect, ViolationCheck):
+            if column is None:
+                continue
+            if effect.check == "required" and not column.required:
+                continue
+            if effect.check == "unique" and not column.unique:
+                continue
+        kept.append(effect)
+    return kept
+
+
 def apply_schema_operations(
     columns: Sequence[Column], ops: Sequence[Mapping], *, table_empty: bool
 ) -> SchemaChangePlan:
@@ -724,10 +759,26 @@ def apply_schema_operations(
     description, canonical defaults). Every operation that addresses a
     column by name also carries that column's immutable ``key`` (``keys``
     for ``reorder_columns``, ``after_key`` for ``add_column``'s ``after``)
-    so a replay or undo can find the column after later renames.
+    so undo can find the column after later renames.
     ``add_column``'s ``column`` is the full :meth:`Column.to_dict` including
     the assigned key, and its ``after`` is always present (None = appended).
     The names in a normalized op are the names at the time the op ran.
+    These normalized ops are the audit record for the change log's
+    ``after`` image, not a replay input; see :class:`SchemaChangePlan` for
+    how undo works instead.
+
+    ``add_column`` specs may not carry a ``key`` (``unknown_field``): keys
+    are assigned here, never by the caller.
+
+    Effects whose condition the rest of the batch undoes are dropped after
+    the last operation, judged against the final columns: a ``required``
+    :class:`ViolationCheck` when the column is gone or no longer required,
+    a ``unique`` check when it is gone or no longer unique, an
+    ``enum_option`` check when the column is gone, and a :class:`Backfill`
+    when the column is gone. DDL effects (column add/drop, index
+    create/drop), :class:`EnumRewrite`, :class:`WrapMulti` and
+    :class:`CaptureDroppedValues` are always kept, in order, so the
+    storage executes every step it was told about.
     """
     batch = _Batch(columns, table_empty)
     if not isinstance(ops, (list, tuple)):
@@ -750,7 +801,7 @@ def apply_schema_operations(
         normalized.append(_HANDLERS[name](batch, op))
     return SchemaChangePlan(
         columns=batch.columns,
-        effects=batch.effects,
+        effects=_live_effects(batch.effects, batch.columns),
         new_title=batch.title,
         operations=normalized,
     )
@@ -792,6 +843,7 @@ def _entry(before: Column | None, after: Column | None) -> dict:
     return {
         "key": (after or before).key,  # type: ignore[union-attr]
         "status": status,
+        "moved": False,
         "before": before_dict,
         "after": after_dict,
         "changes": changes,
@@ -800,14 +852,81 @@ def _entry(before: Column | None, after: Column | None) -> dict:
     }
 
 
+def _kept_in_place(before: Sequence[str], after: Sequence[str]) -> set[str]:
+    """Keys of one longest common subsequence of two orders of the same
+    distinct keys. Ties go to the subsequence keeping the keys that come
+    later in ``before`` (so moving one column flags that column)."""
+    n, m = len(before), len(after)
+    # lcs[i][j]: LCS length of before[i:] and after[j:].
+    lcs = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        for j in range(m - 1, -1, -1):
+            if before[i] == after[j]:
+                lcs[i][j] = lcs[i + 1][j + 1] + 1
+            else:
+                lcs[i][j] = max(lcs[i + 1][j], lcs[i][j + 1])
+    kept: set[str] = set()
+    i = j = 0
+    while i < n and j < m:
+        if before[i] == after[j]:
+            kept.add(before[i])
+            i += 1
+            j += 1
+        elif lcs[i + 1][j] >= lcs[i][j + 1]:
+            i += 1
+        else:
+            j += 1
+    return kept
+
+
 def schema_diff(before: Sequence[Column], after: Sequence[Column]) -> dict:
     """Compare two schemas by column key (a rename is a rename, not a drop
-    plus an add). JSON-serializable; see the module docs for the shape.
+    plus an add) for previews. Returns a JSON-serializable dict::
+
+        {
+          "columns": [entry, ...],
+          "order_changed": bool,   # surviving columns are in a new order
+          "before_order": [name, ...],
+          "after_order": [name, ...],
+          "changed": bool,         # order_changed or any entry not unchanged
+        }
+
+    and each entry::
+
+        {
+          "key": str,
+          "status": "added" | "dropped" | "renamed" | "changed" | "unchanged",
+          "moved": bool,
+          "before": Column.to_dict() | None,   # None when added
+          "after": Column.to_dict() | None,    # None when dropped
+          "changes": {field: {"before": old, "after": new}, ...},
+          "options_added": [option, ...],
+          "options_removed": [option, ...],
+        }
+
+    ``status`` is ``renamed`` whenever the name changed (other fields may
+    have changed too; see ``changes``), ``changed`` when only other fields
+    did. ``changes`` covers every field but ``key`` and is empty for added
+    and dropped columns.
 
     Entries follow the after order; each dropped column sits right after
     its nearest surviving predecessor in the before order (first when it
     has none). ``options_added`` / ``options_removed`` list enum options by
     exact string for columns on both sides, else are empty.
+
+    ``moved`` is True for a surviving column whose position relative to
+    the other surviving columns changed: it is not part of a longest common
+    subsequence of the surviving keys in before order and in after order
+    (ties keep the columns that come later in the before order, so moving
+    one column flags exactly that column). Added and dropped columns are
+    never ``moved``; adds and drops alone move nothing.
+
+    This compares columns only. A ``rename_enum_option`` therefore shows
+    as the old option in ``options_removed`` and the new one in
+    ``options_added``; the preview (A12) labels renames, and the number of
+    cells each rewrites, from the plan's :class:`EnumRewrite` effects,
+    taken in sequence (a later rewrite of the same column applies to the
+    result of the earlier ones).
     """
     before_by_key = {c.key: c for c in before}
     after_by_key = {c.key: c for c in after}
@@ -828,6 +947,11 @@ def schema_diff(before: Sequence[Column], after: Sequence[Column]) -> dict:
     surviving_before = [c.key for c in before if c.key in after_by_key]
     surviving_after = [c.key for c in after if c.key in before_by_key]
     order_changed = surviving_before != surviving_after
+    if order_changed:
+        in_place = _kept_in_place(surviving_before, surviving_after)
+        for e in entries:
+            if e["before"] is not None and e["after"] is not None:
+                e["moved"] = e["key"] not in in_place
     return {
         "columns": entries,
         "order_changed": order_changed,
