@@ -9,7 +9,8 @@
  * suggestion can be edited, accepted (creating the memory) or dismissed.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { TextareaHTMLAttributes } from 'react';
 import { Brain, Check, ChevronDown, ChevronUp, LoaderCircle, X } from 'lucide-react';
 import {
   acceptMemorySuggestion,
@@ -25,6 +26,18 @@ interface MemorySuggestionsProps {
   conversationId: string;
   /** Pending count from the store; the bubble hides at zero. */
   pendingCount: number;
+}
+
+/** Textarea that grows with its (wrapped) content instead of clipping it. */
+function AutoGrowTextarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [props.value]);
+  return <textarea ref={ref} rows={1} {...props} />;
 }
 
 function errorMessage(err: unknown, fallback: string): string {
@@ -280,12 +293,11 @@ export function MemorySuggestions({ conversationId, pendingCount }: MemorySugges
                     key={suggestion.id}
                     className={`memory-suggestion-row${busy ? ' is-busy' : ''}`}
                   >
-                    <textarea
+                    <AutoGrowTextarea
                       className="memory-suggestion-content"
                       value={draft}
                       onChange={(e) => setDrafts((prev) => ({ ...prev, [suggestion.id]: e.target.value }))}
                       disabled={busy}
-                      rows={Math.min(6, Math.max(1, draft.split('\n').length))}
                       aria-label="Memory text"
                     />
                     {(suggestion.reasoning || suggestion.replaces_memory_id) && (

@@ -197,7 +197,8 @@
 
 .memory-suggestion-content {
   width: 100%;
-  resize: vertical;
+  resize: none;
+  overflow: hidden;
   padding: 0.4rem 0.5rem;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -289,15 +290,32 @@
   to { transform: rotate(360deg); }
 }
 
-@media (max-width: 640px) {
-  .memory-suggestions {
-    padding: 0 0.5rem 0.35rem;
+.memory-suggestions-title,
+.memory-suggestions-bulk {
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  /* The phone composer overlays the bottom of .chat-panel (ChatPanel.css),
+     so the bubble leaves the flex flow too and floats just above the
+     collapsed input pill; the panel then opens over the composer. */
+  .chat-panel > .memory-suggestions {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(4.4rem + env(safe-area-inset-bottom, 0px));
+    padding: 0 0.5rem;
+    z-index: 11;
   }
 
   .memory-suggestions-panel {
     left: 0.5rem;
     right: 0.5rem;
     max-height: 70vh;
+  }
+
+  .memory-suggestions-header {
+    flex-wrap: wrap;
   }
 
   .memory-suggestions-hint {
