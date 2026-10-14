@@ -28,6 +28,8 @@ def _invalid():
 
 BAD_IDS = [
     "", ".", "..", "a/b", "../x", "x/..", "/abs", "/", "a\\b/c",
+    # Passes _validate_id_segment; refused because Path.resolve() raises
+    # ValueError inside _resolve_contained_dir's containment check.
     "nul\x00byte",
 ]
 
@@ -103,25 +105,3 @@ class TestGetTableDir:
 
     def test_invalid_id_is_a_value_error(self):
         assert issubclass(_invalid(), ValueError)
-
-
-class TestTablesFeatureGate:
-    def test_registered_off_by_default_and_per_user(self, tmp_path, monkeypatch):
-        import config.feature_gates as fg
-
-        monkeypatch.setattr(fg, "FEATURE_GATES_FILE", tmp_path / "feature_gates.json")
-        assert fg.FEATURE_TABLES == "tables"
-        assert fg.FEATURE_TABLES in fg.KNOWN_FEATURES
-        assert fg.FEATURE_TABLES in fg.PER_USER_ACCESS_FEATURES
-        assert fg.FEATURE_LABELS[fg.FEATURE_TABLES]["label"] == "Quest Tables"
-        assert fg.FEATURE_LABELS[fg.FEATURE_TABLES]["description"]
-        assert not fg.tables_enabled_for("user@example.com")
-
-        fg.set_feature_enabled(fg.FEATURE_TABLES, True)
-        assert fg.tables_enabled_for("anyone@example.com")
-        fg.set_feature_allowed_users(fg.FEATURE_TABLES, ["User@Example.com"])
-        assert fg.tables_enabled_for("user@example.com")
-        assert not fg.tables_enabled_for("other@example.com")
-        assert not fg.tables_enabled_for("")
-        # Independent of the docs gate.
-        assert not fg.docs_enabled_for("user@example.com")

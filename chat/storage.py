@@ -154,10 +154,9 @@ class InvalidStorageIdError(ValueError):
     Raised by the central path resolvers on ``ChatStorage`` for ids that are
     not a single canonical path segment (empty, ``.``, ``..``, containing a
     separator, absolute) or whose resolved directory would not live under
-    ``CHATS_DIR`` / ``PROJECTS_DIR`` / ``DOCS_DIR`` / ``TABLES_DIR`` (e.g. a planted
-    symlink). Subclasses
-    ``ValueError`` so callers that already treat a bad id as a cache miss or
-    a 4xx keep working.
+    ``CHATS_DIR`` / ``PROJECTS_DIR`` / ``DOCS_DIR`` / ``TABLES_DIR`` (e.g. a
+    planted symlink). Subclasses ``ValueError`` so callers that already treat
+    a bad id as a cache miss or a 4xx keep working.
     """
 
 
@@ -220,14 +219,12 @@ class ChatStorage:
     Ownership is authoritative in the conversations SQLite table.
 
     ``get_conversation_dir`` / ``get_project_dir`` / ``get_doc_dir`` /
-    ``get_table_dir`` (and the
-    helpers built on them) are the ONLY places that turn an id into a
-    filesystem path. They validate the id and containment-check the result,
-    so every caller is safe by construction; production code must not join
-    ``CHATS_DIR`` / ``PROJECTS_DIR`` / ``DOCS_DIR`` / ``TABLES_DIR`` with an id
-    itself.
-    Ownership is deliberately NOT
-    checked here -- schedulers, migrations and cross-user subagents resolve
+    ``get_table_dir`` (and the helpers built on them) are the ONLY places that
+    turn an id into a filesystem path. They validate the id and
+    containment-check the result, so every caller is safe by construction;
+    production code must not join ``CHATS_DIR`` / ``PROJECTS_DIR`` /
+    ``DOCS_DIR`` / ``TABLES_DIR`` with an id itself. Ownership is
+    deliberately NOT checked here -- schedulers, migrations and cross-user subagents resolve
     paths without a "current user"; HTTP routes go through
     ``chat.conversation_access`` which adds the DB ownership lookup.
     """

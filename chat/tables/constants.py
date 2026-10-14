@@ -28,8 +28,13 @@ TABLE_MAX_PER_OWNER = 200
 TABLE_WRITE_MAX_ROWS = 500
 
 # query_rows: rows per page and response size (rows halved until it fits).
+# The remaining query, filter and listing limits live with the code that
+# enforces them (filters, tools, routes).
 TABLE_QUERY_MAX_ROWS = 1000
 TABLE_QUERY_MAX_BYTES = 100 * 1024
+
+# table.db connections wait this long on a locked database.
+TABLE_DB_BUSY_TIMEOUT_S = 5
 
 # --- Columns and values ----------------------------------------------------
 
@@ -38,6 +43,10 @@ TABLE_COLUMN_TYPES = ("text", "number", "url", "boolean", "enum")
 TABLE_UNIQUE_COLUMN_TYPES = ("text", "number", "url")
 
 TABLE_COLUMN_NAME_MAX_LEN = 80
+# Immutable server-assigned column key: prefix + this many hex digits
+# (``c_1a2b3c4d``); also the SQL column name in ``rows``.
+TABLE_COLUMN_KEY_PREFIX = "c_"
+TABLE_COLUMN_KEY_HEX_LEN = 8
 TABLE_TEXT_MAX_CHARS = 10_000
 TABLE_NUMBER_MAX_DIGITS = 38  # significant digits of a canonical Decimal
 TABLE_NUMBER_MAX_PRECISION = 10  # column ``precision`` is 0..10
@@ -65,6 +74,16 @@ TABLE_CHANGE_MAX_COUNT = 2000
 # prompts while the ``tables`` gate (config/feature_gates.py
 # FEATURE_TABLES) is closed for the user.
 TABLES_SERVICE_KEY = "tables"
+
+
+def table_not_found_message(table_id: str) -> str:
+    """The ONE not-found text.
+
+    Used verbatim for a table that does not exist AND for a table the caller
+    may not see (invariant 2 in the spec: a hidden table behaves exactly
+    like a nonexistent one). Never build a not-found message any other way.
+    """
+    return f"Table not found: {table_id}"
 
 
 def tables_disabled_message() -> str:

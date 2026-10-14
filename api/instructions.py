@@ -48,8 +48,8 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
 
     The map also carries capability pseudo-keys (:data:`PSEUDO_SERVICE_KEYS`,
     ``"docs"`` and ``"tables"`` for the Quest Docs and Quest Tables feature
-    gates) that gate tools and skills the same way but are not connections. A plugin with neither
-    a credential schema nor a user connection (a free public API, e.g.
+    gates) that gate tools and skills the same way but are not connections.
+    A plugin with neither a credential schema nor a user connection (a free public API, e.g.
     ``sec_edgar``) is always true here; GET /me's aggregate skips those
     ids via :func:`config.plugins.connectionless_plugin_ids`.
 
