@@ -66,12 +66,12 @@
   outline-offset: 2px;
 }
 
-/* Click-away layer over the whole chat panel (the panel's positioned
-   ancestor), under the card. */
+/* Click-away layer over the whole window, composer included, under the
+   card. Fixed, so it escapes the bar; it still paints inside the bar's
+   stacking context, beneath the panel. */
 .memory-suggestions-backdrop {
-  position: absolute;
-  inset: auto -100vw 0;
-  top: -100vh;
+  position: fixed;
+  inset: 0;
   background: rgb(0 0 0 / 0.25);
   z-index: 0;
 }
