@@ -227,7 +227,7 @@ def _flat_oauth_client_fields(id_placeholder: str, secret_placeholder: str):
 
 _register_core(ServiceSpec(
     service="ramp",
-    label="Ramp",
+    label="Ramp (Ramp admins only)",
     fields=_flat_oauth_client_fields(
         "Ramp OAuth client ID", "Ramp OAuth client secret"),
 ))

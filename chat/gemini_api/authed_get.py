@@ -436,7 +436,8 @@ _SERVICE_REGISTRY: dict[str, dict[str, Any]] = {
             "error": "ramp_oauth_required",
             "message": (
                 "Ramp not connected (or the connection expired). "
-                "Please connect Ramp in Settings > Data Connections."
+                "Please connect Ramp in Settings > Data Connections "
+                "(only a Ramp Admin or Business Owner can connect)."
             ),
         },
         "allowed_endpoints": [

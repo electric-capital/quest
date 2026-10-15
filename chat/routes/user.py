@@ -507,9 +507,13 @@ async def get_connectors(user: dict = Depends(get_current_user_cookie_or_apikey_
             "key_placeholder": "Paste Personal Access Token (pat...)",
             "disconnect_url": "/auth/airtable/remove-token",
         },
+        # Ramp only lets Admins and Business Owners of the Ramp business
+        # authorize a developer app, and the resulting token reads
+        # business-wide data, so the row says so up front.
         {
             "service": "ramp",
-            "label": "Ramp",
+            "label": "Ramp (Ramp admins only)",
+            "description": "Business-wide spend data; only Ramp Admins and Business Owners can connect",
             "kind": "oauth",
             "connect_url": "/auth/ramp?popup=1",
             "connected": user.get("ramp_oauth") is not None,

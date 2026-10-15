@@ -4,6 +4,8 @@
 
 Quest integrates with Ramp (spend management: corporate cards, bills, reimbursements) using a standard OAuth 2.0 authorization-code flow. Each user connects individually via OAuth to obtain an access token for read-only API operations. Ramp access tokens expire and refresh tokens rotate on every use, so Quest stores the refresh token and refreshes automatically.
 
+The connector is for **Ramp admins only**: Ramp lets only Admins and Business Owners of the Ramp business authorize a developer app, and the token they obtain reads business-wide data. Regular Ramp employees cannot connect, which is why the connector is labelled "Ramp (Ramp admins only)" in Settings > Data Connections and Settings > Service Credentials (see [Ramp API](../api/ramp-api.md)).
+
 ## Key Files
 
 - Settings > Service Credentials (admin) -- Ramp card managing `client_id` and `client_secret` in the per-service credential store; see [Service Credentials](../architecture/service-credentials.md). Ramp has no legacy `server_credentials.json` fallback.
@@ -23,7 +25,7 @@ Create a Ramp developer app at Ramp > Settings > Developer API (an owner/admin o
 
 Until an admin configures these credentials, the Ramp card in Settings > Data Connections is hidden for all users (`available: false` from `GET /connectors`).
 
-Users then connect individually via the Data Connections section in Settings, which opens an OAuth popup flow. See [OAuth Popup Flow](../architecture/oauth-popup.md).
+Ramp Admins and Business Owners then connect individually via the Data Connections section in Settings, which opens an OAuth popup flow. See [OAuth Popup Flow](../architecture/oauth-popup.md). Anyone else is refused by Ramp's consent screen; the callback error page explains that only a Ramp admin can connect.
 
 ## OAuth Scopes
 

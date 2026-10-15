@@ -33,6 +33,14 @@ router = APIRouter(prefix="/auth", dependencies=[Depends(forbid_impersonation)])
 RAMP_AUTHORIZE_URL = "https://app.ramp.com/v1/authorize"
 RAMP_TOKEN_URL = "https://api.ramp.com/developer/v1/token"
 
+# Shown whenever Ramp turns a user away from the consent screen. Ramp only
+# lets Admins and Business Owners authorize a developer app; everyone else
+# gets "Business not authorized to use this application".
+ADMIN_ONLY_NOTE = (
+    "Only Admins and Business Owners of the Ramp business can connect Ramp. "
+    "If you are a regular Ramp employee, ask a Ramp admin to connect instead."
+)
+
 
 @router.get("/ramp")
 async def auth_ramp(request: Request, popup: str = None):
@@ -100,6 +108,9 @@ async def auth_ramp_callback(
 ):
     """Handle the Ramp OAuth 2.0 callback."""
     if error:
+        # Ramp refuses the consent screen to anyone who is not an Admin or
+        # Business Owner of the Ramp business ("Business not authorized to
+        # use this application"), which is the usual reason to land here.
         return HTMLResponse(f"""
         <!DOCTYPE html>
         <html>
@@ -107,6 +118,7 @@ async def auth_ramp_callback(
         <body style="font-family: sans-serif; max-width: 600px; margin: 50px auto; padding: 20px;">
             <h1>Ramp Authentication Error</h1>
             <p style="color: red;">Ramp authentication failed: {escape(error)}</p>
+            <p>{ADMIN_ONLY_NOTE}</p>
             <p><a href="/">Back to home</a></p>
         </body>
         </html>

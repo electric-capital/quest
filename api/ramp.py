@@ -45,7 +45,8 @@ async def get_ramp_token(user: dict) -> str:
                 "error": "ramp_oauth_required",
                 "message": (
                     "Ramp not connected. "
-                    "Please connect Ramp in Settings > Data Connections."
+                    "Please connect Ramp in Settings > Data Connections "
+                    "(only a Ramp Admin or Business Owner can connect)."
                 ),
             },
         )
@@ -77,6 +78,8 @@ def get_instructions(base_url: str) -> str:
     return f"""## Ramp API (via authed_get)
 
 Access the Ramp developer API (corporate cards, spend, bills, reimbursements) using `authed_get` with the full Ramp API URL. Authentication is handled automatically -- the user's Ramp OAuth token is injected as a Bearer header and refreshed when expired.
+
+**Ramp admins only:** Ramp lets only Admins and Business Owners of the Ramp business connect, and the token sees the whole business's data (every employee's transactions, cards, bills, ...), not just the connected user's own. Treat results accordingly and do not assume "my transactions" means the connected user's unless filtered by `user_id`.
 
 **Base URL:** `{RAMP_API_BASE}/developer/v1`
 
@@ -154,7 +157,7 @@ tool_call(tool_name="authed_get", arguments={{"url": "{RAMP_API_BASE}/developer/
 ```
 
 **Important Notes:**
-- Requires Ramp to be connected in Settings > Data Connections.
+- Requires Ramp to be connected in Settings > Data Connections by a Ramp Admin or Business Owner; regular Ramp employees cannot connect.
 - Read-only: only GET paths on the allow-list in the `api.ramp.com` entry of `_SERVICE_REGISTRY` are reachable via `authed_get`. Write operations are not exposed.
 - Card-vault endpoints (full card numbers, `/cards/vault/...`) are intentionally NOT accessible.
 - Monetary amounts are integers in the currency's minor unit (cents for USD).

@@ -1375,8 +1375,8 @@ _register(SystemSkill(
 
 _register(SystemSkill(
     id="system:ramp",
-    name="Ramp",
-    description="Read Ramp spend data (transactions, cards, bills, reimbursements, vendors) via authed_get.",
+    name="Ramp (Ramp admins only)",
+    description="Read business-wide Ramp spend data (transactions, cards, bills, reimbursements) via authed_get. Ramp admins only.",
     when_to_load="Load when the user asks about Ramp, corporate card spend, expenses, bills, or reimbursements.",
     requires="ramp",
     content_builder=lambda base_url, _api_key: ramp_api.get_instructions(base_url),

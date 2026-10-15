@@ -51,7 +51,7 @@ const TAILSCALE: ConnectorRow = {
   key_help_links: [{ label: 'OAuth clients', url: 'https://login.tailscale.com/admin/settings/oauth' }],
 };
 const HIDDEN: ConnectorRow = {
-  service: 'ramp', label: 'Ramp', kind: 'oauth', connect_url: '/auth/ramp?popup=1', connected: false, available: false,
+  service: 'ramp', label: 'Ramp (Ramp admins only)', kind: 'oauth', connect_url: '/auth/ramp?popup=1', connected: false, available: false,
 };
 
 const WORK: ConnectionRow = {
@@ -137,7 +137,7 @@ describe('DataConnectionsSection: single-connection rows (unchanged)', () => {
     expect(within(rows[0] as HTMLElement).getByText('Gmail, Calendar, Drive')).toBeTruthy();
     expect(within(rows[0] as HTMLElement).getByText('Connected')).toBeTruthy();
     expect(within(rows[1] as HTMLElement).getByText('...abcd')).toBeTruthy();
-    expect(screen.queryByText('Ramp')).toBeNull();
+    expect(screen.queryByText('Ramp (Ramp admins only)')).toBeNull();
   });
 
   it('reconnects an oauth row through the popup', async () => {
