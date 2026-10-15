@@ -231,15 +231,28 @@ export function TableHeader({
       setNotice(null);
       setRenameSaving(true);
       try {
-        const detail = await updateTable(table.id, { title, expected_updated_at: table.updated_at });
+        let detail: TableDetail;
+        try {
+          detail = await updateTable(table.id, { title, expected_updated_at: table.updated_at });
+        } catch (first) {
+          // Row writes move updated_at, so during agent activity a rename is
+          // often "stale" only because rows changed. When the title itself
+          // is unchanged on the server, retry once against the current token.
+          const current = isStaleUpdateError(first) ? staleUpdateCurrent(first) : null;
+          if (!current || current.title !== table.title) throw first;
+          onRowApplied(current);
+          detail = await updateTable(table.id, { title, expected_updated_at: current.updated_at });
+        }
         onDetailApplied(detail);
         setRenaming(false);
         setRenameValue('');
       } catch (err) {
         if (isStaleUpdateError(err)) {
+          // Someone else renamed it meanwhile: show the current table but
+          // keep the input open with what the user typed.
           handleStale(err);
-          setRenaming(false);
-          setRenameValue('');
+          renameSubmittedRef.current = false;
+          if (trigger === 'enter') renameInputRef.current?.focus();
         } else if (err instanceof ApiClientError && KEEP_EDITING_ERRORS.has(err.errorCode ?? '')) {
           showNotice(errorMessage(err, 'That title cannot be used.'));
           rejectedTitleRef.current = title;
@@ -254,7 +267,7 @@ export function TableHeader({
         setRenameSaving(false);
       }
     },
-    [cancelRename, handleStale, onDetailApplied, renameValue, showNotice, table.id, table.title, table.updated_at],
+    [cancelRename, handleStale, onDetailApplied, onRowApplied, renameValue, showNotice, table.id, table.title, table.updated_at],
   );
 
   const toggleRequireApproval = useCallback(async () => {
@@ -263,10 +276,11 @@ export function TableHeader({
     setNotice(null);
     setApprovalSaving(true);
     try {
-      const detail = await updateTable(table.id, {
-        require_approval: next,
-        expected_updated_at: table.updated_at,
-      });
+      // No expected_updated_at, as in DocHeader: row writes move updated_at,
+      // and switching approval on to stop an agent mid-write must not fail
+      // as stale. The request sets an explicit value, so there is no lost
+      // update to guard against.
+      const detail = await updateTable(table.id, { require_approval: next });
       onDetailApplied(detail);
       showNotice(detail.require_approval ? REQUIRE_APPROVAL_ON_NOTICE : REQUIRE_APPROVAL_OFF_NOTICE);
     } catch (err) {
@@ -277,7 +291,7 @@ export function TableHeader({
     }
   }, [
     approvalSaving, canRequireApproval, handleStale, onDetailApplied, showNotice,
-    table.id, table.require_approval, table.updated_at,
+    table.id, table.require_approval,
   ]);
 
   const openDelete = useCallback(() => {

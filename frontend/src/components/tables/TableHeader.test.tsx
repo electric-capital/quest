@@ -250,6 +250,28 @@ describe('TableHeader', () => {
       expect(onRowApplied).toHaveBeenCalledWith(current);
       expect(onDetailApplied).not.toHaveBeenCalled();
       expect(screen.getByRole('status').textContent).toBe(STALE_TABLE_NOTICE);
+      // The typed title survives so the user can decide again.
+      expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('Prospects');
+      expect(mocks.updateTable).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries once when only rows moved (title unchanged on the server)', async () => {
+      const current = detail({ updated_at: '2026-10-04T00:00:00', row_count: 999 });
+      const renamed = detail({ title: 'Prospects', updated_at: '2026-10-04T00:00:01' });
+      mocks.updateTable.mockRejectedValueOnce(staleError(current)).mockResolvedValueOnce(renamed);
+      const { onRowApplied, onDetailApplied } = renderHeader(detail());
+      fireEvent.click(within(openMenu()).getByRole('menuitem', { name: /Rename/ }));
+      const input = screen.getByRole('textbox', { name: 'Rename table' });
+      fireEvent.change(input, { target: { value: 'Prospects' } });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Enter' });
+      });
+      expect(mocks.updateTable).toHaveBeenLastCalledWith('t1', {
+        title: 'Prospects',
+        expected_updated_at: '2026-10-04T00:00:00',
+      });
+      expect(onRowApplied).toHaveBeenCalledWith(current);
+      expect(onDetailApplied).toHaveBeenCalledWith(renamed);
       expect(screen.queryByRole('textbox')).toBeNull();
     });
 
@@ -283,7 +305,7 @@ describe('TableHeader', () => {
   });
 
   describe('require approval', () => {
-    it('flips the switch with expected_updated_at and keeps the menu open', async () => {
+    it('flips the switch without a concurrency token and keeps the menu open', async () => {
       const on = detail({ require_approval: true, updated_at: '2026-10-03T00:00:00' });
       mocks.updateTable.mockResolvedValueOnce(on);
       const { onDetailApplied } = renderHeader(detail());
@@ -291,24 +313,20 @@ describe('TableHeader', () => {
       await act(async () => {
         fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: /Require approval/ }));
       });
-      expect(mocks.updateTable).toHaveBeenCalledWith('t1', {
-        require_approval: true,
-        expected_updated_at: '2026-10-02T00:00:00',
-      });
+      // Row writes move updated_at; the switch must not fail as stale.
+      expect(mocks.updateTable).toHaveBeenCalledWith('t1', { require_approval: true });
       expect(onDetailApplied).toHaveBeenCalledWith(on);
       expect(screen.getByRole('menu')).toBeTruthy();
     });
 
-    it('recovers from stale_update like rename', async () => {
-      const current = detail({ updated_at: '2026-10-05T00:00:00' });
-      mocks.updateTable.mockRejectedValueOnce(staleError(current));
-      const { onRowApplied } = renderHeader(detail());
+    it('shows a failure notice', async () => {
+      mocks.updateTable.mockRejectedValueOnce(new ApiClientError('Nope.', 500, 'internal'));
+      renderHeader(detail());
       const menu = openMenu();
       await act(async () => {
         fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: /Require approval/ }));
       });
-      expect(onRowApplied).toHaveBeenCalledWith(current);
-      expect(screen.getByRole('status').textContent).toBe(STALE_TABLE_NOTICE);
+      expect(screen.getByRole('status').textContent).toBe('Nope.');
     });
   });
 

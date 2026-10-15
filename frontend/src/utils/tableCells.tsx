@@ -130,7 +130,12 @@ export function TableCell({
   switch (column.type) {
     case 'number': {
       const text = formatDecimal(String(value), column.precision);
-      return <td className="table-cell table-cell--number">{text}</td>;
+      // Long values can hit the cell's max-width ellipsis: keep them readable.
+      return (
+        <td className="table-cell table-cell--number" title={text.length > 20 ? text : undefined}>
+          {text}
+        </td>
+      );
     }
     case 'boolean': {
       const checked = value === true;

@@ -73,6 +73,8 @@ export function useTableRows(tableId: string | null, opts: UseTableRowsOptions =
   // The latest parameters, read by run() so a coalesced refetch uses them.
   const paramsRef = useRef({ tableId, filter, sort, offset, limit });
   paramsRef.current = { tableId, filter, sort, offset, limit };
+  const refreshKeyRef = useRef(refreshKey);
+  refreshKeyRef.current = refreshKey;
   const seqRef = useRef(0);
   const inFlightRef = useRef<number | null>(null);
   const dirtyRef = useRef(false);
@@ -117,6 +119,7 @@ export function useTableRows(tableId: string | null, opts: UseTableRowsOptions =
     }
   }, []);
 
+  const lastRefreshKeyRef = useRef(refreshKey);
   // Parameter (or table) changes: fetch now, superseding any fetch in flight.
   useEffect(() => {
     if (!enabled || tableId === null) {
@@ -127,11 +130,13 @@ export function useTableRows(tableId: string | null, opts: UseTableRowsOptions =
       setPending(false);
       return;
     }
+    // This fetch already reflects the current refreshKey; the refresh effect
+    // below must not mark it dirty in the same render.
+    lastRefreshKeyRef.current = refreshKeyRef.current;
     void run();
   }, [tableId, paramsKey, enabled, run]);
 
   // refreshKey bumps: coalesce with a fetch in flight.
-  const lastRefreshKeyRef = useRef(refreshKey);
   useEffect(() => {
     if (lastRefreshKeyRef.current === refreshKey) return;
     lastRefreshKeyRef.current = refreshKey;
