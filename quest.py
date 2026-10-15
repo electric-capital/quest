@@ -508,6 +508,7 @@ from chat.docs.routes import router as docs_router
 from chat.docs.share_routes import router as docs_share_router
 from chat.docs.edit_routes import router as docs_edit_router
 from chat.docs.history_routes import router as docs_history_router
+from chat.tables.routes import router as tables_router
 from chat.realtime import realtime_router
 
 app.include_router(chat_router)
@@ -527,6 +528,7 @@ app.include_router(docs_router)
 app.include_router(docs_share_router)
 app.include_router(docs_edit_router)
 app.include_router(docs_history_router)
+app.include_router(tables_router)
 app.include_router(realtime_router)
 
 # Discover and register filesystem plugins (plugins/*/plugin.py) AFTER the
@@ -613,6 +615,13 @@ async def serve_spa_docs(rest: str = ""):
     """Serve SPA for the Quest Docs deep links (/docs All Docs view,
     /docs?project=<id>, /docs/<id> viewer). Swagger UI moved to /api-docs
     to free this path (see the FastAPI(...) constructor)."""
+    return FileResponse(FRONTEND_BUILD_DIR / "index.html")
+
+@app.get("/tables")
+@app.get("/tables/{rest:path}")
+async def serve_spa_tables(rest: str = ""):
+    """Serve SPA for the Quest Tables deep links (/tables All Tables view,
+    /tables?project=<id>, /tables/<id> viewer)."""
     return FileResponse(FRONTEND_BUILD_DIR / "index.html")
 
 @app.get("/set-password")

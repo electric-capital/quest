@@ -124,6 +124,22 @@ class TestSandboxPort:
         with pytest.raises(ValueError):
             validate_url("http://localhost:9302/api/tool-call")
 
+    @pytest.mark.parametrize("path", [
+        "/app/api/tables",
+        "/app/api/tables/x",
+        "/app/api/tables/x/rows",
+        "/app/api/tables/x/schema",
+        "/app/api/tables/x/restore",
+    ])
+    def test_validate_url_refuses_ui_table_routes(self, path):
+        """curl_proxy can never reach the Quest Tables UI routes: they live
+        under /app/api, and validate_url admits /api/* only (so, like the
+        docs routes, they need no _BLOCKED_PROXY_PATHS entry)."""
+        from chat.route_dispatch import validate_url
+
+        with pytest.raises(ValueError):
+            validate_url(f"http://localhost:8000{path}")
+
 
 class TestSandboxServerRuntime:
     def test_serves_health_and_stops_cleanly(self):
