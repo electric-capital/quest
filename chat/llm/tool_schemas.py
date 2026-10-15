@@ -13,6 +13,7 @@ Tool tiers:
 import copy
 
 from chat.docs.constants import DOCS_SERVICE_KEY
+from chat.tables.constants import TABLES_SERVICE_KEY
 from chat.llm.base import ToolSpec
 from chat.workspace_hints import PROJECT_COPY_FIRST_SENTENCE
 from db.models import ActionRequestType
@@ -2026,6 +2027,190 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "required": ["doc_id", "workspace_path"],
         },
     },
+    # -- Quest Tables (chat/tables/service.py). All carry
+    # requires_service=TABLES_SERVICE_KEY: the "tables" connected-services
+    # pseudo-key mirrors the per-user tables feature gate, so the tools are
+    # left out of prompts while the gate is closed (the handlers also
+    # refuse with tables_disabled before any DB work).
+    "list_tables": {
+        "name": "list_tables",
+        "requires_service": TABLES_SERVICE_KEY,
+        "description": (
+            "List the Quest Tables this conversation can see -- typed, "
+            "structured record tables kept inside Quest, owned by the user "
+            "(scope 'user') or by a project (scope 'project'): this "
+            "conversation's project tables, plus the read-only public tables "
+            "of the public projects this project was given access to -- "
+            "newest updated first. Returns {tables, count}; each table: id, "
+            "title, description, mode ('private' or 'public'), scope, "
+            "project_id, row_count, column_count, columns (\"Name:type\" "
+            "labels; type is text, number, url, boolean or enum, and a "
+            "multi-choice enum is \"Name:enum[]\"), updated_at, writable, "
+            "write_note and schema_change. writable is 'free' (rows can be "
+            "written directly), 'approval' (row changes need the user's "
+            "approval) or 'denied' (read-only here; write_note says why); "
+            "schema_change is 'approval' or 'denied'. Use get_table for the "
+            "full column definitions and sample rows, query_rows to read rows."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "enum": ["user", "project", "public", "all"],
+                    "default": "all",
+                    "description": (
+                        "'user' = the user's own tables, 'project' = this "
+                        "project's tables (empty outside a project), 'public' "
+                        "= the read-only public tables of the public projects "
+                        "this project was given access to, 'all' (default) = "
+                        "everything this conversation can see."
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "default": 50,
+                    "description": "Maximum number of tables to return (1-200, default 50).",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'List my tables'."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+    "get_table": {
+        "name": "get_table",
+        "requires_service": TABLES_SERVICE_KEY,
+        "description": (
+            "Get one Quest Table's full definition: {id, title, description, "
+            "mode, scope, project_id, columns, row_count, schema_version, "
+            "updated_at, writable, write_note, schema_change, schema_note, "
+            "sample_rows}. columns lists every column in order as {name, "
+            "type, required, unique, default, options, multiple, precision, "
+            "description} (options and multiple apply to enum columns, "
+            "precision to number columns). sample_rows holds the first 5 "
+            "rows by _id in the query_rows row shape. Call it before "
+            "querying or writing a table you have not looked at yet."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "table_id": {
+                    "type": "string",
+                    "description": "The table id from list_tables.",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'Inspect inventory table'."
+                    ),
+                },
+            },
+            "required": ["table_id"],
+        },
+    },
+    "query_rows": {
+        "name": "query_rows",
+        "requires_service": TABLES_SERVICE_KEY,
+        "description": (
+            "Read rows of a Quest Table with an optional filter, sort and "
+            "paging. Returns {rows, total, truncated, offset, limit}: each "
+            "row is {_id, _updated_at, <column name>: value}; total is the "
+            "number of rows matching the filter (ignoring paging), so page "
+            "with offset until offset + rows returned reaches total. Number "
+            "values come back as canonical strings (\"12.5\"), booleans as "
+            "true/false, multi-choice enums as lists. A response over about "
+            "100 KB is cut by halving the rows: truncated is true and hint "
+            "names the offset to continue from (or asks for fewer columns). "
+            "count_only: true returns only {total}.\n"
+            "filter is JSON: {\"column\": \"<name>\", \"op\": \"<op>\", "
+            "\"value\": ...} leaves combined with {\"and\": [...]}, "
+            "{\"or\": [...]} and {\"not\": <node>} (depth <= 3, <= 20 "
+            "leaves). Ops: any type eq, ne, in (list), is_null, not_null; "
+            "text and url also contains, starts_with, ends_with "
+            "(case-insensitive); number also lt, lte, gt, gte, between "
+            "([low, high]); single enum eq, ne, in; multi-choice enum "
+            "contains (one option), contains_any, contains_all (lists), "
+            "is_empty. Values are validated like writes, so \"10\" and 10 "
+            "match the same numbers."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "table_id": {
+                    "type": "string",
+                    "description": "The table id from list_tables.",
+                },
+                "filter": {
+                    "type": "object",
+                    "description": (
+                        "Optional filter tree (see the description), e.g. "
+                        "{\"and\": [{\"column\": \"Status\", \"op\": \"eq\", "
+                        "\"value\": \"Open\"}, {\"column\": \"Price\", \"op\": "
+                        "\"gt\", \"value\": 10}]}."
+                    ),
+                },
+                "sort": {
+                    "type": "array",
+                    "description": (
+                        "Optional sort keys, at most 3: [{\"column\": "
+                        "\"<name>\", \"direction\": \"asc\"|\"desc\"}]; nulls "
+                        "sort last. Default: by _id."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "column": {"type": "string"},
+                            "direction": {"type": "string", "enum": ["asc", "desc"]},
+                        },
+                    },
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000,
+                    "default": 100,
+                    "description": "Rows per page (1-1000, default 100).",
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100000,
+                    "default": 0,
+                    "description": "Rows to skip (0-100000, default 0).",
+                },
+                "columns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional column names to return (default: every "
+                        "column); _id and _updated_at are always included."
+                    ),
+                },
+                "count_only": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Return only {total} for the filter, no rows.",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'Find open orders'."
+                    ),
+                },
+            },
+            "required": ["table_id"],
+        },
+    },
 }
 
 
@@ -3155,6 +3340,11 @@ PUBLIC_ROUTINE_TOOLS: list[ToolSpec] = PUBLIC_TOOLS + [_ROUTINE_COMPLETED]
 # is_public=True) hides every private doc from a public conversation --
 # it behaves exactly like a nonexistent id -- and lets it create and write
 # only public docs, which hold sandbox-originated content by construction.
+# The Quest Tables tools are allowed on the same terms: tables are
+# mode-partitioned and resolve_table_access (chat/tables/access.py, with
+# is_public=True) hides every private table from a public conversation
+# (byte-equal to a nonexistent id, never listed); only public tables are
+# readable and writable there.
 # The project memory tools are allowed: they read and propose only the
 # memories of the conversation's own (public) project, every suggestion
 # waits for the user's accept, and a public project's memories are never
@@ -3186,6 +3376,9 @@ PUBLIC_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     "edit_doc",
     "append_to_doc",
     "add_doc_image",
+    "list_tables",
+    "get_table",
+    "query_rows",
 })
 
 
@@ -3248,6 +3441,9 @@ _SKILL_DOCUMENTED_TOOLS: dict[str, str] = {
     "edit_doc": "system:quest_docs",
     "append_to_doc": "system:quest_docs",
     "add_doc_image": "system:quest_docs",
+    "list_tables": "system:tables",
+    "get_table": "system:tables",
+    "query_rows": "system:tables",
 }
 
 

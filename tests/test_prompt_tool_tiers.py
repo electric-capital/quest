@@ -143,7 +143,7 @@ class TestPrompts:
         assert core_bullet("get_gmail_messages") not in prompt
 
     def test_public_prompt_inlines_every_offered_tool(self):
-        prompt = get_public_project_system_prompt(docs_enabled=True)
+        prompt = get_public_project_system_prompt(docs_enabled=True, tables_enabled=True)
         for name in PUBLIC_TOOL_CALL_ALLOWLIST - PROJECT_HIDDEN_WORKSPACE_TOOLS:
             if name not in TOOL_CALL_REGISTRY:
                 continue  # a plugin tool, present only when its plugin is loaded

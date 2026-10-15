@@ -230,6 +230,12 @@ _DOC_TOOLS = (
 )
 
 
+def _table_tools() -> set[str]:
+    """The Quest Tables tools (gated on the tables pseudo-key)."""
+    from chat.gemini_api.system_prompt import _table_tool_names
+    return set(_table_tool_names())
+
+
 class TestPublicSystemPrompt:
     def _prompt(self, **kw):
         from chat.gemini_api.system_prompt import get_public_project_system_prompt
@@ -270,9 +276,10 @@ class TestPublicSystemPrompt:
             assert term not in p, term
 
     def test_keeps_identity_project_guide_and_public_tools(self):
-        # docs_enabled=True: every allowlisted tool, the doc tools included,
-        # is documented (the doc tools are gated on the Quest Docs gate).
-        p = self._prompt(docs_enabled=True)
+        # docs_enabled / tables_enabled: every allowlisted tool, the doc and
+        # table tools included, is documented (those are gated on the Quest
+        # Docs and Quest Tables gates).
+        p = self._prompt(docs_enabled=True, tables_enabled=True)
         assert "Ada" in p and "ada@example.com" in p
         assert "Track BTC prices." in p
         for name in sorted(PUBLIC_TOOL_CALL_ALLOWLIST):
@@ -287,7 +294,7 @@ class TestPublicSystemPrompt:
         for name in _DOC_TOOLS:
             assert name not in p, name
         assert "Quest Docs" not in p
-        for name in sorted(PUBLIC_TOOL_CALL_ALLOWLIST - set(_DOC_TOOLS)):
+        for name in sorted(PUBLIC_TOOL_CALL_ALLOWLIST - set(_DOC_TOOLS) - _table_tools()):
             assert name in p, name
 
     def test_doc_tools_shown_when_docs_gate_open(self):
@@ -314,6 +321,17 @@ class TestPublicSystemPrompt:
         from chat.gemini_api.system_prompt import _doc_tool_names
         assert _doc_tool_names() == frozenset(_DOC_TOOLS)
         assert set(_DOC_TOOLS) <= PUBLIC_TOOL_CALL_ALLOWLIST
+
+    def test_table_tools_follow_the_tables_gate(self):
+        # Hidden by default (gate closed), listed in full when open; the
+        # docs gate does not affect them.
+        closed = self._prompt(docs_enabled=True)
+        shown = self._prompt(tables_enabled=True)
+        assert {"list_tables", "get_table", "query_rows"} <= _table_tools()
+        assert _table_tools() <= PUBLIC_TOOL_CALL_ALLOWLIST
+        for name in sorted(_table_tools()):
+            assert name not in closed, name
+            assert f"- **{name}**" in shown, name
 
     def test_routine_run_with_docs_enabled(self):
         # is_routine and docs_enabled compose: naming tool out, docs in.

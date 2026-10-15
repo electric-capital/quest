@@ -73,6 +73,14 @@ SCRIPT_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     "list_docs",
     "search_docs",
     "read_doc",
+    # Quest Tables reads, on the same terms as the doc reads: run_kind=
+    # "script" with no project and is_public=False (tool_dispatch
+    # _table_caller), so resolve_table_access shows only the user's own and
+    # shared user tables (always private), never project tables, and denies
+    # every row write -- the write tools are not listed.
+    "list_tables",
+    "get_table",
+    "query_rows",
 })
 
 

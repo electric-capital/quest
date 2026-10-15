@@ -389,6 +389,7 @@ _CORE_READ_OR_WORKSPACE_TOOLS = {
     "telegram_get_me", "telegram_list_dialogs", "telegram_get_messages",
     "telegram_list_contacts",
     "list_docs", "search_docs", "read_doc",  # Quest Docs reads
+    "list_tables", "get_table", "query_rows",  # Quest Tables reads
 }
 _CORE_MUTATING_TOOLS = {
     "archive_gmail_message", "modify_gmail_labels",

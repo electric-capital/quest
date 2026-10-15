@@ -9,6 +9,7 @@ the relevant skill(s) on demand through the existing ``load_skills`` tool.
 """
 
 from chat.docs.constants import DOCS_SERVICE_KEY
+from chat.tables.constants import TABLES_SERVICE_KEY
 from chat.gemini_api.constants import (
     MAX_PARALLEL_TASKS,
     MAX_PARALLEL_TEMPLATE_TASKS,
@@ -32,6 +33,15 @@ def _doc_tool_names() -> frozenset[str]:
     return frozenset(
         name for name, spec in TOOL_CALL_REGISTRY.items()
         if spec.get("requires_service") == DOCS_SERVICE_KEY
+    )
+
+
+def _table_tool_names() -> frozenset[str]:
+    """The Quest Tables tools: the registry specs gated on the ``tables``
+    connected-services pseudo-key (``requires_service == TABLES_SERVICE_KEY``)."""
+    return frozenset(
+        name for name, spec in TOOL_CALL_REGISTRY.items()
+        if spec.get("requires_service") == TABLES_SERVICE_KEY
     )
 
 
@@ -986,6 +996,7 @@ def get_public_project_system_prompt(
     project_guide: str = "",
     is_routine: bool = False,
     docs_enabled: bool = False,
+    tables_enabled: bool = False,
     legacy_shared_workspace: bool = False,
     converted_from_standalone: bool = False,
 ) -> str:
@@ -1017,6 +1028,10 @@ def get_public_project_system_prompt(
     "Quest Docs" paragraph is omitted; while True the tools are listed and
     the paragraph follows the Boundaries block (it stands in for the
     ``system:quest_docs`` skill, since this prompt carries no skills).
+
+    ``tables_enabled`` is the same switch for the Quest Tables gate
+    (``config.feature_gates.tables_enabled_for``): while False the table
+    tools are excluded from the Dynamic Tools section.
 
     A public-project conversation is always a project conversation, so the
     "Two file spaces" paragraph (conversation workspace at ``/workspace``,
@@ -1075,6 +1090,8 @@ def get_public_project_system_prompt(
         public_exclude.add("suggest_project_memory")
     if not docs_enabled:
         public_exclude |= _doc_tool_names()
+    if not tables_enabled:
+        public_exclude |= _table_tool_names()
     # No skill tools here, so every offered tool is documented in full.
     dynamic_tools_section = _build_dynamic_tools_section(
         exclude=public_exclude, core_only=False,

@@ -75,6 +75,11 @@ from chat.gemini_api.tool_handlers import (
     _handle_append_to_doc,
     _handle_add_doc_image,
 )
+from chat.gemini_api.tool_handlers.tables import (
+    _handle_get_table,
+    _handle_list_tables,
+    _handle_query_rows,
+)
 
 # Threshold in bytes: tool results larger than this are logged to the
 # dedicated large_tool_results log file.
@@ -622,6 +627,38 @@ async def _tool_add_doc_image(ctx: ToolContext, args: dict) -> str:
     return await _handle_add_doc_image(_doc_caller(ctx), args)
 
 
+def _table_caller(ctx: ToolContext):
+    """The Quest Tables service caller for this dispatch context.
+
+    As for docs: sandbox scripts have no conversation context, so no
+    project (project tables stay hidden from them) and never public (the
+    public sandbox has no tool bridge).
+    """
+    from chat.tables.service import Caller
+    run_kind = ctx.run_kind
+    if run_kind == "script":
+        return Caller(
+            user=ctx.user, conversation_id=None, project_id=None,
+            is_public=False, run_kind=run_kind,
+        )
+    return Caller(
+        user=ctx.user, conversation_id=ctx.conversation_id,
+        project_id=ctx.project_id, is_public=ctx.is_public, run_kind=run_kind,
+    )
+
+
+async def _tool_list_tables(ctx: ToolContext, args: dict) -> str:
+    return await _handle_list_tables(_table_caller(ctx), args)
+
+
+async def _tool_get_table(ctx: ToolContext, args: dict) -> str:
+    return await _handle_get_table(_table_caller(ctx), args)
+
+
+async def _tool_query_rows(ctx: ToolContext, args: dict) -> str:
+    return await _handle_query_rows(_table_caller(ctx), args)
+
+
 # Dynamic tools invoked through the tool_call meta tool. Keys must stay in
 # sync with chat.llm.tool_schemas.TOOL_CALL_REGISTRY (asserted by
 # tests/test_tool_dispatch_table.py); plugin tools are added to both via
@@ -672,6 +709,11 @@ TOOL_CALL_HANDLERS: dict[str, ToolHandler] = {
     "edit_doc": _tool_edit_doc,
     "append_to_doc": _tool_append_to_doc,
     "add_doc_image": _tool_add_doc_image,
+    # Quest Tables (chat/tables/service.py; gated per user by the tables
+    # feature gate inside the handlers).
+    "list_tables": _tool_list_tables,
+    "get_table": _tool_get_table,
+    "query_rows": _tool_query_rows,
 }
 
 # Tools the model calls by their own (top-level) name. Anything not in this

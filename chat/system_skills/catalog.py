@@ -33,6 +33,7 @@ from chat.docs.constants import (
     DOC_READ_MAX_CHARS,
     DOCS_SERVICE_KEY,
 )
+from chat.tables.constants import TABLES_SERVICE_KEY
 
 
 SYSTEM_SKILL_PREFIX = "system:"
@@ -1013,6 +1014,19 @@ The resolved handle's `response` is one of:
 """
 
 
+def _tables_content(_base_url: str, _api_key: str) -> str:
+    # Placeholder until phase A14 (issue #110) writes the full skill; the
+    # loader appends the tool reference rendered from the registry.
+    return """## Quest Tables
+
+A **Quest Table** is a typed table of records kept inside Quest, owned by
+the user (scope `user`) or by a project (scope `project`). Find tables with
+`list_tables`, read a table's columns and first rows with `get_table`, and
+read rows with `query_rows` (filter, sort, `offset` / `limit` paging;
+`total` is the filtered count).
+"""
+
+
 def _quest_docs_content(_base_url: str, _api_key: str) -> str:
     mb = 1024 * 1024
     body_cap = f"{DOC_MAX_CONTENT_SIZE // mb} MB"
@@ -1436,6 +1450,17 @@ _register(SystemSkill(
     when_to_load="Load when the user wants something kept as a doc, asks about their docs, or a routine maintains a running log.",
     requires=DOCS_SERVICE_KEY,
     content_builder=_quest_docs_content,
+))
+
+# Gated on the "tables" connected-services pseudo-key (the per-user Quest
+# Tables feature gate) like the table tools.
+_register(SystemSkill(
+    id="system:tables",
+    name="Quest Tables",
+    description="Quest Tables: list tables, read their columns and query rows with filters, sorting and paging.",
+    when_to_load="Load when the user asks about their tables or structured records kept in Quest.",
+    requires=TABLES_SERVICE_KEY,
+    content_builder=_tables_content,
 ))
 
 _register(SystemSkill(
