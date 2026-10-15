@@ -30,7 +30,7 @@ import time
 from collections import defaultdict, deque
 from datetime import timedelta
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from auth.config import (
@@ -40,7 +40,7 @@ from auth.config import (
     oauth_base_url,
 )
 from auth.mailer import MailerError, send_email, smtp_configured
-from auth.session import get_user_from_cookie, set_session_cookie
+from auth.session import forbid_impersonation, get_user_from_cookie, set_session_cookie
 from config.password_hashing import (
     burn_verify_time,
     hash_password,
@@ -403,13 +403,13 @@ async def set_password_with_link(request: Request):
     return set_session_cookie(response, user["id"], password_fingerprint(password_hash))
 
 
-@router.post("/change")
+@router.post("/change", dependencies=[Depends(forbid_impersonation)])
 async def change_password(request: Request):
     """Change the signed-in user's password.
 
     The current password is required when the account has one. Other
     sessions are signed out (their cookies carry the old fingerprint); this
-    one gets a fresh cookie.
+    one gets a fresh cookie. Refused (403) to an admin impersonation session.
     """
     _require_password_mode()
     signed_cookie = request.cookies.get(COOKIE_NAME)
@@ -421,11 +421,6 @@ async def change_password(request: Request):
         )
     from chat.auth import require_user_allowed
     require_user_allowed(user)
-    if user.get("_impersonator_uid"):
-        raise HTTPException(
-            status_code=403,
-            detail={"error": "forbidden", "message": "Cannot change a password while impersonating."},
-        )
 
     body = await _read_json(request)
     new_password = body.get("new_password")

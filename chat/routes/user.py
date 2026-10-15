@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from chat.auth import check_user_allowed, get_current_user_cookie_or_apikey_checked, is_admin
 
 from auth.config import COOKIE_NAME
-from auth.session import get_user_from_cookie
+from auth.session import forbid_impersonation, get_user_from_cookie
 
 from config.version import RELEASE_INFO
 from chat.routes import router
@@ -52,7 +52,8 @@ THEME_CHOICES = ("light", "dark", "auto")
 COLOR_THEME_CHOICES = ("prototype", "electric-blue", "alloy", "recall")
 
 
-@router.get("/user")
+# Returns users.api_key: refused to an admin impersonation session.
+@router.get("/user", dependencies=[Depends(forbid_impersonation)])
 async def get_current_user_from_cookie(request: Request):
     """DEPRECATED: Get current user info from session cookie.
 
@@ -588,7 +589,9 @@ async def logout(request: Request):
     return response
 
 
-@router.post("/logout-and-disconnect")
+# Account-wide credential revocation and account deletion stay with the
+# account owner: both are refused to an admin impersonation session.
+@router.post("/logout-and-disconnect", dependencies=[Depends(forbid_impersonation)])
 async def logout_and_disconnect(
     request: Request,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked)
@@ -634,7 +637,7 @@ async def logout_and_disconnect(
     return response
 
 
-@router.post("/delete-account")
+@router.post("/delete-account", dependencies=[Depends(forbid_impersonation)])
 async def delete_account(
     request: Request,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked)

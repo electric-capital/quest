@@ -20,6 +20,8 @@ from fastapi.staticfiles import StaticFiles
 from auth import (
     generate_api_key,
     get_current_user_cookie_or_apikey,
+    forbid_impersonation,
+    ImpersonationAuditMiddleware,
     # Routers
     google_login_router,
     google_services_router,
@@ -376,6 +378,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Attributes every request served under admin impersonation to the admin
+# (one audit line per request / WebSocket connection; auth/session.py).
+app.add_middleware(ImpersonationAuditMiddleware)
+
 # Database-backed user data access
 from db.user_store import update_user_field
 
@@ -398,7 +404,10 @@ app.include_router(dev_login_router)
 app.include_router(password_login_router)
 
 
-@app.get("/api/instructions")
+# Both root endpoints hand out the user's long-lived users.api_key (the
+# instructions embed it as the bearer header), so an admin impersonation
+# session may not use them.
+@app.get("/api/instructions", dependencies=[Depends(forbid_impersonation)])
 async def get_instructions(request: Request, user: dict = Depends(get_current_user_cookie_or_apikey)):
     """Return detailed instructions on how to use the proxy.
 
@@ -411,7 +420,7 @@ async def get_instructions(request: Request, user: dict = Depends(get_current_us
     return {"instructions": instructions}
 
 
-@app.post("/api/reset-api-key")
+@app.post("/api/reset-api-key", dependencies=[Depends(forbid_impersonation)])
 async def api_reset_api_key(user: dict = Depends(get_current_user_cookie_or_apikey)):
     """Reset the user's API key via Bearer token auth and return the new key."""
     email = user["email"]

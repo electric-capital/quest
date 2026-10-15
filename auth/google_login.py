@@ -5,13 +5,13 @@ from html import escape
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from db.user_store import get_user_by_email, create_user, update_user_field
 from auth.config import COOKIE_NAME, COOKIE_SECURE, COOKIE_VERSION, generate_api_key, is_login_allowed, is_password_login, login_restriction_description, oauth_base_url
 from auth.oauth_state import clear_oauth_state, mint_oauth_state, verify_oauth_state
-from auth.session import get_cookie_serializer
+from auth.session import forbid_impersonation, get_cookie_serializer
 from auth.google_credentials import get_login_oauth_flow, get_valid_credentials
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ async def auth_logout():
     return response
 
 
-@router.post("/reset-api-key")
+@router.post("/reset-api-key", dependencies=[Depends(forbid_impersonation)])
 async def reset_api_key(request: Request):
     """Reset the user's API key and generate a new one."""
     signed_cookie = request.cookies.get(COOKIE_NAME)

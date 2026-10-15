@@ -1,5 +1,13 @@
-"""Session/cookie management and FastAPI authentication dependencies."""
+"""Session/cookie management and FastAPI authentication dependencies.
 
+Also home of the admin-impersonation guards: the ``forbid_impersonation``
+dependency for routes an impersonation session may not use, and the
+per-request impersonation audit line (``ImpersonationAuditMiddleware`` plus
+the hook in ``get_user_from_cookie``).
+"""
+
+import contextvars
+import logging
 from typing import Optional
 
 from fastapi import HTTPException, Request
@@ -7,6 +15,8 @@ from itsdangerous import URLSafeSerializer, URLSafeTimedSerializer, BadSignature
 
 from db.user_store import get_user_by_api_key, get_user_by_id
 from auth.config import COOKIE_NAME, COOKIE_SECURE, COOKIE_VERSION, get_secret_key
+
+logger = logging.getLogger(__name__)
 
 
 def get_cookie_serializer() -> URLSafeSerializer:
@@ -84,11 +94,137 @@ async def get_user_from_cookie(signed_cookie: str) -> Optional[dict]:
             user["_impersonator_uid"] = imp_uid
             user["_impersonator_email"] = impersonator["email"]
             user["_impersonator_name"] = impersonator.get("name", "")
+            _audit_impersonated_request(user)
 
         return user
 
     except BadSignature:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Admin impersonation: audit line and forbidden routes
+# ---------------------------------------------------------------------------
+
+# The request being served, for the impersonation audit line: method, path,
+# and whether the line was already written. ImpersonationAuditMiddleware sets
+# a fresh record per HTTP request / WebSocket connection; the record is a
+# mutable dict so a write from a dependency (or a task the handler spawned,
+# which runs on a copy of the context) is seen by the whole request.
+_audit_request: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "quest_impersonation_audit_request", default=None,
+)
+
+
+def _audit_impersonated_request(user: dict) -> None:
+    """Log that the current request is served under impersonation.
+
+    Called by ``get_user_from_cookie`` once it has validated an impersonation
+    cookie, so every request that resolves an identity through an
+    impersonation session is attributed to the admin behind it. One line per
+    request: an identity can be resolved more than once in a request (route
+    dependency plus handler, the WebSocket heartbeat's re-validation).
+    """
+    record = _audit_request.get()
+    if record is None:
+        # Outside the middleware (no request context): still attribute it.
+        method, path = "-", "-"
+    else:
+        if record["logged"]:
+            return
+        record["logged"] = True
+        method, path = record["method"], record["path"]
+    logger.info(
+        "[impersonation] admin=%s (id=%s) as user=%s (id=%s): %s %s",
+        user.get("_impersonator_email"), user.get("_impersonator_uid"),
+        user.get("email"), user.get("id"), method, path,
+    )
+
+
+class ImpersonationAuditMiddleware:
+    """ASGI middleware giving the impersonation audit line its request.
+
+    Pure ASGI (not ``BaseHTTPMiddleware``) so it covers WebSocket
+    connections too and leaves streaming responses untouched. It only scopes
+    the ``_audit_request`` record; the line itself is written where the
+    impersonation is validated (``get_user_from_cookie``) or refused
+    (``forbid_impersonation``). The query string is left out: OAuth
+    callbacks carry codes in it.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        kind = scope.get("type")
+        if kind not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        method = scope.get("method", "GET") if kind == "http" else "WEBSOCKET"
+        token = _audit_request.set(
+            {"method": method, "path": scope.get("path", ""), "logged": False}
+        )
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _audit_request.reset(token)
+
+
+def session_impersonation_claim(request: Request) -> Optional[tuple]:
+    """Return ``(user_id, impersonator_id)`` when the session cookie is an
+    impersonation cookie, else ``None``.
+
+    Checks the signature only (no database lookup): any correctly signed
+    session cookie that carries an ``imp`` field counts, even a malformed or
+    no-longer-valid one, so the guard fails closed. A cookie with a bad
+    signature carries no trusted claim and does not count (it resolves no
+    identity either).
+    """
+    signed_cookie = request.cookies.get(COOKIE_NAME)
+    if not signed_cookie:
+        return None
+    try:
+        payload = get_cookie_serializer().loads(signed_cookie)
+    except BadSignature:
+        return None
+    if not isinstance(payload, dict) or payload.get("imp") is None:
+        return None
+    return payload.get("uid"), payload.get("imp")
+
+
+IMPERSONATION_FORBIDDEN_MESSAGE = (
+    "This action is not available while impersonating another user. "
+    "Stop impersonating first."
+)
+
+
+async def forbid_impersonation(request: Request) -> None:
+    """FastAPI dependency: refuse the route to an impersonation session.
+
+    Raises 403 ``impersonation_forbidden`` when the request's session cookie
+    is an impersonation cookie (``session_impersonation_claim``). Declared
+    via ``dependencies=[Depends(forbid_impersonation)]`` on routes that
+    issue, reveal, rotate or revoke credentials or destroy the account, and
+    on the credential-connection routers. Route-level dependencies run
+    before the route's user dependency, so this check never touches the
+    database and logs the refused request itself (by user id; the
+    "started impersonating" line maps ids to emails).
+    """
+    claim = session_impersonation_claim(request)
+    if claim is None:
+        return
+    target_uid, admin_uid = claim
+    logger.warning(
+        "[impersonation] refused admin id=%s as user id=%s: %s %s",
+        admin_uid, target_uid, request.method, request.url.path,
+    )
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "impersonation_forbidden",
+            "message": IMPERSONATION_FORBIDDEN_MESSAGE,
+        },
+    )
 
 
 SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30  # 30 days

@@ -101,7 +101,7 @@ UI messages describe the restriction via `login_restriction_description()` ("@do
 
 ## Admin Impersonation
 
-An impersonation cookie adds an `imp` field with the admin's user id to the session payload and has a one-hour `max_age`. `get_user_from_cookie()` re-checks on every request that the impersonator is still an admin and annotates the user dict with the impersonator's identity, which `GET /app/api/me` exposes. The endpoints, the frontend and the rationale are in [Admin Impersonation](admin-impersonation.md).
+An impersonation cookie adds an `imp` field with the admin's user id to the session payload and has a one-hour `max_age`. `get_user_from_cookie()` re-checks on every request that the impersonator is still an admin and annotates the user dict with the impersonator's identity, which `GET /app/api/me` exposes. The endpoints, the routes an impersonation session may not use (`forbid_impersonation`), the per-request audit line, the frontend and the rationale are in [Admin Impersonation](admin-impersonation.md).
 
 ## Design Decisions
 

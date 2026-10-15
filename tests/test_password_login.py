@@ -268,6 +268,30 @@ class TestChange:
         resp = _client().post("/auth/password/change", json={"new_password": "another one"})
         assert resp.status_code == 401
 
+    def test_refused_while_impersonating(self, method, monkeypatch):
+        import chat.auth as chat_auth
+
+        admin_email = "admin@" + ALLOWED_DOMAIN
+        _create_account()
+        _create_account(email=admin_email, password="admin password")
+        monkeypatch.setattr(chat_auth, "is_admin", lambda email: email == admin_email)
+        alice = _run(user_store.get_user_by_email(ALICE))
+        admin = _run(user_store.get_user_by_email(admin_email))
+        client = _client()
+        client.cookies.set(COOKIE_NAME, session_mod.get_cookie_serializer().dumps(
+            {"v": auth_config.COOKIE_VERSION, "uid": alice["id"], "imp": admin["id"]}
+        ))
+        assert client.get("/whoami").json() == {"email": ALICE}  # a live impersonation
+        before = _run(password_store.get_password_hash(ALICE))
+
+        resp = client.post(
+            "/auth/password/change",
+            json={"current_password": "correct horse", "new_password": "another one"},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["error"] == "impersonation_forbidden"
+        assert _run(password_store.get_password_hash(ALICE)) == before
+
 
 # ---------------------------------------------------------------------------
 # Switching to Google sign-in

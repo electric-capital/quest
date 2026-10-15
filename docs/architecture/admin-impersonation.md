@@ -4,12 +4,14 @@ Admin users can impersonate other users to debug issues or view the application 
 
 ## Overview
 
-Admins (users whose email is in the `admin_emails` list in `server_config.json`) can select another user from a picker and start an impersonation session. During impersonation, the admin sees the app as the target user while the session cookie carries both identities. Impersonation is time-limited (1 hour) and validated on every request.
+Admins (users whose email is in the `admin_emails` list in `server_config.json`) can select another user from a picker and start an impersonation session. During impersonation, the admin sees the app as the target user while the session cookie carries both identities. Impersonation is time-limited (1 hour) and validated on every request. An impersonation session cannot use the routes that issue or reveal credentials or destroy the account, and every request it makes is written to the log under the admin's name.
 
 ## Key Files
 
 **Backend:**
-- `auth/session.py` -- Cookie deserialization with `imp` field handling; annotates user dict with `_impersonator_uid`, `_impersonator_email`, `_impersonator_name`
+- `auth/session.py` -- Cookie deserialization with `imp` field handling; annotates user dict with `_impersonator_uid`, `_impersonator_email`, `_impersonator_name`. Also holds the `forbid_impersonation` dependency and the audit line (`ImpersonationAuditMiddleware` plus the hook in `get_user_from_cookie()`)
+- `quest.py` -- Installs `ImpersonationAuditMiddleware` on the app
+- `config/plugins.py` -- `mount_plugin_oauth_routers()` adds `forbid_impersonation` to every plugin connection router
 - `chat/auth.py` -- `is_admin()` function used to validate impersonator privileges
 - `chat/routes/admin.py` -- Impersonation endpoints (`admin_list_users`, `admin_impersonate`, `admin_stop_impersonation`)
 - `chat/routes/user.py` -- `GET /app/api/me` exposes impersonation state fields
@@ -48,8 +50,30 @@ On every request, `get_user_from_cookie()` in `auth/session.py` checks if the co
 
 This means revoking an admin's access (removing their email from `admin_emails` in `server_config.json`) immediately invalidates all their active impersonation sessions.
 
+## Forbidden Routes
+
+Routes that issue, reveal, rotate or revoke credentials, change the password or destroy the account declare `forbid_impersonation` (`auth/session.py`), which answers 403 `impersonation_forbidden` to an impersonation session:
+
+- the `users.api_key` surfaces: `GET /api/instructions` (embeds the key) and `POST /api/reset-api-key` in `quest.py`, `POST /auth/reset-api-key` in `auth/google_login.py`, and the deprecated `GET /app/api/user` in `chat/routes/user.py`
+- every inference API key route (`chat/routes/inference_api_keys.py`)
+- password change (`auth/password_login.py`), logout-and-disconnect and delete-account (`chat/routes/user.py`)
+- every credential-connection route: the core routers declare the dependency on the router itself (`auth/connections.py`, `auth/service_key.py`, `auth/airtable.py`, `auth/ramp.py`, `auth/google_services.py`), and `mount_plugin_oauth_routers()` adds it to each plugin's `/auth/<id>` router
+
+The dependency reads only the signed cookie's `imp` claim, with no database lookup, so it runs before the route's own user resolution. Any correctly signed cookie with an `imp` field counts, including one whose impersonation no longer validates.
+
+Everything else stays available to an impersonation session: conversations, files, user settings, connector status, the tools acting on the target's data, logout and stop-impersonation. Those requests are covered by the audit line. In the frontend only the password form (`frontend/src/components/settings/PasswordSection.tsx`) is hidden while impersonating; the other settings that call forbidden routes stay visible and their requests fail with the 403.
+
+## Audit Log
+
+Every request served under impersonation writes one INFO line on the `auth.session` logger, prefixed `[impersonation]`, naming the admin's and the target's email and user id plus the request method and path (never the query string, which can carry OAuth codes). The target appears as `user=<email>`, following the [Logging](logging.md) convention.
+
+- `get_user_from_cookie()` writes the line once it has validated the impersonation, so a request that resolves no identity writes none.
+- `ImpersonationAuditMiddleware` (pure ASGI, installed in `quest.py`) gives each HTTP request and WebSocket connection a record, held in a context variable, with its method and path, and limits it to one line. A WebSocket logs once at connect (method `WEBSOCKET`); its heartbeat re-validations do not repeat it.
+- A request refused by `forbid_impersonation` never resolves the identity, so the dependency logs its own WARNING `[impersonation] refused` line with both user ids. The `[admin] ... started impersonating ...` line from `admin_impersonate` maps the ids to emails.
+
 ## Constraints
 
+- Credential and account routes return 403 `impersonation_forbidden` while impersonating (see [Forbidden Routes](#forbidden-routes))
 - Nested impersonation is blocked: if the current session already has `_impersonator_uid`, `POST /admin/impersonate` returns 400
 - Impersonation cookies expire after 1 hour (vs. 30 days for normal sessions)
 - The user list endpoint (`GET /admin/users`) excludes the requesting admin from results
@@ -59,6 +83,15 @@ This means revoking an admin's access (removing their email from `admin_emails` 
 
 **Why carry the impersonator ID in the cookie rather than a separate server-side session store?**
 The existing auth architecture is stateless (signed cookies, no server-side session table). Adding impersonation via the same cookie mechanism keeps the architecture consistent and avoids introducing session storage infrastructure. The cookie is signed and validated on every request, so tamper resistance is maintained.
+
+**Why refuse credential and account routes instead of trusting the support use?**
+Anything an impersonation session could mint or store (an API key, an inference key, a connection credential) outlives the one-hour window, and revoking every connection or deleting the account cannot be undone. Hiding these in the frontend would leave the routes callable, so the server refuses them.
+
+**Why check the cookie claim rather than the resolved user?**
+Routes resolve the user in different ways (dependencies, inline `get_user_from_cookie()`, plugin routers). A request-level check on the signed `imp` claim covers all of them, runs before any of them, needs no database lookup, and fails closed.
+
+**Why write the audit line in `get_user_from_cookie()` rather than in the middleware?**
+Only identity resolution knows that the impersonation is valid and has both users' emails. The middleware only supplies the request's method and path.
 
 **Why a 1-hour max_age for impersonation cookies?**
 Impersonation is a privileged operation. A short-lived cookie limits the blast radius if an admin forgets to end an impersonation session or if the cookie is somehow leaked.

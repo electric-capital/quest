@@ -14,16 +14,18 @@ the full rationale.
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from db.user_store import update_user_field
 from auth.config import COOKIE_NAME
-from auth.session import get_user_from_cookie
+from auth.session import forbid_impersonation, get_user_from_cookie
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/auth")
+# Storing, replacing or removing a connection's credentials is the account
+# owner's call: an admin impersonation session gets 403 on every route here.
+router = APIRouter(prefix="/auth", dependencies=[Depends(forbid_impersonation)])
 
 
 class AirtableTokenRequest(BaseModel):

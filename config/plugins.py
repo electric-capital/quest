@@ -828,13 +828,25 @@ def mount_plugin_oauth_routers(app) -> None:
     shadow core routes. A router that fails to mount is logged and
     skipped, matching the loader's broken-plugin posture (the plugin's
     other surfaces stay registered; its Connect flow 404s).
+
+    Every mounted route gets the ``forbid_impersonation`` dependency: a
+    plugin's ``/auth/<id>`` namespace stores and removes the user's
+    connection credentials, which an admin impersonation session may not do.
+    Applied here so no plugin has to remember it.
     """
+    from fastapi import Depends
+
+    from auth.session import forbid_impersonation
+
     for plugin in get_loaded_plugins():
         spec = plugin.user_connection
         if spec is None or spec.kind != "oauth" or spec.oauth_router is None:
             continue
         try:
-            app.include_router(spec.oauth_router)
+            app.include_router(
+                spec.oauth_router,
+                dependencies=[Depends(forbid_impersonation)],
+            )
         except Exception:
             logger.exception(
                 "Failed to mount plugin %r oauth router; its Connect flow "

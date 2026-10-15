@@ -4,6 +4,9 @@ CRUD for the named bearer tokens that authenticate the one-shot
 ``POST /api/inference`` endpoint (see chat/inference_api.py). The raw
 token is returned exactly once, in the create response; afterwards only
 the name and a short hint are visible.
+
+Every route here is refused (403) to an admin impersonation session: a key
+minted under impersonation would outlive the impersonation window.
 """
 
 import logging
@@ -11,6 +14,7 @@ import logging
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
+from auth.session import forbid_impersonation
 from chat.auth import get_current_user_cookie_or_apikey_checked
 from chat.routes import router
 from db import inference_api_key_store
@@ -24,7 +28,7 @@ class InferenceApiKeyCreate(BaseModel):
     name: str
 
 
-@router.get("/inference-api-keys")
+@router.get("/inference-api-keys", dependencies=[Depends(forbid_impersonation)])
 async def list_inference_api_keys(
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
@@ -33,7 +37,7 @@ async def list_inference_api_keys(
     return {"keys": keys}
 
 
-@router.post("/inference-api-keys")
+@router.post("/inference-api-keys", dependencies=[Depends(forbid_impersonation)])
 async def create_inference_api_key(
     body: InferenceApiKeyCreate,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
@@ -86,7 +90,9 @@ async def create_inference_api_key(
     return {**key, "token": token}
 
 
-@router.delete("/inference-api-keys/{key_id}")
+@router.delete(
+    "/inference-api-keys/{key_id}", dependencies=[Depends(forbid_impersonation)],
+)
 async def delete_inference_api_key(
     key_id: str,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),

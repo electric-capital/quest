@@ -4,7 +4,11 @@
 # else is imported from its defining module (auth.config, auth.session,
 # auth.google_credentials, auth.popup_helpers).
 from auth.config import generate_api_key
-from auth.session import get_current_user_cookie_or_apikey
+from auth.session import (
+    ImpersonationAuditMiddleware,
+    forbid_impersonation,
+    get_current_user_cookie_or_apikey,
+)
 
 # Routers for registration in the main app. The Slack OAuth router and
 # the Telegram login router are plugin-provided (plugins/slack/oauth.py,
