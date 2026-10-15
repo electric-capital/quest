@@ -127,6 +127,8 @@ The core `_SERVICE_REGISTRY` entries are the roster. They come in four credentia
 
 ### Allowed Endpoints Validation
 
+`_parse_request_url()` parses the URL once with `httpx.URL`; the registry lookup, the allow-list match (on the percent-encoded path as sent, without query or fragment), the tools' `alt=media` / `files.export` checks and the request itself all use that parse. Before any lookup it refuses a non-`https` scheme, a `user@` part, a non-default port, and a path with a `.` or `..` segment, an empty segment (`//`), a backslash or a control character, literal or percent-encoded (`_path_problem()`): upstream servers decode those forms on their own terms.
+
 An entry's `allowed_endpoints` regexes (compiled at registration) gate the request path; a miss is rejected with the allowed patterns. Every entry with per-user credentials declares one, as do no-auth hosts path-scoped to an API under a human-facing site: an allow-list pins the entry to read-only paths so a user credential can never reach a write verb. Service notes: [Airtable](../api/airtable-api.md), [GitHub](../../plugins/github/docs/github-api.md), [GCP](../api/gcp-api.md).
 
 Allow-listing is verb-scoped: GETs are checked against `allowed_endpoints`, POSTs against the independent `allowed_post_endpoints`, and a host without a POST list rejects every POST. Only GCP entries whose reads Google exposes as POST verbs declare one ([authed_post](#post-capable-sibling-authed_post)).

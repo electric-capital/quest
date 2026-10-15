@@ -76,11 +76,11 @@ def _mock_httpx(calls: list, body=None):
     response.json = MagicMock(return_value=body)
 
     async def fake_get(url, headers=None):
-        calls.append(("GET", url, dict(headers or {})))
+        calls.append(("GET", str(url), dict(headers or {})))
         return response
 
     async def fake_post(url, headers=None, json=None):
-        calls.append(("POST", url, dict(headers or {})))
+        calls.append(("POST", str(url), dict(headers or {})))
         return response
 
     client = MagicMock()

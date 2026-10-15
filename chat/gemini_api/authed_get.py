@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import urllib.parse
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -534,6 +535,129 @@ for _service in _SERVICE_REGISTRY.values():
 
 
 # ---------------------------------------------------------------------------
+# Request URL normalisation
+# ---------------------------------------------------------------------------
+
+# Rounds of percent-decoding _path_problem() looks through. A path that is
+# still changing after this many rounds is refused as over-encoded.
+_MAX_PERCENT_DECODE_ROUNDS = 4
+
+
+@dataclass(frozen=True)
+class _RequestTarget:
+    """A caller-supplied URL, parsed once into exactly what will be sent.
+
+    Every check -- scheme, host, registry lookup, allow-list match, the
+    tool-level ``alt=media`` / export steering -- reads these fields, and
+    the HTTP client is handed ``url`` itself, so the path that was matched
+    and the path that goes on the wire are the same string by construction.
+    """
+
+    url: httpx.URL
+    host: str   # ASCII (IDNA-encoded) lowercase host: the registry key
+    path: str   # raw percent-encoded path as sent, without query or fragment
+    query: str  # raw query string as sent, without the leading '?'
+
+
+def _path_problem(path: str) -> str | None:
+    """Describe why *path* is refused, or return ``None`` when it is clean.
+
+    Refused: a ``.`` or ``..`` segment, an empty segment (``//``; a single
+    trailing slash is fine), a backslash, or a control character. Each
+    check runs on the path as given and again after every round of
+    percent-decoding, so encoded spellings (``%2e%2e``, ``..%2f``,
+    ``%5c``, double encoding) are refused like the literal ones. Upstream
+    servers resolve or decode these forms themselves, which would let a
+    path that matched an allow-list pattern address a different resource.
+    """
+    form = path.encode("utf-8")
+    for _ in range(_MAX_PERCENT_DECODE_ROUNDS + 1):
+        if b"\\" in form:
+            return "a backslash"
+        if any(byte < 0x20 or byte == 0x7F for byte in form):
+            return "a control character"
+        segments = form.split(b"/")
+        if form.startswith(b"/"):
+            segments = segments[1:]
+        if any(segment in (b".", b"..") for segment in segments):
+            return "a '.' or '..' segment"
+        if any(segment == b"" for segment in segments[:-1]):
+            return "an empty segment ('//')"
+        decoded = urllib.parse.unquote_to_bytes(form)
+        if decoded == form:
+            return None
+        form = decoded
+    return "nested percent-encoding"
+
+
+def _parse_request_url(url: Any) -> tuple[_RequestTarget | None, str | None]:
+    """Normalise a caller URL for authed_get / authed_post.
+
+    Returns ``(target, None)`` on success or ``(None, json_error)``. The URL
+    is parsed with ``httpx.URL`` -- the same parser the request is sent
+    with -- so host and path are read from the form httpx will actually
+    put on the wire (IDNA-encoded host, dot segments resolved, characters
+    percent-encoded). Refused outright, before any registry lookup:
+
+    * a scheme other than ``https``;
+    * a missing host, any userinfo (``user@host``), or a non-default port;
+    * a path with dot segments, empty segments, backslashes or control
+      characters, literal or percent-encoded (see :func:`_path_problem`),
+      checked both as written and as httpx would send it.
+
+    The query string and fragment are never part of the matched path.
+    """
+    if not isinstance(url, str):
+        return None, json.dumps({"error": f"Invalid URL: {url!r}"})
+    try:
+        parsed = httpx.URL(url)
+        written_path = urllib.parse.urlsplit(url).path
+        host = parsed.raw_host.decode("ascii").lower()
+        sent_path, _, query = parsed.raw_path.decode("ascii").partition("?")
+    except Exception:
+        return None, json.dumps({"error": f"Invalid URL: {url}"})
+
+    if parsed.scheme != "https":
+        return None, json.dumps({
+            "error": (
+                "Only HTTPS URLs are supported for security. "
+                f"Got scheme: '{parsed.scheme}'."
+            )
+        })
+    if not host:
+        return None, json.dumps({"error": f"Could not extract hostname from URL: {url}"})
+    if parsed.userinfo:
+        return None, json.dumps({
+            "error": (
+                "URLs with a user@ part (embedded credentials) are not "
+                "supported. Use https://<api host>/<path>; authentication is "
+                "injected automatically."
+            )
+        })
+    if parsed.port is not None:
+        return None, json.dumps({
+            "error": (
+                f"URL port {parsed.port} is not supported. Use the default "
+                "HTTPS port (omit the port)."
+            )
+        })
+
+    for candidate in (written_path, sent_path):
+        problem = _path_problem(candidate)
+        if problem is not None:
+            return None, json.dumps({
+                "error": (
+                    f"URL path '{written_path}' contains {problem}. Dot "
+                    "segments, empty segments, backslashes and control "
+                    "characters are not accepted, literal or percent-encoded; "
+                    "request the canonical path instead."
+                )
+            })
+
+    return _RequestTarget(url=parsed, host=host, path=sent_path, query=query), None
+
+
+# ---------------------------------------------------------------------------
 # Registry lookup
 # ---------------------------------------------------------------------------
 
@@ -664,9 +788,9 @@ async def _make_authed_request(
     Handles both GET (``authed_get``) and the narrow set of read-shaped POST
     verbs (``authed_post``). *method* selects the verb; *json_body* is the JSON
     request body forwarded on POST requests (ignored on GET). Everything else --
-    HTTPS validation, registry lookup, allow-list gating, credential loading +
-    401 refresh, header precedence, error pass-through -- is identical across
-    verbs.
+    URL normalisation (``_parse_request_url``), registry lookup, allow-list
+    gating, credential loading + 401 refresh, header precedence, error
+    pass-through -- is identical across verbs.
 
     Endpoint allow-listing is verb-scoped and the two dimensions are STRICTLY
     independent: GET requests are validated against ``_allowed_endpoints`` and
@@ -697,24 +821,15 @@ async def _make_authed_request(
     """
     method = method.upper()
     # --- URL validation ---------------------------------------------------
-    try:
-        parsed = urllib.parse.urlparse(url)
-    except Exception:
-        return json.dumps({"error": f"Invalid URL: {url}"})
+    # One parse, shared by every check below AND by the send: the registry
+    # lookup and allow-list match read the path exactly as httpx puts it on
+    # the wire, and the request is issued with target.url itself.
+    target, url_error = _parse_request_url(url)
+    if url_error is not None:
+        return url_error
+    hostname = target.host
 
-    if parsed.scheme != "https":
-        return json.dumps({
-            "error": (
-                "Only HTTPS URLs are supported for security. "
-                f"Got scheme: '{parsed.scheme}'."
-            )
-        })
-
-    hostname = parsed.hostname
-    if not hostname:
-        return json.dumps({"error": f"Could not extract hostname from URL: {url}"})
-
-    service = _find_service(hostname, parsed.path)
+    service = _find_service(hostname, target.path)
     if service is None:
         supported = [
             f"  - {info['name']}: https://{host}/..."
@@ -757,13 +872,13 @@ async def _make_authed_request(
         })
 
     if compiled_patterns is not None:
-        if not any(pat.match(parsed.path) for pat in compiled_patterns):
+        if not any(pat.match(target.path) for pat in compiled_patterns):
             allowed_list = "\n".join(
                 f"  - {p}" for p in service.get(allowed_source_key, [])
             )
             return json.dumps({
                 "error": (
-                    f"Endpoint path '{parsed.path}' is not allowed for "
+                    f"Endpoint path '{target.path}' is not allowed for "
                     f"{service['name']} ({method}). Allowed endpoint patterns:\n"
                     + allowed_list
                 )
@@ -836,9 +951,9 @@ async def _make_authed_request(
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             if method == "POST":
-                response = await client.post(url, headers=request_headers, json=json_body)
+                response = await client.post(target.url, headers=request_headers, json=json_body)
             else:
-                response = await client.get(url, headers=request_headers)
+                response = await client.get(target.url, headers=request_headers)
 
             # --- 401 retry for OAuth services -----------------------------
             if response.status_code == 401 and service.get("retry_on_401") and requires_user:
@@ -872,9 +987,9 @@ async def _make_authed_request(
                     request_headers.update(headers)
                 service["inject_auth"](credentials, request_headers)
                 if method == "POST":
-                    response = await client.post(url, headers=request_headers, json=json_body)
+                    response = await client.post(target.url, headers=request_headers, json=json_body)
                 else:
-                    response = await client.get(url, headers=request_headers)
+                    response = await client.get(target.url, headers=request_headers)
 
     except httpx.TimeoutException:
         return json.dumps({
@@ -1160,8 +1275,10 @@ async def handle_authed_get(
         JSON string of the response body on success, or a JSON error
         string on failure.
     """
-    parsed = urllib.parse.urlparse(url)
-    query_params = urllib.parse.parse_qs(parsed.query)
+    target, url_error = _parse_request_url(url)
+    if url_error is not None:
+        return url_error
+    query_params = urllib.parse.parse_qs(target.query)
 
     # When output_file is set, the body never enters LLM context, so the
     # alt=media block does not apply -- this is the deliberate "near-superset
@@ -1183,7 +1300,7 @@ async def handle_authed_get(
     # google_export_sheet / google_export_slides tools write it to the
     # workspace; the allow-list entry exists so those tools (and the
     # output_file path) can reach the endpoint through _make_authed_request.
-    if output_file is None and _DRIVE_EXPORT_PATH_RE.match(parsed.path):
+    if output_file is None and _DRIVE_EXPORT_PATH_RE.match(target.path):
         return json.dumps({
             "error": (
                 "Drive files.export is not supported via the authed_get tool call "
@@ -1404,9 +1521,13 @@ async def authed_get_endpoint(
     so that callers receive the file content intact.
     """
     # Check if this is a binary download request (e.g. Drive alt=media).
-    # If so, we need the raw response bytes, not text.
-    parsed_url = urllib.parse.urlparse(body.url)
-    query_params = urllib.parse.parse_qs(parsed_url.query)
+    # If so, we need the raw response bytes, not text. The query is read
+    # from the same normalised URL every authed request is checked and sent
+    # with; a URL it refuses never reaches either branch below.
+    target, url_error = _parse_request_url(body.url)
+    if url_error is not None:
+        return JSONResponse(content=json.loads(url_error))
+    query_params = urllib.parse.parse_qs(target.query)
     is_binary = query_params.get("alt") == ["media"]
 
     if is_binary:

@@ -83,11 +83,11 @@ def _mock_httpx_client(captured_get: list, captured_post: list,
     response_mock.json = MagicMock(return_value=body)
 
     async def fake_get(url, headers=None):
-        captured_get.append((url, dict(headers or {})))
+        captured_get.append((str(url), dict(headers or {})))
         return response_mock
 
     async def fake_post(url, headers=None, json=None):
-        captured_post.append((url, dict(headers or {}), json))
+        captured_post.append((str(url), dict(headers or {}), json))
         return response_mock
 
     client_mock = MagicMock()
