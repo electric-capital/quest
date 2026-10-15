@@ -215,6 +215,54 @@ def test_model_without_thinking_effort_sends_no_thinking_config():
     assert "output_config" not in fake.captured_kwargs
 
 
+def _text_events():
+    return [_message_start(), _block_start("text"), _delta("text_delta", text="hi"), _BLOCK_STOP]
+
+
+def test_picked_thinking_effort_overrides_registry_default():
+    """The conversation's pick (session.thinking_effort) wins over the
+    registry entry's pinned level; ``none`` sends no thinking at all."""
+    provider = AnthropicProvider()
+    session = provider.create_session(
+        model="claude-opus-5-5", system_prompt="sys", tools=[], thinking_effort="max",
+    )
+    _, fake = _run_stream(provider, session, "hello", _text_events())
+    assert fake.captured_kwargs["thinking"] == {"type": "adaptive"}
+    assert fake.captured_kwargs["output_config"] == {"effort": "max"}
+
+    # Switched in place on the live session (no rebuild needed)
+    assert provider.set_thinking_effort(session, "none") is True
+    _, fake = _run_stream(provider, session, "again", _text_events())
+    assert "thinking" not in fake.captured_kwargs
+    assert "output_config" not in fake.captured_kwargs
+
+    # Back to the registry default
+    provider.set_thinking_effort(session, None)
+    _, fake = _run_stream(provider, session, "again", _text_events())
+    assert fake.captured_kwargs["output_config"] == {"effort": "medium"}
+
+
+def test_registry_lists_selectable_levels_per_model():
+    from chat.llm.config import resolve_model, resolve_thinking_effort
+
+    opus = resolve_model("claude-opus-4-8")
+    assert opus.thinking_efforts == ("none", "low", "medium", "high", "xhigh", "max")
+    assert opus.thinking_effort == "medium"
+    # Models that cannot run without thinking offer no "none"
+    assert "none" not in resolve_model("claude-opus-5-5").thinking_efforts
+    assert "none" not in resolve_model("claude-sonnet-5-5").thinking_efforts
+    # Gemini entries document the API default and offer the three levels
+    assert resolve_model("gemini-4-argon").thinking_efforts == ("low", "medium", "high")
+    # No sublevel for models the registry pins nothing on
+    assert resolve_model("claude-sonnet-5").thinking_efforts == ()
+    # Picks are validated against the list; anything else is the default
+    assert resolve_thinking_effort(opus, " High ") == "high"
+    assert resolve_thinking_effort(opus, "ultra") is None
+    assert resolve_thinking_effort(opus, None) is None
+    assert resolve_thinking_effort(resolve_model("claude-sonnet-5"), "high") is None
+    assert resolve_thinking_effort(None, "high") is None
+
+
 # ---------------------------------------------------------------------------
 # Thinking block accumulation
 # ---------------------------------------------------------------------------

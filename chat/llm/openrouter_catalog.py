@@ -51,6 +51,31 @@ def _rate_per_million(value) -> float | None:
     return rate * _PER_MILLION
 
 
+def normalize_reasoning(raw) -> dict | None:
+    """The per-model ``reasoning`` object of an OpenRouter catalog row,
+    reduced to the keys the model spec derives thinking levels from
+    (``chat.llm.config.thinking_efforts_from_reasoning``): ``mandatory``
+    (reasoning cannot be switched off), ``default_enabled`` (on without a
+    request param), ``supported_efforts`` (the levels the model accepts)
+    and ``default_effort``. ``None`` when the row has no reasoning
+    support (or the field is malformed)."""
+    if not isinstance(raw, dict):
+        return None
+    reasoning: dict = {}
+    for flag in ("mandatory", "default_enabled"):
+        if isinstance(raw.get(flag), bool):
+            reasoning[flag] = raw[flag]
+    efforts = raw.get("supported_efforts")
+    if isinstance(efforts, list):
+        cleaned = [e.strip().lower() for e in efforts if isinstance(e, str) and e.strip()]
+        if cleaned:
+            reasoning["supported_efforts"] = cleaned
+    default = raw.get("default_effort")
+    if isinstance(default, str) and default.strip():
+        reasoning["default_effort"] = default.strip().lower()
+    return reasoning
+
+
 def _normalize_entry(raw) -> dict | None:
     """Keep the fields the typeahead and snapshots use; None when unusable.
 
@@ -88,6 +113,7 @@ def _normalize_entry(raw) -> dict | None:
             else None
         ),
         "pricing": pricing,
+        "reasoning": normalize_reasoning(raw.get("reasoning")),
     }
 
 
@@ -114,6 +140,7 @@ def _cached_entry(raw) -> dict | None:
             int(max_completion) if isinstance(max_completion, (int, float)) else None
         ),
         "pricing": pricing,
+        "reasoning": normalize_reasoning(raw.get("reasoning")),
     }
 
 
@@ -213,7 +240,10 @@ def catalog_snapshot(models: list[dict], wire_id: str) -> dict | None:
     """The metadata snapshot for one wire id, or None when not listed.
 
     The NEAR AI catalog's ``tee`` label (enclave / proxy) rides along when
-    the entry carries one; other catalogs' entries have no such key.
+    the entry carries one; other catalogs' entries have no such key. So
+    does the ``reasoning`` object (see :func:`normalize_reasoning`) when
+    the catalog publishes one -- it is what gives the model a thinking
+    sublevel in the composer's model menu.
     """
     for model in models:
         if model["id"] == wire_id:
@@ -225,5 +255,7 @@ def catalog_snapshot(models: list[dict], wire_id: str) -> dict | None:
             }
             if model.get("tee"):
                 snapshot["tee"] = model["tee"]
+            if isinstance(model.get("reasoning"), dict):
+                snapshot["reasoning"] = model["reasoning"]
             return snapshot
     return None

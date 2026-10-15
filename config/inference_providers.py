@@ -572,6 +572,16 @@ def normalize_instance_model(entry) -> dict | None:
     }
     if entry.get("tee") in TEE_LABELS:
         normalized["tee"] = entry["tee"]
+    # The catalog's per-model reasoning object (router kinds only): what
+    # thinking levels the composer offers for the model -- see
+    # chat.llm.config.thinking_efforts_from_reasoning. Only its known keys
+    # are kept; absent = the model offers no thinking sublevel.
+    reasoning = entry.get("reasoning")
+    if isinstance(reasoning, dict):
+        normalized["reasoning"] = {
+            key: value for key, value in reasoning.items()
+            if key in ("mandatory", "default_enabled", "supported_efforts", "default_effort")
+        }
     history = _normalize_pricing_history(entry.get("pricing_history"))
     if history:
         normalized["pricing_history"] = history

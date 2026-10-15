@@ -1074,6 +1074,14 @@ class Conversation(Base):
         String(100), nullable=True, default=None
     )
 
+    # Thinking level the user picked for ``model`` in the composer's model
+    # menu (one of the model spec's ``thinking_efforts``, "none" = thinking
+    # off). NULL means the model's default level. Set and overwritten
+    # together with ``model``.
+    thinking_effort: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True, default=None
+    )
+
     # Optional custom display name (overrides auto-generated title from first message)
     custom_name: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True, default=None

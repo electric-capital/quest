@@ -22,7 +22,7 @@ _active_chats: dict[tuple[int, str], tuple[str, Any]] = {}
 def get_or_create_chat(
     provider, user_id, conversation_id, model, system_prompt,
     history=None, disk_history=None, disk_provider=None,
-    tools=None,
+    tools=None, thinking_effort=None,
 ):
     """Return an existing chat session or create a new one.
 
@@ -36,6 +36,11 @@ def get_or_create_chat(
         user_id: User's integer ID.
         conversation_id: Conversation UUID.
         model: Model name string.
+        thinking_effort: The conversation's thinking level (validated by
+            the caller; None = the model's default). A cached session on
+            the same model is switched in place when the provider allows
+            it, otherwise rebuilt from its history like a same-provider
+            model switch.
         system_prompt: System instruction text.
         history: Optional list of history dicts to initialize the session
             with (loaded from sdk_history.json on restart).
@@ -59,14 +64,22 @@ def get_or_create_chat(
     if existing is not None:
         stored_model, session = existing
         if stored_model == model:
-            return session
-        # Model changed — determine if old and new models use the same provider.
-        logger.info(
-            "Model changed from %r to %r for conversation %s; replacing session.",
-            stored_model,
-            model,
-            conversation_id,
-        )
+            if _session_thinking_effort(session) == thinking_effort:
+                return session
+            if provider.set_thinking_effort(session, thinking_effort):
+                return session
+            logger.info(
+                "Thinking effort changed to %r for conversation %s; rebuilding session.",
+                thinking_effort, conversation_id,
+            )
+        else:
+            # Model changed — determine if old and new models use the same provider.
+            logger.info(
+                "Model changed from %r to %r for conversation %s; replacing session.",
+                stored_model,
+                model,
+                conversation_id,
+            )
         try:
             old_provider_name = get_provider_for_model(stored_model)
         except ValueError:
@@ -137,9 +150,20 @@ def get_or_create_chat(
         system_prompt=system_prompt,
         tools=session_tools,
         history=loaded_history,
+        thinking_effort=thinking_effort,
     )
     _active_chats[key] = (model, new_session)
     return new_session
+
+
+def _session_thinking_effort(session) -> str | None:
+    """The level a cached session was created with / switched to: the
+    dataclass field of the stateless providers' sessions, or the attribute
+    the Gemini provider stamps on its AsyncChat."""
+    for attr in ("thinking_effort", "_llm_thinking_effort"):
+        if hasattr(session, attr):
+            return getattr(session, attr)
+    return None
 
 
 def remove_chat_session(user_id: int, conversation_id: str) -> bool:

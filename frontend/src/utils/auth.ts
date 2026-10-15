@@ -18,6 +18,10 @@ export async function checkSession(): Promise<{
   default_model: string | null;
   // Last-used model for public-project composers (null = never sent one).
   public_default_model?: string | null;
+  // The thinking level each default was last sent with (null = the
+  // model's default level).
+  default_thinking_effort?: string | null;
+  public_default_thinking_effort?: string | null;
   // Settings > Appearance colour scheme: "light" | "dark" | null (= auto).
   theme?: string | null;
   // Settings > Appearance colour theme id ("prototype" | "electric-blue" | "alloy" | "recall");

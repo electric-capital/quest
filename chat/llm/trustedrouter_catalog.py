@@ -44,7 +44,7 @@ import time
 import urllib.error
 import urllib.request
 
-from chat.llm.openrouter_catalog import normalize_openrouter_entry
+from chat.llm.openrouter_catalog import normalize_openrouter_entry, normalize_reasoning
 from config.paths import TRUSTEDROUTER_CATALOG_FILE
 
 logger = logging.getLogger(__name__)
@@ -119,6 +119,11 @@ def _normalize_entry(raw) -> dict | None:
     bits = ["vision"] if vision else []
     if "reasoning" in features:
         bits.append("reasoning")
+        # No per-model reasoning object published: the parameter list only
+        # says reasoning is accepted, so the model gets the generic levels
+        # and no "off" option (whether it can run without is unknown).
+        if entry["reasoning"] is None:
+            entry["reasoning"] = {}
     entry["detail"] = " · ".join(bits)
     entry["capabilities"] = capabilities
     return entry
@@ -147,6 +152,7 @@ def _cached_entry(raw) -> dict | None:
         "capabilities": (
             [c for c in capabilities if isinstance(c, str)] if isinstance(capabilities, list) else None
         ),
+        "reasoning": normalize_reasoning(raw.get("reasoning")),
     }
 
 

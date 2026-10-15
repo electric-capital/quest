@@ -4,7 +4,7 @@
    the colour theme applies; the preview borrows the real menu's classes
    from ChatPanel.css. */
 
-/* Six columns in the table, so the two menu previews sit in a row above
+/* Seven columns in the table, so the two menu previews sit in a row above
    it (source order keeps the table first for screen readers) and the table
    gets the full width. */
 .model-selection-layout {
@@ -92,6 +92,11 @@
 
 .model-selection-col-descriptor {
   min-width: 9rem;
+}
+
+.model-selection-col-effort {
+  width: 8rem;
+  white-space: nowrap;
 }
 
 .model-selection-col-check {

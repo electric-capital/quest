@@ -240,11 +240,14 @@ def test_normalize_entry_shape():
         "pricing": {"prompt": pytest.approx(0.3), "completion": pytest.approx(1.2), "cache_read": pytest.approx(0.006)},
         "detail": "vision · reasoning",
         "capabilities": ["tools", "vision"],
+        # Reasoning accepted but no per-model object: the generic levels
+        "reasoning": {},
     }
     # No cache-read price -> plain prompt/completion pricing
     entry = tr._normalize_entry(_raw("qwen/qwen3.7-max", cache_read=None, features=("tools", "json_mode")))
     assert entry["pricing"] == {"prompt": pytest.approx(0.3), "completion": pytest.approx(1.2)}
     assert entry["detail"] == "" and entry["capabilities"] == ["tools"]
+    assert entry["reasoning"] is None
     # A text model whose feature list lacks tools is flagged as such
     entry = tr._normalize_entry(_raw("openai/gpt-6-sol", features=("structured_outputs", "reasoning")))
     assert entry["capabilities"] == [] and entry["detail"] == "reasoning"
@@ -380,7 +383,7 @@ def test_cache_round_trip_keeps_shape(fake_urlopen):
     # A hand-edited cache row missing fields degrades gracefully
     assert tr._cached_entry({"id": "x", "pricing": {"prompt": 1}}) == {
         "id": "x", "name": "x", "context_length": None, "max_completion_tokens": None,
-        "pricing": None, "detail": "", "capabilities": None,
+        "pricing": None, "detail": "", "capabilities": None, "reasoning": None,
     }
 
 

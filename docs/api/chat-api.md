@@ -179,24 +179,17 @@ Set or clear a custom name for a conversation. Custom names take priority over a
 
 ### Update Conversation Model
 
-Update the LLM model for a conversation. Used by the frontend to persist model changes when the user switches models via the model selector dropdown.
+Persists the composer's model pick for a conversation.
 
-**Endpoint**: `PATCH /app/api/conversations/{conversation_id}/model`
-
-**Authentication**: Required (session cookie or Bearer token)
-
-**URL Parameters**:
-- `conversation_id`: UUID of the conversation
+**Endpoint**: `PATCH /app/api/conversations/{conversation_id}/model` (authenticated)
 
 **Request body** (JSON):
-- `model` (required, string): LLM model ID to set (e.g., `"claude-sonnet-4-6"`, `"gemini-3.5-flash-lite"`)
+- `model` (required, string): LLM model ID (e.g., `"claude-sonnet-4-6"`)
+- `thinking_effort` (optional, string): the level picked for the model (one of its `thinking_efforts` on `GET /app/api/config`); omitted / empty = the model's default
 
-**Response**: `200 OK` with `{"ok": true}`
+**Response**: `200 OK` with `{"ok": true}`; `404` `conversation_not_found` when the conversation is not the caller's.
 
-**Side effects**:
-- Unconditionally sets the `model` column on the conversation row via `set_conversation_model()` in `db/conversation_store.py` (always overwrites, unlike `update_conversation_model()` which is no-op if already set)
-
-**Error Response**: `404 Not Found` if conversation does not exist or does not belong to the authenticated user (error code: `conversation_not_found`)
+Unconditionally sets the `model` and `thinking_effort` columns via `set_conversation_model()` in `db/conversation_store.py` (unlike `update_conversation_model()`, which is a no-op once a model is set).
 
 **Implementation**: `update_conversation_model_endpoint()` in `chat/routes/conversations.py`. Delegates to `set_conversation_model()` in `db/conversation_store.py`.
 
@@ -313,7 +306,7 @@ There is no per-conversation WebSocket: clients use the persistent socket and re
 
 ### Send Message
 
-`{op: "send_message", conversation_id, message, model?, guide_id?, skill_ids?, timezone?, attachments?, flags?, attached_filenames?, client_send_id?}` kicks off a model run on this conversation (`guide_id` is only sent by the routine auto-send path -- the composer no longer offers guides).
+`{op: "send_message", conversation_id, message, model?, thinking_effort?, guide_id?, skill_ids?, timezone?, attachments?, flags?, attached_filenames?, client_send_id?}` kicks off a model run on this conversation (`guide_id` is only sent by the routine auto-send path -- the composer no longer offers guides). `thinking_effort`: [LLM Providers -- Thinking effort](../architecture/llm-providers.md#thinking-effort).
 
 The user message is appended to `chat_history.json` (which fires `message_appended` to every subscriber), the sending connection alone receives the delivery receipt `{type: "send_message_accepted", conversation_id, seq, client_send_id?}` (the optional opaque `client_send_id` from the request is echoed verbatim so the sender can match the receipt to its optimistic bubble; no receipt is sent when the append fails -- see [Realtime -- Delivery Receipt and Failed Sends](../architecture/realtime.md#delivery-receipt-and-failed-sends)), then `run_conversation_turn()` runs as a cancellable task.
 
@@ -379,7 +372,7 @@ Custom 4xxx codes from `chat/realtime/socket.py`: 4401 (auth failed / revoked), 
 
 ### Get Current User Info
 
-`GET /app/api/me` -- Returns user email, display name, connection status, admin flag, `default_model` (the per-user "last-used" default web/composer model for private conversations, raw from `users.settings.default_model`) and `public_default_model` (the same for public-project conversations, raw from `users.settings.public_default_model`); either may be `null` -- the FE owns the fallback per visibility: Opus 4.8 when allowed + credentialed, else the admin's first top-level pick, else the first offerable model per `available_models` on `GET /app/api/config`. See `get_current_user_info()` in `chat/routes/user.py`. Response type: `UserInfo` in `frontend/src/api/types.ts`. The FE re-reads this endpoint on every fresh new-chat composer mount and on every private<->public context switch for cross-tab default-model correctness (see [Frontend](../architecture/frontend.md), ConversationModelsContext `refreshDefaultModel`).
+`GET /app/api/me` -- Returns user email, display name, connection status, admin flag, `default_model` (the per-user "last-used" default web/composer model for private conversations, raw from `users.settings.default_model`) and `public_default_model` (the same for public-project conversations, raw from `users.settings.public_default_model`) plus `default_thinking_effort` / `public_default_thinking_effort`; either model may be `null` -- the FE owns the fallback per visibility: Opus 4.8 when allowed + credentialed, else the admin's first top-level pick, else the first offerable model per `available_models` on `GET /app/api/config`. See `get_current_user_info()` in `chat/routes/user.py`. Response type: `UserInfo` in `frontend/src/api/types.ts`. The FE re-reads it on every fresh new-chat composer mount and private<->public context switch (see [Frontend](../architecture/frontend.md), ConversationModelsContext `refreshDefaultModel`).
 
 The `has_any_service_connected` flag drives auto-opening the settings panel to Data Connections for new users. The `is_admin` flag (from `admin_emails` in `server_config.json`) controls visibility of the `AdminOpsMenu` component.
 
@@ -392,7 +385,7 @@ These endpoints are defined in `chat/routes/user.py` and `chat/routes/admin.py`.
 - **POST `/app/api/admin/shutdown`** -- Graceful server shutdown (`admin_shutdown()` in `chat/routes/admin.py`). Admin-only (checked via `is_admin()` in `chat/auth.py`). Sets `app.state.shutdown_event`; lifespan handler sends SIGTERM after 1-second delay.
 - **GET `/app/api/settings`** -- Get user settings (`get_settings()` in `chat/routes/user.py`). Reads from `settings` column in user record.
 - **PUT `/app/api/settings`** -- Update user settings (`update_settings()`). Calls `invalidate_user_sessions()` to discard cached SDK sessions when system prompt changes.
-  - Accepts `default_model` (per-user web/composer default for private conversations) and `public_default_model` (the same for public-project conversations), each validated via `resolve_model()` (Vertex registry ids and `<instance>:<wire_id>` instance-model ids) with empty string normalised to NULL (clear) and unknown ids rejected with 400 `invalid_model` -- mirrors the `slack_default_model` handling. The FE writes one of them best-effort only on the first send of a new chat, under the key matching the chat's visibility.
+  - Accepts `default_model` (per-user web/composer default for private conversations) and `public_default_model` (the same for public-project conversations), each validated via `resolve_model()` (Vertex registry ids and `<instance>:<wire_id>` instance-model ids) with empty string normalised to NULL (clear) and unknown ids rejected with 400 `invalid_model` -- mirrors the `slack_default_model` handling. The FE writes one of them best-effort only on the first send of a new chat, under the key matching the chat's visibility, with `default_thinking_effort` / `public_default_thinking_effort` (the pick's level; empty string clears, validated only when a turn uses it).
   - Also accepts `theme` (Settings > Appearance colour scheme): `"light"` / `"dark"` stored as-is, `"auto"` or empty string normalised to NULL (follow the OS), anything else rejected with 400 `invalid_theme`. `GET /app/api/me` surfaces the stored value as `theme` (null = auto) so the FE can apply it on hydration.
 - **GET `/api/instructions`** -- Get full API documentation with embedded API key (`get_instructions()` in `quest.py`). Includes all services regardless of connection status (unlike system prompts which are filtered). Source of truth: `get_instructions_content()` in `api/instructions.py`.
 - **POST `/api/reset-api-key`** -- Generate a new API key (`api_reset_api_key()` in `quest.py`). Old key stops working immediately. Key generation via `generate_api_key()` in `auth/config.py`.

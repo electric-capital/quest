@@ -384,8 +384,11 @@ async def rename_conversation(
         return _conversation_to_dict(conv)
 
 
-async def update_conversation_model(conversation_id: str, model: str) -> None:
-    """Set the model on a conversation, only if not already set.
+async def update_conversation_model(
+    conversation_id: str, model: str, thinking_effort: Optional[str] = None,
+) -> None:
+    """Set the model (and its thinking level) on a conversation, only if
+    no model is set yet.
 
     This is called after model resolution to persist the effective model
     on the conversation record.  No-op if the conversation already has a
@@ -394,6 +397,8 @@ async def update_conversation_model(conversation_id: str, model: str) -> None:
     Args:
         conversation_id: UUID of the conversation.
         model: LLM model ID string (e.g. "claude-sonnet-4-6").
+        thinking_effort: The level the turn runs at, None for the
+            model's default.
     """
     async with AsyncSessionLocal() as db:
         conv = await db.get(Conversation, conversation_id)
@@ -402,25 +407,30 @@ async def update_conversation_model(conversation_id: str, model: str) -> None:
         if conv.model is not None:
             return  # Already set; do not overwrite
         conv.model = model
+        conv.thinking_effort = thinking_effort
         await db.commit()
 
 
-async def set_conversation_model(conversation_id: str, model: str) -> None:
-    """Unconditionally set the model on a conversation.
+async def set_conversation_model(
+    conversation_id: str, model: str, thinking_effort: Optional[str] = None,
+) -> None:
+    """Unconditionally set the model and its thinking level on a conversation.
 
     Unlike update_conversation_model(), this always overwrites the existing
-    value.  Used by the PATCH endpoint when the user explicitly changes
-    the model.
+    values.  Used by the PATCH endpoint when the user explicitly changes
+    the model or its level.
 
     Args:
         conversation_id: UUID of the conversation.
         model: LLM model ID string.
+        thinking_effort: The picked level, None for the model's default.
     """
     async with AsyncSessionLocal() as db:
         conv = await db.get(Conversation, conversation_id)
         if conv is None:
             return
         conv.model = model
+        conv.thinking_effort = thinking_effort
         await db.commit()
 
 
@@ -472,6 +482,7 @@ def _conversation_to_dict(conv: Conversation) -> dict:
         "project_id": conv.project_id,
         "routine_id": conv.routine_id,
         "model": conv.model,
+        "thinking_effort": conv.thinking_effort,
         "created_at": conv.created_at.isoformat() if conv.created_at else None,
         "last_message_at": conv.last_message_at.isoformat() if conv.last_message_at else None,
         "last_message_seq": conv.last_message_seq or 0,

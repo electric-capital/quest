@@ -1,13 +1,21 @@
 /**
- * ModelSelector -- the composer's two-level model menu.
+ * ModelSelector -- the composer's model menu.
  *
  * Replaces the old flat native <select>: the top level shows the admin's
  * slotted picks for the conversation's visibility (Settings > Model
  * Selection keeps separate private and public-project top levels: up to
  * five models each, shown as the descriptor -- e.g. "Smart ($$$)" --
  * sublabeled with the concrete model name, or as the bare model name when
- * the descriptor is empty) and an "All models" row that opens a flyout
- * submenu with the full model list.
+ * the descriptor is empty; each pick is fixed to the thinking level the
+ * admin chose for it, or the model's default) and an "All models" row that
+ * opens a flyout submenu with the full model list.
+ *
+ * Under "All models", a model with selectable thinking levels (catalog
+ * `thinkingEfforts`) gets a third-level flyout listing them, opened by
+ * hovering or clicking its chevron; picking a level selects the model at
+ * that level, while clicking the model row itself selects it at its
+ * default level. The trigger shows the level after the model name when
+ * one is picked ("Claude Opus 5.5 · High").
  *
  * The host passes the already-filtered model list (credentialed models,
  * allowed for the conversation's visibility, narrowed by the conversation's
@@ -23,9 +31,10 @@
  *
  * Phone widths (useIsMobile) get a full-screen sheet instead of the popover:
  * a header with a close button over ONE scrolling list -- the top-level
- * picks, then every model under an "All models" heading (no drill-in). A
- * popover anchored above the composer cannot fit a long model list in the
- * strip left above the on-screen keyboard, so the sheet also dismisses the
+ * picks, then every model under an "All models" heading (no drill-in; a
+ * model's thinking levels are a row of chips under its name). A popover
+ * anchored above the composer cannot fit a long model list in the strip
+ * left above the on-screen keyboard, so the sheet also dismisses the
  * keyboard while it is open and hands focus back to the composer on close.
  */
 
@@ -33,7 +42,8 @@ import { useEffect, useRef, useState, useCallback, type Ref } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import {
-  getModelDisplayName, getModelInfo, getTopLevelModels, isDeprecatedModel, isModelAllowedFor,
+  formatModelPick, formatThinkingEffort, getModelDisplayName, getModelInfo, getTopLevelModels,
+  isDeprecatedModel, isModelAllowedFor,
 } from '../constants/models';
 import type { ModelInfo, ModelVisibility } from '../constants/models';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -41,12 +51,15 @@ import { useIsMobile } from '../hooks/useIsMobile';
 export interface ModelSelectorProps {
   /** Currently selected model id ('' allowed in the read-only case). */
   selectedModel: string;
+  /** Thinking level picked for the selected model (null = its default). */
+  selectedThinkingEffort?: string | null;
   /**
    * Selectable models: credentialed, and already narrowed by the
    * conversation's provider lock when one is set.
    */
   models: ModelInfo[];
-  onSelect: (modelId: string) => void;
+  /** A pick: the model and the level chosen for it (null = default). */
+  onSelect: (modelId: string, thinkingEffort: string | null) => void;
   disabled?: boolean;
   /**
    * Optional trigger-label override for the read-only (Slack) case, e.g.
@@ -67,8 +80,18 @@ export interface ModelSelectorProps {
   onOpenChange?: (open: boolean) => void;
 }
 
+/** Where the third-level thinking flyout sits: beside its model row, growing
+ *  upward from the row's bottom edge (the menu opens above the composer at
+ *  the bottom of the screen). Fixed, so the scrolling submenu does not clip it. */
+interface EffortFlyoutAnchor {
+  modelId: string;
+  left: number;
+  bottom: number;
+}
+
 export function ModelSelector({
   selectedModel,
+  selectedThinkingEffort = null,
   models,
   onSelect,
   disabled = false,
@@ -79,6 +102,7 @@ export function ModelSelector({
   const isMobile = useIsMobile();
   const [isOpen, setIsOpen] = useState(false);
   const [isSubmenuOpen, setIsSubmenuOpen] = useState(false);
+  const [effortFlyout, setEffortFlyout] = useState<EffortFlyoutAnchor | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
   // Element that had focus when the phone sheet opened (the composer
@@ -109,6 +133,7 @@ export function ModelSelector({
     restoreFocusRef.current = null;
     setIsOpen(false);
     setIsSubmenuOpen(false);
+    setEffortFlyout(null);
     onOpenChangeRef.current?.(false);
   }, []);
 
@@ -152,10 +177,16 @@ export function ModelSelector({
     sheetScrollTargetRef.current?.scrollIntoView({ block: 'center' });
   }, [isOpen, isMobile]);
 
-  const handlePick = useCallback((modelId: string) => {
-    onSelect(modelId);
+  const handlePick = useCallback((modelId: string, thinkingEffort: string | null) => {
+    onSelect(modelId, thinkingEffort);
     close();
   }, [onSelect, close]);
+
+  // Open the thinking flyout beside a model row (desktop "All models" list).
+  const openEffortFlyout = useCallback((modelId: string, row: HTMLElement) => {
+    const rect = row.getBoundingClientRect();
+    setEffortFlyout({ modelId, left: rect.right, bottom: window.innerHeight - rect.bottom });
+  }, []);
 
   // The admin's top-level picks for this visibility, limited to what is
   // actually selectable here.
@@ -175,21 +206,37 @@ export function ModelSelector({
       ? ' (not allowed here)'
       : ' (no credentials)';
   const triggerLabel = labelOverride
-    ?? (getModelDisplayName(selectedModel) + (selectionMissing ? missingSuffix : ''));
+    ?? (formatModelPick(selectedModel, selectedThinkingEffort) + (selectionMissing ? missingSuffix : ''));
 
   // The current selection when it isn't offered, heading the full list.
   const missingSelectionItem = selectionMissing && (
     <ModelMenuItem
       label={getModelDisplayName(selectedModel) + missingSuffix}
       selected
-      onClick={() => handlePick(selectedModel)}
+      onClick={() => handlePick(selectedModel, selectedThinkingEffort)}
     />
   );
+
+  // A slotted pick is "the selection" when both its model and its fixed
+  // level match what the conversation runs at.
+  const isPickSelected = (pick: ModelInfo) =>
+    pick.id === selectedModel && (pick.slotEffort ?? null) === (selectedThinkingEffort ?? null);
+
+  // Sublabel of a slotted pick: the model name under a descriptor, with the
+  // fixed level after it when the admin set one.
+  const pickSub = (pick: ModelInfo): string | undefined => {
+    const level = pick.slotEffort ? formatThinkingEffort(pick.slotEffort) : null;
+    if (pick.descriptor) return level ? `${pick.name} · ${level}` : pick.name;
+    return level ? `${level} thinking` : undefined;
+  };
 
   // In the phone sheet the top-level picks sit at the top of the list, so a
   // slotted selection is already on screen; only a selection that appears
   // solely under "All models" needs scrolling to.
-  const selectionIsTopLevel = topLevel.some((t) => t.id === selectedModel);
+  const selectionIsTopLevel = topLevel.some(isPickSelected);
+
+  const effortLabel = (model: ModelInfo, effort: string) =>
+    formatThinkingEffort(effort) + (effort === model.defaultThinkingEffort ? ' (default)' : '');
 
   const sheet = (
     <div
@@ -216,23 +263,42 @@ export function ModelSelector({
           <ModelMenuItem
             key={pick.id}
             label={pick.descriptor || pick.name}
-            sub={pick.descriptor ? pick.name : undefined}
-            selected={pick.id === selectedModel}
-            onClick={() => handlePick(pick.id)}
+            sub={pickSub(pick)}
+            selected={isPickSelected(pick)}
+            onClick={() => handlePick(pick.id, pick.slotEffort)}
           />
         ))}
         {topLevel.length > 0 && <div className="model-sheet-heading">All models</div>}
         {missingSelectionItem}
         {models.map((model) => (
-          <ModelMenuItem
-            key={model.id}
-            label={model.name}
-            selected={model.id === selectedModel}
-            itemRef={model.id === selectedModel && !selectionIsTopLevel
-              ? sheetScrollTargetRef
-              : undefined}
-            onClick={() => handlePick(model.id)}
-          />
+          <div key={model.id} className="model-sheet-entry">
+            <ModelMenuItem
+              label={model.name}
+              selected={model.id === selectedModel}
+              itemRef={model.id === selectedModel && !selectionIsTopLevel
+                ? sheetScrollTargetRef
+                : undefined}
+              onClick={() => handlePick(model.id, null)}
+            />
+            {model.thinkingEfforts.length > 0 && (
+              <div className="model-effort-chips" role="group" aria-label={`Thinking level for ${model.name}`}>
+                {model.thinkingEfforts.map((effort) => {
+                  const chipSelected = model.id === selectedModel && effort === selectedThinkingEffort;
+                  return (
+                    <button
+                      key={effort}
+                      type="button"
+                      className={'model-effort-chip' + (chipSelected ? ' model-effort-chip-selected' : '')}
+                      aria-pressed={chipSelected}
+                      onClick={() => handlePick(model.id, effort)}
+                    >
+                      {effortLabel(model, effort)}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         ))}
       </div>
     </div>
@@ -269,9 +335,9 @@ export function ModelSelector({
               key={pick.id}
               role="menuitem"
               label={pick.descriptor || pick.name}
-              sub={pick.descriptor ? pick.name : undefined}
-              selected={pick.id === selectedModel}
-              onClick={() => handlePick(pick.id)}
+              sub={pickSub(pick)}
+              selected={isPickSelected(pick)}
+              onClick={() => handlePick(pick.id, pick.slotEffort)}
               onMouseEnter={() => setIsSubmenuOpen(false)}
             />
           ))}
@@ -299,23 +365,69 @@ export function ModelSelector({
               </svg>
             </button>
             {isSubmenuOpen && (
-              <div className="model-submenu" role="menu">
+              <div
+                className="model-submenu"
+                role="menu"
+                // The thinking flyout is pinned to its row's screen position;
+                // scrolling the list would leave it behind, so drop it.
+                onScroll={() => setEffortFlyout(null)}
+              >
                 {missingSelectionItem}
-                {models.map((model) => (
-                  <ModelMenuItem
-                    key={model.id}
-                    role="menuitem"
-                    label={model.name}
-                    selected={model.id === selectedModel}
-                    // The submenu scrolls when the model list outgrows its
-                    // max-height; bring the current selection into view on
-                    // open so it isn't hidden below the fold.
-                    itemRef={model.id === selectedModel
-                      ? (el) => el?.scrollIntoView({ block: 'nearest' })
-                      : undefined}
-                    onClick={() => handlePick(model.id)}
-                  />
-                ))}
+                {models.map((model) => {
+                  const hasEfforts = model.thinkingEfforts.length > 0;
+                  const flyoutOpen = effortFlyout?.modelId === model.id;
+                  return (
+                    <div
+                      key={model.id}
+                      className="model-effort-anchor"
+                      onMouseEnter={hasEfforts
+                        ? (e) => openEffortFlyout(model.id, e.currentTarget)
+                        : () => setEffortFlyout(null)}
+                      onMouseLeave={hasEfforts ? () => setEffortFlyout(null) : undefined}
+                    >
+                      <ModelMenuItem
+                        role="menuitem"
+                        label={model.name}
+                        sub={hasEfforts && model.id === selectedModel && selectedThinkingEffort
+                          ? `${formatThinkingEffort(selectedThinkingEffort)} thinking`
+                          : undefined}
+                        selected={model.id === selectedModel}
+                        open={flyoutOpen}
+                        submenu={hasEfforts}
+                        // The submenu scrolls when the model list outgrows its
+                        // max-height; bring the current selection into view on
+                        // open so it isn't hidden below the fold.
+                        itemRef={model.id === selectedModel
+                          ? (el) => el?.scrollIntoView({ block: 'nearest' })
+                          : undefined}
+                        // The row itself picks the model at its default level;
+                        // the chevron only opens the level flyout.
+                        onClick={() => handlePick(model.id, null)}
+                        onChevronClick={hasEfforts
+                          ? (e) => openEffortFlyout(model.id, e.currentTarget.closest('.model-effort-anchor') as HTMLElement)
+                          : undefined}
+                      />
+                      {flyoutOpen && effortFlyout && (
+                        <div
+                          className="model-submenu model-effort-submenu"
+                          role="menu"
+                          aria-label={`Thinking level for ${model.name}`}
+                          style={{ left: effortFlyout.left, bottom: effortFlyout.bottom }}
+                        >
+                          {model.thinkingEfforts.map((effort) => (
+                            <ModelMenuItem
+                              key={effort}
+                              role="menuitem"
+                              label={effortLabel(model, effort)}
+                              selected={model.id === selectedModel && effort === selectedThinkingEffort}
+                              onClick={() => handlePick(model.id, effort)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -334,18 +446,25 @@ interface ModelMenuItemProps {
   onMouseEnter?: () => void;
   role?: string;
   itemRef?: Ref<HTMLButtonElement>;
+  /** Row that opens a further flyout: shows a chevron (clickable on its own). */
+  submenu?: boolean;
+  /** Whether that flyout is open (hover styling, aria-expanded). */
+  open?: boolean;
+  onChevronClick?: (event: React.MouseEvent<HTMLSpanElement>) => void;
 }
 
 /** One pickable model row, shared by the desktop menus and the phone sheet. */
 function ModelMenuItem({
-  label, sub, selected, onClick, onMouseEnter, role, itemRef,
+  label, sub, selected, onClick, onMouseEnter, role, itemRef, submenu, open, onChevronClick,
 }: ModelMenuItemProps) {
   return (
     <button
       type="button"
       role={role}
       aria-current={selected ? 'true' : undefined}
-      className={'model-menu-item' + (selected ? ' model-menu-item-selected' : '')}
+      aria-haspopup={submenu ? 'menu' : undefined}
+      aria-expanded={submenu ? Boolean(open) : undefined}
+      className={'model-menu-item' + (selected ? ' model-menu-item-selected' : '') + (open ? ' model-menu-item-open' : '')}
       ref={itemRef}
       onClick={onClick}
       onMouseEnter={onMouseEnter}
@@ -355,6 +474,16 @@ function ModelMenuItem({
         {sub && <span className="model-menu-item-sub">{sub}</span>}
       </span>
       {selected && <CheckIcon />}
+      {submenu && (
+        <span
+          className="model-menu-item-chevron"
+          onClick={onChevronClick && ((e) => { e.stopPropagation(); onChevronClick(e); })}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        </span>
+      )}
     </button>
   );
 }

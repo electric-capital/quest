@@ -485,10 +485,14 @@ def test_helper_lookups(store):
         "provider_label": "OpenRouter",
         "max_input_tokens": ip.DEFAULT_INSTANCE_CONTEXT_LENGTH,
         "deprecated": False,
+        # No ``reasoning`` in the snapshot: no thinking sublevel
+        "thinking_efforts": [],
+        "default_thinking_effort": None,
         # Admin Model Selection fields (config/model_selection.py), unset here
         "slot": None,
         "public_slot": None,
         "descriptor": "",
+        "slot_effort": None,
         "allow_private": True,
         "allow_public": True,
     }
@@ -1136,11 +1140,75 @@ def test_catalog_normalizes_entries_and_caches(monkeypatch):
     assert second["models"][0] == ds
     assert second["models"][1] == free
     assert catalog.get_catalog(refresh=True) and fetches == [1, 1]
+    # No reasoning object on either row: no ``reasoning`` key in the snapshot
+    assert ds["reasoning"] is None
     assert catalog.catalog_snapshot(first["models"], "free/model") == {
         "name": "free/model", "context_length": None, "max_completion_tokens": None,
         "pricing": {"prompt": 0.0, "completion": 0.0},
     }
     assert catalog.catalog_snapshot(first["models"], "nope") is None
+
+
+def test_catalog_keeps_reasoning_object_for_thinking_levels():
+    import chat.llm.openrouter_catalog as catalog
+
+    row = {
+        "id": "openai/gpt-5", "name": "GPT-5", "context_length": 400000,
+        "pricing": {"prompt": "0.00000125", "completion": "0.00001"},
+        "reasoning": {
+            "mandatory": True, "supported_efforts": ["High", "medium", "low", "minimal", 7],
+            "default_effort": "Medium", "extra": "dropped",
+        },
+    }
+    entry = catalog._normalize_entry(row)
+    assert entry["reasoning"] == {
+        "mandatory": True, "supported_efforts": ["high", "medium", "low", "minimal"],
+        "default_effort": "medium",
+    }
+    # Survives the cache round trip and rides on the snapshot an admin stores
+    assert catalog._cached_entry(entry)["reasoning"] == entry["reasoning"]
+    assert catalog.catalog_snapshot([entry], "openai/gpt-5")["reasoning"] == entry["reasoning"]
+    # Malformed / absent objects read as "no reasoning support"
+    assert catalog.normalize_reasoning("yes") is None
+    assert catalog.normalize_reasoning(None) is None
+    assert catalog.normalize_reasoning({"mandatory": "true"}) == {}
+
+
+def test_instance_model_keeps_reasoning_and_spec_derives_levels(store):
+    from chat.llm.config import resolve_model
+
+    ip.upsert_instance(_instance("openrouter", label="OpenRouter", models=[
+        {"id": "openai/gpt-5", "reasoning": {
+            "mandatory": True, "supported_efforts": ["high", "medium", "low", "minimal"],
+            "default_effort": "medium", "junk": 1,
+        }},
+        {"id": "anthropic/claude-opus-4.8", "reasoning": {
+            "mandatory": False, "default_enabled": False,
+            "supported_efforts": ["max", "xhigh", "high", "medium", "low"],
+            "default_effort": "high",
+        }},
+        {"id": "deepseek/deepseek-r1", "reasoning": {"mandatory": True}},
+        {"id": "vendor/plain", "reasoning": None},
+    ]))
+    models = {m["id"]: m for m in ip.get_instance("openrouter")["models"]}
+    assert models["openai/gpt-5"]["reasoning"] == {
+        "mandatory": True, "supported_efforts": ["high", "medium", "low", "minimal"],
+        "default_effort": "medium",
+    }
+    assert "reasoning" not in models["vendor/plain"]
+
+    gpt = resolve_model("openrouter:openai/gpt-5")
+    assert gpt.thinking_efforts == ("minimal", "low", "medium", "high")
+    assert gpt.thinking_effort == "medium"
+    # Optional reasoning adds "none"; off-by-default makes it the default
+    opus = resolve_model("openrouter:anthropic/claude-opus-4.8")
+    assert opus.thinking_efforts == ("none", "low", "medium", "high", "xhigh", "max")
+    assert opus.thinking_effort == "none"
+    # Reasoning-capable without a published list: the generic trio, no default
+    r1 = resolve_model("openrouter:deepseek/deepseek-r1")
+    assert r1.thinking_efforts == ("low", "medium", "high")
+    assert r1.thinking_effort is None
+    assert resolve_model("openrouter:vendor/plain").thinking_efforts == ()
 
 
 def test_catalog_fetch_failure_serves_stale_or_empty(monkeypatch):

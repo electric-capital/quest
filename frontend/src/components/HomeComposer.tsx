@@ -68,6 +68,7 @@ export function HomeComposer({ onNewConversation }: HomeComposerProps) {
   const { appName } = useAppConfig();
   const {
     getModelForConversation,
+    getThinkingEffortForConversation,
     setDraftModelForConversation,
     refreshDefaultModel,
   } = useConversationModels();
@@ -105,7 +106,7 @@ export function HomeComposer({ onNewConversation }: HomeComposerProps) {
       // Re-key the draft entry to the freshly-resolved server default so
       // getModelForConversation(HOME_DRAFT_KEY) returns it rather than a stale
       // draft selection left over from a previous mount / the other context.
-      setDraftModelForConversation(HOME_DRAFT_KEY, resolved, modelVisibility);
+      setDraftModelForConversation(HOME_DRAFT_KEY, resolved.model, modelVisibility, resolved.thinkingEffort);
     });
     return () => {
       cancelled = true;
@@ -144,6 +145,7 @@ export function HomeComposer({ onNewConversation }: HomeComposerProps) {
       flags?: string[],
       files?: File[],
       imageFiles?: File[],
+      thinkingEffort: string | null = null,
     ) => {
       const trimmed = text.trim();
       const hasImages = !!imageFiles && imageFiles.length > 0;
@@ -205,6 +207,7 @@ export function HomeComposer({ onNewConversation }: HomeComposerProps) {
           // navigating, so ChatPanel's auto-send effect sees a fully-populated
           // state on first mount.
           const effectiveModel = model || getModelForConversation(HOME_DRAFT_KEY);
+          const effectiveEffort = model ? thinkingEffort : getThinkingEffortForConversation(HOME_DRAFT_KEY);
           const queuedSkills = skillIds && skillIds.length > 0
             ? skillIds
             : getQueuedSkillsForConversation(HOME_DRAFT_KEY);
@@ -224,6 +227,7 @@ export function HomeComposer({ onNewConversation }: HomeComposerProps) {
             conversationId: newId,
             prompt: trimmed,
             model: effectiveModel,
+            thinkingEffort: effectiveEffort,
             skillIds: effectiveSkills,
             flags: flags ?? [],
             isPublicProject,
@@ -262,6 +266,7 @@ export function HomeComposer({ onNewConversation }: HomeComposerProps) {
       drilledProjectId,
       isPublicProject,
       getModelForConversation,
+      getThinkingEffortForConversation,
       getQueuedSkillsForConversation,
       setQueuedSkillsForConversation,
       setLoadedSkillsForConversation,
@@ -293,7 +298,7 @@ export function HomeComposer({ onNewConversation }: HomeComposerProps) {
               skipSendLocks
               deferImageUpload
               isPublicProject={isPublicProject}
-              onModelChange={(m) => setDraftModelForConversation(HOME_DRAFT_KEY, m, modelVisibility)}
+              onModelChange={(m, effort) => setDraftModelForConversation(HOME_DRAFT_KEY, m, modelVisibility, effort)}
             />
           </div>
         </div>

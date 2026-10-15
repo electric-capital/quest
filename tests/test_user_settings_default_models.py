@@ -62,10 +62,22 @@ def test_the_two_keys_are_independent():
     assert "public_default_model" not in _put(default_model="known-private")
 
 
+@pytest.mark.parametrize("key", ["default_thinking_effort", "public_default_thinking_effort"])
+def test_thinking_effort_is_normalized_and_cleared_by_empty_string(key):
+    # Stored lower-cased and trimmed; validated against the model's levels
+    # only when a turn uses it, so any short name is accepted here.
+    assert _put(**{key: " High "}) == {key: "high"}
+    assert _put(**{key: ""}) == {key: None}
+    assert _put(**{key: "x" * 40}) == {key: "x" * 20}
+
+
 def test_me_surfaces_both_values():
     user = {
         **_USER,
-        "settings": {"default_model": "known-private", "public_default_model": "known-public"},
+        "settings": {
+            "default_model": "known-private", "public_default_model": "known-public",
+            "default_thinking_effort": "high",
+        },
     }
     with patch("api.instructions.get_user_connected_services", lambda u: {"google_services": False}), \
          patch("chat.routes.user.is_admin", lambda email: False), \
@@ -73,3 +85,5 @@ def test_me_surfaces_both_values():
         info = _run(get_current_user_info(user=user))
     assert info["default_model"] == "known-private"
     assert info["public_default_model"] == "known-public"
+    assert info["default_thinking_effort"] == "high"
+    assert info["public_default_thinking_effort"] is None

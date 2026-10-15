@@ -110,6 +110,9 @@ class AnthropicSession:
     tools: list[dict]
     messages: list[dict] = field(default_factory=list)
     last_usage: dict = field(default_factory=dict)
+    # The user's thinking level for the conversation (``"none"`` = thinking
+    # off); None runs at the registry entry's ``thinking_effort``.
+    thinking_effort: str | None = None
     # When False, no cache_control breakpoints are added at the API-call
     # boundary, so the request writes nothing to the prompt cache. Used for
     # one-off sessions (e.g. the compaction summarizer) whose prompt will
@@ -306,6 +309,7 @@ class AnthropicProvider(LLMProvider):
         system_prompt: str,
         tools: list[ToolSpec],
         history: list | None = None,
+        thinking_effort: str | None = None,
     ) -> Any:
         """Create an Anthropic session (stateless container).
 
@@ -325,9 +329,15 @@ class AnthropicProvider(LLMProvider):
             system_prompt=system_prompt,
             tools=anthropic_tools,
             messages=list(history) if history else [],
+            thinking_effort=thinking_effort,
             fallback_state=fallback_state,
         )
         return session
+
+    def set_thinking_effort(self, session: Any, thinking_effort: str | None) -> bool:
+        # Stateless session: the level is only read at the request boundary.
+        session.thinking_effort = thinking_effort
+        return True
 
     async def send_message_stream(
         self,
@@ -451,16 +461,19 @@ class AnthropicProvider(LLMProvider):
             "messages": cached_messages,
         }
 
-        # Adaptive thinking, gated per model by the registry. Models with a
-        # ``thinking_effort`` entry get ``thinking: adaptive`` plus the
-        # matching ``output_config.effort``; models without it keep the
-        # historical thinking-off behavior (omitting ``thinking`` disables
-        # thinking on Opus 4.7/4.8). ``thinking.display`` stays at its
-        # default ("omitted"), so thinking blocks stream with empty text --
-        # they are still accumulated below because the API requires them to
-        # be echoed back verbatim (with their signature) on later turns.
-        effort = entry.get("thinking_effort")
-        if effort:
+        # Adaptive thinking: the user's pick for the conversation
+        # (``session.thinking_effort``, validated against the registry's
+        # ``thinking_efforts``) or, when none, the registry entry's
+        # ``thinking_effort``. A level gets ``thinking: adaptive`` plus the
+        # matching ``output_config.effort``; no level -- or the explicit
+        # ``none`` -- keeps the historical thinking-off behavior (omitting
+        # ``thinking`` disables thinking on Opus 4.7/4.8). ``thinking.display``
+        # stays at its default ("omitted"), so thinking blocks stream with
+        # empty text -- they are still accumulated below because the API
+        # requires them to be echoed back verbatim (with their signature)
+        # on later turns.
+        effort = session.thinking_effort or entry.get("thinking_effort")
+        if effort and effort != "none":
             api_kwargs["thinking"] = {"type": "adaptive"}
             api_kwargs["output_config"] = {"effort": effort}
         if session.tools:

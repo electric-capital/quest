@@ -20,6 +20,13 @@ enabled, non-deprecated model) and persisted as JSON in ``DATA_DIR /
   sublabel. An empty descriptor shows the model name alone. Admins put
   cost markers or anything else they like in here; the app never parses
   it.
+- ``slot_effort`` -- the thinking level a slotted pick is fixed to (one of
+  the model spec's ``thinking_efforts``, see chat/llm/config.py), ``None``
+  for the model's default. Picking the slotted entry in either top level
+  starts the conversation at that level; the "All models" list offers the
+  model's levels as a sublevel instead. Stored as a short lower-cased
+  name; the admin endpoint rejects a level the model does not list, and
+  the catalog projection drops one it no longer lists.
 - ``allow_private`` / ``allow_public`` -- whether the model may be used in
   private conversations (everything that is not in a public project:
   standalone chats, project chats, routines, Slack, subagent and inference
@@ -72,6 +79,10 @@ MAX_TOP_LEVEL_SLOTS = 5
 # Descriptor length cap (the menu row is narrow; the UI ellipsizes anyway).
 MAX_DESCRIPTOR_LENGTH = 60
 
+# Longest thinking level name stored (chat/llm/config.py keeps the same
+# cap; the module stays standard-library-only so it is repeated here).
+MAX_SLOT_EFFORT_LENGTH = 20
+
 # The two slot fields, keyed by the visibility whose menu they shape.
 SLOT_FIELDS: dict[str, str] = {"private": "slot", "public": "public_slot"}
 
@@ -80,6 +91,7 @@ UNSET_ENTRY: dict = {
     "slot": None,
     "public_slot": None,
     "descriptor": "",
+    "slot_effort": None,
     "allow_private": True,
     "allow_public": True,
 }
@@ -105,8 +117,9 @@ def normalize_entry(value) -> dict:
 
     Out-of-range slots become ``None``, non-string descriptors become
     ``""`` (strings are trimmed and truncated to ``MAX_DESCRIPTOR_LENGTH``),
-    non-bool allow flags fall back to allowed, and a slot for a visibility
-    the model is not allowed in is cleared. Never raises.
+    a slot effort becomes a trimmed lower-cased name or ``None``, non-bool
+    allow flags fall back to allowed, and a slot for a visibility the model
+    is not allowed in is cleared. Never raises.
     """
     if not isinstance(value, dict):
         return dict(UNSET_ENTRY)
@@ -114,10 +127,15 @@ def normalize_entry(value) -> dict:
     allow_public = value.get("allow_public", True) is not False
     descriptor = value.get("descriptor")
     descriptor = descriptor.strip()[:MAX_DESCRIPTOR_LENGTH] if isinstance(descriptor, str) else ""
+    slot_effort = value.get("slot_effort")
+    slot_effort = (
+        slot_effort.strip().lower()[:MAX_SLOT_EFFORT_LENGTH] if isinstance(slot_effort, str) else ""
+    )
     return {
         "slot": _normalize_slot(value.get("slot")) if allow_private else None,
         "public_slot": _normalize_slot(value.get("public_slot")) if allow_public else None,
         "descriptor": descriptor,
+        "slot_effort": slot_effort or None,
         "allow_private": allow_private,
         "allow_public": allow_public,
     }

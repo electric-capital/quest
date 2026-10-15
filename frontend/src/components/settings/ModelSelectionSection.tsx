@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { fetchModelSelection, updateModelSelection } from '../../api/client';
 import type { ModelSelectionListResponse, ModelSelectionRow } from '../../api/types';
+import { formatThinkingEffort } from '../../constants/models';
 import type { ModelVisibility } from '../../constants/models';
 import { useAppConfig } from '../../contexts/AppConfigContext';
 import { SaveActions } from './ServiceCredentialsSection';
@@ -17,6 +18,8 @@ interface Draft {
   slot: number | null;
   publicSlot: number | null;
   descriptor: string;
+  // Thinking level the slotted pick is fixed to (null = the model's default).
+  slotEffort: string | null;
   allowPrivate: boolean;
   allowPublic: boolean;
 }
@@ -26,6 +29,7 @@ function draftOf(row: ModelSelectionRow): Draft {
     slot: row.slot,
     publicSlot: row.public_slot,
     descriptor: row.descriptor,
+    slotEffort: row.slot_effort,
     allowPrivate: row.allow_private,
     allowPublic: row.allow_public,
   };
@@ -35,8 +39,17 @@ function sameDraft(a: Draft, b: Draft): boolean {
   return a.slot === b.slot
     && a.publicSlot === b.publicSlot
     && a.descriptor === b.descriptor
+    && a.slotEffort === b.slotEffort
     && a.allowPrivate === b.allowPrivate
     && a.allowPublic === b.allowPublic;
+}
+
+/** Sublabel of a slotted pick in the previews: the model name under a
+ *  descriptor, with the fixed thinking level after it when one is set. */
+function previewSub(row: ModelSelectionRow, draft: Draft): string | undefined {
+  const level = draft.slotEffort ? formatThinkingEffort(draft.slotEffort) : null;
+  if (draft.descriptor) return level ? `${row.display_name} · ${level}` : row.display_name;
+  return level ? `${level} thinking` : undefined;
 }
 
 function slotOf(draft: Draft, visibility: ModelVisibility): number | null {
@@ -88,7 +101,7 @@ function ModelMenuPreview({
             >
               <span className="model-menu-item-text">
                 <span className="model-menu-item-label">{draft.descriptor || row.display_name}</span>
-                {draft.descriptor && <span className="model-menu-item-sub">{row.display_name}</span>}
+                {previewSub(row, draft) && <span className="model-menu-item-sub">{previewSub(row, draft)}</span>}
               </span>
             </div>
           );
@@ -176,6 +189,10 @@ export function ModelSelectionSection() {
     setDrafts((prev) => ({ ...prev, [modelId]: { ...prev[modelId], descriptor } }));
   }, []);
 
+  const setSlotEffort = useCallback((modelId: string, slotEffort: string | null) => {
+    setDrafts((prev) => ({ ...prev, [modelId]: { ...prev[modelId], slotEffort } }));
+  }, []);
+
   // Unticking a visibility also vacates that menu's slot (the server would
   // clear it anyway); re-ticking does not restore it.
   const setAllowed = useCallback((modelId: string, visibility: ModelVisibility, allowed: boolean) => {
@@ -207,6 +224,7 @@ export function ModelSelectionSection() {
             slot: draft.slot,
             public_slot: draft.publicSlot,
             descriptor: draft.descriptor.trim(),
+            slot_effort: draft.slotEffort,
             allow_private: draft.allowPrivate,
             allow_public: draft.allowPublic,
           };
@@ -242,7 +260,7 @@ export function ModelSelectionSection() {
   }, [data]);
 
   const slotOptions = data ? Array.from({ length: data.max_slots }, (_, i) => i + 1) : [];
-  const columnCount = 6;
+  const columnCount = 7;
 
   return (
     <div className="settings-section">
@@ -250,11 +268,12 @@ export function ModelSelectionSection() {
       <p className="settings-description">
         How the enabled models are offered to users. Pin up to {data?.max_slots ?? 5} models
         to the top level of the composer's model menu with a descriptor of your choice
-        (everything else stays under "All models"). Public-project conversations get their
-        own top level, and each model can be allowed or blocked for private and for public
-        conversations. Models newly added to a provider configuration start out blocked
-        for private conversations — tick "Allowed" here to open them up. Applies to all
-        users. Admin only.
+        (everything else stays under "All models"), each fixed to a thinking level of the
+        model where it offers one; under "All models" users pick the level themselves.
+        Public-project conversations get their own top level, and each model can be allowed
+        or blocked for private and for public conversations. Models newly added to a
+        provider configuration start out blocked for private conversations — tick "Allowed"
+        here to open them up. Applies to all users. Admin only.
       </p>
       {loadError ? (
         <div className="svc-cred-load-error">{loadError}</div>
@@ -268,6 +287,7 @@ export function ModelSelectionSection() {
                 <tr className="model-selection-header-groups">
                   <th className="model-selection-col-model" rowSpan={2}>Model</th>
                   <th className="model-selection-col-descriptor" rowSpan={2} title="Label shown for the model in the top level of either menu">Descriptor</th>
+                  <th className="model-selection-col-effort" rowSpan={2} title="Thinking level the slotted pick runs at (models without levels have no choice)">Thinking</th>
                   <th colSpan={2} className="model-selection-header-group" title="Standalone and project conversations, routines, Slack and API runs">Private conversations</th>
                   <th colSpan={2} className="model-selection-header-group" title="Public-project conversations (internet-enabled sandbox)">Public conversations</th>
                 </tr>
@@ -291,6 +311,7 @@ export function ModelSelectionSection() {
                     busy={saveStatus === 'saving'}
                     onSlot={setSlot}
                     onDescriptor={setDescriptor}
+                    onSlotEffort={setSlotEffort}
                     onAllowed={setAllowed}
                   />
                 ))}
@@ -377,6 +398,7 @@ function GroupRows({
   busy,
   onSlot,
   onDescriptor,
+  onSlotEffort,
   onAllowed,
 }: {
   label: string;
@@ -388,6 +410,7 @@ function GroupRows({
   busy: boolean;
   onSlot: (modelId: string, visibility: ModelVisibility, slot: number | null) => void;
   onDescriptor: (modelId: string, descriptor: string) => void;
+  onSlotEffort: (modelId: string, slotEffort: string | null) => void;
   onAllowed: (modelId: string, visibility: ModelVisibility, allowed: boolean) => void;
 }) {
   return (
@@ -428,6 +451,27 @@ function GroupRows({
             />
           </td>
         );
+        // Models without thinking levels get a disabled "—": there is
+        // nothing to fix the pick to.
+        const effortCell = (
+          <td className="model-selection-col-effort">
+            <select
+              className="model-selection-slot-select"
+              value={draft.slotEffort ?? ''}
+              disabled={busy || row.thinking_efforts.length === 0}
+              aria-label={`Thinking level for ${row.display_name}`}
+              title={row.thinking_efforts.length === 0 ? 'This model has no thinking levels' : undefined}
+              onChange={(e) => onSlotEffort(row.id, e.target.value === '' ? null : e.target.value)}
+            >
+              <option value="">{row.thinking_efforts.length === 0 ? '—' : 'Default'}</option>
+              {row.thinking_efforts.map((effort) => (
+                <option key={effort} value={effort}>
+                  {formatThinkingEffort(effort)}{effort === row.default_thinking_effort ? ' (default)' : ''}
+                </option>
+              ))}
+            </select>
+          </td>
+        );
         const slotCell = (visibility: ModelVisibility) => (
           <td className="model-selection-col-slot">
             <SlotSelect
@@ -455,6 +499,7 @@ function GroupRows({
           <tr key={row.id} className={`model-selection-row${row.available ? '' : ' unavailable'}`}>
             {modelCell}
             {descriptorCell}
+            {effortCell}
             {slotCell('private')}
             {allowedCell('private')}
             {slotCell('public')}

@@ -18,23 +18,57 @@ export interface ModelInfo {
    */
   deprecated?: boolean;
   /**
+   * Thinking levels the model menu offers as a sublevel under the model
+   * (`thinking_efforts` on the catalog entry, lowest first; 'none' =
+   * thinking off; empty = the model has no choice), and the level the
+   * model runs at when the conversation picks none (null = the provider's
+   * own unnamed default).
+   */
+  thinkingEfforts: string[];
+  defaultThinkingEffort: string | null;
+  /**
    * Admin Model Selection (Settings > Model Selection, persisted server-side
    * in data/model_selection.json and delivered on every catalog entry of
    * GET /app/api/config): the composer menu's top-level slot for private
    * and for public-project conversations (null = only listed under "All
-   * models"), the label shown for a slotted model, and whether the model
-   * may be used in private / public-project conversations (both true, and
-   * publicSlot null, while public projects are off server-wide).
+   * models"), the label shown for a slotted model, the thinking level the
+   * slotted pick is fixed to (null = the model's default), and whether the
+   * model may be used in private / public-project conversations (both
+   * true, and publicSlot null, while public projects are off server-wide).
    */
   slot: number | null;
   publicSlot: number | null;
   descriptor: string;
+  slotEffort: string | null;
   allowPrivate: boolean;
   allowPublic: boolean;
 }
 
 /** Conversation visibility a model list is being offered for. */
 export type ModelVisibility = 'private' | 'public';
+
+/** A model choice for a conversation: the model plus the thinking level
+ *  picked for it (null = the model's default level). */
+export interface ModelPick {
+  model: string;
+  thinkingEffort: string | null;
+}
+
+/** Menu labels for the thinking levels (`THINKING_EFFORT_ORDER` in
+ *  chat/llm/config.py); a level outside this map shows capitalised. */
+const THINKING_EFFORT_LABELS: Record<string, string> = {
+  none: 'Off',
+  minimal: 'Minimal',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra high',
+  max: 'Max',
+};
+
+export function formatThinkingEffort(effort: string): string {
+  return THINKING_EFFORT_LABELS[effort] ?? effort.charAt(0).toUpperCase() + effort.slice(1);
+}
 
 /**
  * Pre-config-load fallback catalog: the fixed Vertex models, hand-mirrored
@@ -44,7 +78,12 @@ export type ModelVisibility = 'private' | 'public';
  * and replaces this list via setModelCatalog(); nothing else should read
  * BUILTIN_MODELS directly.
  */
-const UNSET_SELECTION = { slot: null, publicSlot: null, descriptor: '', allowPrivate: true, allowPublic: true };
+const UNSET_SELECTION = {
+  slot: null, publicSlot: null, descriptor: '', slotEffort: null, allowPrivate: true, allowPublic: true,
+  // The thinking levels arrive with the live catalog; nothing is offered
+  // before it (the model menu shows no sublevel on the pre-config paint).
+  thinkingEfforts: [] as string[], defaultThinkingEffort: null,
+};
 
 const BUILTIN_MODELS: ModelInfo[] = ([
   { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', provider: 'gemini', providerLabel: 'Gemini on Vertex', maxInputTokens: 1_000_000, deprecated: true },
@@ -104,14 +143,42 @@ export function setModelCatalog(models: AppModelInfo[] | undefined | null): void
       providerLabel: m.provider_label || m.provider,
       maxInputTokens: m.max_input_tokens || 0,
       deprecated: m.deprecated === true,
+      thinkingEfforts: Array.isArray(m.thinking_efforts)
+        ? m.thinking_efforts.filter((e): e is string => typeof e === 'string' && e !== '')
+        : [],
+      defaultThinkingEffort: typeof m.default_thinking_effort === 'string' ? m.default_thinking_effort : null,
       slot: typeof m.slot === 'number' ? m.slot : null,
       publicSlot: typeof m.public_slot === 'number' ? m.public_slot : null,
       descriptor: typeof m.descriptor === 'string' ? m.descriptor : '',
+      slotEffort: typeof m.slot_effort === 'string' ? m.slot_effort : null,
       allowPrivate: m.allow_private !== false,
       allowPublic: m.allow_public !== false,
     });
   }
   if (next.length > 0) catalog = next;
+}
+
+/** The thinking levels offered for a model (empty when it has none or is unknown). */
+export function getThinkingEfforts(modelId: string): string[] {
+  return getModelInfo(modelId)?.thinkingEfforts ?? [];
+}
+
+/**
+ * A stored / requested thinking level, kept only when the model currently
+ * lists it; otherwise null (the model's default). The server applies the
+ * same rule per turn, so a stale pick never errors, it just reverts.
+ */
+export function resolveThinkingEffortFor(modelId: string, effort: string | null | undefined): string | null {
+  return effort && getThinkingEfforts(modelId).includes(effort) ? effort : null;
+}
+
+/**
+ * The composer's trigger label for a pick: the model's display name, with
+ * the thinking level after it when one is picked ("Claude Opus 5.5 · High").
+ */
+export function formatModelPick(modelId: string, thinkingEffort: string | null): string {
+  const name = getModelDisplayName(modelId);
+  return thinkingEffort ? `${name} · ${formatThinkingEffort(thinkingEffort)}` : name;
 }
 
 /**

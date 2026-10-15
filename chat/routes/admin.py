@@ -1024,7 +1024,12 @@ def _model_selection_view() -> dict:
     for models that are currently disabled or removed stay in the file
     untouched by reads but are dropped by the next full-replacement PUT.
     """
-    from chat.llm.config import get_available_models, get_configured_models, list_model_specs
+    from chat.llm.config import (
+        get_available_models,
+        get_configured_models,
+        list_model_specs,
+        resolve_thinking_effort,
+    )
     from config.model_selection import (
         MAX_DESCRIPTOR_LENGTH,
         MAX_TOP_LEVEL_SLOTS,
@@ -1045,6 +1050,7 @@ def _model_selection_view() -> dict:
             unavailable_reason = "failing"
         else:
             unavailable_reason = "not_configured"
+        entry = selection_for(spec.id, selection)
         rows.append({
             "id": spec.id,
             "wire_id": spec.wire_id,
@@ -1053,7 +1059,13 @@ def _model_selection_view() -> dict:
             "instance_id": spec.instance_id,
             "available": unavailable_reason is None,
             "unavailable_reason": unavailable_reason,
-            **selection_for(spec.id, selection),
+            # The levels the slot-effort dropdown offers (empty = the model
+            # has no thinking sublevel) and the one marked as the default.
+            "thinking_efforts": list(spec.thinking_efforts),
+            "default_thinking_effort": spec.thinking_effort,
+            **entry,
+            # A stored level the model no longer lists reads as unset.
+            "slot_effort": resolve_thinking_effort(spec, entry["slot_effort"]),
         })
     return {
         "max_slots": MAX_TOP_LEVEL_SLOTS,
@@ -1077,6 +1089,8 @@ class ModelSelectionEntry(BaseModel):
     slot: Optional[int] = None
     public_slot: Optional[int] = None
     descriptor: str = ""
+    # Thinking level the slotted pick is fixed to; None = the model's default.
+    slot_effort: Optional[str] = None
     allow_private: bool = True
     allow_public: bool = True
 
@@ -1095,13 +1109,13 @@ async def admin_update_model_selection(
     """Replace the whole model selection (persisted in data/model_selection.json).
 
     Rejects unknown model ids, slots outside ``1..max_slots``, descriptors
-    over the length cap, and duplicate slots within a menu (400). A slot for
-    a visibility the model is not allowed in is cleared, not rejected.
-    Takes effect on the next GET /app/api/config fetch and the next
-    conversation turn.
+    over the length cap, a slot effort the model does not list, and
+    duplicate slots within a menu (400). A slot for a visibility the model
+    is not allowed in is cleared, not rejected. Takes effect on the next
+    GET /app/api/config fetch and the next conversation turn.
     """
     _require_admin(user)
-    from chat.llm.config import resolve_model
+    from chat.llm.config import resolve_model, resolve_thinking_effort
     from config.model_selection import (
         MAX_DESCRIPTOR_LENGTH,
         MAX_TOP_LEVEL_SLOTS,
@@ -1117,7 +1131,8 @@ async def admin_update_model_selection(
     for entry in body.models:
         if entry.id in entries:
             raise _bad(f"Model listed twice: {entry.id}")
-        if resolve_model(entry.id) is None:
+        spec = resolve_model(entry.id)
+        if spec is None:
             raise HTTPException(
                 status_code=400,
                 detail={"error": "unknown_model", "message": f"Unknown model: {entry.id}"},
@@ -1129,10 +1144,14 @@ async def admin_update_model_selection(
             raise _bad(
                 f"Descriptor longer than {MAX_DESCRIPTOR_LENGTH} characters: {entry.id}"
             )
+        slot_effort = (entry.slot_effort or "").strip().lower() or None
+        if slot_effort is not None and resolve_thinking_effort(spec, slot_effort) is None:
+            raise _bad(f"Thinking level {slot_effort!r} is not offered by {entry.id}")
         entries[entry.id] = {
             "slot": entry.slot,
             "public_slot": entry.public_slot,
             "descriptor": entry.descriptor,
+            "slot_effort": slot_effort,
             "allow_private": entry.allow_private,
             "allow_public": entry.allow_public,
         }

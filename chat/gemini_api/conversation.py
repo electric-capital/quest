@@ -503,6 +503,7 @@ async def run_conversation_turn(
     attachments: list[dict] | None = None,
     flags: list[str] | None = None,
     attached_filenames: list[str] | None = None,
+    thinking_effort: str | None = None,
 ) -> list[dict]:
     """Run an LLM conversation turn with streaming and tool execution.
 
@@ -536,6 +537,10 @@ async def run_conversation_turn(
             from the conversation row by the caller. NULL/empty means no flags.
             The ``nested_subagents`` flag enables 1st-level sub-agents to spawn
             one tier of 2nd-level sub-agents (see chat/conversation_flags.py).
+        thinking_effort: The thinking level the user picked in the composer's
+            model menu, or None for the model's default. A level the model's
+            spec does not list (``thinking_efforts``) is ignored, not an
+            error -- the catalog may have changed since the pick was made.
 
     Returns:
         List of structured message dicts for storage.
@@ -581,10 +586,22 @@ async def run_conversation_turn(
         # Remap deprecated models to their replacements
         model = _DEPRECATED_MODELS.get(model, model)
 
-        # Persist the effective model to the conversation record (no-op if already set)
+        # The requested thinking level only counts when the model lists it.
+        from chat.llm.config import resolve_model, resolve_thinking_effort
+        resolved_effort = resolve_thinking_effort(resolve_model(model), thinking_effort)
+        if thinking_effort and resolved_effort is None:
+            logger.warning(
+                "Ignoring thinking effort %r for model %s on conversation %s: "
+                "not one of the model's levels",
+                thinking_effort, model, conversation_id,
+            )
+        thinking_effort = resolved_effort
+
+        # Persist the effective model (and the level it was picked with) to
+        # the conversation record (no-op if already set)
         from db.conversation_store import update_conversation_model
         try:
-            await update_conversation_model(conversation_id, model)
+            await update_conversation_model(conversation_id, model, thinking_effort)
         except Exception:
             pass  # Non-fatal; model metadata is best-effort
 
@@ -946,7 +963,7 @@ async def run_conversation_turn(
         chat = get_or_create_chat(
             provider, user["id"], conversation_id, model, system_prompt,
             history=history, disk_history=disk_history, disk_provider=disk_provider,
-            tools=session_tools,
+            tools=session_tools, thinking_effort=thinking_effort,
         )
 
         # Self-heal histories corrupted by formerly-unserialized concurrent

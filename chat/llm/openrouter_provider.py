@@ -142,6 +142,9 @@ class OpenRouterSession:
     tools: list[dict]
     messages: list[dict] = field(default_factory=list)
     last_usage: dict = field(default_factory=dict)
+    # The user's thinking level for the conversation (``"none"`` =
+    # reasoning off); None sends no ``reasoning`` param at all.
+    thinking_effort: str | None = None
 
 
 class OpenRouterProvider(LLMProvider):
@@ -318,6 +321,7 @@ class OpenRouterProvider(LLMProvider):
         system_prompt: str,
         tools: list[ToolSpec],
         history: list | None = None,
+        thinking_effort: str | None = None,
     ) -> Any:
         """Create an OpenRouter session (stateless container)."""
         return OpenRouterSession(
@@ -325,7 +329,28 @@ class OpenRouterProvider(LLMProvider):
             system_prompt=system_prompt,
             tools=to_openai_tools(tools),
             messages=list(history) if history else [],
+            thinking_effort=thinking_effort,
         )
+
+    def set_thinking_effort(self, session: Any, thinking_effort: str | None) -> bool:
+        # Stateless session: the level is only read at the request boundary.
+        session.thinking_effort = thinking_effort
+        return True
+
+    @staticmethod
+    def _reasoning_param(thinking_effort: str | None) -> dict | None:
+        """The unified OpenRouter ``reasoning`` request object for a picked
+        level: ``{"effort": level}`` (the router maps it onto each model's
+        own effort names or token budget), ``{"enabled": false}`` for
+        ``none``, and nothing when no level was picked -- the model then
+        runs at the router's default for it. Only models whose catalog
+        snapshot advertises reasoning offer a level, so the param never
+        reaches a server that would reject it."""
+        if not thinking_effort:
+            return None
+        if thinking_effort == "none":
+            return {"enabled": False}
+        return {"effort": thinking_effort}
 
     async def send_message_stream(
         self,
@@ -365,13 +390,19 @@ class OpenRouterProvider(LLMProvider):
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        extra_body: dict = {}
         if self._is_openrouter:
             # OpenRouter-only extension: ask for the USD amount charged for
             # this request in the final usage chunk (``usage.cost``), which
             # the analytics layer prefers over its list-price estimate.
             # Self-hosted servers get a plain request (some reject unknown
             # top-level fields).
-            api_kwargs["extra_body"] = {"usage": {"include": True}}
+            extra_body["usage"] = {"include": True}
+        reasoning = self._reasoning_param(session.thinking_effort)
+        if reasoning is not None:
+            extra_body["reasoning"] = reasoning
+        if extra_body:
+            api_kwargs["extra_body"] = extra_body
         if session.tools:
             api_kwargs["tools"] = session.tools
 

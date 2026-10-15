@@ -51,13 +51,22 @@ logger = logging.getLogger(__name__)
 # card shows the upcoming date. Unlike a hand-set ``deprecated`` flag, runs
 # on the model fail at the provider after the date: it no longer exists.
 #
-# ``thinking_effort`` (Anthropic only) turns on adaptive thinking for the
-# model and sets the ``output_config.effort`` level sent with every request
-# ("low" | "medium" | "high" | "xhigh" | "max"). Models without the key run
+# ``thinking_effort`` is the thinking level a conversation runs at when the
+# user picks none ("low" | "medium" | "high" | "xhigh" | "max"). On
+# Anthropic models it turns on adaptive thinking and is sent as
+# ``output_config.effort`` with every request; models without the key run
 # with thinking off (the pre-4.6-era behavior: omitting the ``thinking``
-# param disables it on Opus 4.7/4.8). Keep the value constant for a model:
-# effort shapes the rendered prompt, so changing it between requests of one
-# conversation invalidates the Anthropic prompt cache.
+# param disables it on Opus 4.7/4.8). On Gemini models it only documents
+# the API default -- the provider sends no thinking config unless the user
+# picked a level. Keep the value constant for a model: effort shapes the
+# rendered prompt, so changing it between requests of one conversation
+# invalidates the Anthropic prompt cache (a user switching levels
+# mid-conversation pays that cache miss once, like a model switch).
+#
+# ``thinking_efforts`` lists the levels a user may pick for the model in
+# the composer's model menu (``THINKING_EFFORT_ORDER`` order; ``"none"`` =
+# thinking off, only for models that accept a request without thinking).
+# Absent = no sublevel: the model always runs at ``thinking_effort``.
 MODEL_REGISTRY: dict[str, dict[str, Any]] = {
     "gemini-3.1-pro-preview": {
         "provider": "gemini",
@@ -125,8 +134,8 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "discontinued_on": "2027-01-28",
     },
     # Released 2026-09-02 (1,048,576-token input window, 65,536 output,
-    # thinking low/medium/high -- ``minimal`` is rejected). Limits kept in
-    # line with the other Flash entries.
+    # thinking low/medium/high, default medium -- ``minimal`` is rejected).
+    # Limits kept in line with the other Flash entries.
     "gemini-3.8-flash": {
         "provider": "gemini",
         "backend": "vertex",
@@ -134,6 +143,8 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "vertex_model_id": "gemini-3.8-flash",
         "max_input_tokens": 1_000_000,
         "max_output_tokens": 65_000,
+        "thinking_effort": "medium",
+        "thinking_efforts": ["low", "medium", "high"],
     },
     # Released 2026-10-13 (GA on the global endpoint and the us/eu
     # multi-regions). Google's frontier model: ONE 1,048,576-token window
@@ -153,6 +164,8 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "vertex_model_id": "gemini-4-argon",
         "max_input_tokens": 1_000_000,
         "max_output_tokens": 65_000,
+        "thinking_effort": "medium",
+        "thinking_efforts": ["low", "medium", "high"],
     },
     "claude-haiku-4.5": {
         "provider": "anthropic",
@@ -179,6 +192,7 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "max_input_tokens": 1_000_000,
         "max_output_tokens": 128_000,
         "thinking_effort": "medium",
+        "thinking_efforts": ["low", "medium", "high", "xhigh", "max"],
         # New to Haiku: safety classifiers (cyber, frontier_llm, bio,
         # general_harms) that can decline a request. Anthropic runs no
         # server-side fallback for Haiku 5.5, so the client-side chain
@@ -217,6 +231,9 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "max_input_tokens": 1_000_000,
         "max_output_tokens": 128_000,
         "thinking_effort": "medium",
+        # Thinking can still be switched off on this model (omit the
+        # ``thinking`` param), hence the ``none`` level.
+        "thinking_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
     },
     "claude-sonnet-5": {
         "provider": "anthropic",
@@ -248,6 +265,7 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "max_input_tokens": 1_000_000,
         "max_output_tokens": 128_000,
         "thinking_effort": "high",
+        "thinking_efforts": ["low", "medium", "high", "xhigh", "max"],
         # Declines in more categories than Sonnet 5 (cyber, frontier_llm,
         # bio, reasoning_extraction, general_harms). Anthropic's own
         # server-side default retries cyber/frontier_llm declines on
@@ -291,6 +309,7 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "max_input_tokens": 1_000_000,
         "max_output_tokens": 128_000,
         "thinking_effort": "medium",
+        "thinking_efforts": ["low", "medium", "high", "xhigh", "max"],
         # Broader safety classifiers than Opus 5 (cyber + bio +
         # reasoning_extraction). Same client-side refusal-fallback chain.
         "refusal_fallback_models": ["claude-opus-4-8"],
@@ -309,6 +328,81 @@ def is_discontinued(entry: dict[str, Any], today: date | None = None) -> bool:
     if not discontinued_on:
         return False
     return (today or _today_utc()) >= date.fromisoformat(discontinued_on)
+
+
+# ---------------------------------------------------------------------------
+# Thinking effort levels
+# ---------------------------------------------------------------------------
+
+# Every level a model may list, lowest to highest. ``none`` is thinking
+# off; the rest are the effort names the providers accept (Anthropic
+# ``output_config.effort``, Gemini ``thinking_level``, OpenRouter
+# ``reasoning.effort``). Catalog levels outside this list keep their
+# catalog order after these.
+THINKING_EFFORT_ORDER: tuple[str, ...] = (
+    "none", "minimal", "low", "medium", "high", "xhigh", "max",
+)
+
+# Levels offered for a router model that advertises reasoning without an
+# explicit ``supported_efforts`` list (OpenRouter maps them onto the
+# model's own budget scale).
+_GENERIC_THINKING_EFFORTS: tuple[str, ...] = ("low", "medium", "high")
+
+# Longest level name the stores accept (conversation column, settings).
+MAX_THINKING_EFFORT_LENGTH = 20
+
+
+def normalize_thinking_efforts(levels) -> tuple[str, ...]:
+    """Lower-cased, de-duplicated levels in :data:`THINKING_EFFORT_ORDER`
+    order (unknown names last, in the given order). Non-lists give ``()``."""
+    if not isinstance(levels, (list, tuple)):
+        return ()
+    seen: list[str] = []
+    for level in levels:
+        if isinstance(level, str) and level.strip():
+            cleaned = level.strip().lower()[:MAX_THINKING_EFFORT_LENGTH]
+            if cleaned not in seen:
+                seen.append(cleaned)
+    known = [level for level in THINKING_EFFORT_ORDER if level in seen]
+    return tuple(known + [level for level in seen if level not in THINKING_EFFORT_ORDER])
+
+
+def thinking_efforts_from_reasoning(reasoning) -> tuple[tuple[str, ...], str | None]:
+    """``(selectable levels, default level)`` for an instance model from the
+    OpenRouter-shaped ``reasoning`` object of its catalog snapshot.
+
+    ``None`` (no reasoning support) gives no levels. ``supported_efforts``
+    is used when published, otherwise the generic low/medium/high trio;
+    ``none`` is added when ``mandatory`` is explicitly false (the model
+    accepts a request with reasoning off). The default is ``none`` when the
+    catalog says reasoning is off unless asked for (``default_enabled:
+    false``), else the published ``default_effort``, else unknown.
+    """
+    if not isinstance(reasoning, dict):
+        return (), None
+    published = reasoning.get("supported_efforts")
+    levels = normalize_thinking_efforts(published) or _GENERIC_THINKING_EFFORTS
+    levels = tuple(level for level in levels if level != "none")
+    if reasoning.get("mandatory") is False:
+        levels = ("none",) + levels
+    default: str | None = None
+    if reasoning.get("default_enabled") is False and "none" in levels:
+        default = "none"
+    elif isinstance(reasoning.get("default_effort"), str):
+        candidate = reasoning["default_effort"].strip().lower()
+        default = candidate if candidate in levels else None
+    return levels, default
+
+
+def resolve_thinking_effort(spec: "ModelSpec | None", requested) -> str | None:
+    """The thinking level a turn should run at: ``requested`` when the model
+    lists it in ``thinking_efforts``, else ``None`` (the model's default).
+    Never raises -- an unknown model or a level the catalog no longer
+    advertises just falls back to the default."""
+    if spec is None or not isinstance(requested, str):
+        return None
+    level = requested.strip().lower()
+    return level if level and level in spec.thinking_efforts else None
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +442,13 @@ class ModelSpec:
     enabled: bool = True
     listed: bool = True
     vertex_region: str | None = None
+    # The thinking level the model runs at when the conversation picks none
+    # (see the registry notes), and the levels a user may pick instead --
+    # empty when the model offers no choice. Vertex models take both from
+    # the registry entry; instance models derive them from the ``reasoning``
+    # object of their catalog snapshot (thinking_efforts_from_reasoning).
     thinking_effort: str | None = None
+    thinking_efforts: tuple[str, ...] = field(default_factory=tuple)
     refusal_fallback_models: tuple[str, ...] = field(default_factory=tuple)
     # NEAR AI models only: "enclave" (NEAR's own hardware-attested TEE
     # fleet) or "proxy" (relayed to a third party), from the catalog
@@ -379,6 +479,7 @@ def _vertex_spec(model_id: str, entry: dict, disabled: set[str]) -> ModelSpec:
         enabled=model_id not in disabled,
         vertex_region=entry.get("vertex_region"),
         thinking_effort=entry.get("thinking_effort"),
+        thinking_efforts=normalize_thinking_efforts(entry.get("thinking_efforts")),
         refusal_fallback_models=tuple(entry.get("refusal_fallback_models") or ()),
     )
 
@@ -395,6 +496,7 @@ def _instance_spec(instance: dict, model: dict | None, wire_id: str) -> ModelSpe
     kind = INSTANCE_KINDS[instance["kind"]]
     model = model or {}
     max_output = model.get("max_completion_tokens") or DEFAULT_INSTANCE_MAX_OUTPUT_TOKENS
+    thinking_efforts, thinking_effort = thinking_efforts_from_reasoning(model.get("reasoning"))
     return ModelSpec(
         id=qualify_model_id(instance["id"], wire_id),
         wire_id=wire_id,
@@ -407,6 +509,8 @@ def _instance_spec(instance: dict, model: dict | None, wire_id: str) -> ModelSpe
         instance_id=instance["id"],
         enabled=bool(model) and model.get("enabled", True),
         listed=bool(model),
+        thinking_effort=thinking_effort,
+        thinking_efforts=thinking_efforts,
         tee=model.get("tee"),
     )
 
@@ -592,10 +696,15 @@ def public_model_catalog() -> list[dict]:
 
     Every known model incl. deprecated/disabled ones, so the UI can still
     label and size old conversations; selection is governed separately by
-    ``available_models``. Each entry also carries the admin's Model
-    Selection settings (``config/model_selection.py``): the private and
-    public top-level menu slots + ``descriptor`` and the ``allow_private``
-    / ``allow_public`` usage flags the composer filters its menu by.
+    ``available_models``. Each entry also carries the thinking levels the
+    composer's model menu offers for the model (``thinking_efforts``, with
+    ``default_thinking_effort`` the one a conversation runs at when none is
+    picked) and the admin's Model Selection settings
+    (``config/model_selection.py``): the private and public top-level menu
+    slots + ``descriptor``, the level a slotted pick is fixed to
+    (``slot_effort``, cleared when the model no longer lists it) and the
+    ``allow_private`` / ``allow_public`` usage flags the composer filters
+    its menu by.
     """
     from config.model_selection import read_model_selection, selection_for
 
@@ -610,9 +719,12 @@ def public_model_catalog() -> list[dict]:
             "provider_label": spec.provider_label,
             "max_input_tokens": spec.max_input_tokens,
             "deprecated": spec.deprecated,
+            "thinking_efforts": list(spec.thinking_efforts),
+            "default_thinking_effort": spec.thinking_effort,
             "slot": entry["slot"],
             "public_slot": entry["public_slot"],
             "descriptor": entry["descriptor"],
+            "slot_effort": resolve_thinking_effort(spec, entry["slot_effort"]),
             "allow_private": entry["allow_private"],
             "allow_public": entry["allow_public"],
         })

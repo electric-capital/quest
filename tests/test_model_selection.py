@@ -96,6 +96,11 @@ def test_normalize_entry_shapes():
     assert ms.normalize_entry({"allow_private": False})["allow_private"] is False
     assert ms.normalize_entry({"allow_private": None})["allow_private"] is True
     assert ms.normalize_entry({"allow_public": 0})["allow_public"] is True
+    # Slot efforts are short lower-cased names; anything else is unset
+    assert ms.normalize_entry({"slot_effort": " High "})["slot_effort"] == "high"
+    assert ms.normalize_entry({"slot_effort": ""})["slot_effort"] is None
+    assert ms.normalize_entry({"slot_effort": 3})["slot_effort"] is None
+    assert len(ms.normalize_entry({"slot_effort": "x" * 40})["slot_effort"]) == ms.MAX_SLOT_EFFORT_LENGTH
 
 
 def test_read_absent_file_gives_historical_defaults(store):
@@ -261,6 +266,23 @@ def test_public_model_catalog_carries_selection_fields(store):
     assert rows["claude-opus-4-8"]["slot"] is None
 
 
+def test_public_model_catalog_carries_thinking_levels_and_slot_effort(store):
+    from chat.llm.config import public_model_catalog
+
+    ms.save_model_selection({
+        "claude-opus-4-8": {"slot": 1, "slot_effort": "max"},
+        # A level the model does not list (hand-edited file) reads as unset
+        "claude-sonnet-5-5": {"slot": 2, "slot_effort": "ultra"},
+    })
+    rows = {m["id"]: m for m in public_model_catalog()}
+    assert rows["claude-opus-4-8"]["thinking_efforts"] == ["none", "low", "medium", "high", "xhigh", "max"]
+    assert rows["claude-opus-4-8"]["default_thinking_effort"] == "medium"
+    assert rows["claude-opus-4-8"]["slot_effort"] == "max"
+    assert rows["claude-sonnet-5-5"]["slot_effort"] is None
+    assert rows["claude-sonnet-5"]["thinking_efforts"] == []
+    assert rows["claude-sonnet-5"]["slot_effort"] is None
+
+
 # ---------------------------------------------------------------------------
 # Admin endpoints
 # ---------------------------------------------------------------------------
@@ -309,19 +331,31 @@ def test_admin_get_rows_and_availability(admin_routes, health_store):
     assert rows["claude-opus-4-8"]["slot"] == 1
     assert rows["claude-opus-4-8"]["public_slot"] == 1
     assert rows["claude-opus-4-8"]["descriptor"] == "Smart ($$$)"
+    assert rows["claude-opus-4-8"]["slot_effort"] is None
     assert rows["claude-haiku-4.5"]["slot"] is None
     assert rows["claude-haiku-4.5"]["allow_private"] is True
-    ms.save_model_selection({"claude-haiku-4.5": {"allow_public": False, "public_slot": 4}})
+    # The levels the slot-effort dropdown offers come from the model spec
+    assert rows["claude-opus-4-8"]["thinking_efforts"] == ["none", "low", "medium", "high", "xhigh", "max"]
+    assert rows["claude-opus-4-8"]["default_thinking_effort"] == "medium"
+    assert rows["claude-haiku-4.5"]["thinking_efforts"] == []
+    ms.save_model_selection({
+        "claude-haiku-4.5": {"allow_public": False, "public_slot": 4},
+        "claude-opus-4-8": {"slot": 1, "slot_effort": "high"},
+        "gemini-3.8-flash": {"slot": 2, "slot_effort": "ultra"},
+    })
     result = _run(admin_routes.admin_get_model_selection(user=ADMIN_USER))
     rows = {m["id"]: m for m in result["models"]}
     assert rows["claude-haiku-4.5"]["allow_public"] is False
+    assert rows["claude-opus-4-8"]["slot_effort"] == "high"
+    # A stored level the model no longer lists reads as unset
+    assert rows["gemini-3.8-flash"]["slot_effort"] is None
 
 
 def test_admin_put_full_replacement(admin_routes):
     body = admin_routes.ModelSelectionUpdate(models=[
         admin_routes.ModelSelectionEntry(id="claude-haiku-4.5", slot=1, public_slot=2, descriptor=" Cheapest ($) "),
         # public_slot on a public-disallowed model is cleared, not rejected
-        admin_routes.ModelSelectionEntry(id="claude-opus-4-8", public_slot=1, allow_public=False),
+        admin_routes.ModelSelectionEntry(id="claude-opus-4-8", public_slot=1, allow_public=False, slot_effort=" Max "),
         admin_routes.ModelSelectionEntry(id="gemini-3.8-flash"),
     ])
     result = _run(admin_routes.admin_update_model_selection(body, user=ADMIN_USER))
@@ -332,10 +366,11 @@ def test_admin_put_full_replacement(admin_routes):
     assert rows["claude-opus-4-8"]["slot"] is None  # default slot gone
     assert rows["claude-opus-4-8"]["public_slot"] is None
     assert rows["claude-opus-4-8"]["allow_public"] is False
+    assert rows["claude-opus-4-8"]["slot_effort"] == "max"
     assert rows["claude-sonnet-5"]["slot"] is None  # unlisted -> unset
     assert ms.read_model_selection() == {
         "claude-haiku-4.5": _entry(slot=1, public_slot=2, descriptor="Cheapest ($)"),
-        "claude-opus-4-8": _entry(allow_public=False),
+        "claude-opus-4-8": _entry(allow_public=False, slot_effort="max"),
     }
 
 
@@ -349,6 +384,9 @@ def test_admin_put_full_replacement(admin_routes):
     ([{"id": "claude-opus-4-8", "public_slot": 3}, {"id": "claude-sonnet-5", "public_slot": 3}], "invalid_params"),
     ([{"id": "claude-opus-4-8"}, {"id": "claude-opus-4-8"}], "invalid_params"),
     ([{"id": "claude-opus-4-8", "descriptor": "x" * (ms.MAX_DESCRIPTOR_LENGTH + 1)}], "invalid_params"),
+    # A level the model does not list, or any level on a model without a sublevel
+    ([{"id": "claude-opus-4-8", "slot": 1, "slot_effort": "ultra"}], "invalid_params"),
+    ([{"id": "claude-haiku-4.5", "slot": 1, "slot_effort": "high"}], "invalid_params"),
 ])
 def test_admin_put_validation_400(admin_routes, models, error):
     ms.save_model_selection({"claude-sonnet-5": {"slot": 4}})

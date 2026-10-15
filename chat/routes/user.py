@@ -30,6 +30,11 @@ class UserSettingsUpdate(BaseModel):
     # separately from ``default_model`` (private) because the admin's Model
     # Selection allow-lists differ per visibility. Same validation/clearing.
     public_default_model: Optional[str] = None
+    # The thinking level last sent with each of the two defaults (one of
+    # the model's ``thinking_efforts``); empty string clears (= the model's
+    # default). Written alongside the model on the first send of a chat.
+    default_thinking_effort: Optional[str] = None
+    public_default_thinking_effort: Optional[str] = None
     gmail_labels: Optional[List[str]] = None
     # Settings > Appearance colour-scheme preference: "light", "dark" or
     # "auto" (follow the OS). Empty string clears the stored value (= auto).
@@ -221,6 +226,10 @@ async def get_current_user_info(user: dict = Depends(get_current_user_cookie_or_
         # public-project composer. The FE keeps the two apart so drilling
         # into / out of a public project restores that context's own pick.
         "public_default_model": user.get("settings", {}).get("public_default_model"),
+        # The thinking level each default was last sent with (None = the
+        # model's default level); the FE restores it with the model.
+        "default_thinking_effort": user.get("settings", {}).get("default_thinking_effort"),
+        "public_default_thinking_effort": user.get("settings", {}).get("public_default_thinking_effort"),
         # Settings > Appearance colour-scheme preference ("light" / "dark");
         # None means auto (follow the OS). The FE applies it to <html
         # data-theme> on hydration and caches it in localStorage so the next
@@ -318,6 +327,16 @@ async def update_settings(
                     "message": f"Unknown model id: {candidate}",
                 },
             )
+
+    # The thinking level that rides with each default: stored as a short
+    # lower-cased name (the turn validates it against the model's levels
+    # when it is used); empty string clears it.
+    for key in ("default_thinking_effort", "public_default_thinking_effort"):
+        if key not in update_data:
+            continue
+        from chat.llm.config import MAX_THINKING_EFFORT_LENGTH
+        candidate = update_data[key].strip().lower()[:MAX_THINKING_EFFORT_LENGTH]
+        update_data[key] = candidate or None
 
     # theme: Settings > Appearance colour scheme. "auto" and "" both clear
     # the stored value (None = follow the OS), anything else must be one of

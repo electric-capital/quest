@@ -16,6 +16,7 @@ vi.mock('../hooks/useIsMobile', () => ({
 // Catalog entries as GET /app/api/config delivers them.
 function model(
   id: string, name: string, slot: number | null = null, descriptor = '',
+  extra: Partial<AppModelInfo> = {},
 ): AppModelInfo {
   return {
     id,
@@ -24,16 +25,24 @@ function model(
     provider_label: 'Anthropic',
     max_input_tokens: 200000,
     deprecated: false,
+    thinking_efforts: [],
+    default_thinking_effort: null,
     slot,
     public_slot: null,
     descriptor,
+    slot_effort: null,
     allow_private: true,
     allow_public: true,
+    ...extra,
   };
 }
 
 const CATALOG = [
-  model('opus', 'Claude Opus', 1, 'Smart ($$$)'),
+  // The slotted pick is fixed to "high"; under "All models" Opus offers
+  // its levels as a sublevel.
+  model('opus', 'Claude Opus', 1, 'Smart ($$$)', {
+    thinking_efforts: ['low', 'medium', 'high', 'max'], default_thinking_effort: 'medium', slot_effort: 'high',
+  }),
   model('sonnet', 'Claude Sonnet', 2),
   model('haiku', 'Claude Haiku'),
 ];
@@ -84,8 +93,46 @@ describe('ModelSelector', () => {
       fireEvent.click(within(menu).getByText('All models'));
       const submenu = screen.getAllByRole('menu')[1];
       fireEvent.click(within(submenu).getByText('Claude Haiku'));
-      expect(onSelect).toHaveBeenCalledWith('haiku');
+      // A model without levels is picked at its (only) default level.
+      expect(onSelect).toHaveBeenCalledWith('haiku', null);
       expect(screen.queryByRole('menu')).toBeNull();
+    });
+
+    it('fixes a slotted pick to its admin-set thinking level', () => {
+      const { onSelect } = renderSelector();
+      fireEvent.click(trigger());
+      const menu = screen.getAllByRole('menu')[0];
+      // The sublabel names the model and the level the pick runs at.
+      expect(within(menu).getByText('Claude Opus · High')).toBeTruthy();
+      fireEvent.click(within(menu).getByText('Smart ($$$)'));
+      expect(onSelect).toHaveBeenCalledWith('opus', 'high');
+    });
+
+    it('offers a model\'s thinking levels as a sublevel under "All models"', () => {
+      const { onSelect } = renderSelector({ selectedModel: 'opus', selectedThinkingEffort: 'max' });
+      // The trigger shows the picked level after the model name.
+      expect(trigger().textContent).toContain('Claude Opus · Max');
+      fireEvent.click(trigger());
+      fireEvent.click(within(screen.getAllByRole('menu')[0]).getByText('All models'));
+      const submenu = screen.getAllByRole('menu')[1];
+      const opusRow = within(submenu).getByText('Claude Opus').closest('button') as HTMLButtonElement;
+      // Hovering the row opens the level flyout; the default is marked.
+      fireEvent.mouseEnter(opusRow.parentElement as HTMLElement);
+      const flyout = screen.getByRole('menu', { name: 'Thinking level for Claude Opus' });
+      expect(within(flyout).getByText('Medium (default)')).toBeTruthy();
+      expect(within(flyout).getByText('Max').closest('button')?.getAttribute('aria-current')).toBe('true');
+      // Models without levels have no flyout to open.
+      expect(within(submenu).getByText('Claude Haiku').closest('button')?.getAttribute('aria-haspopup')).toBeNull();
+
+      fireEvent.click(within(flyout).getByText('Low'));
+      expect(onSelect).toHaveBeenCalledWith('opus', 'low');
+      expect(screen.queryByRole('menu')).toBeNull();
+
+      // Clicking the model row itself picks the default level.
+      fireEvent.click(trigger());
+      fireEvent.click(within(screen.getAllByRole('menu')[0]).getByText('All models'));
+      fireEvent.click(within(screen.getAllByRole('menu')[1]).getByText('Claude Opus'));
+      expect(onSelect).toHaveBeenLastCalledWith('opus', null);
     });
   });
 
@@ -122,10 +169,21 @@ describe('ModelSelector', () => {
       expect(onOpenChange).toHaveBeenLastCalledWith(true);
 
       fireEvent.click(within(sheet).getByText('Smart ($$$)'));
-      expect(onSelect).toHaveBeenCalledWith('opus');
+      expect(onSelect).toHaveBeenCalledWith('opus', 'high');
       expect(screen.queryByRole('dialog')).toBeNull();
       expect(document.activeElement).toBe(textarea);
       expect(onOpenChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it('lists a model\'s thinking levels as chips under its row', () => {
+      const { onSelect } = renderSelector({ selectedModel: 'opus', selectedThinkingEffort: 'low' });
+      fireEvent.click(trigger());
+      const sheet = screen.getByRole('dialog');
+      const chips = within(sheet).getByRole('group', { name: 'Thinking level for Claude Opus' });
+      expect(within(chips).getByText('Low').getAttribute('aria-pressed')).toBe('true');
+      expect(within(sheet).queryByRole('group', { name: 'Thinking level for Claude Haiku' })).toBeNull();
+      fireEvent.click(within(chips).getByText('Medium (default)'));
+      expect(onSelect).toHaveBeenCalledWith('opus', 'medium');
     });
 
     it('closes from the header button and on Escape without selecting', () => {

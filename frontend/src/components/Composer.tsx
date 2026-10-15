@@ -50,7 +50,7 @@ import { transcribeAudio } from '../api/client';
 import { ApiClientError } from '../api/request';
 import { extractFilesFromDataTransfer } from '../utils/directoryTraversal';
 import {
-  getKnownModels, getSelectableModels, getProviderForModel, getModelDisplayName, getModelInfo,
+  getKnownModels, getSelectableModels, getProviderForModel, formatModelPick, getModelInfo,
   isModelAllowedFor,
 } from '../constants/models';
 import type { ModelVisibility } from '../constants/models';
@@ -151,6 +151,8 @@ export interface ComposerProps {
      * conversation exists yet (home screen). Undefined otherwise.
      */
     imageFiles?: File[],
+    /** Thinking level picked with the model (null = the model's default). */
+    thinkingEffort?: string | null,
   ) => void;
   /**
    * Stop/interrupt callback. When provided AND ``isStreaming`` is true, the
@@ -239,7 +241,7 @@ export interface ComposerProps {
    * ``setModelForConversation`` is used (the live-chat behavior, which also
    * PATCHes the conversation's model).
    */
-  onModelChange?: (model: string) => void;
+  onModelChange?: (model: string, thinkingEffort: string | null) => void;
 }
 
 /**
@@ -335,7 +337,7 @@ export function Composer({
   const dragDepthRef = useRef(0);
 
   const {
-    getModelForConversation, setModelForConversation,
+    getModelForConversation, getThinkingEffortForConversation, setModelForConversation,
     getLockedProvider, lockConversationProvider, isProviderLocked,
   } = useConversationModels();
   const {
@@ -360,6 +362,7 @@ export function Composer({
   const noModelsAvailable = availableModelIds !== null && availableModelIds.length === 0;
 
   const selectedModel = getModelForConversation(conversationId);
+  const selectedThinkingEffort = getThinkingEffortForConversation(conversationId);
   // A known model the admin has unticked for this visibility cannot be sent
   // with (the server refuses the turn too); the menu keeps it visible with a
   // "(not allowed here)" suffix so the user can switch away.
@@ -536,11 +539,11 @@ export function Composer({
 
   // Handle model change. Uses the draft-safe override on the home screen
   // (no PATCH to a nonexistent conversation), otherwise the context setter.
-  const handleModelSelect = useCallback((modelId: string) => {
+  const handleModelSelect = useCallback((modelId: string, thinkingEffort: string | null) => {
     if (onModelChange) {
-      onModelChange(modelId);
+      onModelChange(modelId, thinkingEffort);
     } else {
-      setModelForConversation(conversationId, modelId);
+      setModelForConversation(conversationId, modelId, thinkingEffort);
     }
   }, [conversationId, setModelForConversation, onModelChange]);
 
@@ -609,7 +612,10 @@ export function Composer({
 
     const dispatchSend = (attachments?: ComposerAttachmentRef[], imageFiles?: File[]) => {
       onAfterSend?.();
-      onSend(trimmedInput, selectedModel, skillIdsToSend, attachments, flagsToSend, filesToSend, imageFiles);
+      onSend(
+        trimmedInput, selectedModel, skillIdsToSend, attachments, flagsToSend, filesToSend, imageFiles,
+        selectedThinkingEffort,
+      );
       if (filesToSend) {
         setPendingFiles([]);
       }
@@ -669,7 +675,7 @@ export function Composer({
       .finally(() => {
         setIsUploadingAttachments(false);
       });
-  }, [inputValue, pendingAttachments, pendingFiles, isStreaming, isUploadingAttachments, hasPendingWait, expensiveResumeBlocked, isRecording, isTranscribing, stopRecording, armSendAfterTranscription, onSend, onAfterSend, selectedModel, skipSendLocks, deferImageUpload, conversationId, isProviderLocked, lockConversationProvider, queuedSkills, markSkillsAsLoaded, isFirstMessage, selectedFlags, setPasteNotice]);
+  }, [inputValue, pendingAttachments, pendingFiles, isStreaming, isUploadingAttachments, hasPendingWait, expensiveResumeBlocked, isRecording, isTranscribing, stopRecording, armSendAfterTranscription, onSend, onAfterSend, selectedModel, selectedThinkingEffort, skipSendLocks, deferImageUpload, conversationId, isProviderLocked, lockConversationProvider, queuedSkills, markSkillsAsLoaded, isFirstMessage, selectedFlags, setPasteNotice]);
 
   // Complete a Send that was pressed mid-dictation. Runs once the recorder
   // is idle and the transcript request has resolved; by then the transcript
@@ -1195,17 +1201,18 @@ export function Composer({
   // Read-only conversations (Slack-driven, inference runs) still show which
   // model they run on plus the context gauge -- disabled trigger, no send.
   // "Server default" sentinel when the conversation was created without an
-  // explicit model (matches the Slack settings label); getModelDisplayName
+  // explicit model (matches the Slack settings label); formatModelPick
   // falls back to the raw id for retired / non-registered models.
   const readOnlyControls = (
     <>
       <ModelSelector
         selectedModel={conversationModel ?? ''}
+        selectedThinkingEffort={conversationModel ? selectedThinkingEffort : null}
         models={getKnownModels()}
         onSelect={() => { /* disabled; no-op */ }}
         disabled
         labelOverride={conversationModel
-          ? getModelDisplayName(conversationModel)
+          ? formatModelPick(conversationModel, selectedThinkingEffort)
           : 'Server default'}
       />
       <div className="composer-spacer" />
@@ -1312,6 +1319,7 @@ export function Composer({
       )}
       <ModelSelector
         selectedModel={selectedModel}
+        selectedThinkingEffort={selectedThinkingEffort}
         models={selectableModels}
         onSelect={handleModelSelect}
         disabled={inputDisabled}

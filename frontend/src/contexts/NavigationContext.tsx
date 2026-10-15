@@ -26,6 +26,8 @@ export interface PendingFirstMessage {
   conversationId: string;
   prompt: string;
   model: string;
+  // Thinking level picked with the model (null = the model's default).
+  thinkingEffort: string | null;
   skillIds: string[];
   flags: string[];
   // Whether the chat was started inside a public project (the home

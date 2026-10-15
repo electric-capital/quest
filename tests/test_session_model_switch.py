@@ -33,11 +33,14 @@ def mock_provider():
     provider = MagicMock()
     # create_session returns a dict so we can inspect what was passed
     provider.create_session.side_effect = (
-        lambda model, system_prompt, tools, history=None: {
+        lambda model, system_prompt, tools, history=None, thinking_effort=None: {
             "model": model,
             "history": history,
+            "thinking_effort": thinking_effort,
         }
     )
+    # Like Gemini: the level is baked in at creation, so a change rebuilds
+    provider.set_thinking_effort.return_value = False
     # save_history returns a fake history list
     provider.save_history.return_value = [{"role": "user", "content": "hello"}]
     # load_history is an identity transform
@@ -70,6 +73,51 @@ class TestSameModelReturnsExistingSession:
         assert result is fake_session
         assert _active_chats[(1, "conv-1")] == ("gemini-3.1-pro-preview", fake_session)
         mock_provider.create_session.assert_not_called()
+
+
+class TestThinkingEffortChange:
+    """A new thinking level on the same model switches the session in
+    place when the provider can, otherwise rebuilds it with its history."""
+
+    class _Session:
+        def __init__(self, model, thinking_effort):
+            self.model = model
+            self.thinking_effort = thinking_effort
+
+    def test_in_place_switch_keeps_session(self, mock_provider):
+        session = self._Session("claude-opus-5-5", None)
+        _active_chats[(1, "conv-1")] = ("claude-opus-5-5", session)
+
+        def _switch(sess, level):
+            sess.thinking_effort = level
+            return True
+
+        mock_provider.set_thinking_effort.side_effect = _switch
+        result = get_or_create_chat(
+            mock_provider, 1, "conv-1", "claude-opus-5-5", "system prompt", thinking_effort="max",
+        )
+        assert result is session and session.thinking_effort == "max"
+        mock_provider.create_session.assert_not_called()
+        # Same level again: nothing to switch
+        mock_provider.set_thinking_effort.reset_mock()
+        get_or_create_chat(mock_provider, 1, "conv-1", "claude-opus-5-5", "system prompt", thinking_effort="max")
+        mock_provider.set_thinking_effort.assert_not_called()
+
+    def test_baked_in_level_rebuilds_from_history(self, mock_provider):
+        session = self._Session("gemini-4-argon", "low")
+        _active_chats[(1, "conv-1")] = ("gemini-4-argon", session)
+
+        result = get_or_create_chat(
+            mock_provider, 1, "conv-1", "gemini-4-argon", "system prompt", thinking_effort="high",
+        )
+        # Rebuilt like a same-provider model switch: history carried over
+        mock_provider.save_history.assert_called_once_with(session)
+        assert result == {
+            "model": "gemini-4-argon",
+            "history": [{"role": "user", "content": "hello"}],
+            "thinking_effort": "high",
+        }
+        assert _active_chats[(1, "conv-1")] == ("gemini-4-argon", result)
 
 
 # ---------------------------------------------------------------------------

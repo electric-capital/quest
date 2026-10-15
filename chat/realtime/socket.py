@@ -533,6 +533,11 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
 
     timezone_str = data.get("timezone") or "UTC"
     selected_model = data.get("model")
+    # The composer's thinking-level pick for the model; validated against
+    # the model's levels in run_conversation_turn (unknown = default).
+    thinking_effort = data.get("thinking_effort")
+    if not isinstance(thinking_effort, str) or not thinking_effort:
+        thinking_effort = None
     guide_id = data.get("guide_id")
     skill_ids = data.get("skill_ids")
 
@@ -843,6 +848,7 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
             user_message=model_message,
             timezone_str=timezone_str,
             selected_model=selected_model,
+            thinking_effort=thinking_effort,
             guide_id=guide_id,
             project_id=project_id,
             routine_id=routine_id,
@@ -938,6 +944,7 @@ async def _run_send_message(
     flags: Optional[list[str]] = None,
     attached_filenames: Optional[list[str]] = None,
     routine_run: bool = False,
+    thinking_effort: Optional[str] = None,
 ) -> None:
     """Background task that drives ``run_conversation_turn`` for a persistent-WS
     send. Kept symmetrical with ``_handle_api_mode`` so the regression
@@ -1003,6 +1010,7 @@ async def _run_send_message(
             attachments=attachments if first_turn else None,
             flags=flags,
             attached_filenames=attached_filenames if first_turn else None,
+            thinking_effort=thinking_effort,
         )
 
     try:

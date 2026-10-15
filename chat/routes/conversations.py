@@ -24,6 +24,10 @@ class RenameConversationRequest(BaseModel):
 
 class UpdateModelRequest(BaseModel):
     model: str
+    # The composer's thinking-level pick for the model (one of the model's
+    # ``thinking_efforts``); omitted / null = the model's default. Stored
+    # as sent -- the turn validates it against the model's levels.
+    thinking_effort: str | None = None
 
 
 def _publish_list_changed(user_id: int, conversation_id: str, action: str) -> None:
@@ -308,6 +312,7 @@ async def get_conversation(conversation_id: str, user: dict = Depends(get_curren
     # Merge server-side metadata into the response (model, routine_id)
     if meta.get("model"):
         conversation["model"] = meta["model"]
+        conversation["thinking_effort"] = meta.get("thinking_effort")
     if meta.get("routine_id"):
         conversation["routine_id"] = meta["routine_id"]
     if meta.get("project_id"):
@@ -610,15 +615,17 @@ async def update_conversation_model_endpoint(
     body: UpdateModelRequest,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """Update the model for a conversation.
+    """Update the model (and its thinking level) for a conversation.
 
-    Sets the model on the conversation record.  This is used by the frontend
-    to persist model changes when the user switches models.
+    Sets both on the conversation record.  This is used by the frontend
+    to persist model changes when the user switches models or levels.
     """
+    from chat.llm.config import MAX_THINKING_EFFORT_LENGTH
     from db.conversation_store import set_conversation_model
 
     await require_owned_conversation(user["id"], conversation_id)
 
-    await set_conversation_model(conversation_id, body.model)
+    thinking_effort = (body.thinking_effort or "").strip().lower()[:MAX_THINKING_EFFORT_LENGTH]
+    await set_conversation_model(conversation_id, body.model, thinking_effort or None)
     _publish_list_changed(user["id"], conversation_id, "model_changed")
     return {"ok": True}

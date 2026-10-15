@@ -161,7 +161,7 @@ function hydrateContextUsage(conversationId: string, messages: MessageContent[])
 
 interface UseConversationOptions {
   onLoadedSkills?: (conversationId: string, skillIds: string[]) => void;
-  onModelLoaded?: (conversationId: string, model: string) => void;
+  onModelLoaded?: (conversationId: string, model: string, thinkingEffort: string | null) => void;
   onProjectIdLoaded?: (conversationId: string, projectId: string) => void;
   onOriginLoaded?: (conversationId: string, origin: 'web' | 'slack' | 'user_subagent' | 'inference_api') => void;
 }
@@ -175,7 +175,7 @@ interface UseConversationResult {
   stacktrace: string | undefined;
   isLoaded: boolean;
   isLoading: boolean;
-  sendMessage: (message: string, model?: string, guideId?: string, skillIds?: string[], attachments?: ComposerAttachmentRef[], flags?: string[], attachedFilenames?: string[]) => void;
+  sendMessage: (message: string, model?: string, guideId?: string, skillIds?: string[], attachments?: ComposerAttachmentRef[], flags?: string[], attachedFilenames?: string[], thinkingEffort?: string | null) => void;
   addUserMessage: (content: string) => void;
   subAgentToolCalls: Map<string, SubAgentToolCallInfo[]>;
   subAgentReturned: Map<string, Map<string, SubAgentFinishedInfo>>;
@@ -363,7 +363,7 @@ export function useConversation(conversationId: string, options?: UseConversatio
         // explicit model (e.g. Slack DMs where the user never set a default).
         setConversationModel(response.model ?? null);
         if (options?.onModelLoaded && response.model) {
-          options.onModelLoaded(conversationId, response.model);
+          options.onModelLoaded(conversationId, response.model, response.thinking_effort ?? null);
         }
 
         // Hydrate persisted per-conversation flags so the composer can render
@@ -658,6 +658,7 @@ export function useConversation(conversationId: string, options?: UseConversatio
       attachments?: ComposerAttachmentRef[],
       flags?: string[],
       attachedFilenames?: string[],
+      thinkingEffort?: string | null,
     ) => {
       // Allow attachment-only sends (text may be empty when images are attached).
       if (!message.trim() && (!attachments || attachments.length === 0)) return;
@@ -703,7 +704,7 @@ export function useConversation(conversationId: string, options?: UseConversatio
       conversationStore.addMessage(conversationId, userMessage);
 
       // Send via WebSocket manager (cookie auth - no API key needed)
-      webSocketManager.sendMessage(conversationId, message, model, guideId, skillIds, attachments, flags, attachedFilenames, clientSendId);
+      webSocketManager.sendMessage(conversationId, message, model, guideId, skillIds, attachments, flags, attachedFilenames, clientSendId, thinkingEffort);
     },
     [conversationId]
   );

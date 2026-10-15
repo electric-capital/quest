@@ -135,7 +135,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
 
   // Get model state from context
   const {
-    getModelForConversation, hydrateModelForConversation,
+    getModelForConversation, getThinkingEffortForConversation, hydrateModelForConversation,
     lockConversationProvider, isProviderLocked,
     refreshDefaultModel, persistDefaultModel,
   } = useConversationModels();
@@ -152,9 +152,9 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
     setLoadedSkillsForConversation(convId, skillIds);
   }, [setLoadedSkillsForConversation]);
 
-  // Callback to hydrate the per-conversation model when loaded from the server
-  const handleModelLoaded = useCallback((convId: string, model: string) => {
-    hydrateModelForConversation(convId, model);
+  // Callback to hydrate the per-conversation pick when loaded from the server
+  const handleModelLoaded = useCallback((convId: string, model: string, thinkingEffort: string | null) => {
+    hydrateModelForConversation(convId, model, thinkingEffort);
   }, [hydrateModelForConversation]);
 
   // Public-project detection: when the loaded conversation reveals a
@@ -385,13 +385,16 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       // Send the routine prompt, carrying the routine's guide override (if
       // any) -- the only remaining path that sends a guide_id.
       const model = getModelForConversation(conversationId);
-      sendMessage(prompt, model, guideId ?? undefined);
+      sendMessage(
+        prompt, model, guideId ?? undefined, undefined, undefined, undefined, undefined,
+        getThinkingEffortForConversation(conversationId),
+      );
 
       // Lock the provider after first message
       lockConversationProvider(conversationId, getProviderForModel(model));
     }
   }, [pendingRoutineMessage, conversationId, isLoaded, isStreaming, messages.length,
-      setPendingRoutineMessage, getModelForConversation,
+      setPendingRoutineMessage, getModelForConversation, getThinkingEffortForConversation,
       sendMessage, lockConversationProvider]);
 
   // Auto-send pending first message when this conversation loads.
@@ -413,10 +416,13 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       !isStreaming &&
       messages.length === 0
     ) {
-      const { prompt, model, skillIds, flags, isPublicProject: startedPublic, attachedFilenames, attachments } = pendingFirstMessage;
+      const {
+        prompt, model, thinkingEffort, skillIds, flags, isPublicProject: startedPublic, attachedFilenames, attachments,
+      } = pendingFirstMessage;
       setPendingFirstMessage(null);  // Clear immediately to prevent re-send
 
       const effectiveModel = model || getModelForConversation(conversationId);
+      const effectiveEffort = model ? thinkingEffort : getThinkingEffortForConversation(conversationId);
       const skillIdsToSend = skillIds && skillIds.length > 0 ? skillIds : undefined;
       const flagsToSend = flags && flags.length > 0 ? flags : undefined;
 
@@ -432,7 +438,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       // first send of this new chat (home-originated flow). This is one of
       // the two first-send choke points; selecting a model without sending
       // never persists.
-      persistDefaultModel(effectiveModel, startedPublic ? 'public' : 'private');
+      persistDefaultModel(effectiveModel, startedPublic ? 'public' : 'private', effectiveEffort);
 
       // Files and pasted images were already uploaded into the workspace by
       // HomeComposer before navigation; here we only forward the file names
@@ -442,14 +448,17 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
         ? attachedFilenames
         : undefined;
       const attachmentsToSend = attachments && attachments.length > 0 ? attachments : undefined;
-      sendMessage(prompt, effectiveModel, undefined, skillIdsToSend, attachmentsToSend, flagsToSend, attachedFilenamesToSend);
+      sendMessage(
+        prompt, effectiveModel, undefined, skillIdsToSend, attachmentsToSend, flagsToSend, attachedFilenamesToSend,
+        effectiveEffort,
+      );
 
       // Lock the provider after the first message.
       lockConversationProvider(conversationId, getProviderForModel(effectiveModel));
     }
   }, [pendingFirstMessage, conversationId, isLoaded, isStreaming, messages.length,
       setPendingFirstMessage,
-      getModelForConversation, setQueuedSkillsForConversation, sendMessage,
+      getModelForConversation, getThinkingEffortForConversation, setQueuedSkillsForConversation, sendMessage,
       lockConversationProvider, persistDefaultModel]);
 
   // Always-fresh fetch on a new empty per-conversation composer mount.
@@ -477,7 +486,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
     }
     let cancelled = false;
     refreshDefaultModel(modelVisibility).then((resolved) => {
-      if (!cancelled) hydrateModelForConversation(conversationId, resolved);
+      if (!cancelled) hydrateModelForConversation(conversationId, resolved.model, resolved.thinkingEffort);
     });
     return () => {
       cancelled = true;
@@ -500,9 +509,11 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       attachments?: ComposerAttachmentRef[],
       flags?: string[],
       files?: File[],
+      _imageFiles?: File[],
+      thinkingEffort: string | null = null,
     ) => {
       if (messages.length === 0) {
-        persistDefaultModel(model, modelVisibility);
+        persistDefaultModel(model, modelVisibility, thinkingEffort);
       }
       // Generic file attachments: the conversation already exists in the live
       // chat, so upload them to the workspace root first, then send carrying
@@ -512,16 +523,16 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
         uploadFiles(conversationId, files, '')
           .then((resp) => {
             const attachedFilenames = resp.uploadedFiles.map((f) => f.name);
-            sendMessage(text, model, undefined, skillIds, attachments, flags, attachedFilenames);
+            sendMessage(text, model, undefined, skillIds, attachments, flags, attachedFilenames, thinkingEffort);
           })
           .catch(() => {
             // Fall back to sending without the attached-filename hint rather
             // than dropping the message; the files just weren't uploaded.
-            sendMessage(text, model, undefined, skillIds, attachments, flags);
+            sendMessage(text, model, undefined, skillIds, attachments, flags, undefined, thinkingEffort);
           });
         return;
       }
-      sendMessage(text, model, undefined, skillIds, attachments, flags);
+      sendMessage(text, model, undefined, skillIds, attachments, flags, undefined, thinkingEffort);
     },
     [conversationId, messages.length, modelVisibility, persistDefaultModel, sendMessage],
   );

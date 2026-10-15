@@ -6,6 +6,9 @@ export interface Conversation {
   project_id?: string;
   routine_id?: string | null;
   model?: string | null;
+  /** Thinking level picked for ``model`` (one of the model's
+   *  thinking_efforts); null/absent = the model's default. */
+  thinking_effort?: string | null;
   archived?: boolean;
   custom_name?: string | null;
   origin?: 'web' | 'slack' | 'user_subagent' | 'inference_api';
@@ -478,6 +481,8 @@ export interface ConversationDetail {
   created_at: string;
   messages: Message[];
   model?: string | null;
+  /** Thinking level picked for ``model`` (null/absent = its default). */
+  thinking_effort?: string | null;
   routine_id?: string | null;
   project_id?: string | null;
   origin?: 'web' | 'slack' | 'user_subagent' | 'inference_api';
@@ -594,6 +599,9 @@ export interface WebSocketSendMessage {
   message: string;
   timezone?: string;
   model?: string;
+  /** Thinking level picked for ``model`` (one of its thinking_efforts);
+   *  omitted = the model's default. */
+  thinking_effort?: string;
   guide_id?: string;
   skill_ids?: string[];
   /** Per-conversation flags selected via the composer Flags popover.
@@ -706,6 +714,10 @@ export interface UserSettings {
   // Last-used composer model inside public projects (public visibility has
   // its own admin allow-list, so it is tracked apart from default_model).
   public_default_model?: string | null;
+  // The thinking level each of the two was last sent with (null = the
+  // model's default); written alongside the model on a chat's first send.
+  default_thinking_effort?: string | null;
+  public_default_thinking_effort?: string | null;
   // Quest-manageable Gmail label names; each maps to a "[Quest]/<name>"
   // label in Gmail (see Settings > Gmail).
   gmail_labels?: string[] | null;
@@ -1961,14 +1973,21 @@ export interface AppModelInfo {
   provider_label: string;
   max_input_tokens: number;
   deprecated: boolean;
+  // Thinking levels the model menu offers as a sublevel under the model
+  // (empty = none; "none" = thinking off), and the level the model runs at
+  // when the conversation picks none (null = provider default, unnamed).
+  thinking_efforts: string[];
+  default_thinking_effort: string | null;
   // Admin Model Selection settings (config/model_selection.py): the
   // composer menu's top-level slot for private and for public-project
   // conversations (1..max, null = "All models" only), the free-text label
-  // shown for a slotted model, and whether the model may be used in
+  // shown for a slotted model, the thinking level a slotted pick is fixed
+  // to (null = the model's default), and whether the model may be used in
   // private / public-project conversations.
   slot: number | null;
   public_slot: number | null;
   descriptor: string;
+  slot_effort: string | null;
   allow_private: boolean;
   allow_public: boolean;
 }
@@ -1983,9 +2002,14 @@ export interface ModelSelectionRow {
   // Offerable right now: credentials configured and no failing health verdict
   available: boolean;
   unavailable_reason: 'not_configured' | 'failing' | null;
+  // Levels the slot-effort dropdown offers (empty = no thinking sublevel)
+  // and the one the model runs at by default.
+  thinking_efforts: string[];
+  default_thinking_effort: string | null;
   slot: number | null;
   public_slot: number | null;
   descriptor: string;
+  slot_effort: string | null;
   allow_private: boolean;
   allow_public: boolean;
 }
@@ -2003,6 +2027,7 @@ export interface ModelSelectionUpdate {
     slot: number | null;
     public_slot: number | null;
     descriptor: string;
+    slot_effort: string | null;
     allow_private: boolean;
     allow_public: boolean;
   }[];

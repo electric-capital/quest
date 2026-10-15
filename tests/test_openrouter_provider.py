@@ -177,6 +177,25 @@ def test_stream_text_and_tool_call(provider, session):
     assert json.loads(assistant["tool_calls"][0]["function"]["arguments"]) == {"a": 1}
 
 
+def test_thinking_effort_rides_in_the_unified_reasoning_param(provider):
+    session = provider.create_session(
+        model="openai/gpt-5", system_prompt="sys", tools=[], thinking_effort="high",
+    )
+    client, _ = _stream_all(provider, session, "hi", [_chunk(_text_delta("ok"), usage=_USAGE)])
+    # Merged next to the usage opt-in, not replacing it
+    assert client.kwargs["extra_body"] == {"usage": {"include": True}, "reasoning": {"effort": "high"}}
+
+    # "none" switches reasoning off; switching happens in place
+    assert provider.set_thinking_effort(session, "none") is True
+    client, _ = _stream_all(provider, session, "hi", [_chunk(_text_delta("ok"), usage=_USAGE)])
+    assert client.kwargs["extra_body"]["reasoning"] == {"enabled": False}
+
+    # No pick: no reasoning param at all (the router's default for the model)
+    provider.set_thinking_effort(session, None)
+    client, _ = _stream_all(provider, session, "hi", [_chunk(_text_delta("ok"), usage=_USAGE)])
+    assert client.kwargs["extra_body"] == {"usage": {"include": True}}
+
+
 def test_stream_malformed_arguments_surface_as_tool_args_error(provider, session):
     """A weaker model emitting non-JSON ``function.arguments`` must not
     poison the conversation: the event carries the parse error (so the

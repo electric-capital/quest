@@ -249,6 +249,8 @@ def test_normalize_entry_shape():
         "pricing": {"prompt": pytest.approx(0.3), "completion": pytest.approx(1.2), "cache_read": pytest.approx(0.006)},
         "detail": "vision · reasoning",
         "capabilities": ["tools", "vision"],
+        # Reasoning accepted but no per-model object: the generic levels
+        "reasoning": {},
         # No TEE metadata passed -> proxy (fail closed)
         "tee": "proxy",
     }
@@ -412,7 +414,7 @@ def test_cache_round_trip_keeps_shape(fake_urlopen):
     # A hand-edited cache row missing fields degrades gracefully
     assert na._cached_entry({"id": "x", "pricing": {"prompt": 1}}) == {
         "id": "x", "name": "x", "context_length": None, "max_completion_tokens": None,
-        "pricing": None, "detail": "", "capabilities": None, "tee": "proxy",
+        "pricing": None, "detail": "", "capabilities": None, "reasoning": None, "tee": "proxy",
     }
 
 

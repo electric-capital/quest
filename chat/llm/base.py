@@ -176,6 +176,7 @@ class LLMProvider(ABC):
         system_prompt: str,
         tools: list[ToolSpec],
         history: list | None = None,
+        thinking_effort: str | None = None,
     ) -> Any:
         """Create a new conversation session.
 
@@ -184,12 +185,26 @@ class LLMProvider(ABC):
             system_prompt: System instruction text.
             tools: List of canonical tool specifications.
             history: Optional previously saved history to restore.
+            thinking_effort: The thinking level the user picked for the
+                conversation (one of the model spec's ``thinking_efforts``,
+                ``"none"`` = thinking off), already validated by the
+                caller; ``None`` runs the model at its default level.
 
         Returns:
             A session object (type varies by provider). For Gemini, this
             is an AsyncChat. For Anthropic, a dict holding messages and config.
         """
         ...
+
+    def set_thinking_effort(self, session: Any, thinking_effort: str | None) -> bool:
+        """Switch a live session to another thinking level in place.
+
+        Returns True when the session now runs at ``thinking_effort``
+        (stateless providers just update the request knob); False when the
+        level is baked into the session at creation (Gemini's chat config),
+        in which case the caller rebuilds the session from its history.
+        """
+        return False
 
     @abstractmethod
     async def send_message_stream(

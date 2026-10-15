@@ -114,6 +114,7 @@ class WebSocketManagerClass {
     flags?: string[],
     attachedFilenames?: string[],
     clientSendId?: string,
+    thinkingEffort?: string | null,
   ): void {
     requestNotificationPermission();
 
@@ -123,6 +124,8 @@ class WebSocketManagerClass {
       message,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       ...(model && { model }),
+      // The thinking level picked for the model; omitted = its default.
+      ...(model && thinkingEffort && { thinking_effort: thinkingEffort }),
       ...(guideId && { guide_id: guideId }),
       ...(skillIds && skillIds.length > 0 && { skill_ids: skillIds }),
       ...(attachments && attachments.length > 0 && { attachments }),

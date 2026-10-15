@@ -244,6 +244,7 @@ class GeminiProvider(LLMProvider):
         system_prompt: str,
         tools: list[ToolSpec],
         history: list | None = None,
+        thinking_effort: str | None = None,
     ) -> Any:
         """Create a Gemini chat session.
 
@@ -259,6 +260,15 @@ class GeminiProvider(LLMProvider):
             ),
             max_output_tokens=_model_max_output_tokens(model),
         )
+        # Only an explicit pick is sent as ``thinking_level``; without one
+        # the request carries no thinking config and the model runs at the
+        # API default (the registry's ``thinking_effort`` documents it).
+        # The level is baked into the chat config, so a mid-conversation
+        # change rebuilds the session (set_thinking_effort stays False).
+        if thinking_effort and thinking_effort != "none":
+            config_kwargs["thinking_config"] = types.ThinkingConfig(
+                thinking_level=thinking_effort,
+            )
         # Tool-less sessions (e.g. the one-off compaction summarizer) must
         # omit the tools field entirely -- an empty declarations list is
         # rejected by the API.
@@ -271,8 +281,10 @@ class GeminiProvider(LLMProvider):
             config=types.GenerateContentConfig(**config_kwargs),
             history=history if history else [],
         )
-        # Attach a usage tracker for per-turn extraction.
+        # Attach a usage tracker for per-turn extraction, and remember the
+        # level so the session cache can tell when a rebuild is needed.
         chat._llm_last_usage = None
+        chat._llm_thinking_effort = thinking_effort
         return chat
 
     async def send_message_stream(

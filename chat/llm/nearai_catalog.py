@@ -64,7 +64,7 @@ import time
 import urllib.error
 import urllib.request
 
-from chat.llm.openrouter_catalog import normalize_openrouter_entry
+from chat.llm.openrouter_catalog import normalize_openrouter_entry, normalize_reasoning
 from config.inference_providers import TEE_LABELS
 from config.paths import NEARAI_CATALOG_FILE
 
@@ -168,6 +168,10 @@ def _normalize_entry(raw, tee_fields: dict | None = None) -> dict | None:
     bits = ["vision"] if vision else []
     if "reasoning" in features:
         bits.append("reasoning")
+        # Same as the TrustedRouter catalog: a feature flag without the
+        # per-model reasoning object gives the generic levels, no "off".
+        if entry["reasoning"] is None:
+            entry["reasoning"] = {}
     entry["detail"] = " · ".join(bits)
     entry["capabilities"] = capabilities
     entry["tee"] = classify_entry(tee_fields)
@@ -197,6 +201,7 @@ def _cached_entry(raw) -> dict | None:
         "capabilities": (
             [c for c in capabilities if isinstance(c, str)] if isinstance(capabilities, list) else None
         ),
+        "reasoning": normalize_reasoning(raw.get("reasoning")),
         # A cache written before the label existed has no ``tee``: proxy
         # until the TTL refresh (fail closed)
         "tee": raw["tee"] if raw.get("tee") in TEE_LABELS else TEE_PROXY,
