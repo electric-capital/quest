@@ -6,20 +6,20 @@
  * open. Items follow the row's server-computed `access` flags (never a
  * role recomputed here):
  * - Rename (can_rename, owner): inline input, PUT title with
- *   `expected_updated_at`;
+ *   `expected_updated_at` (one retry when only rows moved meanwhile);
  * - Columns (everyone): opens the Columns panel; a disabled slot until the
  *   viewer passes `onOpenColumns` (phase B5);
  * - History (can_edit, editors): a disabled slot until `onOpenHistory` (B6);
  * - Download CSV, Download SQLite (everyone) and Download SQLite with history
  *   (can_download_history, editors): plain `<a href download>` links;
  * - "Require approval for agent writes" (can_require_approval, owner): PUT
- *   require_approval with `expected_updated_at`; the menu stays open so the
- *   new state is visible;
+ *   require_approval without a concurrency token (row writes move
+ *   updated_at); the menu stays open so the new state is visible;
  * - Share (can_share, owner): a disabled slot until `onOpenShare` (B6);
  * - Delete (can_delete, owner): DocConfirmDialog naming the row count, then
  *   navigates to All Tables (the project's list for a project table).
  *
- * A stale `expected_updated_at` (409 stale_update) applies the server's
+ * A stale rename (409 stale_update) applies the server's
  * current row (`onRowApplied`, i.e. useTable.applyRow) -- or asks for a
  * re-fetch (`onStale`) when the error carries none -- and shows a notice;
  * nothing is overwritten blindly. Successful writes report the returned

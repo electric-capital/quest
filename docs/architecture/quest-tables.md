@@ -2,7 +2,7 @@
 
 ## Overview
 
-A **Quest Table** is a typed table that lives inside Quest, owned by a user (a **user table**) or by a project (a **project table**, owned by the project owner). Each table is a `data_tables` row in `quest.db` holding its metadata and ordered column schema, plus a directory `<data_dir>/tables/<table_id>/` for its own `table.db` (rows and change log); the rows never live in `quest.db`. This doc covers the metadata store, the column and value model, schema operations, the table file (row writes, schema changes, change log, restore), the access rule, the service layer every caller goes through, the realtime events, the delete sweeps, prompting and the `tables` [feature gate](feature-gates.md). The query language, results and refusals, the model tools, the table action requests and the HTTP routes are in the [Quest Tables API](../api/tables-api.md). Ownership, scope, modes and shares follow [Quest Docs](quest-docs.md#concepts-and-invariants), with the same terms.
+A **Quest Table** is a typed table that lives inside Quest, owned by a user (a **user table**) or by a project (a **project table**, owned by the project owner). Each table is a `data_tables` row in `quest.db` holding its metadata and ordered column schema, plus a directory `<data_dir>/tables/<table_id>/` for its own `table.db` (rows and change log); the rows never live in `quest.db`. This doc covers the metadata store, the column and value model, schema operations, the table file (row writes, schema changes, change log, restore), the access rule, the service layer every caller goes through, the realtime events, the delete sweeps, prompting and the `tables` [feature gate](feature-gates.md). The query language, results and refusals, the model tools, the table action requests and the HTTP routes are in the [Quest Tables API](../api/tables-api.md), the UI in [Quest Tables Frontend](quest-tables-frontend.md). Ownership, scope, modes and shares follow [Quest Docs](quest-docs.md#concepts-and-invariants), with the same terms.
 
 ## Key Files
 
@@ -149,7 +149,7 @@ A refusal leaves the file unchanged. `rows_violate` reports the first failing ch
 
 ## Queries
 
-`chat/tables/filters.py` compiles a query into SQL over `rows`: validated keys quoted by `_ident()`, every value bound. Its contract (grammar, operand rules, empty-cell semantics, sort, caps, the result) is owned by [Quest Tables API -- Queries](../api/tables-api.md#queries). `run_query()` runs the count and the page in one read transaction; a filter delete passes `compile_filter()`'s `(where_sql, params)` pair to `delete_rows()`.
+`chat/tables/filters.py` compiles a query into SQL over `rows`: validated keys quoted by `_ident()`, every value bound. Its contract is owned by [Quest Tables API -- Queries](../api/tables-api.md#queries). `run_query()` runs the count and the page in one read transaction; a filter delete passes `compile_filter()`'s `(where_sql, params)` pair to `delete_rows()`.
 
 ## Change Log
 
@@ -210,11 +210,15 @@ The module's helpers word a verdict for callers ([Refusals](../api/tables-api.md
 
 ## HTTP Routes
 
-Four routers under `/app/api`, mounted in `quest.py`, are the UI surface; their contract is [Quest Tables API -- HTTP Routes](../api/tables-api.md#http-routes). Every handler calls the service with `caller_for_ui()`, so the routes add only what the matrix does not decide: ownership, the editors-only history, the request shapes and the column-key row shape the grid needs. `serve_spa_tables` in `quest.py` serves the `/tables` deep links.
+Four routers under `/app/api`, mounted in `quest.py`, are the UI surface; their contract is [Quest Tables API -- HTTP Routes](../api/tables-api.md#http-routes). Every handler calls the service with `caller_for_ui()`, so the routes add only what the matrix does not decide: ownership, the editors-only history, the request shapes and the column-key row shape the grid needs.
+
+## Frontend
+
+The `/tables` views (sidebar blocks, All Tables, the viewer with its filter bar and grid) and how they consume the routes and events are in [Quest Tables Frontend](quest-tables-frontend.md).
 
 ## Realtime Events
 
-`chat/tables/events.py` publishes two transient per-user globals: `table_list_changed` (list views re-fetch) and `table_changed {table_id, updated_at, schema_version}` (an open viewer re-fetches its grid, and its schema when `schema_version` moved). A null `updated_at` (with a null `schema_version`) means the table's existence or the receiver's access changed. The envelopes are `make_table_list_changed()` and `make_table_changed()` in `chat/realtime/events.py`; the protocol is in [Realtime](realtime.md#backend-publish-sites-per-user-globals).
+`chat/tables/events.py` publishes two transient per-user globals: `table_list_changed` (list views re-fetch) and `table_changed {table_id, updated_at, schema_version}` (an open viewer re-fetches; see [Frontend](#frontend)). A null `updated_at` (with a null `schema_version`) means the table's existence or the receiver's access changed. The envelopes are `make_table_list_changed()` and `make_table_changed()` in `chat/realtime/events.py`; the protocol is in [Realtime](realtime.md#backend-publish-sites-per-user-globals).
 
 The audience is the owner plus every direct share recipient, and every user connected at publish time when the table has an everyone share. It is not filtered by gate or access: such a user can receive a table id, a timestamp and a version, never a title or content, and any fetch goes through the access rule. A delete captures the audience before the share rows cascade away. The module docstring lists who publishes what. An account deletion notifies no one.
 

@@ -1,10 +1,10 @@
 # Frontend Architecture
 
-The React single-page app in `frontend/`: build and serving, the state layer that keeps per-conversation state alive across navigation, URL routing, and the main surfaces (sidebar, composer and home screen, chat panel, message and tool-call rendering, the right-hand workspace panel). The REST client is in [Frontend API Client](../api/api-client-usage.md), the realtime protocol in [Realtime](realtime.md), and the Quest Docs views in [Quest Docs -- Frontend](quest-docs.md#frontend).
+The React single-page app in `frontend/`: build and serving, the state layer that keeps per-conversation state alive across navigation, URL routing, and the main surfaces (sidebar, composer and home screen, chat panel, message and tool-call rendering, the right-hand workspace panel). The REST client is in [Frontend API Client](../api/api-client-usage.md), the realtime protocol in [Realtime](realtime.md), and the Quest Docs and Quest Tables views in [Quest Docs -- Frontend](quest-docs.md#frontend) and [Quest Tables Frontend](quest-tables-frontend.md).
 
 ## Overview
 
-React 19 and TypeScript (versions in `frontend/package.json`), built by Vite into static files that FastAPI serves from the same origin, so REST calls and the WebSocket need no proxy. There is no Vite dev server: `run.py` installs the packages and runs `npm run build` (`tsc -b` over both tsconfig projects, then `vite build` into `frontend/dist/`) before starting the server, in every run mode. The CI checks (typecheck, lint, vitest, build) are in [Development Workflows -- Frontend Checks](../setup/development-workflows.md#frontend-checks).
+React 19 and TypeScript (versions in `frontend/package.json`), built by Vite into static files that FastAPI serves from the same origin, so REST calls and the WebSocket need no proxy. There is no Vite dev server: `run.py` installs the packages and runs `npm run build` (`tsc -b` over both tsconfig projects, then `vite build` into `frontend/dist/`) before starting the server, in every run mode. The CI checks are in [Development Workflows -- Frontend Checks](../setup/development-workflows.md#frontend-checks).
 
 ## Key Files
 
@@ -61,7 +61,7 @@ A shim over `persistentWebSocket` that owns no socket (see its header comment). 
 
 Closing or reloading a tab never cancels a run; only an explicit stop does (server side: [Realtime -- Send Lock and Stop Semantics](realtime.md#send-lock-and-stop-semantics)).
 
-`sendMessage()` calls `requestNotificationPermission()` (`frontend/src/services/desktopNotifications.ts`) so the browser's prompt appears on the first user-initiated send, not at page load. The only `sendDesktopNotification()` call is the "Response complete" alert in `finishStream()`, which `desktopNotifications.ts` shows only with permission granted and the tab hidden.
+`sendMessage()` calls `requestNotificationPermission()` (`frontend/src/services/desktopNotifications.ts`) so the browser's prompt appears on the first send, not at page load. The only `sendDesktopNotification()` call, the "Response complete" alert in `finishStream()`, shows only with permission granted and the tab hidden.
 
 ### Application Contexts (`src/contexts/`)
 
@@ -93,9 +93,9 @@ The per-conversation entry point (`UseConversationResult`). It loads the convers
 
 ## URL-Based Routing
 
-Every conversation has its own URL, so deep links, reloads and back / forward work. `frontend/src/main.tsx` wraps the app in `BrowserRouter`; the `<Routes>` in `App.tsx` send `/`, `/chats/<id>` (standalone), `/projects/<pid>/<id>` (project conversation), `/inbox`, `/inbox/memories` and the Quest Docs routes to `AppContent`, and render `/set-password` and the admin reports page outside it.
+Every conversation has its own URL, so deep links, reloads and back / forward work. `frontend/src/main.tsx` wraps the app in `BrowserRouter`; the `<Routes>` in `App.tsx` send `/`, `/chats/<id>` (standalone), `/projects/<pid>/<id>` (project conversation), `/inbox`, `/inbox/memories` and the Quest Docs and Quest Tables routes to `AppContent`, and render `/set-password` and the admin reports page outside it.
 
-The URL is the source of truth: a `useEffect` in `AppContent` copies the params into `activeConversationId` and `activeProjectId`, and selection goes through `navigate()` in `handleConversationSelect` / `handleNewConversation`, both `useCallback`-stable for the memoized Sidebar. `/inbox*` is mirrored into `showRequestsView`; docs routes are parsed on every render by `parseDocsRoute()` (`frontend/src/utils/docsRoute.ts`), with no context field. Keeping the selection only in React state was rejected: it would be lost on reload and conversations could not be linked.
+The URL is the source of truth: a `useEffect` in `AppContent` copies the params into `activeConversationId` and `activeProjectId`, and selection goes through `navigate()` in `handleConversationSelect` / `handleNewConversation`, both `useCallback`-stable for the memoized Sidebar. `/inbox*` is mirrored into `showRequestsView`; docs and tables routes are parsed on every render by `parseDocsRoute()` and `parseTablesRoute()` (`frontend/src/utils/docsRoute.ts`, `frontend/src/utils/tablesRoute.ts`), with no context field. Keeping the selection only in React state was rejected: it would be lost on reload and conversations could not be linked.
 
 ### Project Redirect
 
@@ -103,11 +103,11 @@ A `/chats/<id>` URL for a project conversation is rewritten to `/projects/<pid>/
 
 ### Backend SPA Support
 
-`quest.py` registers one `serve_spa_*` catch-all per client-side URL family, before the `/{filename}` static fallback, returning `frontend/dist/index.html` so a direct load or reload of a client-side URL reaches React Router instead of a 404. The `/admin` catch-all cannot shadow the admin API, which lives under `/app/api/admin/...`. FastAPI registers its interactive docs in its constructor, ahead of every app route, so serving `/docs` meant moving them: their paths are the `docs_url` / `redoc_url` arguments of the `FastAPI(...)` call in `quest.py`, with `/openapi.json` unchanged (pinned by `tests/test_spa_docs_routes.py`).
+`quest.py` registers one `serve_spa_*` catch-all per client-side URL family, before the `/{filename}` static fallback, returning `frontend/dist/index.html` so a direct load or reload of a client-side URL reaches React Router instead of a 404. The `/admin` catch-all cannot shadow the admin API, which lives under `/app/api/admin/...`. FastAPI registers its interactive docs ahead of every app route, so they live off `/docs`, at the `docs_url` / `redoc_url` arguments of `FastAPI(...)` in `quest.py` (pinned by `tests/test_spa_docs_routes.py`).
 
 ## App Layout
 
-`AppContent` (`frontend/src/App.tsx`) renders, in order of precedence: a loading screen during the session check, `SignInScreen` when unauthenticated, `MobileShell` below `MOBILE_BREAKPOINT_PX`, else the desktop row of `Sidebar`, a main pane and `SettingsModal`. The main pane is `RequestsView` while `showRequestsView` is set, else a Quest Docs view on a `/docs` route (no right panel), else `ChatPanel` (or `HomeComposer` with no conversation) beside `RightPanel`. `MobileShell` (see its header comment) arranges the same components in a top bar and drawers. `document.title` is `appName`, which differs in local mode.
+`AppContent` (`frontend/src/App.tsx`) renders, in order of precedence: a loading screen during the session check, `SignInScreen` when unauthenticated, `MobileShell` below `MOBILE_BREAKPOINT_PX`, else the desktop row of `Sidebar`, a main pane and `SettingsModal`. The main pane is `RequestsView` while `showRequestsView` is set, else a Quest Docs or Quest Tables view on a `/docs` or `/tables` route (no right panel), else `ChatPanel` (or `HomeComposer` with no conversation) beside `RightPanel`. `MobileShell` (see its header comment) arranges the same components in a top bar and drawers. `document.title` is `appName`, which differs in local mode.
 
 **Why components subscribe to their own realtime events.** The sidebar list hooks follow `onStreamComplete` and `conversation_list_changed`, `FileBrowser` follows `file_list_changed`, `ProjectTables` follows `onStreamComplete`. A refresh counter in a shared context would re-render every consumer whenever any run finished and flicker the UI; direct subscriptions re-render only the subscriber, which refreshes stale-while-revalidate.
 
@@ -119,7 +119,7 @@ The browser authenticates only with the session cookie (`COOKIE_NAME` in `auth/c
 
 ## Sidebar Component (`src/components/Sidebar.tsx`)
 
-`Sidebar.tsx` is a shell; its header comment lists what it owns and delegates. The data hooks each own their realtime subscriptions, so the Sidebar has none: `hooks/useTopLevelConversations.ts` (paged standalone list, filters, background refresh), `hooks/useProjectConversations.ts` (per-project lists, the drilled list's poll), `hooks/useProjectRoutines.ts` and two `hooks/useDocs.ts` instances. `hooks/useConversationListActions.ts` (one per list) owns menus, inline rename and optimistic archive; `utils/sidebarItems.ts` and `utils/sidebarDocs.ts` hold the pure list derivation, unit-tested without React; `components/sidebar/` renders, with one `ConversationRow` for every kind of row. Section components return fragments where `Sidebar.css` uses child selectors, so the DOM shape matches the stylesheet.
+`Sidebar.tsx` is a shell; its header comment lists what it owns and delegates. The data hooks each own their realtime subscriptions, so the Sidebar has none: `hooks/useTopLevelConversations.ts` (paged standalone list, filters, background refresh), `hooks/useProjectConversations.ts` (per-project lists, the drilled list's poll), `hooks/useProjectRoutines.ts` and two instances each of `hooks/useDocs.ts` and `hooks/useTables.ts`. `hooks/useConversationListActions.ts` (one per list) owns menus, inline rename and optimistic archive; `utils/sidebarItems.ts` and `utils/sidebarDocs.ts` hold the pure list derivation, unit-tested without React; `components/sidebar/` renders, with one `ConversationRow` for every kind of row. Section components return fragments where `Sidebar.css` uses child selectors, so the DOM shape matches the stylesheet.
 
 - **New Chat never creates a conversation.** It navigates to `/` (see [Home Screen](#home-screen-homecomposer)), keeping a project drill so the first send lands in that project. Only Duplicate Workspace and routine runs create a conversation up front; they seed the store with `seedNewConversation()` (`utils/newConversation.ts`) so `ChatPanel` paints at once, and leave the list refresh to the server's `conversation_list_changed`.
 - **Drilling into a project** remembers the selected top-level conversation, then selects the URL's conversation if it belongs to the project, else the latest, else none; drilling back restores it. A URL naming a project auto-drills. `drilledProjectId` lives in `ProjectsContext` because `HomeComposer` and `RightPanel` read it too.
@@ -152,7 +152,7 @@ The catalog is runtime data: `GET /app/api/config` returns `models` (the Vertex 
 
 After its first message a conversation's provider family is locked and the picker offers only same-family models, so a conversation never switches history formats midway (provider instances share the `openrouter` family, so switching instances stays allowed). Locks live in `ConversationModelsContext.tsx`, persisted in localStorage, written by the composer's first send (unless `skipSendLocks`) and by `ChatPanel.tsx` when a conversation with messages loads, on the routine auto-send and in the `pendingFirstMessage` auto-send.
 
-The home composer must never write a lock: it is keyed by `HOME_DRAFT_KEY` (`frontend/src/constants/drafts.ts`), lock entries are never removed and the map is persisted, so a draft-key lock would restrict the home model menu to one provider for good. `HomeComposer` therefore passes `skipSendLocks`, and the lock lands on the real conversation id in ChatPanel's `pendingFirstMessage` effect. The context's lazy initializer strips any `HOME_DRAFT_KEY` entry left in storage by earlier builds, so the key's value must never change.
+The home composer must never write a lock: it is keyed by `HOME_DRAFT_KEY` (`frontend/src/constants/drafts.ts`), lock entries are never removed and the map is persisted, so a draft-key lock would restrict the home model menu to one provider for good. `HomeComposer` therefore passes `skipSendLocks`, and the lock lands on the real conversation id in ChatPanel's `pendingFirstMessage` effect. The context's lazy initializer strips any stored `HOME_DRAFT_KEY` entry, so the key's value must never change.
 
 ## Home Screen (HomeComposer)
 
@@ -164,9 +164,9 @@ The home composer must never write a lock: it is keyed by `HOME_DRAFT_KEY` (`fro
 
 The footer glyph is `HeartBoltMorph.tsx` (shared with Settings > About); its header comment explains why the morph uses SMIL rather than the CSS `d` property, which Safari lacks.
 
-## Quest Docs UI
+## Quest Docs and Quest Tables UI
 
-The `/docs` views are documented in [Quest Docs -- Frontend](quest-docs.md#frontend). In `AppContent` a docs route takes over the main pane with no right panel, and `showRequestsView` still wins over it, so the Sidebar clears that flag before navigating to a doc.
+The `/docs` views are documented in [Quest Docs -- Frontend](quest-docs.md#frontend), the `/tables` views in [Quest Tables Frontend](quest-tables-frontend.md). In `AppContent` either route takes over the main pane with no right panel, and `showRequestsView` still wins over it, so the Sidebar clears that flag before navigating to a doc or table.
 
 ## ChatPanel Component
 
@@ -191,7 +191,7 @@ The `/docs` views are documented in [Quest Docs -- Frontend](quest-docs.md#front
 
 `MarkdownWorkspaceContext` supplies the base: a context rather than a components factory, so `markdownComponents` stays a stable module constant and the memoization holds. `ChatPanel` provides the conversation id and a click-to-enlarge handler, `FileViewerModal` the file's own space, and the Quest Docs viewer an `assetBase` that resolves only `assets/<name>` ([Quest Docs -- Viewer](quest-docs.md#viewer)). A src that fails to load becomes a missing-image chip, tracked per URL so a src truncated mid-stream recovers.
 
-**Usage stats.** Each turn ends with one `stats` row, emitted by `_emit_durable(ctx, {"type": "stats", ...})` at the end of `run_conversation_turn()` in `chat/gemini_api/conversation.py` from `UsageAccumulator.build_stats()` (`chat/gemini_api/usage.py`; fields in [Gemini API -- Token Usage Tracking](gemini-api.md#token-usage-tracking)). The stats branch of `MessageContentRenderer` shows new input, output, time and tool calls, with a provider-aware breakdown on hover (Gemini and OpenRouter count input inclusive of the cached subset; Anthropic splits cache creation from cache read), plus a sub-agent row when `sub_agent_call_count` is non-zero. Older stats rows without `new_input_tokens` still render in the legacy input-plus-cached form.
+**Usage stats.** Each turn ends with one `stats` row, emitted by `_emit_durable(ctx, {"type": "stats", ...})` at the end of `run_conversation_turn()` in `chat/gemini_api/conversation.py` from `UsageAccumulator.build_stats()` (`chat/gemini_api/usage.py`; fields in [Gemini API -- Token Usage Tracking](gemini-api.md#token-usage-tracking)). The stats branch of `MessageContentRenderer` shows new input, output, time and tool calls, with a provider-aware breakdown on hover (Gemini and OpenRouter count input inclusive of the cached subset; Anthropic splits cache creation from cache read), plus a sub-agent row when `sub_agent_call_count` is non-zero. Stats rows without `new_input_tokens` render input plus cached.
 
 **Code colours.** `Message.css` overrides highlight.js's `atom-one-dark` theme per token class, dark on `:root` and light in the light-scheme block. Every colour passes WCAG AA against its code-block background and carries its measured ratio in a comment on the rule; a palette change must keep those annotations true.
 
@@ -272,4 +272,4 @@ Each component imports its own stylesheet; class names are plain strings, not CS
 
 ## Render Optimization
 
-Wasted renders are cut at three sources: cross-conversation store updates (per-conversation snapshots), context churn (one memoized provider per responsibility), and unstable props (`React.memo` on `Sidebar`, `ChatPanel`, `MessageContentRenderer` and `ActionRequestMessage`, with `useCallback`-stable handlers from `App.tsx`). `RequestsBadge` is split out so a count change re-renders only the badge, and its same-tab event bus lives outside React context for the same reason.
+Wasted renders are cut at three sources: cross-conversation store updates (per-conversation snapshots), context churn (one memoized provider per responsibility), and unstable props (`React.memo` on `Sidebar`, `ChatPanel`, `MessageContentRenderer` and `ActionRequestMessage`, with `useCallback`-stable handlers from `App.tsx`). `RequestsBadge`'s same-tab event bus lives outside React context for the same reason.
