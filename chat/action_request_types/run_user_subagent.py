@@ -28,8 +28,10 @@ _MAX_PROMPT_LEN = 20_000
 _MAX_SKILLS = 10
 
 # Caller-side wait-handle backstop: if the target user never resolves the
-# return card (or the server restarts mid-run), the expires_at sweep frees
-# the caller conversation instead of leaving it locked forever.
+# return card (or the server restarts mid-run), the expires_at sweep in
+# chat/wait_handles/wait_timer.py times the handle out and wakes the caller
+# conversation instead of leaving it locked forever. A wait_for_handles
+# call on the handle replaces this deadline with its own timeout.
 _CALLER_HANDLE_TTL = timedelta(days=14)
 
 # request_type is server-populated context, never model-supplied. The

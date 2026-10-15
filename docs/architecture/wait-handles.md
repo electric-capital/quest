@@ -19,10 +19,10 @@ The mechanism currently backs four call sites:
 ## Key Files
 
 - `db/models.py` -- `ToolWaitHandle` ORM model; `ToolWaitHandleKind` (`slack_reply`, `action_request`, `user_subagent`); `ToolWaitHandleStatus`. The schema column is `String(50)` so adding kinds requires no migration. See [Database Architecture](database.md)
-- `db/tool_wait_handle_store.py` -- async CRUD plus `find_pending_slack_reply(channel, thread_ts)`, `find_pending_for_action_request(user_id, request_id)`, `bulk_get_handles_by_ids`, `mark_timed_out`, `cancel_pending_for_conversation`, `get_handle_by_tool_id`. `create_handle()` accepts optional `correlation_kind` / `correlation_id` for kinds where the linkage is known up front (used by `action_request`)
+- `db/tool_wait_handle_store.py` -- async CRUD plus `find_pending_slack_reply(channel, thread_ts)`, `find_pending_for_action_request(user_id, request_id)`, `bulk_get_handles_by_ids`, `mark_timed_out`, `cancel_pending_for_conversation`, `get_handle_by_tool_id`, and the expiry helpers `set_expires_at` / `list_expired_pending`. `create_handle()` accepts optional `correlation_kind` / `correlation_id` for kinds where the linkage is known up front (used by `action_request`) and an optional `expires_at`
 - `chat/gemini_api/turn_tools.py` -- `SuspendForWaitHandles`, `SuspendForSlackReply`, and `SuspendForActionRequest` sentinel classes; `_await_wait_for_handles`, `_build_wait_for_handles_result`; the per-tool dispatch handlers that register handles and raise the sentinels
 - `chat/gemini_api/conversation.py` -- the top-level `run_conversation_turn()` catches all three sentinels and returns cleanly, and the resume bucket logic at the top of the same function closes the dangling tool_use on the next run
-- `chat/wait_handles/wait_timer.py` -- per-handle `asyncio.Task` that enforces `timeout_seconds`. On expiry, marks the row `timed_out` and calls `maybe_kick_resume`; the DB `expires_at` sweep is the restart-resilience fallback
+- `chat/wait_handles/wait_timer.py` -- deadline enforcement: the per-handle `asyncio.Task` timers, the wait-site overdue check, and the `expires_at` sweep (`expiry_sweep_loop`, `sweep_expired_handles`). See [Expiry](#expiry)
 - `chat/wait_handles/resume.py` -- `maybe_kick_resume`, `_run_resume`, `_conversation_has_dangling_wait`, `_conversation_has_dangling_slack_reply`. Drives a fresh headless `run_conversation_turn()` with `message=""` and preserves `origin` + `slack_context` so Slack-origin resumes boot with the right tools
 - `chat/wait_handle_routes.py` -- REST endpoints (`GET /app/api/wait-handles/{id}`, `POST /app/api/wait-handles/{id}/resolve`); always calls `maybe_kick_resume` on success
 - `chat/action_request_routes.py` -- `POST /app/api/action-requests/{id}/resolve` resolves the linked `kind="action_request"` handle (via `find_pending_for_action_request`) and kicks `maybe_kick_resume` after the action_request row is flipped. See [Action Requests](action-requests.md)
@@ -32,7 +32,7 @@ The mechanism currently backs four call sites:
 - `alembic/versions/3b9d4f7c2e10_cancel_pending_memory_suggestions.py` -- one-shot data migration that cancels any historical `pending` rows of retired kinds so they cannot strand resumes
 - `frontend/src/components/ToolUseMessage.tsx` -- renders `Waiting for: <reason>` in place of `wait_for_handles`
 - `frontend/src/api/types.ts` -- `WaitHandle` type (the endpoint URLs are in `frontend/src/api/config.ts`; no frontend code resolves handles through them)
-- `quest.py` -- registers `wait_handle_router`. No lifespan shutdown drain: pending rows survive restart and resume from DB on next boot
+- `quest.py` -- registers `wait_handle_router` and starts `expiry_sweep_loop` in the lifespan (cancelled on shutdown). No lifespan shutdown drain: pending rows survive restart and resume from DB on next boot
 
 ## Data Model
 
@@ -44,7 +44,9 @@ The mechanism currently backs four call sites:
 
 `correlation_kind` / `correlation_id` are populated **at create time** for `action_request` (the `action_requests.id` is in hand when the wait handle is inserted, so `find_pending_for_action_request()` can index the lookup by it). The `String(50)` `kind` column also accommodates legacy historical rows from now-retired kinds without a schema change.
 
-`ToolWaitHandleStatus` defines the lifecycle: `pending` -> `accepted` | `rejected` | `cancelled` | `timed_out`. Indexes (`user_id`, `conversation_id`, `(user_id, status)`, `tool_id`) cover the access patterns of the resume path, the per-conversation cancellation, and the lookup-by-tool-id used by the resume bucket. See [Database Architecture](database.md) for the column-by-column schema and [Constraints](#constraints).
+`expires_at` is the row's deadline, enforced as described in [Expiry](#expiry). It is set at create time only for `user_subagent` (the 14-day `_CALLER_HANDLE_TTL` backstop in `chat/action_request_types/run_user_subagent.py`); a `wait_for_handles` call overwrites it with that wait's own deadline. `slack_reply` and `action_request` rows are created without one.
+
+`ToolWaitHandleStatus` defines the lifecycle: `pending` -> `accepted` | `rejected` | `cancelled` | `timed_out` | `stopped`. Every transition out of `pending` (`resolve_handle`, `cancel_pending_for_conversation`, `mark_timed_out`) is a conditional `UPDATE ... WHERE status = 'pending'` per row, so when a resolve races a timeout the row's state in the DB picks the single winner and the loser no-ops. Indexes (`user_id`, `conversation_id`, `(user_id, status)`, `tool_id`) cover the access patterns of the resume path, the per-conversation cancellation, and the lookup-by-tool-id used by the resume bucket. See [Database Architecture](database.md) for the column-by-column schema and [Constraints](#constraints).
 
 ## Tool Surface
 
@@ -65,19 +67,19 @@ The dispatch arm of any blocking tool follows the same shape:
 
 1. Insert a `pending` row via `create_handle()`.
 2. Save `sdk_history.json` -- already done by the boundary save in `_capturing_on_event` at the `tool_use` event for the registering call; see [SDK History Persistence](gemini-api.md#sdk-history-persistence).
-3. For `wait_for_handles`: schedule a per-handle expiry timer via `wait_timer.schedule_timeout_for_handles()`, then raise `SuspendForWaitHandles`.
+3. For `wait_for_handles`: time out any requested row whose `expires_at` has already passed (returning at once if nothing is left pending), persist the wait's deadline on the still-pending rows via `set_expires_at()`, schedule a per-handle expiry timer via `wait_timer.schedule_timeout_for_handles()`, then raise `SuspendForWaitHandles`. See [Expiry](#expiry).
    For `send_slack_reply_and_get_response`: post the Slack reply via `slack_driven_runtime.post_thread_reply()`, then raise `SuspendForSlackReply`.
    For `create_action_request`: emit the `action_request` websocket event and append the structured chat-history message, then raise `SuspendForActionRequest`. This sentinel alone is caught **inside** the dispatch loop's per-call arm: the loop records it, keeps dispatching the remaining calls of the same parallel batch (each further `create_action_request` opens another card + row; regular tools run and persist their `tool_result`), then re-raises the first sentinel after the batch with the other cards' handle ids on `sibling_handle_ids`.
 4. The top-level `run_conversation_turn()` catches the sentinel, logs an info line, and returns the structured-messages list cleanly. No error event is emitted; this is a successful suspend, not a turn-end.
 
 On disk, `sdk_history.json` ends on an assistant turn whose last content block is the dangling tool_use (`wait_for_handles`, `send_slack_reply_and_get_response`, or `create_action_request`). The `chat_history.json` flush events that drive the boundary save are listed in `chat/_flush_helper.py` (`FLUSH_EVENT_TYPES`).
 
-Resolution writes the row first (first writer wins via the `status == PENDING` precondition in `resolve_handle()`), then calls `wait_resume.maybe_kick_resume(app, user, conversation_id)`. Callers:
+Resolution writes the row first (first writer wins via the conditional update in `resolve_handle()`), then calls `wait_resume.maybe_kick_resume(app, user, conversation_id)`. Callers:
 
 - `POST /app/api/wait-handles/{id}/resolve` (`chat/wait_handle_routes.py`) -- explicit accept/decline/cancel; no frontend code calls it, because the action-request resolve endpoint resolves its own handle.
 - `POST /app/api/action-requests/{id}/resolve` (`chat/action_request_routes.py`) -- the Approve / Revise / Stop path; resolves the linked `kind="action_request"` handle and kicks the resume (Approve / Revise only -- Stop resolves the handle as `stopped` without a kick, and stops the conversation's other open cards too). `create_memory` action requests insert the new memory row inside the handler's `execute()` so the row id is on `result.memory_id`.
 - `slack_driven_runtime._flush_after()` -- Slack debounce flush that resolves a `slack_reply` row with the collated user text.
-- `wait_timer._expire_after()` -- background timeout that flips `pending` to `timed_out` and kicks resume so the model wakes with a final status.
+- `wait_timer._expire_after()` and `wait_timer.sweep_expired_handles()` -- timeouts that flip `pending` to `timed_out` and kick resume so the model wakes with a final status (see [Expiry](#expiry)).
 
 All resolution paths additionally publish `wait_handle_resolved` on the user channel so a viewing tab updates in place; the action-request path also publishes `request_count_changed` / `conversation_list_changed` as appropriate. See [Realtime Architecture](realtime.md).
 
@@ -119,6 +121,18 @@ When the resume runs with `message=""` and there is no dangling tool_use, the lo
 
 `cancel_pending_for_conversation()` flips every still-pending row in the conversation to `cancelled`. The persistent-WS `{op:"stop"}` handler in `chat/realtime/socket.py` calls it unconditionally so a stop click on a sentinel-suspended run (where the API task already returned successfully) does not leave rows pending with nobody to resolve them.
 
+## Expiry
+
+A pending row times out once its `expires_at` passes. Three paths in `chat/wait_handles/wait_timer.py` enforce this. Each flips rows through `mark_timed_out()`, then publishes `wait_handle_resolved` (`status="timed_out"`) on the owner's channel and kicks one `maybe_kick_resume` per affected conversation:
+
+- **Timers** -- `schedule_timeout_for_handles()` starts one in-memory `asyncio.Task` per handle when a `wait_for_handles` call suspends; a later wait on the same handle replaces it. A timer that fires after the row was resolved no-ops.
+- **Wait-site check** -- before suspending, the `wait_for_handles` arm passes the requested pending rows to `expire_overdue_handles()`. Overdue rows time out on the spot, so the model reads `timed_out` instead of suspending on them; the calling conversation gets no kick because its live run reads the status directly.
+- **Sweep** -- `expiry_sweep_loop()`, started in the `quest.py` lifespan, runs `sweep_expired_handles()` at startup and then every `EXPIRY_SWEEP_INTERVAL_SECONDS`. It lists every pending row whose deadline has passed (`list_expired_pending()`), times them out per owner, loads the owner and kicks the resume. The sweep enforces a deadline whose timer died with the process, and is the only enforcement for a deadline set at create time (the `user_subagent` backstop). An overdue row stays pending for at most one interval.
+
+The sweep and the wait-site check pass `expired_by=now` to `mark_timed_out()`, so a row times out only if the DB still holds it as pending with a passed deadline: a handle resolved, or given a later deadline, after the sweep read it is left alone, and overlapping passes cannot announce one row twice. `set_expires_at()` never moves a deadline that has already passed, so a new wait cannot revive an overdue row.
+
+`_build_wait_for_handles_result()` is a pure read. A row the sweep has not reached yet reads as `still_pending`; once the sweep flips it, its kick wakes the conversation if it is still suspended on a wait.
+
 ## Composer Sync
 
 The web composer is locked on any conversation whose suspended turn still has a `pending` wait-handle row, regardless of which tab loaded the conversation or whether a stream is in flight. The gate is driven by the DB row, not by per-tab streaming state, so a fresh conversation load (Requests-pane navigation, page reload, second tab) lands with the composer already disabled.
@@ -135,7 +149,7 @@ Two channels keep the FE in sync:
 `chat/wait_handle_routes.py` exposes:
 
 - `GET /app/api/wait-handles/{handle_id}` -- returns the row scoped to the authenticated user (404 if not found or owned by someone else).
-- `POST /app/api/wait-handles/{handle_id}/resolve` -- body fields are defined by `ResolveWaitHandleRequest` in the same file: `status` (must be `accepted`, `rejected`, or `cancelled`), optional `response` dict, optional `correlation_kind` / `correlation_id`, optional `feedback` (merged into `response`). Returns 400 on bad status, 404 if missing, 400 if already resolved, 409 if a concurrent resolver won the row first. On success, always calls `maybe_kick_resume`. See [Chat API](../api/chat-api.md) for the full endpoint catalog.
+- `POST /app/api/wait-handles/{handle_id}/resolve` -- body fields are defined by `ResolveWaitHandleRequest` in the same file: `status` (must be `accepted`, `rejected`, or `cancelled`), optional `response` dict, optional `correlation_kind` / `correlation_id`, optional `feedback` (merged into `response`). Returns 422 (request validation) on any other status, 404 if missing, 400 if already resolved, 409 if a concurrent resolver (or a timeout) won the row first. On success, always calls `maybe_kick_resume`. See [Chat API](../api/chat-api.md) for the full endpoint catalog.
 
 The `POST /app/api/action-requests/{id}/resolve` endpoint in `chat/action_request_routes.py` is the primary client of the wait-handle resolve path: it bridges to `tool_wait_handle_store.resolve_handle()` and `maybe_kick_resume()` after flipping the `action_requests` row. See [Action Requests](action-requests.md).
 
@@ -143,7 +157,7 @@ The `POST /app/api/action-requests/{id}/resolve` endpoint in `chat/action_reques
 
 - The `tool_wait_handles` table is created by `alembic/versions/c1f2a3d4e5b6_create_tool_wait_handles.py`. The `kind` column is `String(50)`, so adding a kind is a code-only change.
 - `wait_for_handles` limits are the `_WAIT_FOR_HANDLES_*` constants in `chat/gemini_api/turn_tools.py` (see [Tool Surface](#tool-surface)); the resume path applies the same id cap as the live arm.
-- Per-handle expiry timers in `wait_timer.py` are in-memory `asyncio.Task`s and are lost on process restart. The DB `expires_at` sweep is the restart-resilience fallback. `_build_wait_for_handles_result()` does not yet flip rows whose `expires_at` is past to `timed_out` on read; the TODO note is in that function.
+- Per-handle expiry timers in `wait_timer.py` are in-memory `asyncio.Task`s and are lost on process restart; the persisted `expires_at` and the sweep enforce those deadlines after a restart, up to one sweep interval late. See [Expiry](#expiry).
 - Headless resume is durable across restarts and pushes the streamed continuation to viewing tabs via the persistent multiplexed WebSocket. The same `make_flush_callback` that drove the originating run wires through `_run_resume`, so each `chat_history.json` append publishes `message_appended` to every subscriber on the conversation channel; a tab open on the conversation REST-fetches the new tail and renders without a reload. See [Realtime Architecture](realtime.md).
 - `wait_for_handles` is excluded from sub-agent tool sets and from Slack-driven runs; the dispatch arms short-circuit with a structured error before any wait-handle row is inserted. See [Route Dispatch](route-dispatch.md) and [Slack Socket Mode](slack-socket-mode.md).
 
@@ -163,6 +177,9 @@ The Slack Reply Mode prompt ends every turn by calling the reply tool and waitin
 
 **Why per-handle `asyncio.Task` timers instead of an `asyncio.wait(timeout=...)` arm?**
 Without an in-process future to wait on, there is nothing to attach a timeout to inside the dispatch arm. A small background task per handle gives the same behaviour (mark `timed_out` and wake the conversation on expiry) without coupling the timer to the lifetime of any particular suspend. Resolution before the deadline makes the task a no-op when it eventually fires, which keeps the contract narrow -- timers do not need to be eagerly cancelled on resolve.
+
+**Why a DB sweep as well as the timers?**
+A timer dies with the process, so on its own a restart would leave a timed wait pending forever, and a deadline set at create time (the `user_subagent` backstop) has no timer at all. Persisting the deadline in `expires_at` and sweeping it at startup and on an interval makes the deadline as durable as the row. The timers stay because they fire on time, while the sweep can be up to one interval late.
 
 **Why does `wait_for_handles` take a bounded timeout instead of blocking indefinitely?**
 An unbounded wait would let a forgotten handle pin a suspended conversation forever. The maximum (`_WAIT_FOR_HANDLES_MAX_TIMEOUT`) is on the order of weeks, long enough that a request the user only sees the next morning still wakes the original arm, and it is also the default because the realistic horizon for human-in-the-loop work is days; the model passes a smaller value only when it deliberately wants to give up sooner.

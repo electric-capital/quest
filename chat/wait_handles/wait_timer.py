@@ -1,31 +1,47 @@
-"""Per-handle background timers that enforce ``timeout_seconds`` for
-``wait_for_handles`` suspends.
+"""Expiry enforcement for wait handles: per-handle in-memory timers plus a
+durable ``expires_at`` sweep.
 
-Replaces the deleted in-process future registry. The contract here is
-intentionally narrow:
+Two mechanisms flip an overdue ``pending`` row to ``timed_out`` and wake its
+conversation, and both go through :func:`_announce_timeouts` afterwards
+(``wait_handle_resolved`` on the user channel, then
+:func:`chat.wait_handles.resume.maybe_kick_resume`):
 
-- When ``_await_wait_for_handles`` raises :class:`SuspendForWaitHandles`,
-  it first calls :func:`schedule_timeout_for_handles` to register a
-  background ``asyncio.Task`` that sleeps for ``timeout_seconds``.
-- On expiry, the task marks any still-pending rows ``timed_out`` in the
-  DB and calls :func:`chat.wait_handles.resume.maybe_kick_resume` so the
-  suspended conversation wakes up and the model sees the new status.
-- If the handle is resolved before the deadline, the task observes the
-  non-pending status when it fires and no-ops (we do not eagerly cancel
-  the task on resolve -- the in-process registry is a pure firing
-  convenience, not a coordination primitive).
+- **Timers.** When ``_await_wait_for_handles`` raises
+  :class:`SuspendForWaitHandles`, it first persists the deadline on the rows
+  (``expires_at``) and calls :func:`schedule_timeout_for_handles` to register
+  a background ``asyncio.Task`` per handle that sleeps for
+  ``timeout_seconds``. If the handle is resolved before the deadline, the
+  task observes the non-pending status when it fires and no-ops (tasks are
+  not eagerly cancelled on resolve -- they are a firing convenience, not a
+  coordination primitive).
+- **Sweep.** :func:`expiry_sweep_loop`, started from the app lifespan, runs
+  :func:`sweep_expired_handles` at startup and then every
+  ``EXPIRY_SWEEP_INTERVAL_SECONDS``: it times out every pending row whose
+  ``expires_at`` has passed. This is the restart-resilience fallback for
+  timers lost with the process, and the only enforcement for deadlines set
+  at create time (the ``user_subagent`` caller-handle backstop).
 
-The DB ``expires_at`` sweep remains the restart-resilience fallback for
-in-memory timers lost on a process restart. This module deliberately does
-not implement futures, register/discard plumbing, or shutdown drain
-coupling -- the durable behaviour lives in the DB.
+Every flip goes through :func:`db.tool_wait_handle_store.mark_timed_out`, a
+per-row conditional update, so a timeout racing a resolve is decided by the
+DB row's state: whichever write lands first wins, and the loser no-ops.
+This module deliberately does not implement futures, register/discard
+plumbing, or shutdown drain coupling -- the durable behaviour lives in the
+DB.
 """
 
 import asyncio
 import logging
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# How often the expiry sweep re-scans for pending handles whose expires_at
+# has passed. It also runs once at startup, so a deadline that elapsed while
+# the server was down is enforced on boot; between passes, an overdue row
+# can stay pending for at most this long.
+EXPIRY_SWEEP_INTERVAL_SECONDS = 60
 
 
 # Active timer tasks keyed by handle_id. We keep a reference so the tasks
@@ -47,9 +63,9 @@ def schedule_timeout_for_handles(
 
     Best-effort: a missing event loop (e.g. called outside an asyncio
     context, which should not happen from the model loop) is logged and
-    skipped. ``app`` and ``user`` are optional; when omitted, the
-    fallback resume kick on expiry is skipped (the next ``wait_for_handles``
-    call still picks up the ``timed_out`` status from the DB).
+    skipped. ``app`` and ``user`` are optional; when omitted, the resume
+    kick on expiry is skipped and the model sees the ``timed_out`` status
+    the next time the conversation runs.
     """
     try:
         loop = asyncio.get_running_loop()
@@ -102,10 +118,8 @@ async def _expire_after(
         )
         return
 
-    # If the row resolved during the sleep, mark_timed_out is a no-op (it
-    # only flips rows that are still PENDING). We then still kick a resume:
-    # if a sibling resolution already drove a resume, maybe_kick_resume is
-    # dedupe-safe via _active_resumes.
+    # mark_timed_out only flips a row that is still PENDING (conditional
+    # update), so a handle resolved during the sleep comes back empty.
     try:
         from db import tool_wait_handle_store
         flipped = await tool_wait_handle_store.mark_timed_out(
@@ -126,41 +140,167 @@ async def _expire_after(
         "[wait-timer] Handle %s timed out after %ds (conversation=%s)",
         handle_id, timeout_seconds, conversation_id,
     )
+    _announce_timeouts(flipped, app, user)
 
-    try:
-        from chat.realtime import bus, events as realtime_events
-        # mark_timed_out only flips currently-pending rows, so ``flipped`` is
-        # the set of handles we just nudged to ``timed_out``. We re-derive
-        # the kind from the row so the envelope stays accurate.
-        from db import tool_wait_handle_store as _store
-        row = await _store.get_handle_for_user(user_id, handle_id)
-        bus.publish_to_user(
-            user_id,
-            realtime_events.make_wait_handle_resolved(
-                conversation_id=conversation_id,
-                handle_id=handle_id,
-                kind=(row or {}).get("kind") or "",
-                status="timed_out",
-            ),
-        )
-    except Exception:
-        logger.debug(
-            "[wait-timer] publish wait_handle_resolved (timeout) failed",
-            exc_info=True,
-        )
+
+def _announce_timeouts(
+    flipped: list[dict],
+    app: Any,
+    user: Optional[dict],
+    *,
+    skip_conversation_id: Optional[str] = None,
+) -> None:
+    """Publish and wake for rows this process just flipped to ``timed_out``.
+
+    Publishes ``wait_handle_resolved`` per row so viewing tabs unlock the
+    composer, then kicks one headless resume per affected conversation
+    (``maybe_kick_resume`` is gated on a dangling wait in the saved
+    transcript, so it no-ops where nothing is suspended). The kicks are
+    skipped when ``app`` or ``user`` is missing, and for
+    ``skip_conversation_id`` -- the conversation whose live model run
+    flipped the rows and reads their status directly.
+    """
+    from chat.realtime import bus, events as realtime_events
+
+    for row in flipped:
+        try:
+            bus.publish_to_user(
+                row["user_id"],
+                realtime_events.make_wait_handle_resolved(
+                    conversation_id=row["conversation_id"],
+                    handle_id=row["id"],
+                    kind=row.get("kind") or "",
+                    status=row["status"],
+                ),
+            )
+        except Exception:
+            logger.debug(
+                "[wait-timer] publish wait_handle_resolved (timeout) failed",
+                exc_info=True,
+            )
 
     if app is None or user is None:
-        # No resume-kick context. The next wait_for_handles call (or the
-        # restart-time expires_at sweep) will surface the timed_out status
-        # to the model.
         return
 
-    try:
-        from chat.wait_handles import resume as wait_resume
-        wait_resume.maybe_kick_resume(app, user, conversation_id)
-    except Exception:
-        logger.exception(
-            "[wait-timer] Failed to kick resume after timeout for handle %s "
-            "(conversation=%s)",
-            handle_id, conversation_id,
+    from chat.wait_handles import resume as wait_resume
+
+    conversation_ids = dict.fromkeys(row["conversation_id"] for row in flipped)
+    for conversation_id in conversation_ids:
+        if conversation_id == skip_conversation_id:
+            continue
+        try:
+            wait_resume.maybe_kick_resume(app, user, conversation_id)
+        except Exception:
+            logger.exception(
+                "[wait-timer] Failed to kick resume after timeout "
+                "(conversation=%s)", conversation_id,
+            )
+
+
+async def expire_overdue_handles(
+    app: Any,
+    user: dict,
+    handle_ids: list[str],
+    *,
+    current_conversation_id: Optional[str] = None,
+) -> list[dict]:
+    """Time out any of ``handle_ids`` whose persisted ``expires_at`` has
+    passed, without waiting for the next sweep pass.
+
+    Called by the ``wait_for_handles`` arm so a model never suspends on a
+    handle that is already overdue. Rows are flipped through
+    ``mark_timed_out(expired_by=now)``, so only rows the DB still holds as
+    pending and overdue change. ``current_conversation_id`` (the caller's
+    own, live conversation) gets no resume kick. Returns the flipped rows.
+    """
+    from db import tool_wait_handle_store
+
+    flipped = await tool_wait_handle_store.mark_timed_out(
+        handle_ids, user["id"], expired_by=datetime.now(timezone.utc),
+    )
+    if flipped:
+        logger.info(
+            "[wait-timer] Timed out %d overdue handle(s) at the wait site "
+            "(user=%s): %s",
+            len(flipped), user["id"], [row["id"] for row in flipped],
         )
+        _announce_timeouts(
+            flipped, app, user,
+            skip_conversation_id=current_conversation_id,
+        )
+    return flipped
+
+
+async def sweep_expired_handles(
+    app: Any, *, now: Optional[datetime] = None,
+) -> list[dict]:
+    """One sweep pass: time out every pending handle whose ``expires_at``
+    is at or before ``now`` and wake the affected conversations.
+
+    The candidate read is only a hint. Each user's candidates are flipped
+    through ``mark_timed_out(expired_by=now)``, so a row resolved, or given
+    a later deadline, after the read is left alone, and two overlapping
+    passes cannot both announce the same row. Returns the rows this pass
+    flipped.
+    """
+    from db import tool_wait_handle_store
+    from db.user_store import get_user_by_id
+
+    now = now or datetime.now(timezone.utc)
+    candidates = await tool_wait_handle_store.list_expired_pending(now)
+    if not candidates:
+        return []
+
+    by_user: dict[int, list[str]] = {}
+    for row in candidates:
+        by_user.setdefault(row["user_id"], []).append(row["id"])
+
+    timed_out: list[dict] = []
+    for user_id, ids in by_user.items():
+        try:
+            flipped = await tool_wait_handle_store.mark_timed_out(
+                ids, user_id, expired_by=now,
+            )
+        except Exception:
+            logger.exception(
+                "[wait-timer] Expiry sweep could not time out handles %s "
+                "(user=%s)", ids, user_id,
+            )
+            continue
+        if not flipped:
+            continue
+        logger.info(
+            "[wait-timer] Expiry sweep timed out %d handle(s) (user=%s): %s",
+            len(flipped), user_id, [row["id"] for row in flipped],
+        )
+        try:
+            user = await get_user_by_id(user_id)
+        except Exception:
+            logger.exception(
+                "[wait-timer] Expiry sweep could not load user %s; "
+                "skipping resume kicks", user_id,
+            )
+            user = None
+        _announce_timeouts(flipped, app, user)
+        timed_out.extend(flipped)
+    return timed_out
+
+
+async def expiry_sweep_loop(
+    app: Any, interval_seconds: float = EXPIRY_SWEEP_INTERVAL_SECONDS,
+) -> None:
+    """Background task (started in the app lifespan): run
+    :func:`sweep_expired_handles` immediately, then every
+    ``interval_seconds``, until cancelled."""
+    logger.info(
+        "[wait-timer] Wait-handle expiry sweep started (interval: %ds)",
+        interval_seconds,
+    )
+    while True:
+        try:
+            await sweep_expired_handles(app)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("[wait-timer] Wait-handle expiry sweep failed")
+        await asyncio.sleep(interval_seconds)

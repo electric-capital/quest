@@ -4,13 +4,19 @@ Each row tracks a tool call that is awaiting human resolution. The row is
 the sole source of truth: ``_await_wait_for_handles`` raises a sentinel
 exception that suspends the conversation, and the resume bucket re-queries
 this table on the next run to close the dangling tool_use.
+
+Every transition out of ``pending`` (resolve, cancel, time out) is a
+conditional ``UPDATE ... WHERE status = 'pending'`` per row, so when two
+writers race (a user resolving while a timer or the expiry sweep times the
+row out) the row's state in the DB decides the single winner, never a
+caller's earlier read.
 """
 
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 
 from db.engine import AsyncSessionLocal
 from db.models import ToolWaitHandle, ToolWaitHandleStatus
@@ -32,6 +38,41 @@ def _row_to_dict(row: ToolWaitHandle) -> dict:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
     }
+
+
+async def _flip_pending(db, handle_ids: list[str], values: dict, *conditions) -> list[str]:
+    """Compare-and-set each still-pending row in ``handle_ids`` to ``values``.
+
+    One conditional ``UPDATE ... WHERE id = :id AND status = 'pending'``
+    (plus ``conditions``) per id, all in the caller's transaction, so the
+    DB row's state decides which writer wins. Returns the ids this call
+    flipped, in request order; the caller commits (or rolls back).
+    """
+    flipped: list[str] = []
+    for handle_id in dict.fromkeys(handle_ids):
+        result = await db.execute(
+            update(ToolWaitHandle)
+            .where(
+                ToolWaitHandle.id == handle_id,
+                ToolWaitHandle.status == ToolWaitHandleStatus.PENDING,
+                *conditions,
+            )
+            .values(**values)
+        )
+        if result.rowcount == 1:
+            flipped.append(handle_id)
+    return flipped
+
+
+async def _load_in_order(db, handle_ids: list[str]) -> list[dict]:
+    """Read back ``handle_ids`` as dicts, preserving the given order."""
+    if not handle_ids:
+        return []
+    result = await db.execute(
+        select(ToolWaitHandle).where(ToolWaitHandle.id.in_(handle_ids))
+    )
+    by_id = {row.id: row for row in result.scalars().all()}
+    return [_row_to_dict(by_id[h]) for h in handle_ids if h in by_id]
 
 
 async def create_handle(
@@ -216,26 +257,34 @@ async def resolve_handle(
 ) -> Optional[dict]:
     """Flip a pending handle to a terminal state. First write wins.
 
-    If ``user_id`` is provided, the row is also scoped to that user. Returns
-    the updated dict, or None if the handle does not exist, is already
-    resolved, or is owned by a different user.
+    The transition is a conditional ``UPDATE ... WHERE status = 'pending'``,
+    so a resolve racing a timeout (or another resolve) can never overwrite
+    the winner. If ``user_id`` is provided, the row is also scoped to that
+    user. Returns the updated dict, or None if the handle does not exist,
+    is already resolved, or is owned by a different user.
     """
+    conditions = []
+    if user_id is not None:
+        conditions.append(ToolWaitHandle.user_id == user_id)
     async with AsyncSessionLocal() as db:
-        row = await db.get(ToolWaitHandle, handle_id)
-        if row is None:
+        flipped = await _flip_pending(
+            db,
+            [handle_id],
+            {
+                "status": new_status,
+                "response": response,
+                "correlation_kind": correlation_kind,
+                "correlation_id": correlation_id,
+                "resolved_at": datetime.now(timezone.utc),
+            },
+            *conditions,
+        )
+        if not flipped:
+            await db.rollback()
             return None
-        if user_id is not None and row.user_id != user_id:
-            return None
-        if row.status != ToolWaitHandleStatus.PENDING:
-            return None
-        row.status = new_status
-        row.response = response
-        row.correlation_kind = correlation_kind
-        row.correlation_id = correlation_id
-        row.resolved_at = datetime.now(timezone.utc)
         await db.commit()
-        await db.refresh(row)
-        return _row_to_dict(row)
+        rows = await _load_in_order(db, flipped)
+        return rows[0] if rows else None
 
 
 async def cancel_pending_for_conversation(
@@ -245,52 +294,123 @@ async def cancel_pending_for_conversation(
 ) -> list[dict]:
     """Mark every pending handle for a conversation as cancelled.
 
-    Returns the list of cancelled handles (may be empty). Used when the
+    Returns the list of handles this call cancelled (may be empty; a row
+    resolved or timed out concurrently is left alone). Used when the
     in-memory chat session is removed (e.g. cancellation) so any other run
     that later picks up a dangling ``wait_for_handles`` doesn't hang.
     """
     async with AsyncSessionLocal() as db:
-        stmt = select(ToolWaitHandle).where(
-            ToolWaitHandle.user_id == user_id,
-            ToolWaitHandle.conversation_id == conversation_id,
-            ToolWaitHandle.status == ToolWaitHandleStatus.PENDING,
+        result = await db.execute(
+            select(ToolWaitHandle.id).where(
+                ToolWaitHandle.user_id == user_id,
+                ToolWaitHandle.conversation_id == conversation_id,
+                ToolWaitHandle.status == ToolWaitHandleStatus.PENDING,
+            )
         )
-        result = await db.execute(stmt)
-        rows = result.scalars().all()
-        if not rows:
+        candidate_ids = list(result.scalars().all())
+        if not candidate_ids:
             return []
-        now = datetime.now(timezone.utc)
-        for row in rows:
-            row.status = ToolWaitHandleStatus.CANCELLED
-            row.response = {"feedback": feedback}
-            row.resolved_at = now
+        flipped = await _flip_pending(
+            db,
+            candidate_ids,
+            {
+                "status": ToolWaitHandleStatus.CANCELLED,
+                "response": {"feedback": feedback},
+                "resolved_at": datetime.now(timezone.utc),
+            },
+            ToolWaitHandle.user_id == user_id,
+        )
+        if not flipped:
+            await db.rollback()
+            return []
         await db.commit()
-        return [_row_to_dict(r) for r in rows]
+        return await _load_in_order(db, flipped)
 
 
 async def mark_timed_out(
-    handle_ids: list[str], user_id: int,
+    handle_ids: list[str],
+    user_id: int,
+    *,
+    expired_by: Optional[datetime] = None,
 ) -> list[dict]:
-    """Best-effort transition of still-pending handles to ``timed_out``.
+    """Transition still-pending handles to ``timed_out``.
 
-    Skips handles that have already been resolved by another path (so a
-    racing accept-click is preserved).
+    Each row flips through a conditional update, so a handle resolved by
+    another path first (a racing accept-click) is preserved and left out of
+    the result. With ``expired_by``, a row also flips only when its
+    ``expires_at`` is set and no later than ``expired_by`` -- the expiry
+    sweep and the ``wait_for_handles`` arm pass "now" so a deadline moved
+    since their read is honoured. Returns the rows this call flipped.
     """
     if not handle_ids:
         return []
+    conditions = [ToolWaitHandle.user_id == user_id]
+    if expired_by is not None:
+        conditions += [
+            ToolWaitHandle.expires_at.is_not(None),
+            ToolWaitHandle.expires_at <= expired_by,
+        ]
     async with AsyncSessionLocal() as db:
-        stmt = select(ToolWaitHandle).where(
-            ToolWaitHandle.id.in_(handle_ids),
-            ToolWaitHandle.user_id == user_id,
-            ToolWaitHandle.status == ToolWaitHandleStatus.PENDING,
+        flipped = await _flip_pending(
+            db,
+            handle_ids,
+            {
+                "status": ToolWaitHandleStatus.TIMED_OUT,
+                "resolved_at": datetime.now(timezone.utc),
+            },
+            *conditions,
         )
-        result = await db.execute(stmt)
-        rows = result.scalars().all()
-        if not rows:
+        if not flipped:
+            await db.rollback()
             return []
-        now = datetime.now(timezone.utc)
-        for row in rows:
-            row.status = ToolWaitHandleStatus.TIMED_OUT
-            row.resolved_at = now
         await db.commit()
-        return [_row_to_dict(r) for r in rows]
+        return await _load_in_order(db, flipped)
+
+
+async def set_expires_at(
+    handle_ids: list[str], user_id: int, expires_at: datetime,
+) -> int:
+    """Persist ``expires_at`` on the still-pending handles in ``handle_ids``.
+
+    Used by the ``wait_for_handles`` arm so its timeout survives a restart
+    (the expiry sweep enforces it once the in-memory timer is gone). A
+    deadline that has already passed is never moved: that row is due for
+    the sweep, and a new wait must not revive it. Returns the number of
+    rows updated.
+    """
+    if not handle_ids:
+        return 0
+    now = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            update(ToolWaitHandle)
+            .where(
+                ToolWaitHandle.id.in_(handle_ids),
+                ToolWaitHandle.user_id == user_id,
+                ToolWaitHandle.status == ToolWaitHandleStatus.PENDING,
+                or_(
+                    ToolWaitHandle.expires_at.is_(None),
+                    ToolWaitHandle.expires_at > now,
+                ),
+            )
+            .values(expires_at=expires_at)
+        )
+        await db.commit()
+        return result.rowcount
+
+
+async def list_expired_pending(now: datetime) -> list[dict]:
+    """List pending handles (any user) whose ``expires_at`` is at or before
+    ``now``, oldest deadline first. Read by the expiry sweep, which then
+    flips them through :func:`mark_timed_out`."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ToolWaitHandle)
+            .where(
+                ToolWaitHandle.status == ToolWaitHandleStatus.PENDING,
+                ToolWaitHandle.expires_at.is_not(None),
+                ToolWaitHandle.expires_at <= now,
+            )
+            .order_by(ToolWaitHandle.expires_at)
+        )
+        return [_row_to_dict(r) for r in result.scalars().all()]

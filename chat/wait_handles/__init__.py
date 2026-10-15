@@ -8,12 +8,15 @@ The model-facing surface is the ``wait_for_handles`` tool, dispatched via
 The DB row is the source of truth. There is no in-process future
 registry: ``_await_wait_for_handles`` raises a sentinel exception that
 unwinds the model loop, leaving the dangling ``wait_for_handles``
-``tool_use`` on disk. When a wait-handle row is resolved (REST,
-WebSocket, or background timer expiry), the resume path in
-:mod:`chat.wait_handles.resume` re-queries the DB and continues.
+``tool_use`` on disk. When a wait-handle row is resolved (REST, the
+Slack reply flush, or a timeout from a timer or the expiry sweep), the
+resume path in :mod:`chat.wait_handles.resume` re-queries the DB and
+continues.
 
-The :mod:`chat.wait_handles.wait_timer` module schedules per-handle
-background tasks that enforce ``timeout_seconds`` by flipping rows to
-``timed_out`` on expiry. The DB ``expires_at`` sweep remains the
-restart-resilience fallback for in-memory timers lost on restart.
+The :mod:`chat.wait_handles.wait_timer` module enforces deadlines: per-handle
+background tasks flip rows to ``timed_out`` when a ``wait_for_handles``
+``timeout_seconds`` elapses, and the ``expires_at`` sweep (startup, then
+every ``EXPIRY_SWEEP_INTERVAL_SECONDS``) times out any pending row whose
+persisted deadline has passed -- covering timers lost on restart and
+deadlines set at create time.
 """

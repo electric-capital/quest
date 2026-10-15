@@ -197,6 +197,13 @@ async def lifespan(app: FastAPI):
     slack_notifier_task = asyncio.create_task(notifier_loop())
     logger.info("Slack pending-request notifier background task started")
 
+    # Start the wait-handle expiry sweep: times out pending wait handles
+    # whose persisted expires_at has passed (once now, then on an interval)
+    # and wakes their conversations -- the fallback for in-memory wait
+    # timers lost on restart.
+    from chat.wait_handles.wait_timer import expiry_sweep_loop
+    wait_expiry_task = asyncio.create_task(expiry_sweep_loop(app))
+
     # Cache the app reference for the cross-user subagent runtime so
     # handler execute() paths and background run tasks can kick headless
     # resumes (mirrors slack_driven_runtime.set_app_ref, but installed
@@ -339,6 +346,13 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
 
+    # Shutdown: cancel the wait-handle expiry sweep
+    wait_expiry_task.cancel()
+    try:
+        await wait_expiry_task
+    except asyncio.CancelledError:
+        pass
+
     # Shutdown: cancel the replay-buffer eviction sweep.
     eviction_task.cancel()
     try:
@@ -353,9 +367,10 @@ async def lifespan(app: FastAPI):
     # Shutdown: close the Slack Socket Mode client (no-op if never started)
     await slack_socket_mode.shutdown()
 
-    # Wait-handle suspends are entirely DB-driven now -- there are no
-    # in-process futures to drain. Pending rows survive the restart and
-    # the resume bucket on the next run picks up the dangling tool_use.
+    # Wait-handle suspends are entirely DB-driven -- there are no
+    # in-process futures to drain. Pending rows survive the restart: the
+    # resume bucket on the next run picks up the dangling tool_use, and the
+    # expiry sweep enforces deadlines whose in-memory timers died here.
 
     # Shutdown: plugin-owned teardown (e.g. the Telegram plugin closes its
     # long-lived Telethon client connections) via each plugin's

@@ -29,6 +29,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from chat.storage import utc_timestamp
@@ -415,21 +416,42 @@ async def _await_wait_for_handles(
             ),
         })
 
+    from chat.wait_handles import wait_timer
+
     pending_ids = [
         hid for hid in handle_ids
         if by_id[hid].get("status") == ToolWaitHandleStatus.PENDING
     ]
+    if any(by_id[hid].get("expires_at") for hid in pending_ids):
+        # A pending row whose persisted deadline has already passed is timed
+        # out here rather than suspended on until the next sweep pass.
+        expired = await wait_timer.expire_overdue_handles(
+            ctx.app, ctx.user, pending_ids,
+            current_conversation_id=ctx.conversation_id,
+        )
+        expired_ids = {row["id"] for row in expired}
+        pending_ids = [hid for hid in pending_ids if hid not in expired_ids]
     if not pending_ids:
-        # All resolved already -- return immediately.
+        # Nothing left pending (resolved earlier, or just timed out) --
+        # return immediately.
         result = await _build_wait_for_handles_result(ctx.user["id"], handle_ids)
         return json.dumps(result)
 
-    # Schedule a per-handle background timer to enforce ``timeout_seconds``.
-    # If the run survives in-process until the deadline, the timer marks any
-    # still-pending rows ``timed_out`` and kicks a resume so the suspended
-    # conversation wakes up. The expires_at DB sweep remains the
-    # restart-resilience fallback for in-memory timers lost on restart.
-    from chat.wait_handles import wait_timer
+    # Persist the deadline so the expiry sweep enforces it if this process
+    # restarts before it elapses, then schedule the per-handle in-memory
+    # timers that fire on time while the process lives. Either one marks
+    # the still-pending rows ``timed_out`` and kicks a resume so the
+    # suspended conversation wakes up.
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)
+    try:
+        await tool_wait_handle_store.set_expires_at(
+            pending_ids, ctx.user["id"], deadline,
+        )
+    except Exception:
+        logger.exception(
+            "[wait_for_handles] Failed to persist expires_at for handles %s; "
+            "only the in-memory timer enforces this timeout", pending_ids,
+        )
     wait_timer.schedule_timeout_for_handles(
         user_id=ctx.user["id"],
         conversation_id=ctx.conversation_id,
@@ -454,12 +476,13 @@ async def _build_wait_for_handles_result(
     Used both by the live dispatch arm (after waking up) and by the resume
     path that closes a dangling ``wait_for_handles`` tool_use after a
     restart. Unknown / not-owned ids appear under ``unknown``.
+
+    A pure read: deadlines are enforced by ``chat.wait_handles.wait_timer``
+    (the in-memory timers, the ``wait_for_handles`` arm, and the
+    ``expires_at`` sweep at startup and every
+    ``EXPIRY_SWEEP_INTERVAL_SECONDS``), which flip overdue rows to
+    ``timed_out`` and kick the resume that rebuilds this payload.
     """
-    # TODO: enforce expires_at here -- after a server restart a row whose
-    # original deadline has passed comes back as still_pending; consult
-    # expires_at and call mark_timed_out for rows where expires_at <= now()
-    # before building the payload, otherwise handles can sit pending forever
-    # if no caller re-invokes wait_for_handles.
     rows = await tool_wait_handle_store.bulk_get_handles_by_ids(
         user_id, handle_ids,
     )

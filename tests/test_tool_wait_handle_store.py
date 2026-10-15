@@ -10,6 +10,7 @@ import os
 import shutil
 import tempfile
 import uuid
+from datetime import datetime, timedelta, timezone
 from importlib import reload
 
 import pytest
@@ -184,3 +185,172 @@ def test_get_handle_by_tool_id_scopes_user(_isolated_db, _seed_user):
         _seed_user, "c1", "slack_reply_other",
     ))
     assert not_found is None
+
+
+def _past(seconds=60):
+    return datetime.now(timezone.utc) - timedelta(seconds=seconds)
+
+
+def _future(seconds=3600):
+    return datetime.now(timezone.utc) + timedelta(seconds=seconds)
+
+
+def test_mark_timed_out_expired_by_flips_only_overdue_rows(_isolated_db, _seed_user):
+    store, _models = _isolated_db
+    overdue = _run(store.create_handle(
+        user_id=_seed_user, conversation_id="c1", kind="user_subagent",
+        tool_id="", payload={}, expires_at=_past(),
+    ))
+    not_due = _run(store.create_handle(
+        user_id=_seed_user, conversation_id="c1", kind="user_subagent",
+        tool_id="", payload={}, expires_at=_future(),
+    ))
+    no_deadline = _run(store.create_handle(
+        user_id=_seed_user, conversation_id="c1", kind="user_subagent",
+        tool_id="", payload={},
+    ))
+    rows = _run(store.mark_timed_out(
+        [overdue["id"], not_due["id"], no_deadline["id"]], _seed_user,
+        expired_by=datetime.now(timezone.utc),
+    ))
+    assert [r["id"] for r in rows] == [overdue["id"]]
+    assert rows[0]["status"] == "timed_out"
+    assert rows[0]["resolved_at"] is not None
+    assert _run(store.get_handle(not_due["id"]))["status"] == "pending"
+    assert _run(store.get_handle(no_deadline["id"]))["status"] == "pending"
+
+
+def test_mark_timed_out_scopes_user(_isolated_db, _seed_user):
+    store, _models = _isolated_db
+    h = _run(store.create_handle(
+        user_id=_seed_user, conversation_id="c1",
+        kind="slack_reply", tool_id="t1", payload={},
+    ))
+    assert _run(store.mark_timed_out([h["id"]], _seed_user + 1000)) == []
+    assert _run(store.get_handle(h["id"]))["status"] == "pending"
+
+
+def test_resolve_handle_loses_to_earlier_timeout(_isolated_db, _seed_user):
+    store, _models = _isolated_db
+    h = _run(store.create_handle(
+        user_id=_seed_user, conversation_id="c1",
+        kind="action_request", tool_id="t1", payload={},
+    ))
+    assert len(_run(store.mark_timed_out([h["id"]], _seed_user))) == 1
+    assert _run(store.resolve_handle(
+        h["id"], new_status="accepted", response={"late": True},
+    )) is None
+    row = _run(store.get_handle(h["id"]))
+    assert row["status"] == "timed_out"
+    assert row["response"] is None
+
+
+def test_resolve_and_timeout_race_has_one_winner(_isolated_db, _seed_user):
+    """Run resolve and time-out concurrently many times: every round exactly
+    one writer wins, and the row ends in the winner's state."""
+    store, _models = _isolated_db
+
+    async def _round():
+        h = await store.create_handle(
+            user_id=_seed_user, conversation_id="c1",
+            kind="action_request", tool_id="t1", payload={},
+        )
+        resolved, timed_out = await asyncio.gather(
+            store.resolve_handle(
+                h["id"], new_status="accepted", response={"ok": True},
+                user_id=_seed_user,
+            ),
+            store.mark_timed_out([h["id"]], _seed_user),
+        )
+        final = await store.get_handle(h["id"])
+        return resolved, timed_out, final
+
+    for _ in range(10):
+        resolved, timed_out, final = _run(_round())
+        assert (resolved is not None) != bool(timed_out)
+        if resolved is not None:
+            assert final["status"] == "accepted"
+            assert final["response"] == {"ok": True}
+        else:
+            assert final["status"] == "timed_out"
+
+
+def test_cancel_pending_skips_rows_resolved_meanwhile(_isolated_db, _seed_user):
+    store, _models = _isolated_db
+    h1 = _run(store.create_handle(
+        user_id=_seed_user, conversation_id="c1",
+        kind="slack_reply", tool_id="t1", payload={},
+    ))
+    h2 = _run(store.create_handle(
+        user_id=_seed_user, conversation_id="c1",
+        kind="slack_reply", tool_id="t2", payload={},
+    ))
+    _run(store.mark_timed_out([h2["id"]], _seed_user))
+    cancelled = _run(store.cancel_pending_for_conversation(
+        _seed_user, "c1", feedback="stop",
+    ))
+    assert [r["id"] for r in cancelled] == [h1["id"]]
+    assert cancelled[0]["status"] == "cancelled"
+    assert cancelled[0]["response"] == {"feedback": "stop"}
+    assert _run(store.get_handle(h2["id"]))["status"] == "timed_out"
+
+
+def test_set_expires_at_updates_pending_rows_only(_isolated_db, _seed_user):
+    store, _models = _isolated_db
+    pending = _run(store.create_handle(
+        user_id=_seed_user, conversation_id="c1",
+        kind="user_subagent", tool_id="", payload={}, expires_at=_future(60),
+    ))
+    resolved = _run(store.create_handle(
+        user_id=_seed_user, conversation_id="c1",
+        kind="user_subagent", tool_id="", payload={},
+    ))
+    _run(store.resolve_handle(resolved["id"], new_status="accepted"))
+
+    deadline = _future(7200)
+    count = _run(store.set_expires_at(
+        [pending["id"], resolved["id"]], _seed_user, deadline,
+    ))
+    assert count == 1
+    stored = datetime.fromisoformat(_run(store.get_handle(pending["id"]))["expires_at"])
+    assert stored == deadline.replace(tzinfo=None)
+    assert _run(store.get_handle(resolved["id"]))["expires_at"] is None
+
+
+def test_set_expires_at_never_moves_a_passed_deadline(_isolated_db, _seed_user):
+    store, _models = _isolated_db
+    overdue = _run(store.create_handle(
+        user_id=_seed_user, conversation_id="c1",
+        kind="user_subagent", tool_id="", payload={}, expires_at=_past(),
+    ))
+    before = _run(store.get_handle(overdue["id"]))["expires_at"]
+    assert _run(store.set_expires_at([overdue["id"]], _seed_user, _future())) == 0
+    assert _run(store.get_handle(overdue["id"]))["expires_at"] == before
+
+
+def test_list_expired_pending(_isolated_db, _seed_user):
+    store, _models = _isolated_db
+    older = _run(store.create_handle(
+        user_id=_seed_user, conversation_id="c1",
+        kind="user_subagent", tool_id="", payload={}, expires_at=_past(600),
+    ))
+    newer = _run(store.create_handle(
+        user_id=_seed_user, conversation_id="c2",
+        kind="user_subagent", tool_id="", payload={}, expires_at=_past(60),
+    ))
+    _run(store.create_handle(
+        user_id=_seed_user, conversation_id="c1",
+        kind="user_subagent", tool_id="", payload={}, expires_at=_future(),
+    ))
+    _run(store.create_handle(
+        user_id=_seed_user, conversation_id="c1",
+        kind="slack_reply", tool_id="t", payload={},
+    ))
+    done = _run(store.create_handle(
+        user_id=_seed_user, conversation_id="c1",
+        kind="user_subagent", tool_id="", payload={}, expires_at=_past(),
+    ))
+    _run(store.resolve_handle(done["id"], new_status="rejected"))
+
+    rows = _run(store.list_expired_pending(datetime.now(timezone.utc)))
+    assert [r["id"] for r in rows] == [older["id"], newer["id"]]

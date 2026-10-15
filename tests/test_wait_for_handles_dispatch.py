@@ -303,6 +303,89 @@ def test_pending_handle_raises_suspend_sentinel(_isolated_db, _user_id):
         assert fresh["status"] == "pending"
 
 
+def test_pending_wait_persists_its_deadline(_isolated_db, _user_id):
+    """The wait's timeout is written to expires_at so the expiry sweep
+    enforces it if the process restarts and the in-memory timer is lost."""
+    from datetime import datetime, timedelta, timezone
+
+    store, _ = _isolated_db
+    import db.tool_wait_handle_store as fresh_store
+    with patch("chat.gemini_api.turn_tools.tool_wait_handle_store", fresh_store):
+        from chat.gemini_api.turn_tools import (
+            _await_wait_for_handles,
+            SuspendForWaitHandles,
+        )
+
+        h = _run(store.create_handle(
+            user_id=_user_id, conversation_id="c1",
+            kind="user_subagent", tool_id="",
+            payload={},
+            expires_at=datetime.now(timezone.utc) + timedelta(days=14),
+        ))
+        before = datetime.now(timezone.utc).replace(tzinfo=None)
+        with patch("chat.wait_handles.wait_timer.schedule_timeout_for_handles") as sched:
+            with pytest.raises(SuspendForWaitHandles):
+                _run(_await_wait_for_handles(
+                    _make_ctx(_user_id),
+                    {
+                        "handle_ids": [h["id"]],
+                        "reason": _DEFAULT_REASON,
+                        "timeout_seconds": 300,
+                    },
+                    tool_id="tu-1",
+                ))
+        after = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        sched.assert_called_once()
+        assert sched.call_args.kwargs["timeout_seconds"] == 300
+        row = _run(store.get_handle(h["id"]))
+        assert row["status"] == "pending"
+        expires_at = datetime.fromisoformat(row["expires_at"])
+        assert before + timedelta(seconds=300) <= expires_at
+        assert expires_at <= after + timedelta(seconds=300)
+
+
+def test_overdue_handle_times_out_at_the_wait_site(_isolated_db, _user_id, monkeypatch):
+    """A pending handle whose expires_at already passed is timed out by the
+    wait arm and returned immediately instead of suspending on it."""
+    from datetime import datetime, timedelta, timezone
+
+    from chat.realtime import bus as rt_bus
+
+    events: list = []
+    monkeypatch.setattr(
+        rt_bus, "publish_to_user",
+        lambda user_id, event: events.append((user_id, event)),
+    )
+    store, _ = _isolated_db
+    import db.tool_wait_handle_store as fresh_store
+    with patch("chat.gemini_api.turn_tools.tool_wait_handle_store", fresh_store):
+        from chat.gemini_api.turn_tools import _await_wait_for_handles
+
+        h = _run(store.create_handle(
+            user_id=_user_id, conversation_id="c1",
+            kind="user_subagent", tool_id="",
+            payload={},
+            expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        ))
+        with patch("chat.wait_handles.wait_timer.schedule_timeout_for_handles") as sched:
+            payload_str = _run(_await_wait_for_handles(
+                _make_ctx(_user_id),
+                {"handle_ids": [h["id"]], "reason": _DEFAULT_REASON},
+                tool_id="tu-1",
+            ))
+
+        sched.assert_not_called()
+        payload = json.loads(payload_str)
+        assert payload["still_pending"] == []
+        assert payload["resolved"][0]["id"] == h["id"]
+        assert payload["resolved"][0]["status"] == "timed_out"
+        assert _run(store.get_handle(h["id"]))["status"] == "timed_out"
+        [(event_user, event)] = events
+        assert event_user == _user_id
+        assert event["status"] == "timed_out"
+
+
 def test_suspend_sentinel_inherits_from_exception():
     """Sentinel must derive from Exception, not BaseException, so it
     cannot mask asyncio.CancelledError on the unwind path."""
