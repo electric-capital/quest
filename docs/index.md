@@ -29,7 +29,7 @@
 | [projects.md](architecture/projects.md) | Projects: conversation and project workspaces, instructions, skills, conversion from a chat, archiving, doc access |
 | [public-projects.md](architecture/public-projects.md) | Public projects: internet-enabled sandbox with internal resources cut off, enforcement layers, public prompt and image |
 | [quest-docs.md](architecture/quest-docs.md) | Quest Docs (in-app markdown docs): storage, access rule, sharing, editing, history, model tools, approvals, frontend |
-| [quest-tables.md](architecture/quest-tables.md) | Quest Tables (in-app typed tables): metadata and store rules, column schema, canonical values, schema operations, table.db storage, change log, gate |
+| [quest-tables.md](architecture/quest-tables.md) | Quest Tables (in-app typed tables): metadata, column schema and values, schema operations, table.db storage, change log, filter queries, gate |
 | [plugins.md](architecture/plugins.md) | Plugin system: discovery, manifest validation, atomic registration, what a plugin can register, in-tree plugins |
 | [route-dispatch.md](architecture/route-dispatch.md) | Internal route dispatch for tool calls: conversation_id injection, blocked proxy paths |
 | [run-modes.md](architecture/run-modes.md) | Run modes (local, staging, prod): capability flags, zero-credential local mode, dev-config pre-baking, prod bootstrap |

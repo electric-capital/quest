@@ -2,7 +2,7 @@
 
 ## Overview
 
-A **Quest Table** is a typed table that lives inside Quest, owned by a user (a **user table**) or by a project (a **project table**, owned by the project owner). Each table is a `data_tables` row in `quest.db` holding its metadata and ordered column schema, plus a directory `<data_dir>/tables/<table_id>/` for its own `table.db` (rows and change log); the rows never live in `quest.db`. This doc covers the metadata layer (the two `quest.db` tables, the store module and its rules, the on-disk path, the constants and the per-user `tables` [feature gate](feature-gates.md)), the column layer (the column schema model, canonical cell values and schema operations) and the table file layer (the `table.db` layout, its guarded open, row writes, the change log and the download copy). Ownership, scope, modes and shares follow [Quest Docs](quest-docs.md#concepts-and-invariants), with the same terms.
+A **Quest Table** is a typed table that lives inside Quest, owned by a user (a **user table**) or by a project (a **project table**, owned by the project owner). Each table is a `data_tables` row in `quest.db` holding its metadata and ordered column schema, plus a directory `<data_dir>/tables/<table_id>/` for its own `table.db` (rows and change log); the rows never live in `quest.db`. This doc covers the metadata layer (the two `quest.db` tables, the store module and its rules, the on-disk path, the constants and the per-user `tables` [feature gate](feature-gates.md)), the column layer (the column schema model, canonical cell values and schema operations) the table file layer (the `table.db` layout, its guarded open, row writes, the change log and the download copy) and the query layer (the filter DSL, sorting and paging compiled to SQL). Ownership, scope, modes and shares follow [Quest Docs](quest-docs.md#concepts-and-invariants), with the same terms.
 
 ## Key Files
 
@@ -12,6 +12,7 @@ A **Quest Table** is a typed table that lives inside Quest, owned by a user (a *
 | `chat/tables/schema.py` | The column model (`Column`), column spec parsing, the stored schema JSON and cell value canonicalization; pure, no I/O |
 | `chat/tables/schema_ops.py` | Schema operations (`apply_schema_operations()`), the side effects they emit, and `schema_diff()`; pure, no I/O |
 | `chat/tables/storage.py` | The table file layer: `table.db` DDL and its guarded open, the row writes, the change log and its pruning, row and change reads, the download copy; synchronous `sqlite3` |
+| `chat/tables/filters.py` | The query layer: the filter DSL parsed against a schema (`parse_filter()`), compiled to a parameterized where clause (`to_sql()`, `compile_filter()`), sorts (`parse_sort()`, `to_order_by()`), paging (`check_page()`), the count and select builders and the `run_query()` executor; synchronous `sqlite3` |
 | `db/table_store.py` | Async metadata CRUD, title uniqueness (`_title_taken()`), the per-owner cap, the keyset candidate lists, the two concurrency tokens, the id collectors for directory sweeps, the share helpers |
 | `db/models.py` | `DataTable`, `DataTableShare` |
 | `alembic/versions/e5c97b362821_create_data_tables_and_shares.py` | Creates `data_tables` + `data_table_shares` and their indexes |
@@ -124,6 +125,20 @@ The path guards refuse with `unsafe_path`: a table directory that is not a real 
 - **upsert**: `key_column` must name a unique column, checked before any row work. Each row needs a key value, at most once per call. A row whose key is stored is a partial patch as in update; any other row is an insert with defaults, and only inserts count against `TABLE_MAX_ROWS`.
 - **delete**: exactly one of a list of ids or a prepared `(where_sql, params)` pair, which must be trusted SQL built from validated keys with every value bound, never model text. A filter matching more than `TABLE_WRITE_MAX_ROWS` rows refuses with the matching count; one matching nothing writes no change and returns `change_id` None.
 
+## Queries
+
+`chat/tables/filters.py` turns the `query_rows` arguments (spec #110 section 6.1) into SQL over `rows`; the `query_rows` tool, the filter form of `delete_rows` and `GET /tables/{id}/rows` all go through it. The grammar, the ops allowed per column type (`allowed_ops()`) and the SQL each op compiles to are in the module docstring. Validation happens before any I/O and raises `FilterError`, whose `code` names the rule and whose `path` (`and[1].not.value`, `sort[0].direction`) points at the offending node so a tool error or the grid's filter bar can show where.
+
+- **Columns**: a filter, sort or column list names columns by name, exactly or else case-insensitively (names are unique case-insensitively). Names are lookups only: the SQL holds nothing but validated keys quoted by `_ident()` and the fixed row fields, and every value is a bound parameter. The row fields `_id`, `_created_at` and `_updated_at` sort but do not filter.
+- **Operands** are canonicalized like writes, so `"10"` and `10` select the same rows, booleans are JSON `true`/`false` only and enum operands must be options. Number operands ignore the column `precision`: precision rounds writes only and never rewrites stored cells, so a rounded operand would miss older values and shift range bounds. Substring operands are plain text, not URLs; for url columns they are not NFC-normalized, matching the cells stored as given. A multi enum's `eq` compares the whole canonical set.
+- **NULL**: `eq`, `in`, the range ops and the substring ops never match an empty cell; `ne` does (null-safe `IS NOT`); `not` is the exact complement of its child (`NOT COALESCE(..., 0)`), so `not` of any node returns precisely the rows the node does not. An empty multi enum is NULL, so `is_empty` is `is_null`.
+- **Numbers** compare and sort through `CAST(cell AS REAL)` for ranges and ordering (approximate past about 15 significant digits) and as canonical strings for equality, as [Canonical Values](#canonical-values) stores them; past that precision a range op and an equality op can disagree on the same value.
+- **Case**: the substring ops use `LIKE` with `%`, `_` and `\` escaped, which folds case for ASCII letters only; `É` does not match `é`.
+- **Sort**: nulls last in both directions, binary string order for text, url and enum, and always `_id` as the final tiebreaker, so offset paging is stable.
+- **Caps**: depth and leaf count of a filter, values per list operand, sort keys, page size and offset are the `TABLE_FILTER_*`, `TABLE_SORT_MAX_KEYS` and `TABLE_QUERY_*` constants; the grid route caps a page at `TABLE_GRID_MAX_LIMIT` by passing it to `check_page()`. Depth and leaves are checked while descending, so a hostile input is refused without being walked.
+
+`run_query()` runs the count and the page in one read transaction, so `total` (the filtered count) and `rows` agree, and returns rows keyed by column name with `_id` and `_updated_at` in logical form. It does not cap the response size; the `query_rows` tool halves the page until it fits `TABLE_QUERY_MAX_BYTES`. Given the schema version, it also checks the file against it, like a write. A filter delete passes `compile_filter()`'s pair to `delete_rows()`; `compile_filter()` refuses a missing filter, so a dropped argument cannot match the whole table. `allowed_ops()` and `OP_OPERANDS` describe the ops per type and the operand each takes, for the grid's filter bar.
+
 ## Change Log
 
 Every write appends one `changes` entry inside its own transaction (`append_change()`). A `rows` change's `before` and `after` are lists of full stored rows sorted by `_id`: `_id`, both timestamps and every schema column, keyed by key, cells in stored form. An insert carries only `after`, a delete only `before`, an update both, and an upsert's `before` holds only the rows that existed before the call. The images carry what a revert needs to replay a change as a plain INSERT, UPDATE or DELETE.
@@ -150,7 +165,7 @@ The off-by-default, per-user `tables` gate (`FEATURE_TABLES`, `tables_enabled_fo
 
 ## Constraints
 
-- Every cap and retention number shared across modules lives in `chat/tables/constants.py`, and consumers read it from there rather than repeating it; the remaining query, filter and listing limits live with the code that enforces them.
+- Every cap and retention number shared across modules, including the filter, sort and paging limits, lives in `chat/tables/constants.py`, and consumers read it from there rather than repeating it; listing limits live with the tools and routes that enforce them.
 - `TABLE_TITLE_MAX_LEN` matches the `String(200)` title column; raising it needs a migration.
 
 ## Design Decisions
@@ -190,3 +205,9 @@ Keys survive renames, so an old image still applies after a column rename; full 
 
 **Why no NOT NULL on user columns?**
 `required` is enforced in Python on every write and by violation checks on schema changes; in the DDL, toggling it would need a table rebuild, since SQLite cannot alter a column constraint.
+
+**Why does `ne` match empty cells, and `not` take the complement?**
+SQL's three-valued logic would drop NULL rows from both, so "status is not done" would silently skip rows with no status and `not` of a filter would not return the rest of the table. Matching what a person means keeps a filter and its negation partitioning the rows.
+
+**Why `CAST AS REAL` for ranges and sorting but strings for equality?**
+Numbers are stored as canonical decimal strings, whose text order is not numeric order; a REAL cast orders them correctly up to about 15 significant digits without a shadow column, while equality keeps the exact string comparison that uniqueness uses.
