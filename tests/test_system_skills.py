@@ -340,3 +340,16 @@ def test_action_requests_skill_mentions_sub_agent_restriction():
         "system:action_requests should tell sub-agents to return the "
         "proposed action via agent_task_response"
     )
+
+
+def test_tables_skill_gate_closed_points_at_features():
+    """system:tables behind a closed gate names the feature gate, not a
+    data connection (the "tables" key is a feature-gate pseudo-key)."""
+    from chat.system_skills.loader import load_system_skills
+    from chat.tables.constants import tables_disabled_message
+
+    [result] = load_system_skills(
+        ["system:tables"], connected_services={"tables": False},
+        base_url="http://x", api_key="k",
+    )
+    assert result["error"] == tables_disabled_message()

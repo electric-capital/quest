@@ -8,6 +8,7 @@ import inspect
 from typing import Callable, Optional
 
 from chat.docs.constants import DOCS_SERVICE_KEY, docs_disabled_message
+from chat.tables.constants import TABLES_SERVICE_KEY, tables_disabled_message
 from chat.llm.tool_schemas import (
     TOOL_CALL_REGISTRY,
     render_tool_reference,
@@ -178,6 +179,8 @@ def load_system_skills(
                 # A feature-gate pseudo-key, not a connector (see
                 # api/instructions.py PSEUDO_SERVICE_KEYS).
                 error = docs_disabled_message()
+            elif skill.requires == TABLES_SERVICE_KEY:
+                error = tables_disabled_message()
             else:
                 error = (
                     f"{skill.name} is not connected. Connect it in "
