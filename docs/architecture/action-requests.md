@@ -1,6 +1,6 @@
 # Action Requests Architecture
 
-This document describes the Action Requests system, which allows the LLM agent to propose write operations to external services (e.g., sending a Slack message, Telegram message, creating a calendar invite, uploading a workspace file to Google Drive, creating a Google Drive folder, or editing a Google Spreadsheet cell range) -- plus internal-store writes (saving a memory, creating or editing a DB-backed skill, and changing a shared private Quest Doc) -- that require explicit user approval before execution.
+This document describes the Action Requests system, which allows the LLM agent to propose write operations to external services (e.g., sending a Slack message, Telegram message, creating a calendar invite, uploading a workspace file to Google Drive, creating a Google Drive folder, or editing a Google Spreadsheet cell range) -- plus internal-store writes (saving a memory, creating or editing a DB-backed skill, changing a shared private Quest Doc, and creating, re-shaping or writing a Quest Table) -- that require explicit user approval before execution.
 
 Plugins register additional request types (loaded via `plugins/` or `QUEST_PLUGIN_PATH` -- see [Plugins](plugins.md)); the mechanics below apply to core and plugin handlers alike.
 
@@ -100,6 +100,7 @@ The registry in `chat/action_request_types/registry.py` (core handlers, plus wha
   - At execute time the routine must still belong to the conversation's project, and routine-row field updates go through `update_routine()` with the proposal-time `expected_updated_at` token so a routine edited while the card sat open fails with a clean re-propose message instead of clobbering (`StaleRoutineError` -> `RuntimeError`). Daily schedules convert `daily_time_local` + IANA `timezone` to `daily_time_utc` via `_local_time_to_utc` from `chat/schedule_routes.py` (inside the shared `apply_schedule_spec()`).
   - Returns the routine id. Spec'd in the `system:routines` system skill; see [Routines Architecture -- Agent Tools](routines.md#agent-tools).
 - **`write_doc`** (`WriteDocHandler` in `chat/action_request_types/write_doc.py`): the approval form of the Quest Docs write tools. When a doc's access verdict is `approval`, `edit_doc` / `append_to_doc` / `add_doc_image` refuse with `approval_required` plus a `suggested_request` the model forwards unchanged; the pre-card, the bounded card diff, the approve-time TOCTOU re-check and the attribution to the proposing user are described in [Quest Docs -- The write_doc Action Request](quest-docs.md#the-write_doc-action-request).
+- **`create_table`** / **`change_table_schema`** / **`write_table_rows`** (`chat/action_request_types/create_table.py`, `chat/action_request_types/change_table_schema.py`, `chat/action_request_types/write_table_rows.py`): create a Quest Table, change its columns, write its rows; `write_table_rows` is the `suggested_request` of a row write tool's `approval_required` result. The shared pre-card, the approve-time caller, the TOCTOU pins and the attribution are in [Quest Tables -- Action Requests](quest-tables.md#action-requests), the card contract in [Quest Tables API -- Action Requests](../api/tables-api.md#action-requests).
 
 ## Tool Declaration
 
@@ -130,7 +131,7 @@ When the agent calls `create_action_request`, the backend (in the dispatch handl
 6. Raises `SuspendForActionRequest(handle_id, tool_id, request_id)`. The dispatch loop in `chat/gemini_api/conversation.py` catches it **per call** (only for the `create_action_request` registry key -- `return_to_caller` keeps its immediate unwind), records it, and keeps dispatching the rest of the same tool-call batch; after the batch it re-raises the first sentinel with the others' handle ids on `sibling_handle_ids` (logging only).
    - The top-level handler catches that and returns the accumulated `structured_messages` cleanly without emitting a `tool_result` for any suspended call -- this matches the `SuspendForSlackReply` pattern used by `send_slack_reply_and_get_response`. The dangling `create_action_request` tool_use(s) stay on disk until the resume bucket closes them.
 
-**Parallel action requests.** Models (Opus in particular) often emit several `create_action_request` calls in one response. Because the loop no longer unwinds on the first suspend, every call in the batch opens its own card and `kind="action_request"` wait handle, and the non-suspending calls in the same batch (e.g. a workspace read) still run and persist their `tool_result` to `chat_history.json`.
+**Parallel action requests.** Models (Opus in particular) often emit several `create_action_request` calls in one response. Because the loop does not unwind on the first suspend, every call in the batch opens its own card and `kind="action_request"` wait handle, and the non-suspending calls in the same batch (e.g. a workspace read) still run and persist their `tool_result` to `chat_history.json`.
 
 The composer stays locked until **all** cards are resolved (`pending_wait_handles` lists one entry per card; `Composer.tsx` switches to its plural pending-requests placeholder), and the user may Approve / Revise them in any order (Stop on any one card stops its open siblings too -- see below). The headless resume kicked by each resolve is held by `_unresolved_blocking_handle_ids()` in `chat/wait_handles/resume.py` while any dangling `create_action_request` tool_use still has a pending row, so the model only continues once it can be handed every verdict at once -- one `tool_result` per call.
 
@@ -200,7 +201,7 @@ The function raises `ValueError` on a failure, reusing the same `except ValueErr
 - **Preview enrichment**: injects `current_skill_name` / `skill_target` for `edit_skill` (server-injected, not in `_ALLOWED_PARAMS`, parallel to `calendar_name`) so the card header reads nicely, plus -- for content edits -- the `content_diff` line diff built by `build_content_diff()` in `chat/action_request_types/_skill_content_edit.py`.
   - `render_preview()` surfaces it as a `skill_content_diff`-typed preview field (`+A / -R line(s)` plus the full typed line list) rendered by `SkillContentDiffPreview.tsx`, which shows the changed hunks with `CONTEXT_LINES` of context by default and a "Show full content" toggle for the whole body; without the injected diff it falls back to plain `Replace` / `With` rows.
 
-These are an agent-experience optimization; the execute-time guards in the handlers remain the authoritative TOCTOU enforcement (a user could create a colliding skill between the pre-check and Approve). This is the only handler family whose pre-card hook is a separate module rather than a `validate_against_upstream()` override, because skills have no external `/validate/` endpoint and the checks are internal-DB lookups.
+These are an agent-experience optimization; the execute-time guards in the handlers remain the authoritative TOCTOU enforcement (a user could create a colliding skill between the pre-check and Approve). Pre-card hooks are separate modules rather than `validate_against_upstream()` overrides because their checks are internal-DB lookups with no external `/validate/` endpoint.
 
 ## Routine Pre-card Checks
 
@@ -216,6 +217,8 @@ It also injects preview enrichment:
 - a `skill_names` id->name map for the skill rows,
 - for `create_routine` the default `model` + `model_defaulted` flag when the proposal omitted a model (see [Routines Architecture](routines.md)),
 - and -- for `edit_routine` -- `current_routine_name` for the card header, the routine row's `updated_at` as `expected_updated_at` (the execute-time optimistic-concurrency token described in the `edit_routine` bullet above), and `content_diff` (the `build_content_diff()` line diff of the current vs proposed prompt) whenever the edit changes the prompt, so the card renders the same collapsible diff snippet as skill content edits.
+
+`write_doc` and the three table types have pre-cards with the same contract, called from the same spot after these (`doc_precard_check()` in `chat/action_request_types/doc_precard.py`, `table_precard_check()` in `chat/action_request_types/table_precard.py`). Each dry-runs the proposal through its service against the live doc or table and injects the preview; see [Quest Docs](quest-docs.md#the-write_doc-action-request) and [Quest Tables](quest-tables.md#action-requests).
 
 ## Handler Registry
 
@@ -234,11 +237,7 @@ The `render_preview()` method is responsible for generating human-readable previ
 
 **`send_slack_message` handler** (`SendSlackMessageHandler` in `plugins/slack/handlers.py`): Sends a Slack message to any channel, group, or DM using the user's Slack token. Requires the message-write user scope (and the DM-open scope when targeting a user ID), both part of `SLACK_USER_SCOPES` in `plugins/slack/upstream.py`.
 
-The `params` object (`_MESSAGE_ALLOWED_PARAMS` in `plugins/slack/handlers.py`) carries the target `channel_id`, the `message` (Slack mrkdwn; the length cap is the literal in `validate_params()`, chosen to fit Slack's section-block text limit) and an optional `thread_ts` (a Slack message timestamp string to reply in a thread).
-
-`validate_params()` rejects unknown keys, requires non-empty `channel_id` / `message`, and enforces the Slack object-id shape on `channel_id` and the `<unix_seconds>.<microseconds>` shape on `thread_ts` (when non-empty; whitespace-only is treated as absent and not carried forward). The two regexes (and the recognised-prefix tuple) live at module scope in `plugins/slack/handlers.py`; format errors name the field and echo the offending value truncated so the model self-corrects on the same turn (no `action_requests` row, no card, no wait handle).
-
-Whitelisting the prefix set means malformed channel ids (`#channel`, `@user`, permalink URLs, lowercase ids, raw ints, unknown prefixes) and permalink-style `p...` thread ids are short-circuited before they would have surfaced as opaque Slack `channel_not_found` errors inside `execute()`. When a user ID is provided as `channel_id`, the handler opens a DM conversation automatically via `conversations.open`.
+The `params` allow-list is `_MESSAGE_ALLOWED_PARAMS` in `plugins/slack/handlers.py`; the `message` cap is the literal in `validate_params()`, sized to Slack's section-block text limit, and the format checks are in the type list above.
 
 The handler's `render_preview()` method resolves channel names via `_resolve_slack_channel_name()` in `plugins/slack/handlers.py`, which calls `conversations.info` for channel/group IDs and `users.info` for user IDs, producing human-readable names (e.g., #general, @alice).
 
@@ -256,11 +255,9 @@ On success, the handler returns a result dict with the Slack API response. On fa
 
 **`send_telegram_message` handler** (`SendTelegramMessageHandler` in `plugins/telegram/handlers.py`, registered by the Telegram plugin): Sends a Telegram message to any dialog (user, group, or channel) using the user's existing Telethon session via `TelegramClientManager` in `plugins/telegram/upstream.py`. The `params` object (`_ALLOWED_PARAMS` in `plugins/telegram/handlers.py`) carries `dialog_id` (a numeric Telegram dialog ID) and `message` (text content, capped at `MESSAGE_MAX_LENGTH` to match Telegram's message length limit).
 
-`validate_params()` rejects unknown keys, requires a non-empty `dialog_id` / `message`, and format-validates `dialog_id`: the value must be a Python `int` or a digit string with an optional leading `-` (the `_DIALOG_ID_STR_RE` regex at module scope), so `bool` (which subclasses `int` and would coerce to `0`/`1`), `float`, `list`, `dict`, whitespace-padded strings, `@username`, `t.me/...` URLs, `+E.164` phone numbers, and Slack-style `C.../U...` ids all fail up front.
+`validate_params()` format-checks `dialog_id` as the type list above describes (`_DIALOG_ID_STR_RE` and `_DIALOG_ID_MAX_ABS`, whose comment explains the digit counts).
 
-The integer is then range-checked against three bad shapes: `0` (no valid peer is zero), the bare `-100` supergroup/channel marker prefix (the full form is `-100<digits>`), and a magnitude above `_DIALOG_ID_MAX_ABS` (the bound catches ids misrouted from Twitter / Slack / a phone number while leaving legitimate supergroup ids intact; the comment on the constant explains the digit counts).
-
-Format errors name the field and echo the offending value truncated via `_truncate_for_error` (default limit on the function) so the model self-corrects on the same turn (no `action_requests` row, no card, no wait handle) instead of failing inside `execute()` with an opaque Telethon `PeerIdInvalid`; coverage is in `plugins/telegram/tests/test_telegram_send_validation.py`. The message body is HTML-escaped via `html.escape()` for safety and sent with HTML parse mode. An italic attribution footer is appended to every message.
+Format errors echo the offending value truncated via `_truncate_for_error`; coverage is in `plugins/telegram/tests/test_telegram_send_validation.py`. The message body is HTML-escaped and sent with HTML parse mode, with an italic attribution footer.
 
 The handler's `enrich_params_for_preview()` hook resolves dialog names via `resolve_dialog_name()` in `plugins/telegram/upstream.py`, which obtains a Telethon client from `TelegramClientManager` and calls `client.get_entity(dialog_id)` to look up the entity's display name (first/last name for users, title for groups/channels); the label is always re-derived from `dialog_id`, so a model-supplied `dialog_name` can never survive.
 
@@ -270,11 +267,7 @@ On success, the handler returns a result dict with `success`, `dialog_id`, and `
 
 **`upload_to_drive` handler** (`UploadToDriveHandler` in `chat/action_request_types/upload_to_drive.py`): Uploads one or more workspace files to the user's Google Drive after a single approval, reusing the same multipart upload mechanism as the file-browser "Save to Drive" feature (`chat/file_routes.py:save_file_to_drive`) but uploading the **raw bytes** rather than converting markdown to a Google Doc.
 
-`validate_params()` requires a `files` list of `{path, filename?}` entries, at most `_MAX_FILES_PER_REQUEST` (rejecting absolute paths, `..` traversal, and duplicate paths up front; per-entry `filename` sanitized via `_sanitize_workspace_filename`, dropped if it sanitizes empty so `execute()` falls back to the basename; inner shape validated by the shared `validate_attachments_param()`).
-
-It still accepts the legacy top-level `path` / `filename` single-file shape (mutually exclusive with `files`) for pending pre-deploy rows, accepts an optional `folder_id`, and accepts the optional create-destination-folder pair `new_folder_name` / `new_folder_parent_id` (`new_folder_name` is mutually exclusive with `folder_id`; `new_folder_parent_id` is only valid alongside `new_folder_name`).
-
-File existence and the per-file size cap (`_UPLOAD_MAX_SIZE_BYTES`) are deferred to `execute()` (where `conversation_id` is available for workspace resolution).
+Params are as in the type list above (the inner `files` shape is checked by the shared `validate_attachments_param()`); file existence and the per-file size cap are deferred to `execute()`, where `conversation_id` is available for workspace resolution.
 
 On execution the handler:
 
@@ -286,15 +279,9 @@ On execution the handler:
 
 Each MIME type is guessed from the filename (never the Google Doc mimeType, which would trigger conversion); the created folder's id (or `folder_id`, when present) is set as `parents`. The result (built at the end of `execute()`) lists every uploaded file's id, name and view URL (legacy `path` requests keep the flat single-file shape), extended with the new folder's id / name / URL when a folder was created so the model can chain follow-up upload batches into it.
 
-If an upload fails mid-batch, the raised error lists the already-uploaded files (name + file id) and, after folder creation, the created folder's id, steering the model toward a fresh request with only the remaining files and `folder_id` -- re-approving the still-open request would re-upload the successes and create a duplicate folder (Drive permits same-name siblings).
-
-`render_preview()` renders File / Source / Destination rows for one file, or a `Files` count row plus per-file `File N` rows (renames shown as `path → name`) plus Destination for a batch, resolving `folder_id` (or the new folder's parent) to a human folder name via `_resolve_folder_name()`.
-
 The model-facing parameter spec lives in `api/drive.py` (`get_instructions()`, "Google Drive Write Operations" section), surfaced via the `system:drive` skill, which also carries the "Batch your uploads" guidance (batch same-destination files into one request; fold folder creation in via `new_folder_name`; split only past the per-request file cap or for multiple destinations) alongside the generic "Minimize approval round trips" section in `system:action_requests`.
 
-**`create_drive_folder` handler** (`CreateDriveFolderHandler` in `chat/action_request_types/create_drive_folder.py`): Creates a Google Drive folder after approval via `_drive.create_folder()`. `validate_params()` requires a non-empty `name` (trimmed; no filename sanitization -- folder names are Drive metadata, not filesystem paths) and accepts an optional non-empty `parent_folder_id` (shared drives supported; defaults to the Drive root).
-
-On execution the handler runs the same Google-connection and `drive.file` scope pre-checks as `upload_to_drive`, then returns the new folder's id, name and URL. `render_preview()` renders Folder / Parent rows, resolving `parent_folder_id` via `_resolve_folder_name()` (server-injected `parent_folder_name`) and showing "My Drive (root)" when no parent is given.
+**`create_drive_folder` handler** (`CreateDriveFolderHandler` in `chat/action_request_types/create_drive_folder.py`): behaviour as in the type list above, through `_drive.create_folder()`.
 
 The model-facing parameter spec lives in the same `api/drive.py` `get_instructions()` section, which also directs the model to search for an existing folder via `authed_get` first because Drive allows same-name sibling folders.
 
@@ -320,7 +307,7 @@ The `POST /app/api/action-requests/{id}/resolve` endpoint is the single entry po
 
 Revise posts `action: "deny"` with `feedback`; Stop posts `action: "stop"`. A bare `action: "deny"` without feedback is the legacy one-click Deny: the endpoint still accepts it (and `subagent_return` cards still send it), but no action card in the web UI offers it any more -- the UI's third button is Stop. The validator strips whitespace, treats empty strings as `None`, and truncates to `_MAX_FEEDBACK_LEN` so an oversize message never fails the resolve.
 
-On Approve and Revise the endpoint also resolves the linked wait-handle row and kicks a headless resume so the suspended `create_action_request` tool_use is closed; on Stop it resolves the handle but kicks nothing (see [Stop](#stop) above). The bridge helper `_resolve_linked_wait_handle()` in the same file looks up the pending handle via `tool_wait_handle_store.find_pending_for_action_request(user_id, request_id)`, calls `tool_wait_handle_store.resolve_handle()`, and then calls `wait_resume.maybe_kick_resume()`:
+On Approve and Revise the endpoint also resolves the linked wait-handle row and kicks a headless resume so the suspended `create_action_request` tool_use is closed; on Stop it resolves the handle but kicks nothing (see [Stop](#stop) above). The bridge helper `_resolve_linked_wait_handle()` in the same file looks up the pending handle via `tool_wait_handle_store.find_pending_for_action_request(user_id, request_id)`, calls `tool_wait_handle_store.resolve_handle()`, and then calls `wait_resume.maybe_kick_resume()`. On Approve it passes `request_id` to the handler types in `REQUEST_ID_TYPES` (`write_doc` and the table types), which record their write's source as `action_request:<id>`.
 
 The three `response` dicts are built inline in the resolve endpoint (one per branch), all of the shape `{verdict, request_id, result}` with the verdict naming the outcome:
 
@@ -328,7 +315,7 @@ The three `response` dicts are built inline in the resolve endpoint (one per bra
 - **Revise (and the legacy bare deny)** -- handle goes to `rejected` with a `denied` verdict. The action_request `result` records the denial plus the user's `feedback` when Revise supplied one; `feedback` is also surfaced at the top level of `response` so the resumed model reads `response.feedback` next to `response.verdict` directly off the `create_action_request` tool result without digging into nested `result`.
 - **Execute success** -- handle goes to `accepted` with an `executed` verdict and `result` = the `handler.execute()` return value. The model reads the backend's return payload (e.g., a newly created id) directly out of `response.result`.
 
-Both wait-handle resolves are best-effort and wrapped in a try/except, mirroring `chat/memory_routes.py` -- a missing or already-resolved handle is logged and ignored. In-flight action requests that were created before this feature shipped have no linked handle, so the lookup returns `None` and the resolve is a no-op (graceful rollout).
+Both wait-handle resolves are best-effort and wrapped in a try/except, mirroring `chat/memory_routes.py` -- a missing or already-resolved handle is logged and ignored. A request with no linked handle makes the lookup return `None`, and the resolve is a no-op.
 
 After resolving the DB rows on either branch, the endpoint also calls `ChatStorage.update_action_request_message()` (`chat/storage.py`) to rewrite the matching `{"type": "action_request", "request_id": N}` entry in `chat_history.json` with the new `status`, `result`, and (on Revise) `feedback` fields, so a page reload or replay shows the same outcome the live UI shows. Disk failures are swallowed; the persisted DB rows remain authoritative.
 
@@ -383,14 +370,14 @@ The count and enriched listing endpoints are in `chat/action_request_routes.py`.
 ### Frontend Components
 
 **RequestsView** (`frontend/src/components/RequestsView.tsx` + `RequestsView.css`): Full-pane component replacing the chat panel and file browser when active. Features include:
-- Filter tabs: one per `ActionRequestStatus` plus All (`filterOptions` in `RequestsView.tsx`, Open selected by default; the Denied tab holds Revise outcomes -- the status is still named `denied`) -- with server-provided counts in each tab badge via `fetchActionRequestCounts()`. Switching tabs re-fetches the matching slice via `fetchActionRequestsEnriched(include_context, status)`, passing the tab name as the `status` query param (omitted on the All tab). DB-side filtering is backed by the `ix_action_requests_user_status_created` composite index, so the frontend no longer over-fetches and filters client-side.
+- Filter tabs: one per `ActionRequestStatus` plus All (`filterOptions` in `RequestsView.tsx`, Open selected by default; the Denied tab holds Revise outcomes -- the status is still named `denied`) -- with server-provided counts in each tab badge via `fetchActionRequestCounts()`. Switching tabs re-fetches the matching slice via `fetchActionRequestsEnriched(include_context, status)`, passing the tab name as the `status` query param (omitted on the All tab).
 - Request cards displaying the agent's reasoning, server-rendered preview fields, routine/project context, and conversation navigation links ("Go to conversation" uses `useNavigate()` from `react-router-dom` to navigate to `/chats/<id>` or `/projects/<pid>/<id>`)
 - Approve / Revise / Stop buttons for open requests (approve button label driven by `approve_label` from the server, e.g., "Send" for messaging requests; Revise opens the inline `ReviseFeedbackForm` to send a feedback message that resolves the request as denied with `result.feedback` populated; Stop resolves it as stopped and halts that conversation until its owner types again -- `subagent_return` rows show Deny instead).
   - After a row's status is mutated locally by Approve / Revise, a render-time `requests.filter((r) => r.status === filter)` re-applies the tab predicate so the row vanishes immediately from non-All tabs without a refetch (the server-filtered slice no longer matches it); Stop additionally re-fetches the list because it also stops the clicked row's open siblings in the same conversation.
 - Empty state distinguishes "no requests at all" (`serverCounts.all === 0`) from "no requests for this filter" so a user on a quieter tab is not told they have zero requests when other tabs are populated. The banner-click reload also passes the current tab's `status` so the "N new requests" indicator respects the active filter.
 - Generic preview field rendering via loop over `preview_fields` from the API response
 - Routine and project context display (routine name, project name) from enriched data
-- Live updates: subscribes to `request_count_changed` events on the persistent WebSocket via `persistentWebSocket.onGlobalEvent()` for cross-tab immediate count refresh. The local `onRequestCountChange()` bus from `frontend/src/services/requestEvents.ts` is kept as a same-tab optimisation so a click in this view updates the badge without a server round-trip. The previous 30-second polling fallback was removed; an initial `fetchActionRequestCounts()` runs once on mount.
+- Live updates: subscribes to `request_count_changed` events on the persistent WebSocket via `persistentWebSocket.onGlobalEvent()` for cross-tab immediate count refresh. The local `onRequestCountChange()` bus from `frontend/src/services/requestEvents.ts` is kept as a same-tab optimisation so a click in this view updates the badge without a server round-trip. An initial `fetchActionRequestCounts()` runs once on mount.
 - Non-disruptive "N new requests" banner: when the server-reported total exceeds the count at last full load, a banner appears above the request list. Clicking the banner reloads the current tab's slice and scrolls to the top. The banner avoids disrupting the user's current scroll position or in-progress approve/revise/stop actions
 
 **Sidebar integration** (`frontend/src/components/sidebar/RequestsBadge.tsx`): the requests inbox button in the sidebar brand bar carries the open request count as a badge. The badge mounts with a single `fetchActionRequestCounts()` call and then updates only from `request_count_changed` events on the persistent WebSocket (`persistentWebSocket.onGlobalEvent()`); it does not poll.
@@ -428,9 +415,9 @@ Inline action request rendering works well when the user is already in the conve
 The sidebar badge fetches `GET /app/api/action-requests/counts` once on mount and then updates from `request_count_changed` events on the persistent WebSocket. A COUNT query is significantly cheaper than fetching and serializing full action request objects, and the dedicated `count_action_requests()` function runs an efficient `SELECT COUNT(*)` query, avoiding unnecessary data transfer and serialization overhead for a simple badge number.
 
 **Why server-side preview rendering instead of client-side?**
-Moving preview rendering (including external name resolution) from the frontend to server-side `render_preview()` methods on each `ActionRequestHandler` subclass consolidates type-specific rendering logic in one place. The frontend was simplified from ~160 lines of type-specific rendering to a generic loop over `{key, value}` preview fields.
+Server-side `render_preview()` methods (including external name resolution) keep type-specific rendering in one place, and the frontend is a generic loop over `{key, value}` preview fields.
 
-Adding a new action request type no longer requires frontend changes -- only a new handler with a `render_preview()` method. Server-side rendering also enables richer previews (e.g., resolving upstream entity names) without exposing those APIs to the frontend.
+A new request type needs no frontend change unless it introduces a structured field type. Server-side rendering also enables richer previews (e.g., resolving upstream entity names) without exposing those APIs to the frontend.
 
 **Why a standalone event emitter instead of React context for badge refresh?**
 The `requestEvents.ts` module uses a simple pub/sub pattern outside of React's context system. Putting the refresh signal into React context would cause cascading re-renders across all context consumers (Sidebar, ChatPanel, etc.) whenever the count changes. The standalone event emitter lets the `RequestsBadge` component subscribe independently, keeping re-renders isolated to the badge itself.

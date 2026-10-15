@@ -10,7 +10,7 @@ default, options, multiple, precision, description; never a ``key``).
 (:func:`chat.action_request_types.table_precard.precard_create_table`)
 checks the gate, that the conversation may propose a table (top-level
 private conversations only), the target and project, the mode, title and
-description, the column specs, the per-owner cap and the title collision,
+description, the column specs, the title collision and then the per-owner cap (the store's order),
 then injects the server-only preview keys (:data:`SERVER_INJECTED_KEYS`).
 
 ``execute`` re-resolves the proposal's conversation context, re-checks
