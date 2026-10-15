@@ -93,6 +93,11 @@ export function useTable(tableId: string | null): TableView {
   const requestSeqRef = useRef(0);
   // Seq of the fetch in flight, or null.
   const pendingSeqRef = useRef<number | null>(null);
+  // Set by a table_changed that arrives while a fetch is in flight: rather
+  // than superseding that fetch (which, under a burst of writes, would drop
+  // every response and freeze the view), one more fetch runs when it lands.
+  const dirtyRef = useRef(false);
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
 
   const refresh = useCallback(async () => {
     if (tableId === null) return;
@@ -109,22 +114,30 @@ export function useTable(tableId: string | null): TableView {
         return;
       }
       const prev = stateRef.current;
-      if (prev.id === tableId && prev.table) return;
+      if (prev.id === tableId && (prev.table || prev.notFound)) return;
       const error =
         err instanceof ApiClientError
           ? err
           : new ApiClientError(err instanceof Error ? err.message : 'Failed to load table');
       commit({ id: tableId, table: null, error, notFound: false });
     } finally {
-      if (pendingSeqRef.current === seq) pendingSeqRef.current = null;
+      if (pendingSeqRef.current === seq) {
+        pendingSeqRef.current = null;
+        if (dirtyRef.current && seq === requestSeqRef.current) {
+          dirtyRef.current = false;
+          void refreshRef.current();
+        }
+      }
     }
   }, [tableId, commit]);
+  refreshRef.current = refresh;
 
   // Load on mount and whenever the table id changes, dropping the previous
   // table (and any in-flight response for it) first.
   useEffect(() => {
     requestSeqRef.current += 1;
     pendingSeqRef.current = null;
+    dirtyRef.current = false;
     commit(EMPTY);
     setChanges(NO_CHANGES);
     void refresh();
@@ -138,11 +151,14 @@ export function useTable(tableId: string | null): TableView {
       // response (overtaken by a refresh) must not roll the view back.
       if (detail.updated_at < prev.table.updated_at) return;
       if (detail.schema_version < prev.table.schema_version) return;
+      // The schema-edit response carries change_id; it is not table state.
+      const { change_id: _changeId, ...fields } = detail as TableDetail & { change_id?: number };
+      void _changeId;
       commit({
         ...prev,
         table: {
           ...prev.table,
-          ...detail,
+          ...fields,
           // Only GET /tables/{id} carries it; keep the shown one otherwise.
           last_write_conversation:
             detail.last_write_conversation !== undefined
@@ -202,7 +218,8 @@ export function useTable(tableId: string | null): TableView {
         change.updated_at !== shown.updated_at ||
         change.schema_version !== shown.schema_version
       ) {
-        void refresh();
+        if (pendingSeqRef.current !== null) dirtyRef.current = true;
+        else void refresh();
       }
     });
   }, [tableId, refresh]);

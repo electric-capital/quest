@@ -17,6 +17,7 @@
 import { API_BASE_URL } from './config';
 import {
   ApiClientError,
+  apiDelete,
   apiGet,
   apiPost,
   apiPut,
@@ -224,14 +225,7 @@ export function addTableShare(id: string, body: ShareTableRequest): Promise<Tabl
 
 /** Revoke one grant (404 `share_not_found`). Returns the owner's list row. */
 export async function removeTableShare(id: string, shareId: number): Promise<TableListRow> {
-  const response = await fetch(`${tableEndpoint(id)}/shares/${encodeURIComponent(String(shareId))}`, {
-    method: 'DELETE',
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    await handleErrorResponse(response);
-  }
-  return await response.json();
+  return apiDelete(`${tableEndpoint(id)}/shares/${encodeURIComponent(String(shareId))}`);
 }
 
 // --- Error accessors -------------------------------------------------------

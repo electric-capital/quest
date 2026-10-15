@@ -1365,7 +1365,7 @@ export type TableSchemaVerdict = 'approval' | 'denied';
 export interface TableAccess {
   can_read: boolean;
   rows: TableRowsVerdict;
-  schema: TableSchemaVerdict | string;
+  schema: TableSchemaVerdict;
   // rows === 'free': the owner or a write share.
   can_edit: boolean;
   can_restore: boolean;
@@ -1582,7 +1582,7 @@ export interface TableChange {
   // The conversation behind the source when the viewer owns it.
   conversation: TableWriteConversation | null;
   actor: { user_id: number; name: string } | null;
-  kind: TableChangeKind | string;
+  kind: TableChangeKind;
   op: string;
   summary: string;
   row_count: number | null;

@@ -238,4 +238,30 @@ describe('useTable', () => {
     expect(result.current.table?.schema_version).toBe(1);
     await waitFor(() => expect(result.current.table?.schema_version).toBe(3));
   });
+
+  it('coalesces a burst of changes into one follow-up fetch instead of dropping the in-flight one', async () => {
+    const { result } = await loaded();
+    const T2 = '2026-10-01T00:00:09';
+    let resolveFirst: (d: TableDetail) => void = () => {};
+    mocks.getTable.mockImplementationOnce(() => new Promise((r) => { resolveFirst = r; }));
+    mocks.getTable.mockResolvedValueOnce(detail('t1', { updated_at: T2, row_count: 9 }));
+    act(() => changed('t1', T1, 1));
+    act(() => changed('t1', '2026-10-01T00:00:07', 1));
+    act(() => changed('t1', T2, 1));
+    // One fetch in flight; the later events only mark it dirty.
+    expect(mocks.getTable).toHaveBeenCalledTimes(2);
+    await act(async () => resolveFirst(detail('t1', { updated_at: T1, row_count: 5 })));
+    // The in-flight response lands rather than being discarded...
+    await waitFor(() => expect(result.current.table?.row_count).toBeGreaterThanOrEqual(5));
+    // ...and exactly one more fetch brings the latest state.
+    await waitFor(() => expect(result.current.table?.row_count).toBe(9));
+    expect(mocks.getTable).toHaveBeenCalledTimes(3);
+    expect(result.current.changeSeq).toBe(3);
+  });
+
+  it('strips change_id from a schema-edit response', async () => {
+    const { result } = await loaded();
+    act(() => result.current.applyDetail({ ...detail('t1', { updated_at: T1 }), change_id: 7 } as TableDetail));
+    expect(result.current.table && 'change_id' in result.current.table).toBe(false);
+  });
 });
