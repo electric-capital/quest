@@ -192,10 +192,21 @@ async def _dummy_tool_handler(ctx, args):
     return "{}"
 
 
-def _tool(name):
+def _tool(name, **kwargs):
     return PluginTool(
         spec={"name": name, "description": "d", "parameters": {"type": "object", "properties": {}}},
         handler=_dummy_tool_handler,
+        **kwargs,
+    )
+
+
+def _skill(pid, suffix=""):
+    """A minimal system skill for *pid*: a plugin with tools needs one to
+    document them (PluginTool.skill defaults to the plugin's single skill)."""
+    from chat.system_skills import SystemSkill
+    return SystemSkill(
+        id=f"system:{pid}{suffix}", name="X", description="d",
+        when_to_load="w", content_builder=lambda b, k: "",
     )
 
 
@@ -272,10 +283,63 @@ class TestValidation:
             plugins_mod.validate_plugin(
                 QuestPlugin(
                     id="tp", label="X", tools=(_tool("tp_ping"),),
+                    system_skills=(_skill("tp"),),
                     script_tool_allowlist=frozenset({"tp_other"}),
                 ),
                 set(),
             )
+
+    def test_tool_without_a_documenting_skill_rejected(self):
+        with pytest.raises(ValueError, match="must set PluginTool.skill"):
+            plugins_mod.validate_plugin(
+                QuestPlugin(id="tp", label="X", tools=(_tool("tp_ping"),)), set(),
+            )
+        # Several skills: no default either.
+        with pytest.raises(ValueError, match="must set PluginTool.skill"):
+            plugins_mod.validate_plugin(
+                QuestPlugin(
+                    id="tp", label="X", tools=(_tool("tp_ping"),),
+                    system_skills=(_skill("tp"), _skill("tp", "_more")),
+                ),
+                set(),
+            )
+
+    def test_tool_skill_must_be_the_plugins_own(self):
+        with pytest.raises(ValueError, match="not one of the plugin's system skills"):
+            plugins_mod.validate_plugin(
+                QuestPlugin(
+                    id="tp", label="X", system_skills=(_skill("tp"),),
+                    tools=(_tool("tp_ping", skill="system:gmail"),),
+                ),
+                set(),
+            )
+
+    def test_tool_spec_may_not_set_prompt_tier_keys(self):
+        for key in ("core", "skill"):
+            tool = _tool("tp_ping")
+            tool.spec[key] = "system:tp" if key == "skill" else True
+            with pytest.raises(ValueError, match="use PluginTool.skill"):
+                plugins_mod.validate_plugin(
+                    QuestPlugin(
+                        id="tp", label="X", system_skills=(_skill("tp"),),
+                        tools=(tool,),
+                    ),
+                    set(),
+                )
+
+    def test_tool_skill_resolution(self):
+        plugin = QuestPlugin(
+            id="tp", label="X",
+            system_skills=(_skill("tp"), _skill("tp", "_more")),
+            tools=(_tool("tp_ping", skill="system:tp_more"),),
+        )
+        plugins_mod.validate_plugin(plugin, set())
+        assert plugins_mod.plugin_tool_skill(plugin, plugin.tools[0]) == "system:tp_more"
+        single = QuestPlugin(
+            id="tp", label="X", system_skills=(_skill("tp"),),
+            tools=(_tool("tp_ping"),),
+        )
+        assert plugins_mod.plugin_tool_skill(single, single.tools[0]) == "system:tp"
 
     def test_malformed_service_entry_rejected(self):
         with pytest.raises(ValueError, match="services entries"):
@@ -631,6 +695,7 @@ class TestFanOut:
 
         plugin = QuestPlugin(
             id="tp", label="X",
+            system_skills=(_skill("tp"),),
             tools=(
                 _tool("tp_read"),
                 PluginTool(
@@ -645,6 +710,9 @@ class TestFanOut:
         try:
             assert TOOL_CALL_REGISTRY["tp_write"]["mutating"] is True
             assert "mutating" not in TOOL_CALL_REGISTRY["tp_read"]
+            # The documenting skill is stamped on every plugin spec.
+            assert TOOL_CALL_REGISTRY["tp_read"]["skill"] == "system:tp"
+            assert TOOL_CALL_REGISTRY["tp_write"]["skill"] == "system:tp"
             assert "tp_write" in mutating_tool_call_tools()
             assert "tp_read" not in mutating_tool_call_tools()
 
@@ -665,15 +733,26 @@ class TestFanOut:
             _unregister(plugin)
 
     def test_plugin_tool_gated_out_of_prompt_when_service_missing(self, example_plugin):
+        # A plugin tool is never a core bullet; prompts name it on its
+        # skill's enumeration line, and the loaded skill documents it.
         from chat.gemini_api.system_prompt import _build_dynamic_tools_section
-        assert "example_ping" not in _build_dynamic_tools_section(
+        from chat.system_skills import build_system_skills_enumeration, load_system_skills
+        from tests.prompt_support import named_under_skill
+        assert "example_ping" not in _build_dynamic_tools_section()
+        assert "example_ping" not in build_system_skills_enumeration(
             connected_services={"example": False},
         )
-        assert "example_ping" in _build_dynamic_tools_section(
-            connected_services={"example": True},
+        assert named_under_skill(
+            build_system_skills_enumeration(connected_services={"example": True}),
+            "system:example", "example_ping",
         )
         # Unknown caller context (None) keeps the show-everything behavior.
-        assert "example_ping" in _build_dynamic_tools_section()
+        assert named_under_skill(
+            build_system_skills_enumeration(), "system:example", "example_ping",
+        )
+        loaded = load_system_skills(["system:example"], None, "http://x", "k")
+        assert "## Tool reference" in loaded[0]["content"]
+        assert "- **example_ping** --" in loaded[0]["content"]
 
     def test_action_request_preview_for_plugin_type(self, example_plugin):
         from chat.action_request_types import get_preview_for_request
@@ -892,13 +971,16 @@ class TestAtomicRegistration:
 
     def test_corrected_manifest_registers_after_preflight_rejection(self):
         broken = QuestPlugin(
-            id="tfix", label="X",
+            id="tfix", label="X", system_skills=(_skill("tfix"),),
             tools=(_tool("memory_search"),),
             unprefixed_tools=frozenset({"memory_search"}),
         )
         with pytest.raises(ValueError, match="collides"):
             plugins_mod.register_plugin(broken)
-        fixed = QuestPlugin(id="tfix", label="X", tools=(_tool("tfix_search"),))
+        fixed = QuestPlugin(
+            id="tfix", label="X", system_skills=(_skill("tfix"),),
+            tools=(_tool("tfix_search"),),
+        )
         plugins_mod.register_plugin(fixed)
         try:
             from chat.gemini_api.tool_dispatch import TOOL_CALL_HANDLERS
@@ -952,6 +1034,7 @@ class TestAtomicRegistration:
         from chat.gemini_api import script_tool_call
         first = QuestPlugin(
             id="tfirst", label="X", tools=(_tool("tfirst_ping"),),
+            system_skills=(_skill("tfirst"),),
             script_tool_allowlist=frozenset({"tfirst_ping"}),
         )
         plugins_mod.register_plugin(first)
@@ -970,6 +1053,7 @@ class TestAtomicRegistration:
         # service register fine but whose tool clashes with a core tool is
         # skipped with NO leftover card, store roster entry, or service.
         _write_plugin(tmp_path, "tpart", textwrap.dedent("""
+            from chat.system_skills import SystemSkill
             from config.plugin_types import CredentialField, PluginTool, QuestPlugin
 
             async def _h(ctx, args):
@@ -985,6 +1069,10 @@ class TestAtomicRegistration:
                         "name": "Partial", "load_credentials": lambda: None,
                         "inject_auth": lambda h, c: h,
                     }},),
+                    system_skills=(SystemSkill(
+                        id="system:tpart", name="X", description="d",
+                        when_to_load="w", content_builder=lambda b, k: "",
+                    ),),
                     tools=(PluginTool(
                         spec={"name": "memory_search", "description": "d",
                               "parameters": {"type": "object", "properties": {}}},

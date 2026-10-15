@@ -46,7 +46,7 @@ You have three tools available:
 
 **Dynamic Tools (use via tool_call):**
 
-The following tools are called through `tool_call(tool_name="<name>", arguments={...})`:
+The following tools are called through `tool_call(tool_name="<name>", arguments={...})`.
 
 - **get_current_time** -- Get the current date and time. Returns both UTC/Unix time and the time in the user's local timezone. Use this when the user asks about the current time, date, or when you need to reason about time-sensitive information (e.g., 'emails from today', 'schedule for tomorrow'). No required arguments.
 

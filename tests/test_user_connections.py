@@ -77,8 +77,16 @@ def _tool(name, *, with_connection=True):
 
 
 def _plugin(spec=None, tools=(), pid="tmc"):
+    from chat.system_skills import SystemSkill
+    # A plugin with tools needs a system skill to document them
+    # (PluginTool.skill defaults to the plugin's single skill).
+    skills = (SystemSkill(
+        id=f"system:{pid}", name="X", description="d",
+        when_to_load="w", content_builder=lambda b, k: "",
+    ),) if tools else ()
     return QuestPlugin(
         id=pid, label="Test Multi", user_connection=spec, tools=tuple(tools),
+        system_skills=skills,
     )
 
 

@@ -19,7 +19,9 @@ from chat.llm.tool_schemas import (
     PROJECT_HIDDEN_WORKSPACE_TOOLS,
     PROJECT_ONLY_TOOL_CALL_TOOLS,
     TOOL_CALL_REGISTRY,
+    format_tool_call_doc,
     mutating_tool_call_tools,
+    tool_is_advertised,
 )
 from chat.system_skills import build_system_skills_enumeration
 
@@ -239,14 +241,21 @@ _PROJECT_SCRIPT_EXAMPLE = (
 )
 
 
+_CORE_TOOLS_TAIL = (
+    "These are the core tools, documented in full here. Every other "
+    "`tool_call` tool is listed by name on the `Tools:` tail of the System "
+    "Skill that documents it (see the System Skills list below): load that "
+    "skill with `load_skills` before calling one of them -- the loaded skill "
+    "ends with a \"Tool reference\" giving each tool's parameters."
+)
+
+
 def _build_dynamic_tools_section(
     exclude: set[str] | None = None,
     connected_services: dict[str, bool] | None = None,
+    core_only: bool = True,
 ) -> str:
     """Build the 'Dynamic Tools' system prompt section from TOOL_CALL_REGISTRY.
-
-    Iterates over the registry entries and formats each tool's name,
-    description, and parameter schema into a human-readable block.
 
     Args:
         exclude: Optional set of tool names to omit from the section.
@@ -258,49 +267,34 @@ def _build_dynamic_tools_section(
             tools are not advertised to users who haven't connected that
             plugin's service. ``None`` (unknown caller context) keeps the
             historical show-everything behavior.
+        core_only: Document only the core tools (``spec["core"]``, see
+            ``CORE_TOOL_CALL_TOOLS``) and point at the System Skills
+            enumeration for the rest, which lists each remaining tool by
+            name under the skill that documents it (the same ``exclude``
+            must be passed to ``build_system_skills_enumeration``). False
+            documents every offered tool in full -- the public-project
+            prompt, which has no skill tools to load.
 
     Returns:
-        A formatted string describing all tools available through tool_call.
+        A formatted string describing the tools available through tool_call.
     """
     if exclude is None:
         exclude = set()
     lines = [
         "**Dynamic Tools (use via tool_call):**",
         "",
-        "The following tools are called through `tool_call(tool_name=\"<name>\", arguments={...})`:",
+        "The following tools are called through `tool_call(tool_name=\"<name>\", arguments={...})`."
+        + (f" {_CORE_TOOLS_TAIL}" if core_only else ""),
         "",
     ]
     for name, spec in TOOL_CALL_REGISTRY.items():
         if name in exclude:
             continue
-        required_service = spec.get("requires_service")
-        if (
-            required_service
-            and connected_services is not None
-            and not connected_services.get(required_service)
-        ):
+        if core_only and not spec.get("core"):
             continue
-        desc = spec.get("description", "")
-        params = spec.get("parameters", {})
-        properties = params.get("properties", {})
-        required = params.get("required", [])
-
-        # Build parameter documentation
-        param_parts = []
-        for pname, pschema in properties.items():
-            if pname == "intent_message":
-                continue  # Skip intent_message -- it's handled by tool_call itself
-            pdesc = pschema.get("description", "")
-            ptype = pschema.get("type", "string")
-            req_marker = " (required)" if pname in required else ""
-            param_parts.append(f"`{pname}` ({ptype}{req_marker}) -- {pdesc}")
-
-        if param_parts:
-            args_doc = " Arguments: " + "; ".join(param_parts) + "."
-        else:
-            args_doc = " No required arguments."
-
-        lines.append(f"- **{name}** -- {desc}{args_doc}")
+        if not tool_is_advertised(spec, connected_services):
+            continue
+        lines.append(format_tool_call_doc(name, spec))
         lines.append("")
 
     return "\n".join(lines)
@@ -598,8 +592,11 @@ Facts the user has saved about themselves and how they want you to work, newest 
         exclude=top_level_exclude, connected_services=connected_services,
     )
 
-    # Build the system-skills enumeration block (per-backend API docs live here now)
-    system_skills_block = build_system_skills_enumeration(connected_services, has_project)
+    # Build the system-skills enumeration block (per-backend API docs live
+    # here now, and each skill line names the non-core tools it documents)
+    system_skills_block = build_system_skills_enumeration(
+        connected_services, has_project, exclude_tools=top_level_exclude,
+    )
 
     # Build the proxy preamble (intro + auth header rule + numbered API list)
     proxy_preamble = _build_proxy_preamble(base_url, user_api_key, connected_services)
@@ -661,7 +658,7 @@ You have thirteen tools available:
 
 1. **curl_proxy_get(url, headers?)** -- Make a GET request to a Quest API endpoint.
 2. **curl_proxy_post(url, headers?, body?)** -- Make a POST request to a Quest API endpoint.
-3. **tool_call(tool_name, arguments?)** -- Execute a tool by name. See the 'Dynamic Tools' section below for available tools and their parameters.
+3. **tool_call(tool_name, arguments?)** -- Execute a tool by name. The 'Dynamic Tools' section below documents the core tools; every other tool is named on its System Skill's line, and loading that skill gives its parameters.
 4. **load_gmail_attachment(message_id, attachment_id, filename?, mime_type?, account?)** -- Fetch a Gmail attachment and upload it for analysis. Use this to read PDF, image, or other file attachments from Gmail messages. Requires Google Services to be connected. (Load `system:gmail` for the full attachment workflow.)
 5. **agent_task(name, prompt, description, model?)** -- Spawn a sub-agent to work on a specific task. The sub-agent has access to the same APIs and workspace files. Use this to delegate independent tasks like research, analysis, or multi-step API interactions. The sub-agent will work silently and return its findings. Optionally specify a model (e.g., 'gemini-3.8-flash' for simpler tasks, or 'gemini-3.5-flash-lite' for the simplest/cheapest tasks) -- defaults to your current model if omitted. If you need to run multiple independent sub-agent tasks, use agent_task_parallel instead.
 6. **agent_task_parallel(tasks)** -- Spawn multiple sub-agents to work on tasks in parallel (maximum {MAX_PARALLEL_TASKS} per call). All sub-agents run concurrently and the tool returns when all have completed. Each task needs an 'id' (to identify results), 'name', 'prompt', 'description', and optional 'model'. Use this instead of multiple sequential agent_task calls when the tasks are independent of each other.
@@ -823,17 +820,17 @@ def get_user_subagent_system_prompt(
     # run_kind "user_subagent"): the doc reads stay, the writes are hidden.
     # The run is a standalone conversation in the target's account, so the
     # project-only tools never apply.
+    user_subagent_exclude = (
+        {"wait_for_handles", "set_conversation_name", "suggest_memory"}
+        | PROJECT_ONLY_TOOL_CALL_TOOLS
+        | _doc_write_tool_names()
+    )
     dynamic_tools = _build_dynamic_tools_section(
-        exclude=(
-            {"wait_for_handles", "set_conversation_name", "suggest_memory"}
-            | PROJECT_ONLY_TOOL_CALL_TOOLS
-           
-            | _doc_write_tool_names()
-        ),
-        connected_services=connected_services,
+        exclude=user_subagent_exclude, connected_services=connected_services,
     )
     system_skills_block = build_system_skills_enumeration(
         connected_services, has_project=False,
+        exclude_tools=user_subagent_exclude,
     )
     proxy_preamble = _build_proxy_preamble(
         base_url, target_user_api_key, connected_services,
@@ -927,17 +924,16 @@ def get_inference_api_system_prompt(
     # (chat/gemini_api/tool_dispatch.py, is_inference_api): inference runs
     # must not change anything. That covers the Quest Docs writes too.
     # Inference runs are standalone conversations: no project-only tools.
+    inference_exclude = (
+        {"wait_for_handles", "set_conversation_name", "suggest_memory"}
+        | PROJECT_ONLY_TOOL_CALL_TOOLS
+        | mutating_tool_call_tools()
+    )
     dynamic_tools = _build_dynamic_tools_section(
-        exclude=(
-            {"wait_for_handles", "set_conversation_name", "suggest_memory"}
-            | PROJECT_ONLY_TOOL_CALL_TOOLS
-           
-            | mutating_tool_call_tools()
-        ),
-        connected_services=connected_services,
+        exclude=inference_exclude, connected_services=connected_services,
     )
     system_skills_block = build_system_skills_enumeration(
-        connected_services, has_project=False,
+        connected_services, has_project=False, exclude_tools=inference_exclude,
     )
     proxy_preamble = _build_proxy_preamble(
         base_url, user_api_key, connected_services,
@@ -1079,7 +1075,10 @@ def get_public_project_system_prompt(
         public_exclude.add("suggest_project_memory")
     if not docs_enabled:
         public_exclude |= _doc_tool_names()
-    dynamic_tools_section = _build_dynamic_tools_section(exclude=public_exclude)
+    # No skill tools here, so every offered tool is documented in full.
+    dynamic_tools_section = _build_dynamic_tools_section(
+        exclude=public_exclude, core_only=False,
+    )
     docs_section = _PUBLIC_DOCS_SECTION if docs_enabled else ""
 
     if is_routine:
@@ -1296,7 +1295,9 @@ def get_sub_agent_system_prompt(
     )
 
     # Build the system-skills enumeration block
-    system_skills_block = build_system_skills_enumeration(connected_services, has_project)
+    system_skills_block = build_system_skills_enumeration(
+        connected_services, has_project, exclude_tools=sub_agent_exclude,
+    )
 
     # Build the proxy preamble (intro + auth header rule + numbered API list)
     proxy_preamble = _build_proxy_preamble(base_url, user_api_key, connected_services)
@@ -1383,7 +1384,7 @@ You have {tool_count_word} tools available:
 
 1. **curl_proxy_get(url, headers?)** -- Make a GET request to a Quest API endpoint.
 2. **curl_proxy_post(url, headers?, body?)** -- Make a POST request to a Quest API endpoint.
-3. **tool_call(tool_name, arguments?)** -- Execute a tool by name. See the 'Dynamic Tools' section below for available tools and their parameters.
+3. **tool_call(tool_name, arguments?)** -- Execute a tool by name. The 'Dynamic Tools' section below documents the core tools; every other tool is named on its System Skill's line, and loading that skill gives its parameters.
 4. **load_gmail_attachment(message_id, attachment_id, filename?, mime_type?, account?)** -- Fetch a Gmail attachment and make it available for analysis. Requires Google Services to be connected.
 5. **run_script(path, args?, timeout?)** -- Run a script from the workspace in a sandboxed container with Python. Scripts reach Quest's sandbox tool API at `http://localhost:` + the injected `QUEST_PORT` env var; authenticate with the `QUEST_API_KEY` env var. Load `system:workspace` for full patterns.
 6. **run_python(script, args?, timeout?)** -- Run inline Python code in a sandboxed container. No file written to workspace. For one-off tasks. Load `system:workspace` for full patterns.

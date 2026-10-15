@@ -72,8 +72,8 @@ Mirrors the cross-user subagent runtime (`chat/user_subagent.py`), minus approva
    `run_script`/`run_python` mint their sandbox lease with `block_mutating_tools=True`, and the
    sandbox tool API (`get_current_sandbox_user` + the `POST /api/tool-call` bridge via
    `get_sandbox_lease`) refuses the same tools and routes with 403 for that lease; and the
-   inference system prompt omits the mutating tools from its Dynamic Tools section and states
-   the read-only boundary. Workspace writes (`write_workspace_file`, `edit_workspace_file`,
+   inference system prompt omits the mutating tools (neither documented nor named under their
+   skills) and states the read-only boundary. Workspace writes (`write_workspace_file`, `edit_workspace_file`,
    sandbox output) stay allowed: the run's conversation owns a fresh workspace. Every core
    dynamic tool must be classified -- `tests/test_inference_api.py` pins the full roster.
 3. The system prompt (`get_inference_api_system_prompt` in `chat/gemini_api/system_prompt.py`)

@@ -54,11 +54,13 @@ WORKSPACE_TOOLS = (
 )
 
 from chat.workspace_hints import PROJECT_COPY_FIRST_SENTENCE as COPY_SENTENCE
+from tests.prompt_support import tool_offered
 
 
 def _listed(prompt: str, name: str) -> bool:
-    """Whether the Dynamic Tools section of *prompt* offers tool *name*."""
-    return f"- **{name}** --" in prompt
+    """Whether *prompt* offers tool *name*: a core bullet for the file
+    tools, the `system:project_db` line for project_db_query."""
+    return tool_offered(prompt, name)
 
 
 def _assert_offered(prompt: str, project: bool) -> None:

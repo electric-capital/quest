@@ -113,11 +113,26 @@ class TestRegistration:
         with pytest.raises(ValueError, match="parameters"):
             register_tool_call_tool({"name": "tp_x", "description": "d"})
 
+    def test_spec_requires_a_documenting_skill(self):
+        # A plugin tool no skill documents would be offered by no prompt.
+        with pytest.raises(ValueError, match="skill"):
+            register_tool_call_tool({
+                "name": "tp_x", "description": "d",
+                "parameters": {"type": "object", "properties": {}},
+            })
+        with pytest.raises(ValueError, match="cannot be core"):
+            register_tool_call_tool({
+                "name": "tp_x", "description": "d", "core": True,
+                "parameters": {"type": "object", "properties": {}},
+            })
+        assert "tp_x" not in TOOL_CALL_REGISTRY
+
     def test_register_then_dispatch_round_trip(self):
         register_tool_call_tool({
             "name": "tp_round_trip",
             "description": "d",
             "parameters": {"type": "object", "properties": {}},
+            "skill": "system:tp",
         })
         register_tool_call_handler("tp_round_trip", _dummy_handler)
         try:
@@ -136,7 +151,7 @@ class TestRegistration:
     def test_register_dynamic_tool_registers_both_tables(self):
         from chat.llm.tool_schemas import PLUGIN_TOOL_NAMES
         register_dynamic_tool(
-            {"name": "tp_pair", "description": "d",
+            {"name": "tp_pair", "description": "d", "skill": "system:tp",
              "parameters": {"type": "object", "properties": {}}},
             _dummy_handler,
         )
@@ -162,7 +177,7 @@ class TestRegistration:
         try:
             with pytest.raises(ValueError, match="already registered"):
                 register_dynamic_tool(
-                    {"name": "tp_orphan", "description": "d",
+                    {"name": "tp_orphan", "description": "d", "skill": "system:tp",
                      "parameters": {"type": "object", "properties": {}}},
                     _dummy_handler,
                 )
@@ -255,6 +270,7 @@ class TestDispatchBehavior:
             "name": "tp_boom",
             "description": "d",
             "parameters": {"type": "object", "properties": {}},
+            "skill": "system:tp",
         })
 
         async def _boom(ctx, args):

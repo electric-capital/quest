@@ -127,7 +127,10 @@ class TestRegistry:
         from chat.llm.tool_schemas import TOOL_CALL_REGISTRY
 
         for name in DOC_TOOLS:
-            text = json.dumps(TOOL_CALL_REGISTRY[name])
+            # The model-facing text only: the spec's prompt-tier metadata
+            # (``skill: system:quest_docs``) never reaches a prompt.
+            spec = TOOL_CALL_REGISTRY[name]
+            text = json.dumps([spec["description"], spec["parameters"]])
             for term in _PUBLIC_PROMPT_FORBIDDEN:
                 assert term not in text, (name, term)
 
@@ -161,13 +164,16 @@ class TestRegistry:
         assert set(DOC_TOOLS) & SCRIPT_TOOL_CALL_ALLOWLIST == READ_TOOLS
 
     def test_prompt_hides_doc_tools_without_the_docs_key(self):
-        from chat.gemini_api.system_prompt import _build_dynamic_tools_section
+        # Skill-documented tools: offered by name on the system:quest_docs
+        # enumeration line, which the docs pseudo-key gates.
+        from chat.system_skills import build_system_skills_enumeration
+        from tests.prompt_support import named_under_skill
 
-        hidden = _build_dynamic_tools_section(connected_services={})
-        shown = _build_dynamic_tools_section(connected_services={"docs": True})
+        hidden = build_system_skills_enumeration(connected_services={})
+        shown = build_system_skills_enumeration(connected_services={"docs": True})
         for name in DOC_TOOLS:
-            assert f"**{name}**" not in hidden
-            assert f"**{name}**" in shown
+            assert not named_under_skill(hidden, "system:quest_docs", name)
+            assert named_under_skill(shown, "system:quest_docs", name)
 
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 import config.feature_gates as fg
 from chat.docs.constants import DOCS_SERVICE_KEY
 from chat.tables.constants import TABLES_SERVICE_KEY
+from tests.prompt_support import core_bullet, named_under_skill
 
 DOC_TOOLS = (
     "list_docs", "search_docs", "read_doc", "create_doc", "edit_doc",
@@ -46,9 +47,12 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _bullet(name: str) -> str:
-    """How _build_dynamic_tools_section documents a callable tool."""
-    return f"- **{name}** --"
+def _offered(prompt: str, name: str) -> bool:
+    """The doc tools are skill-documented: a prompt offers one by naming
+    it on the `system:quest_docs` enumeration line (never as a core
+    bullet outside the public prompt)."""
+    assert core_bullet(name) not in prompt, name
+    return named_under_skill(prompt, "system:quest_docs", name)
 
 
 @pytest.fixture()
@@ -274,17 +278,17 @@ class TestPromptGating:
             connected_services={DOCS_SERVICE_KEY: docs},
         )
         for name in DOC_TOOLS:
-            assert (_bullet(name) in prompt) is docs, name
+            assert _offered(prompt, name) is docs, name
         assert ("system:quest_docs" in prompt) is docs
 
     def test_top_level_end_to_end_with_gate(self, gates_file, no_plugins):
         from chat.gemini_api.system_prompt import get_system_prompt
         user = {"email": "u@example.com"}
         closed = get_system_prompt(API_KEY, connected_services=_connected(user))
-        assert not any(_bullet(n) in closed for n in DOC_TOOLS)
+        assert not any(_offered(closed, n) for n in DOC_TOOLS)
         fg.set_feature_enabled(fg.FEATURE_DOCS, True)
         opened = get_system_prompt(API_KEY, connected_services=_connected(user))
-        assert all(_bullet(n) in opened for n in DOC_TOOLS)
+        assert all(_offered(opened, n) for n in DOC_TOOLS)
         # A capability, not a connector: the proxy preamble is unchanged.
         assert "No API services are currently connected" in opened
 
@@ -298,9 +302,9 @@ class TestPromptGating:
             has_project=has_project, can_nest=can_nest,
         )
         for name in WRITE_TOOLS:
-            assert _bullet(name) not in prompt, name
+            assert not _offered(prompt, name), name
         for name in READ_TOOLS:
-            assert _bullet(name) in prompt, name
+            assert _offered(prompt, name), name
 
     def test_user_subagent_prompt_reads_only(self):
         from chat.gemini_api.system_prompt import get_user_subagent_system_prompt
@@ -310,9 +314,9 @@ class TestPromptGating:
             target_user_email="t@example.com", caller_email="c@example.com",
         )
         for name in WRITE_TOOLS:
-            assert _bullet(name) not in prompt, name
+            assert not _offered(prompt, name), name
         for name in READ_TOOLS:
-            assert _bullet(name) in prompt, name
+            assert _offered(prompt, name), name
 
     def test_inference_prompt_reads_only(self):
         from chat.gemini_api.system_prompt import get_inference_api_system_prompt
@@ -321,9 +325,9 @@ class TestPromptGating:
             connected_services={DOCS_SERVICE_KEY: True},
         )
         for name in WRITE_TOOLS:
-            assert _bullet(name) not in prompt, name
+            assert not _offered(prompt, name), name
         for name in READ_TOOLS:
-            assert _bullet(name) in prompt, name
+            assert _offered(prompt, name), name
 
     def test_read_only_tiers_hide_reads_when_gate_closed(self):
         from chat.gemini_api.system_prompt import (
@@ -339,8 +343,17 @@ class TestPromptGating:
         ]
         for prompt in prompts:
             for name in DOC_TOOLS:
-                assert _bullet(name) not in prompt, name
+                assert not _offered(prompt, name), name
             assert "system:quest_docs" not in prompt
+
+    def test_public_prompt_documents_doc_tools_in_full(self):
+        # The public prompt has no load_skills, so the gate-open prompt
+        # carries the doc tools' full bullets rather than skill pointers.
+        from chat.gemini_api.system_prompt import get_public_project_system_prompt
+        prompt = get_public_project_system_prompt(docs_enabled=True)
+        for name in DOC_TOOLS:
+            assert core_bullet(name) in prompt, name
+        assert "system:" not in prompt
 
 
 # ---------------------------------------------------------------------------

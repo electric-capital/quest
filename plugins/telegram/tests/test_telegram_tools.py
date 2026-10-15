@@ -70,13 +70,16 @@ class TestRegistration:
         assert TOOL_CALL_REGISTRY["telegram_get_messages"]["parameters"]["required"] == ["dialog_id"]
 
     def test_hidden_from_prompt_until_connected(self, telegram_plugin):
-        from chat.gemini_api.system_prompt import _build_dynamic_tools_section
+        # Plugin tools are skill-documented: a prompt names them on the
+        # system:telegram enumeration line, gated with the skill.
+        from chat.system_skills import build_system_skills_enumeration
+        from tests.prompt_support import named_under_skill
 
-        hidden = _build_dynamic_tools_section(connected_services={"telegram": False})
-        shown = _build_dynamic_tools_section(connected_services={"telegram": True})
+        hidden = build_system_skills_enumeration(connected_services={"telegram": False})
+        shown = build_system_skills_enumeration(connected_services={"telegram": True})
         for name in TELEGRAM_TOOLS:
             assert name not in hidden, name
-            assert name in shown, name
+            assert named_under_skill(shown, "system:telegram", name), name
 
     def test_script_bridge_allowlisted(self, telegram_plugin):
         from chat.gemini_api.script_tool_call import SCRIPT_TOOL_CALL_ALLOWLIST

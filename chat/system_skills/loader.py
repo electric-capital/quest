@@ -8,6 +8,12 @@ import inspect
 from typing import Callable, Optional
 
 from chat.docs.constants import DOCS_SERVICE_KEY, docs_disabled_message
+from chat.llm.tool_schemas import (
+    TOOL_CALL_REGISTRY,
+    render_tool_reference,
+    tool_is_advertised,
+    tools_for_skill,
+)
 from chat.system_skills.catalog import CATALOG, SYSTEM_SKILL_PREFIX, SystemSkill
 
 
@@ -107,8 +113,16 @@ def build_skill_content(
             connection_summary(user, skill.requires)
             if user and skill.requires else []
         )
-        return skill.content_builder(base_url, api_key, connections=connections)
-    return skill.content_builder(base_url, api_key)
+        content = skill.content_builder(base_url, api_key, connections=connections)
+    else:
+        content = skill.content_builder(base_url, api_key)
+    # The skill's prose is the usage guidance; the registry specs are the
+    # parameter truth, so they are rendered from the registry rather than
+    # copied into the prose (the prompt documents only the core tools).
+    reference = render_tool_reference(skill.id)
+    if reference:
+        content = content.rstrip() + "\n\n" + reference
+    return content
 
 
 def load_system_skills(
@@ -198,15 +212,37 @@ def load_system_skills(
     return results
 
 
+def skill_tool_names(
+    skill: SystemSkill,
+    connected_services: Optional[dict[str, bool]],
+    exclude_tools: Optional[set[str]] = None,
+) -> list[str]:
+    """The ``tool_call`` tools a prompt may name on *skill*'s enumeration
+    line: the registry tools whose ``skill`` is this skill, minus the
+    prompt's excluded tools and those gated on an unconnected service."""
+    exclude = exclude_tools or set()
+    return [
+        name for name in tools_for_skill(skill.id)
+        if name not in exclude
+        and tool_is_advertised(TOOL_CALL_REGISTRY[name], connected_services)
+    ]
+
+
 def build_system_skills_enumeration(
     connected_services: Optional[dict[str, bool]] = None,
     has_project: bool = False,
+    exclude_tools: Optional[set[str]] = None,
 ) -> str:
     """Build the compact "System Skills" block for the system prompt.
 
     Returns a Markdown-formatted bullet list, one line per visible skill,
     or an empty string if no skills are visible (e.g. brand-new user
-    with no services connected and no project).
+    with no services connected and no project). A skill's line ends with
+    the names of the non-core ``tool_call`` tools it documents, so the
+    prompt's Dynamic Tools section can document the core tools alone;
+    ``exclude_tools`` is the prompt's excluded-tool set (the ``exclude``
+    its builder passes to ``_build_dynamic_tools_section``), so a tool
+    hidden from the prompt is not named here either.
     """
     visible = list_system_skills(connected_services, has_project)
     if not visible:
@@ -221,8 +257,17 @@ def build_system_skills_enumeration(
         "`load_skills(skill_ids=[...])` with the skill id(s) when you "
         "need them. You can load multiple at once. Loaded skill content "
         "stays in the conversation for the rest of the turn (and remains "
-        "visible to you in subsequent turns of the same conversation)."
+        "visible to you in subsequent turns of the same conversation). "
+        "A skill's `Tools:` list names the `tool_call` tools it documents; "
+        "load the skill before calling one of them -- its content ends with "
+        "a \"Tool reference\" giving their parameters."
     )
 
-    lines = [f"- `{skill.id}` -- {skill.description} {skill.when_to_load}".rstrip() for skill in visible]
+    lines = []
+    for skill in visible:
+        line = f"- `{skill.id}` -- {skill.description} {skill.when_to_load}".rstrip()
+        names = skill_tool_names(skill, connected_services, exclude_tools)
+        if names:
+            line += " Tools: " + ", ".join(f"`{n}`" for n in names) + "."
+        lines.append(line)
     return header + "\n\n" + "\n".join(lines)

@@ -17,6 +17,8 @@ from importlib import reload
 import pytest
 from fastapi import HTTPException
 
+from tests.prompt_support import named_under_skill, tool_offered
+
 
 def _run(coro):
     return asyncio.run(coro)
@@ -499,10 +501,11 @@ def test_inference_prompt_hides_mutating_tools_and_states_the_boundary(slack_plu
 
     prompt = get_inference_api_system_prompt(
         "", user_email="u@example.com",
-        connected_services={"gmail": True, "slack": True, "telegram": True},
+        connected_services={"google_services": True, "slack": True, "telegram": True},
     )
     for name in mutating_tool_call_tools():
-        assert f"**{name}**" not in prompt, name
-    # Reads are still advertised.
-    assert "get_gmail_messages" in prompt
+        assert not tool_offered(prompt, name), name
+    # Reads are still advertised (named on their skill's line).
+    assert named_under_skill(prompt, "system:gmail", "get_gmail_messages")
+    assert named_under_skill(prompt, "system:slack", "search_slack_messages")
     assert "READ-ONLY" in prompt

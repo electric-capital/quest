@@ -212,12 +212,21 @@ class PluginTool:
     runs, which must not change anything (the loader stamps
     ``spec["mutating"]`` so ``chat.llm.tool_schemas.mutating_tool_call_tools()``
     sees it). Reads and workspace-only writes leave it ``False``.
+
+    ``skill`` names the plugin's system skill that documents the tool
+    (``system:<plugin id>`` or ``system:<plugin id>_...``). System prompts
+    document only the core tools in full; a plugin tool is listed by name on
+    its skill's enumeration line, and loading the skill appends the tool's
+    full parameter reference rendered from ``spec``. ``None`` means the
+    plugin's single system skill; a plugin with tools and several skills
+    (or none) must set it (the loader stamps ``spec["skill"]``).
     """
 
     spec: dict
     handler: Callable
     requires_service: Optional[str] = None
     mutating: bool = False
+    skill: Optional[str] = None
 
 
 @dataclass(frozen=True)

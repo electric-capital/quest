@@ -48,7 +48,7 @@ Every route is session-cookie authed like the core OAuth flows. The page served 
 
 ## Read Tools
 
-All four tools are gated by `requires_service: "telegram"`, so they are only enumerated in the system prompt's Dynamic Tools section for users whose `connected_services["telegram"]` is true (server configured AND session stored -- the combined plugin gate in `get_user_connected_services()`). Result shapes and the paging semantics are documented for the model in `instructions.md`.
+All four tools are gated by `requires_service: "telegram"` and documented by the `system:telegram` skill, so the system prompt names them on that skill's enumeration line only for users whose `connected_services["telegram"]` is true (server configured AND session stored -- the combined plugin gate in `get_user_connected_services()`); loading the skill appends their parameter reference. Result shapes and the paging semantics are documented for the model in `instructions.md`.
 
 | Tool | Arguments | Wraps |
 |------|-----------|-------|

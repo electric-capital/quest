@@ -70,6 +70,7 @@ from typing import Callable
 from config.plugin_types import (
     CredentialField,
     HelpLink,
+    PluginTool,
     QuestPlugin,
     UserConnectionSpec,
 )
@@ -239,6 +240,29 @@ def _import_plugin_module(plugin_py: Path):
     return module
 
 
+def plugin_tool_skill(plugin: QuestPlugin, tool: PluginTool) -> str:
+    """The system skill id documenting *tool* (see ``PluginTool.skill``):
+    the explicit ``skill`` when it is one of the plugin's own skills, else
+    the plugin's single skill. Raises ValueError when neither resolves --
+    a tool no skill documents would be offered by no prompt."""
+    name = tool.spec.get("name", "")
+    skill_ids = [skill.id for skill in plugin.system_skills]
+    if tool.skill is not None:
+        if tool.skill not in skill_ids:
+            raise ValueError(
+                f"Plugin {plugin.id!r} tool {name!r} names skill {tool.skill!r}, "
+                f"which is not one of the plugin's system skills {skill_ids}"
+            )
+        return tool.skill
+    if len(skill_ids) != 1:
+        raise ValueError(
+            f"Plugin {plugin.id!r} tool {name!r} must set PluginTool.skill: the "
+            f"plugin declares {len(skill_ids)} system skills, so there is no "
+            "default skill to document it"
+        )
+    return skill_ids[0]
+
+
 def validate_plugin(plugin: QuestPlugin, existing_ids: set[str]) -> None:
     """Validate a plugin manifest. Raises ValueError on any violation."""
     if not isinstance(plugin, QuestPlugin):
@@ -310,6 +334,12 @@ def validate_plugin(plugin: QuestPlugin, existing_ids: set[str]) -> None:
             )
         if not callable(tool.handler):
             raise ValueError(f"Plugin {pid!r} tool {name!r} handler is not callable")
+        if "core" in tool.spec or "skill" in tool.spec:
+            raise ValueError(
+                f"Plugin {pid!r} tool {name!r} spec must not set 'core' or "
+                "'skill'; use PluginTool.skill"
+            )
+        plugin_tool_skill(plugin, tool)  # raises when unresolvable
         tool_names.add(name)
     stray_tools = set(plugin.unprefixed_tools) - tool_names
     if stray_tools:
@@ -779,6 +809,7 @@ def register_plugin(plugin: QuestPlugin) -> None:
                 spec["requires_service"] = tool.requires_service
             if tool.mutating:
                 spec["mutating"] = True
+            spec["skill"] = plugin_tool_skill(plugin, tool)
             register_dynamic_tool(spec, tool.handler)
             journal.append(
                 lambda name=spec["name"]: unregister_dynamic_tool(name)

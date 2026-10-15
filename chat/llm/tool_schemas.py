@@ -50,9 +50,10 @@ NESTED_SUB_AGENT_ALLOWED_MODELS = {
 TOOL_CALL_SPEC: ToolSpec = {
     "name": "tool_call",
     "description": (
-        "Execute a tool by name. Consult the 'Dynamic Tools' section in your "
-        "system instructions for available tool names, their parameters, and "
-        "usage guidance."
+        "Execute a tool by name. The 'Dynamic Tools' section in your system "
+        "instructions documents the core tools; every other tool is named "
+        "on the line of the System Skill that documents it -- load that "
+        "skill with load_skills for its parameters and usage guidance."
     ),
     "parameters": {
         "type": "object",
@@ -2730,6 +2731,14 @@ def register_tool_call_tool(spec: ToolSpec) -> None:
         raise ValueError(f"Tool already registered: {name!r}")
     if not isinstance(spec.get("parameters"), dict):
         raise ValueError(f"Tool {name!r} spec must have a 'parameters' object")
+    if spec.get("core"):
+        raise ValueError(f"Tool {name!r}: plugin tools cannot be core prompt tools")
+    skill = spec.get("skill")
+    if not isinstance(skill, str) or not skill.startswith("system:"):
+        raise ValueError(
+            f"Tool {name!r} spec must name the system skill documenting it "
+            "('skill': 'system:<id>')"
+        )
     TOOL_CALL_REGISTRY[name] = spec
     PLUGIN_TOOL_NAMES.add(name)
 
@@ -3178,6 +3187,160 @@ PUBLIC_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     "append_to_doc",
     "add_doc_image",
 })
+
+
+# ---------------------------------------------------------------------------
+# Prompt tiers: core tools vs skill-documented tools
+# ---------------------------------------------------------------------------
+
+# The tool_call tools every prompt documents in full (spec["core"]): what a
+# conversation needs before it has loaded any skill -- the authenticated
+# external GET and its large-response companion, the memory reads and
+# suggestions, the clock, conversation naming, and the file tools the
+# prompt's file rules name. Every other registry entry is documented by one
+# system skill (spec["skill"]; built-in tools from _SKILL_DOCUMENTED_TOOLS below,
+# plugin tools from PluginTool.skill): a prompt lists only the tool's name
+# on that skill's enumeration line, and loading the skill appends the full
+# parameter reference (render_tool_reference). Public-project prompts have
+# no skill tools and inline everything they offer instead.
+CORE_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
+    "authed_get",
+    "get_response_content",
+    "memory_search",
+    "memory_list",
+    "suggest_memory",
+    "project_memory_search",
+    "project_memory_list",
+    "suggest_project_memory",
+    "get_current_time",
+    "set_conversation_name",
+    *PROJECT_HIDDEN_WORKSPACE_TOOLS,
+    "list_files",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "copy_file",
+})
+
+# The system skill documenting each built-in tool that is not core.
+# authed_post is GCP-only today (the two POST-shaped reads), and
+# wait_for_handles exists for the action-request handles.
+_SKILL_DOCUMENTED_TOOLS: dict[str, str] = {
+    "authed_post": "system:gcp",
+    "wait_for_handles": "system:action_requests",
+    "project_db_query": "system:project_db",
+    "download_drive_file": "system:drive",
+    "google_export_doc": "system:docs",
+    "google_export_sheet": "system:sheets",
+    "google_export_slides": "system:slides",
+    "get_gmail_messages": "system:gmail",
+    "get_gmail_message_urls": "system:gmail",
+    "create_gmail_draft": "system:gmail",
+    "send_gmail_to_self": "system:gmail",
+    "modify_gmail_labels": "system:gmail",
+    "archive_gmail_message": "system:gmail",
+    "list_gmail_labels": "system:gmail",
+    "list_gmail_quest_labels": "system:gmail",
+    "list_docs": "system:quest_docs",
+    "search_docs": "system:quest_docs",
+    "read_doc": "system:quest_docs",
+    "create_doc": "system:quest_docs",
+    "edit_doc": "system:quest_docs",
+    "append_to_doc": "system:quest_docs",
+    "add_doc_image": "system:quest_docs",
+}
+
+
+def _stamp_prompt_tiers() -> None:
+    """Mark every built-in registry spec ``core`` or give it its ``skill``.
+
+    Runs once at import. A tool in neither table would be offered by no
+    prompt at all, so that is an error here rather than a silent omission.
+    """
+    overlap = CORE_TOOL_CALL_TOOLS & _SKILL_DOCUMENTED_TOOLS.keys()
+    if overlap:
+        raise RuntimeError(f"tool_call tools both core and skill-documented: {sorted(overlap)}")
+    for name, spec in TOOL_CALL_REGISTRY.items():
+        if name in CORE_TOOL_CALL_TOOLS:
+            spec["core"] = True
+        elif name in _SKILL_DOCUMENTED_TOOLS:
+            spec["skill"] = _SKILL_DOCUMENTED_TOOLS[name]
+        else:
+            raise RuntimeError(
+                f"tool_call tool {name!r} has no prompt tier: add it to "
+                "CORE_TOOL_CALL_TOOLS or _SKILL_DOCUMENTED_TOOLS"
+            )
+    unknown = (CORE_TOOL_CALL_TOOLS | _SKILL_DOCUMENTED_TOOLS.keys()) - TOOL_CALL_REGISTRY.keys()
+    if unknown:
+        raise RuntimeError(f"prompt tier names unknown tool_call tools: {sorted(unknown)}")
+
+
+_stamp_prompt_tiers()
+
+
+def tool_is_advertised(spec: ToolSpec, connected_services: dict[str, bool] | None) -> bool:
+    """Whether a prompt built for *connected_services* may name this tool.
+
+    A spec's ``requires_service`` hides it until that key is truthy;
+    ``None`` (unknown caller context) keeps the show-everything behavior.
+    """
+    required_service = spec.get("requires_service")
+    if not required_service or connected_services is None:
+        return True
+    return bool(connected_services.get(required_service))
+
+
+def tools_for_skill(skill_id: str) -> list[str]:
+    """Names of the registry tools documented by *skill_id*, in registry order."""
+    return [
+        name for name, spec in TOOL_CALL_REGISTRY.items()
+        if spec.get("skill") == skill_id
+    ]
+
+
+def format_tool_call_doc(name: str, spec: ToolSpec) -> str:
+    """One Markdown bullet documenting a tool_call tool: description and
+    parameters (``intent_message`` left out -- tool_call handles it)."""
+    desc = spec.get("description", "")
+    params = spec.get("parameters", {})
+    properties = params.get("properties", {})
+    required = params.get("required", [])
+
+    param_parts = []
+    for pname, pschema in properties.items():
+        if pname == "intent_message":
+            continue
+        pdesc = pschema.get("description", "")
+        ptype = pschema.get("type", "string")
+        req_marker = " (required)" if pname in required else ""
+        param_parts.append(f"`{pname}` ({ptype}{req_marker}) -- {pdesc}")
+
+    if param_parts:
+        args_doc = " Arguments: " + "; ".join(param_parts) + "."
+    else:
+        args_doc = " No required arguments."
+    return f"- **{name}** -- {desc}{args_doc}"
+
+
+def render_tool_reference(skill_id: str) -> str:
+    """The "Tool reference" section appended to a loaded system skill: the
+    full documentation of every tool the skill owns, or "" when it owns
+    none. Rendered from the live registry so it cannot drift from the
+    specs dispatch validates against."""
+    names = tools_for_skill(skill_id)
+    if not names:
+        return ""
+    lines = [
+        "## Tool reference",
+        "",
+        "These tools are called through "
+        '`tool_call(tool_name="<name>", arguments={...})`:',
+        "",
+    ]
+    for name in names:
+        lines.append(format_tool_call_doc(name, TOOL_CALL_REGISTRY[name]))
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 # ---------------------------------------------------------------------------

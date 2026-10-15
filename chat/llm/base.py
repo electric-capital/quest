@@ -31,6 +31,14 @@ class ToolSpec(TypedDict, total=False):
     # enumeration (NOT its callability). Tools whose service the user has
     # not connected are omitted from the "Dynamic Tools" section.
     requires_service: str
+    # Prompt tier of a TOOL_CALL_REGISTRY entry (exactly one of the two is
+    # set, see chat/llm/tool_schemas.py CORE_TOOL_CALL_TOOLS). ``core``
+    # tools are documented in full in every prompt; every other tool names
+    # the ``system:*`` skill that documents it in ``skill``: the prompt
+    # lists only its name under that skill's enumeration line, and loading
+    # the skill appends the full tool reference.
+    core: bool
+    skill: str
 
 
 @dataclass

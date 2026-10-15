@@ -208,7 +208,7 @@ Enforcement outside the access rule:
 
 - **Public conversations**: all seven are in `PUBLIC_TOOL_CALL_ALLOWLIST`. The access rule hides every private doc there and public conversations only ever get `free` or `denied`, so the blocked `create_action_request` is never needed.
 - **Inference API runs**: the `mutating` flag puts the four writes in `mutating_tool_call_tools()`, which is hard-rejected at dispatch and refused for the run's sandbox lease (see [Inference API](../api/inference-api.md)). The access rule would deny them anyway.
-- **Sub-agents and cross-user subagents**: `get_sub_agent_system_prompt()` and `get_user_subagent_system_prompt()` drop `_doc_write_tool_names()` from their Dynamic Tools section. If called anyway, `create_doc` refuses through `_CREATE_DENY_REASONS` and the other writes through the access rule.
+- **Sub-agents and cross-user subagents**: `get_sub_agent_system_prompt()` and `get_user_subagent_system_prompt()` exclude `_doc_write_tool_names()` from their prompts (the `system:quest_docs` enumeration line names only the reads). If called anyway, `create_doc` refuses through `_CREATE_DENY_REASONS` and the other writes through the access rule.
 
 ## The write_doc Action Request
 
