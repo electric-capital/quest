@@ -1,19 +1,26 @@
 """Per-conversation ring buffer of recently-flushed durable messages.
 
-Used by the persistent WS subscribe handler to fulfil ``catchup`` responses
-when a client reconnects with a stale ``last_seq`` that is still inside the
-buffer's window. If the requested ``after_seq`` is below the buffer's
-earliest seq, :meth:`ReplayBuffer.slice` returns ``None`` to signal that the
-caller must fall back to ``resync`` (REST-fetch the full conversation).
+Filled by ``chat.storage._publish_appended_to_bus`` right after each
+``chat_history.json`` append, alongside the ``message_appended`` publish.
+Two consumers read it:
 
-Phase 1 ships the skeleton; Phase 2 wires it into the flush callback so
-durable events land in the buffer alongside their bus publish.
+* The persistent WS subscribe handler fulfils ``catchup`` responses when a
+  client reconnects with a stale ``last_seq`` that is still inside the
+  buffer's window. If the requested ``after_seq`` is below the buffer's
+  earliest seq, :meth:`ReplayBuffer.slice` returns ``None`` to signal that
+  the caller must fall back to ``resync`` (REST-fetch the full conversation).
+* ``GET /conversations/{id}/tail`` (``chat/routes/conversations.py``) serves
+  the tail every open tab fetches on each ``message_appended`` from
+  :meth:`ReplayBuffer.contiguous_slice`, which answers only when the buffer
+  provably holds every requested message; otherwise the route reads the
+  file.
 """
 
 from __future__ import annotations
 
 import asyncio
 import collections
+import json
 import logging
 import time
 from typing import Optional
@@ -51,12 +58,21 @@ class ReplayBuffer:
     # ------------------------------------------------------------------
 
     def append(self, conversation_id: str, seq: int, message: dict) -> None:
-        """Record one freshly-flushed message at the given seq."""
+        """Record one freshly-flushed message at the given seq.
+
+        Stores a JSON round-trip copy of ``message``: exactly the row a
+        read of ``chat_history.json`` returns, so a caller that keeps
+        mutating its dict after the flush (the turn loop's shared
+        ``messages_out`` list outlives it) or a value JSON does not
+        preserve (a tuple, an int key) cannot make the buffered row differ
+        from the durable one.
+        """
+        snapshot = json.loads(json.dumps(message))
         buf = self._buffers.get(conversation_id)
         if buf is None:
             buf = collections.deque(maxlen=self._maxlen)
             self._buffers[conversation_id] = buf
-        buf.append((seq, message))
+        buf.append((seq, snapshot))
         self._last_append_at[conversation_id] = time.monotonic()
 
     def slice(
@@ -81,6 +97,41 @@ class ReplayBuffer:
             return None
 
         return [(seq, msg) for (seq, msg) in buf if seq > after_seq]
+
+    def contiguous_slice(
+        self, conversation_id: str, after_seq: int, through_seq: int,
+    ) -> Optional[list[dict]]:
+        """Return every message with ``seq > after_seq``, or ``None``.
+
+        ``through_seq`` is the durable high-water mark (the conversation
+        row's ``last_message_seq``). The messages come back in seq order
+        only when the buffer provably holds all of them: its seqs run
+        without a hole from ``after_seq + 1`` and reach ``through_seq``.
+        ``None`` covers everything else -- no buffer (cold start, idle
+        eviction), ``after_seq`` older than the buffer, a seq missing from
+        the buffer (an append that wrote the file without publishing), or
+        durable messages newer than the buffer -- and the caller reads the
+        file instead.
+
+        Unlike :meth:`slice`, which answers a catchup from whatever is
+        buffered (``[]`` for no buffer at all), this returns ``[]`` only
+        when the buffer proves nothing is newer than ``after_seq``. The
+        returned dicts are the buffer's own copies; callers must not
+        mutate them.
+        """
+        buf = self._buffers.get(conversation_id)
+        if not buf or buf[-1][0] < through_seq:
+            return None
+        window: list[dict] = []
+        expected_seq = after_seq + 1
+        for seq, msg in buf:
+            if seq <= after_seq:
+                continue
+            if seq != expected_seq:
+                return None
+            window.append(msg)
+            expected_seq += 1
+        return window
 
     def latest_seq(self, conversation_id: str) -> Optional[int]:
         buf = self._buffers.get(conversation_id)

@@ -14,11 +14,11 @@ This is the channel that lets resumed runs (memory accept, action-request approv
   - Owns `_handle_subscribe`, `_handle_unsubscribe`, `_handle_send_message`, `_handle_stop`, plus the per-connection subscription deadline map (used for TTL-based eviction; see [Subscription Protocol](#subscription-protocol)), the per-conversation send registry (`_active_send_runs`), and the run task body (`_run_send_message`).
   - The timing constants (the heartbeat's `PING_INTERVAL_SECONDS` / `PONG_DEADLINE_SECONDS`, `AUTH_REVALIDATE_INTERVAL_SECONDS`, the subscription `SUBSCRIPTION_TTL_SECONDS` / `SUBSCRIPTION_SWEEP_INTERVAL_SECONDS`) and the custom `CLOSE_*` WebSocket close codes (one per close cause: auth failure, heartbeat timeout, queue overflow, internal error) are at the top of the file.
 - `chat/realtime/bus.py` -- `Bus` singleton with two channel namespaces (per-conversation and per-user). `SubscriberQueue` is a bounded `asyncio.Queue` (capacity `DEFAULT_QUEUE_MAXSIZE`) with two sticky overflow flags consumed by the writer loop. `connected_user_ids()` snapshots the users with at least one live connection, for install-wide fan-out of a per-user event (Quest Docs everyone shares).
-- `chat/realtime/replay_buffer.py` -- per-conversation deque ring buffer (`DEFAULT_BUFFER_MAXLEN` entries). `slice(after_seq)` returns `[]` (up to date), a non-empty list (catchup window), or `None` (gap too large -- caller responds `resync`). `eviction_loop()` is a background coroutine spawned from FastAPI lifespan; it sweeps every `EVICTION_SWEEP_INTERVAL_SECONDS` and drops conversations with no subscribers and no appends in the last `IDLE_EVICTION_SECONDS`.
+- `chat/realtime/replay_buffer.py` -- per-conversation deque ring buffer (`DEFAULT_BUFFER_MAXLEN` entries). `slice(after_seq)` returns `[]` (up to date), a non-empty list (catchup window), or `None` (gap too large -- caller responds `resync`). `contiguous_slice()` serves `/tail` (see [Replay Buffer](#replay-buffer)). `eviction_loop()` is a background coroutine spawned from FastAPI lifespan; it sweeps every `EVICTION_SWEEP_INTERVAL_SECONDS` and drops conversations with no subscribers and no appends in the last `IDLE_EVICTION_SECONDS`.
 - `chat/realtime/events.py` -- typed envelope helpers, one `make_<event_type>()` per envelope type (the per-user globals, the durable `message_appended`, the transient streaming envelopes and the TTL eviction notice); the field set of each envelope is the helper's signature. Centralising envelope construction keeps the wire format consistent across publish sites.
 - `chat/_flush_helper.py` -- `make_flush_callback()` is the single fan-out point for durable events. After `ChatStorage.append_structured_messages()` succeeds, the closure calls `chat.storage._publish_appended_to_bus()` for every newly-stamped `(seq, message)` pair.
 - `chat/storage.py` -- `_publish_appended_to_bus()` is the shared helper called from both `append_message()` (single-message path used by user-message-at-turn-start) and `make_flush_callback()` (structured-message batch path). It pushes into `replay_buffer` and publishes `message_appended` to the bus. Failures are best-effort; they never roll back the disk write.
-- `chat/routes/conversations.py` -- `GET /conversations/{id}` returns `last_message_seq` so the client can subscribe with a usable `last_seq` right after hydration; `GET /conversations/{id}/tail?after_seq=N` returns the message tail for catchup / resync REST fallback.
+- `chat/routes/conversations.py` -- `GET /conversations/{id}` returns `last_message_seq` so the client can subscribe with a usable `last_seq` right after hydration; `GET /conversations/{id}/tail?after_seq=N` returns the message tail each `message_appended` triggers.
 - `db/models.py:Conversation` -- the `last_message_seq` integer column (non-nullable, zero on both the server and application side so pre-migration rows start unstamped). Cached high-water mark; the JSON file is the source of truth for the actual seq stamped on each message.
 - `db/conversation_store.py` -- `update_last_message_seq()` mirrors the high-water seq into the DB. `_conversation_to_dict` includes `last_message_seq`. `get_conversation_meta()` is what `_handle_subscribe` reads to compute `current_seq` without re-reading the file.
 - `alembic/versions/2a4c7e9b1d3f_add_last_message_seq_to_conversations.py` -- adds the column. Backfill happens in `quest.py:lifespan` rather than in the Alembic op (the migration cannot portably read JSON files); the lifespan iterates rows with `last_message_seq = 0` and a non-empty file, counts messages, and writes the count back. Idempotent on every boot until clean.
@@ -96,7 +96,7 @@ Server reply to `subscribe` (single envelope, three modes):
 
 - `mode: "up_to_date"` -- client's `last_seq >= server.last_seq`; start streaming live.
 - `mode: "catchup"` -- gap fits in the replay buffer; envelope carries `messages: [...]` with each message body and its `seq` stamp.
-- `mode: "resync"` (with a `reason` string naming the branch that downgraded it: the two replay-buffer verdicts in `_handle_subscribe` -- see [Replay Buffer](#replay-buffer) -- or the writer loop's queue overflow -- see [Backpressure](#backpressure)) -- gap exceeds the buffer or queue overflowed. Client REST-fetches `GET /conversations/{id}/tail?after_seq=client_last_seq` and updates `last_seq` from the response.
+- `mode: "resync"` (with a `reason` string naming the branch that downgraded it: the two replay-buffer verdicts in `_handle_subscribe` -- see [Replay Buffer](#replay-buffer) -- or the writer loop's queue overflow -- see [Backpressure](#backpressure)) -- gap exceeds the buffer or queue overflowed. Client refetches `GET /conversations/{id}` and takes `last_seq` from it.
 
 Every mode also carries `run_active: bool` -- whether a model run is streaming on the conversation right now (`is_run_active()` in `chat/realtime/socket.py`: a live `_active_send_runs` task, or a headless wait-handle resume that has passed its hold gates, tracked by `_streaming_resumes` in `chat/wait_handles/resume.py`). See [Run-State Reconcile on Subscribe](#run-state-reconcile-on-subscribe).
 
@@ -159,6 +159,10 @@ In-memory only. Per-conversation `collections.deque` (capacity `DEFAULT_BUFFER_M
 - empty deque or `after_seq >= latest` -- return `[]` (caller answers `up_to_date` if the DB seq matches, or downgrades to `resync` with reason `buffer_unavailable` if the DB seq is ahead but the buffer was evicted).
 - `after_seq + 1 < earliest_seq` -- return `None` (caller answers `resync` with reason `buffer_evicted`).
 - otherwise -- return the messages with `seq > after_seq`.
+
+`append` stores a JSON round-trip copy of each row, identical to what a file read returns.
+
+The second consumer is `GET /conversations/{id}/tail`, which every open tab fetches on each `message_appended`. After the ownership check, `get_conversation_tail` (`chat/routes/conversations.py`) calls `contiguous_slice(after_seq, last_message_seq)`, which answers only when the buffered seqs run without a hole from `after_seq + 1` to the conversation row's high-water seq (its docstring lists the `None` cases). On `None`, or when the window holds an `action_request` card (rewritten in place on resolve by `ChatStorage.update_action_request_message`), the route reads the file in a worker thread.
 
 After a server restart the buffer is empty, the DB still has `last_message_seq`, and the chat history file has the durable bodies, so every reconnecting client gets `resync` and recovers via REST. The `eviction_loop` background task drops buffers with no subscribers and no appends for `IDLE_EVICTION_SECONDS` so the memory footprint stays bounded across many long-lived but inactive conversations.
 
@@ -275,7 +279,7 @@ The bytes always land under `pasted/<attachment_id>.<ext>` in the conversation w
 ## Constraints
 
 - **Single-process FastAPI deploy.** The bus is a plain `asyncio` singleton with no Redis. Multi-process scaling would require a cross-process fan-out layer; the Slack Socket Mode constraint already pins this deployment to a single process. See [Slack Socket Mode -- Constraints](slack-socket-mode.md).
-- **Replay buffer is in-memory only.** Server restart drops every buffer. The DB `last_message_seq` survives, the chat history file survives, so reconnecting clients get `resync` and recover via REST.
+- **Replay buffer is in-memory only.** A server restart drops every buffer; clients recover from the file as described in [Replay Buffer](#replay-buffer).
 - **Backpressure is per-subscriber.** A slow consumer is dropped (per-conversation: `resync`; per-user: socket close) rather than backpressured against the publisher; publishers never block on the bus.
 - **`chat_history.json` writes are not multi-process safe.** Single-process deploy plus the per-conversation send lock plus the per-conversation flush lock make this a non-issue in practice; documented for completeness.
 
@@ -289,6 +293,9 @@ Two writes (file + DB) cannot be made atomic across processes, but the file writ
 
 **Why durable + transient instead of pushing every event with a seq?**
 Stamping every text delta with a seq would multiply append-points by orders of magnitude (every chunk versus every flush event), and a late subscriber needing to replay 5,000 deltas through the buffer would be useless anyway. The existing `FLUSH_EVENT_TYPES` boundary set already gives the natural durable-event cadence -- one seq per appended `chat_history.json` message -- and transients fold themselves into the next flushed text/tool message at the same boundary.
+
+**Why does `/tail` prove buffer coverage when catchup trusts whatever is buffered?**
+A tab never refetches a seq it holds, so a tail row the buffer skipped or kept stale would stay missing or wrong until reload. The check is one pass over the buffer, against a whole-transcript parse per message per tab.
 
 **Why a server-side per-conversation send lock instead of optimistic concurrency?**
 Two tabs racing `send_message` for the same conversation would both append to `chat_history.json` and `sdk_history.json` and corrupt the dangling-tool_use shape the resume bucket depends on. The lock is the simplest correct primitive: the second tab gets `send_message_rejected` immediately and can disable its composer. A FIFO queue would complicate UX (long unexplained delays), and per-file optimistic concurrency would require restructuring the storage layer.

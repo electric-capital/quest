@@ -1,5 +1,6 @@
 """Conversation CRUD endpoints."""
 
+import asyncio
 import logging
 from datetime import datetime
 
@@ -9,6 +10,7 @@ from pydantic import BaseModel
 from chat.auth import get_current_user_cookie_or_apikey_checked
 from chat.conversation_access import require_owned_conversation
 from chat.realtime import bus, events as realtime_events
+from chat.realtime.replay_buffer import replay_buffer
 from chat.storage import ChatStorage
 
 from chat.routes import router
@@ -407,6 +409,50 @@ async def get_conversation(conversation_id: str, user: dict = Depends(get_curren
     return conversation
 
 
+# Transcript row types that are rewritten in place after they are appended:
+# resolving an action request writes its status / result / feedback into the
+# card (``ChatStorage.update_action_request_message``). The replay buffer keeps
+# such a row as it was appended, so a tail holding one is read from disk.
+_REWRITTEN_IN_PLACE_TYPES = frozenset({"action_request"})
+
+
+def _tail_from_replay_buffer(
+    conversation_id: str, after_seq: int, last_message_seq: int,
+) -> list[dict] | None:
+    """The ``seq > after_seq`` tail from the realtime replay buffer, or ``None``.
+
+    ``None`` when the buffer cannot prove it holds the same rows a read of
+    ``chat_history.json`` would return (see
+    ``ReplayBuffer.contiguous_slice``) or when the tail holds a row that is
+    rewritten in place.
+    """
+    window = replay_buffer.contiguous_slice(
+        conversation_id, after_seq, last_message_seq,
+    )
+    if window is None:
+        return None
+    if any(m.get("type") in _REWRITTEN_IN_PLACE_TYPES for m in window):
+        return None
+    return window
+
+
+async def _read_transcript(conversation_id: str) -> dict | None:
+    """Read and parse chat_history.json in a worker thread.
+
+    A failed threaded read -- e.g. a parse error from catching a concurrent
+    writer mid-write -- is retried once synchronously on the event loop, the
+    same recovery as ``_read_chat_history`` in ``chat/gemini_api/conversation.py``.
+    """
+    try:
+        return await asyncio.to_thread(ChatStorage.get_conversation, conversation_id)
+    except Exception:
+        logger.debug(
+            "[conversations] Threaded chat_history.json read failed for %s; "
+            "retrying on the loop", conversation_id, exc_info=True,
+        )
+        return ChatStorage.get_conversation(conversation_id)
+
+
 @router.get("/conversations/{conversation_id}/tail")
 async def get_conversation_tail(
     conversation_id: str,
@@ -417,34 +463,40 @@ async def get_conversation_tail(
 
     Used by the persistent-WS client to fetch the new tail after a
     ``message_appended`` event without re-downloading the entire
-    conversation. Response shape:
+    conversation, so it runs once per appended message per open tab. The
+    tail comes from the realtime replay buffer when that holds every
+    requested row, and from ``chat_history.json`` (read off the event loop)
+    otherwise; both give the same rows. Response shape:
 
     ``{messages: [...], last_message_seq: N}``
     """
     user_id = user["id"]
 
+    # Ownership first, for both sources: the buffer is keyed by
+    # conversation id alone and knows nothing about users.
     meta = await require_owned_conversation(user_id, conversation_id)
+    last_message_seq = meta.get("last_message_seq") or 0
 
-    conversation = ChatStorage.get_conversation(conversation_id)
-    if not conversation:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "conversation_not_found",
-                "message": f"Conversation {conversation_id} not found",
-            },
-        )
-
-    all_messages = conversation.get("messages") or []
-    tail = [
-        m for m in all_messages
-        if isinstance(m, dict)
-        and isinstance(m.get("seq"), int)
-        and m["seq"] > after_seq
-    ]
+    tail = _tail_from_replay_buffer(conversation_id, after_seq, last_message_seq)
+    if tail is None:
+        conversation = await _read_transcript(conversation_id)
+        if not conversation:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "conversation_not_found",
+                    "message": f"Conversation {conversation_id} not found",
+                },
+            )
+        tail = [
+            m for m in conversation.get("messages") or []
+            if isinstance(m, dict)
+            and isinstance(m.get("seq"), int)
+            and m["seq"] > after_seq
+        ]
     return {
         "messages": tail,
-        "last_message_seq": meta.get("last_message_seq") or 0,
+        "last_message_seq": last_message_seq,
     }
 
 

@@ -3,7 +3,7 @@
 The bus is a module-level singleton, so tests instantiate fresh ``Bus``
 objects locally rather than relying on the imported one. The replay buffer
 behaviour is verified end-to-end against its public ``append`` / ``slice``
-API.
+/ ``contiguous_slice`` API.
 """
 
 import time
@@ -117,6 +117,61 @@ def test_replay_buffer_slice_up_to_date_returns_empty():
 def test_replay_buffer_slice_unknown_conversation_returns_empty():
     buf = ReplayBuffer(maxlen=10)
     assert buf.slice("never-seen", 0) == []
+
+
+def test_replay_buffer_append_stores_json_snapshot():
+    """The buffered row is what a chat_history.json read returns, and later
+    mutation of the caller's dict does not reach it."""
+    buf = ReplayBuffer(maxlen=10)
+    msg = {"type": "tool_use", "tool_input": {"ids": (1, 2), 3: "x"}, "seq": 1}
+    buf.append("conv", 1, msg)
+    msg["tool_input"]["ids"] = "mutated"
+    msg["extra"] = True
+
+    [(_seq, stored)] = buf.slice("conv", 0)
+    assert stored == {"type": "tool_use", "tool_input": {"ids": [1, 2], "3": "x"}, "seq": 1}
+
+
+def _filled(seqs, maxlen=10):
+    buf = ReplayBuffer(maxlen=maxlen)
+    for s in seqs:
+        buf.append("conv", s, {"seq": s})
+    return buf
+
+
+def test_contiguous_slice_returns_window_in_seq_order():
+    buf = _filled([1, 2, 3, 4, 5])
+    assert buf.contiguous_slice("conv", 2, 5) == [{"seq": 3}, {"seq": 4}, {"seq": 5}]
+    assert buf.contiguous_slice("conv", 0, 5) == [{"seq": s} for s in range(1, 6)]
+
+
+def test_contiguous_slice_up_to_date_returns_empty():
+    buf = _filled([1, 2, 3])
+    assert buf.contiguous_slice("conv", 3, 3) == []
+    assert buf.contiguous_slice("conv", 9, 3) == []
+
+
+def test_contiguous_slice_none_without_buffer():
+    assert ReplayBuffer().contiguous_slice("never-seen", 0, 0) is None
+    assert ReplayBuffer().contiguous_slice("never-seen", 5, 5) is None
+
+
+def test_contiguous_slice_none_when_after_seq_older_than_buffer():
+    buf = _filled(range(1, 11), maxlen=3)  # keeps 8, 9, 10
+    assert buf.contiguous_slice("conv", 6, 10) is None
+    assert buf.contiguous_slice("conv", 7, 10) == [{"seq": 8}, {"seq": 9}, {"seq": 10}]
+
+
+def test_contiguous_slice_none_when_durable_seq_is_ahead():
+    buf = _filled([1, 2, 3])
+    assert buf.contiguous_slice("conv", 1, 4) is None
+    assert buf.contiguous_slice("conv", 3, 4) is None
+
+
+def test_contiguous_slice_none_across_a_missing_seq():
+    buf = _filled([1, 2, 4, 5])
+    assert buf.contiguous_slice("conv", 1, 5) is None
+    assert buf.contiguous_slice("conv", 3, 5) == [{"seq": 4}, {"seq": 5}]
 
 
 def test_replay_buffer_evict_idle_drops_when_no_subscribers():
