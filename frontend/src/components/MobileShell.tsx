@@ -16,7 +16,7 @@ import { DocViewer } from './docs/DocViewer'
 import { DocsGateClosed } from './docs/DocsGateClosed'
 import type { DocsRoute } from '../utils/docsRoute'
 import { TablesGateClosed } from './tables/TablesGateClosed'
-import { TablesPlaceholder } from './tables/TablesPlaceholder'
+import { TableViewer } from './tables/TableViewer'
 import { TablesListView } from './tables/TablesListView'
 import type { TablesRoute } from '../utils/tablesRoute'
 
@@ -260,7 +260,11 @@ export function MobileShell({
             ) : tablesRoute.kind === 'list' ? (
               <TablesListView projectId={tablesRoute.projectId} />
             ) : (
-              <TablesPlaceholder route={tablesRoute} />
+              <TableViewer
+              tableId={tablesRoute.tableId}
+              filter={tablesRoute.filter}
+              sort={tablesRoute.sort}
+            />
             )}
           </div>
         ) : activeConversationId ? (

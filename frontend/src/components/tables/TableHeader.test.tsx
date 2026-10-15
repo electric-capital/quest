@@ -1,0 +1,353 @@
+// TableHeader: menu items follow the row's access flags (owner-only items
+// hidden for a reader, reserved slots disabled until wired), rename and the
+// approval switch send the concurrency token and recover from stale_update,
+// delete confirms with the row count and navigates to the right list.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { ApiClientError } from '../../api/request';
+import type { TableAccess, TableDetail, TableListRow } from '../../api/types';
+import { STALE_TABLE_NOTICE, TableHeader } from './TableHeader';
+
+const mocks = vi.hoisted(() => ({
+  updateTable: vi.fn(),
+  deleteTable: vi.fn(),
+}));
+
+vi.mock('../../api/tablesApi', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../api/tablesApi')>()),
+  updateTable: mocks.updateTable,
+  deleteTable: mocks.deleteTable,
+}));
+
+vi.mock('../../contexts/ProjectsContext', () => ({
+  useProjects: () => ({ projects: [{ id: 'p1', name: 'Launch Plan' }] }),
+}));
+
+const OWNER_ACCESS: TableAccess = {
+  can_read: true, rows: 'free', schema: 'approval', can_edit: true, can_restore: true,
+  can_rename: true, can_delete: true, can_share: true, can_edit_schema: true,
+  can_require_approval: true, can_download_history: true, deny_reason: null,
+  schema_deny_reason: null,
+};
+
+const READER_ACCESS: TableAccess = {
+  ...OWNER_ACCESS, rows: 'approval', can_edit: false, can_restore: false, can_rename: false,
+  can_delete: false, can_share: false, can_edit_schema: false, can_require_approval: false,
+  can_download_history: false,
+};
+
+function detail(overrides: Partial<TableDetail> = {}): TableDetail {
+  return {
+    id: 't1',
+    owner_id: 1,
+    project_id: null,
+    title: 'Leads',
+    description: '',
+    mode: 'private',
+    schema_version: 3,
+    row_count: 350,
+    last_write_source: 'ui:1',
+    require_approval: false,
+    created_at: '2026-10-01T00:00:00',
+    updated_at: '2026-10-02T00:00:00',
+    scope: 'user',
+    column_count: 2,
+    shared: false,
+    shared_with_me: false,
+    permission: null,
+    owner: null,
+    shares: [],
+    last_write_user: null,
+    access: OWNER_ACCESS,
+    schema: [],
+    last_write_conversation: null,
+    ...overrides,
+  };
+}
+
+const READER = detail({
+  owner_id: 2,
+  shared: true,
+  shared_with_me: true,
+  permission: 'read',
+  owner: { id: 2, name: 'Bea', email: 'bea@example.com' },
+  shares: null,
+  last_write_source: null,
+  access: READER_ACCESS,
+});
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location">{location.pathname + location.search}</div>;
+}
+
+function renderHeader(table: TableDetail, props: Partial<React.ComponentProps<typeof TableHeader>> = {}) {
+  const handlers = { onDetailApplied: vi.fn(), onRowApplied: vi.fn(), onStale: vi.fn() };
+  render(
+    <MemoryRouter initialEntries={['/tables/t1']}>
+      <Routes>
+        <Route
+          path="*"
+          element={
+            <>
+              <TableHeader table={table} {...handlers} {...props} />
+              <LocationProbe />
+            </>
+          }
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+  return handlers;
+}
+
+function openMenu(title = 'Leads') {
+  fireEvent.click(screen.getByRole('button', { name: title }));
+  return screen.getByRole('menu');
+}
+
+function itemLabels(menu: HTMLElement): string[] {
+  return within(menu).getAllByRole('menuitem').map((item) => item.textContent ?? '');
+}
+
+function staleError(current: TableListRow | null) {
+  return new ApiClientError('Changed elsewhere', 409, 'stale_update', undefined, {
+    error: 'stale_update',
+    message: 'Changed elsewhere',
+    ...(current ? { current } : {}),
+  });
+}
+
+describe('TableHeader', () => {
+  beforeEach(() => {
+    mocks.updateTable.mockReset();
+    mocks.deleteTable.mockReset();
+  });
+  afterEach(() => cleanup());
+
+  describe('menu items', () => {
+    it('owner gets every item; the reserved slots are disabled until wired', () => {
+      renderHeader(detail());
+      const menu = openMenu();
+      expect(itemLabels(menu)).toEqual([
+        'RenameR',
+        'ColumnsC',
+        'HistoryH',
+        'ShareS',
+        'Download CSV',
+        'Download SQLite',
+        'Download SQLite with history',
+        'DeleteD',
+      ]);
+      for (const name of [/Columns/, /History/, /Share/]) {
+        expect((within(menu).getByRole('menuitem', { name }) as HTMLButtonElement).disabled).toBe(true);
+      }
+      const checkbox = within(menu).getByRole('menuitemcheckbox', { name: /Require approval for agent writes/ });
+      expect(checkbox.getAttribute('aria-checked')).toBe('false');
+    });
+
+    it('downloads are cookie-authed links with download', () => {
+      renderHeader(detail());
+      const menu = openMenu();
+      const csv = within(menu).getByRole('menuitem', { name: 'Download CSV' });
+      expect(csv.getAttribute('href')).toBe('/app/api/tables/t1/download?format=csv');
+      expect(csv.hasAttribute('download')).toBe(true);
+      expect(within(menu).getByRole('menuitem', { name: 'Download SQLite' }).getAttribute('href')).toBe(
+        '/app/api/tables/t1/download?format=sqlite',
+      );
+      expect(
+        within(menu).getByRole('menuitem', { name: 'Download SQLite with history' }).getAttribute('href'),
+      ).toBe('/app/api/tables/t1/download?format=sqlite&include_history=true');
+    });
+
+    it('a reader gets Columns (disabled) and the two plain downloads only', () => {
+      renderHeader(READER);
+      const menu = openMenu();
+      expect(itemLabels(menu)).toEqual(['ColumnsC', 'Download CSV', 'Download SQLite']);
+      expect(within(menu).queryByRole('menuitemcheckbox')).toBeNull();
+      fireEvent.keyDown(document, { key: 'r' });
+      fireEvent.keyDown(document, { key: 'd' });
+      expect(screen.queryByRole('textbox')).toBeNull();
+      expect(screen.queryByRole('dialog')).toBeNull();
+      // Who shared it, and the view-only permission.
+      expect(screen.getByText('Shared by Bea · Can view')).toBeTruthy();
+    });
+
+    it('a write-share recipient also gets History and the history download', () => {
+      renderHeader(detail({ ...READER, permission: 'write', access: { ...READER_ACCESS, rows: 'free', can_edit: true, can_restore: true, can_download_history: true } }));
+      expect(itemLabels(openMenu())).toEqual([
+        'ColumnsC', 'HistoryH', 'Download CSV', 'Download SQLite', 'Download SQLite with history',
+      ]);
+    });
+
+    it('slots are enabled and call back once wired', () => {
+      const onOpenColumns = vi.fn();
+      const onOpenHistory = vi.fn();
+      const onOpenShare = vi.fn();
+      renderHeader(detail(), { onOpenColumns, onOpenHistory, onOpenShare });
+      fireEvent.click(within(openMenu()).getByRole('menuitem', { name: /Columns/ }));
+      expect(onOpenColumns).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('menu')).toBeNull();
+      fireEvent.click(within(openMenu()).getByRole('menuitem', { name: /History/ }));
+      expect(onOpenHistory).toHaveBeenCalledTimes(1);
+      openMenu();
+      fireEvent.keyDown(document, { key: 's' });
+      expect(onOpenShare).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('chips', () => {
+    it('shows the project chip as a link to that project tables, and share chips', () => {
+      renderHeader(
+        detail({
+          project_id: 'p1',
+          scope: 'project',
+          mode: 'public',
+          shared: true,
+          shares: [
+            { id: 1, user_id: null, permission: 'read', created_at: '2026-10-01T00:00:00', user: null },
+            { id: 2, user_id: 5, permission: 'write', created_at: '2026-10-01T00:00:00', user: { id: 5, name: 'Ana', email: 'ana@example.com' } },
+          ],
+        }),
+      );
+      expect(screen.getByRole('link', { name: 'Launch Plan' }).getAttribute('href')).toBe('/tables?project=p1');
+      expect(screen.getByText('Everyone')).toBeTruthy();
+      expect(screen.getByText('Ana · can edit')).toBeTruthy();
+      expect(screen.getByText('Public')).toBeTruthy();
+    });
+  });
+
+  describe('rename', () => {
+    it('sends the title with expected_updated_at and applies the returned detail', async () => {
+      const renamed = detail({ title: 'Prospects', updated_at: '2026-10-03T00:00:00' });
+      mocks.updateTable.mockResolvedValueOnce(renamed);
+      const { onDetailApplied } = renderHeader(detail());
+      fireEvent.click(within(openMenu()).getByRole('menuitem', { name: /Rename/ }));
+      const input = screen.getByRole('textbox', { name: 'Rename table' });
+      fireEvent.change(input, { target: { value: 'Prospects' } });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Enter' });
+      });
+      expect(mocks.updateTable).toHaveBeenCalledWith('t1', {
+        title: 'Prospects',
+        expected_updated_at: '2026-10-02T00:00:00',
+      });
+      expect(onDetailApplied).toHaveBeenCalledWith(renamed);
+      expect(screen.queryByRole('textbox')).toBeNull();
+    });
+
+    it('on stale_update applies the current row and says so', async () => {
+      const current = detail({ title: 'Renamed elsewhere', updated_at: '2026-10-04T00:00:00' });
+      mocks.updateTable.mockRejectedValueOnce(staleError(current));
+      const { onRowApplied, onDetailApplied } = renderHeader(detail());
+      fireEvent.click(within(openMenu()).getByRole('menuitem', { name: /Rename/ }));
+      const input = screen.getByRole('textbox', { name: 'Rename table' });
+      fireEvent.change(input, { target: { value: 'Prospects' } });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Enter' });
+      });
+      expect(onRowApplied).toHaveBeenCalledWith(current);
+      expect(onDetailApplied).not.toHaveBeenCalled();
+      expect(screen.getByRole('status').textContent).toBe(STALE_TABLE_NOTICE);
+      expect(screen.queryByRole('textbox')).toBeNull();
+    });
+
+    it('on stale_update without a current row asks for a re-fetch', async () => {
+      mocks.updateTable.mockRejectedValueOnce(staleError(null));
+      const { onStale, onRowApplied } = renderHeader(detail());
+      fireEvent.click(within(openMenu()).getByRole('menuitem', { name: /Rename/ }));
+      const input = screen.getByRole('textbox', { name: 'Rename table' });
+      fireEvent.change(input, { target: { value: 'Prospects' } });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Enter' });
+      });
+      expect(onStale).toHaveBeenCalledTimes(1);
+      expect(onRowApplied).not.toHaveBeenCalled();
+    });
+
+    it('keeps the input open on a duplicate title and shows the error', async () => {
+      mocks.updateTable.mockRejectedValueOnce(
+        new ApiClientError('A table with that title exists.', 409, 'duplicate_title'),
+      );
+      renderHeader(detail());
+      fireEvent.click(within(openMenu()).getByRole('menuitem', { name: /Rename/ }));
+      const input = screen.getByRole('textbox', { name: 'Rename table' });
+      fireEvent.change(input, { target: { value: 'Other' } });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Enter' });
+      });
+      expect(screen.getByRole('textbox')).toBeTruthy();
+      expect(screen.getByRole('status').textContent).toBe('A table with that title exists.');
+    });
+  });
+
+  describe('require approval', () => {
+    it('flips the switch with expected_updated_at and keeps the menu open', async () => {
+      const on = detail({ require_approval: true, updated_at: '2026-10-03T00:00:00' });
+      mocks.updateTable.mockResolvedValueOnce(on);
+      const { onDetailApplied } = renderHeader(detail());
+      const menu = openMenu();
+      await act(async () => {
+        fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: /Require approval/ }));
+      });
+      expect(mocks.updateTable).toHaveBeenCalledWith('t1', {
+        require_approval: true,
+        expected_updated_at: '2026-10-02T00:00:00',
+      });
+      expect(onDetailApplied).toHaveBeenCalledWith(on);
+      expect(screen.getByRole('menu')).toBeTruthy();
+    });
+
+    it('recovers from stale_update like rename', async () => {
+      const current = detail({ updated_at: '2026-10-05T00:00:00' });
+      mocks.updateTable.mockRejectedValueOnce(staleError(current));
+      const { onRowApplied } = renderHeader(detail());
+      const menu = openMenu();
+      await act(async () => {
+        fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: /Require approval/ }));
+      });
+      expect(onRowApplied).toHaveBeenCalledWith(current);
+      expect(screen.getByRole('status').textContent).toBe(STALE_TABLE_NOTICE);
+    });
+  });
+
+  describe('delete', () => {
+    it('confirms with the row count and navigates to All Tables', async () => {
+      mocks.deleteTable.mockResolvedValueOnce(undefined);
+      renderHeader(detail());
+      fireEvent.click(within(openMenu()).getByRole('menuitem', { name: /Delete/ }));
+      const dialog = screen.getByRole('dialog');
+      expect(dialog.textContent).toContain('Delete "Leads" and its 350 rows? This cannot be undone.');
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+      });
+      expect(mocks.deleteTable).toHaveBeenCalledWith('t1');
+      expect(screen.getByTestId('location').textContent).toBe('/tables');
+    });
+
+    it('a project table goes back to its project list; one row reads singular', async () => {
+      mocks.deleteTable.mockResolvedValueOnce(undefined);
+      renderHeader(detail({ project_id: 'p1', scope: 'project', row_count: 1 }));
+      fireEvent.click(within(openMenu()).getByRole('menuitem', { name: /Delete/ }));
+      const dialog = screen.getByRole('dialog');
+      expect(dialog.textContent).toContain('and its 1 row?');
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+      });
+      expect(screen.getByTestId('location').textContent).toBe('/tables?project=p1');
+    });
+
+    it('shows a failed delete in the dialog and stays put', async () => {
+      mocks.deleteTable.mockRejectedValueOnce(new ApiClientError('Nope', 500));
+      renderHeader(detail());
+      fireEvent.click(within(openMenu()).getByRole('menuitem', { name: /Delete/ }));
+      const dialog = screen.getByRole('dialog');
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+      });
+      expect(within(dialog).getByRole('alert').textContent).toBe('Nope');
+      expect(screen.getByTestId('location').textContent).toBe('/tables/t1');
+    });
+  });
+});

@@ -1,0 +1,23 @@
+/* Table viewer title unit (TableHeader). The layout, dropdown, chips and
+ * notice reuse DocHeader.css (the doc-header-* classes); only what tables
+ * add lives here. Tokens only. */
+
+/* Reserved slots (Columns / History / Share before their panels exist). */
+.table-header .doc-header-menu-item:disabled:not(.doc-header-menu-item--checkbox) {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.table-header .doc-header-menu-item:disabled:not(.doc-header-menu-item--checkbox):hover {
+  background: none;
+}
+
+.table-header-share-chip {
+  max-width: 200px;
+}
+
+@media (max-width: 768px) {
+  .table-header-share-chip {
+    max-width: 100%;
+  }
+}

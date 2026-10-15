@@ -20,7 +20,7 @@ import { DocViewer } from './components/docs/DocViewer'
 import { DocsGateClosed } from './components/docs/DocsGateClosed'
 import { DOCS_FEATURE } from './api/docsApi'
 import { TablesGateClosed } from './components/tables/TablesGateClosed'
-import { TablesPlaceholder } from './components/tables/TablesPlaceholder'
+import { TableViewer } from './components/tables/TableViewer'
 import { TablesListView } from './components/tables/TablesListView'
 import { TABLES_FEATURE } from './api/tablesApi'
 import { useIsMobile } from './hooks/useIsMobile'
@@ -191,7 +191,11 @@ function AppContent() {
           ) : tablesRoute.kind === 'list' ? (
             <TablesListView projectId={tablesRoute.projectId} />
           ) : (
-            <TablesPlaceholder route={tablesRoute} />
+            <TableViewer
+              tableId={tablesRoute.tableId}
+              filter={tablesRoute.filter}
+              sort={tablesRoute.sort}
+            />
           )}
         </div>
       ) : (

@@ -1,0 +1,86 @@
+/* Table viewer (/tables/<id>). Rendered inside .docs-main.tables-main
+ * (App.css), a column that scrolls as a whole: the viewer fills the pane's
+ * height so the grid's own scroll container (TableGrid.css) takes the rest
+ * after the header, and long tables scroll inside it with the header row
+ * pinned. 2rem gutters on desktop, 16px on phones; no horizontal page
+ * scroll (wide tables scroll inside the grid). The loading / not-found /
+ * error states reuse DocViewer.css (.doc-viewer-state). */
+
+.table-viewer {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 1rem 2rem 1rem;
+}
+
+.table-viewer-rows-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: var(--hover);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.table-viewer-rows-retry {
+  padding: 0.2rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.table-viewer-rows-retry:hover:not(:disabled) {
+  background-color: var(--surface-raised);
+}
+
+.table-viewer-rows-retry:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Footer (TableFooter). */
+.table-footer {
+  display: flex;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.table-footer-sep {
+  white-space: pre;
+}
+
+.table-footer-link {
+  color: var(--accent-text);
+  font-weight: 500;
+}
+
+.table-footer-link:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+@media (max-width: 768px) {
+  .table-viewer {
+    padding: 0.75rem 16px 1rem;
+  }
+}
