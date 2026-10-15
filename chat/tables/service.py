@@ -1005,7 +1005,8 @@ async def preview_schema_change(
         "columns_after": plan.columns, "schema_diff":
         schema_ops.schema_diff(before, after), "stats":
         storage.check_schema_violations' counts ({"cells_rewritten": {key:
-        n}, "rows_backfilled": n, "dropped_values": {key: n}}),
+        n}, "cells_changed": {key: n}, "rows_backfilled": n,
+        "dropped_values": {key: n}}),
         "row_count": n, "new_title": plan.new_title}``. Column keys appear
         in ``schema_diff`` and ``stats``; the card strips them.
 

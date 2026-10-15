@@ -9,8 +9,8 @@ requests (chat/tables/service.py, chat/tables/storage.py):
    StaleSchema, RowsChanged (rows mutated between preview and apply,
    through a UI caller), live-schema validation errors unchanged, and the
    success path writing exactly one change.
-4. ``preview_schema_change``: payload incl. ``stats.cells_rewritten`` for
-   enum renames, StaleSchema, TableDenied, rows_violate, duplicate_title,
+4. ``preview_schema_change``: payload incl. ``stats.cells_rewritten`` and
+   ``stats.cells_changed`` for enum renames, StaleSchema, TableDenied, rows_violate, duplicate_title,
    and nothing written.
 """
 
@@ -496,6 +496,8 @@ class TestPreviewSchemaChange:
         assert out["stats"] == {
             # Status: 2 cells Open -> Todo, then the same 2 Todo -> Next.
             "cells_rewritten": {key_of(table, "Status"): 4, key_of(table, "Tags"): 2},
+            # ... but only 2 distinct cells of each column changed.
+            "cells_changed": {key_of(table, "Status"): 2, key_of(table, "Tags"): 2},
             "rows_backfilled": 0,
             "dropped_values": {key_of(table, "Price"): 0},
         }
@@ -515,6 +517,7 @@ class TestPreviewSchemaChange:
         # values are its 3 non-null cells (Open, Open, Done).
         assert out["stats"] == {
             "cells_rewritten": {},
+            "cells_changed": {},
             "rows_backfilled": 0,
             "dropped_values": {key_of(table, "Status"): 3},
         }

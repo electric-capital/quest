@@ -934,7 +934,8 @@ class TestDryRun:
                                  {"op": "rename_table", "title": "Other"}])
         stats = check_schema_violations(table_dir, schema, plan, schema_version=1)
         assert stats == {
-            "cells_rewritten": {}, "rows_backfilled": 0, "dropped_values": {K_SKU: 2},
+            "cells_rewritten": {}, "cells_changed": {}, "rows_backfilled": 0,
+            "dropped_values": {K_SKU: 2},
         }
         assert snapshot(table_dir) == before
 
@@ -953,6 +954,8 @@ class TestDryRun:
         # Status: 2 renamed cells (A, D's default) + 3 wrapped non-null cells.
         assert stats == {
             "cells_rewritten": {K_STATUS: 5, K_TAGS: 2},
+            # Distinct changed cells: A is renamed and wrapped, but is one cell.
+            "cells_changed": {K_STATUS: 3, K_TAGS: 2},
             "rows_backfilled": 4,
             "dropped_values": {},
         }

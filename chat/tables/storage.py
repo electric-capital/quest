@@ -1778,7 +1778,7 @@ def _clip(text: object) -> str:
     return text
 
 
-def _schema_summary(operations: Sequence[Mapping[str, Any]]) -> str:
+def schema_summary(operations: Sequence[Mapping[str, Any]]) -> str:
     """One line for a schema change: the single operation spelled out
     ("Added column Status"), else "<N> schema changes"."""
     if len(operations) != 1:
@@ -1818,6 +1818,7 @@ def _schema_summary(operations: Sequence[Mapping[str, Any]]) -> str:
     if kind == "rename_table":
         return f"Renamed table to {_clip(op['title'])}"
     return "1 schema change"
+
 
 
 def _ddl_columns(conn: sqlite3.Connection) -> list[str]:
@@ -1901,6 +1902,31 @@ def _check_plan_keys(schema: Sequence[Column], plan: SchemaChangePlan) -> None:
 def _multi_sort_key(options: Sequence[str]):
     rank = {o: i for i, o in enumerate(options)}
     return lambda value: (rank.get(value, len(rank)), value)
+
+
+def _cells_changed(
+    conn: sqlite3.Connection,
+    originals: Mapping[str, Mapping[int, Any]],
+    after_by_key: Mapping[str, Column],
+) -> dict[str, int]:
+    """Per surviving pre-existing column, the distinct cells whose stored
+    value now differs from the pre-change one (a chained or round-trip
+    enum rename counts each cell at most once, and not at all when it ends
+    where it started)."""
+    changed: dict[str, int] = {}
+    for key, cells in originals.items():
+        if key not in after_by_key or not cells:
+            continue
+        now_values = dict(
+            conn.execute(f"SELECT _id, {_ident(key)} FROM rows").fetchall()
+        )
+        n = sum(
+            1 for row_id, old in cells.items()
+            if row_id in now_values and now_values[row_id] != old
+        )
+        if n:
+            changed[key] = n
+    return changed
 
 
 def _execute_schema_change(
@@ -2096,6 +2122,7 @@ def _execute_schema_change(
         stats["cells_rewritten"] = {
             key: n for key, n in cells_rewritten.items() if key in after_by_key
         }
+        stats["cells_changed"] = _cells_changed(conn, originals, after_by_key)
         stats["rows_backfilled"] = _count(conn) if backfill else 0
         stats["dropped_values"] = {
             key: len(values) for key, values in dropped_values.items()
@@ -2114,7 +2141,7 @@ def _execute_schema_change(
         actor_user_id=actor_user_id,
         kind="schema",
         op="schema",
-        summary=_schema_summary(plan.operations),
+        summary=schema_summary(plan.operations),
         schema_before=schema_version,
         schema_after=new_version,
         row_ids=row_ids,
@@ -2307,6 +2334,9 @@ def check_schema_violations(
         {"cells_rewritten": {key: n},   # cells each enum-rename / wrap
                                         # effect touches, summed in effect
                                         # order; columns of plan.columns only
+         "cells_changed": {key: n},     # distinct cells of each surviving
+                                        # pre-existing column whose stored
+                                        # value differs after the change
          "rows_backfilled": n,          # rows a surviving added column's
                                         # backfill fills (the row count), or 0
          "dropped_values": {key: n}}    # non-null cells of each dropped
