@@ -3,13 +3,7 @@
  */
 
 import React, { useState, useRef, useCallback } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkBreaks from 'remark-breaks';
-import rehypeHighlight from 'rehype-highlight';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import remarkMathCurrencyGuard from '../utils/remarkMathCurrencyGuard';
+import { RichMarkdown } from './RichMarkdown';
 import { Copy, Check } from 'lucide-react';
 import { formatTimestamp, formatNumber } from '../utils/formatters';
 import { getModelDisplayName } from '../constants/models';
@@ -19,8 +13,6 @@ import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMe
 import { ToolUseMessage } from './ToolUseMessage';
 import { ActionRequestMessage } from './ActionRequestMessage';
 import { webSocketManager } from '../services/WebSocketManager';
-// KaTeX styles + self-hosted fonts for $...$ / $$...$$ math (remark-math + rehype-katex).
-import 'katex/dist/katex.min.css';
 import './Message.css';
 
 interface MessageProps {
@@ -337,13 +329,7 @@ export function Message({ role, content, timestamp, model, attachments, conversa
           {role === 'user' ? (
             content
           ) : (
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm, remarkBreaks, remarkMath, remarkMathCurrencyGuard]}
-              rehypePlugins={[rehypeHighlight, rehypeKatex]}
-              components={markdownComponents}
-            >
-              {content}
-            </ReactMarkdown>
+            <RichMarkdown components={markdownComponents}>{content}</RichMarkdown>
           )}
         </div>
       )}
@@ -575,13 +561,7 @@ export const MessageContentRenderer = React.memo(function MessageContentRenderer
               <summary>Show the summary the model now sees</summary>
               <div className="compaction-summary">
                 <div className="compaction-summary-md">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm, remarkBreaks, remarkMath, remarkMathCurrencyGuard]}
-                    rehypePlugins={[rehypeKatex]}
-                    components={markdownComponents}
-                  >
-                    {mdPart}
-                  </ReactMarkdown>
+                  <RichMarkdown components={markdownComponents} highlight={false}>{mdPart}</RichMarkdown>
                 </div>
                 {recordsPart && (
                   <pre className="compaction-summary-records">{recordsPart}</pre>

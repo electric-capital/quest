@@ -3,14 +3,11 @@
  */
 
 import { useMemo, useState } from 'react';
-import hljs from 'highlight.js/lib/core';
-import python from 'highlight.js/lib/languages/python';
+import { useCodeAndMath } from '../hooks/useCodeAndMath';
 import { formatTimestamp } from '../utils/formatters';
 import { JsonView, tryParseJsonContainer } from './JsonView';
 import type { ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, SubAgentToolCallInfo, SubAgentFinishedInfo } from '../api/types';
 import './ToolUseMessage.css';
-
-hljs.registerLanguage('python', python);
 
 /**
  * For run_python calls (direct or through the tool_call meta tool), pull the
@@ -36,17 +33,19 @@ function extractPythonScript(
 /**
  * Renders a tool's Input section content: run_python scripts as a
  * syntax-highlighted Python block (remaining params, e.g. args/timeout,
- * as JSON underneath), everything else as pretty-printed JSON.
+ * as JSON underneath), everything else as pretty-printed JSON. The script
+ * shows as plain text until the lazy code-and-math chunk (highlight.js) is in.
  */
 function ToolInputContent({ toolName, toolInput }: { toolName: string; toolInput: Record<string, unknown> }) {
   const extracted = extractPythonScript(toolName, toolInput);
+  const codeAndMath = useCodeAndMath(extracted !== null);
   if (!extracted) {
     return <JsonView value={toolInput} />;
   }
 
   let highlighted = '';
   try {
-    highlighted = hljs.highlight(extracted.script, { language: 'python' }).value;
+    highlighted = codeAndMath ? codeAndMath.highlightPython(extracted.script) : '';
   } catch {
     // fall through to plain text
   }

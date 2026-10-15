@@ -3,14 +3,9 @@
  */
 
 import React, { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkBreaks from 'remark-breaks';
-import rehypeHighlight from 'rehype-highlight';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import remarkMathCurrencyGuard from '../utils/remarkMathCurrencyGuard';
+import { RichMarkdown } from './RichMarkdown';
 import { useNavigate } from 'react-router-dom';
+import { useCodeAndMathLoaded } from '../hooks/useCodeAndMath';
 import { useConversation } from '../hooks/useConversation';
 import { useConversationModels } from '../contexts/ConversationModelsContext';
 import { useConversationSkills } from '../contexts/ConversationSkillsContext';
@@ -28,7 +23,7 @@ import { ConvertToProjectModal } from './ConvertToProjectModal';
 import { ExpensiveResumeWarning } from './ExpensiveResumeWarning';
 import { MemorySuggestions } from './MemorySuggestions';
 import { ConversationHeader } from './ConversationHeader';
-import { FileViewerModal } from './FileViewerModal';
+import { LazyFileViewerModal } from './LazyFileViewerModal';
 import { uploadFiles } from '../api/fileApi';
 import { useWorkspaceDownload } from '../hooks/useWorkspaceDownload';
 import { buildSlackThreadUrl } from '../utils/slackLinks';
@@ -314,6 +309,19 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       scrollToBottom('smooth');
     }
   }, [partialResponse, scrollToBottom]);
+
+  // Messages with code fences or math re-render once the lazy code-and-math
+  // chunk (highlight.js, KaTeX) lands, which can change their heights after
+  // the load-time scroll. Re-pin to the bottom if the user was there.
+  const codeAndMathLoaded = useCodeAndMathLoaded();
+  const prevCodeAndMathLoadedRef = useRef(codeAndMathLoaded);
+  useLayoutEffect(() => {
+    const justLoaded = codeAndMathLoaded && !prevCodeAndMathLoadedRef.current;
+    prevCodeAndMathLoadedRef.current = codeAndMathLoaded;
+    if (justLoaded && wasNearBottom) {
+      scrollToBottom('instant');
+    }
+  }, [codeAndMathLoaded, wasNearBottom, scrollToBottom]);
 
   // Follow the persisted-message tail when new messages arrive (e.g. tail-fetch
   // after a message_appended event lands AFTER the streaming bubble cleared).
@@ -785,13 +793,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
                 </span>
               </div>
               <div className="message-content">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkBreaks, remarkMath, remarkMathCurrencyGuard]}
-                  rehypePlugins={[rehypeHighlight, rehypeKatex]}
-                  components={markdownComponents}
-                >
-                  {partialResponse}
-                </ReactMarkdown>
+                <RichMarkdown components={markdownComponents}>{partialResponse}</RichMarkdown>
                 <span className="streaming-cursor"></span>
               </div>
             </div>
@@ -871,7 +873,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       />
 
       {attachmentViewer && (
-        <FileViewerModal
+        <LazyFileViewerModal
           isOpen={!!attachmentViewer}
           conversationId={conversationId}
           filePath={attachmentViewer.workspace_path}

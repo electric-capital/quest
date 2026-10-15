@@ -6,21 +6,18 @@
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkBreaks from 'remark-breaks';
-import rehypeHighlight from 'rehype-highlight';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import remarkMathCurrencyGuard from '../utils/remarkMathCurrencyGuard';
+import { RichMarkdown } from './RichMarkdown';
 import { errorMessage } from '../utils/errorMessage';
 import { fetchFileContent, fileDownloadUrl, saveFileToDrive, type FileSource } from '../api/fileApi';
 import { JsonTreeViewer } from './JsonTreeViewer';
-import { PdfViewer } from './PdfViewer';
 import { markdownComponents, MarkdownWorkspaceContext } from './Message';
 import { parseCsv } from '../utils/csv';
+import { LazyBoundary, lazyNamed } from './LazyBoundary';
 import { ModalShell } from './ModalShell';
 import './FileViewerModal.css';
+
+// pdf.js (~1 MB with its worker) is its own chunk, fetched on the first PDF.
+const PdfViewer = lazyNamed(() => import('./PdfViewer'), 'PdfViewer');
 
 // PDFs are fetched whole into memory before handing to pdf.js; refuse
 // pathological sizes (workspace upload cap is 200 MB) and point at Download.
@@ -443,7 +440,9 @@ export function FileViewerModal({ isOpen, source: sourceProp, conversationId, fi
             {loading && <div className="file-viewer-loading">Loading...</div>}
             {error && renderError(error)}
             {!loading && !error && pdfData && (
-              <PdfViewer data={pdfData} fileName={fileName} onMetadata={handlePdfMetadata} />
+              <LazyBoundary fallback={<div className="file-viewer-loading">Loading...</div>}>
+                <PdfViewer data={pdfData} fileName={fileName} onMetadata={handlePdfMetadata} />
+              </LazyBoundary>
             )}
           </>
         ) : isImage ? (
@@ -473,13 +472,7 @@ export function FileViewerModal({ isOpen, source: sourceProp, conversationId, fi
                 {/* Workspace-relative image refs in .md files resolve against
                     this conversation's workspace (no click-to-open here). */}
                 <MarkdownWorkspaceContext.Provider value={markdownCtx}>
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm, remarkBreaks, remarkMath, remarkMathCurrencyGuard]}
-                    rehypePlugins={[rehypeHighlight, rehypeKatex]}
-                    components={markdownComponents}
-                  >
-                    {content || ''}
-                  </ReactMarkdown>
+                  <RichMarkdown components={markdownComponents}>{content || ''}</RichMarkdown>
                 </MarkdownWorkspaceContext.Provider>
               </div>
             ) : isCsv && !showRaw && parsedCsv.columns.length > 0 ? (

@@ -10,7 +10,7 @@ import React, { useState, useCallback } from 'react';
 import { Download } from 'lucide-react';
 import { useWorkspaceDownload } from '../hooks/useWorkspaceDownload';
 import { getFileIconInfo } from '../utils/fileIcons';
-import { FileViewerModal } from './FileViewerModal';
+import { LazyFileViewerModal } from './LazyFileViewerModal';
 import { isImageFile, isJsonFile, isPdfFile, isCsvFile } from './FileBrowser';
 import type { SubagentReturnFileEntry } from '../api/types';
 import './SubagentReturnFilesPreview.css';
@@ -72,7 +72,7 @@ export const SubagentReturnFilesPreview = React.memo(function SubagentReturnFile
         );
       })}
       {viewerFile && (
-        <FileViewerModal
+        <LazyFileViewerModal
           isOpen={!!viewerFile}
           conversationId={conversationId}
           filePath={viewerFile.path}

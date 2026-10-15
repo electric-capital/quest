@@ -30,11 +30,14 @@ export default defineConfig({
     },
   },
 
+  // Minified JS and CSS (Vite's default esbuild minifier). Source maps stay
+  // on, next to each chunk, so browser devtools and stack traces map back to
+  // the original sources. Heavy views are split into lazy chunks with
+  // React.lazy (see LazyBoundary.tsx); /assets serves them like any asset.
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
     sourcemap: true,
-    minify: false,
   },
 
   base: '/',

@@ -9,7 +9,8 @@ import { DownloadWarningProvider } from '../contexts/DownloadWarningContext';
 import { ActionRequestPreviewFields } from './ActionRequestPreviewFields';
 import { DocImagePreview } from './DocImagePreview';
 
-// The real modal pulls in the PDF viewer; a stub records what it was given.
+// The real modal is not under test; a stub (loaded through
+// LazyFileViewerModal's dynamic import) records what it was given.
 vi.mock('./FileViewerModal', () => ({
   FileViewerModal: (props: { conversationId: string; filePath: string; isImage?: boolean }) => (
     <div data-testid="file-viewer">
@@ -90,12 +91,13 @@ describe('DocImagePreview', () => {
     expect(screen.getByText('42.1 KB')).toBeTruthy();
   });
 
-  it('opens the workspace file in the file viewer on click', () => {
+  it('opens the workspace file in the file viewer on click', async () => {
     renderWithProviders(<DocImagePreview image={IMAGE} conversationId="conv-1" />);
     expect(screen.queryByTestId('file-viewer')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'q3-sales.png' }));
-    expect(screen.getByTestId('file-viewer').textContent).toBe('conv-1|charts/q3 sales.png|true');
+    // The viewer is a lazy chunk (LazyFileViewerModal): it renders a tick later.
+    expect((await screen.findByTestId('file-viewer')).textContent).toBe('conv-1|charts/q3 sales.png|true');
   });
 });
 

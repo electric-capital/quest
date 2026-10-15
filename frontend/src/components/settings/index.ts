@@ -1,3 +1,7 @@
+// Settings sections rendered eagerly by SettingsModal. The admin-only
+// sections are code-split: SettingsModal lazy-loads them by path, so they
+// must not be re-exported here (a static re-export would pull them back
+// into the main chunk).
 export { DataConnectionsSection } from './DataConnectionsSection';
 export { MemoriesSection } from './MemoriesSection';
 export { AppearanceSection } from './AppearanceSection';
@@ -7,11 +11,6 @@ export { SlackSection } from './SlackSection';
 export { GmailSection } from './GmailSection';
 export { SmsMessagesSection } from './SmsMessagesSection';
 export { InferenceApiSection } from './InferenceApiSection';
-export { FeatureGatesSection } from './FeatureGatesSection';
-export { ServiceCredentialsSection } from './ServiceCredentialsSection';
-export { InferenceProvidersSection } from './InferenceProvidersSection';
 export { PasswordSection } from './PasswordSection';
-export { SignInSection } from './SignInSection';
-export { ModelSelectionSection } from './ModelSelectionSection';
 export { SignOutSection } from './SignOutSection';
 export { AboutSection } from './AboutSection';

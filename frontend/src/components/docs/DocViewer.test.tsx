@@ -53,10 +53,6 @@ vi.mock('../../contexts/ProjectsContext', () => ({
   useProjects: () => ({ projects: [] }),
 }));
 
-// Message.tsx (markdownComponents) reaches pdfjs-dist through its card
-// imports; pdf.js needs browser canvas APIs jsdom lacks.
-vi.mock('../PdfViewer', () => ({ PdfViewer: () => null }));
-
 function doc(overrides: Partial<DocDetail> = {}): DocDetail {
   return {
     id: 'd1',
@@ -123,9 +119,13 @@ function openMenuItem(name: RegExp) {
   fireEvent.click(screen.getByRole('menuitem', { name }));
 }
 
-/** The header's Edit button (beside the Show source toggle). */
-function clickEdit() {
+/**
+ * The header's Edit button (beside the Show source toggle). DocEditor is a
+ * lazy chunk, so wait for its textarea.
+ */
+async function clickEdit() {
   fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+  await screen.findByRole('textbox', { name: 'Doc markdown' });
 }
 
 function titleButton(): HTMLElement {
@@ -301,12 +301,12 @@ describe('DocViewer', () => {
       expect(screen.queryByRole('button', { name: 'Delete chart.png' })).toBeNull();
     });
 
-    it('is not offered in edit mode', () => {
+    it('is not offered in edit mode', async () => {
       setView({ doc: doc() });
       const { container } = renderViewer();
       expect(screen.getByRole('button', { name: 'Delete chart.png' })).toBeTruthy();
 
-      clickEdit();
+      await clickEdit();
       expect(container.querySelector('.doc-viewer--edit')).not.toBeNull();
       expect(screen.getByRole('textbox', { name: 'Doc markdown' })).toBeTruthy();
       expect(screen.queryByRole('button', { name: 'Delete chart.png' })).toBeNull();
@@ -410,7 +410,7 @@ describe('DocViewer', () => {
       setView({ doc: current });
       const { container } = renderViewer();
 
-      clickEdit();
+      await clickEdit();
       expect(container.querySelector('.doc-viewer--edit')).not.toBeNull();
       fireEvent.change(editorTextarea()!, { target: { value: 'New body' } });
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -421,20 +421,21 @@ describe('DocViewer', () => {
       expect(container.querySelector('.doc-viewer--view')).not.toBeNull();
     });
 
-    it('Cancel returns to view and focuses the title', () => {
+    it('Cancel returns to view and focuses the title', async () => {
       setView({ doc: doc() });
       renderViewer();
-      clickEdit();
+      await clickEdit();
       fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
       expect(editorTextarea()).toBeNull();
       expect(document.activeElement).toBe(titleButton());
     });
 
-    it('leaving History focuses the title too', () => {
+    it('leaving History focuses the title too', async () => {
       setView({ doc: doc() });
       renderViewer();
       openMenuItem(/History/);
-      fireEvent.click(screen.getByRole('button', { name: /Back to doc/ }));
+      // DocHistory is a lazy chunk.
+      fireEvent.click(await screen.findByRole('button', { name: /Back to doc/ }));
       expect(document.activeElement).toBe(titleButton());
     });
 
@@ -449,7 +450,7 @@ describe('DocViewer', () => {
       mocks.fetchDoc.mockResolvedValue({ ...current, content: 'Theirs', updated_at: '2026-10-06T23:00:00' });
       setView({ doc: current });
       renderViewer();
-      clickEdit();
+      await clickEdit();
       fireEvent.change(editorTextarea()!, { target: { value: 'Mine' } });
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
       await waitFor(() => expect(mocks.view.refresh).toHaveBeenCalledTimes(1));
@@ -465,7 +466,7 @@ describe('DocViewer', () => {
     it('a doc that vanishes mid-edit shows the draft read-only: copy, download, discard', async () => {
       setView({ doc: doc() });
       const { rerender } = renderViewer();
-      clickEdit();
+      await clickEdit();
       fireEvent.change(editorTextarea()!, { target: { value: 'Unsaved words' } });
 
       // Deleted elsewhere / share revoked: the re-fetch 404s.
@@ -516,24 +517,24 @@ describe('DocViewer', () => {
       expect(screen.queryByRole('region', { name: 'Unsaved draft' })).toBeNull();
     });
 
-    it('view mode offers to resume a stored draft; the editor then offers the restore', () => {
+    it('view mode offers to resume a stored draft; the editor then offers the restore', async () => {
       storeDraft('Older draft');
       setView({ doc: doc() });
       renderViewer();
       const notice = screen.getByText(/^You have unsaved changes from /);
       expect(notice).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: 'Resume editing' }));
-      expect(editorTextarea()).not.toBeNull();
+      expect(await screen.findByRole('textbox', { name: 'Doc markdown' })).toBeTruthy();
       expect(screen.getByText(/^Restore unsaved draft from /, { selector: 'p' })).toBeTruthy();
       expect(screen.queryByRole('button', { name: 'Resume editing' })).toBeNull();
     });
 
-    it('a Cancel that keeps the undecided draft brings the notice back', () => {
+    it('a Cancel that keeps the undecided draft brings the notice back', async () => {
       storeDraft('Older draft');
       setView({ doc: doc() });
       renderViewer();
       fireEvent.click(screen.getByRole('button', { name: 'Resume editing' }));
-      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
       expect(screen.getByRole('button', { name: 'Resume editing' })).toBeTruthy();
     });
 

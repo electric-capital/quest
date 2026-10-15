@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, type ReactNode } from 'react'
 import { Routes, Route, Navigate, useParams, useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
 import { AppProviders } from './contexts/AppProviders'
@@ -14,7 +14,6 @@ import { SettingsModal } from './components/SettingsModal'
 import { SignInScreen } from './components/SignInScreen'
 import { SetPasswordScreen } from './components/SetPasswordScreen'
 import { RequestsView } from './components/RequestsView'
-import { AdminSystemReportsPage } from './pages/AdminSystemReportsPage'
 import { MobileShell } from './components/MobileShell'
 import { DocsListView } from './components/docs/DocsListView'
 import { DocViewer } from './components/docs/DocViewer'
@@ -22,6 +21,13 @@ import { DocsGateClosed } from './components/docs/DocsGateClosed'
 import { DOCS_FEATURE } from './api/docsApi'
 import { useIsMobile } from './hooks/useIsMobile'
 import { parseDocsRoute } from './utils/docsRoute'
+import { LazyBoundary, lazyNamed } from './components/LazyBoundary'
+
+// Admin-only page: a separate chunk, fetched on the first visit.
+const AdminSystemReportsPage = lazyNamed(
+  () => import('./pages/AdminSystemReportsPage'),
+  'AdminSystemReportsPage',
+)
 
 function AppContent() {
   const {
@@ -195,22 +201,29 @@ function AdminSystemReportsRoute() {
   const { isAuthenticated, isCheckingAuth } = useAuth();
   const { appName } = useAppConfig();
 
-  if (isCheckingAuth) {
-    return (
-      <div className="app-container">
-        <div className="api-key-form-container">
-          <h1>{appName}</h1>
-          <p>Loading...</p>
-        </div>
+  const screen = (body: ReactNode) => (
+    <div className="app-container">
+      <div className="api-key-form-container">
+        <h1>{appName}</h1>
+        {body}
       </div>
-    );
+    </div>
+  );
+  const loading = screen(<p>Loading...</p>);
+
+  if (isCheckingAuth) {
+    return loading;
   }
 
   if (!isAuthenticated) {
     return <SignInScreen />;
   }
 
-  return <AdminSystemReportsPage />;
+  return (
+    <LazyBoundary fallback={loading} frame={screen}>
+      <AdminSystemReportsPage />
+    </LazyBoundary>
+  );
 }
 
 function App() {

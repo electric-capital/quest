@@ -13,7 +13,7 @@ import { getFileInfo, type FileSource } from '../api/fileApi';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
 import { extractFilesFromDataTransfer } from '../utils/directoryTraversal';
 import { getFileIconInfo } from '../utils/fileIcons';
-import { FileViewerModal } from './FileViewerModal';
+import { LazyFileViewerModal } from './LazyFileViewerModal';
 import { NewFolderModal } from './NewFolderModal';
 import { Folder, Upload, FolderPlus, Eye, EyeOff, X } from 'lucide-react';
 import type { FileEntry } from '../api/types';
@@ -665,7 +665,7 @@ export function FileBrowser({ source, rowActions, notice, onDismissNotice }: Fil
 
       {/* File viewer modal */}
       {viewerFile && (
-        <FileViewerModal
+        <LazyFileViewerModal
           isOpen={!!viewerFile}
           source={source}
           filePath={viewerFile.path}

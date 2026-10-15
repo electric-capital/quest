@@ -35,12 +35,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkBreaks from 'remark-breaks';
-import remarkMath from 'remark-math';
-import rehypeHighlight from 'rehype-highlight';
-import rehypeKatex from 'rehype-katex';
 import { docAssetBase } from '../../api/docsApi';
 import type { Doc, DocContentResponse, DocDetail, DocUserRef } from '../../api/types';
 import { useAuth } from '../../contexts/AuthContext';
@@ -56,15 +50,18 @@ import {
 } from '../../utils/docDraftBackup';
 import { docsListPath, docViewerPath } from '../../utils/docsRoute';
 import { formatRelativeTimestamp, formatTimestamp, parseUTCTimestamp } from '../../utils/formatters';
-import remarkMathCurrencyGuard from '../../utils/remarkMathCurrencyGuard';
+import { RichMarkdown } from '../RichMarkdown';
 import { MarkdownWorkspaceContext, markdownComponents } from '../Message';
 import { DocAssetsPanel } from './DocAssetsPanel';
 import { DocDraftRecovery } from './DocDraftRecovery';
-import { DocEditor } from './DocEditor';
 import { DocHeader, type DocViewerMode } from './DocHeader';
-import { DocHistory } from './DocHistory';
 import { DocShareDialog } from './DocShareDialog';
+import { LazyBoundary, lazyNamed } from '../LazyBoundary';
 import './DocViewer.css';
+
+// The editor and History are separate chunks, fetched on first use.
+const DocEditor = lazyNamed(() => import('./DocEditor'), 'DocEditor');
+const DocHistory = lazyNamed(() => import('./DocHistory'), 'DocHistory');
 
 const CONVERSATION_SOURCE_PREFIX = 'conversation:';
 const ACTION_REQUEST_SOURCE_RE = /^action_request:(.+)$/;
@@ -351,7 +348,11 @@ export function DocViewer({ docId }: { docId: string }) {
             />
           </div>
         )}
-        {body ?? (
+        {body ? (
+          <LazyBoundary key={mode} fallback={<div className="doc-viewer-state">Loading...</div>}>
+            {body}
+          </LazyBoundary>
+        ) : (
           <div className="doc-viewer-body">
             {isEmpty ? (
               <p className="doc-viewer-empty">{emptyDocText(doc)}</p>
@@ -362,13 +363,7 @@ export function DocViewer({ docId }: { docId: string }) {
               // strips the bubble chrome so it reads like an assistant reply.
               <div className="message-content doc-viewer-markdown">
                 <MarkdownWorkspaceContext.Provider value={markdownCtx}>
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm, remarkBreaks, remarkMath, remarkMathCurrencyGuard]}
-                    rehypePlugins={[rehypeHighlight, rehypeKatex]}
-                    components={markdownComponents}
-                  >
-                    {doc.content}
-                  </ReactMarkdown>
+                  <RichMarkdown components={markdownComponents}>{doc.content}</RichMarkdown>
                 </MarkdownWorkspaceContext.Provider>
               </div>
             )}

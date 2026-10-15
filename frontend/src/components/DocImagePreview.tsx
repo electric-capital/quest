@@ -12,7 +12,7 @@ import { useCallback, useState } from 'react';
 import { API_BASE_URL } from '../api/config';
 import { useWorkspaceDownload } from '../hooks/useWorkspaceDownload';
 import type { DocImagePreview as DocImagePreviewData } from '../api/types';
-import { FileViewerModal } from './FileViewerModal';
+import { LazyFileViewerModal } from './LazyFileViewerModal';
 import './DocImagePreview.css';
 
 interface DocImagePreviewProps {
@@ -87,7 +87,7 @@ export function DocImagePreview({ image, conversationId, placed = true }: DocIma
         </div>
       )}
       {viewerOpen && (
-        <FileViewerModal
+        <LazyFileViewerModal
           isOpen={viewerOpen}
           conversationId={conversationId}
           filePath={path}

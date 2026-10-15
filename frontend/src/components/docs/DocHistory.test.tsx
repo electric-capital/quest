@@ -42,10 +42,6 @@ vi.mock('../../hooks/useIsMobile', () => ({
   useIsMobile: () => mocks.isMobile,
 }));
 
-// Message.tsx (markdownComponents) reaches pdfjs-dist through its card
-// imports; pdf.js needs browser canvas APIs jsdom lacks.
-vi.mock('../PdfViewer', () => ({ PdfViewer: () => null }));
-
 const TOKEN = '2026-10-06T10:00:00.000001';
 const NEWER_TOKEN = '2026-10-06T10:05:00.000002';
 const NEWEST_TOKEN = '2026-10-06T10:09:00.000003';

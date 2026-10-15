@@ -63,12 +63,6 @@ import {
   type ReactNode,
 } from 'react';
 import { Link } from 'react-router-dom';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkBreaks from 'remark-breaks';
-import remarkMath from 'remark-math';
-import rehypeHighlight from 'rehype-highlight';
-import rehypeKatex from 'rehype-katex';
 import { ArrowLeft, ChevronLeft, CopyPlus, FileDiff, RotateCcw, X } from 'lucide-react';
 import {
   copyDocRevision,
@@ -92,7 +86,7 @@ import type {
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { formatDocSize } from '../../utils/allDocsGrouping';
 import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatters';
-import remarkMathCurrencyGuard from '../../utils/remarkMathCurrencyGuard';
+import { RichMarkdown } from '../RichMarkdown';
 import { MarkdownWorkspaceContext, markdownComponents } from '../Message';
 import { SkillContentDiffPreview } from '../SkillContentDiffPreview';
 import { DocConfirmDialog } from './DocConfirmDialog';
@@ -252,13 +246,7 @@ const VersionBody = memo(function VersionBody({
     // strips the bubble chrome like the viewer does.
     <div className="message-content doc-history-markdown">
       <MarkdownWorkspaceContext.Provider value={markdownCtx}>
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkBreaks, remarkMath, remarkMathCurrencyGuard]}
-          rehypePlugins={[rehypeHighlight, rehypeKatex]}
-          components={markdownComponents}
-        >
-          {content}
-        </ReactMarkdown>
+        <RichMarkdown components={markdownComponents}>{content}</RichMarkdown>
       </MarkdownWorkspaceContext.Provider>
     </div>
   );

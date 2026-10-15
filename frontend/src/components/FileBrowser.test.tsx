@@ -43,7 +43,8 @@ vi.mock('../services/PersistentWebSocket', () => ({
   },
 }));
 
-// The real modal pulls in the PDF viewer; a stub records its source.
+// The real modal is not under test; a stub (loaded through
+// LazyFileViewerModal's dynamic import) records its source.
 vi.mock('./FileViewerModal', () => ({
   FileViewerModal: (props: { source?: FileSource; filePath: string }) => (
     <div data-testid="file-viewer">{props.source?.kind}:{props.source?.id}|{props.filePath}</div>
@@ -150,7 +151,7 @@ describe('FileBrowser source', () => {
     serveListing({ 'project:p1:/': [entry('notes.md')] });
     renderCards(<FileBrowser source={PROJECT} />);
     fireEvent.click(await screen.findByText('notes.md'));
-    expect(screen.getByTestId('file-viewer').textContent).toBe('project:p1|/notes.md');
+    expect((await screen.findByTestId('file-viewer')).textContent).toBe('project:p1|/notes.md');
   });
 });
 

@@ -39,10 +39,6 @@ vi.mock('../../api/docsApi', async (importOriginal) => {
   };
 });
 
-// Message.tsx (markdownComponents) reaches pdfjs-dist through its card
-// imports; pdf.js needs browser canvas APIs jsdom lacks.
-vi.mock('../PdfViewer', () => ({ PdfViewer: () => null }));
-
 const T0 = '2026-10-06T09:00:00';
 const T1 = '2026-10-06T10:00:00';
 const T1_UPLOAD = '2026-10-06T10:00:30';

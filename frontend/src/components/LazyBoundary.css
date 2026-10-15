@@ -1,0 +1,69 @@
+/* LazyBoundary: the load-failure notice, and the stand-in overlay
+   LazyFileViewerModal shows while the viewer chunk loads. Tokens only, so
+   both schemes and every colour theme follow. */
+
+.lazy-boundary-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 2rem 16px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.lazy-boundary-error-text {
+  margin: 0;
+  max-width: 36rem;
+}
+
+.lazy-boundary-reload {
+  padding: 0.4rem 1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.lazy-boundary-reload:hover {
+  background: var(--hover);
+}
+
+.lazy-boundary-loading {
+  margin: 0;
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* The overlay stays invisible for its first 300 ms: a chunk that arrives
+   by then swaps in the real modal without a flash of the stand-in. */
+.lazy-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.6);
+  animation: lazy-modal-appear 0.15s ease-out 0.3s both;
+}
+
+.lazy-modal {
+  min-width: min(24rem, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  border-radius: 12px;
+  background-color: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+}
+
+@keyframes lazy-modal-appear {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

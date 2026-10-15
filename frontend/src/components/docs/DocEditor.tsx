@@ -8,7 +8,7 @@
  * bulleted / numbered list, quote -- pure toggling edits from
  * utils/markdownFormatting, also Ctrl/Cmd+B, I and K) over a
  * monospace textarea and a live preview rendered exactly like DocViewer's
- * body (same remark / rehype plugins, the chat's `markdownComponents`,
+ * body (RichMarkdown with the chat's `markdownComponents`,
  * `assets/<name>` resolved through MarkdownWorkspaceContext.assetBase).
  * Desktop shows the two side by side (stacked when the editor is narrow; the
  * preview can be hidden, remembered per browser); phones switch between
@@ -76,12 +76,6 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import { useNavigate } from 'react-router-dom';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkBreaks from 'remark-breaks';
-import remarkMath from 'remark-math';
-import rehypeHighlight from 'rehype-highlight';
-import rehypeKatex from 'rehype-katex';
 import {
   Bold,
   Code,
@@ -129,7 +123,7 @@ import {
   type MarkdownFormat,
   type TextEdit,
 } from '../../utils/markdownFormatting';
-import remarkMathCurrencyGuard from '../../utils/remarkMathCurrencyGuard';
+import { RichMarkdown } from '../RichMarkdown';
 import { MarkdownWorkspaceContext, markdownComponents } from '../Message';
 import { DocConfirmDialog } from './DocConfirmDialog';
 import './DocEditor.css';
@@ -154,10 +148,6 @@ const PREVIEW_DEBOUNCE_MS = 250;
 const LARGE_PREVIEW_CHARS = 200 * 1024;
 const PREVIEW_PREF_KEY = 'quest_doc_editor_preview';
 const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta']);
-
-// The same pipeline as DocViewer's body.
-const REMARK_PLUGINS = [remarkGfm, remarkBreaks, remarkMath, remarkMathCurrencyGuard];
-const REHYPE_PLUGINS = [rehypeHighlight, rehypeKatex];
 
 const IS_APPLE =
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
@@ -413,13 +403,7 @@ const DocMarkdownPreview = memo(function DocMarkdownPreview({ content }: { conte
   return (
     // DocViewer.css's body typography (the chat markdown look, flat).
     <div className="message-content doc-viewer-markdown">
-      <ReactMarkdown
-        remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={REHYPE_PLUGINS}
-        components={markdownComponents}
-      >
-        {content}
-      </ReactMarkdown>
+      <RichMarkdown components={markdownComponents}>{content}</RichMarkdown>
     </div>
   );
 });

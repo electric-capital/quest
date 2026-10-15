@@ -16,17 +16,26 @@ import {
   GmailSection,
   SmsMessagesSection,
   InferenceApiSection,
-  FeatureGatesSection,
-  ServiceCredentialsSection,
-  InferenceProvidersSection,
   PasswordSection,
-  SignInSection,
-  ModelSelectionSection,
   SignOutSection,
   AboutSection,
 } from './settings';
+import { LazyBoundary, lazyNamed } from './LazyBoundary';
 import { ModalShell } from './ModalShell';
 import './SettingsModal.css';
+
+// Admin-only sections: separate chunks, fetched when an admin opens one.
+const SignInSection = lazyNamed(() => import('./settings/SignInSection'), 'SignInSection');
+const FeatureGatesSection = lazyNamed(() => import('./settings/FeatureGatesSection'), 'FeatureGatesSection');
+const ServiceCredentialsSection = lazyNamed(
+  () => import('./settings/ServiceCredentialsSection'),
+  'ServiceCredentialsSection',
+);
+const InferenceProvidersSection = lazyNamed(
+  () => import('./settings/InferenceProvidersSection'),
+  'InferenceProvidersSection',
+);
+const ModelSelectionSection = lazyNamed(() => import('./settings/ModelSelectionSection'), 'ModelSelectionSection');
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -321,7 +330,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
         {/* Right content (desktop) / slide-over second tier (mobile) */}
         <div className="settings-content">
-          {renderActiveSection()}
+          <LazyBoundary key={effectiveSection} fallback={<div className="settings-loading">Loading...</div>}>
+            {renderActiveSection()}
+          </LazyBoundary>
         </div>
       </div>
     </ModalShell>

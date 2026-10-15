@@ -1,7 +1,7 @@
 // The shared markdown `img` renderer (MarkdownImage via markdownComponents):
 // Quest Doc asset resolution through MarkdownWorkspaceContext.assetBase, and
 // the unchanged conversation-workspace behaviour without it.
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import ReactMarkdown from 'react-markdown';
 import { API_BASE_URL } from '../api/config';
@@ -10,10 +10,6 @@ import {
   markdownComponents,
   type MarkdownWorkspaceContextValue,
 } from './Message';
-
-// Message.tsx reaches pdfjs-dist through its card imports (FileViewerModal);
-// pdf.js needs browser canvas APIs jsdom lacks.
-vi.mock('./PdfViewer', () => ({ PdfViewer: () => null }));
 
 function renderMarkdown(markdown: string, ctx: MarkdownWorkspaceContextValue) {
   return render(
