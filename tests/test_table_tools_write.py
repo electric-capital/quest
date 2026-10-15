@@ -817,3 +817,43 @@ class TestReadFollowUps:
 
 def _ids_listed(world) -> set[str]:
     return {t["id"] for t in _dispatch(world, "list_tables", {})["tables"]}
+
+
+# ---------------------------------------------------------------------------
+# Read-only tiers' prompts hide the row write tools
+# ---------------------------------------------------------------------------
+
+_TABLE_READ_TOOLS = ("list_tables", "get_table", "query_rows")
+_TABLE_WRITE_TOOLS = ("insert_rows", "update_rows", "upsert_rows", "delete_rows")
+
+
+def _offered_table_tool(prompt: str, name: str) -> bool:
+    from tests.prompt_support import named_under_skill
+    return named_under_skill(prompt, "system:tables", name)
+
+
+def test_table_write_tool_roster_helper():
+    from chat.gemini_api.system_prompt import _table_write_tool_names
+    assert _table_write_tool_names() == frozenset(_TABLE_WRITE_TOOLS)
+
+
+@pytest.mark.parametrize("tier", ["sub_agent", "user_subagent"])
+def test_read_only_tier_prompts_offer_reads_not_writes(tier):
+    from chat.gemini_api.system_prompt import (
+        get_sub_agent_system_prompt,
+        get_user_subagent_system_prompt,
+    )
+    services = {"tables": True}
+    if tier == "sub_agent":
+        prompt = get_sub_agent_system_prompt(
+            "helper", "key", base_url="http://x", connected_services=services,
+        )
+    else:
+        prompt = get_user_subagent_system_prompt(
+            "key", base_url="http://x", connected_services=services,
+            target_user_email="t@example.com", caller_email="c@example.com",
+        )
+    for name in _TABLE_READ_TOOLS:
+        assert _offered_table_tool(prompt, name), name
+    for name in _TABLE_WRITE_TOOLS:
+        assert not _offered_table_tool(prompt, name), name

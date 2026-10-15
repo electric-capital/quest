@@ -56,6 +56,16 @@ def _doc_write_tool_names() -> frozenset[str]:
     return _doc_tool_names() & mutating_tool_call_tools()
 
 
+def _table_write_tool_names() -> frozenset[str]:
+    """The Quest Tables row write tools (insert_rows / update_rows /
+    upsert_rows / delete_rows): the table tools flagged ``mutating``.
+
+    Hidden from the read-only tiers' prompts like the doc write tools; the
+    access rule (chat/tables/access.py) refuses them there anyway.
+    """
+    return _table_tool_names() & mutating_tool_call_tools()
+
+
 # Public-project prompt paragraph shown while Quest Docs is enabled for the
 # user. The public prompt carries no skills, so this replaces
 # system:quest_docs there; the tool descriptions carry the details. Must not
@@ -826,14 +836,16 @@ def get_user_subagent_system_prompt(
 
 """
 
-    # Cross-user subagent runs are read-only for Quest Docs (access rule
-    # run_kind "user_subagent"): the doc reads stay, the writes are hidden.
+    # Cross-user subagent runs are read-only for Quest Docs and Tables
+    # (access rule run_kind "user_subagent"): the reads stay, the writes
+    # are hidden.
     # The run is a standalone conversation in the target's account, so the
     # project-only tools never apply.
     user_subagent_exclude = (
         {"wait_for_handles", "set_conversation_name", "suggest_memory"}
         | PROJECT_ONLY_TOOL_CALL_TOOLS
         | _doc_write_tool_names()
+        | _table_write_tool_names()
     )
     dynamic_tools = _build_dynamic_tools_section(
         exclude=user_subagent_exclude, connected_services=connected_services,
@@ -1297,12 +1309,13 @@ def get_sub_agent_system_prompt(
     # Build dynamic tools section excluding top-level-only tools and the
     # project-only tools when not in a project conversation. Sub-agents are
     # read-only for Quest Docs (access rule run_kind "sub_agent": "only the
-    # top-level agent writes docs"), so the doc write tools are hidden too.
+    # top-level agent writes docs"), so the doc and table write tools are
+    # hidden too.
     sub_agent_exclude = {
         "wait_for_handles", "set_conversation_name", "suggest_memory",
         "suggest_project_memory",
     }
-    sub_agent_exclude |= _doc_write_tool_names()
+    sub_agent_exclude |= _doc_write_tool_names() | _table_write_tool_names()
     if has_project:
         sub_agent_exclude |= PROJECT_HIDDEN_WORKSPACE_TOOLS
     else:
