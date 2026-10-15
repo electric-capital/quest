@@ -33,7 +33,15 @@ from chat.docs.constants import (
     DOC_READ_MAX_CHARS,
     DOCS_SERVICE_KEY,
 )
-from chat.tables.constants import TABLES_SERVICE_KEY
+from chat.tables.constants import (
+    TABLE_FILTER_IN_MAX_VALUES,
+    TABLE_FILTER_MAX_DEPTH,
+    TABLE_FILTER_MAX_LEAVES,
+    TABLE_QUERY_MAX_ROWS,
+    TABLE_SORT_MAX_KEYS,
+    TABLE_WRITE_MAX_ROWS,
+    TABLES_SERVICE_KEY,
+)
 
 
 SYSTEM_SKILL_PREFIX = "system:"
@@ -1015,17 +1023,223 @@ The resolved handle's `response` is one of:
 
 
 def _tables_content(_base_url: str, _api_key: str) -> str:
-    # Placeholder until phase A14 (issue #110) writes the full skill; the
-    # loader appends the tool reference rendered from the registry.
-    return """## Quest Tables
+    return f"""## Quest Tables
 
-A **Quest Table** is a typed table of records kept inside Quest, owned by
-the user (scope `user`) or by a project (scope `project`). Find tables with
-`list_tables`, read a table's columns and first rows with `get_table`, and
-read rows with `query_rows` (filter, sort, `offset` / `limit` paging;
-`total` is the filtered count). Write rows with `insert_rows`,
-`update_rows` (by `_id`), `upsert_rows` (matched on a unique column) and
-`delete_rows` (by `_id` or filter).
+A **Quest Table** is a typed table of records kept inside Quest: named
+columns (`text`, `number`, `url`, `boolean`, `enum`, optionally
+multi-choice), rows addressed by an integer `_id`, every change logged so
+the user can restore it. It is owned by the user (scope `user`) or by a
+project (scope `project`), outlives this conversation, is shown as a grid
+in the Quest UI (downloadable as CSV), and any later conversation finds it
+again with `list_tables`.
+
+Use a table for structured records that get added to and updated over
+time: contacts, a reading list, inventory, prices, job applications, a
+log of runs. Prose belongs in a doc; a one-off export the user downloads
+belongs in a workspace CSV. The project database (`project_db_query`) is
+legacy: new structured data goes into tables. Keep using the project
+database only for data already stored there, unless the user asks to move
+it.
+
+### Workflow
+
+1. `list_tables` -- find the table (tables are not listed in your prompt).
+   `writable` says whether rows are written directly (`free`), need the
+   user's approval (`approval`) or are read-only here (`denied`, with
+   `write_note`); `schema_change` is `approval` or `denied`.
+2. `get_table(table_id)` -- column names, types, `required` / `unique` /
+   `default` / enum `options`, `schema_version` and the first 5 rows.
+   Always call it before writing to a table you have not inspected in
+   this conversation. Columns are addressed by name, exactly as shown.
+3. Read with `query_rows`, write with `insert_rows`, `update_rows`,
+   `upsert_rows` or `delete_rows`.
+
+### Querying
+
+A filter is one leaf `{{"column": "<name>", "op": "<op>", "value": ...}}`
+or `{{"and": [...]}}` / `{{"or": [...]}}` / `{{"not": <node>}}` around
+leaves: at most {TABLE_FILTER_MAX_DEPTH} levels deep and {TABLE_FILTER_MAX_LEAVES} leaves. (The examples use
+the reading-list table created under "Cards" below.)
+
+| Column type | Ops |
+|---|---|
+| any | `eq`, `ne`, `in` (list), `is_null`, `not_null` |
+| text, url | also `contains`, `starts_with`, `ends_with` (case-insensitive for ASCII letters only) |
+| number | also `lt`, `lte`, `gt`, `gte`, `between` (`[low, high]`) |
+| multi-choice enum | also `contains` (one option), `contains_any`, `contains_all` (lists), `is_empty`; `eq` / `ne` compare the whole list |
+
+`eq` and `in` never match an empty cell; `ne` and `not` do ("status is
+not Done" includes rows with no status). Use `is_null` / `not_null` for
+empty cells. Filter values are validated like writes, so `10` and `"10"`
+match the same numbers; `in`, `contains_any` and `contains_all` take at
+most {TABLE_FILTER_IN_MAX_VALUES} values. An unknown column or an op the type does not take is
+refused with the offending `path`.
+
+```
+{{"column": "Status", "op": "eq", "value": "Reading"}}
+{{"and": [{{"column": "Rating", "op": "between", "value": [4, 5]}},
+         {{"column": "Author", "op": "contains", "value": "le guin"}}]}}
+{{"or": [{{"column": "Link", "op": "is_null"}},
+        {{"not": {{"column": "Tags", "op": "contains_any", "value": ["fiction", "work"]}}}}]}}
+```
+
+`sort` is up to {TABLE_SORT_MAX_KEYS} keys, `[{{"column": "Rating", "direction": "desc"}}]`;
+empty cells sort last either way, and ties fall back to `_id`. Ask for
+only the `columns` you need on wide tables, and use `count_only: true`
+to just count.
+
+**Paging:** `total` is the number of rows matching the filter. Pages are
+`limit` rows (default 100, max {TABLE_QUERY_MAX_ROWS}) from `offset`;
+continue with `offset + len(rows)` until it reaches `total`. When
+`truncated` is true the response was cut to fit its size cap: continue
+from the offset in `hint`, or request fewer columns. Never claim a count
+or an aggregate from a partial page: page through, or use `total`.
+
+### Writing
+
+- **Values**: send numbers as JSON numbers or plain decimal strings
+  (`1234.5`, `"1234.5"`), never formatted: `"1,234.5"`, `"$12"` and `"5%"`
+  are invalid. Numbers come back as canonical strings (`"12.5"`).
+  Equality is exact, but sorting and range filters are approximate past 15
+  significant digits. Booleans are JSON `true` / `false` only; enum values
+  must be one of the column's options, exactly; a multi-choice enum takes a
+  list; `null` empties a cell. Omitted columns take their `default` on
+  insert.
+- **`_id`s come only from queries** (`query_rows`, `get_table` sample
+  rows, or `row_ids` a write returned). Never guess one. `update_rows`
+  patches only the columns you name; an unknown `_id` fails the whole
+  call.
+- **Idempotent refresh**: when the data has a natural key (SKU, email,
+  URL, ticket id) in a `unique` column, sync with
+  `upsert_rows(table_id, key_column="SKU", rows=[...])`: existing keys are
+  patched, new ones inserted, so re-running the same sync never duplicates
+  rows. A routine that refreshes a table each run should always upsert.
+  Each row needs a key value, and each key may appear only once per call.
+- **Caps**: at most {TABLE_WRITE_MAX_ROWS} rows per call; split bigger writes into
+  batches. A filter `delete_rows` matching more than {TABLE_WRITE_MAX_ROWS} rows is refused
+  with `too_many_rows` and the count: narrow the filter.
+- **All or nothing**: each call is one transaction. If any row is
+  invalid nothing is written and the error is `invalid_rows` with
+  `problems: [{{row, column, reason}}]` (`row` = index in your list): fix
+  every listed problem and resend the whole call. A unique violation names
+  the `_id` that already holds the value.
+
+### Approval tables: the write_table_rows handoff
+
+A table that is shared, or whose owner requires approval for every
+change, has `writable: "approval"`. A write tool then returns
+
+```
+{{"error": "approval_required", "message": "...",
+ "suggested_request": {{"request_type": "write_table_rows", "params": {{...}}}}}}
+```
+
+Forward the suggested request unchanged:
+
+```
+create_action_request(
+    request_type="write_table_rows",
+    params=<suggested_request.params>,
+    reasoning="<why this change, in plain English>",
+)
+```
+
+The `params` are the tool's own arguments plus `operation` (`insert`,
+`update`, `upsert` or `delete`); don't rebuild them. The card shows the
+user a before/after grid; the call blocks until they decide. If the rows
+or the columns changed meanwhile, Approve fails (`rows_changed` /
+`stale_schema`) with the reason on the card, which stays open for the
+user to retry or stop -- when you get the verdict back, re-query and
+propose again. Do
+not propose `write_table_rows` for a `free` table (refused: call the tool)
+or a `denied` one. Slack-driven conversations cannot open cards, so these
+writes fail there: tell the user to continue in the Quest web UI.
+
+### Cards: new tables and column changes
+
+No tool creates a table or changes its columns; you propose a card the
+user approves.
+
+**Create** (private conversations only; the table is private, owned by
+the user, or by the project with `target: "project"`):
+
+```
+create_action_request(
+    request_type="create_table",
+    params={{
+        "title": "Reading list",
+        "description": "Books to read and their status",
+        "target": "user",
+        "columns": [
+            {{"name": "Title", "type": "text", "required": true, "unique": true}},
+            {{"name": "Author", "type": "text"}},
+            {{"name": "Status", "type": "enum", "options": ["To read", "Reading", "Done"], "default": "To read"}},
+            {{"name": "Tags", "type": "enum", "options": ["fiction", "work"], "multiple": true}},
+            {{"name": "Rating", "type": "number", "precision": 1}},
+            {{"name": "Link", "type": "url"}}
+        ]
+    }},
+    reasoning="...",
+)
+```
+
+Column fields: `name`, `type`, and optionally `required`, `unique`
+(text, number and url only), `default`, `options` (enum), `multiple`
+(enum), `precision` (number, 0-10 decimals), `description`. Design the
+columns from the data: give records with a natural key a `unique` column
+so they can be upserted. Titles are unique per owner (per project for
+project tables). On approval the verdict's `result` carries the new
+`table_id`; fill the table with `insert_rows`.
+
+**Change columns** (`schema_change: "approval"`): send ONE card holding
+every operation, in order -- never one card per column -- with
+`expected_schema_version` set to the `schema_version` from `get_table`:
+
+```
+create_action_request(
+    request_type="change_table_schema",
+    params={{
+        "table_id": "<id>",
+        "expected_schema_version": 3,
+        "operations": [
+            {{"op": "add_column", "column": {{"name": "Priority", "type": "enum", "options": ["Low", "High"]}}, "after": "Status"}},
+            {{"op": "rename_column", "name": "Link", "new_name": "Goodreads link"}},
+            {{"op": "add_enum_option", "name": "Status", "option": "Abandoned"}}
+        ]
+    }},
+    reasoning="...",
+)
+```
+
+Operations: `add_column` (`column`, `after?`; a `required` column on a
+non-empty table needs a `default`), `rename_column` (`name`,
+`new_name`), `drop_column` (`name`), `reorder_columns` (`names`, the full
+list), `set_description` / `set_required` / `set_unique` / `set_default` /
+`set_precision` (`name` plus the field), `add_enum_option` (`name`,
+`option`, `after?`), `rename_enum_option` (`name`, `option`,
+`new_option`; rewrites the cells), `remove_enum_option` (`name`,
+`option`), `set_enum_multiple` (`name`, `multiple: true`), `rename_table`
+(`title`). A column's type never changes: add a new column and copy the
+values with row writes. `stale_schema` means the columns changed since
+your `get_table`: the message lists the current columns; re-propose
+against them. `rows_violate` names rows that block the change (empty
+cells for `set_required`, duplicates for `set_unique`, cells using a
+removed option): fix those rows first, or ask the user.
+
+`schema_change: "denied"` (public-project and Slack-driven
+conversations, which cannot open cards): ask the user to create or
+change the table themselves in the Quest UI (Tables).
+
+### Not available to you
+
+- **Restoring** an earlier version, or undoing a change, is done by the
+  user in the table's **History** panel in the Quest UI; point them there.
+- Editing a table's description, its "require approval" switch,
+  sharing and deleting it are done by the owner in the Quest UI.
+- Sub-agents, cross-user subagent runs and inference API runs only read
+  tables; a sub-agent returns rows to the top-level agent, which writes.
+- Sandbox scripts can call `list_tables`, `get_table` and `query_rows`
+  through the sandbox tool API (user tables only), never the writes.
 """
 
 
@@ -1459,8 +1673,8 @@ _register(SystemSkill(
 _register(SystemSkill(
     id="system:tables",
     name="Quest Tables",
-    description="Quest Tables: list tables, read their columns and query rows with filters, sorting and paging.",
-    when_to_load="Load when the user asks about their tables or structured records kept in Quest.",
+    description="Typed record tables: query and write rows, upsert syncs; create_table / change_table_schema / write_table_rows cards.",
+    when_to_load="Load when the user wants structured records kept, tracked or refreshed in Quest, or asks about their tables.",
     requires=TABLES_SERVICE_KEY,
     content_builder=_tables_content,
 ))

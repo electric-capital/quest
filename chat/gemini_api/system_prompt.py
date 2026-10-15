@@ -76,6 +76,38 @@ Public docs the user owns or was given write access to are written directly, wit
 """
 
 
+# Public-project prompt paragraph shown while Quest Tables is enabled for
+# the user; stands in for system:tables (the public prompt carries no
+# skills). Public conversations never open approval cards, so it covers the
+# tools only. Must not name internal-only tools or skills.
+_PUBLIC_TABLES_SECTION = """
+**Quest Tables:** Tables are typed record tables kept inside Quest; later conversations can find them again. This conversation sees only PUBLIC tables, which are this project's tables; private tables (every user table included) are invisible here. Find tables with `list_tables` (no table titles are listed in this prompt), read a table's columns and first rows with `get_table`, and read rows with `query_rows`. When `writable` is `free`, write rows directly, with no approval step: `insert_rows`, `update_rows` (by `_id`, taken from a query), `upsert_rows` (matched on a unique key column, so re-running a sync never duplicates rows) and `delete_rows`. Creating a table, changing its columns and restoring an earlier version are the user's job: ask them to do it in the Quest UI (Tables). Keep new structured records in tables rather than the project database; if no suitable table exists, ask the user to create one in the Quest UI.
+"""
+
+
+def _tables_open(connected_services: dict[str, bool] | None) -> bool:
+    """Whether a prompt built for *connected_services* offers Quest Tables:
+    the ``tables`` pseudo-key is truthy, or the map is ``None`` (unknown
+    caller context shows everything, as ``tool_is_advertised`` does)."""
+    return connected_services is None or bool(connected_services.get(TABLES_SERVICE_KEY))
+
+
+# One sentence appended to the "Project Database" paragraph of the standard
+# and sub-agent prompts while Quest Tables is offered (never while gated).
+_PROJECT_DB_TABLES_NOTE = (
+    "The project database is legacy: keep new structured records in Quest "
+    "Tables (`system:tables`) and use `project_db_query` only for data "
+    "already stored there.\n"
+)
+# The sub-agent variant: sub-agents only read tables.
+_SUB_AGENT_PROJECT_DB_TABLES_NOTE = (
+    "The project database is legacy: new structured records belong in Quest "
+    "Tables (`system:tables`), which you can only read -- return new records "
+    "to the top-level agent to write. Use `project_db_query` only for data "
+    "already stored there.\n"
+)
+
+
 # Project conversations have two file spaces (spec 00009 section 6.4): their
 # own conversation workspace and the project workspace shared by every
 # conversation of the project. Shown in project conversations ONLY -- the
@@ -557,6 +589,8 @@ Facts the user has saved about themselves and how they want you to work, newest 
             '`tool_call(tool_name="project_db_query", arguments={"query": "..."})` '
             "to create tables, store data, and query it. For full usage details, load the "
             "`system:project_db` system skill.\n"
+        ) + (
+            _PROJECT_DB_TABLES_NOTE if _tables_open(connected_services) else ""
         ) + _project_files_section(
             legacy_shared_workspace, converted_from_standalone,
         ) + _project_memories_section(can_suggest=not is_routine)
@@ -1043,7 +1077,9 @@ def get_public_project_system_prompt(
 
     ``tables_enabled`` is the same switch for the Quest Tables gate
     (``config.feature_gates.tables_enabled_for``): while False the table
-    tools are excluded from the Dynamic Tools section.
+    tools are excluded from the Dynamic Tools section and the "Quest
+    Tables" paragraph is omitted; while True both are present (the
+    paragraph stands in for the ``system:tables`` skill).
 
     A public-project conversation is always a project conversation, so the
     "Two file spaces" paragraph (conversation workspace at ``/workspace``,
@@ -1109,6 +1145,7 @@ def get_public_project_system_prompt(
         exclude=public_exclude, core_only=False,
     )
     docs_section = _PUBLIC_DOCS_SECTION if docs_enabled else ""
+    tables_section = _PUBLIC_TABLES_SECTION if tables_enabled else ""
 
     if is_routine:
         naming_section = _ROUTINE_NAMING_SECTION
@@ -1160,7 +1197,7 @@ You have three tools available:
 - You cannot propose write actions (`create_action_request` is unavailable) and cannot spawn sub-agents (`agent_task*` is unavailable).
 - If the user asks for something that needs internal data or a connected service, tell them plainly that it requires a regular (private) conversation outside this public project -- do not attempt workarounds.
 - Files the user uploads to this conversation or to the project workspace are fair game: the user chose to bring them into a public project.
-{docs_section}
+{docs_section}{tables_section}
 {naming_section}
 
 **Example usage:**
@@ -1283,6 +1320,8 @@ def get_sub_agent_system_prompt(
             '`tool_call(tool_name="project_db_query", arguments={"query": "..."})` '
             "to create tables, store data, and query it. Load `system:project_db` for the full "
             "usage reference.\n"
+        ) + (
+            _SUB_AGENT_PROJECT_DB_TABLES_NOTE if _tables_open(connected_services) else ""
         ) + _project_files_section(
             legacy_shared_workspace, converted_from_standalone,
         ) + _project_memories_section(can_suggest=False)
