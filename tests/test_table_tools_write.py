@@ -14,7 +14,8 @@ Covers:
    operation: free / approval_required / denied / not found, with nothing
    written on a refusal.
 3. The suggested_request round trip: validate_write_request_params, then
-   apply_row_write(bypass_approval=True) gives the free path's table state.
+   apply_row_write(bypass_approval=True) gives the free path's table state;
+   invalid rows on an approval table get the free path's error, no card.
 4. Attribution: change source ``conversation:<id>``, actor the user.
 5. Atomic validation (invalid_rows), caps (too_many_rows), update with an
    unknown _id, upsert key errors, delete by ids and by filter, argument
@@ -447,6 +448,42 @@ class TestRoundTrip:
         assert (big["error"], big["count"], big["cap"]) == (
             "too_many_rows", TABLE_WRITE_MAX_ROWS + 1, TABLE_WRITE_MAX_ROWS,
         )
+
+    @pytest.mark.parametrize("who", ["alice", "bob"])
+    @pytest.mark.parametrize("tool,bad,code", [
+        ("insert_rows", {"rows": [{"Name": "x", "Colour": "red"}]}, "invalid_rows"),
+        ("insert_rows", {"rows": [{"Name": "x", "SKU": "S1"}]}, "invalid_rows"),
+        ("update_rows", {"updates": [{"_id": 99, "Name": "Ghost"}]}, "invalid_rows"),
+        ("update_rows", {"updates": [{"_id": 1, "Price": "abc"}]}, "invalid_rows"),
+        ("upsert_rows", {"key_column": "Name", "rows": [{"Name": "x"}]}, "key_not_unique"),
+        ("delete_rows", {"row_ids": [99]}, "invalid_rows"),
+    ])
+    def test_invalid_rows_refuse_before_the_card(self, world, who, tool, bad, code):
+        """An approval verdict dry-runs the write first: rows it would
+        refuse get the free path's error and no suggested_request."""
+        for table, kw in ((world.t["write_shared"], {}), (world.t["mine"], None)):
+            if kw is None:
+                if who != "alice":
+                    continue
+                _set_require_approval(world, table)
+            before = _snapshot(world, table)
+            got = _dispatch(world, tool, {"table_id": table["id"], **bad}, who=who)
+            assert got["error"] == code, got
+            assert "suggested_request" not in got
+            assert _snapshot(world, table) == before
+            ok = _dispatch(world, tool, _args(tool, table["id"]), who=who)
+            assert ok["error"] == "approval_required" and "suggested_request" in ok
+            assert _snapshot(world, table) == before
+
+    def test_filter_delete_over_cap_refuses_before_the_card(self, world, monkeypatch):
+        monkeypatch.setattr(storage, "TABLE_WRITE_MAX_ROWS", 1)
+        table = world.t["write_shared"]
+        before = _snapshot(world, table)
+        got = _dispatch(world, "delete_rows", {
+            "table_id": table["id"], "filter": {"column": "Price", "op": "gt", "value": "0"},
+        })
+        assert got["error"] == "too_many_rows" and "suggested_request" not in got
+        assert _snapshot(world, table) == before
 
     def test_coerced_arguments_reach_the_card(self, world):
         tid = world.t["write_shared"]["id"]

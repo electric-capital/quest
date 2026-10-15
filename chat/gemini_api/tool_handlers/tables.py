@@ -372,7 +372,8 @@ async def _handle_row_write(caller: Caller, operation: str, args: dict) -> str:
     any verdict, so an ``approval_required`` result always carries a
     well-formed card) -> ``service.apply_row_write``. An ``approval``
     verdict returns the ``write_table_rows`` suggested request built from
-    the same validated params."""
+    the same validated params, once the service's dry run found the rows
+    valid (invalid rows get the free path's error, no card)."""
     async def op():
         request = build_write_request_params(
             args.get("table_id"), operation, _write_op_params(operation, args),

@@ -49,6 +49,11 @@ Writes run in one ``BEGIN IMMEDIATE`` transaction (:func:`_write_txn`):
 schema match check, validation (every problem in every row collected),
 caps, unique checks against the final state, the write and the change
 entry. Any refusal rolls everything back, so nothing is written.
+Every row write takes ``dry_run=True``: the same transaction runs to its
+end (every check, the write and the change entry's size cap) and is then
+rolled back, so it raises exactly what the real write would and otherwise
+returns the :class:`RowWriteResult` the write would have, with
+``change_id`` None (the approval path and precards validate this way).
 Values go through :func:`apply_default` (insert) or :func:`canonicalize`
 (patches), then :func:`to_storage`; reads go through :func:`from_storage`.
 Payload rows are keyed by column **name**; images, stored rows and
@@ -268,8 +273,9 @@ class RowWriteResult:
     caller can map payload index to ``_id``), sorted for the other ops.
     ``inserted_ids`` / ``updated_ids``: the rows inserted / updated, in
     input order (empty where the op does neither). ``row_count``: rows in
-    the table after the commit. ``change_id``: None only when nothing was
-    written (a where-delete that matched no row).
+    the table after the commit. ``change_id``: None when nothing was
+    written (a where-delete that matched no row, or a dry run; a dry run's
+    ids are the ones the write would assign or touch).
     """
 
     op: str
@@ -445,18 +451,22 @@ def connect(table_dir: Path) -> Iterator[sqlite3.Connection]:
 
 
 @contextmanager
-def _write_txn(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+def _write_txn(
+    conn: sqlite3.Connection, *, dry_run: bool = False
+) -> Iterator[sqlite3.Connection]:
     """``BEGIN IMMEDIATE`` ... ``COMMIT``; ``ROLLBACK`` on any exception. A
     lock held past the busy timeout at ``BEGIN`` or ``COMMIT`` is ``busy``.
     A residual ``IntegrityError`` (the Python checks should have caught it)
     is logged and re-raised as ``constraint_failed`` with a fixed message,
-    since SQLite's text names internal column keys."""
+    since SQLite's text names internal column keys. ``dry_run`` ends a
+    block that completed normally with ``ROLLBACK`` instead of ``COMMIT``,
+    so every row, change entry and ``sqlite_sequence`` bump is undone."""
     with _busy_as_refusal():
         conn.execute("BEGIN IMMEDIATE")
     try:
         yield conn
         with _busy_as_refusal():
-            conn.execute("COMMIT")
+            conn.execute("ROLLBACK" if dry_run else "COMMIT")
     except BaseException as exc:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
@@ -1145,6 +1155,7 @@ def insert_rows(
     actor_user_id: int | None,
     rows: Sequence[Mapping[str, Any]],
     now: datetime | None = None,
+    dry_run: bool = False,
 ) -> RowWriteResult:
     """Insert ``rows`` (each ``{column name: value}``) in one transaction
     with one ``insert`` change. Omitted columns take their default; an
@@ -1159,7 +1170,7 @@ def insert_rows(
     now = _resolve_now(now)
     stamp = _utc_iso(now)
     by_name = {c.name: c for c in schema}
-    with connect(table_dir) as conn, _write_txn(conn):
+    with connect(table_dir) as conn, _write_txn(conn, dry_run=dry_run):
         _check_schema_matches(conn, schema, schema_version)
         current = _check_table_room(conn, len(rows))
         problems = _Problems(schema)
@@ -1194,7 +1205,7 @@ def insert_rows(
         inserted_ids=list(ids),
         updated_ids=[],
         row_count=current + len(ids),
-        change_id=change_id,
+        change_id=None if dry_run else change_id,
     )
 
 
@@ -1207,6 +1218,7 @@ def update_rows(
     actor_user_id: int | None,
     updates: Sequence[Mapping[str, Any]],
     now: datetime | None = None,
+    dry_run: bool = False,
 ) -> RowWriteResult:
     """Patch existing rows in one transaction with one ``update`` change.
 
@@ -1233,7 +1245,7 @@ def update_rows(
     now = _resolve_now(now)
     stamp = _utc_iso(now)
     by_name = {c.name: c for c in schema}
-    with connect(table_dir) as conn, _write_txn(conn):
+    with connect(table_dir) as conn, _write_txn(conn, dry_run=dry_run):
         _check_schema_matches(conn, schema, schema_version)
         problems = _Problems(schema)
         # (payload index, _id or None when unusable, raw patch, values)
@@ -1324,7 +1336,7 @@ def update_rows(
         inserted_ids=[],
         updated_ids=[row_id for row_id, _ in patches],
         row_count=count,
-        change_id=change_id,
+        change_id=None if dry_run else change_id,
     )
 
 
@@ -1338,6 +1350,7 @@ def upsert_rows(
     key_column: str,
     rows: Sequence[Mapping[str, Any]],
     now: datetime | None = None,
+    dry_run: bool = False,
 ) -> RowWriteResult:
     """Insert or patch ``rows`` matched on the unique column named
     ``key_column``, in one transaction with one ``upsert`` change.
@@ -1380,7 +1393,7 @@ def upsert_rows(
     now = _resolve_now(now)
     stamp = _utc_iso(now)
     by_name = {c.name: c for c in schema}
-    with connect(table_dir) as conn, _write_txn(conn):
+    with connect(table_dir) as conn, _write_txn(conn, dry_run=dry_run):
         _check_schema_matches(conn, schema, schema_version)
         problems = _Problems(schema)
         # (payload index, stored key or None when unusable, raw row,
@@ -1501,7 +1514,7 @@ def upsert_rows(
         inserted_ids=inserted_ids,
         updated_ids=updated_ids,
         row_count=current + len(inserted_ids),
-        change_id=change_id,
+        change_id=None if dry_run else change_id,
     )
 
 
@@ -1515,6 +1528,7 @@ def delete_rows(
     row_ids: Sequence[int] | None = None,
     where: tuple[str, Sequence[Any]] | None = None,
     now: datetime | None = None,
+    dry_run: bool = False,
 ) -> RowWriteResult:
     """Delete rows by ``_id`` or by a prepared filter, in one transaction
     with one ``delete`` change (``before`` the deleted rows, ``after``
@@ -1555,7 +1569,7 @@ def delete_rows(
             raise ValueError("where must be a (where_sql, params) pair.")
         where_sql, params = where[0], tuple(where[1])
     now = _resolve_now(now)
-    with connect(table_dir) as conn, _write_txn(conn):
+    with connect(table_dir) as conn, _write_txn(conn, dry_run=dry_run):
         _check_schema_matches(conn, schema, schema_version)
         if row_ids is not None:
             problems = _Problems(schema)
@@ -1634,7 +1648,7 @@ def delete_rows(
         inserted_ids=[],
         updated_ids=[],
         row_count=count,
-        change_id=change_id,
+        change_id=None if dry_run else change_id,
     )
 
 

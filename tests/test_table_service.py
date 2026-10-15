@@ -8,7 +8,8 @@ Covers (phase A8):
    byte-equal TableNotFound.
 2. The per-table lock: concurrent writes produce ordered changes, reads
    take the lock too, cancellation shielding.
-3. Verdicts: approval (nothing written), bypass_approval, denied.
+3. Verdicts: approval (dry run first: invalid rows raise the storage
+   error, nothing written), bypass_approval, denied, preview_row_write.
 4. Schema change (version bump, stale token), restore round trip (quest.db
    matches table.db meta), create failure cleanup, delete.
 5. Event audiences; project-delete and account-delete directory sweeps.
@@ -510,6 +511,104 @@ class TestVerdicts:
         assert entry["source"] == "action_request:42"
         assert entry["actor_user_id"] == uid(env, "alice")
         assert fetch(env, table)["last_write_source"] == "action_request:42"
+
+    def _seed_rows(self, env, table):
+        _run(service.apply_row_write(
+            convo(env), table["id"], "insert",
+            {"rows": [{"Name": "a", "SKU": "x"}, {"Name": "b", "SKU": "y"}]},
+            bypass_approval=True,
+        ))
+        env.published.clear()
+
+    @pytest.mark.parametrize("op,params,patch,code", [
+        ("insert", {"rows": [{"Name": "c", "Nope": 1}]}, None, "invalid_rows"),
+        ("insert", {"rows": [{"Name": "c", "Price": "abc"}]}, None, "invalid_rows"),
+        ("insert", {"rows": [{"Name": "c", "SKU": "x"}]}, None, "invalid_rows"),
+        ("insert", {"rows": [{"Name": "c"}]}, ("TABLE_MAX_ROWS", 2), "table_full"),
+        ("insert", {"rows": [{"Name": "c"}]}, ("TABLE_CHANGE_MAX_BYTES", 50),
+         "change_too_large"),
+        ("update", {"updates": [{"_id": 99, "Name": "z"}]}, None, "invalid_rows"),
+        ("upsert", {"key_column": "Name", "rows": [{"Name": "z"}]}, None,
+         "key_not_unique"),
+        ("delete", {"row_ids": [99]}, None, "invalid_rows"),
+        ("delete", {"filter": {"column": "Name", "op": "ne", "value": "q"}},
+         ("TABLE_WRITE_MAX_ROWS", 1), "too_many_rows"),
+    ])
+    def test_approval_with_invalid_rows_raises_storage_error(
+        self, env, monkeypatch, op, params, patch, code,
+    ):
+        """The approval path dry-runs first: rows the write would refuse
+        raise that refusal, never approval_required, and nothing is written."""
+        table = make_table(env, shares=[("bob", "write")])
+        self._seed_rows(env, table)
+        if patch is not None:
+            monkeypatch.setattr(storage, *patch)
+        seq = storage.list_changes(table_dir(env, table))
+        with pytest.raises(storage.TableStorageError) as exc:
+            _run(service.apply_row_write(convo(env), table["id"], op, params))
+        assert exc.value.code == code
+        assert storage.list_changes(table_dir(env, table)) == seq
+        assert fetch(env, table)["row_count"] == 2
+        assert env.published == []
+
+    def test_approval_with_valid_rows_after_dry_run(self, env):
+        table = make_table(env, shares=[("bob", "write")])
+        self._seed_rows(env, table)
+        before = storage.dump_rows(table_dir(env, table), load_schema(table["schema"]))
+        for op, params in (
+            ("update", {"updates": [{"_id": 1, "SKU": "y"}, {"_id": 2, "SKU": "x"}]}),
+            ("upsert", {"key_column": "SKU", "rows": [{"SKU": "x", "Price": 2}]}),
+            ("delete", {"filter": {"column": "Name", "op": "eq", "value": "a"}}),
+        ):
+            with pytest.raises(TableApprovalRequired) as exc:
+                _run(service.apply_row_write(convo(env), table["id"], op, params))
+            assert exc.value.suggested_request["params"]["operation"] == op
+        assert storage.dump_rows(
+            table_dir(env, table), load_schema(table["schema"])) == before
+        assert [c["id"] for c in changes(env, table)] == [1, 2]
+        assert env.published == []
+        # The rolled-back dry run did not advance the id sequences.
+        result = _run(service.apply_row_write(
+            convo(env), table["id"], "insert", {"rows": [{"Name": "c"}]},
+            bypass_approval=True,
+        ))
+        assert result["inserted_ids"] == [3] and result["change_id"] == 3
+
+    def test_preview_row_write(self, env):
+        table = make_table(env, shares=[("bob", "write")])
+        self._seed_rows(env, table)
+        before = changes(env, table)
+        fresh, access, result = _run(service.preview_row_write(
+            convo(env), table["id"], "insert", {"rows": [{"Name": "c"}, {"Name": "d"}]},
+        ))
+        assert fresh["id"] == table["id"] and access.rows == "approval"
+        assert result["op"] == "insert" and result["inserted_ids"] == [3, 4]
+        assert result["change_id"] is None and result["row_count"] == 4
+        assert result["schema_version"] == fresh["schema_version"]
+        _f, _a, dele = _run(service.preview_row_write(
+            ui(env), table["id"], "delete",
+            {"filter": {"column": "SKU", "op": "eq", "value": "y"}},
+        ))
+        assert dele["row_ids"] == [2] and dele["deleted"] == 1
+        assert changes(env, table) == before
+        assert fetch(env, table)["row_count"] == 2
+        assert env.published == []
+        with pytest.raises(storage.InvalidRowsError):
+            _run(service.preview_row_write(
+                convo(env), table["id"], "update", {"updates": [{"_id": 99, "Name": "z"}]},
+            ))
+        with pytest.raises(TableNotFound):
+            _run(service.preview_row_write(
+                convo(env, "carol"), table["id"], "insert", {"rows": [{"Name": "c"}]},
+            ))
+        reader = make_table(env, "Other", shares=[("bob", "read")])
+        with pytest.raises(TableDenied):
+            _run(service.preview_row_write(
+                convo(env, "bob"), reader["id"], "insert", {"rows": [{"Name": "c"}]},
+            ))
+        with pytest.raises(service.TableError) as exc:
+            _run(service.preview_row_write(convo(env), table["id"], "nope", {}))
+        assert exc.value.code == "invalid_args"
 
     def test_denied(self, env):
         table = make_table(env, shares=[("bob", "read")])

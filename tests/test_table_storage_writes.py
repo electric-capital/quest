@@ -778,3 +778,95 @@ def test_upsert_insert_takes_value_an_update_gives_up(coded, order):
 def test_existing_ids(table_dir):
     with storage_mod.connect(table_dir) as conn:
         assert storage_mod._existing_ids(conn, [3, 1, 99, 1]) == {1, 3}
+
+
+# --- dry_run -------------------------------------------------------------------
+
+
+def _write(op, table_dir, schema, *, dry_run, **kw) -> RowWriteResult:
+    common = dict(
+        schema_version=kw.pop("schema_version", 1),
+        source=SOURCE,
+        actor_user_id=None,
+        now=LATER,
+        dry_run=dry_run,
+    )
+    fn = {
+        "insert": storage_mod.insert_rows,
+        "update": update_rows,
+        "upsert": upsert_rows,
+        "delete": delete_rows,
+    }[op]
+    return fn(table_dir, schema, **common, **kw)
+
+
+def _snapshot(table_dir, schema) -> tuple:
+    """Everything a write could leave behind: rows, the change log and both
+    AUTOINCREMENT counters."""
+    return (
+        dump_rows(table_dir, schema),
+        raw_sql(table_dir, "SELECT * FROM changes ORDER BY id"),
+        raw_sql(table_dir, "SELECT name, seq FROM sqlite_sequence ORDER BY name"),
+    )
+
+
+DRY_RUN_OK = [
+    ("insert", {"rows": [{"Name": "d", "SKU": "Z"}, {"Name": "e"}]}),
+    ("update", {"updates": [{"_id": 2, "Price": 3}, {"_id": 1, "SKU": "Y2"}]}),
+    ("upsert", {"key_column": "SKU", "rows": [{"SKU": "X", "Price": 2}, {"SKU": "N", "Name": "n"}]}),
+    ("delete", {"row_ids": [3, 1]}),
+    ("delete", {"where": (f"{K_NAME} IN (?, ?)", ["a", "b"])}),
+    ("delete", {"where": (f"{K_NAME} = ?", ["zzz"])}),
+]
+
+
+@pytest.mark.parametrize("op,kw", DRY_RUN_OK)
+def test_dry_run_predicts_the_write_and_writes_nothing(table_dir, schema, op, kw):
+    before = _snapshot(table_dir, schema)
+    dry = _write(op, table_dir, schema, dry_run=True, **kw)
+    assert _snapshot(table_dir, schema) == before
+    assert dry.change_id is None
+    real = _write(op, table_dir, schema, dry_run=False, **kw)
+    # Same outcome, inserted ids included (the rolled-back sequence bump
+    # hands the real write the same ids).
+    assert {**real.__dict__, "change_id": None} == dry.__dict__
+    assert real.change_id == (None if real.row_ids == [] else 3)
+
+
+def _set(monkeypatch, name, value):
+    monkeypatch.setattr(storage_mod, name, value)
+
+
+DRY_RUN_REFUSALS = [
+    ("insert", {"rows": [{"Name": "d", "Nope": 1}]}, None, InvalidRowsError),
+    ("insert", {"rows": [{"Name": "d", "SKU": "X"}]}, None, InvalidRowsError),
+    ("insert", {"rows": [{"Name": "d"}]}, ("TABLE_MAX_ROWS", 3), TableFullError),
+    ("insert", {"rows": [{"Name": "d"}]}, ("TABLE_CHANGE_MAX_BYTES", 50), ChangeTooLargeError),
+    ("insert", {"rows": [{"Name": "d"}, {"Name": "e"}]}, ("TABLE_WRITE_MAX_ROWS", 1), TooManyRowsError),
+    ("insert", {"rows": [{"Name": "d"}], "schema_version": 2}, None, SchemaMismatchError),
+    ("update", {"updates": [{"_id": 99, "Name": "z"}]}, None, InvalidRowsError),
+    ("update", {"updates": [{"_id": 1, "Price": "abc"}]}, None, InvalidRowsError),
+    ("update", {"updates": [{"_id": 2, "SKU": "X"}]}, None, InvalidRowsError),
+    ("update", {"updates": [{"_id": 1, "Price": 9}]}, ("TABLE_CHANGE_MAX_BYTES", 50), ChangeTooLargeError),
+    ("upsert", {"key_column": "SKU", "rows": [{"SKU": "N", "Name": "n"}]}, ("TABLE_MAX_ROWS", 3), TableFullError),
+    ("upsert", {"key_column": "SKU", "rows": [{"SKU": "N"}]}, None, InvalidRowsError),
+    ("upsert", {"key_column": "Name", "rows": [{"Name": "n"}]}, None, UpsertKeyError),
+    ("delete", {"row_ids": [99]}, None, InvalidRowsError),
+    ("delete", {"where": ("1 = 1", [])}, ("TABLE_WRITE_MAX_ROWS", 2), TooManyRowsError),
+    ("delete", {"row_ids": [1]}, ("TABLE_CHANGE_MAX_BYTES", 50), ChangeTooLargeError),
+]
+
+
+@pytest.mark.parametrize("op,kw,patch,error", DRY_RUN_REFUSALS)
+def test_dry_run_raises_what_the_write_raises(table_dir, schema, monkeypatch, op, kw, patch, error):
+    if patch is not None:
+        _set(monkeypatch, *patch)
+    before = _snapshot(table_dir, schema)
+    with pytest.raises(error) as dry:
+        _write(op, table_dir, schema, dry_run=True, **kw)
+    assert _snapshot(table_dir, schema) == before
+    with pytest.raises(error) as real:
+        _write(op, table_dir, schema, dry_run=False, **kw)
+    assert _snapshot(table_dir, schema) == before
+    assert (dry.value.code, str(dry.value)) == (real.value.code, str(real.value))
+    assert getattr(dry.value, "problems", None) == getattr(real.value, "problems", None)

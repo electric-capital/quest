@@ -118,6 +118,7 @@ __all__ = [
     "delete_table_dirs",
     "get_visible_table",
     "list_visible_tables",
+    "preview_row_write",
     "query_rows",
     "require_enabled",
     "resolve",
@@ -574,21 +575,17 @@ def _suggested_request(table_id: str, op: str, clean: dict) -> dict:
     }
 
 
-def _check_row_verdict(
-    access: TableAccess, table_id: str, op: str, clean: dict, bypass_approval: bool,
-) -> None:
+def _check_rows_not_denied(access: TableAccess) -> None:
     if access.rows == "denied":
         raise TableDenied(access.deny_reason)
-    if access.rows == "approval" and not bypass_approval:
-        raise TableApprovalRequired(access, _suggested_request(table_id, op, clean))
 
 
 def _run_row_op(
     table_dir: Path, columns, op: str, clean: dict, *,
-    schema_version: int, source: str, actor_user_id: int,
+    schema_version: int, source: str, actor_user_id: int, dry_run: bool = False,
 ) -> storage.RowWriteResult:
     common = dict(schema_version=schema_version, source=source,
-                  actor_user_id=actor_user_id)
+                  actor_user_id=actor_user_id, dry_run=dry_run)
     if op == "insert":
         return storage.insert_rows(table_dir, columns, rows=clean["rows"], **common)
     if op == "update":
@@ -601,6 +598,22 @@ def _run_row_op(
         return storage.delete_rows(table_dir, columns, row_ids=clean["row_ids"], **common)
     where = filters.compile_filter(columns, clean["filter"])
     return storage.delete_rows(table_dir, columns, where=where, **common)
+
+
+def _row_result(result: storage.RowWriteResult, table: dict) -> dict:
+    return {
+        "op": result.op,
+        "inserted": result.inserted,
+        "updated": result.updated,
+        "deleted": result.deleted,
+        "row_ids": list(result.row_ids),
+        "inserted_ids": list(result.inserted_ids),
+        "updated_ids": list(result.updated_ids),
+        "change_id": result.change_id,
+        "row_count": result.row_count,
+        "updated_at": table["updated_at"],
+        "schema_version": table["schema_version"],
+    }
 
 
 async def apply_row_write(
@@ -625,7 +638,12 @@ async def apply_row_write(
     The ``write_table_rows`` executor (A13) calls this at approve time with
     ``bypass_approval=True``: an ``approval`` verdict then proceeds, while
     hidden/missing (the share was revoked or the table deleted meanwhile)
-    and ``denied`` still refuse.
+    and ``denied`` still refuse. Without it, an ``approval`` verdict first
+    dry-runs the write under the lock (storage ``dry_run=True``: every
+    check against the live schema and rows, nothing written), so invalid
+    rows raise the same storage error as on the free path, and only a
+    write that would succeed raises :class:`TableApprovalRequired` with
+    its suggested request.
 
     Returns:
         ``{op, inserted, updated, deleted, row_ids, inserted_ids,
@@ -640,33 +658,26 @@ async def apply_row_write(
     require_enabled(caller)
     clean = _clean_row_params(op, params)
     table, access = await _lookup(caller, table_id)
-    _check_row_verdict(access, table["id"], op, clean, bypass_approval)
+    _check_rows_not_denied(access)
     source = _write_source(write_source, caller)
     actor = _actor(actor_user_id, caller)
 
     async def _locked() -> dict:
         async with _table_lock(table["id"]):
             fresh, fresh_access = await _lookup(caller, table_id)
-            _check_row_verdict(fresh_access, fresh["id"], op, clean, bypass_approval)
+            _check_rows_not_denied(fresh_access)
+            needs_card = fresh_access.rows == "approval" and not bypass_approval
             columns = load_schema(fresh["schema"])
             result = await _file_call(
                 fresh, _run_row_op, _table_dir(fresh["id"]), columns, op, clean,
                 schema_version=fresh["schema_version"], source=source,
-                actor_user_id=actor,
+                actor_user_id=actor, dry_run=needs_card,
             )
-            out = {
-                "op": result.op,
-                "inserted": result.inserted,
-                "updated": result.updated,
-                "deleted": result.deleted,
-                "row_ids": list(result.row_ids),
-                "inserted_ids": list(result.inserted_ids),
-                "updated_ids": list(result.updated_ids),
-                "change_id": result.change_id,
-                "row_count": result.row_count,
-                "updated_at": fresh["updated_at"],
-                "schema_version": fresh["schema_version"],
-            }
+            if needs_card:
+                raise TableApprovalRequired(
+                    fresh_access, _suggested_request(fresh["id"], op, clean),
+                )
+            out = _row_result(result, fresh)
             if result.change_id is None:
                 return out
             updated = await table_store.update_after_write(
@@ -679,6 +690,39 @@ async def apply_row_write(
             return out
 
     return await _shielded(_locked())
+
+
+async def preview_row_write(
+    caller: Caller, table_id: str, op: str, params: dict,
+) -> tuple[dict, TableAccess, dict]:
+    """Dry-run one row write under the table lock and return ``(table,
+    access, result)``: ``result`` has :func:`apply_row_write`'s shape with
+    ``change_id`` None (the ids an insert would assign, the rows an update,
+    upsert or delete would touch, the row count after). Every check of the
+    real write runs against the live schema and rows and nothing is
+    written, bumped or published. The ``write_table_rows`` precard (A13)
+    uses it.
+
+    Any row verdict but ``denied`` may preview (``approval`` included).
+
+    Raises:
+        TableDisabled, TableNotFound (missing OR hidden), TableDenied,
+        TableError ``invalid_args``, FilterError, TableStorageError.
+    """
+    require_enabled(caller)
+    clean = _clean_row_params(op, params)
+    table, access = await _lookup(caller, table_id)
+    _check_rows_not_denied(access)
+    async with _table_lock(table["id"]):
+        fresh, fresh_access = await _lookup(caller, table_id)
+        _check_rows_not_denied(fresh_access)
+        columns = load_schema(fresh["schema"])
+        result = await _file_call(
+            fresh, _run_row_op, _table_dir(fresh["id"]), columns, op, clean,
+            schema_version=fresh["schema_version"], source="ui:dry-run",
+            actor_user_id=caller.user["id"], dry_run=True,
+        )
+        return fresh, fresh_access, _row_result(result, fresh)
 
 
 # ---------------------------------------------------------------------------
