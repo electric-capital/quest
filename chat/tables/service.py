@@ -147,6 +147,7 @@ __all__ = [
     "delete_table_dirs",
     "export_table",
     "get_change",
+    "get_change_entry",
     "get_visible_table",
     "list_changes",
     "list_visible_tables",
@@ -1609,6 +1610,36 @@ async def get_change(
         return change
 
     return await _editor_read(caller, table_id, _run)
+
+
+async def get_change_entry(
+    caller: Caller, table_id: str, change_id: int,
+) -> tuple[dict, TableAccess, dict, dict]:
+    """:func:`get_change` plus the change's list entry (the
+    :func:`list_changes` fields incl. ``in_effect`` and ``row_count``),
+    both read in ONE locked editor read so they describe the same log
+    (``GET /tables/{id}/changes/{change_id}``).
+
+    Returns:
+        ``(table, access, change, entry)``.
+
+    Raises:
+        As :func:`get_change`.
+    """
+    require_enabled(caller)
+    _check_int(change_id, "change_id")
+
+    def _run(table_dir: Path, _columns, _table: dict) -> tuple[dict, dict]:
+        change = storage.get_change(table_dir, change_id)
+        if change is None:
+            raise revert.UnknownChangeError(change_id)
+        page = revert.list_changes_in_effect(table_dir, limit=1, before_id=change_id + 1)
+        if not page or page[0]["id"] != change_id:
+            raise revert.UnknownChangeError(change_id)
+        return change, page[0]
+
+    table, access, (change, entry) = await _editor_read(caller, table_id, _run)
+    return table, access, change, entry
 
 
 EXPORT_FORMATS = ("csv", "sqlite")

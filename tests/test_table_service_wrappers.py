@@ -313,6 +313,27 @@ class TestHistory:
             _run(service.get_change(ui(env), table["id"], "2"))
         assert exc.value.code == "invalid_args"
 
+    def test_get_change_entry(self, env):
+        table = make_table(env, shares=[("bob", "write"), ("carol", "read")])
+        insert(env, table, [{"Name": "a"}, {"Name": "b"}])        # change 2
+        insert(env, table, [{"Name": "c"}])                        # change 3
+        _run(service.apply_restore(ui(env), table["id"], 2))       # change 4
+        _t, access, change, entry = _run(
+            service.get_change_entry(ui(env, "bob"), table["id"], 3),
+        )
+        assert access.rows == "free"
+        assert change["id"] == entry["id"] == 3 and change["row_ids"] == [3]
+        assert entry["in_effect"] is False and entry["row_count"] == 1
+        _t, _a, _c, entry = _run(service.get_change_entry(ui(env), table["id"], 4))
+        assert entry["in_effect"] is True and entry["restore_to"] == 2
+        with pytest.raises(revert.UnknownChangeError):
+            _run(service.get_change_entry(ui(env), table["id"], 99))
+        with pytest.raises(TableError) as exc:
+            _run(service.get_change_entry(ui(env), table["id"], True))
+        assert exc.value.code == "invalid_args"
+        with pytest.raises(TableForbidden):
+            _run(service.get_change_entry(ui(env, "carol"), table["id"], 1))
+
     def test_share_revoked_while_queued(self, env):
         table = make_table(env, shares=[("bob", "write")])
 
