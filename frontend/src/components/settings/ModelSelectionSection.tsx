@@ -136,7 +136,7 @@ function ModelMenuPreview({
  * and are saved as one full replacement; the previews render the draft.
  */
 export function ModelSelectionSection() {
-  const { refreshModelCatalog } = useAppConfig();
+  const { refreshAppConfig } = useAppConfig();
   const [data, setData] = useState<ModelSelectionListResponse | null>(null);
   const [loadError, setLoadError] = useState('');
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -234,7 +234,7 @@ export function ModelSelectionSection() {
       setSaveStatus('saved');
       // The composer menu in this tab reads the module-level catalog fed by
       // GET /app/api/config; re-fetch so the change shows without a reload.
-      void refreshModelCatalog();
+      void refreshAppConfig();
       if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
       statusTimeoutRef.current = window.setTimeout(() => setSaveStatus('idle'), 2000);
     } catch (error) {
@@ -244,7 +244,7 @@ export function ModelSelectionSection() {
       if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
       statusTimeoutRef.current = window.setTimeout(() => setSaveStatus('idle'), 4000);
     }
-  }, [data, drafts, applyResponse, refreshModelCatalog]);
+  }, [data, drafts, applyResponse, refreshAppConfig]);
 
   // Rows grouped by provider label, preserving server order (Vertex
   // families first, then each instance's models).

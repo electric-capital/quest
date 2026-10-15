@@ -337,7 +337,7 @@ certificate.
 4. Set `app_base_url` to `https://quest.yourdomain.com` and register the callback URLs under it.
 
 Caveat: the Cloudflare proxy caps a single request body at 100 MB on free/pro plans, below the
-composer's 200 MB per-file attachment limit.
+default per-file upload limit; lower it under Settings > Limits to match.
 
 ### Reverse proxy (Nginx or Caddy)
 
@@ -345,7 +345,7 @@ For a server with a public IP and your own certificates (Caddy obtains them auto
 requirements:
 - WebSocket support: must proxy `Upgrade` and `Connection` headers (Caddy handles this automatically)
 - Read timeout: at least 5 minutes (`proxy_read_timeout 300s` in Nginx) for long-running model responses
-- Client body size: increase from default for file uploads (`client_max_body_size 250M` in Nginx)
+- Client body size: increase from default for file uploads to above the upload limit in Settings > Limits (`client_max_body_size 250M` in Nginx for the default)
 - HTTPS only: redirect port 80 to 443; set `app_base_url` to the `https://` URL as above
 
 ## Logging

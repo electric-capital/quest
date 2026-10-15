@@ -48,14 +48,22 @@ export interface AppConfigContextValue {
   // failure; never rejects). Session hydration and default-model resolution
   // await it so they see the credentialed-model list.
   whenConfigLoaded: Promise<void>;
-  // Re-fetch GET /app/api/config and replace the model catalog +
-  // available_models (used after an admin saves Settings > Model Selection
-  // so the composer menu in this tab reflects the change without a reload).
-  refreshModelCatalog: () => Promise<void>;
+  // Per-file workspace upload cap in bytes (admin Settings > Limits). The
+  // composer rejects larger attachments before uploading. Defaults to the
+  // server default until the config fetch resolves.
+  maxUploadBytes: number;
+  // Re-fetch GET /app/api/config and replace the admin-editable parts: the
+  // model catalog + available_models and the upload cap (used after an
+  // admin saves Settings > Model Selection or Limits so this tab reflects
+  // the change without a reload).
+  refreshAppConfig: () => Promise<void>;
   // Version update detection: the server has been redeployed since this
   // page loaded (Sidebar shows a reload banner).
   updateAvailable: boolean;
 }
+
+/** Server default for max_upload_bytes (config/limits.py). */
+const DEFAULT_MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
 
 const AppConfigContext = createContext<AppConfigContextValue | null>(null);
 
@@ -74,6 +82,7 @@ export function AppConfigProvider({ children }: { children: React.ReactNode }) {
   // read the credentialed-model list right after awaiting the config fetch,
   // without racing the state update.
   const availableModelIdsRef = useRef<string[] | null>(null);
+  const [maxUploadBytes, setMaxUploadBytes] = useState(DEFAULT_MAX_UPLOAD_BYTES);
 
   // Version update detection
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -98,6 +107,9 @@ export function AppConfigProvider({ children }: { children: React.ReactNode }) {
     if (Array.isArray(data.available_models)) {
       availableModelIdsRef.current = data.available_models as string[];
       setAvailableModelIds(data.available_models as string[]);
+    }
+    if (typeof data.max_upload_bytes === 'number' && data.max_upload_bytes > 0) {
+      setMaxUploadBytes(data.max_upload_bytes);
     }
   }, []);
 
@@ -181,7 +193,7 @@ export function AppConfigProvider({ children }: { children: React.ReactNode }) {
     };
   }, [updateAvailable]);
 
-  const refreshModelCatalog = useCallback(async () => {
+  const refreshAppConfig = useCallback(async () => {
     try {
       const response = await fetch('/app/api/config');
       if (!response.ok) return;
@@ -202,7 +214,8 @@ export function AppConfigProvider({ children }: { children: React.ReactNode }) {
     availableModelIds,
     getAvailableModelIds,
     whenConfigLoaded: configLoaded.promise,
-    refreshModelCatalog,
+    maxUploadBytes,
+    refreshAppConfig,
     updateAvailable,
   }), [
     appName,
@@ -213,7 +226,8 @@ export function AppConfigProvider({ children }: { children: React.ReactNode }) {
     availableModelIds,
     getAvailableModelIds,
     configLoaded.promise,
-    refreshModelCatalog,
+    maxUploadBytes,
+    refreshAppConfig,
     updateAvailable,
   ]);
 

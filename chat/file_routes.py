@@ -42,8 +42,8 @@ from chat.file_storage import (
     copy_entry,
     CopyEntryError,
     is_scratch_source,
-    MAX_FILE_SIZE
 )
+from config.limits import max_upload_bytes
 from chat.image_sanitizer import ImageSanitizeError, sanitize_image
 from auth.google_credentials import make_authenticated_request
 
@@ -167,18 +167,21 @@ async def _upload(
     """
     uploaded_files = []
     errors = []
+    # Admin-configurable (Settings > Limits); read once per request.
+    limit = max_upload_bytes()
 
     for i, file in enumerate(files):
         try:
-            # Read file content
-            content = await file.read()
-
-            # Check file size
-            if len(content) > MAX_FILE_SIZE:
+            # Check the size the multipart parser recorded before pulling the
+            # (disk-spooled) file into memory, then the bytes actually read.
+            content = None
+            if file.size is None or file.size <= limit:
+                content = await file.read()
+            if content is None or len(content) > limit:
                 errors.append({
                     "filename": file.filename or "unknown",
                     "error": "file_too_large",
-                    "message": f"File exceeds maximum size of {MAX_FILE_SIZE // (1024 * 1024)}MB"
+                    "message": f"File exceeds maximum size of {limit // (1024 * 1024)}MB"
                 })
                 continue
 

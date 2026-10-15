@@ -1010,6 +1010,69 @@ async def admin_update_feature_gate(
 
 
 # ---------------------------------------------------------------------------
+# Limits (Settings > Limits)
+# ---------------------------------------------------------------------------
+
+
+def _limits_view(limits: dict) -> dict:
+    from config.limits import (
+        DEFAULT_MAX_UPLOAD_MB,
+        MAX_MAX_UPLOAD_MB,
+        MIN_MAX_UPLOAD_MB,
+    )
+
+    return {
+        "max_upload_mb": limits["max_upload_mb"],
+        "max_upload_mb_default": DEFAULT_MAX_UPLOAD_MB,
+        "max_upload_mb_min": MIN_MAX_UPLOAD_MB,
+        "max_upload_mb_max": MAX_MAX_UPLOAD_MB,
+    }
+
+
+@router.get("/admin/limits")
+async def admin_get_limits(
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """The admin-configurable server limits with their defaults and bounds."""
+    _require_admin(user)
+    from config.limits import read_limits
+
+    return _limits_view(read_limits())
+
+
+class LimitsUpdate(BaseModel):
+    max_upload_mb: int
+
+
+@router.put("/admin/limits")
+async def admin_update_limits(
+    body: LimitsUpdate,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Update the server limits (persisted in data/limits.json).
+
+    ``max_upload_mb`` outside the allowed range is 400 ``invalid_params``.
+    Takes effect on the next upload; clients pick the new cap up from the
+    next GET /app/api/config fetch.
+    """
+    _require_admin(user)
+    from config.limits import set_max_upload_mb
+
+    try:
+        limits = set_max_upload_mb(body.max_upload_mb)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_params", "message": str(exc)},
+        )
+    logger.info(
+        "[admin] %s set the workspace upload limit to %d MB",
+        user["email"], limits["max_upload_mb"],
+    )
+    return _limits_view(limits)
+
+
+# ---------------------------------------------------------------------------
 # Model selection (Settings > Model Selection)
 # ---------------------------------------------------------------------------
 

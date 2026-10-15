@@ -35,6 +35,7 @@ const InferenceProvidersSection = lazyNamed(
   () => import('./settings/InferenceProvidersSection'),
   'InferenceProvidersSection',
 );
+const LimitsSection = lazyNamed(() => import('./settings/LimitsSection'), 'LimitsSection');
 const ModelSelectionSection = lazyNamed(() => import('./settings/ModelSelectionSection'), 'ModelSelectionSection');
 
 interface SettingsModalProps {
@@ -42,7 +43,7 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SettingsSection = 'data-connections' | 'appearance' | 'password' | 'sign-in' | 'slack' | 'gmail' | 'sms' | 'memories' | 'guides' | 'skills' | 'inference-api' | 'feature-gates' | 'service-credentials' | 'inference-providers' | 'model-selection' | 'about' | 'sign-out';
+type SettingsSection = 'data-connections' | 'appearance' | 'password' | 'sign-in' | 'slack' | 'gmail' | 'sms' | 'memories' | 'guides' | 'skills' | 'inference-api' | 'feature-gates' | 'service-credentials' | 'inference-providers' | 'model-selection' | 'limits' | 'about' | 'sign-out';
 
 interface SectionEntry {
   id: SettingsSection;
@@ -96,6 +97,7 @@ const ADMIN_SECTIONS: SectionEntry[] = [
   { id: 'service-credentials', label: 'Service Credentials' },
   { id: 'inference-providers', label: 'Inference Providers' },
   { id: 'model-selection', label: 'Model Selection' },
+  { id: 'limits', label: 'Limits' },
 ];
 
 // Listed after every other section in the top nav group (below Admin for
@@ -257,6 +259,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         ) : null;
       case 'model-selection':
         return isAdmin && !isMobile ? <ModelSelectionSection /> : null;
+      case 'limits':
+        return isAdmin && !isMobile ? <LimitsSection /> : null;
       case 'about':
         return <AboutSection />;
       case 'sign-out':

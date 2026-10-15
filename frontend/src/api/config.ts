@@ -203,6 +203,8 @@ export const endpoints = {
 
   adminFeatureGate: (feature: string) => `${API_BASE_URL}/admin/feature-gates/${feature}`,
 
+  adminLimits: () => `${API_BASE_URL}/admin/limits`,
+
   adminServiceCredentials: () => `${API_BASE_URL}/admin/service-credentials`,
 
   adminServiceCredential: (service: string) => `${API_BASE_URL}/admin/service-credentials/${service}`,

@@ -66,3 +66,7 @@ def _isolated_inference_provider_files(tmp_path, monkeypatch):
     import config.model_selection as model_selection
 
     monkeypatch.setattr(model_selection, "MODEL_SELECTION_FILE", tmp_path / "model_selection.json")
+    # And the admin Limits store: absent = the default upload cap.
+    import config.limits as limits
+
+    monkeypatch.setattr(limits, "LIMITS_FILE", tmp_path / "limits.json")

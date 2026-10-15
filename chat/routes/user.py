@@ -137,6 +137,7 @@ async def get_app_config():
     from chat.llm.config import get_available_models, public_model_catalog
     from auth.config import allowed_login_domain, login_method, login_restriction_description
     from auth.mailer import smtp_configured
+    from config.limits import max_upload_bytes
 
     return {
         "quest_env": environment.get_quest_env(),
@@ -155,6 +156,9 @@ async def get_app_config():
         # sign-up / forgot-password (requires outgoing email).
         "login_method": login_method(),
         "password_self_service": smtp_configured(),
+        # Per-file workspace upload cap (admin Settings > Limits), so the
+        # composer can reject oversize attachments before uploading.
+        "max_upload_bytes": max_upload_bytes(),
     }
 
 

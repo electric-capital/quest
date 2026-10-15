@@ -69,6 +69,7 @@ import type {
   FeatureGate,
   FeatureGatesListResponse,
   FeatureGateUpdate,
+  AdminLimits,
   TranscribeResponse,
   PasswordLinkInfo,
   PasswordLinkResult,
@@ -1065,6 +1066,14 @@ export function updateFeatureGate(
   update: FeatureGateUpdate,
 ): Promise<FeatureGate> {
   return apiPut(endpoints.adminFeatureGate(feature), { body: update });
+}
+
+export function fetchAdminLimits(): Promise<AdminLimits> {
+  return apiGet(endpoints.adminLimits());
+}
+
+export function updateAdminLimits(update: { max_upload_mb: number }): Promise<AdminLimits> {
+  return apiPut(endpoints.adminLimits(), { body: update });
 }
 
 /**

@@ -13,10 +13,20 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 import aiofiles
 
+from config.limits import max_upload_bytes
+
 logger = logging.getLogger(__name__)
 
-# Maximum file size for uploads (200MB)
-MAX_FILE_SIZE = 200 * 1024 * 1024
+# Maximum file size for the in-memory sanitized download (200MB). The upload
+# cap is admin-configurable: see config/limits.py.
+MAX_SANITIZE_SIZE = 200 * 1024 * 1024
+
+
+def check_upload_size(size: int) -> None:
+    """Raise ``ValueError`` when ``size`` exceeds the configured upload cap."""
+    limit = max_upload_bytes()
+    if size > limit:
+        raise ValueError(f"File too large. Maximum size is {limit // (1024 * 1024)}MB")
 
 # Regex matching any Unicode space character (category Zs) that is NOT a
 # regular ASCII space (U+0020).  These look identical to normal spaces when
@@ -225,8 +235,7 @@ async def save_uploaded_file(root: Path, filename: str, file_content: bytes, rel
     filename = _sanitize_filename(filename)
 
     # Check file size
-    if len(file_content) > MAX_FILE_SIZE:
-        raise ValueError(f"File too large. Maximum size is {MAX_FILE_SIZE // (1024 * 1024)}MB")
+    check_upload_size(len(file_content))
 
     # Validate destination path
     is_valid, resolved_dir = validate_path(root, relative_path)
@@ -396,10 +405,7 @@ async def save_uploaded_file_with_path(
         combined_path = base_relative_path
 
     # Check file size
-    if len(file_content) > MAX_FILE_SIZE:
-        raise ValueError(
-            f"File too large. Maximum size is {MAX_FILE_SIZE // (1024 * 1024)}MB"
-        )
+    check_upload_size(len(file_content))
 
     # Validate destination path
     is_valid, resolved_dir = validate_path(root, combined_path)
@@ -518,8 +524,7 @@ def read_file_bytes(root: Path, file_path_str: str) -> Tuple[bytes, str]:
     non-blocking ``O_NOFOLLOW`` open plus the ``S_ISREG`` re-check on the
     descriptor, so a sandbox-planted FIFO or symlink can neither stall the
     event loop nor redirect the read -- without the viewable-extension and
-    preview-size limits. Files over ``MAX_FILE_SIZE`` (the upload cap) are
-    refused.
+    preview-size limits. Files over ``MAX_SANITIZE_SIZE`` are refused.
 
     Returns ``(data, filename)``; ``ValueError`` on an invalid path or a
     non-regular file, ``FileNotFoundError`` when the file is missing.
@@ -540,11 +545,11 @@ def read_file_bytes(root: Path, file_path_str: str) -> Tuple[bytes, str]:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             raise ValueError(f"Not a file: {file_path_str}")
-        if st.st_size > MAX_FILE_SIZE:
+        if st.st_size > MAX_SANITIZE_SIZE:
             raise ValueError(
                 f"This file is too large to sanitize "
                 f"({st.st_size / (1024 * 1024):.1f} MB, limit "
-                f"{MAX_FILE_SIZE // (1024 * 1024)} MB)"
+                f"{MAX_SANITIZE_SIZE // (1024 * 1024)} MB)"
             )
         with os.fdopen(fd, "rb") as f:
             fd = -1  # ownership passed to the file object

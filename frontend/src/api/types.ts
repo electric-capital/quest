@@ -1691,6 +1691,16 @@ export interface FeatureGatesListResponse {
   features: FeatureGate[];
 }
 
+// GET/PUT /admin/limits: admin-configurable server limits with their
+// default and allowed range (config/limits.py).
+export interface AdminLimits {
+  // Per-file workspace upload cap in MB.
+  max_upload_mb: number;
+  max_upload_mb_default: number;
+  max_upload_mb_min: number;
+  max_upload_mb_max: number;
+}
+
 // Admin service credentials (server-level upstream API credentials).
 // Fully schema-driven: the backend describes each service's form as a list
 // of CredentialFieldSchema rows and the frontend renders one generic card

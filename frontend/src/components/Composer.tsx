@@ -80,11 +80,6 @@ interface PastedImage {
 // in chat/realtime/socket.py and chat/file_routes.py.
 const MAX_COMPOSER_ATTACHMENTS = 10;
 
-// Per-file size cap for generic workspace file attachments. Mirrors the
-// backend MAX_FILE_SIZE in chat/file_routes.py (200 MB) so we reject oversize
-// files client-side before the (potentially huge) upload.
-const MAX_ATTACH_FILE_SIZE = 200 * 1024 * 1024;
-
 // Sanity cap on the number of generic files queued per send. The backend has
 // no hard count limit; this just keeps the UI manageable.
 const MAX_PENDING_FILES = 20;
@@ -345,7 +340,9 @@ export function Composer({
     getLoadedSkillsForConversation,
     markSkillsAsLoaded,
   } = useConversationSkills();
-  const { availableModelIds } = useAppConfig();
+  // maxUploadBytes: the admin-set workspace upload cap (Settings > Limits),
+  // so oversize files are rejected client-side before the upload.
+  const { availableModelIds, maxUploadBytes } = useAppConfig();
   const { enabledFeatures } = useAuth();
 
   // Models whose backend credentials are configured server-side. null means
@@ -784,7 +781,7 @@ export function Composer({
     const oversized: string[] = [];
     for (let i = 0; i < incoming.length; i++) {
       const file = incoming[i];
-      if (file.size > MAX_ATTACH_FILE_SIZE) {
+      if (file.size > maxUploadBytes) {
         oversized.push(file.name);
         continue;
       }
@@ -794,10 +791,11 @@ export function Composer({
       });
     }
     if (oversized.length > 0) {
+      const limit = `${Math.floor(maxUploadBytes / (1024 * 1024))} MB`;
       setPasteNotice(
         oversized.length === 1
-          ? `"${oversized[0]}" exceeds the 200 MB limit and was not attached.`
-          : `${oversized.length} files exceed the 200 MB limit and were not attached.`,
+          ? `"${oversized[0]}" exceeds the ${limit} limit and was not attached.`
+          : `${oversized.length} files exceed the ${limit} limit and were not attached.`,
       );
     }
     if (accepted.length > 0) {
@@ -812,7 +810,7 @@ export function Composer({
         return merged;
       });
     }
-  }, [setPasteNotice]);
+  }, [setPasteNotice, maxUploadBytes]);
 
   // Read the chosen files and queue them. Resets input.value so picking the
   // same file again re-fires onChange.

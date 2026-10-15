@@ -113,6 +113,26 @@ class TestProjectRoutes:
         assert r.json()["files"] == []
         assert (env["projects"] / "fresh" / "workspace" / "workspace").is_dir()
 
+    def test_upload_honors_admin_size_limit(self, env):
+        import config.limits as limits
+
+        limits.set_max_upload_mb(1)
+        r = env["client"].post(
+            "/app/api/projects/p1/files/upload",
+            files=[
+                ("files", ("big.bin", b"x" * (1024 * 1024 + 1), "application/octet-stream")),
+                ("files", ("ok.bin", b"x" * (1024 * 1024), "application/octet-stream")),
+            ],
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert [f["name"] for f in body["uploadedFiles"]] == ["ok.bin"]
+        assert [(e["filename"], e["error"]) for e in body["errors"]] == [
+            ("big.bin", "file_too_large")
+        ]
+        assert "1MB" in body["errors"][0]["message"]
+        assert not (env["proj_root"] / "big.bin").exists()
+
     def test_upload_content_download_info_delete(self, env):
         c, proj_root = env["client"], env["proj_root"]
         r = c.post(
