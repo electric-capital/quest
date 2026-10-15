@@ -79,6 +79,7 @@ class ActionRequestType(StrEnum):
     WRITE_DOC = "write_doc"
     CREATE_TABLE = "create_table"
     CHANGE_TABLE_SCHEMA = "change_table_schema"
+    WRITE_TABLE_ROWS = "write_table_rows"
 
 
 class ActionRequestStatus(StrEnum):
