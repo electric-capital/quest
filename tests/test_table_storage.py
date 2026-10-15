@@ -901,3 +901,235 @@ class TestSharedHelpers:
     def test_utc_iso_fixed_width(self):
         local = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone(timedelta(hours=2)))
         assert storage_mod._utc_iso(local) == "2026-01-02T01:04:05.000000+00:00"
+
+
+# --- Review fixes: guarded open, reads, errors ---------------------------------
+
+
+class TestDoubleQuotedStrings:
+    def test_dqs_off_on_every_connection(self, table_dir):
+        with connect(table_dir) as conn:
+            with pytest.raises(sqlite3.OperationalError, match="no such column"):
+                conn.execute('SELECT "c_0000000f" FROM rows')
+
+    def test_dump_rows_with_extra_column_is_schema_mismatch(self, table_dir, schema):
+        insert(table_dir, schema, [{"Name": "a"}])
+        extra = schema + [Column(key="c_0000000f", name="Extra", type="text")]
+        with pytest.raises(SchemaMismatchError) as exc:
+            dump_rows(table_dir, extra)
+        assert exc.value.code == "schema_mismatch"
+        assert "c_0000000f" not in exc.value.message
+        with pytest.raises(SchemaMismatchError):
+            get_rows_by_ids(table_dir, extra, [1])
+
+
+class TestBusy:
+    def test_locked_table_at_begin_is_busy(self, table_dir, schema, monkeypatch):
+        monkeypatch.setattr(storage_mod, "TABLE_DB_BUSY_TIMEOUT_S", 0.05)
+        holder = sqlite3.connect(table_dir / TABLE_DB_NAME, isolation_level=None)
+        try:
+            holder.execute("BEGIN IMMEDIATE")
+            with pytest.raises(TableStorageError) as exc:
+                insert(table_dir, schema, [{"Name": "a"}])
+            assert (exc.value.code, exc.value.message) == (
+                "busy", "The table is busy; try again."
+            )
+            assert isinstance(exc.value.__cause__, sqlite3.OperationalError)
+            # Reads still work in WAL mode while a writer holds the lock.
+            assert row_count(table_dir) == 0
+        finally:
+            holder.close()
+        assert insert(table_dir, schema, [{"Name": "a"}]).row_ids == [1]
+
+    def test_locked_file_at_open_is_busy(self, table_dir, monkeypatch):
+        monkeypatch.setattr(storage_mod, "TABLE_DB_BUSY_TIMEOUT_S", 0.05)
+        holder = sqlite3.connect(table_dir / TABLE_DB_NAME, isolation_level=None)
+        try:
+            holder.execute("PRAGMA locking_mode=EXCLUSIVE")
+            holder.execute("BEGIN IMMEDIATE")
+            holder.execute("DELETE FROM meta WHERE key = 'none'")
+            holder.execute("COMMIT")
+            with pytest.raises(TableStorageError) as exc:
+                row_count(table_dir)
+            assert exc.value.code == "busy"
+        finally:
+            holder.close()
+
+    def test_opener_uses_patched_timeout(self, table_dir, monkeypatch):
+        monkeypatch.setattr(storage_mod, "TABLE_DB_BUSY_TIMEOUT_S", 0.05)
+        with connect(table_dir) as conn:
+            assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 50
+
+    def test_other_operational_errors_pass_through(self, table_dir):
+        with connect(table_dir) as conn:
+            with pytest.raises(sqlite3.OperationalError):
+                with storage_mod._write_txn(conn):
+                    conn.execute("SELECT * FROM no_such_table")
+
+
+def test_side_file_rechecked_after_pragmas(table_dir, tmp_path, monkeypatch):
+    real_connect = sqlite3.connect
+    target = tmp_path / "target"
+    target.write_bytes(b"")
+    side = table_dir / (TABLE_DB_NAME + "-journal")
+
+    def planting_connect(path, *a, **kw):
+        os.symlink(target, side)
+        return real_connect(path, *a, **kw)
+
+    monkeypatch.setattr(storage_mod.sqlite3, "connect", planting_connect)
+    with pytest.raises(TableStorageError) as exc:
+        row_count(table_dir)
+    assert exc.value.code == "unsafe_path" and side.name in exc.value.message
+
+
+def test_table_dir_that_is_a_file_refused(tmp_path):
+    path = tmp_path / "t"
+    path.write_text("x")
+    with pytest.raises(TableStorageError) as exc:
+        row_count(path)
+    assert exc.value.code == "unsafe_path"
+
+
+def test_constraint_failed_hides_column_key(table_dir, schema, monkeypatch, caplog):
+    insert(table_dir, schema, [{"Name": "a", "SKU": "X"}])
+    monkeypatch.setattr(storage_mod, "_check_unique", lambda *a, **kw: None)
+    with caplog.at_level("WARNING", logger="chat.tables.storage"):
+        with pytest.raises(TableStorageError) as exc:
+            insert(table_dir, schema, [{"Name": "b", "SKU": "X"}])
+    assert exc.value.code == "constraint_failed"
+    assert K_SKU not in exc.value.message
+    assert exc.value.message == "The write broke a table constraint; nothing was written."
+    assert isinstance(exc.value.__cause__, sqlite3.IntegrityError)
+    assert K_SKU in caplog.text
+
+
+class TestChangeLogExtras:
+    def test_too_large_hint(self, table_dir, monkeypatch):
+        monkeypatch.setattr(storage_mod, "TABLE_CHANGE_MAX_BYTES", 10)
+        with connect(table_dir) as conn:
+            with pytest.raises(ChangeTooLargeError) as exc:
+                append_change(
+                    conn, now=NOW, source="ui:1", actor_user_id=None, kind="schema",
+                    op="schema", summary="x", schema_before=1, schema_after=2,
+                    row_ids=[], before=["x" * 20], after=[],
+                    too_large_hint="Drop fewer columns at once.",
+                )
+        assert exc.value.message.endswith(" Drop fewer columns at once.")
+        assert ChangeTooLargeError(99, 10).message.endswith(" Split it into smaller writes.")
+
+    def test_size_bytes_counts_utf8(self, table_dir, schema):
+        insert(table_dir, schema, [{"Name": "é" * 10}])
+        change = get_change(table_dir, 2)
+        expected = len(json.dumps(change["before"], ensure_ascii=False,
+                                  separators=(",", ":")).encode()) + len(
+            json.dumps(change["after"], ensure_ascii=False,
+                       separators=(",", ":")).encode())
+        assert change["size_bytes"] == expected
+        ascii_len = len(json.dumps(change["after"], ensure_ascii=False,
+                                   separators=(",", ":")))
+        assert change["size_bytes"] == 2 + ascii_len + 10  # "[]" + 1 extra byte per é
+
+    def test_list_changes_limit_clamped(self, table_dir, schema, monkeypatch):
+        monkeypatch.setattr(storage_mod, "_LIST_CHANGES_MAX", 3)
+        for name in "abcd":
+            insert(table_dir, schema, [{"Name": name}])
+        assert len(list_changes(table_dir, limit=1000)) == 3
+        assert len(list_changes(table_dir, limit=0)) == 1
+        assert len(list_changes(table_dir, limit=-5)) == 1
+        assert storage_mod._LIST_CHANGES_MAX == 3
+
+    def test_list_changes_max_is_200(self):
+        assert storage_mod._LIST_CHANGES_MAX == 200
+
+    @pytest.mark.parametrize("kw", [{"before_id": "5"}, {"before_id": True},
+                                    {"before_id": 1.5}, {"limit": "10"}, {"limit": None}])
+    def test_list_changes_bad_args(self, table_dir, kw):
+        with pytest.raises(ValueError):
+            list_changes(table_dir, **kw)
+
+
+class TestNaiveNow:
+    def test_insert_refuses_naive_now(self, table_dir, schema):
+        with pytest.raises(ValueError, match="timezone-aware"):
+            insert(table_dir, schema, [{"Name": "a"}], now=datetime(2026, 10, 1, 12))
+        assert_nothing_written(table_dir, 0, 1)
+
+    def test_create_refuses_naive_now(self, tmp_path, schema):
+        path = tmp_path / "t"
+        with pytest.raises(ValueError):
+            create_table_db(path, table_id="t", title="T", schema=schema, source="ui:1",
+                            actor_user_id=1, now=datetime(2026, 10, 1, 12))
+        assert not path.exists()
+
+    def test_append_change_refuses_naive_now(self, table_dir):
+        with connect(table_dir) as conn:
+            with pytest.raises(ValueError):
+                _append(conn, datetime(2026, 10, 1, 12))
+        assert change_count(table_dir) == 1
+
+
+@pytest.mark.parametrize("value", ['{"a": 1}', '"text"', "5", "[5]", "[{\"key\": 1}]"])
+def test_read_meta_bad_schema_json_is_corrupt(table_dir, value):
+    raw_conn = sqlite3.connect(table_dir / TABLE_DB_NAME)
+    raw_conn.execute("UPDATE meta SET value = ? WHERE key = 'schema'", (value,))
+    raw_conn.commit()
+    raw_conn.close()
+    with pytest.raises(TableStorageError) as exc:
+        read_meta(table_dir)
+    assert exc.value.code == "corrupt_storage"
+
+
+class TestCopyExtras:
+    @pytest.mark.parametrize("history", [True, False])
+    def test_copy_leaves_no_side_files(self, table_dir, schema, tmp_path, history,
+                                       monkeypatch):
+        insert(table_dir, schema, [{"Name": "a"}])
+        out = tmp_path / "out"
+        out.mkdir()
+        dest = out / "copy.sqlite"
+        seen: set[str] = set()
+        modes: list[str] = []
+        real_open = storage_mod._open_db_file
+
+        class Watching:
+            """Records the files next to dest after every statement."""
+
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, *a):
+                try:
+                    return self._conn.execute(*a)
+                finally:
+                    seen.update(p.name for p in out.iterdir())
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        def watching_open(db, **kw):
+            conn = real_open(db, **kw)
+            if db != dest:
+                return conn
+            modes.append(conn.execute("PRAGMA journal_mode").fetchone()[0])
+            return Watching(conn)
+
+        monkeypatch.setattr(storage_mod, "_open_db_file", watching_open)
+        copy_for_download(table_dir, dest, include_history=history)
+        assert modes == ["delete"]
+        assert not {n for n in seen if n.endswith(("-wal", "-shm"))}
+        assert sorted(p.name for p in out.iterdir()) == ["copy.sqlite"]
+
+    def test_failure_partway_removes_dest(self, table_dir, tmp_path, monkeypatch):
+        dest = tmp_path / "copy.sqlite"
+        real_open = storage_mod._open_db_file
+
+        def failing_open(db, **kw):
+            if db == dest:
+                raise RuntimeError("boom")
+            return real_open(db, **kw)
+
+        monkeypatch.setattr(storage_mod, "_open_db_file", failing_open)
+        with pytest.raises(RuntimeError):
+            copy_for_download(table_dir, dest)
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["tables"]

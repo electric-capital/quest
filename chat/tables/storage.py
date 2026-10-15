@@ -37,9 +37,12 @@ table directory, a ``table.db`` that is a symlink or not a regular file
 (``O_NOFOLLOW`` + ``fstat`` + ``S_ISREG``, opened ``O_NONBLOCK`` so a
 planted FIFO never blocks), a ``-wal`` / ``-shm`` / ``-journal`` side
 file that is not a regular file, and a file swapped between the check and
-the connect. It sets WAL mode, the busy timeout and an authorizer that
-denies ``ATTACH`` (the project database guard), as defense in depth even
-though no model SQL ever reaches the file.
+the connect. It turns off SQLite's double-quoted string literals (so a
+quoted identifier naming no column is an error, never a string), sets WAL
+mode, the busy timeout and an authorizer that denies ``ATTACH`` (the
+project database guard), as defense in depth even though no model SQL
+ever reaches the file. A database locked past the busy timeout surfaces
+as ``busy``.
 
 Writes run in one ``BEGIN IMMEDIATE`` transaction (:func:`_write_txn`):
 schema match check, validation (every problem in every row collected),
@@ -59,6 +62,13 @@ never breaks undo and replay is a plain INSERT or UPDATE.
 The caps come from :mod:`chat.tables.constants` imported by name; this
 module's globals are the patch point (tests monkeypatch
 ``chat.tables.storage.TABLE_MAX_ROWS`` and friends), read at call time.
+
+The other modules of this package (schema changes, revert) build their
+own transactions from the private helpers here: :func:`connect`,
+:func:`_write_txn`, :func:`_ident`, :func:`sql_type`,
+:func:`unique_index_name`, :func:`write_meta`, :func:`append_change`,
+:func:`prune_changes`, :func:`_row_images`, :func:`_insert_image_row` and
+:func:`_check_schema_matches`. Nothing outside ``chat.tables`` uses them.
 """
 
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
@@ -67,6 +77,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import errno
 import json
+import logging
 import os
 from pathlib import Path
 import sqlite3
@@ -83,7 +94,9 @@ from chat.tables.constants import (
     TABLE_WRITE_MAX_ROWS,
 )
 from chat.tables.schema import (
+    RESERVED_COLUMN_NAMES,
     Column,
+    TableSchemaError,
     TableValueError,
     apply_default,
     canonicalize,
@@ -97,6 +110,8 @@ from chat.tables.schema import (
     to_storage,
 )
 
+logger = logging.getLogger(__name__)
+
 TABLE_DB_NAME = "table.db"
 
 # SQLite side files next to table.db; each must be a regular file if present.
@@ -108,7 +123,12 @@ SOURCE_PREFIXES = ("conversation:", "action_request:", "ui:", "revert:")
 
 # Server-maintained columns of ``rows``.
 ROW_ID = "_id"
-RESERVED_COLUMNS = ("_id", "_created_at", "_updated_at")
+RESERVED_COLUMNS = RESERVED_COLUMN_NAMES
+
+# Most changes list_changes returns per call.
+_LIST_CHANGES_MAX = 200
+
+_CHANGE_TOO_LARGE_HINT = "Split it into smaller writes."
 
 _JSON_SEPARATORS = (",", ":")
 
@@ -121,7 +141,7 @@ class TableStorageError(Exception):
     ``message`` is model/user-facing text (also ``str(err)``).
 
     Plain codes: ``unsafe_path``, ``storage_missing``, ``storage_exists``,
-    ``corrupt_storage``, ``no_rows``, ``constraint_failed``,
+    ``corrupt_storage``, ``busy``, ``no_rows``, ``constraint_failed``,
     ``invalid_selector``, ``copy_exists``; the subclasses carry the rest.
     """
 
@@ -176,15 +196,18 @@ class TableFullError(TableStorageError):
 
 
 class ChangeTooLargeError(TableStorageError):
-    """The change's before/after images exceed ``TABLE_CHANGE_MAX_BYTES``."""
+    """The change's before/after images exceed ``TABLE_CHANGE_MAX_BYTES``.
+    ``hint`` ends the message (default: split the write)."""
 
-    def __init__(self, size_bytes: int, cap: int | None = None):
+    def __init__(
+        self, size_bytes: int, cap: int | None = None, *, hint: str | None = None
+    ):
         cap = TABLE_CHANGE_MAX_BYTES if cap is None else cap
+        hint = _CHANGE_TOO_LARGE_HINT if hint is None else hint
         super().__init__(
             "change_too_large",
             f"This write's change record would be {size_bytes} bytes, over the "
-            f"{cap}-byte limit that keeps every change undoable. Split it into "
-            "smaller writes.",
+            f"{cap}-byte limit that keeps every change undoable. {hint}",
         )
         self.size_bytes = size_bytes
         self.cap = cap
@@ -196,7 +219,10 @@ class UpsertKeyError(TableStorageError):
 
 
 class SchemaMismatchError(TableStorageError):
-    """The live table no longer matches the schema the caller passed."""
+    """The live table no longer matches the schema the caller passed.
+
+    This means quest.db's schema and table.db disagree; it is distinct from
+    the API-level stale-token refusal a caller raises before getting here."""
 
     def __init__(self, message: str):
         super().__init__("schema_mismatch", message)
@@ -290,6 +316,27 @@ def _check_real_dir(path: Path) -> None:
         raise _unsafe(path.name, "not a directory")
 
 
+def _is_busy(exc: sqlite3.OperationalError) -> bool:
+    """Whether ``exc`` is SQLite's "database is locked" / busy error."""
+    code = getattr(exc, "sqlite_errorcode", None)
+    if code is not None:
+        return code & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+    text = str(exc).lower()
+    return "locked" in text or "busy" in text
+
+
+@contextmanager
+def _busy_as_refusal() -> Iterator[None]:
+    """Re-raise a busy/locked ``OperationalError`` as ``busy``; any other
+    error passes through unchanged."""
+    try:
+        yield
+    except sqlite3.OperationalError as exc:
+        if _is_busy(exc):
+            raise TableStorageError("busy", "The table is busy; try again.") from exc
+        raise
+
+
 def _check_side_files(db: Path) -> None:
     for suffix in _SIDE_SUFFIXES:
         side = db.with_name(db.name + suffix)
@@ -301,9 +348,18 @@ def _check_side_files(db: Path) -> None:
             raise _unsafe(side.name, "not a regular file")
 
 
-def _open_db_file(db: Path) -> sqlite3.Connection:
+def _open_db_file(db: Path, *, wal: bool = True) -> sqlite3.Connection:
     """Open ``db`` through the guards described in the module docstring and
-    return a configured connection (caller closes it)."""
+    return a configured connection (caller closes it). ``wal`` False leaves
+    the journal mode alone (the download copy, which must not grow
+    ``-wal`` / ``-shm`` files).
+
+    The side files are checked before the connect and again after the
+    pragmas, by which point SQLite has opened ``-wal`` / ``-shm``. What
+    remains is the window between the first check and SQLite's own open of
+    a side file (a planted symlink there is followed once, then refused),
+    and a ``-journal`` file, which only a rollback-journal database (the
+    download copy) creates, per transaction, after both checks."""
     _check_real_dir(db.parent)
     try:
         fd = os.open(db, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
@@ -318,21 +374,27 @@ def _open_db_file(db: Path) -> sqlite3.Connection:
         if not stat.S_ISREG(st.st_mode):
             raise _unsafe(db.name, "not a regular file")
         _check_side_files(db)
+        timeout = TABLE_DB_BUSY_TIMEOUT_S
         conn = sqlite3.connect(
             str(db),
-            timeout=TABLE_DB_BUSY_TIMEOUT_S,
+            timeout=timeout,
             isolation_level=None,
             check_same_thread=True,
         )
         try:
+            conn.setconfig(sqlite3.SQLITE_DBCONFIG_DQS_DML, False)
+            conn.setconfig(sqlite3.SQLITE_DBCONFIG_DQS_DDL, False)
             conn.set_authorizer(_deny_attach_authorizer)
             after = os.stat(db)
             if (after.st_dev, after.st_ino) != (st.st_dev, st.st_ino):
                 raise _unsafe(db.name, "the file changed while it was opened")
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            conn.execute(f"PRAGMA busy_timeout={int(TABLE_DB_BUSY_TIMEOUT_S * 1000)}")
-            conn.execute("PRAGMA synchronous=NORMAL")
+            with _busy_as_refusal():
+                conn.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
+                if wal:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA foreign_keys=ON")
+                conn.execute("PRAGMA synchronous=NORMAL")
+            _check_side_files(db)
         except BaseException:
             conn.close()
             raise
@@ -356,18 +418,24 @@ def connect(table_dir: Path) -> Iterator[sqlite3.Connection]:
 @contextmanager
 def _write_txn(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     """``BEGIN IMMEDIATE`` ... ``COMMIT``; ``ROLLBACK`` on any exception. A
-    residual ``IntegrityError`` (the Python checks should have caught it) is
-    re-raised as ``constraint_failed``."""
-    conn.execute("BEGIN IMMEDIATE")
+    lock held past the busy timeout at ``BEGIN`` or ``COMMIT`` is ``busy``.
+    A residual ``IntegrityError`` (the Python checks should have caught it)
+    is logged and re-raised as ``constraint_failed`` with a fixed message,
+    since SQLite's text names internal column keys."""
+    with _busy_as_refusal():
+        conn.execute("BEGIN IMMEDIATE")
     try:
         yield conn
-        conn.execute("COMMIT")
+        with _busy_as_refusal():
+            conn.execute("COMMIT")
     except BaseException as exc:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
         if isinstance(exc, sqlite3.IntegrityError):
+            logger.warning("Table write broke a table constraint: %s", exc)
             raise TableStorageError(
-                "constraint_failed", f"The write broke a table constraint: {exc}"
+                "constraint_failed",
+                "The write broke a table constraint; nothing was written.",
             ) from exc
         raise
 
@@ -375,13 +443,23 @@ def _write_txn(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 # --- Small helpers -----------------------------------------------------------
 
 
+def _check_aware(now: datetime) -> None:
+    """A naive ``now`` would be read as local time; it is a caller bug."""
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be timezone-aware.")
+
+
 def _resolve_now(now: datetime | None) -> datetime:
-    return datetime.now(timezone.utc) if now is None else now.astimezone(timezone.utc)
+    if now is None:
+        return datetime.now(timezone.utc)
+    _check_aware(now)
+    return now.astimezone(timezone.utc)
 
 
 def _utc_iso(now: datetime) -> str:
     """Fixed-width UTC ISO 8601 with microseconds and ``+00:00`` (sorts
-    lexicographically in time order)."""
+    lexicographically in time order). A naive ``now`` is a ValueError."""
+    _check_aware(now)
     return now.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
@@ -593,7 +671,7 @@ def read_meta(table_dir: Path) -> TableMeta:
             schema=load_schema(json.loads(values["schema"])),
             schema_version=int(values["schema_version"]),
         )
-    except (KeyError, ValueError) as exc:
+    except (KeyError, ValueError, TypeError, AttributeError, TableSchemaError) as exc:
         raise TableStorageError(
             "corrupt_storage", "The table file's metadata is missing or invalid."
         ) from exc
@@ -616,17 +694,19 @@ def append_change(
     row_ids: Sequence[int],
     before: Any,
     after: Any,
+    too_large_hint: str | None = None,
 ) -> int:
     """Insert one ``changes`` entry and prune old ones; returns its id.
     Runs in the caller's transaction. ``before`` / ``after`` are JSON-ready
-    images; ``size_bytes`` is their encoded size, and above
+    images; ``size_bytes`` is their UTF-8 encoded size, and above
     ``TABLE_CHANGE_MAX_BYTES`` the change is refused with
-    :class:`ChangeTooLargeError` before anything is inserted."""
+    :class:`ChangeTooLargeError` (its message ending in ``too_large_hint``
+    when given) before anything is inserted."""
     before_json = _json(before)
     after_json = _json(after)
     size_bytes = len(before_json.encode("utf-8")) + len(after_json.encode("utf-8"))
     if size_bytes > TABLE_CHANGE_MAX_BYTES:
-        raise ChangeTooLargeError(size_bytes)
+        raise ChangeTooLargeError(size_bytes, hint=too_large_hint)
     cursor = conn.execute(
         "INSERT INTO changes (created_at, source, actor_user_id, kind, op, summary, "
         "schema_before, schema_after, row_ids, before, after, reverted_by, size_bytes) "
@@ -869,6 +949,27 @@ def _insert_row(
         (stamp, stamp, *(to_storage(c, values.get(c.key)) for c in schema)),
     )
     return cursor.lastrowid
+
+
+def _insert_image_row(
+    conn: sqlite3.Connection, schema: Sequence[Column], image: Mapping[str, Any]
+) -> None:
+    """Insert one row image (see the module docstring) verbatim: its
+    ``_id``, both timestamps and every ``schema`` cell in stored form (a
+    key the image lacks is NULL, keys outside ``schema`` are ignored).
+    Undo of a delete uses it to restore a row under its original ``_id``."""
+    cells = _cell_list(schema)
+    marks = ", ".join("?" for _ in schema)
+    conn.execute(
+        f"INSERT INTO rows (_id, _created_at, _updated_at, {cells}) "
+        f"VALUES (?, ?, ?, {marks})",
+        (
+            image["_id"],
+            image["_created_at"],
+            image["_updated_at"],
+            *(image.get(c.key) for c in schema),
+        ),
+    )
 
 
 def _row_images(
@@ -1411,6 +1512,22 @@ def _logical_rows(schema: Sequence[Column], cursor: sqlite3.Cursor) -> list[dict
     return out
 
 
+def _select_rows(
+    conn: sqlite3.Connection, sql: str, params: Sequence[Any] = ()
+) -> sqlite3.Cursor:
+    """Run a read naming ``schema``'s columns; a column the live table lacks
+    means quest.db and table.db disagree (:class:`SchemaMismatchError`)."""
+    try:
+        return conn.execute(sql, params)
+    except sqlite3.OperationalError as exc:
+        if "no such column" in str(exc):
+            raise SchemaMismatchError(
+                "The table's schema changed since it was read; reload the table "
+                "and retry."
+            ) from exc
+        raise
+
+
 def row_count(table_dir: Path) -> int:
     """Number of rows in the table."""
     with connect(table_dir) as conn:
@@ -1419,9 +1536,11 @@ def row_count(table_dir: Path) -> int:
 
 def dump_rows(table_dir: Path, schema: Sequence[Column]) -> list[dict]:
     """Every row ordered by ``_id`` as ``{"_id", "_created_at",
-    "_updated_at", <key>: logical value}`` with every schema column."""
+    "_updated_at", <key>: logical value}`` with every schema column. A
+    schema column the table lacks is :class:`SchemaMismatchError`."""
     with connect(table_dir) as conn:
-        cursor = conn.execute(
+        cursor = _select_rows(
+            conn,
             f"SELECT _id, _created_at, _updated_at, {_cell_list(schema)} "
             "FROM rows ORDER BY _id"
         )
@@ -1432,10 +1551,12 @@ def get_rows_by_ids(
     table_dir: Path, schema: Sequence[Column], ids: Iterable[int]
 ) -> list[dict]:
     """The rows with these ``_id``s in :func:`dump_rows` form, ``_id``
-    order, missing ids omitted."""
+    order, missing ids omitted. A schema column the table lacks is
+    :class:`SchemaMismatchError`."""
     wanted = _check_ids(ids)
     with connect(table_dir) as conn:
-        cursor = conn.execute(
+        cursor = _select_rows(
+            conn,
             f"SELECT _id, _created_at, _updated_at, {_cell_list(schema)} FROM rows "
             "WHERE _id IN (SELECT value FROM json_each(?)) ORDER BY _id",
             (_json(sorted(set(wanted))),),
@@ -1479,7 +1600,15 @@ def list_changes(
     table_dir: Path, *, limit: int = 50, before_id: int | None = None
 ) -> list[dict]:
     """Changes newest first, summary fields only (no images or row ids);
-    ``before_id`` pages to older entries."""
+    ``before_id`` (an int or None) pages to older entries. ``limit`` is
+    clamped to 1.._LIST_CHANGES_MAX."""
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        raise ValueError(f"limit must be an integer, got {limit!r}")
+    if before_id is not None and (
+        not isinstance(before_id, int) or isinstance(before_id, bool)
+    ):
+        raise ValueError(f"before_id must be an integer or None, got {before_id!r}")
+    limit = max(1, min(limit, _LIST_CHANGES_MAX))
     sql = f"SELECT {', '.join(_CHANGE_SUMMARY_FIELDS)} FROM changes"
     params: list[Any] = []
     if before_id is not None:
@@ -1525,8 +1654,9 @@ def copy_for_download(
     ``include_history``) and return ``dest``.
 
     ``dest`` must not exist (``copy_exists``, a symlink included) and its
-    parent must be a real directory. The copy is left in rollback-journal
-    mode (no ``-wal`` file); a partial copy is removed on failure."""
+    parent must be a real directory. The copy is opened without WAL and
+    left in rollback-journal mode (no ``-wal`` / ``-shm`` file); a partial
+    copy is removed on failure."""
     dest = Path(dest)
     if os.path.lexists(dest):
         raise TableStorageError("copy_exists", f"{dest.name} already exists.")
@@ -1536,7 +1666,7 @@ def copy_for_download(
         with connect(table_dir) as conn, _attach_allowed(conn, str(dest)):
             created = True
             conn.execute("VACUUM INTO ?", (str(dest),))
-        copy = _open_db_file(dest)
+        copy = _open_db_file(dest, wal=False)
         try:
             if not include_history:
                 copy.execute("DROP TABLE changes")

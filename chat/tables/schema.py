@@ -266,11 +266,19 @@ def new_column_key(existing_keys: Collection[str]) -> str:
             return key
 
 
+# Names of the server-maintained row columns; a column may not take one
+# (compared case-insensitively), since rows and query output use them.
+RESERVED_COLUMN_NAMES = ("_id", "_created_at", "_updated_at")
+
+
 def validate_column_name(name: object) -> str:
     """Check a column name's shape (string, 1..80 chars, no leading or
     trailing whitespace, no control characters, format characters (category
     Cf, e.g. zero-width and bidi controls), line or paragraph separators or
-    unpaired surrogates) and return it unchanged. Uniqueness is the caller's job (:func:`name_taken`)."""
+    unpaired surrogates) and return it unchanged. Uniqueness is the caller's job (:func:`name_taken`).
+
+    Codes: ``invalid_name`` for the shape, ``reserved_name`` for one of
+    :data:`RESERVED_COLUMN_NAMES` in any letter case."""
     if not isinstance(name, str):
         raise ColumnSpecError(
             "invalid_name", "Column name must be a string.", field="name"
@@ -299,6 +307,14 @@ def validate_column_name(name: object) -> str:
         raise ColumnSpecError(
             "invalid_name",
             f"Column name {clip_repr(name)} {problem}.",
+            column=name,
+            field="name",
+        )
+    if name.casefold() in RESERVED_COLUMN_NAMES:
+        raise ColumnSpecError(
+            "reserved_name",
+            f"Column name {clip_repr(name)} is reserved for a server-maintained "
+            "column (_id, _created_at, _updated_at).",
             column=name,
             field="name",
         )

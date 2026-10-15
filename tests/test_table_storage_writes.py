@@ -572,18 +572,9 @@ class TestDelete:
         before_dump = dump_rows(table_dir, schema)
         result = delete(table_dir, schema, row_ids=[1, 2])
         change = get_change(table_dir, result.change_id)
-        conn = sqlite3.connect(table_dir / storage_mod.TABLE_DB_NAME)
-        try:
+        with storage_mod.connect(table_dir) as conn, storage_mod._write_txn(conn):
             for image in change["before"]:
-                cols = list(image)
-                conn.execute(
-                    f"INSERT INTO rows ({', '.join(cols)}) VALUES "
-                    f"({', '.join('?' for _ in cols)})",
-                    tuple(image[c] for c in cols),
-                )
-            conn.commit()
-        finally:
-            conn.close()
+                storage_mod._insert_image_row(conn, schema, image)
         assert dump_rows(table_dir, schema) == before_dump
 
     def test_change_too_large_rolls_back(self, table_dir, schema, monkeypatch):
@@ -621,3 +612,32 @@ def test_upsert_replay_restores_dump(table_dir, schema):
     assert dump_rows(table_dir, schema) == before_dump
     assert row_count(table_dir) == 3 and change_count(table_dir) == 3
     assert K_SITE in change["after"][0]
+
+
+def test_failure_after_append_rolls_back_pruning(table_dir, schema, monkeypatch):
+    """With a one-entry log, append_change prunes every older change; a
+    failure later in the same transaction must bring them all back."""
+    monkeypatch.setattr(storage_mod, "TABLE_CHANGE_MAX_COUNT", 1)
+    before_dump = dump_rows(table_dir, schema)
+
+    def boom(conn):
+        raise RuntimeError("after append")
+
+    monkeypatch.setattr(storage_mod, "_count", boom)
+    with pytest.raises(RuntimeError):
+        update(table_dir, schema, [{"_id": 1, "Price": 9}])
+    monkeypatch.undo()
+    assert change_count(table_dir) == 2
+    assert dump_rows(table_dir, schema) == before_dump
+
+
+def test_insert_image_row_keeps_id_and_timestamps(table_dir, schema):
+    image = {"_id": 77, "_created_at": "2020-01-01T00:00:00.000000+00:00",
+             "_updated_at": "2021-01-01T00:00:00.000000+00:00", K_NAME: "z",
+             "c_0000ffff": "ignored"}
+    with storage_mod.connect(table_dir) as conn, storage_mod._write_txn(conn):
+        storage_mod._insert_image_row(conn, schema, image)
+    row = storage_mod.get_rows_by_ids(table_dir, schema, [77])[0]
+    assert (row["_id"], row["_created_at"], row["_updated_at"], row[K_NAME]) == (
+        77, image["_created_at"], image["_updated_at"], "z")
+    assert row[K_SKU] is None

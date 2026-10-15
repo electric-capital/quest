@@ -683,6 +683,9 @@ SPEC_REJECT = [
     ("name-whitespace-only", {"name": "  ", "type": "text"}, "invalid_name"),
     ("name-int", {"name": 5, "type": "text"}, "invalid_name"),
     ("name-null", {"name": None, "type": "text"}, "invalid_name"),
+    ("name-reserved-id", {"name": "_id", "type": "text"}, "reserved_name"),
+    ("name-reserved-created", {"name": "_created_at", "type": "text"}, "reserved_name"),
+    ("name-reserved-updated-case", {"name": "_Updated_AT", "type": "text"}, "reserved_name"),
     ("name-duplicate-case", {"name": "EXISTING", "type": "text"}, "duplicate_name"),
     ("type-unknown", {"name": "N", "type": "date"}, "invalid_type"),
     ("type-case", {"name": "N", "type": "Text"}, "invalid_type"),
@@ -772,6 +775,22 @@ def test_parse_column_spec_reject(spec, code):
     assert str(info.value) == info.value.message
     if isinstance(spec, dict) and isinstance(spec.get("name"), str):
         assert info.value.column == spec["name"]
+
+
+@pytest.mark.parametrize("name", ["_id", "_ID", "_created_at", "_UPDATED_at"])
+def test_rename_column_to_reserved_name_is_refused(name):
+    from chat.tables.schema_ops import SchemaOperationError, apply_schema_operations
+
+    columns = [Column(key="c_aaaaaaaa", name="Link", type="text")]
+    ops = [{"op": "rename_column", "name": "Link", "new_name": name}]
+    with pytest.raises(SchemaOperationError) as info:
+        apply_schema_operations(columns, ops, table_empty=True)
+    assert (info.value.code, info.value.column) == ("reserved_name", name)
+
+
+@pytest.mark.parametrize("name", ["_idx", "id", "created_at", "_id_", "x_id"])
+def test_names_near_reserved_ones_are_accepted(name):
+    assert validate_column_name(name) == name
 
 
 @pytest.mark.parametrize(
