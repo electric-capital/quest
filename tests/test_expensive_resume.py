@@ -11,17 +11,13 @@ Covers:
 3. ``check_expensive_resume()`` end-to-end against an isolated SQLite DB:
    verdict shape, threshold boundaries, and the defensive None paths.
 
-The store tests use the repo's isolated-SQLite convention (asyncio.run,
-reload engine/models/store against a temp DATABASE_PATH).
+The store tests run against the shared ``isolated_db`` fixture (a fresh
+SQLite file per test, see tests/db_support.py) with asyncio.run.
 """
 
 import asyncio
-import os
-import shutil
-import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
-from importlib import reload
 
 import pytest
 
@@ -110,26 +106,10 @@ def test_candidate_rules_tolerates_bad_timestamps():
 # ---------------------------------------------------------------------------
 
 @pytest.fixture()
-def _isolated_db(monkeypatch):
-    """Point engine + models at a fresh sqlite file with the current schema."""
-    tmpdir = tempfile.mkdtemp(prefix="quest_expensive_resume_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
+def _isolated_db(isolated_db):
     import db.llm_call_store as store_mod
-    reload(store_mod)
 
-    models_mod.Base.metadata.create_all(engine_mod.engine)
-
-    yield store_mod, models_mod
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
+    return store_mod, isolated_db.models
 
 
 def _record_anthropic(store, models_mod, conversation_id, call_type,

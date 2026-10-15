@@ -8,10 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import shutil
 import sqlite3
-import tempfile
 import uuid
 
 import pytest
@@ -25,35 +22,18 @@ def _run(coro):
 
 
 @pytest.fixture()
-def isolated_db(monkeypatch):
-    """Fresh sqlite file + reloaded engine/models/stores (same recipe as
-    tests/test_user_service_credentials.py)."""
-    tmpdir = tempfile.mkdtemp(prefix="quest_enc_cols_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    from importlib import reload
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
+def isolated_db(isolated_db):
+    """The shared fresh-sqlite fixture plus the stores this file drives and
+    the raw file path for ciphertext inspection."""
     import db.user_service_credential_store as usc_mod
-    reload(usc_mod)
     import db.user_store as user_store_mod
-    reload(user_store_mod)
 
-    models_mod.Base.metadata.create_all(engine_mod.engine)
-
-    yield {
-        "db_path": db_path,
-        "models": models_mod,
+    return {
+        "db_path": str(isolated_db.path),
+        "models": isolated_db.models,
         "user_store": user_store_mod,
         "usc_store": usc_mod,
     }
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _raw(db_path: str, sql: str, *params):

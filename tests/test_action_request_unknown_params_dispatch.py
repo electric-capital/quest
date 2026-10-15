@@ -13,11 +13,7 @@ those side effects are absent.
 
 import asyncio
 import json
-import os
-import shutil
-import tempfile
 import uuid
-from importlib import reload
 
 import pytest
 
@@ -27,27 +23,11 @@ def _run(coro):
 
 
 @pytest.fixture()
-def _isolated_db(monkeypatch):
-    tmpdir = tempfile.mkdtemp(prefix="quest_action_req_unknown_dispatch_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
-    import db.tool_wait_handle_store as store_mod
-    reload(store_mod)
+def _isolated_db(isolated_db):
     import db.action_request_store as ar_store_mod
-    reload(ar_store_mod)
+    import db.tool_wait_handle_store as store_mod
 
-    models_mod.Base.metadata.create_all(engine_mod.engine)
-
-    yield store_mod, ar_store_mod, models_mod
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
+    return store_mod, ar_store_mod, isolated_db.models
 
 
 @pytest.fixture()

@@ -9,12 +9,8 @@ side effects without driving a model run or touching the real data dir.
 
 import ast
 import asyncio
-import os
-import shutil
-import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
-from importlib import reload
 from pathlib import Path
 
 import pytest
@@ -29,21 +25,8 @@ def _now():
 
 
 @pytest.fixture()
-def env(monkeypatch):
-    tmpdir = tempfile.mkdtemp(prefix="quest_wait_timer_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
+def env(isolated_db, monkeypatch):
     import db.tool_wait_handle_store as store_mod
-    reload(store_mod)
-
-    models_mod.Base.metadata.create_all(engine_mod.engine)
 
     from chat.realtime import bus as rt_bus
     from chat.wait_handles import resume as wait_resume
@@ -68,14 +51,13 @@ def env(monkeypatch):
 
     yield {
         "store": store_mod,
-        "models": models_mod,
+        "models": isolated_db.models,
         "wait_timer": wait_timer,
         "kicks": kicks,
         "events": events,
     }
 
     wait_timer._active_timers.clear()
-    shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _make_user(env) -> int:

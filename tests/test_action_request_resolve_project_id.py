@@ -11,12 +11,8 @@ These tests call the route function directly with an isolated DB.
 """
 
 import asyncio
-import os
-import shutil
-import tempfile
 import uuid
 from datetime import datetime, timezone
-from importlib import reload
 
 import pytest
 from fastapi import HTTPException
@@ -27,31 +23,11 @@ def _run(coro):
 
 
 @pytest.fixture()
-def _isolated_db(monkeypatch):
-    tmpdir = tempfile.mkdtemp(prefix="quest_ar_resolve_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
-    import db.user_store as user_store_mod
-    reload(user_store_mod)
-    import db.project_store as project_store_mod
-    reload(project_store_mod)
-    import db.conversation_store as conversation_store_mod
-    reload(conversation_store_mod)
-    import db.skill_store as skill_store_mod
-    reload(skill_store_mod)
+def _isolated_db(isolated_db, monkeypatch):
     import db.action_request_store as action_request_store_mod
-    reload(action_request_store_mod)
-    import db.tool_wait_handle_store as tool_wait_handle_store_mod
-    reload(tool_wait_handle_store_mod)
-
-    models_mod.Base.metadata.create_all(engine_mod.engine)
+    import db.conversation_store as conversation_store_mod
+    import db.project_store as project_store_mod
+    import db.skill_store as skill_store_mod
 
     # The route's best-effort on-disk chat-history mirror is irrelevant
     # here and would touch the real data dir; make it a no-op.
@@ -61,15 +37,13 @@ def _isolated_db(monkeypatch):
         staticmethod(lambda **kwargs: None),
     )
 
-    yield {
-        "models": models_mod,
+    return {
+        "models": isolated_db.models,
         "project_store": project_store_mod,
         "conversation_store": conversation_store_mod,
         "skill_store": skill_store_mod,
         "action_request_store": action_request_store_mod,
     }
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 class _FakeRequest:

@@ -9,11 +9,7 @@ the skill goes private.
 """
 
 import asyncio
-import os
-import shutil
-import tempfile
 import uuid
-from importlib import reload
 
 import pytest
 from fastapi import FastAPI
@@ -25,27 +21,12 @@ def _run(coro):
 
 
 @pytest.fixture()
-def env(monkeypatch):
-    tmpdir = tempfile.mkdtemp(prefix="quest_project_autoload_access_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
-    import db.skill_store as skill_store_mod
-    reload(skill_store_mod)
-    import db.project_store as project_store_mod
-    reload(project_store_mod)
+def env(isolated_db):
     import chat.project_skill_routes as routes_mod
-    reload(routes_mod)
+    import db.project_store as project_store_mod
+    import db.skill_store as skill_store_mod
 
-    models_mod.Base.metadata.create_all(engine_mod.engine)
-    yield skill_store_mod, project_store_mod, models_mod, routes_mod
-    shutil.rmtree(tmpdir, ignore_errors=True)
+    return skill_store_mod, project_store_mod, isolated_db.models, routes_mod
 
 
 def _make_user(models_mod, label):

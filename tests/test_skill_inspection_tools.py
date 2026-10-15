@@ -192,7 +192,9 @@ def test_list_my_skills_exclude_public():
     assert cats == {"own", "shared"}
 
 
-def test_list_my_skills_inline_autoload_tiers():
+def test_list_my_skills_inline_autoload_tiers(isolated_db):
+    # isolated_db: list_project_skills(project_id) is not patched and reads
+    # the (empty) store; without it the call reaches the real engine.
     # own -> user tier + a routine; public -> project tier.
     routines = [({"id": "r1", "name": "Daily digest"}, ["skill-own"])]
     patches = _patch_autoload(

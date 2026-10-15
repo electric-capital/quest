@@ -8,9 +8,6 @@ connection). Uses an isolated SQLite file per test, driven via
 """
 
 import asyncio
-import os
-import shutil
-import tempfile
 import uuid
 
 import pytest
@@ -34,29 +31,11 @@ def _api_key_plugin(pid: str = "acme") -> QuestPlugin:
 
 
 @pytest.fixture()
-def _isolated_db(monkeypatch):
-    """Point engine + paths at a fresh sqlite file, then create the schema."""
-    tmpdir = tempfile.mkdtemp(prefix="quest_user_svc_cred_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    from importlib import reload
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
+def _isolated_db(isolated_db):
     import db.user_service_credential_store as store_mod
-    reload(store_mod)
     import db.user_store as user_store_mod
-    reload(user_store_mod)
 
-    models_mod.Base.metadata.create_all(engine_mod.engine)
-
-    yield store_mod, user_store_mod
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
+    return store_mod, user_store_mod
 
 
 @pytest.fixture()

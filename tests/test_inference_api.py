@@ -8,11 +8,7 @@ test_action_request_wait_handle.py).
 """
 
 import asyncio
-import os
-import shutil
-import tempfile
 import uuid
-from importlib import reload
 
 import pytest
 from fastapi import HTTPException
@@ -25,27 +21,10 @@ def _run(coro):
 
 
 @pytest.fixture()
-def _isolated_db(monkeypatch):
-    tmpdir = tempfile.mkdtemp(prefix="quest_inference_api_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
+def _isolated_db(isolated_db):
     import db.inference_api_key_store as store_mod
-    reload(store_mod)
-    import db.user_store as user_store_mod
-    reload(user_store_mod)
 
-    models_mod.Base.metadata.create_all(engine_mod.engine)
-
-    yield store_mod, models_mod
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
+    return store_mod, isolated_db.models
 
 
 @pytest.fixture()
@@ -472,9 +451,10 @@ class TestInferenceDispatchRejectsMutations:
             assert "not available in inference API runs" in json.loads(result)["error"], path
             assert notices == []
 
-    def test_normal_conversations_are_unaffected(self):
+    def test_normal_conversations_are_unaffected(self, isolated_db):
         """Without the flag the same call reaches the handler (and fails on
-        the missing Gmail credentials rather than on the gate)."""
+        the missing Gmail credentials rather than on the gate). The handler
+        looks the user up in the store, hence the isolated database."""
         import json
         from chat.gemini_api.tool_dispatch import _dispatch_tool_call_inner
         result, _ = _run(_dispatch_tool_call_inner(

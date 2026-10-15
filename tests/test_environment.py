@@ -1,8 +1,6 @@
 """Tests for config.environment (run-mode resolution and capability flags)."""
 
 import asyncio
-import os
-import shutil
 import tempfile
 import uuid
 from importlib import reload
@@ -197,26 +195,9 @@ class TestLocalAdminDefault:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture()
-def _isolated_db(monkeypatch):
-    """Point engine + paths at a fresh sqlite file, then create the schema."""
-    tmpdir = tempfile.mkdtemp(prefix="quest_env_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
-    import db.user_store as user_store_mod
-    reload(user_store_mod)
-
-    models_mod.Base.metadata.create_all(engine_mod.engine)
-
-    yield models_mod
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
+def _isolated_db(isolated_db):
+    """The ORM models, bound to the shared fresh sqlite file."""
+    return isolated_db.models
 
 
 class TestDevAccountsEndpoint:

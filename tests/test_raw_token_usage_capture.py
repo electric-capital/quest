@@ -16,17 +16,13 @@ the 00106 single-table capture):
 4. ``get_usage_by_model_for_conversations()`` returns provider-discriminated
    per-model entries with native ``metrics`` sums plus a coarse total.
 
-Provider tests are pure mocks (no SDK/network). The store tests use an
-isolated SQLite file, matching the repo's existing async-test convention
-(asyncio.run, reload engine/models against a temp DATABASE_PATH).
+Provider tests are pure mocks (no SDK/network). The store tests run
+against the shared ``isolated_db`` fixture (a fresh SQLite file per test,
+see tests/db_support.py) with asyncio.run.
 """
 
 import asyncio
-import os
-import shutil
-import tempfile
 import uuid
-from importlib import reload
 from types import SimpleNamespace
 
 import pytest
@@ -162,26 +158,10 @@ def test_anthropic_raw_usage_carries_cache_creation_ttl_split():
 # ---------------------------------------------------------------------------
 
 @pytest.fixture()
-def _isolated_db(monkeypatch):
-    """Point engine + models at a fresh sqlite file with the current schema."""
-    tmpdir = tempfile.mkdtemp(prefix="quest_raw_usage_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
+def _isolated_db(isolated_db):
     import db.llm_call_store as store_mod
-    reload(store_mod)
 
-    models_mod.Base.metadata.create_all(engine_mod.engine)
-
-    yield store_mod, models_mod
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
+    return store_mod, isolated_db.models
 
 
 def test_record_api_call_gemini_lands_in_gemini_table(_isolated_db):

@@ -8,11 +8,7 @@ here.
 
 import asyncio
 import json
-import os
-import shutil
-import tempfile
 import uuid
-from importlib import reload
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,25 +19,10 @@ def _run(coro):
 
 
 @pytest.fixture()
-def _isolated_db(monkeypatch):
-    tmpdir = tempfile.mkdtemp(prefix="quest_wait_dispatch_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
+def _isolated_db(isolated_db):
     import db.tool_wait_handle_store as store_mod
-    reload(store_mod)
 
-    models_mod.Base.metadata.create_all(engine_mod.engine)
-
-    yield store_mod, models_mod
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
+    return store_mod, isolated_db.models
 
 
 @pytest.fixture()

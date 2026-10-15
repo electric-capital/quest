@@ -12,12 +12,7 @@ against.
 """
 
 import asyncio
-import os
-import shutil
-import tempfile
 import uuid
-from importlib import reload
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -28,35 +23,20 @@ def _run(coro):
 
 
 @pytest.fixture()
-def _isolated_storage(monkeypatch):
-    tmpdir = tempfile.mkdtemp(prefix="quest_slack_publish_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-    chats_dir = os.path.join(tmpdir, "chats")
-    os.makedirs(chats_dir, exist_ok=True)
+def _isolated_storage(isolated_db, tmp_path, monkeypatch):
+    chats_dir = tmp_path / "chats"
+    chats_dir.mkdir()
 
     from config import paths
-
-    monkeypatch.setattr(paths, "DATABASE_PATH", Path(db_path), raising=True)
-    monkeypatch.setattr(paths, "CHATS_DIR", Path(chats_dir), raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
-    import db.conversation_store as conv_store_mod
-    reload(conv_store_mod)
     import chat.storage as storage_mod
-    reload(storage_mod)
-    import chat._flush_helper as flush_mod
-    reload(flush_mod)
+
+    # chat.storage binds CHATS_DIR at import time, so patch its copy too.
+    monkeypatch.setattr(paths, "CHATS_DIR", chats_dir, raising=True)
+    monkeypatch.setattr(storage_mod, "CHATS_DIR", chats_dir, raising=True)
+
     import chat.slack_conversation_store as slack_store_mod
-    reload(slack_store_mod)
 
-    models_mod.Base.metadata.create_all(engine_mod.engine)
-
-    yield storage_mod, slack_store_mod, models_mod
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
+    return storage_mod, slack_store_mod, isolated_db.models
 
 
 @pytest.fixture()

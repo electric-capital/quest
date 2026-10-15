@@ -20,12 +20,8 @@ It discards the request AND halts the conversation loop:
 
 import asyncio
 import json
-import os
-import shutil
-import tempfile
 import uuid
 from datetime import datetime, timezone
-from importlib import reload
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -45,25 +41,10 @@ def _run(coro):
 
 
 @pytest.fixture()
-def _isolated_db(monkeypatch):
-    tmpdir = tempfile.mkdtemp(prefix="quest_ar_stop_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
-    import db.conversation_store as conversation_store_mod
-    reload(conversation_store_mod)
+def _isolated_db(isolated_db, monkeypatch):
     import db.action_request_store as action_request_store_mod
-    reload(action_request_store_mod)
+    import db.conversation_store as conversation_store_mod
     import db.tool_wait_handle_store as tool_wait_handle_store_mod
-    reload(tool_wait_handle_store_mod)
-
-    models_mod.Base.metadata.create_all(engine_mod.engine)
 
     from chat.storage import ChatStorage
     monkeypatch.setattr(
@@ -84,16 +65,14 @@ def _isolated_db(monkeypatch):
         lambda user_id, event: events.append(event),
     )
 
-    yield {
-        "models": models_mod,
+    return {
+        "models": isolated_db.models,
         "conversation_store": conversation_store_mod,
         "action_request_store": action_request_store_mod,
         "tool_wait_handle_store": tool_wait_handle_store_mod,
         "kicks": kicks,
         "events": events,
     }
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 class _FakeRequest:
@@ -412,7 +391,9 @@ _USER = {"id": 1, "email": "t@example.com", "api_key": "k", "name": "T"}
 
 
 @pytest.fixture()
-def _patched_conversation(monkeypatch):
+def _patched_conversation(isolated_db, monkeypatch):
+    # isolated_db: run_conversation_turn reads memories through the real
+    # store; without it the call reaches the real engine (no data dir here).
     from chat.gemini_api import conversation as conv_mod
 
     monkeypatch.setattr(

@@ -7,11 +7,7 @@ kick and the realtime bus are replaced with recorders.
 """
 
 import asyncio
-import os
-import shutil
-import tempfile
 import uuid
-from importlib import reload
 
 import pytest
 from fastapi import FastAPI
@@ -23,22 +19,9 @@ def _run(coro):
 
 
 @pytest.fixture()
-def env(monkeypatch):
-    tmpdir = tempfile.mkdtemp(prefix="quest_wait_routes_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
+def env(isolated_db, monkeypatch):
     import db.tool_wait_handle_store as store_mod
-    reload(store_mod)
     import chat.wait_handle_routes as routes_mod
-
-    models_mod.Base.metadata.create_all(engine_mod.engine)
 
     kicks: list[tuple] = []
     events: list[tuple] = []
@@ -51,15 +34,13 @@ def env(monkeypatch):
         lambda user_id, event: events.append((user_id, event)),
     )
 
-    yield {
+    return {
         "store": store_mod,
-        "models": models_mod,
+        "models": isolated_db.models,
         "routes": routes_mod,
         "kicks": kicks,
         "events": events,
     }
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _make_user(env, label="u") -> dict:

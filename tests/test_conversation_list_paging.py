@@ -10,18 +10,13 @@ additions behind the paged sidebar list (GET /conversations):
    full list in ``(last_message_at DESC, id DESC)`` order without overlap
    or gaps, and stays stable when newer rows are prepended mid-walk.
 
-Store tests use an isolated SQLite file, matching the repo's existing
-async-test convention (asyncio.run, reload engine/models against a temp
-DATABASE_PATH) established in test_raw_token_usage_capture.py.
+Store tests run against the shared ``isolated_db`` fixture (a fresh SQLite
+file per test, see tests/db_support.py) with asyncio.run.
 """
 
 import asyncio
-import os
-import shutil
-import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
-from importlib import reload
 
 import pytest
 
@@ -31,26 +26,10 @@ def _run(coro):
 
 
 @pytest.fixture()
-def _isolated_db(monkeypatch):
-    """Point engine + models at a fresh sqlite file with the current schema."""
-    tmpdir = tempfile.mkdtemp(prefix="quest_conv_paging_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
+def _isolated_db(isolated_db):
     import db.conversation_store as store_mod
-    reload(store_mod)
 
-    models_mod.Base.metadata.create_all(engine_mod.engine)
-
-    yield store_mod, models_mod
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
+    return store_mod, isolated_db.models
 
 
 BASE_TS = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)

@@ -13,11 +13,7 @@ clear, and skill auto-load toggles) against an isolated DB. Also the
 
 import asyncio
 import json
-import os
-import shutil
-import tempfile
 import uuid
-from importlib import reload
 
 import pytest
 
@@ -29,37 +25,19 @@ def _run(coro):
 
 
 @pytest.fixture()
-def _isolated_db(monkeypatch):
-    tmpdir = tempfile.mkdtemp(prefix="quest_edit_routine_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
-    import db.routine_store as routine_store_mod
-    reload(routine_store_mod)
-    import db.schedule_store as schedule_store_mod
-    reload(schedule_store_mod)
-    import db.skill_store as skill_store_mod
-    reload(skill_store_mod)
+def _isolated_db(isolated_db):
     import db.project_store as project_store_mod
-    reload(project_store_mod)
+    import db.routine_store as routine_store_mod
+    import db.schedule_store as schedule_store_mod
+    import db.skill_store as skill_store_mod
 
-    models_mod.Base.metadata.create_all(engine_mod.engine)
-
-    yield {
+    return {
         "routine_store": routine_store_mod,
         "schedule_store": schedule_store_mod,
         "skill_store": skill_store_mod,
         "project_store": project_store_mod,
-        "models": models_mod,
+        "models": isolated_db.models,
     }
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _make_user(models_mod, name="Routine Tester"):

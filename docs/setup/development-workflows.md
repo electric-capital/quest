@@ -41,13 +41,27 @@ Run all tests:
 uv run pytest
 ```
 
-The test suite requires `uv sync` to install dev dependencies. Tests use mock objects (no database or LLM API calls required).
+The test suite requires `uv sync` to install dev dependencies. Tests never call an LLM API; tests that need a database get a throwaway SQLite file from the shared fixture below.
 
 Pytest's `testpaths` (pyproject.toml) covers both `tests/` and `plugins/`, so a bare `uv run pytest` runs the core suite plus every in-tree plugin's tests. Passing explicit paths runs exactly those (`uv run pytest tests/` no longer covers plugin tests).
 
 ### Running in parallel
 
 `uv run pytest -n auto` runs the suite across one worker process per CPU core with [pytest-xdist](https://pytest-xdist.readthedocs.io/) (dev dependency group); CI uses it. A bare `uv run pytest` stays serial (`-n` is not in `addopts`), so `--durations`, `-x` and debugger sessions behave as usual. xdist requires every worker to collect the same test ids, so a `parametrize` whose values are computed at import time (bytes carrying a timestamp, `uuid4()`, random data) needs explicit `ids=[...]`; `tests/test_image_sanitizer.py` shows the pattern.
+
+### Database-backed tests
+
+Store and route tests that need real rows use the `isolated_db` fixture (defined in `tests/db_support.py`, exposed through `tests/conftest.py`). It gives each test a fresh SQLite file under `tmp_path` with the current schema (created from the already-imported `db.models.Base`, no module reloads), installs the same per-connection PRAGMAs as `db/engine.py` (`foreign_keys=ON`, WAL, `busy_timeout`, `synchronous=NORMAL`), and monkeypatches `db.engine` and every store module in `SESSION_LOCAL_MODULES` so their `AsyncSessionLocal` (plus `engine` / `SessionLocal` on `db.engine`) points at the temp database. `config.paths.DATABASE_PATH` is patched too. A test file builds its own fixture on top to pick the stores it returns:
+
+```python
+@pytest.fixture()
+def _isolated_db(isolated_db):
+    import db.action_request_store as store_mod
+
+    return store_mod, isolated_db.models
+```
+
+The yielded object carries `path`, `engine` (sync, for raw SQL inspection), `AsyncSessionLocal`, `models` and a `patch(*modules)` helper for a module outside the default list that binds its own `AsyncSessionLocal`. Inside a test, `from db.engine import AsyncSessionLocal` resolves to the test factory. `SESSION_LOCAL_MODULES` is the explicit list of modules that import `AsyncSessionLocal` from `db.engine`; a new store module is added there. Plugin suites import the fixture from `tests.db_support` into their own conftest. Tests that patch `chat.storage` directories (`CHATS_DIR`, ...) set them on `chat.storage` itself, which binds them at import time.
 
 ### Plugin tests
 

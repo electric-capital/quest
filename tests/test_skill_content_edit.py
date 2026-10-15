@@ -10,11 +10,7 @@ content-edit arm (read-before-edit gate, same-turn match rejection, and
 """
 
 import asyncio
-import os
-import shutil
-import tempfile
 import uuid
-from importlib import reload
 
 import pytest
 
@@ -152,29 +148,10 @@ def test_skill_reads_sidecar(monkeypatch, tmp_path):
 
 
 @pytest.fixture()
-def _isolated_db(monkeypatch):
-    tmpdir = tempfile.mkdtemp(prefix="quest_skill_precard_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
+def _isolated_db(isolated_db):
     import db.skill_store as skill_store_mod
-    reload(skill_store_mod)
-    import db.project_store as project_store_mod
-    reload(project_store_mod)
-    import db.user_store as user_store_mod
-    reload(user_store_mod)
 
-    models_mod.Base.metadata.create_all(engine_mod.engine)
-
-    yield skill_store_mod, models_mod
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
+    return skill_store_mod, isolated_db.models
 
 
 def _make_user(models_mod):

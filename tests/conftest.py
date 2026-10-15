@@ -1,4 +1,8 @@
-"""Shared fixtures: registering the in-tree reference plugins.
+"""Shared fixtures: the isolated test database and the in-tree reference plugins.
+
+``isolated_db`` (tests/db_support.py) gives a test a fresh SQLite file
+with the current schema and points every store module's session factory
+at it; per-file fixtures build on it to pick the stores they return.
 
 Plugin-specific test suites live in each plugin's own ``tests/``
 directory (``plugins/<name>/tests``) with their own conftest. The
@@ -13,6 +17,7 @@ from pathlib import Path
 
 from config.plugins import PLUGINS_DIR
 
+from tests.db_support import isolated_db  # noqa: F401  (fixture, re-exported)
 from tests.plugin_support import plugin_fixture
 
 # The _example smoke plugin (never discovered in production -- the loader

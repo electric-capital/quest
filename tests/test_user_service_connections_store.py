@@ -9,9 +9,6 @@ test (schema from ``Base.metadata.create_all``), driven via ``asyncio.run``.
 """
 
 import asyncio
-import os
-import shutil
-import tempfile
 import uuid
 
 import pytest
@@ -24,37 +21,22 @@ def _run(coro):
 
 
 @pytest.fixture()
-def env(monkeypatch):
-    tmpdir = tempfile.mkdtemp(prefix="quest_user_svc_conn_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    from importlib import reload
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
+def env(isolated_db):
     import db.user_service_credential_store as store_mod
-    reload(store_mod)
     import db.user_store as user_store_mod
-    reload(user_store_mod)
 
-    models_mod.Base.metadata.create_all(engine_mod.engine)
     user = _run(user_store_mod.create_user(
         email=f"test-{uuid.uuid4().hex}@example.com",
         name="Test",
         api_key=f"k-{uuid.uuid4().hex}",
     ))
-    yield {
+    return {
         "store": store_mod,
         "user_store": user_store_mod,
-        "engine": engine_mod.engine,
+        "engine": isolated_db.engine,
         "user": user,
         "uid": user["id"],
     }
-    shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _accounts(store, uid, service="imap"):

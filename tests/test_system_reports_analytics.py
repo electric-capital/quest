@@ -13,19 +13,14 @@ Covers the read-side additions behind the System Reports page:
 3. ``ChatStorage.count_user_message_active_days()`` -- distinct UTC days
    with user messages, read from chat_history.json.
 
-Store tests use an isolated SQLite file, matching the repo's existing
-async-test convention (asyncio.run, reload engine/models against a temp
-DATABASE_PATH) established in test_raw_token_usage_capture.py.
+Store tests run against the shared ``isolated_db`` fixture (a fresh SQLite
+file per test, see tests/db_support.py) with asyncio.run.
 """
 
 import asyncio
 import json
-import os
-import shutil
-import tempfile
 import uuid
 from datetime import datetime, timezone
-from importlib import reload
 from pathlib import Path
 
 import pytest
@@ -37,26 +32,10 @@ def _run(coro):
 
 
 @pytest.fixture()
-def _isolated_db(monkeypatch):
-    """Point engine + models at a fresh sqlite file with the current schema."""
-    tmpdir = tempfile.mkdtemp(prefix="quest_system_reports_test_")
-    db_path = os.path.join(tmpdir, "quest.db")
-
-    from config import paths
-    monkeypatch.setattr(paths, "DATABASE_PATH", db_path, raising=True)
-
-    import db.engine as engine_mod
-    reload(engine_mod)
-    import db.models as models_mod
-    reload(models_mod)
+def _isolated_db(isolated_db):
     import db.llm_call_store as store_mod
-    reload(store_mod)
 
-    models_mod.Base.metadata.create_all(engine_mod.engine)
-
-    yield store_mod, models_mod
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
+    return store_mod, isolated_db.models
 
 
 def _record_anthropic(store, models_mod, conversation_id, output_tokens,
