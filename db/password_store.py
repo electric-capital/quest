@@ -1,8 +1,9 @@
 """Data access for email/password sign-in: password hashes and one-time links.
 
 The password hash never leaves this module except as the fingerprint on the
-user dict (``password_fp``, see ``User.to_dict``). One-time set-password
-links live in ``password_tokens``; only their SHA-256 is stored.
+user dict (``password_fp``, see ``User.to_dict``). Setting a password also
+advances the account's ``session_epoch``. One-time set-password links live
+in ``password_tokens``; only their SHA-256 is stored.
 """
 
 import hashlib
@@ -37,13 +38,19 @@ async def get_password_hash(email: str) -> Optional[str]:
 
 
 async def set_password_hash(email: str, password_hash: str) -> bool:
-    """Store a new hash and void every outstanding link for the account.
+    """Store a new hash, end every session of the account and void every
+    outstanding link for it.
 
-    Returns False when no account has this email.
+    Sessions end by bumping ``session_epoch`` (see get_user_from_cookie in
+    auth/session.py), which also covers sessions issued without a password
+    fingerprint. Returns False when no account has this email.
     """
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            update(User).where(User.email == email).values(password_hash=password_hash)
+            update(User).where(User.email == email).values(
+                password_hash=password_hash,
+                session_epoch=User.session_epoch + 1,
+            )
         )
         await db.execute(
             update(PasswordToken)

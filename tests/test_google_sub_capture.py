@@ -79,11 +79,9 @@ def _patch_userinfo(payload=USERINFO):
 
 
 def _patch_serializer():
-    serializer = MagicMock()
-    serializer.dumps = MagicMock(return_value="signed-cookie")
-    return patch.object(
-        google_login, "get_cookie_serializer", return_value=serializer,
-    )
+    """Sign the session cookie with a fixed key (never the data dir's)."""
+    import auth.session as session_mod
+    return patch.object(session_mod, "get_secret_key", return_value="test-secret")
 
 
 class TestLoginCallbackStoresSub:

@@ -83,12 +83,36 @@ class TestCapabilityFlags:
         assert names["staging"] == "quest_session_staging"
         assert len(set(names.values())) == 3
 
-    def test_cookie_secure_staging_only(self, monkeypatch):
-        monkeypatch.setenv("QUEST_ENV", "staging")
-        assert environment.cookie_secure()
-        for env in ("local", "prod"):
-            monkeypatch.setenv("QUEST_ENV", env)
-            assert not environment.cookie_secure()
+    @pytest.mark.parametrize("env,app_base_url,expected", [
+        # Staging is always Secure, whatever the public URL.
+        ("staging", "", True),
+        ("staging", "http://quest.example.com", True),
+        ("staging", "https://quest.example.com", True),
+        # Prod and local follow the configured public URL's scheme.
+        ("prod", "", False),
+        ("prod", "http://quest.example.com", False),
+        ("prod", "https://quest.example.com", True),
+        ("prod", " HTTPS://Quest.Example.com", True),
+        ("local", "", False),
+        ("local", "http://10.0.0.5:9000", False),
+        ("local", "https://dev.example.com", True),
+        # Not a scheme match: an https host behind an http URL.
+        ("prod", "http://https.example.com", False),
+    ])
+    def test_cookie_secure_matrix(self, monkeypatch, env, app_base_url, expected):
+        import config.server_config as server_config
+        monkeypatch.setenv("QUEST_ENV", env)
+        monkeypatch.setattr(server_config, "get_app_base_url", lambda: app_base_url)
+        assert environment.cookie_secure() is expected
+
+    def test_cookie_secure_reads_app_base_url_env_override(self, monkeypatch, tmp_path):
+        import config.server_config as server_config
+        monkeypatch.setenv("QUEST_ENV", "prod")
+        monkeypatch.setattr(server_config, "SERVER_CONFIG_FILE", tmp_path / "missing.json")
+        monkeypatch.delenv("QUEST_APP_BASE_URL", raising=False)
+        assert environment.cookie_secure() is False
+        monkeypatch.setenv("QUEST_APP_BASE_URL", "https://quest.example.com/")
+        assert environment.cookie_secure() is True
 
     def test_image_suffix_matches_mode(self, monkeypatch):
         monkeypatch.setenv("QUEST_ENV", "dev")  # legacy alias canonicalizes

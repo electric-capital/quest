@@ -282,7 +282,9 @@ Two things to get right whichever route you pick:
 - **Set `app_base_url` to the HTTPS URL** (`server_config.json`, env `QUEST_APP_BASE_URL`; the
   bootstrap wizard prompts for it). `oauth_base_url()` in `auth/config.py` uses it verbatim. Without
   it, callbacks are built from the request's own scheme and host, which behind a TLS-terminating
-  front is plain `http://` on `localhost:8000` -- the provider then rejects the mismatch.
+  front is plain `http://` on `localhost:8000` -- the provider then rejects the mismatch. An
+  `https://` `app_base_url` also gives the session cookie the `Secure` attribute (applied at
+  startup; see [Run Modes](../architecture/run-modes.md)).
 - **Register the callbacks under that URL** with each provider: `<app_base_url>/auth/callback` and
   `<app_base_url>/auth/google-services/callback` for Google (both required), plus
   `<app_base_url>/auth/<service>/callback` for each connector you configure (see the per-service

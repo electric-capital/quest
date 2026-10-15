@@ -213,10 +213,14 @@ RAMP_SCOPES = [
 ]
 
 # Session cookie configuration (per-mode name and Secure flag come from
-# the central environment module so modes never share sessions).
+# the central environment module so modes never share sessions). The
+# Secure flag is resolved once at startup: a changed app_base_url applies
+# after a restart.
 COOKIE_NAME = environment.cookie_name()
 COOKIE_SECURE = environment.cookie_secure()
-COOKIE_VERSION = 2  # Bump this to invalidate all existing sessions
+# Bump this to invalidate all existing sessions. Version 3 is the timed
+# cookie carrying the session epoch (auth/session.py).
+COOKIE_VERSION = 3
 
 def generate_api_key() -> str:
     """Generate a random API key (32+ characters)."""

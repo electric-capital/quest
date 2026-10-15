@@ -101,7 +101,10 @@ def _rows(db_path: Path, sql: str) -> list[tuple]:
 # models map (they SELECT every mapped column, so the read-back needs them);
 # added by hand, with their server defaults, for the read-back only.
 _LATER_COLUMNS = {
-    "users": (("password_hash", "VARCHAR(255)"),),
+    "users": (
+        ("password_hash", "VARCHAR(255)"),
+        ("session_epoch", "INTEGER NOT NULL DEFAULT 0"),
+    ),
     "user_service_credentials": (
         ("account", "VARCHAR(320) NOT NULL DEFAULT ''"),
         ("description", "TEXT"),

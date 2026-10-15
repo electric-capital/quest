@@ -43,8 +43,10 @@ from auth.session import (
 )
 
 SECRET = "test-secret"
-ADMIN = {"id": 1, "email": "admin@example.test", "name": "Admin", "api_key": "admin-key"}
-TARGET = {"id": 2, "email": "target@example.test", "name": "Target", "api_key": "target-key"}
+ADMIN = {"id": 1, "email": "admin@example.test", "name": "Admin", "api_key": "admin-key",
+         "session_epoch": 0}
+TARGET = {"id": 2, "email": "target@example.test", "name": "Target", "api_key": "target-key",
+          "session_epoch": 0}
 
 
 def _run(coro):
@@ -57,15 +59,16 @@ def _secret(monkeypatch):
 
 
 def _cookie(payload) -> str:
-    return session_mod.get_cookie_serializer().dumps(payload)
+    return session_mod.get_session_serializer().dumps(payload)
 
 
 def _imp_cookie(uid=TARGET["id"], imp=ADMIN["id"]) -> str:
-    return _cookie({"v": COOKIE_VERSION, "uid": uid, "imp": imp})
+    # "e" / "ie" are both accounts' session epochs (0 for the fixtures above).
+    return _cookie({"v": COOKIE_VERSION, "uid": uid, "e": 0, "imp": imp, "ie": 0})
 
 
 def _normal_cookie(uid=TARGET["id"]) -> str:
-    return _cookie({"v": COOKIE_VERSION, "uid": uid})
+    return _cookie({"v": COOKIE_VERSION, "uid": uid, "e": 0})
 
 
 def _client(app, cookie: str | None = None) -> TestClient:
@@ -530,7 +533,9 @@ in_namespace = sorted(
 )
 to_check = sorted(set(map(tuple, spec["explicit"])) | set(in_namespace))
 
-cookie = session_mod.get_cookie_serializer().dumps({"v": COOKIE_VERSION, "uid": 2, "imp": 1})
+cookie = session_mod.get_session_serializer().dumps(
+    {"v": COOKIE_VERSION, "uid": 2, "e": 0, "imp": 1, "ie": 0}
+)
 client = TestClient(app, raise_server_exceptions=False, follow_redirects=False)
 client.cookies.set(COOKIE_NAME, cookie)
 responses = []
@@ -553,7 +558,9 @@ app.dependency_overrides[quest.get_current_user_cookie_or_apikey] = (
     lambda: {"id": 2, "email": "target@example.test", "api_key": "target-key"}
 )
 normal = TestClient(app, raise_server_exceptions=False, follow_redirects=False)
-normal.cookies.set(COOKIE_NAME, session_mod.get_cookie_serializer().dumps({"v": COOKIE_VERSION, "uid": 2}))
+normal.cookies.set(
+    COOKIE_NAME, session_mod.get_session_serializer().dumps({"v": COOKIE_VERSION, "uid": 2, "e": 0})
+)
 instructions = normal.get("/api/instructions")
 reset = normal.post("/api/reset-api-key")
 root = {

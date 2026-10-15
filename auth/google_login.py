@@ -9,9 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from db.user_store import get_user_by_email, create_user, update_user_field
-from auth.config import COOKIE_NAME, COOKIE_SECURE, COOKIE_VERSION, generate_api_key, is_login_allowed, is_password_login, login_restriction_description, oauth_base_url
+from auth.config import COOKIE_NAME, generate_api_key, is_login_allowed, is_password_login, login_restriction_description, oauth_base_url
 from auth.oauth_state import clear_oauth_state, mint_oauth_state, verify_oauth_state
-from auth.session import forbid_impersonation, get_cookie_serializer
+from auth.session import forbid_impersonation, revoke_cookie_session, set_session_cookie
 from auth.google_credentials import get_login_oauth_flow, get_valid_credentials
 
 logger = logging.getLogger(__name__)
@@ -22,8 +22,10 @@ router = APIRouter(prefix="/auth")
 
 
 @router.get("/logout")
-async def auth_logout():
-    """Clear session cookie and redirect to root (sign-in screen)."""
+async def auth_logout(request: Request):
+    """Sign out: revoke the account's sessions server-side, clear the
+    session cookie and redirect to root (sign-in screen)."""
+    await revoke_cookie_session(request)
     response = RedirectResponse("/")
     response.delete_cookie(COOKIE_NAME)
     return response
@@ -302,18 +304,9 @@ async def auth_callback(
         logger.info("[OAuth] Has refresh token: %s (user=%s)", credentials.refresh_token is not None, email)
         logger.info("[OAuth] Token expiry: %s (user=%s)", credentials.expiry, email)
 
-        # Set signed session cookie with versioned payload and redirect to app
+        # Set signed session cookie and redirect to app
         user_record = await get_user_by_email(email)
-        signed_payload = get_cookie_serializer().dumps({"v": COOKIE_VERSION, "uid": user_record["id"]})
-        response = RedirectResponse("/", status_code=303)
-        response.set_cookie(
-            key=COOKIE_NAME,
-            value=signed_payload,
-            httponly=True,
-            max_age=60 * 60 * 24 * 30,  # 30 days
-            samesite="lax",
-            secure=COOKIE_SECURE,
-        )
+        response = set_session_cookie(RedirectResponse("/", status_code=303), user_record)
         return clear_oauth_state(response, _STATE_COOKIE)
 
     except Exception as e:

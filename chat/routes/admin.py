@@ -10,8 +10,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from chat.auth import get_current_user_cookie_or_apikey_checked, is_admin
-from auth.config import COOKIE_NAME, COOKIE_SECURE, COOKIE_VERSION, is_password_login
-from auth.session import get_cookie_serializer, get_user_from_cookie, set_session_cookie
+from auth.config import COOKIE_NAME, is_password_login
+from auth.session import get_user_from_cookie, set_impersonation_cookie, set_session_cookie
 from chat.storage import ChatStorage
 from db.conversation_store import (
     get_conversations_with_users,
@@ -147,13 +147,7 @@ async def admin_impersonate(
 
     logger.info("[admin] %s started impersonating %s", user["email"], target_user["email"])
 
-    # Create impersonation cookie
-    signed_payload = get_cookie_serializer().dumps({
-        "v": COOKIE_VERSION,
-        "uid": target_user["id"],
-        "imp": user["id"],
-    })
-
+    # Impersonation cookie: one hour, bound to both accounts' sessions
     response = JSONResponse({
         "success": True,
         "impersonating": {
@@ -162,15 +156,7 @@ async def admin_impersonate(
             "name": target_user.get("name", ""),
         },
     })
-    response.set_cookie(
-        key=COOKIE_NAME,
-        value=signed_payload,
-        httponly=True,
-        max_age=60 * 60,  # 1 hour (shorter than normal 30-day session)
-        samesite="lax",
-        secure=COOKIE_SECURE,
-    )
-    return response
+    return set_impersonation_cookie(response, target_user, user)
 
 
 @router.get("/admin/system-monitor/latest-active-conversations")
@@ -1883,14 +1869,21 @@ async def admin_stop_impersonation(
         user["email"],
     )
 
-    # Create a normal (non-impersonation) cookie for the admin. Under
-    # password sign-in it is bound to the admin's password again, exactly
-    # like the cookie they signed in with.
-    password_fp = None
-    if is_password_login():
-        admin_user = await get_user_by_id(impersonator_uid)
-        password_fp = (admin_user or {}).get("password_fp")
-    return set_session_cookie(JSONResponse({"success": True}), impersonator_uid, password_fp)
+    # Create a normal (non-impersonation) cookie for the admin, under the
+    # admin's current session epoch. Under password sign-in it is bound to
+    # the admin's password again, exactly like the cookie they signed in
+    # with.
+    admin_user = await get_user_by_id(impersonator_uid)
+    if admin_user is None:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "not_authenticated",
+                "message": "Invalid session.",
+            }
+        )
+    password_fp = admin_user.get("password_fp") if is_password_login() else None
+    return set_session_cookie(JSONResponse({"success": True}), admin_user, password_fp)
 
 
 # ---------------------------------------------------------------------------

@@ -31,11 +31,11 @@ def check_user_allowed(email: str) -> bool:
 def require_user_allowed(user: dict) -> dict:
     """Raise 403 ``access_denied`` unless *user* passes the admission policy.
 
-    Session cookies never expire on their own and ``users.api_key`` is
-    long-lived, so login-time enforcement is not enough: a user removed
-    from the allowed domain / ``allowed_login_emails`` whitelist keeps
-    valid credentials. Every request-authenticating dependency (here and
-    in ``auth/session.py``) funnels through this check so no route can
+    Session cookies stay valid for weeks and ``users.api_key`` never
+    expires, so login-time enforcement is not enough: a user removed from
+    the allowed domain / ``allowed_login_emails`` whitelist keeps valid
+    credentials. Every request-authenticating dependency (here and in
+    ``auth/session.py``) funnels through this check so no route can
     resolve an offboarded user.
     """
     if not check_user_allowed(user.get("email", "")):

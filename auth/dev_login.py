@@ -17,8 +17,8 @@ from fastapi.responses import JSONResponse
 
 from config import environment
 from db.user_store import get_user_by_email, create_user, list_all_users
-from auth.config import COOKIE_NAME, COOKIE_SECURE, COOKIE_VERSION, generate_api_key
-from auth.session import get_cookie_serializer
+from auth.config import generate_api_key
+from auth.session import set_session_cookie
 
 logger = logging.getLogger(__name__)
 
@@ -146,19 +146,8 @@ async def dev_login(request: Request):
         created = True
         logger.info("[DevLogin] New user created: %s (name=%s)", email, name)
 
-    # Set session cookie using the same pattern as Google OAuth login
-    signed_payload = get_cookie_serializer().dumps(
-        {"v": COOKIE_VERSION, "uid": user_record["id"]}
-    )
+    # Same session cookie as the Google OAuth login
     response = JSONResponse(
         content={"success": True, "email": email, "name": name, "created": created}
     )
-    response.set_cookie(
-        key=COOKIE_NAME,
-        value=signed_payload,
-        httponly=True,
-        max_age=60 * 60 * 24 * 30,  # 30 days
-        samesite="lax",
-        secure=COOKIE_SECURE,
-    )
-    return response
+    return set_session_cookie(response, user_record)

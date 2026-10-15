@@ -9,7 +9,12 @@ from pydantic import BaseModel
 from chat.auth import check_user_allowed, get_current_user_cookie_or_apikey_checked, is_admin
 
 from auth.config import COOKIE_NAME
-from auth.session import forbid_impersonation, get_user_from_cookie
+from auth.session import (
+    forbid_impersonation,
+    get_user_from_cookie,
+    revoke_cookie_session,
+    revoke_sessions,
+)
 
 from config.version import RELEASE_INFO
 from chat.routes import router
@@ -582,8 +587,11 @@ async def get_connectors(user: dict = Depends(get_current_user_cookie_or_apikey_
 
 @router.post("/logout")
 async def logout(request: Request):
-    """Clear session cookie. Preserves all user data and OAuth tokens."""
+    """Sign out: end every session of the account server-side (session
+    epoch bump) and clear the session cookie. Preserves all user data and
+    OAuth tokens."""
     from fastapi.responses import JSONResponse
+    await revoke_cookie_session(request)
     response = JSONResponse({"success": True})
     response.delete_cookie(COOKIE_NAME)
     return response
@@ -631,6 +639,9 @@ async def logout_and_disconnect(
     # Invalidate cached chat sessions
     from chat.gemini_api import invalidate_user_sessions
     invalidate_user_sessions(user_id)
+
+    # End every session of the account server-side (session epoch bump)
+    await revoke_sessions(user)
 
     response = JSONResponse({"success": True})
     response.delete_cookie(COOKIE_NAME)

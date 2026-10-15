@@ -7,7 +7,7 @@ get_user_by_api_key/get_user_by_email functions, but backed by async SQLite.
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import func, select, or_
+from sqlalchemy import func, select, or_, update
 
 from config.encryption import hash_api_key
 from db.engine import AsyncSessionLocal
@@ -350,6 +350,30 @@ async def remove_user_fields(email: str, fields: list[str]) -> Optional[dict]:
         await db.commit()
         await db.refresh(user)
         return await _user_dict(db, user)
+
+
+async def bump_session_epoch(user_id: int) -> Optional[int]:
+    """Advance the user's session generation, ending every session cookie
+    issued under the old value (see get_user_from_cookie in auth/session.py).
+
+    The increment is done in SQL, so concurrent bumps never collapse into
+    one; the read-back runs in the same transaction, under the UPDATE's
+    write lock. Returns the new epoch, or None when no user has this id.
+    """
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            update(User)
+            .where(User.id == user_id)
+            .values(session_epoch=User.session_epoch + 1)
+        )
+        if result.rowcount == 0:
+            await db.rollback()
+            return None
+        epoch = (await db.execute(
+            select(User.session_epoch).where(User.id == user_id)
+        )).scalar_one()
+        await db.commit()
+        return epoch
 
 
 async def delete_user(email: str) -> bool:

@@ -13,7 +13,7 @@ Quest runs in one of three modes, selected by the `QUEST_ENV` environment variab
 | Login | canned-account picker + free email via `/auth/dev-login`; Google OAuth optional | Google OAuth | Google OAuth |
 | Domain restriction | off | on | on |
 | Database / data dir | fresh throwaway per run under `data/local-runs/`, seeded; `--keep-data` reuses the latest | persistent | persistent |
-| Session cookie | `quest_session_local` | `quest_session_staging`, `Secure` | `quest_session` |
+| Session cookie | `quest_session_local`; `Secure` with an `https://` `app_base_url` | `quest_session_staging`, always `Secure` | `quest_session`; `Secure` with an `https://` `app_base_url` |
 | npm install | `npm install` | `npm ci` | `npm ci` |
 | Container images | `quest-script-runner-local`; build failures non-fatal | `-staging` suffix, required | `-prod` suffix, required |
 | Missing credentials | degrade gracefully (see below) | fail like prod | HTTP 500s on affected features |
@@ -65,7 +65,7 @@ Local mode must start and stay usable with no credentials:
 
 ## Staging Mode
 
-Staging behaves like prod -- domain restriction on, real credentials, persistent data dir -- with a distinct cookie name (`quest_session_staging`) and the `Secure` cookie attribute, so staging and prod sessions never collide in a shared browser. It is intended to be launched by deploy automation (`run.py --staging`). Prod cookies are intentionally left non-`Secure` until the prod fronting is confirmed HTTPS-only (see `cookie_secure()` in `config/environment.py`).
+Staging behaves like prod -- domain restriction on, real credentials, persistent data dir -- with a distinct cookie name (`quest_session_staging`), so staging and prod sessions never collide in a shared browser, and an always-`Secure` session cookie. It is intended to be launched by deploy automation (`run.py --staging`). In prod and local mode the cookie is `Secure` exactly when the configured public URL (`app_base_url`, see [Production](../setup/production.md#serving-over-https)) is `https://`, so a plain-HTTP install still signs in (`cookie_secure()` in `config/environment.py`, read once at startup).
 
 ## Prod Mode
 

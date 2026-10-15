@@ -216,6 +216,14 @@ class User(Base):
         String(255), nullable=True, default=None
     )
 
+    # Session generation. Every session cookie carries the value it was
+    # issued under and stops verifying once this moves on, so bumping it
+    # (sign-out, password change; bump_session_epoch() in db/user_store.py)
+    # ends every session of the account server-side.
+    session_epoch: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+
     def to_dict(self) -> dict:
         """Convert to dictionary matching the current user dict format.
 
@@ -229,6 +237,7 @@ class User(Base):
             "api_key": self.api_key,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "settings": self.settings or {},
+            "session_epoch": self.session_epoch or 0,
         }
         if self.google_sub is not None:
             d["google_sub"] = self.google_sub

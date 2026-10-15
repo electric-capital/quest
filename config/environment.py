@@ -93,11 +93,21 @@ def cookie_name() -> str:
 def cookie_secure() -> bool:
     """Whether session cookies get the ``Secure`` attribute.
 
-    Staging is assumed to sit behind HTTPS. Prod is intentionally left
-    unchanged (not secure) until its fronting is confirmed to be HTTPS-only;
-    flipping it here would silently break a plain-HTTP prod deployment.
+    True in staging (assumed to sit behind HTTPS) and in any mode whose
+    configured public URL (``app_base_url``, see get_app_base_url() in
+    config/server_config.py) is ``https://`` -- the URL users browse, so
+    the browser always has a secure origin to return the cookie to. A
+    deployment without an https ``app_base_url`` keeps plain cookies so a
+    plain-HTTP install still signs in.
+
+    The lazy import keeps this module importable as early as config.paths
+    (config.server_config is stdlib-only as well).
     """
-    return is_staging()
+    if is_staging():
+        return True
+    from config.server_config import get_app_base_url
+
+    return get_app_base_url().strip().lower().startswith("https://")
 
 
 def image_suffix() -> str:

@@ -19,8 +19,9 @@ Passwords are only ever set through a one-time link (``password_tokens``):
   ``apply_pending_admin_passwords``).
 
 Logged-in users can change their password (current password required when
-one is set). Password-issued session cookies carry the password-hash
-fingerprint, so a password change signs out every other session.
+one is set). Setting a password advances the account's session epoch, and
+password-issued session cookies also carry the password-hash fingerprint,
+so a password change or reset signs out every other session.
 """
 
 import asyncio
@@ -295,7 +296,7 @@ async def password_login(request: Request):
     user = await get_user_by_email(email)
     logger.info("[PasswordLogin] User signed in: %s", email)
     response = JSONResponse({"success": True, "email": email})
-    return set_session_cookie(response, user["id"], password_fingerprint(stored))
+    return set_session_cookie(response, user, password_fingerprint(stored))
 
 
 @router.post("/request-link")
@@ -394,13 +395,15 @@ async def set_password_with_link(request: Request):
             detail={"error": "invalid_link", "message": "This link is invalid or has expired."},
         )
 
-    user = await _ensure_account(email, str(body.get("name") or ""))
+    await _ensure_account(email, str(body.get("name") or ""))
     password_hash = await asyncio.to_thread(hash_password, password)
     await set_password_hash(email, password_hash)
     _failed_by_email.reset(email)
     logger.info("[PasswordLogin] Password set via %s link: %s", info["purpose"], email)
+    # Reload: setting the password advanced the account's session epoch.
+    user = await get_user_by_email(email)
     response = JSONResponse({"success": True, "email": email})
-    return set_session_cookie(response, user["id"], password_fingerprint(password_hash))
+    return set_session_cookie(response, user, password_fingerprint(password_hash))
 
 
 @router.post("/change", dependencies=[Depends(forbid_impersonation)])
@@ -408,8 +411,9 @@ async def change_password(request: Request):
     """Change the signed-in user's password.
 
     The current password is required when the account has one. Other
-    sessions are signed out (their cookies carry the old fingerprint); this
-    one gets a fresh cookie. Refused (403) to an admin impersonation session.
+    sessions are signed out (their cookies carry the old session epoch);
+    this one gets a fresh cookie. Refused (403) to an admin impersonation
+    session.
     """
     _require_password_mode()
     signed_cookie = request.cookies.get(COOKIE_NAME)
@@ -442,8 +446,10 @@ async def change_password(request: Request):
     password_hash = await asyncio.to_thread(hash_password, new_password)
     await set_password_hash(email, password_hash)
     logger.info("[PasswordLogin] Password changed: %s", email)
+    # Reload: setting the password advanced the account's session epoch.
+    user = await get_user_by_email(email)
     response = JSONResponse({"success": True})
-    return set_session_cookie(response, user["id"], password_fingerprint(password_hash))
+    return set_session_cookie(response, user, password_fingerprint(password_hash))
 
 
 # ---------------------------------------------------------------------------

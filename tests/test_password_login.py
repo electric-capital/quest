@@ -141,7 +141,7 @@ class TestLogin:
         resp = client.post("/auth/password/login", json={"email": "ALICE@" + ALLOWED_DOMAIN, "password": "correct horse"})
         assert resp.status_code == 200
         assert client.get("/whoami").json() == {"email": ALICE}
-        payload = session_mod.get_cookie_serializer().loads(client.cookies[COOKIE_NAME])
+        payload = session_mod.get_session_serializer().loads(client.cookies[COOKIE_NAME])
         assert payload["pw"]
 
     def test_wrong_password_and_unknown_account_look_alike(self, method):
@@ -278,9 +278,11 @@ class TestChange:
         alice = _run(user_store.get_user_by_email(ALICE))
         admin = _run(user_store.get_user_by_email(admin_email))
         client = _client()
-        client.cookies.set(COOKIE_NAME, session_mod.get_cookie_serializer().dumps(
-            {"v": auth_config.COOKIE_VERSION, "uid": alice["id"], "imp": admin["id"]}
-        ))
+        client.cookies.set(COOKIE_NAME, session_mod.get_session_serializer().dumps({
+            "v": auth_config.COOKIE_VERSION,
+            "uid": alice["id"], "e": alice["session_epoch"],
+            "imp": admin["id"], "ie": admin["session_epoch"],
+        }))
         assert client.get("/whoami").json() == {"email": ALICE}  # a live impersonation
         before = _run(password_store.get_password_hash(ALICE))
 
