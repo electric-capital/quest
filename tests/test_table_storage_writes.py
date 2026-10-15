@@ -220,8 +220,49 @@ class TestUpdate:
         # Row 1 keeps X (not patched); row 3 taking X must collide with it.
         with pytest.raises(InvalidRowsError) as exc:
             update(table_dir, schema, [{"_id": 1, "Price": 3}, {"_id": 3, "SKU": "X"}])
-        (problem,) = exc.value.problems
-        assert problem["row"] == 1 and "row 0 of this call" in problem["reason"]
+        assert exc.value.problems == [
+            {
+                "row": 1,
+                "column": "SKU",
+                "code": "duplicate_value",
+                "reason": "value 'X' is already used by row _id 1.",
+            }
+        ]
+
+    def test_unchanged_unique_cell_problem_lands_on_changing_row(self, table_dir, schema):
+        # The changing row comes first; the problem must not move to row 1.
+        with pytest.raises(InvalidRowsError) as exc:
+            update(table_dir, schema, [{"_id": 3, "SKU": "X"}, {"_id": 1, "Price": 3}])
+        assert exc.value.problems == [
+            {
+                "row": 0,
+                "column": "SKU",
+                "code": "duplicate_value",
+                "reason": "value 'X' is already used by row _id 1.",
+            }
+        ]
+
+    @pytest.mark.parametrize("order", [1, -1])
+    def test_clear_unique_while_another_row_takes_it(self, table_dir, schema, order):
+        update(table_dir, schema, [{"_id": 1, "SKU": None}, {"_id": 3, "SKU": "X"}][::order])
+        assert stored(table_dir, 1)[K_SKU] is None
+        assert stored(table_dir, 3)[K_SKU] == "X"
+
+    def test_clear_boolean_and_multi_enum(self, table_dir, schema):
+        update(table_dir, schema, [{"_id": 2, "Done": None, "Tags": []}])
+        row = stored(table_dir, 2)
+        assert (row[K_DONE], row[K_TAGS]) == (None, None)
+
+    def test_problem_order_row_level_then_id(self, table_dir, schema):
+        with pytest.raises(InvalidRowsError) as exc:
+            update(table_dir, schema, [{"_id": "z"}, {"Bogus": 1, "Price": "x"}])
+        assert codes(exc) == [
+            (0, None, "empty_patch"),
+            (0, "_id", "invalid_row_id"),
+            (1, "_id", "invalid_row_id"),
+            (1, "Price", "invalid_number"),
+            (1, "Bogus", "unknown_column"),
+        ]
 
     def test_unique_swap_in_one_call(self, table_dir, schema):
         update(table_dir, schema, [{"_id": 1, "SKU": "Y"}, {"_id": 2, "SKU": "X"}])
@@ -477,8 +518,33 @@ class TestUpsert:
 
     def test_too_many_rows(self, table_dir, schema, monkeypatch):
         monkeypatch.setattr(storage_mod, "TABLE_WRITE_MAX_ROWS", 1)
-        with pytest.raises(TooManyRowsError):
+        with pytest.raises(TooManyRowsError) as exc:
             upsert(table_dir, schema, [{"SKU": "X"}, {"SKU": "Y"}])
+        assert exc.value.count == 2
+        assert_nothing_written(table_dir, 3, 2)
+
+    def test_missing_key_row_gets_insert_rules(self, table_dir, schema):
+        with pytest.raises(InvalidRowsError) as exc:
+            upsert(table_dir, schema, [{"Price": 1}, {"SKU": 5}])
+        assert codes(exc) == [
+            (0, "Name", "required"),
+            (0, "SKU", "missing_key"),
+            (1, "Name", "required"),
+            (1, "SKU", "wrong_type"),
+        ]
+        assert_nothing_written(table_dir, 3, 2)
+
+    def test_repeated_key_row_validated_like_first(self, table_dir, schema):
+        # N inserts, so its repeat gets insert rules; X patches, so its
+        # repeat gets patch rules (Name not needed).
+        with pytest.raises(InvalidRowsError) as exc:
+            upsert(table_dir, schema, [{"SKU": "N", "Name": "n"}, {"SKU": "N"},
+                                       {"SKU": "X"}, {"SKU": "X"}])
+        assert codes(exc) == [
+            (1, "Name", "required"),
+            (1, "SKU", "duplicate_key"),
+            (3, "SKU", "duplicate_key"),
+        ]
 
 
 # --- delete_rows -----------------------------------------------------------------
@@ -563,6 +629,10 @@ class TestDelete:
     def test_where_shape(self, table_dir, schema):
         with pytest.raises(ValueError):
             delete(table_dir, schema, where="1 = 1")
+        for params in ({"a": 1}, "ab", None):
+            with pytest.raises(ValueError):
+                delete(table_dir, schema, where=("1 = ?", params))
+        assert_nothing_written(table_dir, 3, 2)
 
     def test_deleted_id_not_reused(self, table_dir, schema):
         delete(table_dir, schema, row_ids=[3])
@@ -641,3 +711,71 @@ def test_insert_image_row_keeps_id_and_timestamps(table_dir, schema):
     assert (row["_id"], row["_created_at"], row["_updated_at"], row[K_NAME]) == (
         77, image["_created_at"], image["_updated_at"], "z")
     assert row[K_SKU] is None
+
+
+# --- A second unique column ------------------------------------------------------
+
+K_CODE = "c_00000008"
+
+
+@pytest.fixture
+def coded(tmp_path):
+    """Rows 1 (a, SKU X, Code c1), 2 (b, SKU Y) and 3 (c) in a table whose
+    Code column is unique too."""
+    schema = make_schema() + [Column(key=K_CODE, name="Code", type="text", unique=True)]
+    path = tmp_path / "tables" / "t2"
+    create_table_db(
+        path, table_id="t2", title="Coded", schema=schema,
+        source="ui:1", actor_user_id=1, now=NOW,
+    )
+    insert(path, schema, [{"Name": "a", "SKU": "X", "Code": "c1"},
+                          {"Name": "b", "SKU": "Y"}, {"Name": "c"}])
+    return path, schema
+
+
+def _dup(row, reason):
+    return [{"row": row, "column": "Code", "code": "duplicate_value", "reason": reason}]
+
+
+@pytest.mark.parametrize("order", [1, -1])
+def test_update_duplicate_lands_on_changing_row(coded, order):
+    path, schema = coded
+    updates = [{"_id": 2, "Code": "c1"}, {"_id": 1, "Name": "zz"}][::order]
+    with pytest.raises(InvalidRowsError) as exc:
+        update(path, schema, updates)
+    changing = 0 if order == 1 else 1
+    assert exc.value.problems == _dup(changing, "value 'c1' is already used by row _id 1.")
+    assert_nothing_written(path, 3, 2)
+
+
+@pytest.mark.parametrize("order", [1, -1])
+def test_upsert_duplicate_lands_on_changing_row(coded, order):
+    path, schema = coded
+    rows = [{"SKU": "Q", "Name": "q", "Code": "c1"}, {"SKU": "X", "Name": "aa"}][::order]
+    with pytest.raises(InvalidRowsError) as exc:
+        upsert(path, schema, rows)
+    changing = 0 if order == 1 else 1
+    assert exc.value.problems == _dup(changing, "value 'c1' is already used by row _id 1.")
+    assert_nothing_written(path, 3, 2)
+
+
+def test_duplicate_between_changing_rows_names_call_row(coded):
+    path, schema = coded
+    with pytest.raises(InvalidRowsError) as exc:
+        update(path, schema, [{"_id": 2, "Code": "c7"}, {"_id": 3, "Code": "c7"}])
+    assert exc.value.problems == _dup(1, "value 'c7' is also used by row 0 of this call.")
+
+
+@pytest.mark.parametrize("order", [1, -1])
+def test_upsert_insert_takes_value_an_update_gives_up(coded, order):
+    path, schema = coded
+    rows = [{"SKU": "X", "Code": "c9"}, {"SKU": "N", "Name": "n", "Code": "c1"}][::order]
+    result = upsert(path, schema, rows)
+    assert (result.inserted, result.updated) == (1, 1)
+    assert stored(path, 1)[K_CODE] == "c9"
+    assert stored(path, result.inserted_ids[0])[K_CODE] == "c1"
+
+
+def test_existing_ids(table_dir):
+    with storage_mod.connect(table_dir) as conn:
+        assert storage_mod._existing_ids(conn, [3, 1, 99, 1]) == {1, 3}

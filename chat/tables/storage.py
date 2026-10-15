@@ -104,6 +104,7 @@ from chat.tables.schema import (
     coerce_value,
     dump_schema,
     field_label,
+    find_column,
     from_storage,
     is_valid_column_key,
     load_schema,
@@ -780,15 +781,24 @@ def _check_schema_matches(
 
 
 class _Problems:
-    """Collects invalid_rows problems and orders them by row, then schema
-    column order (row-level problems first, unknown columns last)."""
+    """Collects invalid_rows problems and orders them by row, then within a
+    row: row-level problems (``column`` None), then ``_id``, then schema
+    columns in schema order, then any other column (unknown names and the
+    read-only timestamps) in the order reported."""
 
     def __init__(self, schema: Sequence[Column]):
         self._slots = {c.name: i for i, c in enumerate(schema)}
         self._items: list[tuple[tuple[int, int, int], dict]] = []
 
+    def _slot(self, column: str | None) -> int:
+        if column is None:
+            return -2
+        if column == ROW_ID:
+            return -1
+        return self._slots.get(column, len(self._slots))
+
     def add(self, row: int, column: str | None, code: str, reason: str) -> None:
-        slot = -1 if column is None else self._slots.get(column, len(self._slots))
+        slot = self._slot(column)
         self._items.append(
             (
                 (row, slot, len(self._items)),
@@ -829,7 +839,10 @@ def _row_values(
             continue
         if name in RESERVED_COLUMNS:
             problems.add(
-                index, name, "read_only_column", f"{name} is set by the server."
+                index,
+                name,
+                "read_only_column",
+                f"{name} is set by the server.",
             )
             continue
         column = by_name.get(name) if isinstance(name, str) else None
@@ -880,37 +893,52 @@ def _check_unique(
     conn: sqlite3.Connection,
     problems: _Problems,
     schema: Sequence[Column],
-    final_rows: Sequence[tuple[int, Mapping[str, Any]]],
+    changing: Sequence[tuple[int, Mapping[str, Any]]],
     touched_ids: Collection[int],
+    *,
+    unchanged: Mapping[int, Mapping[str, Any]] | None = None,
 ) -> None:
     """Check every unique column against the state after the write.
 
-    ``final_rows`` pairs each written row's payload index with its final
-    logical cell values keyed by column key; for an existing row this
-    must include unique cells the patch leaves unchanged, since the row is
-    excluded from the stored-row check. A missing key or None never
-    conflicts. Reports ``duplicate_value`` on the later row of a pair
-    inside the call, and on a row whose value an untouched stored row
-    (not in ``touched_ids``) already holds, naming that row's ``_id``."""
+    ``changing`` pairs each written row's payload index with the logical
+    cells it writes, keyed by column key: every cell of an inserted row,
+    the named cells of a patch. ``unchanged`` maps each touched existing
+    ``_id`` to its stored unique cells the patch leaves alone (see
+    :func:`_split_patched`); ``touched_ids`` are excluded from the
+    stored-row query, so those cells must come through here. A missing
+    key or None never conflicts.
+
+    A problem always lands on a row that writes the value: on the later of
+    two changing rows ("also used by row N of this call"), and on a row
+    taking a value an unchanged cell of a touched row or an untouched
+    stored row already holds ("already used by row _id N")."""
     touched_json = _json(sorted(touched_ids))
     for column in schema:
         if not column.unique:
             continue
-        seen: dict[Any, int] = {}
-        for index, values in final_rows:
-            value = to_storage(column, values.get(column.key))
+        # value -> ("stored", _id) or ("call", payload index)
+        seen: dict[Any, tuple[str, int]] = {}
+        for row_id, cells in (unchanged or {}).items():
+            value = to_storage(column, cells.get(column.key))
+            if value is not None:
+                seen[value] = ("stored", row_id)
+        for index, values in changing:
+            if column.key not in values:
+                continue
+            value = to_storage(column, values[column.key])
             if value is None:
                 continue
             if value in seen:
-                problems.add(
-                    index,
-                    column.name,
-                    "duplicate_value",
-                    f"value {clip_repr(value)} is also used by row {seen[value]} "
-                    "of this call.",
+                kind, holder = seen[value]
+                reason = (
+                    f"value {clip_repr(value)} is already used by row _id {holder}."
+                    if kind == "stored"
+                    else f"value {clip_repr(value)} is also used by row {holder} "
+                    "of this call."
                 )
+                problems.add(index, column.name, "duplicate_value", reason)
                 continue
-            seen[value] = index
+            seen[value] = ("call", index)
             hit = conn.execute(
                 f"SELECT _id FROM rows WHERE {_ident(column.key)} = ? "
                 "AND _id NOT IN (SELECT value FROM json_each(?)) LIMIT 1",
@@ -996,12 +1024,21 @@ def _row_id_problem(row_id: object) -> str | None:
     return None
 
 
+def _existing_ids(conn: sqlite3.Connection, ids: Iterable[int]) -> set[int]:
+    """The ``ids`` that exist in ``rows``."""
+    cursor = conn.execute(
+        "SELECT _id FROM rows WHERE _id IN (SELECT value FROM json_each(?))",
+        (_json(sorted(set(ids))),),
+    )
+    return {row[0] for row in cursor.fetchall()}
+
+
 def _existing_unique_cells(
     conn: sqlite3.Connection, schema: Sequence[Column], ids: Iterable[int]
 ) -> dict[int, dict[str, Any]]:
     """``{_id: {unique column key: logical value}}`` for the ``ids`` that
     exist (missing ids are absent, so this doubles as the existence
-    check). Patched rows feed these to :func:`_check_unique` as their
+    check). :func:`_split_patched` turns them into a patched row's
     unchanged unique cells."""
     unique = [c for c in schema if c.unique]
     cells = "".join(f", {_ident(c.key)}" for c in unique)
@@ -1015,16 +1052,16 @@ def _existing_unique_cells(
     }
 
 
-def _final_patched(
+def _split_patched(
     existing: Mapping[str, Any], raw: Mapping[str, Any], values: Mapping[str, Any]
-) -> dict[str, Any]:
-    """A patched row's final unique cells for :func:`_check_unique`: the
-    stored ones, overridden by the patch. A patched column whose value was
-    refused counts as cleared, so it raises no extra unique problem."""
-    final = dict(existing)
-    for key in raw:
-        final[key] = values.get(key)
-    return final
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """A patched row's ``(changing, unchanged)`` cells for
+    :func:`_check_unique`: every column the patch names (a refused value
+    counts as cleared, so it raises no extra unique problem), and the
+    stored unique cells it leaves alone."""
+    changing = {key: values.get(key) for key in raw}
+    unchanged = {key: value for key, value in existing.items() if key not in raw}
+    return changing, unchanged
 
 
 def _apply_patches(
@@ -1137,7 +1174,9 @@ def update_rows(
     named columns change, an explicit null clears a cell, and every
     touched row's ``_updated_at`` becomes ``now`` (``_created_at`` is
     kept). Unique columns are checked against the final state, so values
-    swapped between rows in one call are fine. ``updated_ids`` is in input
+    swapped between rows in one call are fine. A patch that sets every
+    named cell to its current value still counts as updated: it bumps
+    ``_updated_at`` and is part of the change. ``updated_ids`` is in input
     order, ``row_ids`` sorted.
 
     Problems (one :class:`InvalidRowsError`, nothing written):
@@ -1182,12 +1221,16 @@ def update_rows(
                 first_index[row_id] = index
             if not set(update) - {ROW_ID}:
                 problems.add(
-                    index, None, "empty_patch", "the update names no column to change."
+                    index,
+                    None,
+                    "empty_patch",
+                    "the update names no column to change.",
                 )
             values = _patch_values(problems, index, schema, raw)
             parsed.append((index, row_id, raw, values))
         existing = _existing_unique_cells(conn, schema, first_index)
-        final_rows: list[tuple[int, dict[str, Any]]] = []
+        changing: list[tuple[int, dict[str, Any]]] = []
+        unchanged: dict[int, dict[str, Any]] = {}
         for index, row_id, raw, values in parsed:
             if row_id is None:
                 # Which row it would patch is unknown, so a unique check
@@ -1195,11 +1238,23 @@ def update_rows(
                 continue
             if row_id not in existing:
                 problems.add(
-                    index, ROW_ID, "unknown_row", f"there is no row with _id {row_id}."
+                    index,
+                    ROW_ID,
+                    "unknown_row",
+                    f"there is no row with _id {row_id}.",
                 )
             else:
-                final_rows.append((index, _final_patched(existing[row_id], raw, values)))
-        _check_unique(conn, problems, schema, final_rows, touched_ids=list(existing))
+                cells, kept = _split_patched(existing[row_id], raw, values)
+                changing.append((index, cells))
+                unchanged[row_id] = kept
+        _check_unique(
+            conn,
+            problems,
+            schema,
+            changing,
+            touched_ids=list(existing),
+            unchanged=unchanged,
+        )
         problems.raise_if_any()
         patches = [(row_id, values) for _, row_id, _, values in parsed]
         ids = sorted(row_id for row_id, _ in patches)
@@ -1252,8 +1307,14 @@ def upsert_rows(
     kept); any other row is inserted like :func:`insert_rows` (defaults
     applied). The table-row cap counts the inserts only. The change's
     ``before`` holds only the pre-existing rows, ``after`` every written
-    row. ``inserted_ids`` / ``updated_ids`` are in input order, ``row_ids``
-    sorted.
+    row. A matched row that changes nothing (only the key, or every cell
+    already at its value) still counts as updated: it bumps ``_updated_at``
+    and is part of the change. ``inserted_ids`` / ``updated_ids`` are in
+    input order, ``row_ids`` sorted.
+
+    A row whose key is missing or refused is validated by the insert rules
+    without its key column (there is no stored row it could patch); a row
+    repeating an earlier row's key is validated like that earlier row.
 
     :class:`UpsertKeyError` before any row work: ``unknown_key_column``,
     ``key_not_unique``. Problems (one :class:`InvalidRowsError`, nothing
@@ -1263,7 +1324,7 @@ def upsert_rows(
     ``no_rows``, :class:`TooManyRowsError`, :class:`SchemaMismatchError`,
     :class:`TableFullError`, :class:`ChangeTooLargeError`."""
     _check_source(source)
-    key = next((c for c in schema if c.name == key_column), None)
+    key = find_column(schema, key_column)
     if key is None:
         raise UpsertKeyError(
             "unknown_key_column",
@@ -1282,14 +1343,16 @@ def upsert_rows(
     with connect(table_dir) as conn, _write_txn(conn):
         _check_schema_matches(conn, schema, schema_version)
         problems = _Problems(schema)
-        # (payload index, stored key or None when unusable, raw row)
-        parsed: list[tuple[int, Any, dict[str, Any]]] = []
+        # (payload index, stored key or None when unusable, raw row,
+        # stored key of the earlier row this one repeats, or None)
+        parsed: list[tuple[int, Any, dict[str, Any], Any]] = []
         first_index: dict[Any, int] = {}
         for index, row in enumerate(rows):
             raw = _row_values(problems, index, row, by_name, id_allowed=False)
             if raw is None:
                 continue
             stored_key = None
+            repeats = None
             try:
                 stored_key = to_storage(key, coerce_value(key, raw.get(key.key)))
             except TableValueError as exc:
@@ -1297,23 +1360,27 @@ def upsert_rows(
             else:
                 if stored_key is None:
                     problems.add(
-                        index, key.name, "missing_key",
+                        index,
+                        key.name,
+                        "missing_key",
                         f"each row needs a value in the key column {clip_repr(key.name)}.",
                     )
                 elif stored_key in first_index:
                     problems.add(
-                        index, key.name, "duplicate_key",
+                        index,
+                        key.name,
+                        "duplicate_key",
                         f"key value {clip_repr(stored_key)} is also used by row "
                         f"{first_index[stored_key]} of this call.",
                     )
-                    stored_key = None
+                    repeats, stored_key = stored_key, None
                 else:
                     first_index[stored_key] = index
-            if stored_key is None:
+            if stored_key is None and repeats is None:
                 raw.pop(key.key, None)
-            parsed.append((index, stored_key, raw))
+            parsed.append((index, stored_key, raw, repeats))
         found: dict[int, int] = {}  # payload index -> existing _id
-        for index, stored_key, _ in parsed:
+        for index, stored_key, _, _ in parsed:
             if stored_key is not None:
                 hit = conn.execute(
                     f"SELECT _id FROM rows WHERE {_ident(key.key)} = ?", (stored_key,)
@@ -1321,29 +1388,48 @@ def upsert_rows(
                 if hit is not None:
                     found[index] = hit[0]
         inserting = sum(
-            1 for index, stored_key, _ in parsed
+            1
+            for index, stored_key, _, _ in parsed
             if stored_key is not None and index not in found
         )
         current = _check_table_room(conn, inserting)
         existing = _existing_unique_cells(conn, schema, found.values())
-        final_rows: list[tuple[int, dict[str, Any]]] = []
+        changing: list[tuple[int, dict[str, Any]]] = []
+        unchanged: dict[int, dict[str, Any]] = {}
         patches: list[tuple[int, dict[str, Any]]] = []
         inserts: list[dict[str, Any]] = []
-        for index, stored_key, raw in parsed:
+        non_key = [c for c in schema if c is not key]
+        for index, stored_key, raw, repeats in parsed:
             if index in found:
                 values = _patch_values(problems, index, schema, raw)
                 row_id = found[index]
-                final_rows.append((index, _final_patched(existing[row_id], raw, values)))
+                cells, kept = _split_patched(existing[row_id], raw, values)
+                changing.append((index, cells))
+                unchanged[row_id] = kept
                 patches.append((row_id, values))
             elif stored_key is not None:
                 values = _insert_values(problems, index, schema, raw)
-                final_rows.append((index, values))
+                changing.append((index, values))
                 inserts.append(values)
-            else:
-                # The key is unusable, so the row is neither an insert nor
-                # an update: report its value problems, skip the unique check.
+            elif repeats is not None and first_index[repeats] in found:
+                # Repeats a key that patches a stored row: patch rules.
+                # The row is not written, so it skips the unique check.
                 _patch_values(problems, index, schema, raw)
-        _check_unique(conn, problems, schema, final_rows, touched_ids=list(found.values()))
+            elif repeats is not None:
+                # Repeats a key that inserts: insert rules.
+                _insert_values(problems, index, schema, raw)
+            else:
+                # Missing or refused key: no stored row to patch, so the
+                # insert rules apply to the other columns.
+                _insert_values(problems, index, non_key, raw)
+        _check_unique(
+            conn,
+            problems,
+            schema,
+            changing,
+            touched_ids=list(found.values()),
+            unchanged=unchanged,
+        )
         problems.raise_if_any()
         updated_ids = [row_id for row_id, _ in patches]
         before = _row_images(conn, schema, updated_ids)
@@ -1401,7 +1487,8 @@ def delete_rows(
     = index in ``row_ids``, ``column`` None) refuse the whole call.
 
     ``where``: ``(where_sql, params)`` from the filter module, run as
-    ``SELECT _id FROM rows WHERE (<where_sql>)`` with ``params`` bound.
+    ``SELECT _id FROM rows WHERE (<where_sql>)`` with ``params`` (a list
+    or tuple) bound.
     ``where_sql`` is interpolated, so it must be trusted SQL built from
     validated column keys with every value bound in ``params``; it must
     never contain model or user text. More than ``TABLE_WRITE_MAX_ROWS``
@@ -1423,6 +1510,7 @@ def delete_rows(
             not isinstance(where, (tuple, list))
             or len(where) != 2
             or not isinstance(where[0], str)
+            or not isinstance(where[1], (tuple, list))
         ):
             raise ValueError("where must be a (where_sql, params) pair.")
         where_sql, params = where[0], tuple(where[1])
@@ -1438,16 +1526,21 @@ def delete_rows(
                     problems.add(index, None, "invalid_row_id", why)
                 elif row_id in first_index:
                     problems.add(
-                        index, None, "duplicate_row_id",
+                        index,
+                        None,
+                        "duplicate_row_id",
                         f"_id {row_id} is also listed at index {first_index[row_id]}.",
                     )
                 else:
                     first_index[row_id] = index
-            existing = _existing_unique_cells(conn, schema, first_index)
+            existing = _existing_ids(conn, first_index)
             for row_id, index in first_index.items():
                 if row_id not in existing:
                     problems.add(
-                        index, None, "unknown_row", f"there is no row with _id {row_id}."
+                        index,
+                        None,
+                        "unknown_row",
+                        f"there is no row with _id {row_id}.",
                     )
             problems.raise_if_any()
             ids = sorted(first_index)
@@ -1462,8 +1555,14 @@ def delete_rows(
                 raise TooManyRowsError(len(ids))
             if not ids:
                 return RowWriteResult(
-                    op="delete", inserted=0, updated=0, deleted=0, row_ids=[],
-                    inserted_ids=[], updated_ids=[], row_count=_count(conn),
+                    op="delete",
+                    inserted=0,
+                    updated=0,
+                    deleted=0,
+                    row_ids=[],
+                    inserted_ids=[],
+                    updated_ids=[],
+                    row_count=_count(conn),
                     change_id=None,
                 )
         before = _row_images(conn, schema, ids)

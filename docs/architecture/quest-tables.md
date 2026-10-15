@@ -2,7 +2,7 @@
 
 ## Overview
 
-A **Quest Table** is a typed table that lives inside Quest, owned by a user (a **user table**) or by a project (a **project table**, owned by the project owner). Each table is a `data_tables` row in `quest.db` holding its metadata and ordered column schema, plus a directory `<data_dir>/tables/<table_id>/` for its own `table.db` (rows and change log); the rows never live in `quest.db`. This doc covers the metadata layer (the two `quest.db` tables, the store module and its rules, the on-disk path, the constants and the per-user `tables` [feature gate](feature-gates.md)) the column layer (the column schema model, canonical cell values and schema operations) and the table file layer (the `table.db` layout, its guarded open, row writes, the change log and the download copy). Ownership, scope, modes and shares follow [Quest Docs](quest-docs.md#concepts-and-invariants), with the same terms.
+A **Quest Table** is a typed table that lives inside Quest, owned by a user (a **user table**) or by a project (a **project table**, owned by the project owner). Each table is a `data_tables` row in `quest.db` holding its metadata and ordered column schema, plus a directory `<data_dir>/tables/<table_id>/` for its own `table.db` (rows and change log); the rows never live in `quest.db`. This doc covers the metadata layer (the two `quest.db` tables, the store module and its rules, the on-disk path, the constants and the per-user `tables` [feature gate](feature-gates.md)), the column layer (the column schema model, canonical cell values and schema operations) and the table file layer (the `table.db` layout, its guarded open, row writes, the change log and the download copy). Ownership, scope, modes and shares follow [Quest Docs](quest-docs.md#concepts-and-invariants), with the same terms.
 
 ## Key Files
 
@@ -134,7 +134,7 @@ Every write appends one `changes` entry inside its own transaction (`append_chan
 
 Every refusal is a `TableStorageError` with a machine `code` and a model-facing `message`; the class docstring lists the plain codes, and each subclass carries its own. Each write's docstring names the refusals and problem codes it can raise. What the docstrings do not say:
 
-- `invalid_rows` (`InvalidRowsError`) carries every problem of the call as `{row, column, code, reason}`, ordered by row, then schema column order.
+- `invalid_rows` (`InvalidRowsError`) carries every problem of the call as `{row, column, code, reason}`, ordered by row; within a row, row-level problems come first, then `_id`, then schema columns in order, then unknown names. A `duplicate_value` lands on the row that writes the value.
 - `too_many_rows`, `table_full` and `change_too_large` are the caps; `unknown_key_column` and `key_not_unique` (`UpsertKeyError`) refuse an upsert key.
 - `schema_mismatch` means `quest.db` and `table.db` disagree on the schema; it is the file-level check, distinct from the store's `StaleTableSchemaError` token.
 - `constraint_failed` is a residual SQLite integrity error that the Python checks should have caught; its message is fixed, so no SQLite text reaches a model.

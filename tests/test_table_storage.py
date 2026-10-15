@@ -521,9 +521,9 @@ class TestInsertValidation:
             (1, "Tags", "unknown_option"),
             (1, "Bogus", "unknown_column"),
             (2, None, "invalid_row"),
+            (3, "_id", "read_only_column"),
             (3, "Site", "invalid_url"),
             (3, "Done", "wrong_type"),
-            (3, "_id", "read_only_column"),
             (3, "_created_at", "read_only_column"),
         ]
         assert str(exc.value) == "The rows have 9 problems; nothing was written."
