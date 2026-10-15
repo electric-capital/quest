@@ -1,4 +1,7 @@
-"""The Quest Docs access rule -- the ONE place the read/write matrix lives.
+"""The Quest Docs access rule -- the ONE place the matrix is documented.
+
+The procedure that applies it lives in ``chat/artifact_access.py``
+(shared with Quest Tables); this module maps it to :class:`DocAccess`.
 
 Invariant 3 of the Quest Docs spec: every read/write decision about a doc
 goes through :func:`resolve_doc_access`. The model-facing tools, the HTTP
@@ -89,14 +92,25 @@ Callers pass ``is_public=False`` and ``project_id=None`` for the ``ui`` and
 ``script`` run kinds (neither runs inside a conversation), and the empty
 default ``doc_source_project_ids`` for everything but a private project
 conversation (the doc service loads the project's sources).
+
+The procedure itself lives in ``chat/artifact_access.py`` (shared with the
+Quest Tables resolver, ``chat/tables/access.py``, whose matrix is the same
+plus a schema verdict); this module owns the doc verdict type and wording.
 """
 
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
+from chat import artifact_access
+from chat.artifact_access import (
+    READ_ONLY_RUN_KINDS,
+    RUN_KINDS,
+    WRITE_VERDICTS,
+    WriteVerdict,
+)
 from chat.docs.constants import DOC_MODES
 
 __all__ = [
@@ -124,19 +138,10 @@ __all__ = [
     "write_note",
 ]
 
-RUN_KINDS = (
-    "top_level",
-    "sub_agent",
-    "inference_api",
-    "user_subagent",
-    "script",
-    "slack",
-    "ui",
-)
-READ_ONLY_RUN_KINDS = frozenset({"sub_agent", "inference_api", "user_subagent", "script"})
-
-WriteVerdict = Literal["free", "approval", "denied"]
-WRITE_VERDICTS = ("free", "approval", "denied")
+# The procedure and RUN_KINDS / READ_ONLY_RUN_KINDS live in
+# chat.artifact_access (shared with chat.tables.access) and are re-exported
+# here; doc modes are the shared modes.
+assert tuple(DOC_MODES) == artifact_access.MODES
 
 # Model/user-facing deny reasons. Tools, routes and docs reference these
 # constants; the text never names or hints at a hidden doc.
@@ -168,15 +173,20 @@ APPROVAL_REQUIRED_WRITE_NOTE = (
     "owner requires approval for every change: use create_action_request(write_doc)"
 )
 
-_READ_ONLY_REASONS = {
+# artifact_access deny cause -> doc wording.
+_DENY_TEXT = {
     "sub_agent": DENY_SUB_AGENT,
     "inference_api": DENY_INFERENCE_API,
     "user_subagent": DENY_USER_SUBAGENT,
     "script": DENY_SCRIPT,
+    "read_only_share": DENY_READ_ONLY_SHARE,
+    "public_from_private": DENY_PUBLIC_DOC_FROM_PRIVATE,
+    "slack_needs_approval": DENY_SLACK_NEEDS_APPROVAL,
+    "slack_approval_required": DENY_SLACK_APPROVAL_REQUIRED,
+    "public_approval_required": DENY_PUBLIC_APPROVAL_REQUIRED,
+    "ui_read_only": DENY_UI_READ_ONLY,
 }
-
-# Share permissions (constants.DOC_SHARE_PERMISSIONS), weakest to strongest.
-_PERMISSION_RANK = {"read": 1, "write": 2}
+assert set(_DENY_TEXT) == set(artifact_access.DENY_CAUSES)
 
 
 @dataclass(frozen=True)
@@ -223,20 +233,6 @@ def _read_only(reason: str) -> DocAccess:
     return DocAccess(visible=True, can_read=True, write="denied", deny_reason=reason)
 
 
-def _shares(doc: Mapping[str, Any]) -> list:
-    """The doc's share rows; a missing/None ``shares`` key is a caller bug.
-
-    Fail closed: a dict fetched without shares (``get_doc(...,
-    with_shares=False)``) must never be read as "unshared", or the owner of
-    a shared private doc would get a free write instead of the approval
-    card. Callers always pass the full store dict.
-    """
-    shares = doc.get("shares")
-    if shares is None:
-        raise ValueError("doc dict must carry its 'shares' list (fetch with shares)")
-    return shares
-
-
 def effective_share(doc: Mapping[str, Any], user_id: int) -> str | None:
     """The permission ``user_id`` holds through ``doc["shares"]``.
 
@@ -245,19 +241,9 @@ def effective_share(doc: Mapping[str, Any], user_id: int) -> str | None:
     user-specific row never downgrades an everyone grant. Rows with an
     unknown permission grant nothing. Returns ``"write"``, ``"read"`` or
     None. Ownership is not a share; callers check ``owner_id`` separately.
+    A missing or None ``shares`` key raises ValueError (fail closed).
     """
-    best: str | None = None
-    for row in _shares(doc):
-        grantee = row.get("user_id")
-        if grantee is not None and grantee != user_id:
-            continue
-        permission = row.get("permission")
-        rank = _PERMISSION_RANK.get(permission)
-        if rank is None:
-            continue
-        if best is None or rank > _PERMISSION_RANK[best]:
-            best = permission
-    return best
+    return artifact_access.effective_share(doc, user_id, kind="doc")
 
 
 def resolve_doc_access(
@@ -281,82 +267,22 @@ def resolve_doc_access(
     Raises ValueError for an unknown ``run_kind`` or doc mode, or a doc
     dict without its ``shares`` list.
     """
-    if run_kind not in RUN_KINDS:
-        raise ValueError(f"unknown run_kind: {run_kind!r}")
-    stored_mode = doc["mode"]
-    if stored_mode not in DOC_MODES:
-        raise ValueError(f"unknown doc mode: {stored_mode!r}")
-    _shares(doc)  # fail closed on a partial dict before any verdict
-
-    # 0. A user doc is always private, whatever its row says (defensive:
-    # after migration e1b7c4d9a2f6 no public user doc exists).
-    doc_project_id = doc["project_id"]
-    mode = "private" if doc_project_id is None else stored_mode
-
-    # 1. Relationship.
-    is_owner = doc["owner_id"] == user_id
-    share = None if is_owner else effective_share(doc, user_id)
-    is_shared = len(_shares(doc)) > 0
-    # Rule 7. Absent on a hand-built dict = off, like a fresh row.
-    require_approval = bool(doc.get("require_approval", False))
-
-    # 2. No relationship at all.
-    if not is_owner and share is None:
+    core = artifact_access.resolve_core(
+        doc,
+        user_id=user_id,
+        is_public=is_public,
+        project_id=project_id,
+        run_kind=run_kind,
+        source_project_ids=doc_source_project_ids,
+        kind="doc",
+    )
+    if not core.visible:
         return HIDDEN
-
-    # 3. Project docs: only from that project's conversations (or the UI),
-    # except public docs of a listed doc source, which a private project's
-    # conversations may read (rule 2). Public conversations stay confined
-    # to their own project's docs; scripts (no conversation) see no
-    # project doc; standalone conversations have no sources.
-    if doc_project_id is not None and run_kind != "ui" and project_id != doc_project_id:
-        if (
-            mode != "public"
-            or is_public
-            or run_kind == "script"
-            or project_id is None
-            or doc_project_id not in doc_source_project_ids
-        ):
-            return HIDDEN
-
-    # 4. Public conversations never learn of private docs.
-    if is_public and mode == "private":
-        return HIDDEN
-
-    # 5. Visible and readable; decide the write verdict.
-    if run_kind in READ_ONLY_RUN_KINDS:
-        return _read_only(_READ_ONLY_REASONS[run_kind])
-
-    may_write = is_owner or share == "write"
-
-    if run_kind == "ui":
-        return _FREE if may_write else _read_only(DENY_UI_READ_ONLY)
-
-    if mode == "public":
-        if not is_public:
-            return _read_only(DENY_PUBLIC_DOC_FROM_PRIVATE)
-        if not may_write:
-            return _read_only(DENY_READ_ONLY_SHARE)
-        if require_approval:
-            # Rule 7: public conversations have no action requests, so the
-            # owner's switch leaves the agent read-only here.
-            return _read_only(DENY_PUBLIC_APPROVAL_REQUIRED)
+    if core.write == "denied":
+        return _read_only(_DENY_TEXT[core.cause])
+    if core.write == "free":
         return _FREE
-
-    # Private doc in a private conversation (step 4 hid it from public ones).
-    if not may_write:
-        return _read_only(DENY_READ_ONLY_SHARE)
-    if require_approval:
-        # Rule 7, before the matrix: the switch wins over "unshared = free"
-        # and over the share-based approval (its wording names the switch).
-        if run_kind == "slack":
-            return _read_only(DENY_SLACK_APPROVAL_REQUIRED)
-        return _APPROVAL_REQUIRED
-    if is_owner and not is_shared:
-        return _FREE
-    if run_kind == "slack":
-        return _read_only(DENY_SLACK_NEEDS_APPROVAL)
-    return _APPROVAL
+    return _APPROVAL_REQUIRED if core.required_by_owner else _APPROVAL
 
 
 def write_note(access: DocAccess) -> str | None:
