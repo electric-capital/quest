@@ -660,8 +660,8 @@ class TestDelete:
 
 
 def test_upsert_replay_restores_dump(table_dir, schema):
-    """Undo sanity for an upsert: delete the inserted rows, restore the
-    updated rows' before images."""
+    """An upsert's images are complete: deleting the inserted rows and
+    writing back the updated rows' before images gives the old dump."""
     before_dump = dump_rows(table_dir, schema)
     result = upsert(table_dir, schema, [{"SKU": "Y", "Price": 2}, {"SKU": "N", "Name": "n"}])
     change = get_change(table_dir, result.change_id)
@@ -684,10 +684,9 @@ def test_upsert_replay_restores_dump(table_dir, schema):
     assert K_SITE in change["after"][0]
 
 
-def test_failure_after_append_rolls_back_pruning(table_dir, schema, monkeypatch):
-    """With a one-entry log, append_change prunes every older change; a
-    failure later in the same transaction must bring them all back."""
-    monkeypatch.setattr(storage_mod, "TABLE_CHANGE_MAX_COUNT", 1)
+def test_failure_after_append_rolls_back(table_dir, schema, monkeypatch):
+    """A failure after append_change in the same transaction leaves neither
+    the write nor its change entry."""
     before_dump = dump_rows(table_dir, schema)
 
     def boom(conn):

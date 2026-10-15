@@ -193,13 +193,12 @@ class SchemaChangePlan:
     image, not a replay input: it is not accepted back by
     :func:`apply_schema_operations` (it carries server-assigned keys, which
     operations may not name). Each op that addresses a column carries that
-    column's immutable key so undo can locate the column after later
-    renames. Undo does not re-run inverse operations (several changes have
-    no inverse op: a multi-option enum cannot become single again, and
-    ``add_column`` cannot insert at position 0); it rebuilds the table from
-    the before schema, which the change log must store in the change's
-    ``before`` image, the values captured by :class:`CaptureDroppedValues`,
-    and ``effects``.
+    column's immutable key so the History view can name the column after
+    later renames. Restore never re-runs operations: it replays each schema
+    change from the stored ``after`` image (columns, physical column order,
+    backfill) plus the rewrite steps in ``before`` (see
+    :func:`chat.tables.storage.apply_schema_change` and
+    :mod:`chat.tables.revert`).
     """
 
     columns: list[Column]
@@ -799,13 +798,13 @@ def apply_schema_operations(
     description, canonical defaults). Every operation that addresses a
     column by name also carries that column's immutable ``key`` (``keys``
     for ``reorder_columns``, ``after_key`` for ``add_column``'s ``after``)
-    so undo can find the column after later renames.
+    so the History view can find the column after later renames.
     ``add_column``'s ``column`` is the full :meth:`Column.to_dict` including
     the assigned key, and its ``after`` is always present (None = appended).
     The names in a normalized op are the names at the time the op ran.
     These normalized ops are the audit record for the change log's
     ``after`` image, not a replay input; see :class:`SchemaChangePlan` for
-    how undo works instead.
+    how restore replays a schema change instead.
 
     ``add_column`` specs may not carry a ``key`` (``unknown_field``): keys
     are assigned here, never by the caller.

@@ -16,11 +16,12 @@ Layout::
   a column required needs no table rebuild). One unique index per
   ``unique`` column, named by :func:`unique_index_name`. AUTOINCREMENT (a
   deviation from the spec's plain ``INTEGER PRIMARY KEY``) means a deleted
-  row's ``_id`` is never handed out again: undo re-inserts a deleted row
-  under its original ``_id``, and reuse would make a later insert collide
-  with a pending undo and make a change's ``row_ids`` ambiguous.
+  row's ``_id`` is never handed out again: a restore replays rows under
+  their original ``_id`` values, and reuse would make a change's ``row_ids``
+  name two different rows.
 - ``changes``: the change log (spec section 4.5), one entry per write in
-  the same transaction as the write (spec invariant 6).
+  the same transaction as the write (spec invariant 6), kept in full from
+  table creation (no pruning).
 - ``meta``: ``schema`` (compact JSON of :func:`dump_schema`),
   ``schema_version``, ``table_id`` and ``title``, so a downloaded copy is
   self-describing. quest.db stays the source of truth.
@@ -46,8 +47,8 @@ as ``busy``, for reads and writes alike.
 
 Writes run in one ``BEGIN IMMEDIATE`` transaction (:func:`_write_txn`):
 schema match check, validation (every problem in every row collected),
-caps, unique checks against the final state, the write, the change entry
-and pruning. Any refusal rolls everything back, so nothing is written.
+caps, unique checks against the final state, the write and the change
+entry. Any refusal rolls everything back, so nothing is written.
 Values go through :func:`apply_default` (insert) or :func:`canonicalize`
 (patches), then :func:`to_storage`; reads go through :func:`from_storage`.
 Payload rows are keyed by column **name**; images, stored rows and
@@ -57,7 +58,7 @@ Row images (a ``rows`` change's ``before`` / ``after``) are lists of full
 stored rows sorted by ``_id``: ``{"_id", "_created_at", "_updated_at",
 <key>: <stored cell>}`` with every schema column present, cells in stored
 form (booleans 0/1, multi-enums as their compact JSON string), so a rename
-never breaks undo and replay is a plain INSERT or UPDATE.
+never breaks a restore and replay is a plain INSERT.
 
 Schema changes (:func:`apply_schema_change`) execute a
 :class:`chat.tables.schema_ops.SchemaChangePlan`'s effects in order in one
@@ -67,8 +68,8 @@ one ``schema`` change entry. Their images (spelled out in that function's
 docstring) are dicts, not row lists: the before and after columns and
 title, the physical ``rows`` column order on both sides
 (``ddl_columns``), every dropped column's pre-change values, the ordered
-cell rewrites (wraps and option renames, compact) undo replays in
-reverse, each backfilled column's value and the normalized operations.
+cell rewrites (wraps and option renames, compact) a restore replays
+forward, each backfilled column's value and the normalized operations.
 Change #1 (``create_table``) keeps its own image shape (see
 :func:`create_table_db`).
 :func:`check_schema_violations` is the same run, always rolled back.
@@ -79,17 +80,18 @@ module's globals are the patch point (tests monkeypatch
 
 The other modules of this package (queries, revert)
 build their own transactions from the private helpers here:
-:func:`connect`, :func:`_write_txn`, :func:`_busy_as_refusal`,
-:func:`_ident`, :func:`sql_type`, :func:`unique_index_name`,
-:func:`write_meta`, :func:`append_change`, :func:`prune_changes`,
-:func:`_row_images`, :func:`_insert_image_row`, :func:`_select_rows` and
+:func:`connect`, :func:`_open_db_file`, :func:`_write_txn`,
+:func:`_busy_as_refusal`, :func:`_ident`, :func:`sql_type`,
+:func:`unique_index_name`, :func:`_create_table_ddl`, :func:`append_change`,
+:func:`_list_changes`, :func:`_unique_indexes`,
+:func:`_insert_image_row`, :func:`_select_rows` and
 :func:`_check_schema_matches`. Nothing outside ``chat.tables`` uses them.
 """
 
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import errno
 import json
 import logging
@@ -101,8 +103,6 @@ from typing import Any
 
 from chat.tables.constants import (
     TABLE_CHANGE_MAX_BYTES,
-    TABLE_CHANGE_MAX_COUNT,
-    TABLE_CHANGE_RETENTION_DAYS,
     TABLE_DB_BUSY_TIMEOUT_S,
     TABLE_MAX_COLUMNS,
     TABLE_MAX_ROWS,
@@ -236,7 +236,7 @@ class ChangeTooLargeError(TableStorageError):
         super().__init__(
             "change_too_large",
             f"This write's change record would be {size_bytes} bytes, over the "
-            f"{cap}-byte limit that keeps every change undoable. {hint}",
+            f"{cap}-byte limit for one change. {hint}",
         )
         self.size_bytes = size_bytes
         self.cap = cap
@@ -555,7 +555,8 @@ def _check_new_schema(schema: Sequence[Column]) -> None:
 
 
 def _remove_new_storage(table_dir: Path) -> None:
-    """Undo a failed :func:`create_table_db` so a retry can start clean."""
+    """Remove what a failed :func:`create_table_db` created so a retry can
+    start clean."""
     db = table_dir / TABLE_DB_NAME
     for path in (db, *(db.with_name(db.name + s) for s in _SIDE_SUFFIXES)):
         with suppress(OSError):
@@ -607,28 +608,7 @@ def create_table_db(
         os.close(fd)
         now = _resolve_now(now)
         with connect(table_dir) as conn, _write_txn(conn):
-            columns = ", ".join(f"{_ident(c.key)} {sql_type(c)}" for c in schema)
-            conn.execute(
-                "CREATE TABLE rows (_id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                "_created_at TEXT NOT NULL, _updated_at TEXT NOT NULL, "
-                f"{columns})"
-            )
-            for column in schema:
-                if column.unique:
-                    conn.execute(
-                        f'CREATE UNIQUE INDEX "{unique_index_name(column.key)}" '
-                        f"ON rows({_ident(column.key)})"
-                    )
-            conn.execute(
-                "CREATE TABLE changes (id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                "created_at TEXT NOT NULL, source TEXT NOT NULL, "
-                "actor_user_id INTEGER, kind TEXT NOT NULL, op TEXT NOT NULL, "
-                "summary TEXT NOT NULL, schema_before INTEGER NOT NULL, "
-                "schema_after INTEGER NOT NULL, row_ids TEXT NOT NULL, "
-                "before TEXT NOT NULL, after TEXT NOT NULL, reverted_by INTEGER, "
-                "size_bytes INTEGER NOT NULL)"
-            )
-            conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            _create_table_ddl(conn, schema)
             write_meta(
                 conn,
                 schema=schema,
@@ -657,6 +637,35 @@ def create_table_db(
     except BaseException:
         _remove_new_storage(table_dir)
         raise
+
+
+def _create_table_ddl(conn: sqlite3.Connection, schema: Sequence[Column]) -> None:
+    """Create ``rows`` (with ``schema``'s columns and unique indexes),
+    ``changes`` and ``meta`` in the caller's transaction. A restore builds
+    its fresh file with the same statements, so ``sqlite_master`` matches
+    a table created here."""
+    columns = ", ".join(f"{_ident(c.key)} {sql_type(c)}" for c in schema)
+    conn.execute(
+        "CREATE TABLE rows (_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "_created_at TEXT NOT NULL, _updated_at TEXT NOT NULL, "
+        f"{columns})"
+    )
+    for column in schema:
+        if column.unique:
+            conn.execute(
+                f'CREATE UNIQUE INDEX "{unique_index_name(column.key)}" '
+                f"ON rows({_ident(column.key)})"
+            )
+    conn.execute(
+        "CREATE TABLE changes (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "created_at TEXT NOT NULL, source TEXT NOT NULL, "
+        "actor_user_id INTEGER, kind TEXT NOT NULL, op TEXT NOT NULL, "
+        "summary TEXT NOT NULL, schema_before INTEGER NOT NULL, "
+        "schema_after INTEGER NOT NULL, row_ids TEXT NOT NULL, "
+        "before TEXT NOT NULL, after TEXT NOT NULL, "
+        "size_bytes INTEGER NOT NULL)"
+    )
+    conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
 
 
 def write_meta(
@@ -709,6 +718,24 @@ def read_meta(table_dir: Path) -> TableMeta:
 # --- Change log --------------------------------------------------------------
 
 
+# Columns of ``changes`` in DDL order (a restore copies the log by them).
+CHANGE_COLUMNS = (
+    "id",
+    "created_at",
+    "source",
+    "actor_user_id",
+    "kind",
+    "op",
+    "summary",
+    "schema_before",
+    "schema_after",
+    "row_ids",
+    "before",
+    "after",
+    "size_bytes",
+)
+
+
 def append_change(
     conn: sqlite3.Connection,
     *,
@@ -725,12 +752,13 @@ def append_change(
     after: Any,
     too_large_hint: str | None = None,
 ) -> int:
-    """Insert one ``changes`` entry and prune old ones; returns its id.
-    Runs in the caller's transaction. ``before`` / ``after`` are JSON-ready
-    images; ``size_bytes`` is their UTF-8 encoded size, and above
-    ``TABLE_CHANGE_MAX_BYTES`` the change is refused with
-    :class:`ChangeTooLargeError` (its message ending in ``too_large_hint``
-    when given) before anything is inserted."""
+    """Insert one ``changes`` entry; returns its id. Runs in the caller's
+    transaction. ``kind`` is ``rows``, ``schema`` or ``restore``.
+    ``before`` / ``after`` are JSON-ready images; ``size_bytes`` is their
+    UTF-8 encoded size, and above ``TABLE_CHANGE_MAX_BYTES`` the change is
+    refused with :class:`ChangeTooLargeError` (its message ending in
+    ``too_large_hint`` when given) before anything is inserted. The log is
+    never pruned."""
     before_json = _json(before)
     after_json = _json(after)
     size_bytes = len(before_json.encode("utf-8")) + len(after_json.encode("utf-8"))
@@ -738,8 +766,8 @@ def append_change(
         raise ChangeTooLargeError(size_bytes, hint=too_large_hint)
     cursor = conn.execute(
         "INSERT INTO changes (created_at, source, actor_user_id, kind, op, summary, "
-        "schema_before, schema_after, row_ids, before, after, reverted_by, size_bytes) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+        "schema_before, schema_after, row_ids, before, after, size_bytes) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             _utc_iso(now),
             source,
@@ -755,23 +783,7 @@ def append_change(
             size_bytes,
         ),
     )
-    change_id = cursor.lastrowid
-    prune_changes(conn, now=now)
-    return change_id
-
-
-def prune_changes(conn: sqlite3.Connection, *, now: datetime) -> int:
-    """Delete changes older than ``TABLE_CHANGE_RETENTION_DAYS`` before
-    ``now``, then all but the newest ``TABLE_CHANGE_MAX_COUNT`` by id.
-    Returns how many were deleted. Runs in the caller's transaction."""
-    cutoff = _utc_iso(now - timedelta(days=TABLE_CHANGE_RETENTION_DAYS))
-    deleted = conn.execute("DELETE FROM changes WHERE created_at < ?", (cutoff,)).rowcount
-    deleted += conn.execute(
-        "DELETE FROM changes WHERE id NOT IN "
-        "(SELECT id FROM changes ORDER BY id DESC LIMIT ?)",
-        (TABLE_CHANGE_MAX_COUNT,),
-    ).rowcount
-    return deleted
+    return cursor.lastrowid
 
 
 # --- Shared row-write machinery ----------------------------------------------
@@ -1013,7 +1025,7 @@ def _insert_image_row(
     """Insert one row image (see the module docstring) verbatim: its
     ``_id``, both timestamps and every ``schema`` cell in stored form (a
     key the image lacks is NULL, keys outside ``schema`` are ignored).
-    Undo of a delete uses it to restore a row under its original ``_id``."""
+    A restore uses it to replay a row under its original ``_id``."""
     cells = _cell_list(schema)
     marks = ", ".join("?" for _ in schema)
     conn.execute(
@@ -1701,11 +1713,11 @@ def _schema_too_large_hint(operations: Sequence[Mapping[str, Any]]) -> str:
     helps a batch of several operations."""
     if len(operations) > 1:
         return (
-            "This schema change touches too many cells to record for undo; "
+            "This schema change touches too many cells to record; "
             "split it into smaller schema changes."
         )
     return (
-        "This schema change touches too many cells to record for undo; change "
+        "This schema change touches too many cells to record; change "
         "the affected rows with row writes in smaller batches first."
     )
 
@@ -1769,6 +1781,18 @@ def _schema_summary(operations: Sequence[Mapping[str, Any]]) -> str:
 def _ddl_columns(conn: sqlite3.Connection) -> list[str]:
     """The physical ``rows`` column names in ``PRAGMA table_info`` order."""
     return [row[1] for row in conn.execute("PRAGMA table_info(rows)").fetchall()]
+
+
+def _unique_indexes(conn: sqlite3.Connection) -> list[str]:
+    """The names of the unique indexes on ``rows`` in ``sqlite_master``
+    order (creation order; ``PRAGMA index_list`` follows it)."""
+    return [
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND tbl_name = 'rows' AND sql IS NOT NULL ORDER BY rowid"
+        ).fetchall()
+    ]
 
 
 def _violating_ids(
@@ -1863,6 +1887,9 @@ def _execute_schema_change(
     # this batch reads it (dropped_values records pre-change values).
     originals: dict[str, dict[int, Any]] = {}
     backfilled: list[str] = []
+    # Unique indexes this change created, in creation order (a re-created
+    # index moves to its latest creation).
+    created: list[str] = []
     # Cell rewrites of pre-existing columns, in execution order (see
     # apply_schema_change); filtered to surviving columns at the end.
     rewrites: list[dict[str, Any]] = []
@@ -1898,6 +1925,8 @@ def _execute_schema_change(
             kind = sql_type(column) if column is not None else _added_type(plan, key)
             conn.execute(f"ALTER TABLE rows ADD COLUMN {col} {kind}")
         elif isinstance(effect, DropColumnDDL):
+            if unique_index_name(key) in created:
+                created.remove(unique_index_name(key))
             conn.execute(f'DROP INDEX IF EXISTS "{unique_index_name(key)}"')
             conn.execute(f"ALTER TABLE rows DROP COLUMN {col}")
         elif isinstance(effect, CreateUniqueIndex):
@@ -1908,7 +1937,12 @@ def _execute_schema_change(
             except sqlite3.IntegrityError:
                 _run_check(conn, ViolationCheck("unique", key), names)
                 raise
+            if unique_index_name(key) in created:
+                created.remove(unique_index_name(key))
+            created.append(unique_index_name(key))
         elif isinstance(effect, DropUniqueIndex):
+            if unique_index_name(key) in created:
+                created.remove(unique_index_name(key))
             conn.execute(f'DROP INDEX IF EXISTS "{unique_index_name(key)}"')
         elif isinstance(effect, Backfill):
             column = after_by_key[key]
@@ -2034,6 +2068,8 @@ def _execute_schema_change(
             "columns": dump_schema(plan.columns),
             "title": new_title,
             "ddl_columns": _ddl_columns(conn),
+            "unique_indexes": _unique_indexes(conn),
+            "created_indexes": created,
             "operations": plan.operations,
             "backfill": backfill,
         },
@@ -2095,9 +2131,9 @@ def apply_schema_change(
     for a table that has rows, which emits no backfill. The service should
     still compute ``row_count`` for ``table_empty`` under the table lock.
     Then ``meta`` (new schema, ``schema_version + 1``, title), the change
-    entry and pruning. Rows' ``_updated_at`` is never touched by a schema
-    change, even where cells were rewritten: the change log records those
-    cells, and undo can then restore rows byte-equal.
+    entry. Rows' ``_updated_at`` is never touched by a schema change, even
+    where cells were rewritten, so a restore that replays the change
+    (:mod:`chat.tables.revert`) reproduces the rows byte-equal.
 
     Change entry: ``kind`` / ``op`` "schema", ``summary`` the one
     operation spelled out ("Added column Status", "Renamed option A to B
@@ -2115,6 +2151,8 @@ def apply_schema_change(
                   "rewrites": [step, ...]}
         after  = {"columns": dump_schema(plan.columns), "title": new title,
                   "ddl_columns": [... after the DDL],
+                  "unique_indexes": [index names, sqlite_master order],
+                  "created_indexes": [index names this change created],
                   "operations": plan.operations,
                   "backfill": {key: {"value": stored}}}
 
@@ -2126,33 +2164,44 @@ def apply_schema_change(
 
     - ``dropped_values``: for each column of ``schema`` the batch drops, its
       non-null cells as they were before the change (a cell the batch
-      rewrote before dropping it is recorded with its original value);
-      undo restores NULL for every ``_id`` not listed. A column the batch
-      adds and drops again is not recorded.
+      rewrote before dropping it is recorded with its original value),
+      for the History detail view. A column the batch adds and drops
+      again is not recorded.
     - ``rewrites``: every cell rewrite of a column present in both schemas,
       in execution order, one step per effect that changed at least one
       cell (``row_ids`` ascending). Steps on a column the batch adds or
-      drops are left out (undo drops an added column; ``dropped_values``
-      restores a dropped one). Undo replays the inverse steps in reverse
-      order, which restores the exact stored cells even after chained
+      drops are left out (an added column only ever holds its backfill,
+      a dropped one is gone). A restore replays the steps forward in
+      order, which reproduces the exact stored cells even after chained
       renames or a wrap followed by renames:
 
-      - ``wrap``: each listed cell is a one-element JSON list ``[v]``; set
-        it back to ``v``.
-      - ``enum_rename`` (single enum): each listed cell holds ``new``; set
-        it back to ``old``.
-      - ``enum_rename_multi``: set each listed cell back to its recorded
-        stored string (a multi cell is deduplicated and re-sorted, so it
-        is not derivable from ``old`` / ``new``).
+      - ``wrap``: each listed non-null cell ``v`` becomes the compact
+        JSON list ``[v]``.
+      - ``enum_rename`` (single enum): each listed cell holds ``old`` and
+        becomes ``new``.
+      - ``enum_rename_multi``: each listed cell's recorded stored string
+        with ``old`` replaced by ``new``, deduplicated and sorted by the
+        option order of the column in ``after["columns"]`` (options not
+        in it last, then by value), as compact JSON.
 
       A cell renamed and renamed back within one batch still appears in
       both steps.
     - ``backfill``: for each surviving column the batch adds with a
       backfill on a non-empty table, the stored value every row ended up
       with (after any later rewrite or wrap in the batch). The column is
-      new, so the before value is NULL; undo drops the column.
-    - ``ddl_columns`` lets undo rebuild ``rows`` with its original physical
-      column order (``ADD COLUMN`` only appends).
+      new, so the before value is NULL.
+    - ``ddl_columns``: ``ADD COLUMN`` only appends, so a restore that
+      drops the columns gone from ``after`` and appends the new ones in
+      ``after["ddl_columns"]`` order reproduces the physical order; it
+      checks the result against ``after["ddl_columns"]``.
+    - ``unique_indexes``: the unique index names on ``rows`` after the
+      change in ``sqlite_master`` (creation) order; ``created_indexes``:
+      the ones this change created (including one dropped and re-created),
+      in creation order. A new index lands after every existing
+      ``sqlite_master`` entry, so a restore that drops the created ones and
+      creates them again in that order reproduces ``sqlite_master`` and
+      ``PRAGMA index_list`` order; it checks the result against
+      ``unique_indexes``.
 
     Refusals (nothing written, the file unchanged):
     :class:`SchemaMismatchError` (stale schema or version),
@@ -2287,7 +2336,6 @@ _CHANGE_SUMMARY_FIELDS = (
     "summary",
     "schema_before",
     "schema_after",
-    "reverted_by",
     "size_bytes",
 )
 _CHANGE_JSON_FIELDS = ("row_ids", "before", "after")
@@ -2295,7 +2343,7 @@ _CHANGE_JSON_FIELDS = ("row_ids", "before", "after")
 
 def get_change(table_dir: Path, change_id: int) -> dict | None:
     """One change with ``row_ids``, ``before`` and ``after`` decoded, or
-    None when it does not exist (or was pruned)."""
+    None when it does not exist."""
     fields = (*_CHANGE_SUMMARY_FIELDS, *_CHANGE_JSON_FIELDS)
     with connect(table_dir) as conn, _busy_as_refusal():
         row = conn.execute(
@@ -2309,29 +2357,54 @@ def get_change(table_dir: Path, change_id: int) -> dict | None:
     return change
 
 
-def list_changes(
-    table_dir: Path, *, limit: int = 50, before_id: int | None = None
-) -> list[dict]:
-    """Changes newest first, summary fields only (no images or row ids);
-    ``before_id`` (an int or None) pages to older entries. ``limit`` is
-    clamped to 1.._LIST_CHANGES_MAX."""
+def _check_list_args(limit: object, before_id: object) -> int:
     if not isinstance(limit, int) or isinstance(limit, bool):
         raise ValueError(f"limit must be an integer, got {limit!r}")
     if before_id is not None and (
         not isinstance(before_id, int) or isinstance(before_id, bool)
     ):
         raise ValueError(f"before_id must be an integer or None, got {before_id!r}")
-    limit = max(1, min(limit, _LIST_CHANGES_MAX))
-    sql = f"SELECT {', '.join(_CHANGE_SUMMARY_FIELDS)} FROM changes"
+    return max(1, min(limit, _LIST_CHANGES_MAX))
+
+
+def _list_changes(
+    conn: sqlite3.Connection, *, limit: int, before_id: int | None
+) -> list[dict]:
+    """The body of :func:`list_changes` on an open connection (arguments
+    already checked). A restore entry whose ``after`` is not JSON is
+    ``corrupt_storage``."""
+    sql = (
+        f"SELECT {', '.join(_CHANGE_SUMMARY_FIELDS)}, CASE WHEN kind = 'restore' "
+        "THEN json_extract(after, '$.restore_to') END FROM changes"
+    )
     params: list[Any] = []
     if before_id is not None:
         sql += " WHERE id < ?"
         params.append(before_id)
     sql += " ORDER BY id DESC LIMIT ?"
     params.append(limit)
-    with connect(table_dir) as conn, _busy_as_refusal():
+    try:
         rows = conn.execute(sql, params).fetchall()
-    return [dict(zip(_CHANGE_SUMMARY_FIELDS, row)) for row in rows]
+    except sqlite3.OperationalError as exc:
+        if _is_busy(exc):
+            raise
+        raise TableStorageError(
+            "corrupt_storage", "The table's change log is invalid."
+        ) from exc
+    return [dict(zip((*_CHANGE_SUMMARY_FIELDS, "restore_to"), row)) for row in rows]
+
+
+def list_changes(
+    table_dir: Path, *, limit: int = 50, before_id: int | None = None
+) -> list[dict]:
+    """Changes newest first, summary fields only (no images or row ids)
+    plus ``restore_to`` (a restore entry's target id, else None);
+    ``before_id`` (an int or None) pages to older entries. ``limit`` is
+    clamped to 1.._LIST_CHANGES_MAX. The same page with ``in_effect``
+    flags comes from :func:`chat.tables.revert.list_changes_in_effect`."""
+    limit = _check_list_args(limit, before_id)
+    with connect(table_dir) as conn, _busy_as_refusal():
+        return _list_changes(conn, limit=limit, before_id=before_id)
 
 
 # --- Download copy -----------------------------------------------------------

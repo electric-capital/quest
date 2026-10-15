@@ -28,7 +28,6 @@ from chat.tables.storage import (
     get_rows_by_ids,
     insert_rows,
     list_changes,
-    prune_changes,
     read_meta,
     row_count,
     sql_type,
@@ -165,7 +164,7 @@ class TestCreate:
         assert cols == [
             "id", "created_at", "source", "actor_user_id", "kind", "op", "summary",
             "schema_before", "schema_after", "row_ids", "before", "after",
-            "reverted_by", "size_bytes",
+            "size_bytes",
         ]
         assert [r[1] for r in raw_sql(table_dir, "PRAGMA table_info(meta)")] == [
             "key", "value",
@@ -197,7 +196,6 @@ class TestCreate:
             "title": "Inventory",
             "columns": dump_schema(schema),
         }
-        assert change["reverted_by"] is None
         assert change["size_bytes"] == len("{}") + len(
             json.dumps(change["after"], ensure_ascii=False, separators=(",", ":")).encode()
         )
@@ -741,30 +739,29 @@ class TestChangeLog:
                 _append(conn, NOW, after=["x" * 20])
         assert change_count(table_dir) == 1
 
-    def test_prune_by_age(self, table_dir):
+    def test_log_is_never_pruned(self, table_dir):
         with connect(table_dir) as conn, storage_mod._write_txn(conn):
-            for days in (100, 95, 89):
+            for days in (4000, 900, 1):
                 _append(conn, NOW - timedelta(days=days))
-        # Each append prunes relative to its own ``now``: nothing went yet.
-        assert change_count(table_dir) == 4
         with connect(table_dir) as conn, storage_mod._write_txn(conn):
-            cid = _append(conn, NOW)
-        ids = [c["id"] for c in list_changes(table_dir)]
-        assert ids == [cid, 4, 1]
+            for _ in range(30):
+                _append(conn, NOW)
+        assert change_count(table_dir) == 34
+        assert [c["id"] for c in list_changes(table_dir, limit=200)] == list(
+            range(34, 0, -1)
+        )
 
-    def test_prune_by_count(self, table_dir, monkeypatch, schema):
-        monkeypatch.setattr(storage_mod, "TABLE_CHANGE_MAX_COUNT", 3)
-        for name in "abcde":
-            insert(table_dir, schema, [{"Name": name}])
-        assert [c["id"] for c in list_changes(table_dir)] == [6, 5, 4]
-        assert row_count(table_dir) == 5
-
-    def test_prune_keeps_reverted_by(self, table_dir):
+    def test_list_changes_restore_to(self, table_dir):
         with connect(table_dir) as conn, storage_mod._write_txn(conn):
-            cid = _append(conn, NOW)
-            conn.execute("UPDATE changes SET reverted_by = 99 WHERE id = ?", (cid,))
-            assert prune_changes(conn, now=NOW) == 0
-        assert get_change(table_dir, cid)["reverted_by"] == 99
+            storage_mod.append_change(
+                conn, now=NOW, source="ui:1", actor_user_id=1, kind="restore",
+                op="restore", summary="Restored table to change #1",
+                schema_before=1, schema_after=2, row_ids=[], before={},
+                after={"restore_to": 1},
+            )
+        newest, first = list_changes(table_dir)
+        assert (newest["kind"], newest["restore_to"]) == ("restore", 1)
+        assert first["restore_to"] is None
 
 
 # --- Download copy -------------------------------------------------------------

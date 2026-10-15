@@ -1,4 +1,4 @@
-"""Caps, retention, and shared error text for Quest Tables.
+"""Caps and shared error text for Quest Tables.
 
 Every limit the spec leaves tunable lives here so the store, the table
 file storage, the tools, the routes, the action requests and the tests
@@ -86,11 +86,9 @@ TABLE_ROWS_VIOLATE_MAX_IDS = 20
 # --- Change log (``changes`` in table.db) ----------------------------------
 
 # Before/after images of one change; a bigger write is refused with
-# ``change_too_large`` so every recorded change stays undoable.
+# ``change_too_large``, so a restore replays one bounded entry at a time.
+# The log itself is kept in full (no pruning).
 TABLE_CHANGE_MAX_BYTES = 5 * 1024 * 1024
-# Pruned at write time: older than this, or beyond this count (newest kept).
-TABLE_CHANGE_RETENTION_DAYS = 90
-TABLE_CHANGE_MAX_COUNT = 2000
 
 # --- Feature gate ----------------------------------------------------------
 

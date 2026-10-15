@@ -48,11 +48,11 @@ the UI routes). It is decided after the rows verdict, in this order:
    recipient: schema edits are owner-only (spec section 7). Routes still
    check ownership themselves for every owner-only action (rename,
    ``require_approval``, delete, shares); ``schema != "denied"`` in the UI
-   is equivalent to "is the owner". The UI revert routes (phase A16:
-   undo / restore-to-point, open to editors = owner or write share, and
-   reverting schema changes too, spec 4.5 and 7) gate on ``rows ==
+   is equivalent to "is the owner". The UI restore route (phase A16:
+   restore-to-point, open to editors = owner or write share, and
+   rewinding schema changes too, spec 4.5 and 7) gates on ``rows ==
    "free"`` with ``run_kind="ui"``, NOT on ``schema``: a write-share
-   recipient may revert a schema change it cannot make.
+   recipient may restore past a schema change it cannot make.
 4. Slack-driven runs -> denied (:data:`DENY_SCHEMA_SLACK`): no cards there;
    the model asks the user to make the change in the Quest UI.
 5. Public conversations -> denied (:data:`DENY_SCHEMA_PUBLIC`): public

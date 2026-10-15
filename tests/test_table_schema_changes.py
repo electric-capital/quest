@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 import chat.tables.storage as storage_mod
+from chat.tables.revert import restore_to
 from chat.tables.schema import dump_schema, parse_columns
 from chat.tables.schema_ops import SchemaOperationError, apply_schema_operations
 from chat.tables.storage import (
@@ -167,35 +168,27 @@ def stored(table_dir, key):
     return [r[0] for r in raw_sql(table_dir, f'SELECT "{key}" FROM rows ORDER BY _id')]
 
 
-def undo_rewrites(table_dir, change):
-    """Replay the inverse of a change's ``rewrites`` in reverse order, as
-    phase A6's undo will (raw SQL, test-only)."""
-    conn = sqlite3.connect(table_dir / TABLE_DB_NAME)
-    try:
-        for step in reversed(change["before"]["rewrites"]):
-            col = f'"{step["key"]}"'
-            if step["kind"] == "wrap":
-                for row_id in step["row_ids"]:
-                    (cell,) = conn.execute(
-                        f"SELECT {col} FROM rows WHERE _id = ?", (row_id,)
-                    ).fetchone()
-                    (value,) = json.loads(cell)
-                    conn.execute(f"UPDATE rows SET {col} = ? WHERE _id = ?",
-                                 (value, row_id))
-            elif step["kind"] == "enum_rename":
-                for row_id in step["row_ids"]:
-                    assert conn.execute(
-                        f"SELECT {col} FROM rows WHERE _id = ?", (row_id,)
-                    ).fetchone()[0] == step["new"]
-                    conn.execute(f"UPDATE rows SET {col} = ? WHERE _id = ?",
-                                 (step["old"], row_id))
-            else:
-                for row_id, cell in step["cells"].items():
-                    conn.execute(f"UPDATE rows SET {col} = ? WHERE _id = ?",
-                                 (cell, int(row_id)))
-        conn.commit()
-    finally:
-        conn.close()
+def assert_replays(table_dir):
+    """Restore the table to its newest change, which replays the whole log
+    forward from change #1 (chat.tables.revert), and check the rebuilt
+    file equals the live one: the images hold every rewritten cell."""
+    def state():
+        return {
+            "rows": raw_sql(table_dir, "SELECT * FROM rows ORDER BY _id"),
+            "info": raw_sql(table_dir, "PRAGMA table_info(rows)"),
+            "indexes": raw_sql(table_dir, "PRAGMA index_list(rows)"),
+            "sql": raw_sql(table_dir, "SELECT type, name, sql FROM sqlite_master "
+                           "ORDER BY rowid"),
+            "meta": raw_sql(table_dir, "SELECT key, value FROM meta "
+                            "WHERE key != 'schema_version' ORDER BY key"),
+        }
+
+    before = state()
+    meta = read_meta(table_dir)
+    newest = raw_sql(table_dir, "SELECT MAX(id) FROM changes")[0][0]
+    restore_to(table_dir, meta.schema, newest, schema_version=meta.schema_version,
+               source="ui:1", actor_user_id=1)
+    assert state() == before
 
 
 def check_common(table_dir, plan, result, *, version=1, title=TITLE, summary=None):
@@ -225,8 +218,16 @@ def check_common(table_dir, plan, result, *, version=1, title=TITLE, summary=Non
         "columns", "title", "ddl_columns", "dropped_values", "rewrites"
     }
     assert set(change["after"]) == {
-        "columns", "title", "ddl_columns", "operations", "backfill"
+        "columns", "title", "ddl_columns", "unique_indexes", "created_indexes",
+        "operations", "backfill",
     }
+    assert change["after"]["unique_indexes"] == [
+        r[0] for r in raw_sql(
+            table_dir,
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'rows' "
+            "AND sql IS NOT NULL ORDER BY rowid",
+        )
+    ]
     if summary is not None:
         assert change["summary"] == summary
     return change
@@ -582,8 +583,7 @@ class TestEnumOps:
         assert result.row_ids == [1, 3]
 
     def test_rename_chain_and_back(self, table_dir, schema):
-        # a -> x -> a again: both steps are recorded; undo replays both.
-        rows_before = snapshot(table_dir)["rows"]
+        # a -> x -> a again: both steps are recorded; a restore replays both.
         plan, result = apply(
             table_dir, schema,
             [{"op": "rename_enum_option", "name": "Tags", "option": "a",
@@ -597,8 +597,7 @@ class TestEnumOps:
             "enum_rename_multi", "enum_rename_multi"
         ]
         assert result.row_ids == [1]
-        undo_rewrites(table_dir, change)
-        assert snapshot(table_dir)["rows"] == rows_before
+        assert_replays(table_dir)
 
     def test_rename_onto_existing_refused_by_plan(self, schema):
         with pytest.raises(SchemaOperationError):
@@ -654,7 +653,6 @@ class TestEnumOps:
         assert result.row_ids == [1, 2, 4]
 
     def test_wrap_then_rename_then_remove(self, table_dir, schema):
-        rows_before = snapshot(table_dir)["rows"]
         plan, result = apply(
             table_dir, schema,
             [{"op": "set_enum_multiple", "name": "Status", "multiple": True},
@@ -669,11 +667,9 @@ class TestEnumOps:
             {"kind": "enum_rename_multi", "key": K_STATUS, "old": "Closed",
              "new": "Done", "cells": {"2": '["Closed"]'}},
         ]
-        undo_rewrites(table_dir, change)
-        assert snapshot(table_dir)["rows"] == rows_before
+        assert_replays(table_dir)
 
-    def test_single_rename_chain_undoes_exactly(self, table_dir, schema):
-        rows_before = snapshot(table_dir)["rows"]
+    def test_single_rename_chain_replays_exactly(self, table_dir, schema):
         plan, result = apply(
             table_dir, schema,
             [{"op": "rename_enum_option", "name": "Status", "option": "Open",
@@ -689,8 +685,7 @@ class TestEnumOps:
         assert [(r["old"], r["new"], r["row_ids"]) for r in change["before"]["rewrites"]] == [
             ("Open", "X", [1, 4]), ("Closed", "Open", [2]), ("X", "Closed", [1, 4])
         ]
-        undo_rewrites(table_dir, change)
-        assert snapshot(table_dir)["rows"] == rows_before
+        assert_replays(table_dir)
 
     def test_backfilled_single_enum_wrapped(self, table_dir, schema):
         plan, result = apply(
@@ -875,7 +870,7 @@ class TestRefusals:
         with pytest.raises(ChangeTooLargeError) as exc:
             apply(table_dir, schema, [{"op": "drop_column", "name": "Site"}])
         assert exc.value.code == "change_too_large"
-        assert "touches too many cells to record for undo" in exc.value.message
+        assert "touches too many cells to record" in exc.value.message
         assert "row writes in smaller batches" in exc.value.message
         assert snapshot(table_dir) == before
 
@@ -992,15 +987,13 @@ class TestCompactImages:
         # wrap: every non-null Status (403); rename: every Closed cell (401).
         touched = 403 if op["op"] == "set_enum_multiple" else 401
         old_format_floor = touched * 2 * (len('"123":') + len('"Closed",'))
-        monkeypatch.setattr(storage_mod, "TABLE_CHANGE_MAX_BYTES", 4500)
-        assert old_format_floor > 4500
-        rows_before = snapshot(table_dir)["rows"]
+        monkeypatch.setattr(storage_mod, "TABLE_CHANGE_MAX_BYTES", 5000)
+        assert old_format_floor > 5000
         plan, result = apply(table_dir, schema, [op])
         change = get_change(table_dir, result.change_id)
-        assert change["size_bytes"] <= 4500
+        assert change["size_bytes"] <= 5000
         assert len(result.row_ids) == touched
-        undo_rewrites(table_dir, change)
-        assert snapshot(table_dir)["rows"] == rows_before
+        assert_replays(table_dir)
 
     def test_multi_op_too_large_hint_says_split(self, table_dir, schema, monkeypatch):
         monkeypatch.setattr(storage_mod, "TABLE_CHANGE_MAX_BYTES", 300)
