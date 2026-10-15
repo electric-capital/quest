@@ -9,141 +9,88 @@ untouched and still decrypts through the ORM store, the index swap landed
 table, and the downgrade refuses while a (user, service) holds several rows
 but succeeds -- restoring the old unique index -- once each has one.
 
-Alembic, the seeding and the ORM read-back run in subprocesses (``uv run``)
-so the env is exactly what a deployment would have, without disturbing this
-process's engine or encryption cache.
+Alembic, the seeding and the ORM read-back run in this process against the
+temp deployment set up by ``tests/migration_support.py``.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
-import subprocess
-from pathlib import Path
 
 import pytest
 
 from config import encryption
-from config.paths import PROJECT_ROOT
+from tests.migration_support import (  # noqa: F401
+    PASSWORD,
+    deployment,
+    execute,
+    metadata_drift,
+    rows,
+    run,
+)
 
 REV = "e3c9b7a1d5f2"
 PREVIOUS = "b4d7e2a9c6f1"
-PASSWORD = "migration-test-password"
 
 
 @pytest.fixture()
-def deployment(tmp_path):
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    key_file = data_dir / "encryption_key.json"
-    env = {
-        **os.environ,
-        "QUEST_ENV": "prod",
-        "QUEST_DATA_DIR": str(data_dir),
-        "QUEST_ENCRYPTION_KEY_FILE": str(key_file),
-        "QUEST_ENCRYPTION_PASSWORD": PASSWORD,
-    }
-    env.pop("QUEST_ENCRYPTION_PASSWORD_FILE", None)
-    encryption.create_key_file(PASSWORD, key_file)
-    return data_dir, env
-
-
-def _run(args, env, check=True):
-    return subprocess.run(
-        ["uv", "run", *args], cwd=PROJECT_ROOT, env=env,
-        capture_output=True, text=True, check=check,
-    )
-
-
-def _python(env, script):
-    return _run(["python", "-c", script], env).stdout.strip().splitlines()[-1]
-
-
-def _rows(db_path, sql, params=()):
-    conn = sqlite3.connect(db_path)
-    try:
-        return conn.execute(sql, params).fetchall()
-    finally:
-        conn.close()
-
-
-def _execute(db_path, sql, params=()):
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.execute(sql, params)
-        conn.commit()
-    finally:
-        conn.close()
+def keyed(deployment):
+    encryption.create_key_file(PASSWORD, deployment.key_file)
+    return deployment
 
 
 def _indexes(db_path):
-    return dict(_rows(
+    return dict(rows(
         db_path,
         "SELECT name, sql FROM sqlite_master WHERE type = 'index' "
         "AND tbl_name = 'user_service_credentials'",
     ))
 
 
-_SEED = """
-import json, sqlite3
-from config import encryption
-from config.paths import DATABASE_PATH
-sec = lambda s: encryption.encrypt_str(s, "user_service_credentials.secret")
-blob = lambda d: json.dumps(encryption.encrypt_json(d, "user_service_credentials.oauth_blob"))
-conn = sqlite3.connect(DATABASE_PATH)
-ins = ("INSERT INTO users (id, email, name, api_key, settings, created_at) "
-       "VALUES (?, ?, ?, ?, '{}', CURRENT_TIMESTAMP)")
-conn.execute(ins, (1, 'a@example.com', 'A', 'key-a'))
-conn.execute(ins, (2, 'b@example.com', 'B', 'key-b'))
-row = ("INSERT INTO user_service_credentials (user_id, service, secret, oauth_blob, created_at, updated_at) "
-       "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
-conn.execute(row, (1, 'acme', sec('sk-a'), None))
-conn.execute(row, (1, 'github', None, blob({"access_token": "gho-a"})))
-conn.execute(row, (2, 'acme', sec('sk-b'), None))
-conn.commit(); conn.close()
-print("seeded")
-"""
-
-_READ = """
-import asyncio, json
-from db.user_service_credential_store import get_credential, list_connections
-out = {
-    "a_acme": asyncio.run(get_credential(1, "acme")),
-    "a_github": asyncio.run(get_credential(1, "github")),
-    "b_acme": asyncio.run(list_connections(2, "acme")),
-}
-print(json.dumps(out))
-"""
-
-_DRIFT = """
-import json
-from sqlalchemy import create_engine
-from alembic.autogenerate import compare_metadata
-from alembic.migration import MigrationContext
-from config.paths import DATABASE_PATH
-from db.models import Base
-engine = create_engine(f"sqlite:///{DATABASE_PATH}")
-with engine.connect() as conn:
-    diffs = compare_metadata(MigrationContext.configure(conn), Base.metadata)
-def touches(d):
-    return "user_service_credentials" in repr(d)
-print(json.dumps([repr(d) for d in diffs if touches(d)]))
-"""
+def _seed(db_path) -> None:
+    sec = lambda s: encryption.encrypt_str(s, "user_service_credentials.secret")  # noqa: E731
+    blob = lambda d: json.dumps(encryption.encrypt_json(d, "user_service_credentials.oauth_blob"))  # noqa: E731
+    conn = sqlite3.connect(db_path)
+    try:
+        ins = ("INSERT INTO users (id, email, name, api_key, settings, created_at) "
+               "VALUES (?, ?, ?, ?, '{}', CURRENT_TIMESTAMP)")
+        conn.execute(ins, (1, 'a@example.com', 'A', 'key-a'))
+        conn.execute(ins, (2, 'b@example.com', 'B', 'key-b'))
+        row = ("INSERT INTO user_service_credentials (user_id, service, secret, oauth_blob, created_at, updated_at) "
+               "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+        conn.execute(row, (1, 'acme', sec('sk-a'), None))
+        conn.execute(row, (1, 'github', None, blob({"access_token": "gho-a"})))
+        conn.execute(row, (2, 'acme', sec('sk-b'), None))
+        conn.commit()
+    finally:
+        conn.close()
 
 
-def test_upgrade_downgrade_roundtrip(deployment):
-    data_dir, env = deployment
-    db_path = data_dir / "quest.db"
+def _read() -> dict:
+    from db.user_service_credential_store import get_credential, list_connections
 
-    _run(["alembic", "upgrade", PREVIOUS], env)
-    _python(env, _SEED)
-    before = _rows(db_path, "SELECT id, secret, oauth_blob FROM user_service_credentials ORDER BY id")
+    async def _read_all():
+        return {
+            "a_acme": await get_credential(1, "acme"),
+            "a_github": await get_credential(1, "github"),
+            "b_acme": await list_connections(2, "acme"),
+        }
 
-    _run(["alembic", "upgrade", REV], env)
+    return run(_read_all())
+
+
+def test_upgrade_downgrade_roundtrip(keyed):
+    db_path = keyed.db_path
+
+    keyed.alembic("upgrade", PREVIOUS)
+    _seed(db_path)
+    before = rows(db_path, "SELECT id, secret, oauth_blob FROM user_service_credentials ORDER BY id")
+
+    keyed.alembic("upgrade", REV)
 
     # Legacy rows: account '', no description, default; ciphertext verbatim.
-    after = _rows(
+    after = rows(
         db_path,
         "SELECT id, secret, oauth_blob, account, description, is_default "
         "FROM user_service_credentials ORDER BY id",
@@ -157,11 +104,11 @@ def test_upgrade_downgrade_roundtrip(deployment):
     assert "UNIQUE" in indexes["ix_user_service_credentials_user_service_account"]
     default_sql = indexes["ix_user_service_credentials_user_service_default"]
     assert "UNIQUE" in default_sql and "WHERE is_default" in default_sql
-    fks = _rows(db_path, "PRAGMA foreign_key_list(user_service_credentials)")
+    fks = rows(db_path, "PRAGMA foreign_key_list(user_service_credentials)")
     assert [(fk[2], fk[3], fk[4], fk[6]) for fk in fks] == [("users", "user_id", "id", "CASCADE")]
 
     # The ORM reads the migrated rows back through the store.
-    read = json.loads(_python(env, _READ))
+    read = _read()
     assert read["a_acme"]["secret"] == "sk-a"
     assert read["a_acme"]["account"] == "" and read["a_acme"]["is_default"] is True
     assert read["a_github"]["oauth_blob"] == {"access_token": "gho-a"}
@@ -170,45 +117,43 @@ def test_upgrade_downgrade_roundtrip(deployment):
     # ORM metadata matches the migrated table's columns and index columns /
     # uniqueness. compare_metadata does NOT compare sqlite_where or server
     # defaults; the index-SQL and legacy-row assertions above cover those.
-    assert json.loads(_python(env, _DRIFT)) == []
+    assert [d for d in metadata_drift(db_path) if "user_service_credentials" in d] == []
 
     # A second connection and a second default.
-    _execute(
+    execute(
         db_path,
         "INSERT INTO user_service_credentials (user_id, service, account, is_default, created_at, updated_at) "
         "VALUES (1, 'acme', 'second', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
     )
     with pytest.raises(sqlite3.IntegrityError):
-        _execute(
+        execute(
             db_path,
             "INSERT INTO user_service_credentials (user_id, service, account, is_default, created_at, updated_at) "
             "VALUES (1, 'acme', 'third', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
         )
 
     # Downgrade refuses while (1, acme) has two rows; nothing changes.
-    result = _run(["alembic", "downgrade", PREVIOUS], env, check=False)
-    assert result.returncode != 0
-    assert "RuntimeError" in result.stderr
-    assert "user 1 / acme (2 rows)" in result.stderr
-    assert "is_default" in {r[1] for r in _rows(db_path, "PRAGMA table_info(user_service_credentials)")}
-    assert _rows(db_path, "SELECT version_num FROM alembic_version") == [(REV,)]
+    with pytest.raises(RuntimeError, match=r"user 1 / acme \(2 rows\)"):
+        keyed.alembic("downgrade", PREVIOUS)
+    assert "is_default" in {r[1] for r in rows(db_path, "PRAGMA table_info(user_service_credentials)")}
+    assert rows(db_path, "SELECT version_num FROM alembic_version") == [(REV,)]
 
     # With one row per (user, service) it succeeds.
-    _execute(db_path, "DELETE FROM user_service_credentials WHERE account = 'second'")
-    _run(["alembic", "downgrade", PREVIOUS], env)
-    columns = {r[1] for r in _rows(db_path, "PRAGMA table_info(user_service_credentials)")}
+    execute(db_path, "DELETE FROM user_service_credentials WHERE account = 'second'")
+    keyed.alembic("downgrade", PREVIOUS)
+    columns = {r[1] for r in rows(db_path, "PRAGMA table_info(user_service_credentials)")}
     assert not columns & {"account", "description", "is_default"}
-    assert _rows(db_path, "SELECT id, secret, oauth_blob FROM user_service_credentials ORDER BY id") == before
+    assert rows(db_path, "SELECT id, secret, oauth_blob FROM user_service_credentials ORDER BY id") == before
     indexes = _indexes(db_path)
     assert "UNIQUE" in indexes["ix_user_service_credentials_user_id_service"]
     assert "ix_user_service_credentials_user_id" in indexes
     assert "ix_user_service_credentials_user_service_account" not in indexes
     assert "ix_user_service_credentials_user_service_default" not in indexes
-    fks = _rows(db_path, "PRAGMA foreign_key_list(user_service_credentials)")
+    fks = rows(db_path, "PRAGMA foreign_key_list(user_service_credentials)")
     assert [(fk[2], fk[3], fk[4], fk[6]) for fk in fks] == [("users", "user_id", "id", "CASCADE")]
     # Users survived the table rebuild (no cascade in the wrong direction).
-    assert _rows(db_path, "SELECT COUNT(*) FROM users") == [(2,)]
+    assert rows(db_path, "SELECT COUNT(*) FROM users") == [(2,)]
 
     # And upgrades again cleanly.
-    _run(["alembic", "upgrade", "head"], env)
-    assert _rows(db_path, "SELECT COUNT(*) FROM user_service_credentials WHERE is_default") == [(3,)]
+    keyed.alembic("upgrade", "head")
+    assert rows(db_path, "SELECT COUNT(*) FROM user_service_credentials WHERE is_default") == [(3,)]

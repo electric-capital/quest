@@ -19,6 +19,7 @@ All work lands on `main` through pull requests -- never commit directly to `main
 - `tests/test_syntax.py` -- Parametrized pytest syntax check: walks the project tree and compiles every `.py` file with `py_compile`, one test per file
 - `tests/` -- Core functional test modules, one per feature area (e.g. `test_edit_workspace_file.py` for the edit tool); browse the directory for the current set
 - `plugins/<name>/tests/` -- Each plugin's own test suite (see "Plugin tests" below)
+- `tests/migration_support.py` -- The `deployment` fixture behind the `tests/test_*_migration.py` end-to-end Alembic tests: a prod-mode deployment in a temp data dir (env, `config.paths`, encryption key cache, ORM store bindings) that `alembic.command` runs against in the test process; the module docstring has the mechanics
 - `conftest.py` (repo root) -- Pytest hook that also collects out-of-tree plugin test suites from `QUEST_PLUGIN_PATH` roots
 - `pyproject.toml` -- Dev dependency group includes `pytest>=8.0.0`
 

@@ -6,9 +6,11 @@ the encryption revision, and checks: the pre-encryption backup exists, every sec
 ``qenc1:`` envelope, ``api_key_hash`` is populated, the ORM reads the
 plaintext back, re-running is a no-op, and downgrade restores plaintext.
 
-Alembic and the ORM read-back run in subprocesses (``uv run``) so the env
-(QUEST_DATA_DIR, the key file, the password) is exactly what a deployment
-would have, without disturbing this process's engine.
+Alembic and the ORM read-back run in this process against the temp
+deployment set up by ``tests/migration_support.py`` (env, paths, key cache
+and store bindings are swapped for the test and restored afterwards). The
+two ``init`` CLI tests at the bottom spawn ``python -m config.encryption``
+once each, since the module entry point is what they test.
 """
 
 from __future__ import annotations
@@ -24,41 +26,13 @@ import pytest
 
 from config import encryption
 from config.paths import PROJECT_ROOT
+from tests.migration_support import PASSWORD, deployment, rows, run  # noqa: F401
 
 PREVIOUS_HEAD = "f3a9c5d81b42"
 # The revision under test. Later migrations (d7a1f3c9e2b4 drops
 # users.telegram_session) change the schema these assertions read, so the
 # upgrades stop at this revision instead of the current head.
 ENCRYPTION_REV = "c4e8a2d17f63"
-PASSWORD = "migration-test-password"
-
-
-@pytest.fixture()
-def deployment(tmp_path):
-    """A temp data dir with its own key file and the env to address it."""
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    key_file = data_dir / "encryption_key.json"
-    env = {
-        **os.environ,
-        "QUEST_ENV": "prod",
-        "QUEST_DATA_DIR": str(data_dir),
-        "QUEST_ENCRYPTION_KEY_FILE": str(key_file),
-        "QUEST_ENCRYPTION_PASSWORD": PASSWORD,
-    }
-    env.pop("QUEST_ENCRYPTION_PASSWORD_FILE", None)
-    return data_dir, env
-
-
-def _run(args: list[str], env: dict, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["uv", "run", *args], cwd=PROJECT_ROOT, env=env,
-        capture_output=True, text=True, check=check,
-    )
-
-
-def _alembic(env: dict, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-    return _run(["alembic", *args], env, check=check)
 
 
 def _seed_plaintext(db_path: Path) -> None:
@@ -89,14 +63,6 @@ def _seed_plaintext(db_path: Path) -> None:
         conn.close()
 
 
-def _rows(db_path: Path, sql: str) -> list[tuple]:
-    conn = sqlite3.connect(db_path)
-    try:
-        return conn.execute(sql).fetchall()
-    finally:
-        conn.close()
-
-
 # Columns added by migrations after ENCRYPTION_REV that the current ORM
 # models map (they SELECT every mapped column, so the read-back needs them);
 # added by hand, with their server defaults, for the read-back only.
@@ -113,7 +79,7 @@ _LATER_COLUMNS = {
 }
 
 
-def _read_back_via_orm(env: dict, db_path: Path) -> dict:
+def _read_back_via_orm(db_path: Path) -> dict:
     conn = sqlite3.connect(db_path)
     try:
         for table, columns in _LATER_COLUMNS.items():
@@ -124,34 +90,35 @@ def _read_back_via_orm(env: dict, db_path: Path) -> dict:
         conn.commit()
     finally:
         conn.close()
-    script = (
-        "import asyncio, json\n"
-        "from db.user_store import get_user_by_email, get_user_by_api_key, get_user_by_slack_user_id\n"
-        "a = asyncio.run(get_user_by_email('a@example.com'))\n"
-        "by_key = asyncio.run(get_user_by_api_key('key-a'))\n"
-        "by_slack = asyncio.run(get_user_by_slack_user_id('U1'))\n"
-        "print(json.dumps({'a': a, 'by_key_email': by_key and by_key['email'],"
-        " 'by_slack_email': by_slack and by_slack['email']}))\n"
-    )
-    result = _run(["python", "-c", script], env)
-    return json.loads(result.stdout.strip().splitlines()[-1])
+    from db.user_store import get_user_by_api_key, get_user_by_email, get_user_by_slack_user_id
+
+    async def _read():
+        a = await get_user_by_email("a@example.com")
+        by_key = await get_user_by_api_key("key-a")
+        by_slack = await get_user_by_slack_user_id("U1")
+        return {
+            "a": a,
+            "by_key_email": by_key and by_key["email"],
+            "by_slack_email": by_slack and by_slack["email"],
+        }
+
+    return run(_read())
 
 
 def test_migration_encrypts_in_place_with_backup_and_downgrade(deployment):
-    data_dir, env = deployment
-    db_path = data_dir / "quest.db"
-    encryption.create_key_file(PASSWORD, Path(env["QUEST_ENCRYPTION_KEY_FILE"]))
+    data_dir, db_path = deployment.data_dir, deployment.db_path
+    encryption.create_key_file(PASSWORD, deployment.key_file)
 
-    _alembic(env, "upgrade", PREVIOUS_HEAD)
+    deployment.alembic("upgrade", PREVIOUS_HEAD)
     _seed_plaintext(db_path)
 
-    _alembic(env, "upgrade", ENCRYPTION_REV)
+    deployment.alembic("upgrade", ENCRYPTION_REV)
 
     backups = list(data_dir.glob("quest.db.pre-encryption-*.bak"))
     assert len(backups) == 1
-    assert _rows(backups[0], "SELECT api_key FROM users ORDER BY id") == [("key-a",), ("key-b",)]
+    assert rows(backups[0], "SELECT api_key FROM users ORDER BY id") == [("key-a",), ("key-b",)]
 
-    users = _rows(
+    users = rows(
         db_path,
         "SELECT api_key, api_key_hash, google_oauth, google_services_oauth, "
         "telegram_session, airtable_token, ramp_oauth FROM users ORDER BY id",
@@ -168,13 +135,13 @@ def test_migration_encrypts_in_place_with_backup_and_downgrade(deployment):
     for secret in ("key-a", "key-b", "g-a", "gs-a", "tg-a", "pat-a", "ramp-a"):
         assert secret not in dump
 
-    creds = _rows(db_path, "SELECT service, secret, oauth_blob FROM user_service_credentials ORDER BY id")
+    creds = rows(db_path, "SELECT service, secret, oauth_blob FROM user_service_credentials ORDER BY id")
     assert encryption.is_encrypted(creds[0][1]) and creds[0][2] is None
     assert creds[1][1] is None and encryption.is_encrypted(json.loads(creds[1][2]))
 
     # The ORM reads plaintext back, looks users up by hash, and resolves the
     # Slack user id from the decrypted blob.
-    read = _read_back_via_orm(env, db_path)
+    read = _read_back_via_orm(db_path)
     assert read["a"]["api_key"] == "key-a"
     assert read["a"]["google_oauth"] == {"access_token": "g-a"}
     # (telegram_session is checked in SQL above only: the current ORM model
@@ -184,29 +151,28 @@ def test_migration_encrypts_in_place_with_backup_and_downgrade(deployment):
     assert read["by_slack_email"] == "a@example.com"
 
     # Downgrade restores plaintext and drops the hash column
-    _alembic(env, "downgrade", PREVIOUS_HEAD)
-    restored = _rows(
+    deployment.alembic("downgrade", PREVIOUS_HEAD)
+    restored = rows(
         db_path,
         "SELECT api_key, google_oauth, telegram_session, airtable_token, ramp_oauth FROM users WHERE id = 1",
     )
     assert restored == [("key-a", json.dumps({"access_token": "g-a"}), "tg-a", "pat-a", json.dumps({"access_token": "ramp-a"}))]
-    columns = {r[1] for r in _rows(db_path, "PRAGMA table_info(users)")}
+    columns = {r[1] for r in rows(db_path, "PRAGMA table_info(users)")}
     assert "api_key_hash" not in columns
-    assert _rows(db_path, "SELECT secret FROM user_service_credentials WHERE service = 'acme'") == [("acme-secret",)]
+    assert rows(db_path, "SELECT secret FROM user_service_credentials WHERE service = 'acme'") == [("acme-secret",)]
 
 
 def test_migration_is_idempotent_over_a_partial_run(deployment):
     """Rows already in the envelope are skipped; only plaintext rows change."""
-    data_dir, env = deployment
-    db_path = data_dir / "quest.db"
-    encryption.create_key_file(PASSWORD, Path(env["QUEST_ENCRYPTION_KEY_FILE"]))
-    _alembic(env, "upgrade", PREVIOUS_HEAD)
+    db_path = deployment.db_path
+    encryption.create_key_file(PASSWORD, deployment.key_file)
+    deployment.alembic("upgrade", PREVIOUS_HEAD)
     _seed_plaintext(db_path)
-    _alembic(env, "upgrade", ENCRYPTION_REV)
-    before = _rows(db_path, "SELECT api_key, google_oauth FROM users ORDER BY id")
+    deployment.alembic("upgrade", ENCRYPTION_REV)
+    before = rows(db_path, "SELECT api_key, google_oauth FROM users ORDER BY id")
 
     # Simulate a downgrade-less re-run: stamp back and upgrade again.
-    _alembic(env, "stamp", PREVIOUS_HEAD)
+    deployment.alembic("stamp", PREVIOUS_HEAD)
     conn = sqlite3.connect(db_path)
     try:
         conn.execute("DROP INDEX ix_users_api_key_hash")
@@ -214,76 +180,98 @@ def test_migration_is_idempotent_over_a_partial_run(deployment):
         conn.commit()
     finally:
         conn.close()
-    _alembic(env, "upgrade", ENCRYPTION_REV)
-    after = _rows(db_path, "SELECT api_key, google_oauth FROM users ORDER BY id")
+    deployment.alembic("upgrade", ENCRYPTION_REV)
+    after = rows(db_path, "SELECT api_key, google_oauth FROM users ORDER BY id")
     assert after == before  # untouched ciphertext, no re-encryption
-    assert _rows(db_path, "SELECT api_key_hash FROM users WHERE id = 1") == [(encryption.hash_api_key("key-a"),)]
+    assert rows(db_path, "SELECT api_key_hash FROM users WHERE id = 1") == [(encryption.hash_api_key("key-a"),)]
 
 
 def test_migration_fails_closed_without_the_key(deployment):
-    data_dir, env = deployment
-    db_path = data_dir / "quest.db"
-    encryption.create_key_file(PASSWORD, Path(env["QUEST_ENCRYPTION_KEY_FILE"]))
-    _alembic(env, "upgrade", PREVIOUS_HEAD)
+    data_dir, db_path = deployment.data_dir, deployment.db_path
+    encryption.create_key_file(PASSWORD, deployment.key_file)
+    deployment.alembic("upgrade", PREVIOUS_HEAD)
     _seed_plaintext(db_path)
 
-    bad_env = {**env, "QUEST_ENCRYPTION_PASSWORD": "wrong"}
-    result = _alembic(bad_env, "upgrade", ENCRYPTION_REV, check=False)
-    assert result.returncode != 0
-    assert "does not unlock" in result.stderr
+    with deployment.env(QUEST_ENCRYPTION_PASSWORD="wrong"):
+        with pytest.raises(RuntimeError, match="does not unlock"):
+            deployment.alembic("upgrade", ENCRYPTION_REV)
     # Nothing was touched, no backup was written
-    assert _rows(db_path, "SELECT api_key FROM users ORDER BY id") == [("key-a",), ("key-b",)]
+    assert rows(db_path, "SELECT api_key FROM users ORDER BY id") == [("key-a",), ("key-b",)]
     assert not list(data_dir.glob("*.bak"))
 
-    no_pw_env = {k: v for k, v in env.items() if k != "QUEST_ENCRYPTION_PASSWORD"}
-    result = _alembic(no_pw_env, "upgrade", ENCRYPTION_REV, check=False)
-    assert result.returncode != 0
-    assert "No encryption password available" in result.stderr
+    with deployment.env(QUEST_ENCRYPTION_PASSWORD=None):
+        with pytest.raises(RuntimeError, match="No encryption password available"):
+            deployment.alembic("upgrade", ENCRYPTION_REV)
 
 
 def test_fresh_database_needs_no_backup(deployment):
-    data_dir, env = deployment
-    encryption.create_key_file(PASSWORD, Path(env["QUEST_ENCRYPTION_KEY_FILE"]))
-    _alembic(env, "upgrade", ENCRYPTION_REV)
+    data_dir = deployment.data_dir
+    encryption.create_key_file(PASSWORD, deployment.key_file)
+    deployment.alembic("upgrade", ENCRYPTION_REV)
     assert not list(data_dir.glob("*.bak"))
-    columns = {r[1] for r in _rows(data_dir / "quest.db", "PRAGMA table_info(users)")}
+    columns = {r[1] for r in rows(data_dir / "quest.db", "PRAGMA table_info(users)")}
     assert "api_key_hash" in columns
 
 
-def test_init_cli_creates_key_file_and_refuses_sentinel_outside_local(deployment, tmp_path):
-    data_dir, env = deployment
-    key_file = Path(env["QUEST_ENCRYPTION_KEY_FILE"])
+# -- CLI ---------------------------------------------------------------------
+#
+# ``python -m config.encryption`` is the entry point run.py runs before the
+# migrations. One spawn per test (``sys.executable``, the venv is already
+# active) covers the ``__main__`` guard, argument parsing and the exit code;
+# the remaining commands go through ``_cli()`` in this process, which is the
+# function that guard calls with ``sys.exit(_cli(argv))``.
+
+
+def _spawn_cli(*args: str, env: dict | None = None, check: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-m", "config.encryption", *args], cwd=PROJECT_ROOT,
+        env={**os.environ, **(env or {})}, capture_output=True, text=True, check=check,
+    )
+
+
+def _cli(capsys, *args: str) -> tuple[int, str, str]:
+    code = encryption._cli(list(args))
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
+def test_init_cli_creates_key_file_and_refuses_sentinel_outside_local(deployment, tmp_path, capsys):
+    key_file = deployment.key_file
     assert not key_file.exists()
-    result = _run(["python", "-m", "config.encryption", "init"], env)
+    result = _spawn_cli("init")
     assert key_file.exists() and "Encryption key unlocked" in result.stdout
     # check with the right password
-    _run(["python", "-m", "config.encryption", "check"], env)
+    with deployment.env():
+        assert _cli(capsys, "check")[0] == 0
     # wrong password
-    result = _run(["python", "-m", "config.encryption", "check"], {**env, "QUEST_ENCRYPTION_PASSWORD": "x"}, check=False)
-    assert result.returncode == 1 and "does not unlock" in result.stderr
+    with deployment.env(QUEST_ENCRYPTION_PASSWORD="x"):
+        code, _out, err = _cli(capsys, "check")
+    assert code == 1 and "does not unlock" in err
     # sentinel in prod
-    result = _run(
-        ["python", "-m", "config.encryption", "check"],
-        {**env, "QUEST_ENCRYPTION_PASSWORD": encryption.LOCAL_DEV_PASSWORD}, check=False,
-    )
-    assert result.returncode == 1 and "outside local" in result.stderr
+    with deployment.env(QUEST_ENCRYPTION_PASSWORD=encryption.LOCAL_DEV_PASSWORD):
+        code, _out, err = _cli(capsys, "check")
+    assert code == 1 and "outside local" in err
     # local mode: sentinel auto-creates without any password set
     local_key = tmp_path / "local_key.json"
-    local_env = {k: v for k, v in env.items() if k != "QUEST_ENCRYPTION_PASSWORD"}
-    local_env.update({"QUEST_ENV": "local", "QUEST_ENCRYPTION_KEY_FILE": str(local_key)})
-    _run(["python", "-m", "config.encryption", "init"], local_env)
+    with deployment.env(
+        QUEST_ENCRYPTION_PASSWORD=None, QUEST_ENV="local", QUEST_ENCRYPTION_KEY_FILE=str(local_key),
+    ):
+        assert _cli(capsys, "init")[0] == 0
     assert local_key.exists()
 
 
 def test_init_cli_encrypts_plaintext_store_files(deployment):
-    data_dir, env = deployment
+    data_dir = deployment.data_dir
     store = data_dir / "service_credentials"
     store.mkdir()
     (store / "google_oauth.json").write_text(json.dumps({"web": {"client_id": "x", "client_secret": "s"}}))
     inf = data_dir / "inference_credentials"
     inf.mkdir()
     (inf / "openrouter.json").write_text(json.dumps({"api_key": "sk-or"}))
-    result = _run(["python", "-m", "config.encryption", "init"], env)
+    # The store directories are import-time constants of the credential
+    # modules, so the sweep has to run in a process whose QUEST_DATA_DIR is
+    # this deployment's: the CLI spawn, as run.py does.
+    result = _spawn_cli("init")
     assert "Encrypted credential file for google_oauth" in result.stdout
     assert "Encrypted credential file for openrouter" in result.stdout
     for path in (store / "google_oauth.json", inf / "openrouter.json"):
