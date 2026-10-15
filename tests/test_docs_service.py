@@ -107,8 +107,10 @@ def docs_env(tmp_path, monkeypatch):
     # user_store / action_request_store: the UI rows resolve owner / share
     # recipient / last writer (incl. a recipient's approved card) through
     # get_users_by_ids / get_action_request_owners (never the real data dir).
+    import db.table_store as table_store
+    # table_store: project and account deletes sweep table directories too.
     for mod in (doc_store, project_store, conversation_store, user_store,
-                action_request_store):
+                action_request_store, table_store):
         monkeypatch.setattr(mod, "AsyncSessionLocal", session_local)
 
     dirs = {name: tmp_path / name for name in ("chats", "projects", "docs")}

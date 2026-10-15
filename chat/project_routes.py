@@ -427,6 +427,9 @@ async def delete_user_project(
     # the shares tell who must hear about it (collected now, before they go).
     project_docs = await doc_store.list_docs_for_project(project_id)
     doc_ids = [doc["id"] for doc in project_docs]
+    # Same for the project's Quest Tables (data_tables.project_id CASCADE):
+    # the rows with their shares, collected now for the sweep and the audience.
+    project_tables = await _list_project_tables(project_id)
 
     deleted = await delete_project(user_id, project_id)
     if not deleted:
@@ -453,6 +456,22 @@ async def delete_user_project(
             doc_events.docs_audience(project_docs, user_id),
         )
 
+    # Each project table's directory, same reasons and order as the docs.
+    if project_tables:
+        from chat.tables import events as table_events
+        from chat.tables import service as table_service
+
+        await asyncio.to_thread(
+            table_service.delete_table_dirs, [t["id"] for t in project_tables],
+        )
+        for table in project_tables:
+            table_events.publish_table_gone_to(
+                table_events.table_audience(table), table["id"],
+            )
+        table_events.publish_table_list_changed_to(
+            table_events.tables_audience(project_tables, user_id),
+        )
+
     # Delete filesystem: project workspace
     ChatStorage.delete_project_workspace(project_id)
 
@@ -463,6 +482,20 @@ async def delete_user_project(
             shutil.rmtree(conv_dir)
 
     return {"success": True}
+
+
+async def _list_project_tables(project_id: str) -> list[dict]:
+    """Every table of a project as table dicts WITH shares (collect BEFORE
+    deleting the project: the ids drive the directory sweep, the shares the
+    realtime audience -- both rows go with the project's CASCADE)."""
+    from db import table_store
+
+    tables = []
+    for table_id in await table_store.list_table_ids_for_project(project_id):
+        table = await table_store.get_table(table_id, with_shares=True)
+        if table is not None:
+            tables.append(table)
+    return tables
 
 
 def _delete_doc_dirs(doc_ids: list[str]) -> None:

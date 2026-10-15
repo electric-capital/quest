@@ -731,6 +731,9 @@ async def delete_account(
     # project docs' rows, and delete_user() cascades the rest.
     from db import doc_store
     doc_ids = await doc_store.list_doc_ids_for_user(user_id)
+    # Same for the Quest Tables the user owns (user and project tables).
+    from db import table_store
+    table_ids = await table_store.list_table_ids_for_user(user_id)
 
     # Delete projects (DB rows -- CASCADE deletes linked conversation rows)
     await delete_all_user_projects(user_id)
@@ -756,6 +759,14 @@ async def delete_account(
                     )
 
         await asyncio.to_thread(_sweep_doc_dirs)
+
+    # Each table's directory (table.db). Best-effort per id, never raises,
+    # so it also runs before the rmtree loops below.
+    if table_ids:
+        import asyncio
+        from chat.tables import service as table_service
+
+        await asyncio.to_thread(table_service.delete_table_dirs, table_ids)
 
     # Delete each conversation's filesystem directory individually
     for conv in conversations_meta:

@@ -130,6 +130,39 @@ def make_doc_changed(doc_id: str, updated_at: Optional[str]) -> dict[str, Any]:
     }
 
 
+def make_table_list_changed() -> dict[str, Any]:
+    """Envelope for ``table_list_changed``.
+
+    Per-user global published after any Quest Tables mutation that can
+    change a list view (create, delete, schema change, restore, and every
+    row write, which bumps ``updated_at`` and so the sort order). Carries
+    no ids: list views simply re-fetch their loaded window. Published
+    through chat/tables/events.py only.
+    """
+    return {"type": "table_list_changed"}
+
+
+def make_table_changed(
+    table_id: str, updated_at: Optional[str], schema_version: Optional[int],
+) -> dict[str, Any]:
+    """Envelope for ``table_changed``.
+
+    Per-user global published after every Quest Tables row write, schema
+    change or restore so an open viewer of ``table_id`` re-fetches its
+    grid (and its schema when ``schema_version`` moved). ``updated_at`` is
+    the row's new ISO timestamp; ``None`` (sent on delete, project delete
+    and share changes) means the table's existence or the receiver's
+    access changed -- always re-fetch; ``schema_version`` may then be
+    ``None`` too.
+    """
+    return {
+        "type": "table_changed",
+        "table_id": table_id,
+        "updated_at": updated_at,
+        "schema_version": schema_version,
+    }
+
+
 def make_memory_suggestions_changed(
     conversation_id: str,
     pending_count: int,

@@ -388,11 +388,12 @@ def account_env(tmp_path, monkeypatch):
     import db.project_store as project_store
     import db.routine_store as routine_store
     import db.user_store as user_store
+    import db.table_store as table_store
 
     models.Base.metadata.create_all(sync_engine)
     for mod in (
         action_request_store, conversation_store, doc_store, guide_store,
-        memory_store, project_store, routine_store, user_store,
+        memory_store, project_store, routine_store, user_store, table_store,
     ):
         monkeypatch.setattr(mod, "AsyncSessionLocal", session_local)
 

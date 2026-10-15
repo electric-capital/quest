@@ -1,0 +1,1016 @@
+"""Quest Tables service layer: the ONE read/write path for table files.
+
+The model-facing table tools, the table action requests (``create_table``,
+``change_table_schema``, ``write_table_rows``) and the HTTP routes call the
+functions below; nothing else opens a ``table.db``. Every operation follows
+the same pipeline in this one place::
+
+    feature gate -> table lookup (db/table_store) -> resolve_table_access
+      -> [per-table lock] re-fetch + re-resolve
+      -> table file op (chat/tables/storage|filters|revert, in asyncio.to_thread)
+      -> quest.db bump (table_store.update_after_write / update_schema)
+      -> realtime events (chat/tables/events.py)
+
+Errors
+------
+
+Refusals decided here are :class:`TableError` (``.code`` machine-readable,
+``str(e)`` model/user-facing) or one of its subclasses:
+:class:`TableDisabled` (``tables_disabled``, raised before any DB work),
+:class:`TableNotFound` (``table_not_found``; a hidden table and a missing
+id raise byte-equal text after the same DB work: one ``get_table`` plus
+the same doc-source lookup), :class:`TableApprovalRequired`
+(``approval_required``, carries the verdict and the ``write_table_rows``
+suggested request), :class:`TableDenied` (``denied``, the verdict's deny
+reason), :class:`TableForbidden` (``forbidden``, owner-only actions) and
+:class:`StaleSchema` (``stale_schema``, carries the current table dict).
+Other ``TableError`` codes: ``invalid_args``, ``project_not_found``,
+``mode_mismatch``, ``duplicate_title``, ``table_limit``,
+``invalid_request``.
+
+Errors from the layers below propagate UNCHANGED so the tools and routes
+map them by their ``.code``: :class:`chat.tables.storage.TableStorageError`
+and its subclasses (``invalid_rows``, ``too_many_rows``, ``table_full``,
+``change_too_large``, ``unknown_key_column`` / ``key_not_unique``,
+``schema_mismatch``, ``rows_violate``, ``busy``, ``no_rows``,
+``invalid_selector``, ``unknown_change``, ``corrupt_storage`` ...),
+:class:`chat.tables.filters.FilterError` and
+:class:`chat.tables.schema.TableSchemaError` (column specs and schema
+operations). None of them is a :class:`TableError`.
+
+The per-table lock
+------------------
+
+Each table id has one ``asyncio.Lock`` (single event loop per process).
+It is held by every reader AND every writer of ``table.db`` for the whole
+file call: :func:`chat.tables.revert.restore_to` swaps the file in with
+``os.replace`` and requires that no other connection is open at that
+moment (an open reader could leave a WAL the new file would inherit, a
+writer committing between its re-check and the rename would be lost).
+Storage functions open and close one connection per call, so holding the
+lock across the call is enough. Writers also hold it through the quest.db
+bump and the events, so ``row_count`` / ``schema_version`` /
+``updated_at`` land in write order. Every lock holder first resolves access
+outside the lock (a hidden or denied table never takes or creates a lock)
+and then re-fetches the row and re-resolves under it (a share revoked or
+a schema changed while the call queued changes the outcome). Writes,
+restores and deletes are shielded from cancellation (the Stop button
+mid-turn) so table.db and quest.db never disagree. The project-delete and
+account-delete directory sweeps (:func:`delete_table_dirs`) run after the
+rows are gone without the lock; a call still queued on the lock then fails
+its re-fetch with :class:`TableNotFound`.
+
+Realtime publishers run on the event loop only, never inside
+``asyncio.to_thread``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import shutil
+import stat
+import uuid
+import weakref
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Optional
+
+from chat.storage import ChatStorage
+from chat.tables import filters, revert, schema_ops, storage
+from chat.tables.access import (
+    TableAccess,
+    approval_required_message,
+    not_found_message,
+    resolve_table_access,
+)
+from chat.tables.constants import table_not_found_message, tables_disabled_message
+from chat.tables.schema import dump_schema, load_schema, parse_columns
+from config import feature_gates
+from db import table_store
+
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "ROW_OPS",
+    "TABLE_SCOPES",
+    "Caller",
+    "StaleSchema",
+    "TableApprovalRequired",
+    "TableDenied",
+    "TableDisabled",
+    "TableError",
+    "TableForbidden",
+    "TableNotFound",
+    "apply_restore",
+    "apply_row_write",
+    "apply_schema_change",
+    "caller_for_ui",
+    "create_table",
+    "delete_table",
+    "delete_table_dirs",
+    "get_visible_table",
+    "list_visible_tables",
+    "query_rows",
+    "require_enabled",
+    "resolve",
+    "sample_rows",
+]
+
+ROW_OPS = ("insert", "update", "upsert", "delete")
+# list_visible_tables scopes, as docs: ``user`` = user tables, ``project``
+# = this conversation's project tables, ``public`` = the public tables
+# readable from here (a private project's doc sources; a public
+# conversation's own project), ``all`` = everything visible.
+TABLE_SCOPES = ("user", "project", "public", "all")
+SAMPLE_ROWS_DEFAULT = 5
+
+
+# ---------------------------------------------------------------------------
+# Errors and the caller
+# ---------------------------------------------------------------------------
+
+
+class TableError(Exception):
+    """A table operation was refused. ``code`` is machine-readable,
+    ``str(e)`` (also ``message``) is model/user-facing."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+class TableDisabled(TableError):
+    """The ``tables`` feature gate is closed for the user."""
+
+    def __init__(self) -> None:
+        super().__init__("tables_disabled", tables_disabled_message())
+
+
+class TableNotFound(TableError):
+    """Missing OR hidden table: the same text either way (invariant 2)."""
+
+    def __init__(self, table_id: str):
+        super().__init__("table_not_found", table_not_found_message(table_id))
+        self.table_id = table_id
+
+
+class TableApprovalRequired(TableError):
+    """The row write needs a ``write_table_rows`` action request.
+
+    ``access`` is the verdict; ``suggested_request`` is ``{"request_type":
+    "write_table_rows", "params": {"table_id", "operation", ...params}}``.
+    """
+
+    def __init__(self, access: TableAccess, suggested_request: Optional[dict] = None):
+        super().__init__("approval_required", approval_required_message(access))
+        self.access = access
+        self.suggested_request = suggested_request
+
+
+class TableDenied(TableError):
+    """The verdict denies the action; ``str(e)`` is the deny reason."""
+
+    def __init__(self, reason: str):
+        super().__init__("denied", reason)
+
+
+class TableForbidden(TableError):
+    """An owner-only action by someone who can see but does not own the table."""
+
+    def __init__(self, message: str):
+        super().__init__("forbidden", message)
+
+
+class StaleSchema(TableError):
+    """``expected_schema_version`` no longer matches; ``current`` is the
+    current table dict (with shares)."""
+
+    def __init__(self, current: dict):
+        super().__init__(
+            "stale_schema",
+            "The table's columns were changed by someone else; reload the "
+            "table and try again.",
+        )
+        self.current = current
+
+
+@dataclass(frozen=True)
+class Caller:
+    """Who is asking, from which kind of run.
+
+    ``run_kind`` is one of ``chat.tables.access.RUN_KINDS`` (incl. ``"ui"``).
+    Sandbox scripts and the UI have no conversation context:
+    ``project_id=None``, ``is_public=False`` (scripts and the UI also pass
+    ``conversation_id=None``).
+    """
+
+    user: dict
+    conversation_id: Optional[str]
+    project_id: Optional[str]
+    is_public: bool
+    run_kind: str
+
+
+def caller_for_ui(user: dict) -> Caller:
+    """The caller of an HTTP route (``run_kind="ui"``)."""
+    return Caller(user=user, conversation_id=None, project_id=None,
+                  is_public=False, run_kind="ui")
+
+
+def require_enabled(caller: Caller) -> None:
+    """Raise :class:`TableDisabled` unless the tables gate is open for the user."""
+    email = (caller.user or {}).get("email") or ""
+    if not feature_gates.tables_enabled_for(email):
+        raise TableDisabled()
+
+
+# ---------------------------------------------------------------------------
+# Helpers: access, sources, the lock, events
+# ---------------------------------------------------------------------------
+
+
+def _has_doc_sources(caller: Caller) -> bool:
+    """Only a conversation of a private project has doc sources."""
+    return bool(
+        caller.project_id
+        and not caller.is_public
+        and caller.run_kind not in ("script", "ui")
+    )
+
+
+async def _doc_sources(caller: Caller) -> frozenset[str]:
+    """The public projects whose public tables this caller's project may
+    read (``project_doc_sources``, "Docs & Tables access"); empty for every
+    caller that is not a private project conversation."""
+    if not _has_doc_sources(caller):
+        return frozenset()
+    from db import project_store
+    return frozenset(await project_store.list_doc_source_project_ids(caller.project_id))
+
+
+def resolve(
+    caller: Caller, table: dict, doc_source_project_ids: frozenset[str] = frozenset(),
+) -> TableAccess:
+    """``resolve_table_access`` for this caller (``table`` with shares)."""
+    return resolve_table_access(
+        table,
+        user_id=caller.user["id"],
+        is_public=caller.is_public,
+        project_id=caller.project_id,
+        run_kind=caller.run_kind,
+        doc_source_project_ids=doc_source_project_ids,
+    )
+
+
+def _check_table_id(table_id) -> None:
+    if not isinstance(table_id, str) or not table_id.strip():
+        raise TableError("invalid_args", "table_id must be a non-empty string.")
+
+
+async def _lookup(caller: Caller, table_id) -> tuple[dict, TableAccess]:
+    """Lookup + verdict; a missing or hidden table raises TableNotFound.
+
+    The doc-source lookup runs before the None check, so a hidden table
+    and a nonexistent id cost the same DB work (invariant 2)."""
+    _check_table_id(table_id)
+    table = await table_store.get_table(table_id, with_shares=True)
+    sources = await _doc_sources(caller)
+    access = resolve(caller, table, sources) if table is not None else None
+    if not_found_message(table_id, access) is not None:
+        raise TableNotFound(table_id)
+    return table, access
+
+
+def _table_dir(table_id: str) -> Path:
+    return ChatStorage.get_table_dir(table_id)
+
+
+# Per-table asyncio locks (module docstring). Weak values: holders and
+# waiters keep a strong reference, so the map does not grow with every
+# table id ever touched.
+_table_locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = (
+    weakref.WeakValueDictionary()
+)
+
+
+def _table_lock(key: str) -> asyncio.Lock:
+    lock = _table_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _table_locks[key] = lock
+    return lock
+
+
+async def _shielded(coro):
+    """Run ``coro`` to completion even if the awaiting task is cancelled.
+
+    A write is file op -> quest.db bump -> events; cancelling between the
+    first two would leave ``row_count`` / ``schema_version`` stale and no
+    event sent. The inner task keeps running; the cancellation still
+    propagates to the caller.
+    """
+    task = asyncio.ensure_future(coro)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        def _log_done(t: "asyncio.Future") -> None:
+            if not t.cancelled() and t.exception() is not None:
+                logger.warning(
+                    "[tables] write finished with an error after the caller "
+                    "was cancelled: %s", t.exception(),
+                )
+        task.add_done_callback(_log_done)
+        raise
+
+
+def _events():
+    """chat/tables/events.py, imported lazily: it pulls in chat.realtime,
+    whose package import reaches chat.gemini_api, which imports the table
+    tool handlers -- and so this module."""
+    from chat.tables import events
+    return events
+
+
+def _write_source(write_source: Optional[str], caller: Caller) -> str:
+    """``write_source`` when given, else ``conversation:<id>``, else
+    ``ui:<user_id>`` for the UI. Any other caller must pass one (the
+    storage layer only accepts the documented source prefixes)."""
+    if write_source:
+        return write_source
+    if caller.conversation_id:
+        return f"conversation:{caller.conversation_id}"
+    if caller.run_kind == "ui":
+        return f"ui:{caller.user['id']}"
+    raise TableError("invalid_args", "write_source is required for this caller.")
+
+
+def _actor(actor_user_id: Optional[int], caller: Caller) -> int:
+    return caller.user["id"] if actor_user_id is None else actor_user_id
+
+
+# ---------------------------------------------------------------------------
+# Visibility + reads
+# ---------------------------------------------------------------------------
+
+
+async def get_visible_table(caller: Caller, table_id: str) -> tuple[dict, TableAccess]:
+    """Return ``(table, access)`` for a table this caller may see. No file
+    IO, no lock.
+
+    Raises:
+        TableDisabled, TableNotFound (missing OR hidden), TableError
+        ``invalid_args`` (not a non-empty string).
+    """
+    require_enabled(caller)
+    return await _lookup(caller, table_id)
+
+
+async def list_visible_tables(
+    caller: Caller, *, scope: str = "all", limit: Optional[int] = None,
+) -> list[tuple[dict, TableAccess]]:
+    """Visible tables in ``scope`` (:data:`TABLE_SCOPES`), newest-updated
+    first, at most ``limit`` (None = all). No file IO.
+
+    Candidates come from ``table_store.list_accessible_tables`` (owned or
+    shared with the caller): user tables (never for a public conversation:
+    user tables are always private), this conversation's project tables,
+    and the public tables of the doc-source projects (a private project
+    conversation). Each candidate goes through the access rule; pages
+    through the store's keyset cursor so hidden rows never eat into
+    ``limit``. Payload shaping and limit clamping are the tool's job.
+    """
+    require_enabled(caller)
+    if scope is None:
+        scope = "all"
+    if scope not in TABLE_SCOPES:
+        raise TableError("invalid_args", f"scope must be one of: {', '.join(TABLE_SCOPES)}.")
+    if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
+        raise TableError("invalid_args", "limit must be a positive integer.")
+
+    include_user = scope in ("user", "all") and not caller.is_public
+    include_project = bool(caller.project_id) and (
+        scope in ("project", "all") or (scope == "public" and caller.is_public)
+    )
+    sources = await _doc_sources(caller) if scope in ("public", "all") else frozenset()
+    if not include_user and not include_project and not sources:
+        return []
+
+    out: list[tuple[dict, TableAccess]] = []
+    before = None
+    while True:
+        rows = await table_store.list_accessible_tables(
+            caller.user["id"],
+            project_id=caller.project_id,
+            include_user_tables=include_user,
+            include_project_tables=include_project,
+            source_project_ids=sources,
+            mode="public" if caller.is_public else None,
+            limit=limit,
+            before=before,
+        )
+        for row in rows:
+            access = resolve(caller, row, sources)
+            if not access.visible:
+                continue
+            out.append((row, access))
+            if limit is not None and len(out) >= limit:
+                return out
+        if limit is None or len(rows) < limit:
+            return out
+        last = rows[-1]
+        before = (datetime.fromisoformat(last["updated_at"]), last["id"])
+
+
+async def _locked_read(caller: Caller, table_id: str, fn):
+    """Gate + lookup outside the lock, then under the lock re-fetch,
+    re-resolve and run ``fn(table_dir, columns, table)`` in a thread.
+    Returns ``(table, access, result)``."""
+    require_enabled(caller)
+    await _lookup(caller, table_id)  # hidden / missing never take a lock
+    async with _table_lock(table_id):
+        table, access = await _lookup(caller, table_id)
+        columns = load_schema(table["schema"])
+        result = await asyncio.to_thread(fn, _table_dir(table["id"]), columns, table)
+        return table, access, result
+
+
+async def query_rows(
+    caller: Caller,
+    table_id: str,
+    *,
+    filter: Any = None,  # noqa: A002 - the DSL's own name
+    sort: Any = None,
+    limit: Any = None,
+    offset: Any = None,
+    columns: Optional[list] = None,
+    count_only: bool = False,
+    max_limit: Optional[int] = None,
+) -> tuple[dict, TableAccess, filters.QueryResult]:
+    """Run a filtered, sorted, paged query (:func:`filters.run_query`)
+    under the table lock. ``max_limit`` defaults to ``TABLE_QUERY_MAX_ROWS``
+    (the grid route passes ``TABLE_GRID_MAX_LIMIT``). Rows are
+    ``{"_id", "_updated_at", <name>: value}``.
+
+    Raises:
+        TableDisabled, TableNotFound, FilterError, TableStorageError.
+    """
+    def _run(table_dir: Path, schema, table: dict) -> filters.QueryResult:
+        kwargs = {} if max_limit is None else {"max_limit": max_limit}
+        return filters.run_query(
+            table_dir, schema,
+            filter=filter, sort=sort, limit=limit, offset=offset,
+            columns=columns, count_only=count_only,
+            schema_version=table["schema_version"], **kwargs,
+        )
+
+    return await _locked_read(caller, table_id, _run)
+
+
+async def sample_rows(
+    caller: Caller, table_id: str, n: int = SAMPLE_ROWS_DEFAULT,
+) -> tuple[dict, TableAccess, list[dict]]:
+    """The first ``n`` rows by ``_id`` (the query row shape), with the
+    table and the verdict: everything ``get_table`` needs in one locked
+    call. Raises like :func:`query_rows`."""
+    result_table, access, result = await query_rows(caller, table_id, limit=n)
+    return result_table, access, result.rows
+
+
+# ---------------------------------------------------------------------------
+# Row writes
+# ---------------------------------------------------------------------------
+
+
+def _clean_row_params(op: str, params: dict) -> dict:
+    """Shape-check ``params`` for ``op`` (storage validates the content)."""
+    if op not in ROW_OPS:
+        raise TableError("invalid_args", f"operation must be one of: {', '.join(ROW_OPS)}.")
+    if not isinstance(params, dict):
+        raise TableError("invalid_args", "params must be an object.")
+    if op == "insert":
+        return {"rows": params.get("rows")}
+    if op == "update":
+        return {"updates": params.get("updates")}
+    if op == "upsert":
+        key_column = params.get("key_column")
+        if not isinstance(key_column, str) or not key_column:
+            raise TableError("invalid_args", "key_column must be a column name.")
+        return {"key_column": key_column, "rows": params.get("rows")}
+    has_ids = params.get("row_ids") is not None
+    has_filter = params.get("filter") is not None
+    if has_ids == has_filter:
+        raise TableError("invalid_args", "Give exactly one of row_ids or filter.")
+    return {"row_ids": params["row_ids"]} if has_ids else {"filter": params["filter"]}
+
+
+def _suggested_request(table_id: str, op: str, clean: dict) -> dict:
+    return {
+        "request_type": "write_table_rows",
+        "params": {"table_id": table_id, "operation": op, **clean},
+    }
+
+
+def _check_row_verdict(
+    access: TableAccess, table_id: str, op: str, clean: dict, bypass_approval: bool,
+) -> None:
+    if access.rows == "denied":
+        raise TableDenied(access.deny_reason)
+    if access.rows == "approval" and not bypass_approval:
+        raise TableApprovalRequired(access, _suggested_request(table_id, op, clean))
+
+
+def _run_row_op(
+    table_dir: Path, columns, op: str, clean: dict, *,
+    schema_version: int, source: str, actor_user_id: int,
+) -> storage.RowWriteResult:
+    common = dict(schema_version=schema_version, source=source,
+                  actor_user_id=actor_user_id)
+    if op == "insert":
+        return storage.insert_rows(table_dir, columns, rows=clean["rows"], **common)
+    if op == "update":
+        return storage.update_rows(table_dir, columns, updates=clean["updates"], **common)
+    if op == "upsert":
+        return storage.upsert_rows(
+            table_dir, columns, key_column=clean["key_column"], rows=clean["rows"], **common,
+        )
+    if "row_ids" in clean:
+        return storage.delete_rows(table_dir, columns, row_ids=clean["row_ids"], **common)
+    where = filters.compile_filter(columns, clean["filter"])
+    return storage.delete_rows(table_dir, columns, where=where, **common)
+
+
+async def apply_row_write(
+    caller: Caller,
+    table_id: str,
+    op: str,
+    params: dict,
+    *,
+    write_source: Optional[str] = None,
+    actor_user_id: Optional[int] = None,
+    bypass_approval: bool = False,
+) -> dict:
+    """Run one row write (``op`` in :data:`ROW_OPS`).
+
+    ``params`` are the tool args minus ``table_id``: insert ``{rows}``,
+    update ``{updates}``, upsert ``{key_column, rows}``, delete
+    ``{row_ids}`` or ``{filter}`` (exactly one; a filter is compiled
+    against the schema under the lock). The change's source is
+    ``write_source`` or ``conversation:<id>`` (``ui:<user_id>`` for the
+    UI); ``actor_user_id`` defaults to the caller.
+
+    The ``write_table_rows`` executor (A13) calls this at approve time with
+    ``bypass_approval=True``: an ``approval`` verdict then proceeds, while
+    hidden/missing (the share was revoked or the table deleted meanwhile)
+    and ``denied`` still refuse.
+
+    Returns:
+        ``{op, inserted, updated, deleted, row_ids, inserted_ids,
+        updated_ids, change_id, row_count, updated_at, schema_version}``
+        (``change_id`` None only for a filter delete that matched nothing;
+        nothing is bumped or published then).
+
+    Raises:
+        TableDisabled, TableNotFound, TableDenied, TableApprovalRequired,
+        TableError ``invalid_args``, FilterError, TableStorageError.
+    """
+    require_enabled(caller)
+    clean = _clean_row_params(op, params)
+    table, access = await _lookup(caller, table_id)
+    _check_row_verdict(access, table["id"], op, clean, bypass_approval)
+    source = _write_source(write_source, caller)
+    actor = _actor(actor_user_id, caller)
+
+    async def _locked() -> dict:
+        async with _table_lock(table["id"]):
+            fresh, fresh_access = await _lookup(caller, table_id)
+            _check_row_verdict(fresh_access, fresh["id"], op, clean, bypass_approval)
+            columns = load_schema(fresh["schema"])
+            result = await asyncio.to_thread(
+                _run_row_op, _table_dir(fresh["id"]), columns, op, clean,
+                schema_version=fresh["schema_version"], source=source,
+                actor_user_id=actor,
+            )
+            out = {
+                "op": result.op,
+                "inserted": result.inserted,
+                "updated": result.updated,
+                "deleted": result.deleted,
+                "row_ids": list(result.row_ids),
+                "inserted_ids": list(result.inserted_ids),
+                "updated_ids": list(result.updated_ids),
+                "change_id": result.change_id,
+                "row_count": result.row_count,
+                "updated_at": fresh["updated_at"],
+                "schema_version": fresh["schema_version"],
+            }
+            if result.change_id is None:
+                return out
+            updated = await table_store.update_after_write(
+                fresh["id"], row_count=result.row_count, last_write_source=source,
+            )
+            if updated is None:
+                raise TableNotFound(table_id)
+            _events().publish_table_write(updated)
+            out["updated_at"] = updated["updated_at"]
+            return out
+
+    return await _shielded(_locked())
+
+
+# ---------------------------------------------------------------------------
+# Schema changes and restores
+# ---------------------------------------------------------------------------
+
+
+async def _record_schema(
+    table: dict, *, columns, row_count: int, source: str, title: Optional[str],
+) -> dict:
+    """quest.db after a landed schema change or restore: the new schema
+    (version bumped by one, matching table.db's meta), row count and
+    source, then the title when it changed. ``table`` is the row the
+    change was applied to."""
+    try:
+        updated = await table_store.update_schema(
+            table["id"],
+            schema=dump_schema(columns),
+            expected_schema_version=table["schema_version"],
+            row_count=row_count,
+            last_write_source=source,
+        )
+    except table_store.StaleTableSchemaError as exc:
+        # Cannot happen while every schema writer holds the lock.
+        logger.error("[tables] quest.db schema moved under the lock for %s", table["id"])
+        raise StaleSchema(exc.current) from None
+    if updated is None:
+        raise TableNotFound(table["id"])
+    if title is not None and title != updated["title"]:
+        try:
+            renamed = await table_store.update_table_metadata(table["id"], title=title)
+        except (table_store.DuplicateTableTitleError, table_store.TableValidationError):
+            logger.warning(
+                "[tables] could not record title %r for %s in quest.db",
+                title, table["id"], exc_info=True,
+            )
+        else:
+            if renamed is not None:
+                updated = renamed
+    return updated
+
+
+async def apply_schema_change(
+    caller: Caller,
+    table_id: str,
+    operations: list,
+    *,
+    expected_schema_version: int,
+    write_source: Optional[str] = None,
+    actor_user_id: Optional[int] = None,
+) -> dict:
+    """Apply a list of schema operations (one change).
+
+    For ``PUT /tables/{id}/schema`` (a ``ui`` caller: the owner) and the
+    ``create_table`` / ``change_table_schema`` executors (a ``top_level``
+    caller at approve time). The verdict must be ``schema == "approval"``
+    (the card's approval, or the owner's own Save in the UI), else
+    :class:`TableDenied` with ``schema_deny_reason``.
+
+    Under the lock (shielded): re-resolve, check ``expected_schema_version``
+    (:class:`StaleSchema`), count rows, plan with
+    ``schema_ops.apply_schema_operations(table_empty=row_count == 0)``,
+    then ``storage.apply_schema_change`` in a thread and
+    ``table_store.update_schema``. A ``rename_table`` operation is
+    recorded in quest.db first through ``update_table_metadata`` (so a
+    title collision refuses with ``duplicate_title`` before table.db
+    changes) and rolled back if the file change fails.
+
+    Returns:
+        ``{change_id, schema_version, row_count, row_ids, columns
+        (dump_schema), title, updated_at}``.
+
+    Raises:
+        TableDisabled, TableNotFound, TableDenied, StaleSchema, TableError
+        (``invalid_args``, ``duplicate_title``), TableSchemaError
+        (``SchemaOperationError``), TableStorageError (``rows_violate``,
+        ``change_too_large``, ``schema_mismatch``, ``busy``).
+    """
+    require_enabled(caller)
+    if isinstance(expected_schema_version, bool) or not isinstance(expected_schema_version, int):
+        raise TableError("invalid_args", "expected_schema_version must be an integer.")
+    table, access = await _lookup(caller, table_id)
+    if access.schema != "approval":
+        raise TableDenied(access.schema_deny_reason)
+    source = _write_source(write_source, caller)
+    actor = _actor(actor_user_id, caller)
+
+    async def _locked() -> dict:
+        async with _table_lock(table["id"]):
+            fresh, fresh_access = await _lookup(caller, table_id)
+            if fresh_access.schema != "approval":
+                raise TableDenied(fresh_access.schema_deny_reason)
+            if expected_schema_version != fresh["schema_version"]:
+                raise StaleSchema(fresh)
+            columns = load_schema(fresh["schema"])
+            table_dir = _table_dir(fresh["id"])
+            count = await asyncio.to_thread(storage.row_count, table_dir)
+            plan = schema_ops.apply_schema_operations(
+                columns, operations, table_empty=count == 0,
+            )
+            old_title = fresh["title"]
+            renamed = plan.new_title is not None and plan.new_title != old_title
+            if renamed:
+                try:
+                    await table_store.update_table_metadata(fresh["id"], title=plan.new_title)
+                except table_store.DuplicateTableTitleError as exc:
+                    raise TableError("duplicate_title", str(exc)) from None
+                except table_store.TableValidationError as exc:
+                    raise TableError("invalid_request", str(exc)) from None
+            try:
+                result = await asyncio.to_thread(
+                    storage.apply_schema_change, table_dir, columns, plan,
+                    schema_version=fresh["schema_version"], source=source,
+                    actor_user_id=actor, title=old_title,
+                )
+            except BaseException:
+                if renamed:
+                    try:
+                        await table_store.update_table_metadata(fresh["id"], title=old_title)
+                    except Exception:
+                        logger.warning(
+                            "[tables] could not roll back the title of %s",
+                            fresh["id"], exc_info=True,
+                        )
+                raise
+            updated = await _record_schema(
+                fresh, columns=result.columns, row_count=result.row_count,
+                source=source, title=result.title,
+            )
+            _events().publish_table_write(updated)
+            return {
+                "change_id": result.change_id,
+                "schema_version": updated["schema_version"],
+                "row_count": result.row_count,
+                "row_ids": list(result.row_ids),
+                "columns": dump_schema(result.columns),
+                "title": updated["title"],
+                "updated_at": updated["updated_at"],
+            }
+
+    return await _shielded(_locked())
+
+
+async def apply_restore(
+    caller: Caller,
+    table_id: str,
+    change_id: int,
+    *,
+    write_source: Optional[str] = None,
+    actor_user_id: Optional[int] = None,
+) -> dict:
+    """Restore the table to the state right after ``change_id``.
+
+    Editors only: the verdict must be ``rows == "free"`` for the caller's
+    run kind. The restore route (A16) passes a ``ui`` caller, for which
+    that means owner or write-share recipient (a recipient may restore
+    past a schema change it could not make itself; see
+    chat/tables/access.py rule 3). Else :class:`TableDenied`.
+
+    Under the lock (shielded): ``revert.restore_to`` in a thread (source
+    ``revert:<change_id>`` unless given), then quest.db is ALWAYS updated
+    through ``table_store.update_schema``: a restore always bumps
+    ``schema_version`` by one in table.db's meta (the restore entry's
+    ``schema_after``), and may change the columns, the row count and the
+    title, so recording the restored columns, row count and the +1
+    version keeps quest.db's schema JSON and ``schema_version`` equal to
+    the restored table.db meta. A restored title that collides with
+    another table's title is left unrecorded in quest.db (logged).
+
+    Returns:
+        ``{change_id (the new restore entry), restored_to, schema_version,
+        row_count, columns (dump_schema), title, updated_at}``.
+
+    Raises:
+        TableDisabled, TableNotFound, TableDenied, TableStorageError
+        (``unknown_change``, ``schema_mismatch``, ``corrupt_storage``,
+        ``busy``), ValueError (``change_id`` not an integer).
+    """
+    require_enabled(caller)
+    if isinstance(change_id, bool) or not isinstance(change_id, int):
+        raise TableError("invalid_args", "change_id must be an integer.")
+    table, access = await _lookup(caller, table_id)
+    if access.rows != "free":
+        raise TableDenied(access.deny_reason or "Restoring needs edit access to this table.")
+    source = write_source or f"revert:{change_id}"
+    actor = _actor(actor_user_id, caller)
+
+    async def _locked() -> dict:
+        async with _table_lock(table["id"]):
+            fresh, fresh_access = await _lookup(caller, table_id)
+            if fresh_access.rows != "free":
+                raise TableDenied(
+                    fresh_access.deny_reason or "Restoring needs edit access to this table."
+                )
+            columns = load_schema(fresh["schema"])
+            result = await asyncio.to_thread(
+                revert.restore_to, _table_dir(fresh["id"]), columns, change_id,
+                schema_version=fresh["schema_version"], source=source,
+                actor_user_id=actor,
+            )
+            updated = await _record_schema(
+                fresh, columns=result.columns, row_count=result.row_count,
+                source=source, title=result.title,
+            )
+            _events().publish_table_write(updated)
+            return {
+                "change_id": result.change_id,
+                "restored_to": result.restored_to,
+                "schema_version": updated["schema_version"],
+                "row_count": result.row_count,
+                "columns": dump_schema(result.columns),
+                "title": updated["title"],
+                "updated_at": updated["updated_at"],
+            }
+
+    return await _shielded(_locked())
+
+
+# ---------------------------------------------------------------------------
+# Create and delete
+# ---------------------------------------------------------------------------
+
+
+async def create_table(
+    caller: Caller,
+    *,
+    title: str,
+    description: str = "",
+    project_id: Optional[str] = None,
+    columns: list,
+    write_source: Optional[str] = None,
+    actor_user_id: Optional[int] = None,
+    owner_id: Optional[int] = None,
+) -> dict:
+    """Create a table: ``table.db`` with change #1 "Created table", then
+    the quest.db row. For ``POST /tables`` (A15, a ``ui`` caller) and the
+    ``create_table`` executor (A11, at approve time).
+
+    Authorization is the callers' job (the route's ownership checks, the
+    card's pre-card and approve-time checks); this function only checks
+    the gate, the column specs (``schema.parse_columns``; errors propagate
+    as ``ColumnSpecError``), the title / description, and for a project
+    table that the project exists and belongs to the owner. The owner is
+    ``owner_id`` or the caller. Mode: ``private`` for a user table, the
+    project's ``public`` flag for a project table; a conversation caller
+    (anything but ``ui``) must be in that same mode (``mode_mismatch``, the
+    taint rule: a private conversation never creates a public table).
+
+    Order (the docs order): lay out the directory under a fresh id, then
+    insert the row (a crash in between leaves an invisible orphan
+    directory, never a row without a file); a failing insert removes the
+    directory again; the whole sequence is shielded from cancellation.
+    Creates are serialized per owner, so the store's
+    check-then-insert title rule and per-owner cap hold.
+    Publishes ``table_list_changed`` to the owner (no shares yet).
+
+    Returns:
+        The store's table dict (with ``shares: []``).
+
+    Raises:
+        TableDisabled, TableError (``invalid_args``, ``project_not_found``,
+        ``mode_mismatch``, ``duplicate_title``, ``table_limit``,
+        ``invalid_request``), ColumnSpecError, TableStorageError.
+    """
+    require_enabled(caller)
+    try:
+        clean_title = table_store._validate_title(title)
+        clean_description = table_store._validate_description(description)
+    except table_store.TableValidationError as exc:
+        raise TableError("invalid_request", str(exc)) from None
+    parsed = parse_columns(columns)
+    owner = caller.user["id"] if owner_id is None else owner_id
+    mode = "private"
+    if project_id is not None:
+        from db import project_store
+
+        project = await project_store.get_project(owner, project_id)
+        if project is None:
+            raise TableError("project_not_found", "Project not found.")
+        mode = "public" if project.get("public") else "private"
+    if caller.run_kind != "ui" and (mode == "public") != bool(caller.is_public):
+        raise TableError(
+            "mode_mismatch",
+            "This conversation's mode does not match the table's; the table "
+            "cannot be created here.",
+        )
+    source = _write_source(write_source, caller)
+    actor = _actor(actor_user_id, caller)
+    table_id = str(uuid.uuid4())
+    table_dir = _table_dir(table_id)
+
+    async def _locked() -> dict:
+        async with _table_lock(f"owner:{owner}"):
+            try:
+                await asyncio.to_thread(
+                    storage.create_table_db, table_dir,
+                    table_id=table_id, title=clean_title, schema=parsed,
+                    source=source, actor_user_id=actor,
+                )
+                table = await table_store.create_table(
+                    owner, clean_title,
+                    mode=mode, schema=dump_schema(parsed), description=clean_description,
+                    project_id=project_id, last_write_source=source, table_id=table_id,
+                )
+            except BaseException as exc:
+                try:
+                    await asyncio.to_thread(_remove_dir, table_dir)
+                except Exception:
+                    logger.warning("[tables] cleanup of %s failed", table_id, exc_info=True)
+                if isinstance(exc, table_store.DuplicateTableTitleError):
+                    raise TableError("duplicate_title", str(exc)) from None
+                if isinstance(exc, table_store.TableLimitError):
+                    raise TableError("table_limit", str(exc)) from None
+                if isinstance(exc, table_store.TableValidationError):
+                    raise TableError("invalid_request", str(exc)) from None
+                raise
+            _events().publish_table_list_changed(table["owner_id"])
+            return table
+
+    return await _shielded(_locked())
+
+
+async def delete_table(caller: Caller, table_id: str) -> dict:
+    """Owner-only delete, under the table lock (shielded): the row (shares
+    go with it), then the directory (best-effort, logged), then
+    ``table_changed {updated_at: null}`` and ``table_list_changed`` to the
+    audience captured under the lock BEFORE the rows go.
+
+    Returns:
+        The deleted table dict (with shares, as it was).
+
+    Raises:
+        TableDisabled, TableNotFound (hidden/missing), TableForbidden.
+    """
+    require_enabled(caller)
+    table, _access = await _lookup(caller, table_id)
+    if table["owner_id"] != caller.user["id"]:
+        raise TableForbidden("Only the table's owner can delete it.")
+
+    async def _locked() -> dict:
+        async with _table_lock(table["id"]):
+            current = await table_store.get_table(table["id"], with_shares=True)
+            if current is None:
+                raise TableNotFound(table_id)
+            audience = _events().table_audience(current)
+            table_dir = _table_dir(current["id"])
+            if not await table_store.delete_table(current["id"]):
+                raise TableNotFound(table_id)
+            try:
+                await asyncio.to_thread(_remove_dir, table_dir)
+            except Exception:
+                logger.warning(
+                    "[tables] could not remove the directory of deleted table %s",
+                    current["id"], exc_info=True,
+                )
+            events = _events()
+            events.publish_table_gone_to(audience, current["id"])
+            events.publish_table_list_changed_to(audience)
+            return current
+
+    return await _shielded(_locked())
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
+
+
+def _remove_dir(path: Path) -> None:
+    """Remove a table directory; missing is fine, a symlink is unlinked,
+    never followed."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(st.st_mode):
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def delete_table_dirs(table_ids: list[str]) -> None:
+    """Remove deleted tables' directories (sync: run in ``asyncio.to_thread``).
+
+    For the project-delete and account-delete sweeps, after the rows are
+    gone. Each id goes through ``ChatStorage.get_table_dir``; a failure is
+    logged, never raised (the delete has already succeeded)."""
+    for table_id in table_ids:
+        try:
+            _remove_dir(_table_dir(table_id))
+        except Exception:
+            logger.warning(
+                "[tables] could not remove the directory of table %s", table_id,
+                exc_info=True,
+            )
