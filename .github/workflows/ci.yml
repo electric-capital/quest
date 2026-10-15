@@ -28,7 +28,7 @@ jobs:
         run: uv sync --locked
 
       - name: Run tests
-        run: uv run pytest -q
+        run: uv run pytest -q -n auto
 
   frontend:
     name: Frontend typecheck, lint, tests and build

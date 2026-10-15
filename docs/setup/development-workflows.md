@@ -11,7 +11,7 @@ All work lands on `main` through pull requests -- never commit directly to `main
 1. Branch from up-to-date `origin/main` (e.g. `feat/<topic>` or `fix/<topic>`).
 2. Develop and verify in local mode (`python3 run.py`; see [Run Modes](../architecture/run-modes.md)) and run the test suite before committing.
 3. Push the branch and open a PR against `main` (`gh pr create`).
-4. CI (`.github/workflows/ci.yml`) runs on every PR and push to `main`: the backend job runs `uv sync --locked` + `uv run pytest`, the frontend job runs `npm ci`, `npm run typecheck`, `npm run lint`, `npm test` and `npm run build` on Node 24 (see "Frontend Checks"). Fix a red check before asking for review.
+4. CI (`.github/workflows/ci.yml`) runs on every PR and push to `main`: the backend job runs `uv sync --locked` + `uv run pytest -q -n auto` (parallel, see "Pytest Test Suite"), the frontend job runs `npm ci`, `npm run typecheck`, `npm run lint`, `npm test` and `npm run build` on Node 24 (see "Frontend Checks"). Fix a red check before asking for review.
 5. A human reviews and merges. Agents open PRs; they do not merge them.
 
 ## Key Files
@@ -43,6 +43,10 @@ uv run pytest
 The test suite requires `uv sync` to install dev dependencies. Tests use mock objects (no database or LLM API calls required).
 
 Pytest's `testpaths` (pyproject.toml) covers both `tests/` and `plugins/`, so a bare `uv run pytest` runs the core suite plus every in-tree plugin's tests. Passing explicit paths runs exactly those (`uv run pytest tests/` no longer covers plugin tests).
+
+### Running in parallel
+
+`uv run pytest -n auto` runs the suite across one worker process per CPU core with [pytest-xdist](https://pytest-xdist.readthedocs.io/) (dev dependency group); CI uses it. A bare `uv run pytest` stays serial (`-n` is not in `addopts`), so `--durations`, `-x` and debugger sessions behave as usual. xdist requires every worker to collect the same test ids, so a `parametrize` whose values are computed at import time (bytes carrying a timestamp, `uuid4()`, random data) needs explicit `ids=[...]`; `tests/test_image_sanitizer.py` shows the pattern.
 
 ### Plugin tests
 

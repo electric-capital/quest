@@ -241,11 +241,14 @@ class TestJpeg:
         assert junk not in out
         assert _pixels(out) == _pixels(buf.getvalue())
 
+    # Explicit ids: the last value is built at collection time and embeds an
+    # ICC profile with a creation timestamp, so an auto-generated id would
+    # differ between pytest-xdist workers and abort the run.
     @pytest.mark.parametrize("data", [
         b"\xff\xd8\xff",
         b"\xff\xd8\xff\xdb\x00\x10abc",
         _jpeg_with_metadata()[:-len(SECRET) - 2],  # EOI cut off
-    ])
+    ], ids=["soi-only", "dqt-cut-off", "eoi-cut-off"])
     def test_truncated(self, data):
         with pytest.raises(ImageSanitizeError):
             sanitize_jpeg(data)
