@@ -1,8 +1,8 @@
-// ProjectPanel: the drill-down's section order is Routines, Docs, then the
-// Conversations header, and each block follows its show flag.
+// ProjectPanel: the drill-down's section order is Routines, Docs, Tables,
+// then the Conversations header, and each block follows its show flag.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
-import type { Project } from '../../api/types';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import type { Project, TableListRow } from '../../api/types';
 import { ProjectPanel } from './ProjectPanel';
 
 // The FLIP animation measures layout and reads matchMedia, which jsdom lacks.
@@ -22,7 +22,34 @@ const PROJECT: Project = {
   conversation_count: 0,
 };
 
-function renderPanel(props: { showRoutines: boolean; showDocs: boolean }) {
+function tableRow(id: string, day: number): TableListRow {
+  return {
+    id, owner_id: 1, project_id: 'p1', title: `Table ${id}`, description: '', mode: 'private',
+    schema_version: 1, row_count: 0, last_write_source: null, require_approval: false,
+    created_at: '2026-10-01T00:00:00', updated_at: `2026-10-0${day}T00:00:00`, scope: 'project',
+    column_count: 1, shared: false, shared_with_me: false, permission: null, owner: null,
+    shares: [], last_write_user: null,
+    access: {
+      can_read: true, rows: 'free', schema: 'approval', can_edit: true, can_restore: true,
+      can_rename: true, can_delete: true, can_share: true, can_edit_schema: true,
+      can_require_approval: true, can_download_history: true, deny_reason: null,
+      schema_deny_reason: null,
+    },
+  };
+}
+
+interface PanelProps {
+  showRoutines: boolean;
+  showDocs: boolean;
+  showTables?: boolean;
+  tables?: TableListRow[];
+  activeTableId?: string | null;
+  onOpenTable?: (id: string) => void;
+  onOpenAllTables?: () => void;
+  tablesHeaderActive?: boolean;
+}
+
+function renderPanel({ showRoutines, showDocs, ...tableProps }: PanelProps) {
   const noop = vi.fn();
   return render(
     <ProjectPanel
@@ -30,7 +57,7 @@ function renderPanel(props: { showRoutines: boolean; showDocs: boolean }) {
       conversations={[]}
       loading={false}
       routines={[]}
-      showRoutines={props.showRoutines}
+      showRoutines={showRoutines}
       showArchived={false}
       onShowArchivedChange={noop}
       showSlack={false}
@@ -48,8 +75,9 @@ function renderPanel(props: { showRoutines: boolean; showDocs: boolean }) {
       onSelect={noop}
       updateConversations={noop}
       onArchived={noop}
-      showDocs={props.showDocs}
+      showDocs={showDocs}
       docs={[]}
+      {...tableProps}
     />,
   );
 }
@@ -64,27 +92,57 @@ describe('ProjectPanel', () => {
     cleanup();
   });
 
-  it('orders Routines, then Docs, then the Conversations header', () => {
-    const { container } = renderPanel({ showRoutines: true, showDocs: true });
+  it('orders Routines, then Docs, then Tables, then the Conversations header', () => {
+    const { container } = renderPanel({ showRoutines: true, showDocs: true, showTables: true });
 
     const routines = container.querySelector('.routines-section');
-    const docs = container.querySelector('.docs-section');
+    const docs = container.querySelector('.docs-section:not(.tables-section)');
+    const tables = container.querySelector('.tables-section');
     const conversations = screen.getByText('Conversations');
     expect(routines).not.toBeNull();
     expect(docs).not.toBeNull();
+    expect(tables).not.toBeNull();
     expect(precedes(routines!, docs!)).toBe(true);
-    expect(precedes(docs!, conversations)).toBe(true);
+    expect(precedes(docs!, tables!)).toBe(true);
+    expect(precedes(tables!, conversations)).toBe(true);
 
     // The section labels read in the same order.
     expect(
       [...container.querySelectorAll('.section-label')].map((label) => label.textContent),
-    ).toEqual(['Routines', 'Docs', 'Conversations']);
+    ).toEqual(['Routines', 'Docs', 'Tables', 'Conversations']);
   });
 
-  it('leaves out the Routines and Docs blocks when their flags are off', () => {
-    const { container } = renderPanel({ showRoutines: false, showDocs: false });
+  it('leaves out the Routines, Docs and Tables blocks when their flags are off', () => {
+    const { container } = renderPanel({ showRoutines: false, showDocs: false, showTables: false });
     expect(container.querySelector('.routines-section')).toBeNull();
     expect(container.querySelector('.docs-section')).toBeNull();
+    expect(container.querySelector('.tables-section')).toBeNull();
     expect(screen.getByText('Conversations')).toBeTruthy();
+  });
+
+  it("lists the project's tables and wires their row and header callbacks", () => {
+    const onOpenTable = vi.fn();
+    const onOpenAllTables = vi.fn();
+    const { container } = renderPanel({
+      showRoutines: false,
+      showDocs: false,
+      showTables: true,
+      tables: [tableRow('t1', 1), tableRow('t2', 2)],
+      activeTableId: 't1',
+      onOpenTable,
+      onOpenAllTables,
+      tablesHeaderActive: true,
+    });
+    expect(
+      [...container.querySelectorAll('.table-row .doc-row-title')].map((el) => el.textContent),
+    ).toEqual(['Table t2', 'Table t1']);
+    expect(container.querySelector('.table-row.active')?.textContent).toContain('Table t1');
+
+    fireEvent.click(screen.getByRole('button', { name: /Table t2/ }));
+    expect(onOpenTable).toHaveBeenCalledWith('t2');
+    const header = screen.getByTitle('All tables');
+    expect(header.getAttribute('aria-current')).toBe('page');
+    fireEvent.click(header);
+    expect(onOpenAllTables).toHaveBeenCalledTimes(1);
   });
 });

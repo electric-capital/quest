@@ -21,6 +21,7 @@ import { DocsGateClosed } from './components/docs/DocsGateClosed'
 import { DOCS_FEATURE } from './api/docsApi'
 import { TablesGateClosed } from './components/tables/TablesGateClosed'
 import { TablesPlaceholder } from './components/tables/TablesPlaceholder'
+import { TablesListView } from './components/tables/TablesListView'
 import { TABLES_FEATURE } from './api/tablesApi'
 import { useIsMobile } from './hooks/useIsMobile'
 import { parseDocsRoute } from './utils/docsRoute'
@@ -187,6 +188,8 @@ function AppContent() {
         <div className="main-content docs-main tables-main">
           {!tablesEnabled ? (
             <TablesGateClosed />
+          ) : tablesRoute.kind === 'list' ? (
+            <TablesListView projectId={tablesRoute.projectId} />
           ) : (
             <TablesPlaceholder route={tablesRoute} />
           )}

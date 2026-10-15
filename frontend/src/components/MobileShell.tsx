@@ -17,6 +17,7 @@ import { DocsGateClosed } from './docs/DocsGateClosed'
 import type { DocsRoute } from '../utils/docsRoute'
 import { TablesGateClosed } from './tables/TablesGateClosed'
 import { TablesPlaceholder } from './tables/TablesPlaceholder'
+import { TablesListView } from './tables/TablesListView'
 import type { TablesRoute } from '../utils/tablesRoute'
 
 interface MobileShellProps {
@@ -256,6 +257,8 @@ export function MobileShell({
           <div className="main-content docs-main tables-main">
             {!tablesEnabled ? (
               <TablesGateClosed />
+            ) : tablesRoute.kind === 'list' ? (
+              <TablesListView projectId={tablesRoute.projectId} />
             ) : (
               <TablesPlaceholder route={tablesRoute} />
             )}

@@ -2,14 +2,14 @@
  * Sidebar shell: brand bar, the two sliding panels (projects + docs +
  * standalone conversations, and the drilled project), the update banner, the
  * user bar and the modals. Owns the cross-list flows -- drilling in and out
- * of a project, creating chats, running routines, opening docs,
+ * of a project, creating chats, running routines, opening docs and tables,
  * project/routine CRUD follow-ups -- and delegates:
  *
  * - data fetching / paging / polling / realtime refresh to
  *   hooks/useTopLevelConversations, useProjectConversations,
- *   useProjectRoutines, useDocs
+ *   useProjectRoutines, useDocs, useTables
  * - list derivation (filters, routine grouping, ordering) to
- *   utils/sidebarItems and utils/sidebarDocs
+ *   utils/sidebarItems, utils/sidebarDocs and utils/allTablesGrouping
  * - section rendering to components/sidebar/*
  */
 
@@ -22,6 +22,7 @@ import {
   ApiClientError,
 } from '../api/client';
 import { DOCS_FEATURE } from '../api/docsApi';
+import { TABLES_FEATURE } from '../api/tablesApi';
 import type { Conversation, Routine } from '../api/types';
 import { useAppConfig } from '../contexts/AppConfigContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -43,11 +44,15 @@ import { useProjectRoutines } from '../hooks/useProjectRoutines';
 import { useDocs } from '../hooks/useDocs';
 import { docsListPath, docViewerPath, parseDocsRoute } from '../utils/docsRoute';
 import { SIDEBAR_DOC_LIMIT } from '../utils/sidebarDocs';
+import { useTables } from '../hooks/useTables';
+import { parseTablesRoute, tableViewerPath, tablesListPath } from '../utils/tablesRoute';
+import { SIDEBAR_TABLE_LIMIT } from '../utils/allTablesGrouping';
 import { SearchModal } from './SearchModal';
 import { QuestLogo } from './QuestLogo';
 import { RequestsBadge } from './sidebar/RequestsBadge';
 import { ProjectsSection } from './sidebar/ProjectsSection';
 import { DocsSection } from './sidebar/DocsSection';
+import { TablesSection } from './sidebar/TablesSection';
 import { ConversationsSection } from './sidebar/ConversationsSection';
 import { ProjectPanel } from './sidebar/ProjectPanel';
 import './Sidebar.css';
@@ -64,7 +69,7 @@ interface SidebarProps {
   onConversationSelect: (id: string, projectId?: string | null, opts?: { implicit?: boolean }) => void;
   onNewConversation: (id: string, projectId?: string | null) => void;
   // Called after the Sidebar navigates to a view that is not a conversation
-  // (a doc, the All Docs list): the host closes its drawer on phone. The
+  // (a doc or table, the All Docs / All Tables list): the host closes its drawer on phone. The
   // desktop layout passes nothing.
   onNavigateAway?: () => void;
 }
@@ -129,6 +134,22 @@ export const Sidebar = React.memo(function Sidebar({
   // The project id of the All Docs view showing (null = unfiltered), or
   // undefined when no All Docs view is showing.
   const docsListProjectId = docsRoute?.kind === 'list' ? docsRoute.projectId : undefined;
+
+  // Quest Tables: the same pair of blocks (right under each Docs block),
+  // only while the `tables` feature gate is open; the URL says which table /
+  // All Tables view is showing.
+  const tablesEnabled = enabledFeatures.includes(TABLES_FEATURE);
+  const userTables = useTables({ limit: SIDEBAR_TABLE_LIMIT, enabled: tablesEnabled });
+  const projectTables = useTables({
+    projectId: drilledProjectId,
+    limit: SIDEBAR_TABLE_LIMIT,
+    enabled: tablesEnabled && drilledProjectId !== null,
+  });
+  const tablesRoute = parseTablesRoute(location.pathname, location.search);
+  const activeTableId = tablesRoute?.kind === 'viewer' ? tablesRoute.tableId : null;
+  // The project id of the All Tables view showing (null = unfiltered), or
+  // undefined when no All Tables view is showing.
+  const tablesListProjectId = tablesRoute?.kind === 'list' ? tablesRoute.projectId : undefined;
 
   // Per-project conversation filters. Default to false (hide archived, hide
   // Slack conversations) on every page load; no persistence. Independent of
@@ -338,6 +359,22 @@ export const Sidebar = React.memo(function Sidebar({
     onNavigateAway?.();
   }
 
+  // Tables views are URL routes too (/tables/<id>, /tables[?project=<id>]),
+  // handled exactly like the docs ones above.
+  function handleOpenTable(id: string) {
+    setError(null);
+    setShowRequestsView(false);
+    navigate(tableViewerPath(id));
+    onNavigateAway?.();
+  }
+
+  function handleOpenAllTables(projectId: string | null) {
+    setError(null);
+    setShowRequestsView(false);
+    navigate(tablesListPath(projectId));
+    onNavigateAway?.();
+  }
+
   // Deselect an archived conversation if it was the active one.
   function handleArchived(conversationId: string) {
     if (activeConversationId === conversationId) {
@@ -511,6 +548,18 @@ export const Sidebar = React.memo(function Sidebar({
               />
             )}
 
+            {tablesEnabled && (
+              <TablesSection
+                tables={userTables.tables}
+                loading={userTables.loading}
+                error={userTables.error}
+                activeTableId={activeTableId}
+                onOpenTable={handleOpenTable}
+                onOpenAll={() => handleOpenAllTables(null)}
+                headerActive={tablesListProjectId === null}
+              />
+            )}
+
             <ConversationsSection
               list={topLevel}
               activeConversationId={highlightedConversationId}
@@ -560,6 +609,14 @@ export const Sidebar = React.memo(function Sidebar({
                 onOpenDoc={handleOpenDoc}
                 onOpenAllDocs={() => handleOpenAllDocs(drilledProject.id)}
                 docsHeaderActive={docsListProjectId === drilledProject.id}
+                showTables={tablesEnabled}
+                tables={projectTables.tables}
+                tablesLoading={projectTables.loading}
+                tablesError={projectTables.error}
+                activeTableId={activeTableId}
+                onOpenTable={handleOpenTable}
+                onOpenAllTables={() => handleOpenAllTables(drilledProject.id)}
+                tablesHeaderActive={tablesListProjectId === drilledProject.id}
               />
             )}
           </div>

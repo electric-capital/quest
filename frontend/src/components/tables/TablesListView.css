@@ -1,0 +1,529 @@
+/* TablesListView -- All Tables takeover (/tables, /tables?project=<id>), a
+ * copy of DocsListView.css. Lives inside .docs-main.tables-main (App.css),
+ * which is the scrolling column; the header sticks to its top. Rows are
+ * pill-shaped, separated by spacing and hover rather than hairlines. Desktop
+ * rows are a 6-column grid under one column-label row; at the phone
+ * breakpoint (768px, same as useIsMobile / MobileShell) they collapse to a
+ * title line plus a meta line. */
+
+.tables-list {
+  flex: 1 0 auto;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+.tables-list-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 1.25rem 2rem 0.75rem;
+  background-color: var(--surface);
+}
+
+.tables-list-header-inner {
+  max-width: 960px;
+  margin: 0 auto;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+}
+
+.tables-list-heading {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.tables-list-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  margin-left: -0.35rem;
+  padding: 0.1rem 0.45rem 0.1rem 0.15rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.tables-list-back:hover {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.tables-list-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.tables-list-title-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.tables-list-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Same outline pill as the sidebar drill-down's public-project badge. */
+.tables-list-public-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
+.tables-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.tables-list-new-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  height: 2.125rem;
+  padding: 0 0.9rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-color: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.tables-list-new-button:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+  border-color: transparent;
+}
+
+/* No New Table dialog yet (phase B5): visible but inert. */
+.tables-list-new-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Content column */
+.tables-list-content {
+  padding: 0.5rem 2rem 2.5rem;
+}
+
+.tables-list-inner {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+/* Grid shared by the column-label row and every table row:
+ * title | mode | scope | rows | columns | updated */
+.tables-columns,
+.tables-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 4.75rem minmax(0, 9rem) 4.5rem 4.5rem 7.5rem;
+  column-gap: 1rem;
+  align-items: center;
+}
+
+.tables-columns {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.tables-col-num {
+  text-align: right;
+}
+
+/* Groups */
+.tables-group {
+  margin-top: 1rem;
+}
+
+.tables-group-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.25rem 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
+.tables-group-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.tables-group-link {
+  margin: -0.15rem -0.45rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  transition: background-color 0.15s;
+}
+
+.tables-group-link:hover {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.tables-group-label-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tables-group-folder {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.tables-group-public {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
+/* Archived project: same muted outline pill as the sidebar drill-down's
+ * "Archived" badge. Archiving does not touch a project's tables. */
+.tables-group-archived {
+  flex-shrink: 0;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.tables-group-count {
+  flex-shrink: 0;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background-color: var(--hover);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.tables-group-empty {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+/* "Shared with you" whose first page failed: the group stays to say so. */
+.tables-group-error {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  color: #ff6464;
+}
+
+.tables-group-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem 0;
+}
+
+.tables-load-more {
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: none;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.tables-load-more:hover:not(:disabled) {
+  background-color: var(--hover);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.tables-load-more:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Rows */
+.tables-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tables-row {
+  padding: 0.55rem 0.75rem;
+  border-radius: 10px;
+  color: var(--text);
+  font-weight: 400;
+  text-decoration: none;
+  transition: background-color 0.12s;
+}
+
+.tables-row:hover {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.tables-row:active {
+  background-color: var(--pressed);
+}
+
+.tables-row:focus-visible {
+  outline: 2px solid rgb(var(--accent-rgb) / 0.6);
+  outline-offset: -2px;
+}
+
+.tables-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  min-width: 0;
+}
+
+.tables-row-title,
+.tables-row-description,
+.tables-row-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tables-row-title {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.tables-row-description {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.tables-row-mode {
+  display: flex;
+  min-width: 0;
+}
+
+.tables-row-meta {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.tables-row-updated,
+.tables-row-rows,
+.tables-row-columns {
+  font-variant-numeric: tabular-nums;
+}
+
+.tables-row-rows,
+.tables-row-columns {
+  text-align: right;
+}
+
+/* The unit word ("rows", "columns") only reads on the phone meta line; the
+ * desktop column labels already say it. */
+.tables-row-unit {
+  display: none;
+}
+
+/* States */
+.tables-list-status {
+  display: flex;
+  justify-content: center;
+  padding: 3rem 1rem;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.tables-list-empty {
+  padding: 4rem 1rem;
+  text-align: center;
+}
+
+.tables-list-empty-title {
+  margin: 0 0 0.25rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.tables-list-empty-hint {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.tables-list-error {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 100, 100, 0.2);
+  background-color: rgba(255, 100, 100, 0.1);
+  font-size: 0.85rem;
+  color: #ff6464;
+}
+
+.tables-list-warning {
+  margin-top: 1.25rem;
+  padding: 0 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+/* Narrow desktop: beside the 260px sidebar the fixed columns would squeeze
+ * the title to a few dozen pixels, so drop Scope and Columns (the column
+ * labels and the cells) and keep title | mode | rows | updated. The phone
+ * layout below restacks the rows and shows every field again. */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .tables-columns,
+  .tables-row {
+    grid-template-columns: minmax(0, 1fr) 4.75rem 4.5rem 7.5rem;
+  }
+
+  .tables-col-scope,
+  .tables-col-columns,
+  .tables-row-scope,
+  .tables-row-columns {
+    display: none;
+  }
+}
+
+/* Phone: 16px gutters, the New Table button wraps under the title, rows
+ * stack into a title line and a meta line (badge, scope, rows, columns,
+ * time). */
+@media (max-width: 768px) {
+  .tables-list-header {
+    padding: 0.875rem 16px 0.5rem;
+  }
+
+  .tables-list-header-inner {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.625rem;
+  }
+
+  .tables-list-actions {
+    width: 100%;
+  }
+
+  .tables-list-content {
+    padding: 0.25rem 16px 2rem;
+  }
+
+  .tables-columns {
+    display: none;
+  }
+
+  .tables-group-heading,
+  .tables-group-empty,
+  .tables-group-error,
+  .tables-group-footer,
+  .tables-list-warning {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+
+  .tables-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 0.5rem;
+    row-gap: 0.25rem;
+    padding: 0.6rem 0.5rem;
+  }
+
+  .tables-row-main {
+    flex: 1 0 100%;
+  }
+
+  /* No badge (a private table): drop the slot so the meta line starts at
+     the scope. */
+  .tables-row-mode:empty {
+    display: none;
+  }
+
+  .tables-row-meta {
+    flex: 0 1 auto;
+    font-size: 0.75rem;
+  }
+
+  .tables-row-scope {
+    max-width: 45%;
+  }
+
+  .tables-row-rows,
+  .tables-row-columns {
+    text-align: left;
+  }
+
+  .tables-row-unit {
+    display: inline;
+  }
+
+  .tables-row-rows::before,
+  .tables-row-columns::before,
+  .tables-row-updated::before {
+    content: '\00b7';
+    margin-right: 0.5rem;
+    color: var(--text-muted);
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  .tables-list-error {
+    border-color: rgba(211, 47, 47, 0.2);
+    background-color: rgba(211, 47, 47, 0.06);
+    color: #cc3333;
+  }
+
+  .tables-group-error {
+    color: #cc3333;
+  }
+}

@@ -1,15 +1,16 @@
 /**
  * The Sidebar's drill-down panel for one project: back/settings header, the
- * Routines section, the project's Docs block (Quest Docs gate open only), and
- * the project's conversation list with routine runs folded into expandable
- * groups. Data comes from useProjectConversations / useProjectRoutines /
- * useDocs (owned by the Sidebar); this component renders it and owns only
+ * Routines section, the project's Docs block (Quest Docs gate open only), its
+ * Tables block (Quest Tables gate open only), and the project's conversation
+ * list with routine runs folded into expandable groups. Data comes from
+ * useProjectConversations / useProjectRoutines / useDocs / useTables (owned
+ * by the Sidebar); this component renders it and owns only
  * its own row UI state.
  */
 
 import { useMemo, useState } from 'react';
 import { Archive } from 'lucide-react';
-import type { Conversation, Doc, Project, Routine } from '../../api/types';
+import type { Conversation, Doc, Project, Routine, TableListRow } from '../../api/types';
 import { useConversationListActions } from '../../hooks/useConversationListActions';
 import { useFlipListAnimation } from '../../hooks/useFlipListAnimation';
 import { deriveProjectSidebarItems } from '../../utils/sidebarItems';
@@ -17,6 +18,7 @@ import { ConversationFilterMenu } from './ConversationFilterMenu';
 import { ConversationRow } from './ConversationRow';
 import { DocsSection } from './DocsSection';
 import { RoutinesSection } from './RoutinesSection';
+import { TablesSection } from './TablesSection';
 import {
   ChevronLeftIcon,
   FolderIcon,
@@ -71,9 +73,24 @@ interface ProjectPanelProps {
   onOpenAllDocs?: () => void;
   // That filtered All Docs view is the one showing.
   docsHeaderActive?: boolean;
+  // The project's Tables block, rendered right under the Docs block while
+  // `showTables` (the Quest Tables feature gate is open for the user).
+  showTables?: boolean;
+  tables?: TableListRow[];
+  tablesLoading?: boolean;
+  // The project's first tables page failed to load.
+  tablesError?: string | null;
+  // The table open in the viewer (its row is highlighted).
+  activeTableId?: string | null;
+  onOpenTable?: (id: string) => void;
+  // Opens the All Tables view filtered to this project.
+  onOpenAllTables?: () => void;
+  // That filtered All Tables view is the one showing.
+  tablesHeaderActive?: boolean;
 }
 
 const NO_DOCS: Doc[] = [];
+const NO_TABLES: TableListRow[] = [];
 const noop = () => {};
 
 export function ProjectPanel({
@@ -107,6 +124,14 @@ export function ProjectPanel({
   onOpenDoc = noop,
   onOpenAllDocs = noop,
   docsHeaderActive = false,
+  showTables = false,
+  tables = NO_TABLES,
+  tablesLoading = false,
+  tablesError = null,
+  activeTableId = null,
+  onOpenTable = noop,
+  onOpenAllTables = noop,
+  tablesHeaderActive = false,
 }: ProjectPanelProps) {
   const listRef = useFlipListAnimation<HTMLDivElement>();
   // Held here, not in the popover: toggling the archive filter reloads the
@@ -179,6 +204,18 @@ export function ProjectPanel({
                 onOpenDoc={onOpenDoc}
                 onOpenAll={onOpenAllDocs}
                 headerActive={docsHeaderActive}
+              />
+            )}
+
+            {showTables && (
+              <TablesSection
+                tables={tables}
+                loading={tablesLoading}
+                error={tablesError}
+                activeTableId={activeTableId}
+                onOpenTable={onOpenTable}
+                onOpenAll={onOpenAllTables}
+                headerActive={tablesHeaderActive}
               />
             )}
 
