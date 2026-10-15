@@ -2,16 +2,16 @@
 
 GCP reads are handled via the ``authed_get`` tool (GET requests) and its
 POST-capable sibling ``authed_post`` (for the GCP reads Google only exposes
-as POST: searching organizations, reading log entries, and the project-level
-IAM policy read). Both ride on the existing per-user Google Services OAuth
+as POST: searching organizations, reading log entries, and the project- and
+billing-account-level IAM policy reads). Both ride on the existing per-user Google Services OAuth
 credentials -- the same Bearer token used by
 Gmail/Calendar/Drive/Docs/Sheets/Slides/Tasks -- granted the full
 ``cloud-platform`` scope (Compute Engine and GKE/Container reject the
 read-only variant, so the full scope is required). Access is kept strictly
 READ-ONLY at the APPLICATION layer, not by the OAuth scope: only the
 whitelisted read-shaped GET paths and the read-shaped POST verbs
-(``organizations:search``, ``entries:list``, project ``:getIamPolicy``) are
-reachable. ``getIamPolicy`` is read-shaped despite being a POST: its body
+(``organizations:search``, ``entries:list``, project and billing-account
+``:getIamPolicy``) are reachable. ``getIamPolicy`` is read-shaped despite being a POST: its body
 carries only ``GetPolicyOptions`` (a policy-version hint) and the verb returns
 the policy -- the mutating counterpart is the separate ``:setIamPolicy`` verb,
 which the allow-list anchors never match.
@@ -27,6 +27,8 @@ RESOURCE_MANAGER_BASE = "https://cloudresourcemanager.googleapis.com"
 COMPUTE_BASE = "https://compute.googleapis.com"
 CONTAINER_BASE = "https://container.googleapis.com"
 LOGGING_BASE = "https://logging.googleapis.com"
+BILLING_BASE = "https://cloudbilling.googleapis.com"
+BUDGETS_BASE = "https://billingbudgets.googleapis.com"
 
 
 # ---------------------------------------------------------------------------
@@ -58,9 +60,10 @@ returns a 403 with a scope/permission error, the user must reconnect Google
 Services in Settings > Data Connections to grant the `cloud-platform` scope.
 
 **API enablement note:** The relevant GCP API (Compute Engine, Kubernetes
-Engine, Cloud Logging, Resource Manager) must be enabled on the target project.
-If it isn't, Google returns a 403 "API not enabled" error -- surface that to the
-user; it is a project-side setting, not a Quest issue.
+Engine, Cloud Logging, Resource Manager, Cloud Billing, Cloud Billing Budget)
+must be enabled on the target project. If it isn't, Google returns a 403 "API
+not enabled" error -- surface that to the user; it is a project-side setting,
+not a Quest issue.
 
 ### Cloud Resource Manager (projects & organizations)
 
@@ -192,6 +195,53 @@ Reading actual log lines is `authed_post` `POST /v2/entries:list` with a body:
 The response carries `entries[]` + `nextPageToken`. Log pulls can be large --
 prefer `output_file` and a tight `filter` + small `pageSize`.
 
+### Cloud Billing (billing accounts, project billing, pricing, budgets)
+
+**Base URL:** `{BILLING_BASE}` (budgets: `{BUDGETS_BASE}`)
+
+| Path | Tool | Description |
+|------|------|-------------|
+| `/v1/billingAccounts` | `authed_get` | **List billing accounts** the user can see (`filter=master_billing_account=billingAccounts/{{id}}` narrows to one reseller's subaccounts) |
+| `/v1/billingAccounts/{{accountId}}` | `authed_get` | Get one billing account (`displayName`, `open`, `masterBillingAccount`, `currencyCode`) |
+| `/v1/billingAccounts/{{accountId}}/projects` | `authed_get` | **Projects billed to this account** (`projectBillingInfo[]` with `projectId`, `billingEnabled`) |
+| `/v1/billingAccounts/{{accountId}}/subAccounts` | `authed_get` | Subaccounts of a reseller (master) billing account |
+| `/v1/organizations/{{orgId}}/billingAccounts` | `authed_get` | Billing accounts owned by an organization |
+| `/v1/projects/{{projectId}}/billingInfo` | `authed_get` | **Which account a project bills to** and whether billing is enabled |
+| `/v1/billingAccounts/{{accountId}}:getIamPolicy` | **`authed_post`** | **Billing-account IAM policy** (who is a billing admin / viewer / user; empty body or `{{"options": {{"requestedPolicyVersion": 3}}}}`) |
+| `/v1/services` | `authed_get` | List billable Google Cloud services (public catalog; `serviceId` + `displayName`) |
+| `/v1/services/{{serviceId}}/skus` | `authed_get` | **SKUs + public list prices** for one service (`currencyCode=`, `startTime=`/`endTime=` for historical pricing) |
+| `/v1beta/skus/{{skuId}}/price` | `authed_get` | Public price for one SKU (`currencyCode=`) |
+| `/v1beta/billingAccounts/{{accountId}}/services` | `authed_get` | Services visible to a billing account |
+| `/v1beta/billingAccounts/{{accountId}}/skus` | `authed_get` | SKUs visible to a billing account (`filter=service="services/{{serviceId}}"`) |
+| `/v1beta/billingAccounts/{{accountId}}/skus/{{skuId}}/price` | `authed_get` | **Account-specific price** for one SKU (reflects negotiated discounts) |
+| `{BUDGETS_BASE}/v1/billingAccounts/{{accountId}}/budgets` | `authed_get` | **List budgets** on a billing account (amount, threshold rules, filters) |
+| `{BUDGETS_BASE}/v1/billingAccounts/{{accountId}}/budgets/{{budgetId}}` | `authed_get` | Get one budget |
+
+Billing account ids look like `012345-6789AB-CDEF01` (the resource name is
+`billingAccounts/012345-6789AB-CDEF01`; use only the id part in the path).
+Start with `GET /v1/billingAccounts` to discover them, or
+`GET /v1/projects/{{projectId}}/billingInfo` when you know the project.
+
+**What the Billing API does NOT give you:** actual spend / cost history. The
+Cloud Billing API covers accounts, project links, IAM, the price catalog, and
+budget definitions (a budget object holds its amount and alert thresholds, not
+the current spend against it). Itemised cost and usage data lives only in the
+BigQuery billing export, which Quest cannot query. If the user asks "how much
+did we spend last month", say so and point them to the Billing console's
+Reports page or their BigQuery export rather than guessing from SKU prices.
+
+**Permissions:** the user needs the Billing Account Viewer role (or higher) on
+an account to see it; accounts the user has no role on are silently absent from
+`GET /v1/billingAccounts`, and direct reads of them 403 with `PERMISSION_DENIED`.
+`projects/{{projectId}}/billingInfo` needs `resourcemanager.projects.get` on the
+project. The pricing catalog (`/v1/services`, `/v1/services/{{id}}/skus`,
+`/v1beta/skus/{{id}}/price`) is public and needs no billing role.
+
+The SKU catalog is large (`/v1/services/{{id}}/skus` for Compute Engine runs to
+thousands of entries) -- always pass `output_file`, and narrow with `pageSize`
+and `currencyCode`. Billing and Budget endpoints paginate with `pageSize` +
+`pageToken`.
+
 ### Response size, `fields`, pagination, and `output_file`
 
 GCP responses (aggregated instance lists, full cluster objects, large log pulls)
@@ -201,7 +251,7 @@ commonly exceed the ~3 KB `authed_get`/`authed_post` size gate. To handle this:
 - Use `output_file` to stream large payloads to the workspace, then read them
   with `get_workspace_file` / `run_python`.
 - GCP list endpoints paginate: Compute uses `maxResults` + `pageToken`; Resource
-  Manager / Container / Logging use `pageSize` + `pageToken`.
+  Manager / Container / Logging / Billing / Budgets use `pageSize` + `pageToken`.
 
 ### Example `authed_get` calls
 
@@ -232,6 +282,21 @@ tool_call(tool_name="authed_get", arguments={{"url": "{CONTAINER_BASE}/v1/projec
 
 # Instance-level IAM policy for one VM (plain GET; often empty)
 tool_call(tool_name="authed_get", arguments={{"url": "{COMPUTE_BASE}/compute/v1/projects/my-project-123/zones/us-central1-a/instances/my-vm/getIamPolicy"}})
+
+# List billing accounts the user can see
+tool_call(tool_name="authed_get", arguments={{"url": "{BILLING_BASE}/v1/billingAccounts"}})
+
+# Which billing account does a project bill to, and is billing enabled?
+tool_call(tool_name="authed_get", arguments={{"url": "{BILLING_BASE}/v1/projects/my-project-123/billingInfo"}})
+
+# All projects billed to one account
+tool_call(tool_name="authed_get", arguments={{"url": "{BILLING_BASE}/v1/billingAccounts/012345-6789AB-CDEF01/projects"}})
+
+# Budgets configured on a billing account
+tool_call(tool_name="authed_get", arguments={{"url": "{BUDGETS_BASE}/v1/billingAccounts/012345-6789AB-CDEF01/budgets"}})
+
+# Public SKU price list for Compute Engine (service id 6F81-5844-456A) -- very large, stream to workspace
+tool_call(tool_name="authed_get", arguments={{"url": "{BILLING_BASE}/v1/services/6F81-5844-456A/skus?currencyCode=USD&pageSize=500", "output_file": "compute_skus.json"}})
 ```
 
 ### Example `authed_post` calls
@@ -248,13 +313,18 @@ tool_call(tool_name="authed_post", arguments={{"url": "{RESOURCE_MANAGER_BASE}/v
 
 # Read recent error logs for a project -- large, so stream to workspace
 tool_call(tool_name="authed_post", arguments={{"url": "{LOGGING_BASE}/v2/entries:list", "body": {{"resourceNames": ["projects/my-project-123"], "filter": "severity>=ERROR", "orderBy": "timestamp desc", "pageSize": 50}}, "output_file": "error_logs.json"}})
+
+# Billing-account IAM policy: who are the billing admins / viewers / users
+tool_call(tool_name="authed_post", arguments={{"url": "{BILLING_BASE}/v1/billingAccounts/012345-6789AB-CDEF01:getIamPolicy", "body": {{}}}})
 ```
 
 **Important Notes:**
 - Read-only: only the GET paths and the POST verbs (`organizations:search`,
-  `entries:list`, project `:getIamPolicy`) above are reachable. Write verbs
-  (incl. `:setIamPolicy`) are rejected. The sole write is the approval-gated
-  `reset_gcp_instance` action request.
+  `entries:list`, project and billing-account `:getIamPolicy`) above are
+  reachable. Write verbs (incl. `:setIamPolicy`) are rejected. The sole write
+  is the approval-gated `reset_gcp_instance` action request.
+- Billing: the API exposes accounts, project links, IAM, prices and budget
+  definitions -- not actual spend. Don't estimate cost history from SKU prices.
 - Most paths require a `{{project}}` id -- list projects or ask the user first.
 - If a call 403s with a scope/permission error, the user must reconnect Google
   Services in Settings to grant the `cloud-platform` scope.

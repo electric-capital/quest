@@ -281,7 +281,7 @@ _SERVICE_REGISTRY: dict[str, dict[str, Any]] = {
         ],
     },
     # --- Google Cloud Platform (GCP) -- read-only via per-user Google OAuth ---
-    # All four GCP hosts share the Google Services loader/injector (same Bearer
+    # All six GCP hosts share the Google Services loader/injector (same Bearer
     # token, granted the full cloud-platform scope -- Compute/GKE reject the
     # read-only variant; read-only is enforced HERE at the app layer by these
     # allow-lists, not by the OAuth scope). GET allow-lists use
@@ -289,9 +289,9 @@ _SERVICE_REGISTRY: dict[str, dict[str, Any]] = {
     # which is how GCP encodes custom/write methods (e.g. ``instances/{id}:stop``,
     # ``clusters/{id}:setMasterAuth``), keeping the GET path read-only. A few
     # read-shaped POST verbs (``organizations:search``, ``entries:list``, and
-    # the project ``:getIamPolicy`` pair) are exposed via the separate
-    # ``allowed_post_endpoints`` dimension, reachable only through the
-    # authed_post tool -- never through authed_get.
+    # the project / billing-account ``:getIamPolicy`` verbs) are exposed via
+    # the separate ``allowed_post_endpoints`` dimension, reachable only through
+    # the authed_post tool -- never through authed_get.
     "cloudresourcemanager.googleapis.com": {
         "name": "Google Cloud Resource Manager",
         "load_credentials": _load_google_services_credentials,
@@ -373,6 +373,49 @@ _SERVICE_REGISTRY: dict[str, dict[str, Any]] = {
             # filter + orderBy + pageSize). The ONLY POST verb allow-listed for
             # this host -- entries:write and other write verbs are unreachable.
             r"^/v2/entries:list$",
+        ],
+    },
+    "cloudbilling.googleapis.com": {
+        "name": "Google Cloud Billing",
+        "load_credentials": _load_google_services_credentials,
+        "inject_auth": _inject_google_bearer_auth,
+        "requires_user": True,
+        "retry_on_401": True,
+        "allowed_endpoints": [
+            # Billing accounts and the projects linked to them. Account ids
+            # look like ``012345-6789AB-CDEF01`` (no ':' or '/'), so the
+            # ``[^/:]+`` segment keeps ``:patch``-style verbs unreachable.
+            r"^/v1/billingAccounts$",                        # list billing accounts (supports filter=)
+            r"^/v1/billingAccounts/[^/:]+$",                 # get one billing account
+            r"^/v1/billingAccounts/[^/:]+/projects$",        # projects linked to a billing account
+            r"^/v1/billingAccounts/[^/:]+/subAccounts$",     # subaccounts of a reseller account
+            r"^/v1/organizations/[^/:]+/billingAccounts$",   # billing accounts under an org
+            r"^/v1/projects/[^/:]+/billingInfo$",            # which account a project bills to
+            # Public pricing catalog (no billing account needed).
+            r"^/v1/services$",                               # list billable services
+            r"^/v1/services/[^/:]+/skus$",                   # SKUs + list prices for a service
+            # Account-aware pricing (v1beta): the account's negotiated prices.
+            r"^/v1beta/skus/[^/:]+/price$",                          # public price for one SKU
+            r"^/v1beta/billingAccounts/[^/:]+/services$",            # services visible to the account
+            r"^/v1beta/billingAccounts/[^/:]+/skus$",                # SKUs visible to the account
+            r"^/v1beta/billingAccounts/[^/:]+/skus/[^/:]+/price$",   # account-specific price for one SKU
+        ],
+        "allowed_post_endpoints": [
+            # Billing-account IAM policy read (POST; body carries only
+            # GetPolicyOptions, same reasoning as the project verb above).
+            # ``:setIamPolicy`` / ``:testIamPermissions`` never match.
+            r"^/v1/billingAccounts/[^/:]+:getIamPolicy$",
+        ],
+    },
+    "billingbudgets.googleapis.com": {
+        "name": "Google Cloud Billing Budgets",
+        "load_credentials": _load_google_services_credentials,
+        "inject_auth": _inject_google_bearer_auth,
+        "requires_user": True,
+        "retry_on_401": True,
+        "allowed_endpoints": [
+            r"^/v1/billingAccounts/[^/:]+/budgets$",           # list budgets on a billing account
+            r"^/v1/billingAccounts/[^/:]+/budgets/[^/:]+$",    # get one budget
         ],
     },
     "api.airtable.com": {
@@ -1429,9 +1472,10 @@ async def handle_authed_post(
     This is the POST-capable sibling of ``handle_authed_get``. It is NOT a
     general POST proxy: the target host must be registered in
     ``_SERVICE_REGISTRY`` AND the path must match that host's
-    ``allowed_post_endpoints`` allow-list, which today contains exactly the two
-    read-shaped GCP verbs ``organizations:search`` and ``entries:list``. Write
-    verbs are absent from every POST allow-list and are therefore unreachable.
+    ``allowed_post_endpoints`` allow-list, which today contains only the
+    read-shaped GCP verbs ``organizations:search``, ``entries:list`` and the
+    project / billing-account ``:getIamPolicy`` reads. Write verbs are absent
+    from every POST allow-list and are therefore unreachable.
 
     Args:
         url: Full upstream API URL (must be HTTPS and match a known service +

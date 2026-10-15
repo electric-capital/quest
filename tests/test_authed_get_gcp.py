@@ -1,20 +1,22 @@
 """Tests for the Google Cloud Platform (GCP) entries in the ``authed_get`` /
 ``authed_post`` registry.
 
-The four GCP hosts (Resource Manager, Compute Engine, Kubernetes Engine,
-Cloud Logging) are per-user OAuth Google services modelled like Slides/Docs:
+The six GCP hosts (Resource Manager, Compute Engine, Kubernetes Engine,
+Cloud Logging, Cloud Billing, Billing Budgets) are per-user OAuth Google
+services modelled like Slides/Docs:
 they reuse the shared ``_load_google_services_credentials`` loader and
 ``_inject_google_bearer_auth`` injector, set ``requires_user`` and
 ``retry_on_401`` to ``True``, and are keyed by plain hostnames (path gating by
 the regex allow-lists).
 
-Two hosts additionally expose a SEPARATE POST allow-list
-(``allowed_post_endpoints``) for the two read-shaped POST verbs Google only
-offers as POST: ``organizations:search`` (Resource Manager) and
-``entries:list`` (Cloud Logging). These are reachable only via ``authed_post``.
+Three hosts additionally expose a SEPARATE POST allow-list
+(``allowed_post_endpoints``) for the read-shaped POST verbs Google only
+offers as POST: ``organizations:search`` and project ``:getIamPolicy``
+(Resource Manager), ``entries:list`` (Cloud Logging) and billing-account
+``:getIamPolicy`` (Cloud Billing). These are reachable only via ``authed_post``.
 
 Covers:
-* All four GCP entries present as plain-hostname keys, correct names, per-user
+* All six GCP entries present as plain-hostname keys, correct names, per-user
   OAuth model, shared Google loader/injector.
 * GET allow-lists match the intended read paths and reject write verbs
   (``:`` -suffixed custom methods), list-vs-id mismatches, and unrelated paths.
@@ -49,8 +51,10 @@ _RM_KEY = "cloudresourcemanager.googleapis.com"
 _COMPUTE_KEY = "compute.googleapis.com"
 _GKE_KEY = "container.googleapis.com"
 _LOGGING_KEY = "logging.googleapis.com"
+_BILLING_KEY = "cloudbilling.googleapis.com"
+_BUDGETS_KEY = "billingbudgets.googleapis.com"
 
-_ALL_GCP_KEYS = [_RM_KEY, _COMPUTE_KEY, _GKE_KEY, _LOGGING_KEY]
+_ALL_GCP_KEYS = [_RM_KEY, _COMPUTE_KEY, _GKE_KEY, _LOGGING_KEY, _BILLING_KEY, _BUDGETS_KEY]
 
 
 # ---------------------------------------------------------------------------
@@ -139,11 +143,13 @@ class TestGcpRegistryEntries:
             assert entry["load_credentials"] is _load_google_services_credentials
             assert entry["inject_auth"] is _inject_google_bearer_auth
 
-    def test_only_rm_and_logging_have_post_allow_lists(self):
+    def test_only_rm_logging_and_billing_have_post_allow_lists(self):
         assert "_allowed_post_endpoints" in _SERVICE_REGISTRY[_RM_KEY]
         assert "_allowed_post_endpoints" in _SERVICE_REGISTRY[_LOGGING_KEY]
+        assert "_allowed_post_endpoints" in _SERVICE_REGISTRY[_BILLING_KEY]
         assert "_allowed_post_endpoints" not in _SERVICE_REGISTRY[_COMPUTE_KEY]
         assert "_allowed_post_endpoints" not in _SERVICE_REGISTRY[_GKE_KEY]
+        assert "_allowed_post_endpoints" not in _SERVICE_REGISTRY[_BUDGETS_KEY]
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +254,60 @@ class TestGcpGetAllowLists:
         assert not _matches(compiled, "/v2/entries:list")
         assert not _matches(compiled, "/v2/entries:write")
 
+    def test_billing_allowed(self):
+        compiled = _SERVICE_REGISTRY[_BILLING_KEY]["_allowed_endpoints"]
+        for path in [
+            "/v1/billingAccounts",
+            "/v1/billingAccounts/012345-6789AB-CDEF01",
+            "/v1/billingAccounts/012345-6789AB-CDEF01/projects",
+            "/v1/billingAccounts/012345-6789AB-CDEF01/subAccounts",
+            "/v1/organizations/123456/billingAccounts",
+            "/v1/projects/my-project-123/billingInfo",
+            "/v1/services",
+            "/v1/services/6F81-5844-456A/skus",
+            "/v1beta/skus/0001-0002-0003/price",
+            "/v1beta/billingAccounts/012345-6789AB-CDEF01/services",
+            "/v1beta/billingAccounts/012345-6789AB-CDEF01/skus",
+            "/v1beta/billingAccounts/012345-6789AB-CDEF01/skus/0001-0002-0003/price",
+        ]:
+            assert _matches(compiled, path), f"expected allowed: {path}"
+
+    def test_billing_denied_write_verbs_and_extra_segments(self):
+        compiled = _SERVICE_REGISTRY[_BILLING_KEY]["_allowed_endpoints"]
+        for path in [
+            # ':'-verbs (create/update/move/IAM) must never match a GET pattern.
+            "/v1/billingAccounts:create",
+            "/v1/billingAccounts/012345-6789AB-CDEF01:patch",
+            "/v1/billingAccounts/012345-6789AB-CDEF01:move",
+            "/v1/billingAccounts/012345-6789AB-CDEF01:getIamPolicy",   # POST-only
+            "/v1/billingAccounts/012345-6789AB-CDEF01:setIamPolicy",
+            "/v1/billingAccounts/012345-6789AB-CDEF01:testIamPermissions",
+            "/v1/projects/my-project-123/billingInfo:update",
+            "/v1beta/billingAccounts/012345-6789AB-CDEF01:estimateCostScenario",
+            # Deeper / unrelated sub-resources must not widen the patterns.
+            "/v1/billingAccounts/012345-6789AB-CDEF01/projects/p",
+            "/v1/services/6F81-5844-456A",
+            "/v1/services/6F81-5844-456A/skus/0001",
+            "/v1beta/skus/0001-0002-0003/prices",
+            "/v1/projects/my-project-123",
+        ]:
+            assert not _matches(compiled, path), f"should be denied: {path}"
+
+    def test_budgets_allowed_and_denied(self):
+        compiled = _SERVICE_REGISTRY[_BUDGETS_KEY]["_allowed_endpoints"]
+        for path in [
+            "/v1/billingAccounts/012345-6789AB-CDEF01/budgets",
+            "/v1/billingAccounts/012345-6789AB-CDEF01/budgets/b1",
+        ]:
+            assert _matches(compiled, path), f"expected allowed: {path}"
+        for path in [
+            "/v1/billingAccounts/012345-6789AB-CDEF01/budgets/b1:patch",
+            "/v1/billingAccounts/012345-6789AB-CDEF01/budgets/b1/extra",
+            "/v1/billingAccounts/012345-6789AB-CDEF01",
+            "/v1beta1/billingAccounts/012345-6789AB-CDEF01/budgets",
+        ]:
+            assert not _matches(compiled, path), f"should be denied: {path}"
+
 
 # ---------------------------------------------------------------------------
 # Tests: POST allow-lists and verb independence
@@ -282,18 +342,34 @@ class TestGcpPostAllowLists:
         assert not _matches(compiled, "/v2/entries:write")
         assert not _matches(compiled, "/v2/projects/p/logs")
 
+    def test_billing_post_get_iam_policy_only(self):
+        compiled = _SERVICE_REGISTRY[_BILLING_KEY]["_allowed_post_endpoints"]
+        assert _matches(compiled, "/v1/billingAccounts/012345-6789AB-CDEF01:getIamPolicy")
+        for path in [
+            "/v1/billingAccounts/012345-6789AB-CDEF01:setIamPolicy",
+            "/v1/billingAccounts/012345-6789AB-CDEF01:testIamPermissions",
+            "/v1/billingAccounts:create",
+            "/v1/billingAccounts/012345-6789AB-CDEF01:move",
+            "/v1beta/billingAccounts/012345-6789AB-CDEF01:estimateCostScenario",
+            "/v1/billingAccounts",
+        ]:
+            assert not _matches(compiled, path), f"should be denied (POST): {path}"
+
     def test_get_and_post_allow_lists_are_independent(self):
         """A GET path cannot appear on a POST list and vice versa."""
         rm = _SERVICE_REGISTRY[_RM_KEY]
         logging_ = _SERVICE_REGISTRY[_LOGGING_KEY]
+        billing = _SERVICE_REGISTRY[_BILLING_KEY]
         # POST verbs must not match the GET lists.
         assert not _matches(rm["_allowed_endpoints"], "/v1/organizations:search")
         assert not _matches(rm["_allowed_endpoints"], "/v1/projects/p:getIamPolicy")
         assert not _matches(rm["_allowed_endpoints"], "/v3/projects/p:getIamPolicy")
         assert not _matches(logging_["_allowed_endpoints"], "/v2/entries:list")
+        assert not _matches(billing["_allowed_endpoints"], "/v1/billingAccounts/a:getIamPolicy")
         # GET metadata paths must not match the POST lists.
         assert not _matches(rm["_allowed_post_endpoints"], "/v1/projects")
         assert not _matches(logging_["_allowed_post_endpoints"], "/v2/projects/p/logs")
+        assert not _matches(billing["_allowed_post_endpoints"], "/v1/billingAccounts")
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +444,40 @@ class TestMakeAuthedRequestGcp:
         assert "error" in parsed
         assert get_calls == [] and post_calls == []
 
+    def test_post_billing_get_iam_policy_forwards_body(self):
+        get_calls: list = []
+        post_calls: list = []
+        resp_body = {"bindings": [{"role": "roles/billing.admin", "members": ["user:a@example.com"]}]}
+        with _mock_credentials_loader("ya29.billing"), \
+                _mock_httpx_client(get_calls, post_calls, body=resp_body):
+            result = _run(_make_authed_request(
+                "https://cloudbilling.googleapis.com/v1/billingAccounts/012345-6789AB-CDEF01:getIamPolicy",
+                user={"email": "user@example.com"},
+                method="POST",
+                json_body={},
+            ))
+        assert json.loads(result) == resp_body
+        assert get_calls == []
+        assert len(post_calls) == 1
+        url, headers, sent_json = post_calls[0]
+        assert url.endswith("/v1/billingAccounts/012345-6789AB-CDEF01:getIamPolicy")
+        assert headers.get("Authorization") == "Bearer ya29.billing"
+        assert sent_json == {}
+
+    def test_post_billing_set_iam_policy_rejected_without_http_call(self):
+        get_calls: list = []
+        post_calls: list = []
+        with _mock_credentials_loader(), \
+                _mock_httpx_client(get_calls, post_calls):
+            result = _run(_make_authed_request(
+                "https://cloudbilling.googleapis.com/v1/billingAccounts/012345-6789AB-CDEF01:setIamPolicy",
+                user={"email": "user@example.com"},
+                method="POST",
+                json_body={"policy": {}},
+            ))
+        assert "error" in json.loads(result)
+        assert get_calls == [] and post_calls == []
+
     def test_post_to_host_without_post_list_rejected(self):
         """Compute has no POST allow-list -> all POSTs rejected, no call."""
         get_calls: list = []
@@ -410,3 +520,5 @@ class TestGcpServiceLookup:
         assert _find_service(_COMPUTE_KEY, "/compute/v1/projects/p/zones")["name"] == "Google Compute Engine"
         assert _find_service(_GKE_KEY, "/v1/projects/p/locations/-/clusters")["name"] == "Google Kubernetes Engine"
         assert _find_service(_LOGGING_KEY, "/v2/entries:list")["name"] == "Google Cloud Logging"
+        assert _find_service(_BILLING_KEY, "/v1/billingAccounts")["name"] == "Google Cloud Billing"
+        assert _find_service(_BUDGETS_KEY, "/v1/billingAccounts/a/budgets")["name"] == "Google Cloud Billing Budgets"

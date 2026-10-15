@@ -144,7 +144,9 @@ GOOGLE_SERVICE_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",  # Cell writes via the edit_google_spreadsheet action request
     "https://www.googleapis.com/auth/presentations.readonly",  # Read access to Google Slides
     "https://www.googleapis.com/auth/tasks.readonly",
-    # Platform-wide Google Cloud scope (Resource Manager, Compute, GKE, Logging).
+    # Platform-wide Google Cloud scope (Resource Manager, Compute, GKE, Logging,
+    # Cloud Billing and Billing Budgets -- the billing APIs accept it too, so
+    # they need no scope of their own).
     # This is the FULL cloud-platform scope, not a read-only variant: Compute
     # Engine rejects cloud-platform.read-only and GKE/Container has no read-only
     # scope at all (both require this full scope). Read-only behavior is enforced

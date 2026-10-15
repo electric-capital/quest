@@ -1562,8 +1562,8 @@ _register(SystemSkill(
 _register(SystemSkill(
     id="system:gcp",
     name="Google Cloud",
-    description="Read GCP projects, Compute VMs, GKE clusters, orgs, and logs; hard-reset a stuck VM via reset_gcp_instance.",
-    when_to_load="Load when the user asks about GCP projects, VMs/instances (incl. resetting a stuck VM), GKE/Kubernetes clusters, organizations, or logs.",
+    description="Read GCP projects, VMs, GKE clusters, orgs, logs, billing accounts, prices and budgets; hard-reset a stuck VM.",
+    when_to_load="Load when the user asks about GCP projects, VMs/instances (incl. resetting a stuck VM), GKE/Kubernetes clusters, organizations, logs, billing accounts, which account a project bills to, SKU prices, or budgets.",
     requires="google_services",
     content_builder=lambda base_url, _api_key: gcp_api.get_instructions(base_url),
 ))

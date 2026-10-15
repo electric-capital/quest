@@ -59,7 +59,7 @@
 | [drive-api.md](api/drive-api.md) | Google Drive reads, download and export tools, Save to Drive, upload and folder action requests |
 | [federal-register-api.md](api/federal-register-api.md) | Federal Register read access via authed_get, no credentials |
 | [file-browser-api.md](api/file-browser-api.md) | Workspace file endpoints for conversation and project spaces: list, upload, download, sanitized images, copy between spaces |
-| [gcp-api.md](api/gcp-api.md) | Read-only Google Cloud access (projects, Compute, GKE, Logging, IAM) and the approval-gated VM reset |
+| [gcp-api.md](api/gcp-api.md) | Read-only Google Cloud access (projects, Compute, GKE, Logging, IAM, Billing accounts, pricing, budgets) and the approval-gated VM reset |
 | [gmail-api.md](api/gmail-api.md) | Gmail tools (read, draft, send-to-self, labels), raw Gmail API reads, and email HTML sanitizing |
 | [inference-api.md](api/inference-api.md) | One-shot inference endpoint for internal apps: per-user tokens, read-only headless runs |
 | [project-db-api.md](api/project-db-api.md) | REST endpoints for browsing and deleting project database tables |
