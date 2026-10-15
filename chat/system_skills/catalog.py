@@ -1023,7 +1023,9 @@ A **Quest Table** is a typed table of records kept inside Quest, owned by
 the user (scope `user`) or by a project (scope `project`). Find tables with
 `list_tables`, read a table's columns and first rows with `get_table`, and
 read rows with `query_rows` (filter, sort, `offset` / `limit` paging;
-`total` is the filtered count).
+`total` is the filtered count). Write rows with `insert_rows`,
+`update_rows` (by `_id`), `upsert_rows` (matched on a unique column) and
+`delete_rows` (by `_id` or filter).
 """
 
 

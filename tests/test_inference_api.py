@@ -396,6 +396,8 @@ _CORE_MUTATING_TOOLS = {
     "create_gmail_draft", "send_gmail_to_self",
     # Quest Docs writes (no card when free; inference runs are read-only)
     "create_doc", "edit_doc", "append_to_doc", "add_doc_image",
+    # Quest Tables row writes (same terms as the doc writes)
+    "insert_rows", "update_rows", "upsert_rows", "delete_rows",
 }
 
 

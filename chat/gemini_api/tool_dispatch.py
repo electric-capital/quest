@@ -76,9 +76,13 @@ from chat.gemini_api.tool_handlers import (
     _handle_add_doc_image,
 )
 from chat.gemini_api.tool_handlers.tables import (
+    _handle_delete_rows,
     _handle_get_table,
+    _handle_insert_rows,
     _handle_list_tables,
     _handle_query_rows,
+    _handle_update_rows,
+    _handle_upsert_rows,
 )
 
 # Threshold in bytes: tool results larger than this are logged to the
@@ -659,6 +663,22 @@ async def _tool_query_rows(ctx: ToolContext, args: dict) -> str:
     return await _handle_query_rows(_table_caller(ctx), args)
 
 
+async def _tool_insert_rows(ctx: ToolContext, args: dict) -> str:
+    return await _handle_insert_rows(_table_caller(ctx), args)
+
+
+async def _tool_update_rows(ctx: ToolContext, args: dict) -> str:
+    return await _handle_update_rows(_table_caller(ctx), args)
+
+
+async def _tool_upsert_rows(ctx: ToolContext, args: dict) -> str:
+    return await _handle_upsert_rows(_table_caller(ctx), args)
+
+
+async def _tool_delete_rows(ctx: ToolContext, args: dict) -> str:
+    return await _handle_delete_rows(_table_caller(ctx), args)
+
+
 # Dynamic tools invoked through the tool_call meta tool. Keys must stay in
 # sync with chat.llm.tool_schemas.TOOL_CALL_REGISTRY (asserted by
 # tests/test_tool_dispatch_table.py); plugin tools are added to both via
@@ -714,6 +734,10 @@ TOOL_CALL_HANDLERS: dict[str, ToolHandler] = {
     "list_tables": _tool_list_tables,
     "get_table": _tool_get_table,
     "query_rows": _tool_query_rows,
+    "insert_rows": _tool_insert_rows,
+    "update_rows": _tool_update_rows,
+    "upsert_rows": _tool_upsert_rows,
+    "delete_rows": _tool_delete_rows,
 }
 
 # Tools the model calls by their own (top-level) name. Anything not in this
