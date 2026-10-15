@@ -1,5 +1,5 @@
 """Quest Tables reads: the filter DSL, sort and paging, compiled to SQL
-(see docs/architecture/quest-tables.md).
+(see docs/api/tables-api.md).
 
 Pure SQL building plus one thin executor (:func:`run_query`). The tools
 (``query_rows``, filter-based ``delete_rows``) and the
