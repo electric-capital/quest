@@ -30,15 +30,20 @@ Operands are validated and canonicalized like writes
 ``"10"``, ``10``, ``10.0`` and ``"1e1"`` select the same rows of a number
 column. Exceptions:
 
-- number range bounds (``lt`` / ``lte`` / ``gt`` / ``gte`` / ``between``)
-  are canonicalized with the column ``precision`` removed: rounding a
-  bound to the column precision would change the result (``lt 10.05`` on
-  a precision-1 column must still include 10.0). ``eq`` / ``ne`` / ``in``
-  keep the write rounding, so they match what a write of the same value
-  stores.
-- text/url substring operands are plain non-empty text (NFC, CR/LF to LF,
-  no NUL or unpaired surrogates, at most the column type's length cap);
-  they need not be valid URLs.
+- every number operand (``eq`` / ``ne`` / ``in`` and the range bounds)
+  is canonicalized with the column ``precision`` removed. Changing a
+  column's precision never rewrites stored cells, so ``10.05`` written
+  before ``precision`` became 1 is still stored as ``"10.05"`` and must
+  be matched by ``eq 10.05``; and rounding a range bound would change the
+  result (``lt 10.05`` on a precision-1 column must still include 10.0).
+  Equality is exact against the stored canonical string.
+- text substring operands are non-empty text, NFC-normalized with CR/LF
+  turned into LF like text cells; url substring operands are checked the
+  same way (no NUL or unpaired surrogates) but not rewritten, since url
+  cells are stored as given. Both are capped at the column type's length
+  and need not be valid URLs.
+- a multi-enum ``eq`` / ``ne`` operand and each ``in`` element is a list
+  of at most ``TABLE_ENUM_MAX_OPTIONS`` options (``too_many_values``).
 - a multi-enum ``contains`` takes one option; ``contains_any`` /
   ``contains_all`` take a non-empty list of options.
 
@@ -81,15 +86,18 @@ The caps come from :mod:`chat.tables.constants` imported by name; this
 module's globals are the patch point for tests, read at call time.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
+import re
 import sqlite3
 from typing import Any, Literal, Union
 
 from chat.tables import storage
 from chat.tables.constants import (
+    TABLE_ENUM_MAX_OPTIONS,
     TABLE_FILTER_IN_MAX_VALUES,
     TABLE_FILTER_MAX_DEPTH,
     TABLE_FILTER_MAX_LEAVES,
@@ -134,6 +142,10 @@ class FilterError(ValueError):
         self.message = message
         self.path = path
 
+    def to_payload(self) -> dict:
+        """The tool / route error body."""
+        return {"error": self.code, "message": self.message, "path": self.path}
+
 
 # --- Ops -----------------------------------------------------------------------
 
@@ -144,6 +156,29 @@ _MULTI_OPS = ("contains", "contains_any", "contains_all", "is_empty")
 _NULLARY_OPS = ("is_null", "not_null", "is_empty")
 
 ALL_OPS = frozenset(_COMMON_OPS + _SUBSTRING_OPS + _RANGE_OPS + ("between",) + _MULTI_OPS)
+
+# The operand shape of each op, for the UI filter builder and route docs:
+# "none" (no value), "one" (a single value; on a multiple enum the one
+# value of ``eq`` / ``ne`` is itself a list of options), "list" (a
+# non-empty list) or "pair" (``[low, high]``).
+OP_OPERANDS: Mapping[str, Literal["none", "one", "list", "pair"]] = {
+    "eq": "one",
+    "ne": "one",
+    "in": "list",
+    "is_null": "none",
+    "not_null": "none",
+    "is_empty": "none",
+    "contains": "one",
+    "starts_with": "one",
+    "ends_with": "one",
+    "lt": "one",
+    "lte": "one",
+    "gt": "one",
+    "gte": "one",
+    "between": "pair",
+    "contains_any": "list",
+    "contains_all": "list",
+}
 
 _RANGE_SQL = {"lt": "<", "lte": "<=", "gt": ">", "gte": ">="}
 
@@ -265,7 +300,22 @@ def _value_error(path: str, exc: TableValueError, hint: str = "") -> FilterError
 
 
 def _canonical(column: Column, value: Any, path: str) -> tuple[Any, Any]:
-    """(logical, stored) for an eq/ne/in operand, refusing null."""
+    """(logical, stored) for an eq/ne/in operand, refusing null. Numbers
+    are canonicalized without the column precision (module docstring)."""
+    if (
+        column.type == "enum"
+        and column.multiple
+        and isinstance(value, (list, tuple))
+        and len(value) > TABLE_ENUM_MAX_OPTIONS
+    ):
+        raise FilterError(
+            "too_many_values",
+            f"Column {clip_repr(column.name)}: at most {TABLE_ENUM_MAX_OPTIONS} "
+            f"options in one value (got {len(value)}).",
+            path,
+        )
+    if column.type == "number":
+        column = replace(column, precision=None, default=None)
     try:
         logical = coerce_value(column, value)
     except TableValueError as exc:
@@ -309,12 +359,28 @@ def _substring(column: Column, value: Any, path: str) -> str:
             f"Column {clip_repr(column.name)}: expected a non-empty string.",
             path,
         )
+    cap = TABLE_URL_MAX_CHARS if column.type == "url" else TABLE_TEXT_MAX_CHARS
+    if column.type == "url":
+        # Url cells are stored as given: check, never rewrite.
+        if len(value) > cap:
+            raise FilterError(
+                "invalid_value",
+                f"Column {clip_repr(column.name)}: text is longer than {cap} characters.",
+                path,
+            )
+        if "\x00" in value or _SURROGATE_RE.search(value):
+            raise FilterError(
+                "invalid_value",
+                f"Column {clip_repr(column.name)}: text contains a NUL character or "
+                "an unpaired surrogate.",
+                path,
+            )
+        return value
     as_text = replace(column, type="text", precision=None, default=None)
     try:
         text = coerce_value(as_text, value)
     except TableValueError as exc:
         raise _value_error(path, exc) from None
-    cap = TABLE_URL_MAX_CHARS if column.type == "url" else TABLE_TEXT_MAX_CHARS
     if len(text) > cap:
         raise FilterError(
             "invalid_value",
@@ -449,6 +515,8 @@ def _parse_leaf(schema: Sequence[Column], node: dict, path: str) -> Leaf:
         )
     return Leaf(column, op, [lo, hi], (lo, hi))
 
+
+_SURROGATE_RE = re.compile("[\ud800-\udfff]")
 
 _LEAF_KEYS = frozenset(("column", "op", "value"))
 
@@ -589,7 +657,12 @@ def to_sql(tree: FilterNode | None) -> tuple[str, list]:
 
 
 def compile_filter(schema: Sequence[Column], node: Any) -> tuple[str, list]:
-    """:func:`parse_filter` then :func:`to_sql`."""
+    """:func:`parse_filter` then :func:`to_sql`, for a filter-based delete.
+    A missing filter is refused (``invalid_filter``) rather than compiled
+    to ``"1"``, so a delete can never select every row by omission; reads
+    use :func:`parse_filter` / :func:`to_sql`, where None means no filter."""
+    if node is None:
+        raise FilterError("invalid_filter", "A filter is required.", "")
     return to_sql(parse_filter(schema, node))
 
 
@@ -763,10 +836,14 @@ def build_select(
     limit: int,
     offset: int,
 ) -> tuple[str, list]:
-    """One page of rows: the row fields then ``columns``; params are the
-    where params then limit and offset."""
+    """One page of rows: ``_id``, ``_updated_at`` then ``columns``; params
+    are the where params then limit and offset.
+
+    ``where[0]`` and ``order_by`` are interpolated, so they must be trusted
+    SQL from :func:`to_sql` and :func:`to_order_by` (built from validated
+    column keys, every value bound); never user or model text."""
     where_sql, params = where
-    fields = ["_id", "_created_at", "_updated_at"] + [_ident(c.key) for c in columns]
+    fields = ["_id", "_updated_at"] + [_ident(c.key) for c in columns]
     sql = (
         f"SELECT {', '.join(fields)} FROM rows WHERE ({where_sql}) "
         f"ORDER BY {order_by} LIMIT ? OFFSET ?"
@@ -780,10 +857,13 @@ def build_select(
 @dataclass(frozen=True)
 class QueryResult:
     """``rows``: ``{"_id", "_updated_at", <name>: logical value}`` in the
-    requested column order. ``total``: the filtered count, ignoring paging."""
+    requested column order. ``total``: the filtered count, ignoring paging.
+    ``limit`` / ``offset``: the page actually used (defaults applied)."""
 
     rows: list[dict]
     total: int
+    limit: int
+    offset: int
 
 
 def run_query(
@@ -797,37 +877,41 @@ def run_query(
     columns: Sequence[str] | None = None,
     count_only: bool = False,
     max_limit: int = TABLE_QUERY_MAX_ROWS,
+    schema_version: int | None = None,
 ) -> QueryResult:
     """Validate the request (raising :class:`FilterError` before any I/O),
     then count and select in one read transaction so ``total`` and
-    ``rows`` agree. A schema column missing from table.db is
-    :class:`chat.tables.storage.SchemaMismatchError`. Synchronous."""
+    ``rows`` agree. A schema column missing from table.db, or a stored
+    schema version other than ``schema_version`` when given, is
+    :class:`chat.tables.storage.SchemaMismatchError`; a database locked
+    past the busy timeout is ``TableStorageError`` ``busy``. Synchronous."""
     where = to_sql(parse_filter(schema, filter))
     order_by = to_order_by(parse_sort(schema, sort))
     selected = resolve_columns(schema, columns)
     page_limit, page_offset = check_page(limit, offset, max_limit=max_limit)
 
     with storage.connect(table_dir) as conn:
-        conn.execute("BEGIN")
-        try:
-            sql, params = build_count(where)
-            total = storage._select_rows(conn, sql, params).fetchone()[0]
-            rows: list[dict] = []
-            if not count_only:
-                sql, params = build_select(
-                    selected, where, order_by, limit=page_limit, offset=page_offset
-                )
-                for record in storage._select_rows(conn, sql, params).fetchall():
-                    item = {"_id": record[0], "_updated_at": record[2]}
-                    for column, stored in zip(selected, record[3:]):
-                        item[column.name] = from_storage(column, stored)
-                    rows.append(item)
-            conn.execute("COMMIT")
-        except BaseException:
-            if conn.in_transaction:
-                try:
-                    conn.execute("ROLLBACK")
-                except sqlite3.Error:
-                    pass
-            raise
-    return QueryResult(rows=rows, total=total)
+        with storage._busy_as_refusal():
+            conn.execute("BEGIN")
+            try:
+                if schema_version is not None:
+                    storage._check_schema_matches(conn, schema, schema_version)
+                sql, params = build_count(where)
+                total = storage._select_rows(conn, sql, params).fetchone()[0]
+                rows: list[dict] = []
+                if not count_only:
+                    sql, params = build_select(
+                        selected, where, order_by, limit=page_limit, offset=page_offset
+                    )
+                    for record in storage._select_rows(conn, sql, params).fetchall():
+                        item = {"_id": record[0], "_updated_at": record[1]}
+                        for column, stored in zip(selected, record[2:]):
+                            item[column.name] = from_storage(column, stored)
+                        rows.append(item)
+                conn.execute("COMMIT")
+            except BaseException:
+                if conn.in_transaction:
+                    with suppress(sqlite3.Error):
+                        conn.execute("ROLLBACK")
+                raise
+    return QueryResult(rows=rows, total=total, limit=page_limit, offset=page_offset)

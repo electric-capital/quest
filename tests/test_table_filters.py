@@ -1,6 +1,9 @@
 """Quest Tables filter DSL, sort and paged reads (chat/tables/filters.py)."""
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+
+import sqlite3
 
 import pytest
 
@@ -8,6 +11,8 @@ import chat.tables.filters as filters_mod
 from chat.tables import storage
 from chat.tables.constants import TABLE_GRID_MAX_LIMIT, TABLE_QUERY_MAX_ROWS
 from chat.tables.filters import (
+    ALL_OPS,
+    OP_OPERANDS,
     And,
     FilterError,
     Leaf,
@@ -322,7 +327,51 @@ def test_every_allowed_op_is_covered():
 def test_no_filter_is_everything(table_dir):
     assert to_sql(None) == ("1", [])
     assert parse_filter(SCHEMA, None) is None
-    assert ids_for(table_dir, None) == ALL_IDS
+    assert run_query(table_dir, SCHEMA).total == len(ALL_IDS)
+
+
+def test_compile_filter_requires_a_filter():
+    with pytest.raises(FilterError) as info:
+        compile_filter(SCHEMA, None)
+    assert info.value.to_payload() == {
+        "error": "invalid_filter",
+        "message": "A filter is required.",
+        "path": "",
+    }
+
+
+def test_error_payload():
+    err = refused({"and": [leaf("Nope", "eq", 1)]})
+    payload = err.to_payload()
+    assert payload["error"] == "unknown_column"
+    assert payload["path"] == "and[0].column"
+    assert payload["message"] == err.message == str(err)
+
+
+def test_op_operands_cover_every_op():
+    assert set(OP_OPERANDS) == set(ALL_OPS)
+    assert set(OP_OPERANDS.values()) <= {"none", "one", "list", "pair"}
+    assert OP_OPERANDS["between"] == "pair"
+    assert OP_OPERANDS["is_empty"] == "none"
+    assert OP_OPERANDS["contains_all"] == "list"
+    for column in SCHEMA:
+        assert set(allowed_ops(column)) <= set(OP_OPERANDS)
+
+
+def test_multi_enum_list_operand_cap(monkeypatch):
+    monkeypatch.setattr(filters_mod, "TABLE_ENUM_MAX_OPTIONS", 3)
+    parse_filter(SCHEMA, leaf("Tags", "eq", ["a", "b", "c"]))
+    err = refused(leaf("Tags", "eq", ["a", "b", "c", "a"]))
+    assert (err.code, err.path) == ("too_many_values", "value")
+    err = refused(leaf("Tags", "ne", ["a"] * 4))
+    assert err.code == "too_many_values"
+    err = refused(leaf("Tags", "in", [["a"], ["a", "b", "c", "c"]]))
+    assert (err.code, err.path) == ("too_many_values", "value[1]")
+
+
+def test_multi_enum_list_operand_cap_default():
+    err = refused(leaf("Tags", "eq", ["a"] * 201))
+    assert err.code == "too_many_values"
 
 
 # --- Value canonicalization ----------------------------------------------------
@@ -343,11 +392,43 @@ def test_range_bound_keeps_its_precision(table_dir):
     assert parse_filter(SCHEMA, leaf("Score", "lt", 10.05)).params == ("10.05",)
 
 
-def test_eq_rounds_like_a_write(table_dir):
+def test_eq_is_exact_without_precision(table_dir):
+    # Operands are not rounded to the column precision: stored cells may
+    # predate it, so equality is exact against the stored string.
     tree = parse_filter(SCHEMA, leaf("Score", "eq", 10.04))
-    assert tree.params == ("10",)
-    assert ids_for(table_dir, leaf("Score", "eq", 10.04)) == {1, 7}
-    assert ids_for(table_dir, leaf("Score", "eq", "10.06")) == {2, 8}
+    assert tree.params == ("10.04",)
+    assert ids_for(table_dir, leaf("Score", "eq", 10.04)) == set()
+    assert ids_for(table_dir, leaf("Score", "eq", "10.10")) == {2, 8}
+    assert parse_filter(SCHEMA, leaf("Score", "in", [10.04, "10.040"])).params == (
+        "10.04",
+    )
+
+
+def test_cells_written_before_set_precision(tmp_path):
+    loose = parse_columns(
+        [{"key": K_PRICE, "name": "N", "type": "number"}], allow_key=True
+    )
+    rows = [{"N": "10.05"}, {"N": "10"}, {"N": None}]
+    path = build_table(tmp_path / "p", loose, rows)
+    tight = [replace(loose[0], precision=1)]
+
+    def ids(flt):
+        return {r["_id"] for r in run_query(path, tight, filter=flt).rows}
+
+    assert ids(leaf("N", "eq", 10.05)) == {1}
+    assert ids(leaf("N", "ne", 10.05)) == {2, 3}
+    assert ids(leaf("N", "in", ["10.05", 7])) == {1}
+    assert ids(leaf("N", "between", [10.05, 10.05])) == {1}
+    result = storage.delete_rows(
+        path,
+        tight,
+        schema_version=1,
+        source=SOURCE,
+        actor_user_id=None,
+        where=compile_filter(tight, leaf("N", "ne", "10.05")),
+    )
+    assert result.row_ids == [2, 3]
+    assert ids(None) == {1}
 
 
 @pytest.mark.parametrize(
@@ -931,12 +1012,13 @@ def test_build_count_and_select_shapes():
         [SCHEMA[1], SCHEMA[0]], where, "_id ASC", limit=10, offset=20
     )
     assert sql == (
-        f'SELECT _id, _created_at, _updated_at, "{K_PRICE}", "{K_NAME}" FROM rows '
+        f'SELECT _id, _updated_at, "{K_PRICE}", "{K_NAME}" FROM rows '
         'WHERE ("c_00000001" = ?) ORDER BY _id ASC LIMIT ? OFFSET ?'
     )
     assert params == ["x", 10, 20]
     sql, params = build_select([], ("1", []), "_id ASC", limit=1, offset=0)
-    assert sql.startswith("SELECT _id, _created_at, _updated_at FROM rows")
+    assert sql.startswith("SELECT _id, _updated_at FROM rows")
+    assert "_created_at" not in sql
     assert params == [1, 0]
 
 
@@ -1041,7 +1123,7 @@ def test_run_query_columns_subset(table_dir):
 
 def test_run_query_count_only(table_dir):
     result = run_query(table_dir, SCHEMA, filter=leaf("Done", "eq", True), count_only=True)
-    assert result == QueryResult(rows=[], total=3)
+    assert result == QueryResult(rows=[], total=3, limit=100, offset=0)
 
 
 def test_run_query_grid_limit(table_dir):
@@ -1097,3 +1179,104 @@ def test_run_query_read_is_one_transaction(table_dir, monkeypatch):
     monkeypatch.setattr(storage, "_select_rows", spy)
     run_query(table_dir, SCHEMA)
     assert seen == [True, True]
+
+
+def test_run_query_reports_page(table_dir):
+    result = run_query(table_dir, SCHEMA, limit=3, offset=2)
+    assert (result.limit, result.offset) == (3, 2)
+    result = run_query(table_dir, SCHEMA, max_limit=TABLE_GRID_MAX_LIMIT)
+    assert (result.limit, result.offset) == (100, 0)
+
+
+def test_run_query_schema_version(table_dir):
+    assert run_query(table_dir, SCHEMA, schema_version=1, count_only=True).total == 8
+    with pytest.raises(storage.SchemaMismatchError):
+        run_query(table_dir, SCHEMA, schema_version=2)
+    with pytest.raises(storage.SchemaMismatchError):
+        run_query(table_dir, SCHEMA[:-1], schema_version=1)
+
+
+def test_run_query_busy_is_a_refusal(table_dir, monkeypatch):
+    # WAL readers are not blocked by a writer, so a real lock cannot be
+    # produced deterministically here; simulate SQLite's busy error.
+    def locked(conn, sql, params=()):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(storage, "_select_rows", locked)
+    with pytest.raises(storage.TableStorageError) as info:
+        run_query(table_dir, SCHEMA)
+    assert info.value.code == "busy"
+
+
+def test_url_substring_not_normalized(tmp_path):
+    schema = parse_columns(
+        [{"key": K_SITE, "name": "Site", "type": "url"}], allow_key=True
+    )
+    decomposed = "https://x.io/cafe\u0301"  # not NFC
+    path = build_table(tmp_path / "u", schema, [{"Site": decomposed}, {"Site": "https://x.io/caf\u00e9"}])
+    tree = parse_filter(schema, leaf("Site", "contains", "cafe\u0301"))
+    assert tree.value == "cafe\u0301"
+    result = run_query(path, schema, filter=leaf("Site", "contains", "cafe\u0301"))
+    assert [r["_id"] for r in result.rows] == [1]
+    result = run_query(path, schema, filter=leaf("Site", "contains", "caf\u00e9"))
+    assert [r["_id"] for r in result.rows] == [2]
+    for bad in ("a\x00b", "\ud800", "", "a" * 2049):
+        with pytest.raises(FilterError) as info:
+            parse_filter(schema, leaf("Site", "contains", bad))
+        assert info.value.code == "invalid_value"
+    # Text columns still normalize.
+    assert parse_filter(SCHEMA, leaf("Name", "contains", "cafe\u0301")).value == (
+        "caf\u00e9"
+    )
+
+
+@pytest.mark.parametrize(
+    "column,direction,expected",
+    [
+        # Binary string order: "http:" < "https://E" < "https://example.com/1" < ".../a"
+        ("Site", "asc", [2, 5, 3, 1, 8, 6, 4, 7]),
+        ("Site", "desc", [6, 8, 1, 3, 5, 2, 4, 7]),
+        # Multi enum sorts by its JSON string: '["a","b","c"]' < '["a","b"]'
+        # (',' sorts before ']'), not by list contents.
+        ("Tags", "asc", [3, 1, 6, 8, 2, 5, 4, 7]),
+        ("Tags", "desc", [5, 2, 8, 6, 1, 3, 4, 7]),
+    ],
+)
+def test_sort_url_and_multi_enum(table_dir, column, direction, expected):
+    assert sorted_ids(table_dir, [{"column": column, "direction": direction}]) == expected
+
+
+def test_sort_created_at(tmp_path):
+    schema = parse_columns([{"key": K_NAME, "name": "Name", "type": "text"}], allow_key=True)
+    path = tmp_path / "c"
+    storage.create_table_db(
+        path, table_id="t", title="T", schema=schema, source="ui:1", actor_user_id=1, now=NOW
+    )
+    for index, second in enumerate([5, 1, 3]):
+        storage.insert_rows(
+            path,
+            schema,
+            schema_version=1,
+            source=SOURCE,
+            actor_user_id=None,
+            rows=[{"Name": str(index)}],
+            now=NOW + timedelta(seconds=second),
+        )
+    def order(direction):
+        rows = run_query(
+            path, schema, sort=[{"column": "_created_at", "direction": direction}]
+        ).rows
+        return [r["_id"] for r in rows]
+
+    assert order("asc") == [2, 3, 1]
+    assert order("desc") == [1, 3, 2]
+
+
+def test_not_over_in_includes_nulls(table_dir):
+    assert ids_for(table_dir, {"not": leaf("Status", "in", ["Open", "Closed"])}) == {
+        3,
+        4,
+        7,
+        8,
+    }
+    assert ids_for(table_dir, {"not": leaf("Price", "in", [10, 100])}) == {2, 3, 5, 6, 8}

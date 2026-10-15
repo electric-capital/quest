@@ -63,11 +63,12 @@ The caps come from :mod:`chat.tables.constants` imported by name; this
 module's globals are the patch point (tests monkeypatch
 ``chat.tables.storage.TABLE_MAX_ROWS`` and friends), read at call time.
 
-The other modules of this package (schema changes, revert) build their
-own transactions from the private helpers here: :func:`connect`,
-:func:`_write_txn`, :func:`_ident`, :func:`sql_type`,
-:func:`unique_index_name`, :func:`write_meta`, :func:`append_change`,
-:func:`prune_changes`, :func:`_row_images`, :func:`_insert_image_row` and
+The other modules of this package (queries, schema changes, revert)
+build their own transactions from the private helpers here:
+:func:`connect`, :func:`_write_txn`, :func:`_busy_as_refusal`,
+:func:`_ident`, :func:`sql_type`, :func:`unique_index_name`,
+:func:`write_meta`, :func:`append_change`, :func:`prune_changes`,
+:func:`_row_images`, :func:`_insert_image_row`, :func:`_select_rows` and
 :func:`_check_schema_matches`. Nothing outside ``chat.tables`` uses them.
 """
 
