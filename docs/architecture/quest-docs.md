@@ -11,7 +11,8 @@ Docs come in two **modes** that mirror [public projects](public-projects.md). **
 | File | Description |
 |------|-------------|
 | `chat/docs/constants.py` | Every cap and retention number (`DOC_*`), the mode and share-permission sets, the prompt pseudo-key `DOCS_SERVICE_KEY`, and the shared user-facing texts, incl. `doc_not_found_message()` (the one not-found text) |
-| `chat/docs/access.py` | `resolve_doc_access()`, the access rule; the module docstring holds the matrix and the rules layered on it |
+| `chat/docs/access.py` | `resolve_doc_access()`, the access rule and its doc wording; the module docstring holds the matrix and the rules layered on it |
+| `chat/artifact_access.py` | `resolve_core()`, the procedure that applies the matrix, shared with [Quest Tables](quest-tables.md#access) |
 | `chat/docs/files.py` | On-disk layer: body, revisions, `doc.meta.json`, assets, zip; layout and safety rules in the module docstring |
 | `chat/docs/service.py` | The one read/write path shared by tools, routes and the action request (pipeline and invariants in the module docstring), incl. the locked UI delete and `mode_switch_refusal()` |
 | `chat/docs/ui_writes.py` | Human (UI) writes: editor save, History restore, image upload and delete; `referenced_asset_names()`, the one matcher of the `assets/<name>` references in a body |
@@ -101,6 +102,8 @@ A version is a body. Creation takes no snapshot, metadata and share changes touc
 ## Access Rule
 
 `resolve_doc_access()` in `chat/docs/access.py` returns a `DocAccess` whose `write` is one of `WRITE_VERDICTS` (free / approval / denied). The matrix (the doc's mode and share state x who asks from which conversation kind, with cells Free / Approval / Read / Hidden) and the seven rules layered on it are written down once, in the module docstring; this doc refers to its rows, cells and rules by those names. What spans other files:
+
+- The procedure that applies the matrix is `resolve_core()` in `chat/artifact_access.py`, shared with [Quest Tables](quest-tables.md#access) so both artifacts follow one rule. It returns a wording-free `CoreVerdict`: a denied verdict carries a machine cause from `DENY_CAUSES`, and each resolver maps every cause to its own text (`_DENY_TEXT`, asserted complete at import). Only `resolve_doc_access()` and `resolve_table_access()` call it.
 
 - `doc` must carry its `shares` list; a dict fetched without shares raises instead of being read as unshared. `doc_source_project_ids` are loaded by the service from `project_doc_sources` for a private project's conversations and are empty for every other caller.
 - Rule 5 (`ui`): Free is what the row's `access.can_edit` reports and what the content save, image upload, restore and every History route require. Ownership-only operations are not part of the matrix: the routes check them for rename, share management and asset delete, and `delete_doc_from_ui` for delete.

@@ -45,6 +45,7 @@ This doc is the map: where each piece lives, how a turn moves through them, and 
 | `chat/system_skills/` | `system:*` skill catalog and prompt enumeration | [Skill Library](skill-library.md) |
 | `chat/docs/` | Quest Docs | [Quest Docs](quest-docs.md) |
 | `chat/tables/` | Quest Tables | [Quest Tables](quest-tables.md) |
+| `chat/artifact_access.py` | The access procedure shared by Quest Docs and Quest Tables | [Quest Docs -- Access Rule](quest-docs.md#access-rule) |
 | `chat/scheduler.py`, `chat/routine_runs.py` | Scheduled and one-click routine runs | [Scheduling](scheduling.md), [Routines](routines.md) |
 | `chat/slack_socket_mode.py`, `chat/slack_driven_runtime.py`, `chat/slack_notifier.py` | Slack-driven conversations, pending-request DMs | [Slack Socket Mode](slack-socket-mode.md), [Slack Pending-Request Notifier](slack-pending-request-notifier.md) |
 | `chat/sandbox_api.py`, `chat/sandbox_tokens.py` | Loopback tool API for sandbox scripts and its per-run tokens | [Script Runner](script-runner.md) |
@@ -97,7 +98,7 @@ Exactly one sign-in method is active, Google OAuth or email/password (`login_met
 - **Paths**: canonical-id and containment checks inside the resolvers ([Data Paths](data-paths.md)).
 - **Code execution**: only in rootless Podman containers with a no-symlink seccomp profile; the restricted image has no egress and reaches only the sandbox tool API ([Script Runner](script-runner.md)).
 - **Public projects**: an internet-enabled sandbox, cut off from skills, memories, connectors and every other internal resource ([Public Projects](public-projects.md)).
-- **Quest Docs**: one access rule, `resolve_doc_access()` in `chat/docs/access.py` ([Quest Docs](quest-docs.md)).
+- **Quest Docs and Tables**: one access procedure, `resolve_core()` in `chat/artifact_access.py`, behind `resolve_doc_access()` and `resolve_table_access()` ([Quest Docs](quest-docs.md), [Quest Tables](quest-tables.md#access)).
 
 ## Run Modes and Serving
 
