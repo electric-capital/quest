@@ -9,13 +9,24 @@
  *
  * The URL is the single source of truth for the filter and the sort: the
  * route's `filter` / `sort` params (utils/tableFilter searchParamToFilter /
- * parseSortParam, the first `[{column, direction}]` key). The filter bar
- * (TableFilterBar) and the grid's sort headers report changes, and the viewer
- * navigates to the new `?filter=` / `?sort=` with `replace: true`, keeping
- * any other params (tableViewerSearch). A filter the bar cannot show as chips
- * is still sent as-is (it is valid DSL); the bar shows "Custom filter". A
- * sort or filter naming a column the loaded schema no longer has (dropped or
- * renamed) is not sent (a 400 unknown_column); the bar says so for a filter.
+ * searchParamToSort). The filter bar (TableFilterBar) and the grid's sort
+ * headers report changes, and the viewer navigates to the new `?filter=` /
+ * `?sort=` with `replace: true`, keeping any other params
+ * (tableViewerSearch). A filter the bar cannot show as chips is still sent
+ * as-is (it is valid DSL); the bar shows "Custom filter".
+ *
+ * Sort: a link may carry up to 3 keys (`resolveSort`); every key whose
+ * column exists (or a row field: `_id`, `_created_at`, `_updated_at`) is
+ * sent, in order. The grid header shows the primary key's arrow only, and
+ * a header click replaces the whole sort with that one column's next state
+ * (`nextSort`: single-key cycling), so secondary keys are dropped then. A
+ * sort param that does not parse (bad JSON or direction, more than 3 keys,
+ * a column named twice) is not sent and a note says so with Clear sort.
+ *
+ * Stale columns: a filter naming a column the loaded schema no longer has
+ * (dropped or renamed) is not sent (a 400 unknown_column) and the bar says
+ * so; a sort key naming one is left out (the other keys are still sent) and
+ * a note under the bar names it, with Clear sort.
  *
  * Viewer state (`TableViewerState`, kept per table: the inner component is
  * keyed by the id) is only `offset`, the grid page start: local, not in the
@@ -39,7 +50,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { filterErrorPath } from '../../api/tablesApi';
-import type { FilterNode, SortKey } from '../../api/types';
+import type { FilterNode, SortKey, TableColumn } from '../../api/types';
 import { useTable } from '../../hooks/useTable';
 import { useTableRows } from '../../hooks/useTableRows';
 import {
@@ -53,7 +64,7 @@ import {
 } from '../../utils/tableFilter';
 import { tableViewerSearch, tablesListPath } from '../../utils/tablesRoute';
 import { TableFilterBar } from './TableFilterBar';
-import { ROW_ID_COLUMN, TABLE_GRID_PAGE_SIZE, TableGrid, clampOffset } from './TableGrid';
+import { TABLE_GRID_PAGE_SIZE, TableGrid, clampOffset } from './TableGrid';
 import { TableFooter } from './TableFooter';
 import { TableHeader } from './TableHeader';
 import '../docs/DocViewer.css';
@@ -79,6 +90,57 @@ export interface TableViewerState {
  */
 export function parseSortParam(raw: string | null): SortKey | null {
   return searchParamToSort(raw)?.[0] ?? null;
+}
+
+/** Row fields the server sorts by (filters.py `_ROW_FIELD_SQL`). */
+const SORT_ROW_FIELDS = ['_id', '_created_at', '_updated_at'];
+
+/** How the viewer reads a `sort` route param against the loaded schema. */
+export interface ResolvedSort {
+  /** The keys to send (schema spelling), in order; null for none. */
+  keys: SortKey[] | null;
+  /** Column names the schema lacks (left out of `keys`). */
+  missing: string[];
+  /** The param is present but cannot be read (not sent at all). */
+  unreadable: boolean;
+}
+
+/**
+ * Resolve a raw `sort` param: every parsed key whose column exists (or a
+ * row field) is kept, named as the schema spells it. Two keys resolving to
+ * the same column (names differing only in case) make the param unreadable,
+ * as the server refuses a column sorted twice. Before the schema loads
+ * (`schema` null) every key is kept.
+ */
+export function resolveSort(raw: string | null, schema: TableColumn[] | null): ResolvedSort {
+  if (raw === null) return { keys: null, missing: [], unreadable: false };
+  const parsed = searchParamToSort(raw);
+  if (!parsed) return { keys: null, missing: [], unreadable: true };
+  if (!schema) return { keys: parsed, missing: [], unreadable: false };
+  const keys: SortKey[] = [];
+  const missing: string[] = [];
+  const seen = new Set<string>();
+  for (const key of parsed) {
+    const rowField = SORT_ROW_FIELDS.find((field) => field === key.column.toLowerCase());
+    const column = rowField ? null : findColumn(schema, key.column);
+    const identity = rowField ?? column?.key ?? null;
+    if (identity === null) {
+      if (!missing.includes(key.column)) missing.push(key.column);
+      continue;
+    }
+    if (seen.has(identity)) return { keys: null, missing: [], unreadable: true };
+    seen.add(identity);
+    keys.push({ column: rowField ?? column!.name, direction: key.direction });
+  }
+  return { keys: keys.length > 0 ? keys : null, missing, unreadable: false };
+}
+
+/** The note under the filter bar for a sort that is not (fully) applied. */
+function sortNote(sort: ResolvedSort): string {
+  if (sort.unreadable) return "This link's sort could not be read.";
+  return sort.missing.length === 1
+    ? `This sort references a column that no longer exists (${sort.missing[0]}).`
+    : `This sort references columns that no longer exist (${sort.missing.join(', ')}).`;
 }
 
 /** The `filter` route param as a filter node (any JSON object), else null. */
@@ -120,14 +182,17 @@ function TableViewerBody({
 
   const schema = table?.schema;
   const parsedFilter = useMemo(() => searchParamToFilter(filterParam), [filterParam]);
-  const parsedSort = useMemo(() => parseSortParam(sortParam), [sortParam]);
   const effectiveFilter =
     parsedFilter && schema && missingFilterColumns(parsedFilter, schema).length > 0 ? null : parsedFilter;
-  const effectiveSort =
-    parsedSort && schema && parsedSort.column !== ROW_ID_COLUMN && !findColumn(schema, parsedSort.column)
-      ? null
-      : parsedSort;
-  const sortKeys = useMemo(() => (effectiveSort ? [effectiveSort] : null), [effectiveSort]);
+  const resolvedSort = useMemo(() => resolveSort(sortParam, schema ?? null), [sortParam, schema]);
+  const sortKeysJson = resolvedSort.keys ? JSON.stringify(resolvedSort.keys) : null;
+  // Stable identity per content, so a schema object refresh does not re-query.
+  const sortKeys = useMemo<SortKey[] | null>(
+    () => (sortKeysJson ? (JSON.parse(sortKeysJson) as SortKey[]) : null),
+    [sortKeysJson],
+  );
+  // The grid shows (and cycles) the primary key only.
+  const primarySort = sortKeys?.[0] ?? null;
 
   // Rows refresh counter (see the module docstring).
   const [rowsRefreshKey, setRowsRefreshKey] = useState(0);
@@ -277,6 +342,15 @@ function TableViewerBody({
         error={filterError}
       />
 
+      {(resolvedSort.unreadable || resolvedSort.missing.length > 0) && (
+        <div className="table-filter-row table-sort-note">
+          <span className="table-filter-note">{sortNote(resolvedSort)}</span>
+          <button type="button" className="table-filter-clear" onClick={() => setSort(null)}>
+            Clear sort
+          </button>
+        </div>
+      )}
+
       {rowsError && !filterError && (
         <div className="table-viewer-rows-error" role="alert">
           <span>Failed to load rows: {rowsError.message}</span>
@@ -295,7 +369,7 @@ function TableViewerBody({
         columns={table.schema}
         page={page}
         loading={rows.loading}
-        sort={effectiveSort}
+        sort={primarySort}
         onSortChange={setSort}
         offset={view.offset}
         limit={TABLE_GRID_PAGE_SIZE}

@@ -6,11 +6,13 @@ import { describe, expect, it } from 'vitest';
 import type { FilterNode, FilterOp, TableColumn } from '../api/types';
 import {
   FILTER_MAX_CONDITIONS,
+  compareDecimals,
   conditionError,
   conditionLabel,
   conditionsError,
   conditionsToFilter,
   conditionToLeaf,
+  decimalDigitCount,
   emptyValue,
   filterColumnNames,
   filterErrorTarget,
@@ -18,6 +20,7 @@ import {
   filterToSearchParam,
   isConditionComplete,
   isDecimalString,
+  isHttpUrl,
   missingFilterColumns,
   opsForColumn,
   searchParamToFilter,
@@ -79,7 +82,8 @@ const LEAF_CASES: [string, FilterOp, FilterValue, FilterNode][] = [
   ['Name', 'contains', ' lov ', { column: 'Name', op: 'contains', value: ' lov ' }],
   ['Name', 'starts_with', 'A', { column: 'Name', op: 'starts_with', value: 'A' }],
   ['Name', 'ends_with', 'e', { column: 'Name', op: 'ends_with', value: 'e' }],
-  ['Name', 'in', [' Ada ', 'Bob', 'Ada'], { column: 'Name', op: 'in', value: ['Ada', 'Bob'] }],
+  // text values go as typed (not trimmed), repeats dropped
+  ['Name', 'in', [' Ada ', 'Bob', 'Ada', 'Bob'], { column: 'Name', op: 'in', value: [' Ada ', 'Bob', 'Ada'] }],
   ['Name', 'is_null', null, { column: 'Name', op: 'is_null' }],
   ['Name', 'not_null', null, { column: 'Name', op: 'not_null' }],
   // url
@@ -178,6 +182,28 @@ describe('validation', () => {
     ['Revenue', 'between', ['20', '10'], 'The first bound must not be larger'],
     ['Revenue', 'between', ['1', 'x'], 'Enter numbers'],
     ['Revenue', 'in', ['1', '2,5'], 'Enter numbers only'],
+    ['Revenue', 'in', ['1,234'], 'Enter numbers only'],
+    // 38 significant digits at most (the server's canonical number)
+    ['Revenue', 'eq', '1'.repeat(39), 'Use at most 38 digits'],
+    ['Revenue', 'gt', '1e38', 'Use at most 38 digits'],
+    ['Revenue', 'lt', '1e-39', 'Use at most 38 digits'],
+    ['Revenue', 'between', ['0', '1'.repeat(39)], 'Use at most 38 digits'],
+    ['Revenue', 'in', ['1', `0.${'1'.repeat(39)}`], 'Use at most 38 digits'],
+    // exact decimal comparison: Number() would call these equal or ordered
+    ['Revenue', 'between', ['0.30000000000000001', '0.3'], 'The first bound must not be larger'],
+    ['Revenue', 'between', ['12345678901234567891', '12345678901234567890'], 'The first bound must not be larger'],
+    ['Revenue', 'between', ['1e2', '99.9'], 'The first bound must not be larger'],
+    ['Revenue', 'between', ['-1', '-2'], 'The first bound must not be larger'],
+    // url eq / ne / in operands are http(s) URLs with a host
+    ['Site', 'eq', 'x.io', 'Enter an http(s) URL'],
+    ['Site', 'ne', 'ftp://x.io', 'Enter an http(s) URL'],
+    ['Site', 'eq', 'https://', 'Enter an http(s) URL'],
+    ['Site', 'eq', 'http:x.io', 'Enter an http(s) URL'],
+    ['Site', 'eq', 'https://a b.io', 'Enter an http(s) URL'],
+    ['Site', 'eq', 'https://evil.io\\@good.io', 'Enter an http(s) URL'],
+    ['Site', 'eq', 'https://x.io:99999', 'Enter an http(s) URL'],
+    ['Site', 'eq', `https://x.io/${'a'.repeat(2048)}`, 'Enter an http(s) URL'],
+    ['Site', 'in', ['https://a.io', 'b.io'], 'Enter an http(s) URL'],
     ['Active', 'eq', null, 'Choose true or false'],
     ['Active', 'eq', 'true', 'Choose true or false'],
     ['Active', 'in', [], 'Choose at least one'],
@@ -208,14 +234,83 @@ describe('validation', () => {
     expect(conditionError(cond('Revenue', 'in', hundredOne), SCHEMA)).toBe('At most 100 values');
   });
 
+  it('caps list ops at 100 options; only a multi-enum exact set takes 200', () => {
+    const options = Array.from({ length: 200 }, (_, i) => `o${i}`);
+    const schema = [
+      col('Many', 'enum', { options, multiple: true }),
+      col('One', 'enum', { options }),
+    ];
+    const check = (column: string, op: FilterOp, count: number) =>
+      conditionError(cond(column, op, options.slice(0, count)), schema);
+    for (const op of ['contains_any', 'contains_all'] as FilterOp[]) {
+      expect(check('Many', op, 100)).toBeNull();
+      expect(check('Many', op, 101)).toBe('At most 100 options');
+    }
+    expect(check('One', 'in', 100)).toBeNull();
+    expect(check('One', 'in', 101)).toBe('At most 100 options');
+    for (const op of ['eq', 'ne'] as FilterOp[]) {
+      expect(check('Many', op, 101)).toBeNull();
+      expect(check('Many', op, 200)).toBeNull();
+    }
+  });
+
+  it('url substring ops take plain text', () => {
+    for (const op of ['contains', 'starts_with', 'ends_with'] as FilterOp[]) {
+      expect(conditionError(cond('Site', op, 'x.io/a b'), SCHEMA)).toBeNull();
+    }
+    expect(conditionError(cond('Site', 'eq', ' https://x.io/a?b=1#c '), SCHEMA)).toBeNull();
+  });
+
+  it('isHttpUrl follows the server URL rule', () => {
+    for (const ok of ['http://a', 'HTTPS://A.io/x?y#z', 'https://u:p@x.io:8080/', 'http://[::1]:80/', 'http://a:', ' https://x.io ']) {
+      expect(isHttpUrl(ok)).toBe(true);
+    }
+    for (const bad of [
+      '', 'x.io', 'ftp://x.io', 'http://', 'http://:80', 'http://u@:80', 'http:x.io', 'http://a b', 'http://a\tb',
+      'http://a\\b', 'http://a:x', 'http://a:b:c', 'http://a:65536', 'http://[::1', 'http://x.io/​',
+      'http://x.io/\u0085', `http://x.io/${'a'.repeat(2040)}`,
+    ]) {
+      expect(isHttpUrl(bad)).toBe(false);
+    }
+  });
+
+  it('compareDecimals compares exactly', () => {
+    expect(compareDecimals('1', '2')).toBe(-1);
+    expect(compareDecimals('2', '1')).toBe(1);
+    expect(compareDecimals('1e2', '100.000')).toBe(0);
+    expect(compareDecimals('0', '-0.0e5')).toBe(0);
+    expect(compareDecimals('-5', '0')).toBe(-1);
+    expect(compareDecimals('-1.5', '-1.25')).toBe(-1);
+    expect(compareDecimals('0.30000000000000001', '0.3')).toBe(1);
+    expect(compareDecimals('.5', '0.50')).toBe(0);
+    expect(compareDecimals('+7', '7')).toBe(0);
+    expect(compareDecimals('1e999999999999', '1')).toBe(1);
+    expect(compareDecimals('1e-999999999999', '0')).toBe(1);
+    expect(compareDecimals('x', '1')).toBeNull();
+  });
+
+  it('decimalDigitCount counts the canonical plain digits', () => {
+    expect(decimalDigitCount('0')).toBe(0);
+    expect(decimalDigitCount('0e99999')).toBe(0);
+    expect(decimalDigitCount('120')).toBe(3);
+    expect(decimalDigitCount('1.50')).toBe(2);
+    expect(decimalDigitCount('0.001')).toBe(3);
+    expect(decimalDigitCount('1.5e-37')).toBe(38);
+    expect(decimalDigitCount('1e37')).toBe(38);
+    expect(decimalDigitCount('1e38')).toBe(39);
+    expect(decimalDigitCount('nope')).toBeNull();
+  });
+
   it('isDecimalString follows the server grammar', () => {
     for (const ok of ['0', '-1', '+2.', '.5', '1e10', ' 3.14 ', '1E-3']) expect(isDecimalString(ok)).toBe(true);
     for (const bad of ['', '1,000', '1_000', 'Infinity', '٣', '1.2.3', '$5', '1e']) expect(isDecimalString(bad)).toBe(false);
   });
 
-  it('splitLines splits per line (numbers also on commas)', () => {
-    expect(splitLines(' a, b \n\n c ')).toEqual(['a, b', 'c']);
-    expect(splitLines('1, 2\n3', true)).toEqual(['1', '2', '3']);
+  it('splitLines splits on newlines only, keeping text as typed', () => {
+    expect(splitLines(' a, b \n\n  \n c ')).toEqual([' a, b ', ' c ']);
+    expect(splitLines(' 1 \n3\n', true)).toEqual(['1', '3']);
+    // A thousands separator is one (invalid) value, not two.
+    expect(splitLines('1,234', true)).toEqual(['1,234']);
   });
 
   it('valueKind and emptyValue', () => {
@@ -256,6 +351,33 @@ describe('filterToConditions', () => {
     expect(conditionsToFilter(parsed.conditions, SCHEMA)).toEqual(leaf);
     expect(parsed.conditions[0].column).toBe(column);
     expect(parsed.conditions[0].op).toBe(op);
+  });
+
+  // Conditions -> DSL -> conditions -> DSL is the identity for every leaf
+  // read back as a chip, so an untouched chip is re-emitted unchanged.
+  it.each(LEAF_CASES)('re-emits %s %s unchanged', (column, op, value) => {
+    const first = conditionsToFilter([cond(column, op, value)], SCHEMA);
+    const parsed = filterToConditions(first, SCHEMA);
+    expect(parsed.kind).toBe('conditions');
+    if (parsed.kind !== 'conditions') return;
+    const second = conditionsToFilter(parsed.conditions, SCHEMA);
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+  });
+
+  it('re-emits a hand-made text or url leaf exactly (no trimming)', () => {
+    const leaves: FilterNode[] = [
+      { column: 'Name', op: 'eq', value: '  padded  ' },
+      { column: 'Name', op: 'in', value: [' a', 'b ', '  c  '] },
+      { column: 'Site', op: 'in', value: [' https://a.io', 'https://b.io '] },
+      { column: 'Site', op: 'eq', value: ' https://a.io ' },
+      { column: 'Name', op: 'contains', value: ' x ' },
+    ];
+    for (const leaf of leaves) {
+      const parsed = filterToConditions(leaf, SCHEMA);
+      expect(parsed.kind).toBe('conditions');
+      if (parsed.kind !== 'conditions') continue;
+      expect(conditionsToFilter(parsed.conditions, SCHEMA)).toEqual(leaf);
+    }
   });
 
   it('reads none, a flat and, and and-of-one', () => {
@@ -301,6 +423,10 @@ describe('filterToConditions', () => {
     ['extra key', { column: 'Name', op: 'is_null', extra: 1 }],
     ['mixed shapes', { and: [{ column: 'Name', op: 'is_null' }], or: [] }],
     ['too many conditions', { and: Array.from({ length: 21 }, () => ({ column: 'Name', op: 'is_null' })) }],
+    ['text in value spanning lines', { column: 'Name', op: 'in', value: ['a\nb'] }],
+    ['whitespace-only text in value', { column: 'Name', op: 'in', value: [' '] }],
+    ['url eq that is not a URL', { column: 'Site', op: 'eq', value: 'x.io' }],
+    ['between out of order past float precision', { column: 'Revenue', op: 'between', value: ['0.30000000000000001', '0.3'] }],
   ];
 
   it.each(CUSTOM)('reports %s as custom', (_label, node) => {
@@ -413,5 +539,16 @@ describe('URL params', () => {
       searchParamToSort(JSON.stringify(Array.from({ length: 4 }, () => ({ column: 'A', direction: 'asc' })))),
     ).toBeNull();
     expect(searchParamToSort('nope')).toBeNull();
+  });
+
+  it('searchParamToSort keeps every key, defaults the direction, refuses a repeat', () => {
+    expect(
+      searchParamToSort('[{"column":"A","direction":"desc"},{"column":"B"},{"column":"C","direction":null}]'),
+    ).toEqual([
+      { column: 'A', direction: 'desc' },
+      { column: 'B', direction: 'asc' },
+      { column: 'C', direction: 'asc' },
+    ]);
+    expect(searchParamToSort('[{"column":"A"},{"column":"A","direction":"desc"}]')).toBeNull();
   });
 });

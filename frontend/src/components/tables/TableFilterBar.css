@@ -1,9 +1,10 @@
 /* Table viewer filter bar (TableFilterBar): a wrapping row of condition
  * chips, Add filter and Clear all, with the add / edit dialog as a popover
  * anchored under the row. Tokens only, so light and dark themes follow
- * App.css; the invalid red follows DocHeader's danger colour (light only,
- * a stronger border in dark). Phone width: chips wrap and the popover spans
- * the bar. */
+ * App.css. The invalid chip's dashed border uses DocHeader's literal danger
+ * colours (a status colour): #ff6b6b on the dark default, #d32f2f in the
+ * light block. Phone width: chips wrap and the popover spans the bar. The
+ * viewer's sort note (`.table-sort-note`) reuses the note and Clear styles. */
 
 .table-filter-bar {
   position: relative;
@@ -47,7 +48,7 @@
 
 .table-filter-chip--invalid {
   border-style: dashed;
-  border-color: var(--text-secondary);
+  border-color: #ff6b6b;
 }
 
 .table-filter-chip-edit,

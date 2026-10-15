@@ -17,6 +17,7 @@ function col(name: string, type: TableColumn['type'], extra: Partial<TableColumn
 
 const COLUMNS: TableColumn[] = [
   col('Name', 'text'),
+  col('Site', 'url'),
   col('Revenue', 'number', { precision: 2 }),
   col('Active', 'boolean'),
   col('Status', 'enum', { options: ['Lead', 'Customer'] }),
@@ -132,14 +133,84 @@ describe('TableFilterBar add form', () => {
     expect(onChange).toHaveBeenCalledWith({ column: 'Revenue', op: 'between', value: ['20', '30'] });
   });
 
-  it('number in: one per line or comma separated', () => {
+  it('number in: one per line; a comma is not a separator', () => {
     const { onChange } = setup(null);
     const dialog = openAdd();
     fireEvent.change(within(dialog).getByLabelText('Column'), { target: { value: 'Revenue' } });
     fireEvent.change(within(dialog).getByLabelText('Condition'), { target: { value: 'in' } });
-    fireEvent.change(within(dialog).getByLabelText(/Values/), { target: { value: '1, 2\n3.5\n' } });
+    const values = within(dialog).getByLabelText('Values (one per line)');
+    fireEvent.change(values, { target: { value: '1,234\n3.5' } });
+    expect(apply().disabled).toBe(true);
+    expect(within(dialog).getByText('Enter numbers only')).toBeTruthy();
+    fireEvent.change(values, { target: { value: ' 1\n2\n3.5\n' } });
     fireEvent.click(apply());
     expect(onChange).toHaveBeenCalledWith({ column: 'Revenue', op: 'in', value: ['1', '2', '3.5'] });
+  });
+
+  it('text in keeps values as typed', () => {
+    const { onChange } = setup(null);
+    const dialog = openAdd();
+    fireEvent.change(within(dialog).getByLabelText('Condition'), { target: { value: 'in' } });
+    fireEvent.change(within(dialog).getByLabelText('Values (one per line)'), { target: { value: ' a \n\nb' } });
+    fireEvent.click(apply());
+    expect(onChange).toHaveBeenCalledWith({ column: 'Name', op: 'in', value: [' a ', 'b'] });
+  });
+
+  it('url is / is not needs an http(s) URL; contains takes any text', () => {
+    const { onChange } = setup(null);
+    const dialog = openAdd();
+    fireEvent.change(within(dialog).getByLabelText('Column'), { target: { value: 'Site' } });
+    const value = within(dialog).getByLabelText('Value');
+    fireEvent.change(value, { target: { value: 'example.com' } });
+    expect(apply().disabled).toBe(true);
+    expect(within(dialog).getByText('Enter an http(s) URL')).toBeTruthy();
+    fireEvent.change(within(dialog).getByLabelText('Condition'), { target: { value: 'contains' } });
+    expect(apply().disabled).toBe(false);
+    fireEvent.click(apply());
+    expect(onChange).toHaveBeenCalledWith({ column: 'Site', op: 'contains', value: 'example.com' });
+  });
+
+  it('links the value input to the validation hint while it shows a problem', () => {
+    setup(null);
+    const dialog = openAdd();
+    expect(within(dialog).getByLabelText('Value').getAttribute('aria-describedby')).toBeNull();
+    fireEvent.change(within(dialog).getByLabelText('Column'), { target: { value: 'Revenue' } });
+    const number = within(dialog).getByLabelText('Value');
+    fireEvent.change(number, { target: { value: 'abc' } });
+    const hint = within(dialog).getByText('Enter a number');
+    expect(hint.id).toBeTruthy();
+    expect(number.getAttribute('aria-describedby')).toBe(hint.id);
+
+    fireEvent.change(within(dialog).getByLabelText('Condition'), { target: { value: 'between' } });
+    fireEvent.change(within(dialog).getByLabelText('From'), { target: { value: '5' } });
+    const pairHint = within(dialog).getByText('Enter both bounds');
+    expect(within(dialog).getByLabelText('From').getAttribute('aria-describedby')).toBe(pairHint.id);
+    expect(within(dialog).getByLabelText('To').getAttribute('aria-describedby')).toBe(pairHint.id);
+    fireEvent.change(within(dialog).getByLabelText('To'), { target: { value: '6' } });
+    expect(within(dialog).getByLabelText('To').getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('Add filter toggles the dialog closed when it is open', () => {
+    setup(null);
+    const add = screen.getByRole('button', { name: 'Add filter' });
+    openAdd();
+    expect(add.getAttribute('aria-expanded')).toBe('true');
+    // A real click: mousedown (not an outside click) then click (toggle).
+    fireEvent.mouseDown(add);
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    fireEvent.click(add);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(add.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('a second click on the chip being edited closes the dialog', () => {
+    setup({ column: 'Name', op: 'eq', value: 'x' });
+    const chip = screen.getByRole('button', { name: 'Edit filter: Name is x' });
+    fireEvent.click(chip);
+    expect(screen.getByRole('dialog', { name: 'Edit filter' })).toBeTruthy();
+    fireEvent.mouseDown(chip);
+    fireEvent.click(chip);
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('boolean: a JSON boolean from the true / false control', () => {

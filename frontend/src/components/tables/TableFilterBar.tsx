@@ -13,8 +13,11 @@
  * "Add filter" (or a click on a chip) opens a small dialog under the bar:
  * column -> condition (per column type) -> a typed value input, Apply
  * disabled while the condition is incomplete or invalid (`conditionError`).
- * Escape, Cancel or a click outside closes it and focus returns to the button
- * that opened it. "Clear all" removes every condition.
+ * Escape, Cancel, a click outside or a second click on the button that
+ * opened it (Add filter, or the chip) closes it and focus returns to that
+ * button. The validation hint is linked to the value input(s) with
+ * aria-describedby while it shows a problem. "Clear all" removes every
+ * condition.
  *
  * A server refusal of the filter (`error`, from the rows query's
  * filterErrorPath and message) is shown on the bar; when its path points at
@@ -186,9 +189,10 @@ export function TableFilterBar({
                   aria-describedby={invalid ? errorId : undefined}
                   aria-expanded={edit?.index === index}
                   title={label}
-                  onClick={(event) =>
-                    setEdit({ index, draft: { ...condition }, returnFocus: event.currentTarget })
-                  }
+                  onClick={(event) => {
+                    if (edit?.index === index) close();
+                    else setEdit({ index, draft: { ...condition }, returnFocus: event.currentTarget });
+                  }}
                 >
                   <span className="table-filter-chip-text">{label}</span>
                 </button>
@@ -211,9 +215,10 @@ export function TableFilterBar({
             type="button"
             className="table-filter-add"
             aria-expanded={edit?.index === null}
-            onClick={(event) =>
-              setEdit({ index: null, draft: newCondition(columns), returnFocus: event.currentTarget })
-            }
+            onClick={(event) => {
+              if (edit?.index === null) close();
+              else setEdit({ index: null, draft: newCondition(columns), returnFocus: event.currentTarget });
+            }}
             disabled={columns.length === 0}
           >
             <Plus size={14} aria-hidden="true" />
@@ -240,6 +245,7 @@ export function TableFilterBar({
           columns={columns}
           initial={edit.draft}
           isNew={edit.index === null}
+          toggle={edit.returnFocus}
           onApply={apply}
           onCancel={close}
         />
@@ -254,11 +260,13 @@ interface FilterEditorProps {
   columns: TableColumn[];
   initial: FilterCondition;
   isNew: boolean;
+  /** The button that opened the dialog: a press on it is not an outside click (it toggles). */
+  toggle: HTMLElement | null;
   onApply: (condition: FilterCondition) => void;
   onCancel: () => void;
 }
 
-function FilterEditor({ columns, initial, isNew, onApply, onCancel }: FilterEditorProps) {
+function FilterEditor({ columns, initial, isNew, toggle: toggleButton, onApply, onCancel }: FilterEditorProps) {
   const [draft, setDraft] = useState<FilterCondition>(initial);
   const [touched, setTouched] = useState(!isNew);
   // Raw text of a one-per-line list input, kept so typing is not rewritten.
@@ -273,19 +281,24 @@ function FilterEditor({ columns, initial, isNew, onApply, onCancel }: FilterEdit
     firstFieldRef.current?.focus();
   }, []);
 
-  // A click outside closes.
+  // A click outside closes; the opening button toggles on its own click.
   useEffect(() => {
     const onDown = (event: MouseEvent) => {
-      if (dialogRef.current && !dialogRef.current.contains(event.target as Node)) onCancel();
+      const target = event.target as Node;
+      if (toggleButton?.contains(target)) return;
+      if (dialogRef.current && !dialogRef.current.contains(target)) onCancel();
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [onCancel]);
+  }, [onCancel, toggleButton]);
 
   const column = findColumn(columns, draft.column);
   const ops = column ? opsForColumn(column) : [];
   const kind = column ? valueKind(column, draft.op) : 'none';
   const problem = conditionError(draft, columns);
+  const hintId = `${uid}-hint`;
+  const showHint = touched && problem !== null;
+  const describedBy = showHint ? hintId : undefined;
 
   const update = (patch: Partial<FilterCondition>) => {
     setTouched(true);
@@ -343,6 +356,7 @@ function FilterEditor({ columns, initial, isNew, onApply, onCancel }: FilterEdit
             onChange={(event) => update({ value: event.target.value })}
             placeholder={kind === 'number' ? 'e.g. 12.5' : undefined}
             autoComplete="off"
+            aria-describedby={describedBy}
           />
         </label>
       );
@@ -360,6 +374,7 @@ function FilterEditor({ columns, initial, isNew, onApply, onCancel }: FilterEdit
               value={lo ?? ''}
               onChange={(event) => update({ value: [event.target.value, hi ?? ''] })}
               autoComplete="off"
+              aria-describedby={describedBy}
             />
           </label>
           <label className="table-filter-field">
@@ -371,6 +386,7 @@ function FilterEditor({ columns, initial, isNew, onApply, onCancel }: FilterEdit
               value={hi ?? ''}
               onChange={(event) => update({ value: [lo ?? '', event.target.value] })}
               autoComplete="off"
+              aria-describedby={describedBy}
             />
           </label>
         </div>
@@ -379,7 +395,7 @@ function FilterEditor({ columns, initial, isNew, onApply, onCancel }: FilterEdit
     }
     case 'boolean':
       valueInput = (
-        <fieldset className="table-filter-fieldset">
+        <fieldset className="table-filter-fieldset" aria-describedby={describedBy}>
           <legend className="table-filter-field-label">Value</legend>
           <div className="table-filter-segmented">
             {[true, false].map((flag) => (
@@ -400,7 +416,7 @@ function FilterEditor({ columns, initial, isNew, onApply, onCancel }: FilterEdit
     case 'booleans': {
       const chosen = Array.isArray(draft.value) ? (draft.value as boolean[]) : [];
       valueInput = (
-        <fieldset className="table-filter-fieldset">
+        <fieldset className="table-filter-fieldset" aria-describedby={describedBy}>
           <legend className="table-filter-field-label">Values</legend>
           {[true, false].map((flag) => (
             <label key={String(flag)} className="table-filter-check">
@@ -424,6 +440,7 @@ function FilterEditor({ columns, initial, isNew, onApply, onCancel }: FilterEdit
             className="table-filter-select"
             value={typeof draft.value === 'string' ? draft.value : ''}
             onChange={(event) => update({ value: event.target.value })}
+            aria-describedby={describedBy}
           >
             <option value="" disabled>
               Choose...
@@ -440,7 +457,7 @@ function FilterEditor({ columns, initial, isNew, onApply, onCancel }: FilterEdit
     case 'options': {
       const chosen = Array.isArray(draft.value) ? (draft.value as string[]) : [];
       valueInput = (
-        <fieldset className="table-filter-fieldset">
+        <fieldset className="table-filter-fieldset" aria-describedby={describedBy}>
           <legend className="table-filter-field-label">Values</legend>
           <div className="table-filter-checklist">
             {options.map((option) => (
@@ -464,13 +481,13 @@ function FilterEditor({ columns, initial, isNew, onApply, onCancel }: FilterEdit
       const numbers = column?.type === 'number';
       valueInput = (
         <label className="table-filter-field">
-          <span className="table-filter-field-label">
-            {numbers ? 'Values (one per line or comma separated)' : 'Values (one per line)'}
-          </span>
+          <span className="table-filter-field-label">Values (one per line)</span>
           <textarea
             className="table-filter-input table-filter-textarea"
             rows={3}
             value={linesText}
+            aria-describedby={describedBy}
+            placeholder={numbers ? 'e.g. 12.5' : undefined}
             onChange={(event) => {
               setLinesText(event.target.value);
               update({ value: splitLines(event.target.value, numbers) });
@@ -524,8 +541,8 @@ function FilterEditor({ columns, initial, isNew, onApply, onCancel }: FilterEdit
           </select>
         </label>
         {valueInput}
-        <div className="table-filter-hint" aria-live="polite">
-          {touched && problem ? problem : ''}
+        <div id={hintId} className="table-filter-hint" aria-live="polite">
+          {showHint ? problem : ''}
         </div>
         <div className="table-filter-actions">
           <button type="button" className="table-filter-cancel" onClick={onCancel}>

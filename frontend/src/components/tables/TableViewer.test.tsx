@@ -10,7 +10,7 @@ import { ApiClientError } from '../../api/request';
 import type { TableColumn, TableDetail, TableRowsPage } from '../../api/types';
 import type { TableView } from '../../hooks/useTable';
 import { parseTablesRoute, tableViewerPath } from '../../utils/tablesRoute';
-import { TableViewer, filterColumnNames, parseFilterParam, parseSortParam } from './TableViewer';
+import { TableViewer, filterColumnNames, parseFilterParam, parseSortParam, resolveSort } from './TableViewer';
 
 const mocks = vi.hoisted(() => ({
   queryTableRows: vi.fn(),
@@ -112,6 +112,35 @@ describe('route param parsing', () => {
     expect(parseSortParam(null)).toBeNull();
   });
 
+  it('resolveSort keeps every existing key, in order, schema spelling', () => {
+    expect(
+      resolveSort('[{"column":"status","direction":"desc"},{"column":"Name"},{"column":"_ID"}]', COLUMNS),
+    ).toEqual({
+      keys: [
+        { column: 'Status', direction: 'desc' },
+        { column: 'Name', direction: 'asc' },
+        { column: '_id', direction: 'asc' },
+      ],
+      missing: [],
+      unreadable: false,
+    });
+    expect(resolveSort('[{"column":"Gone"},{"column":"Name","direction":"desc"}]', COLUMNS)).toEqual({
+      keys: [{ column: 'Name', direction: 'desc' }],
+      missing: ['Gone'],
+      unreadable: false,
+    });
+    expect(resolveSort('[{"column":"Gone"}]', COLUMNS)).toEqual({ keys: null, missing: ['Gone'], unreadable: false });
+    // Names differing only in case are one column: the server refuses it.
+    expect(resolveSort('[{"column":"Name"},{"column":"NAME"}]', COLUMNS)).toEqual({
+      keys: null, missing: [], unreadable: true,
+    });
+    expect(resolveSort('[{"column":"Name","direction":"up"}]', COLUMNS).unreadable).toBe(true);
+    expect(resolveSort(null, COLUMNS)).toEqual({ keys: null, missing: [], unreadable: false });
+    expect(resolveSort('[{"column":"Gone"}]', null)).toEqual({
+      keys: [{ column: 'Gone', direction: 'asc' }], missing: [], unreadable: false,
+    });
+  });
+
   it('parseFilterParam accepts a JSON object only', () => {
     expect(parseFilterParam('{"column":"Status","op":"eq","value":"open"}')).toEqual({
       column: 'Status', op: 'eq', value: 'open',
@@ -196,12 +225,50 @@ describe('TableViewer', () => {
     render(ui({ sort: '[{"column":"Gone","direction":"asc"}]', filter: '{"column":"Gone","op":"is_null"}' }));
     await screen.findByText('row at 0');
     expect(lastQuery()).toMatchObject({ sort: null, filter: null });
+    expect(screen.getByText('This sort references a column that no longer exists (Gone).')).toBeTruthy();
     cleanup();
     render(ui({ filter: '{"column":"Status","op":"eq","value":"open"}' }));
     await screen.findByText('row at 0');
     expect(lastQuery()).toMatchObject({ filter: { column: 'Status', op: 'eq', value: 'open' } });
     // Footer counts the matches under a filter.
     expect(document.querySelector('footer')?.textContent).toContain('350 rows (350 matching)');
+  });
+
+  it('sends every key of a multi-key sort and shows the primary arrow', async () => {
+    render(ui({ sort: '[{"column":"Status","direction":"desc"},{"column":"Name"}]' }));
+    await screen.findByText('row at 0');
+    expect(lastQuery()).toMatchObject({
+      sort: [
+        { column: 'Status', direction: 'desc' },
+        { column: 'Name', direction: 'asc' },
+      ],
+    });
+    expect(screen.getByRole('button', { name: 'Status' }).closest('th')?.getAttribute('aria-sort')).toBe('descending');
+    expect(screen.getByRole('button', { name: 'Name' }).closest('th')?.getAttribute('aria-sort')).toBeNull();
+    expect(screen.queryByText(/sort/i, { selector: '.table-filter-note' })).toBeNull();
+    // A header click replaces the sort with that one key.
+    fireEvent.click(screen.getByRole('button', { name: 'Name' }));
+    await waitFor(() => expect(currentParams().get('sort')).toBe('[{"column":"Name","direction":"asc"}]'));
+    await waitFor(() => expect(lastQuery()).toMatchObject({ sort: [{ column: 'Name', direction: 'asc' }] }));
+  });
+
+  it('leaves out a sort key on a dropped column, names it, and clears', async () => {
+    render(ui({ sort: '[{"column":"Gone","direction":"desc"},{"column":"Name","direction":"desc"}]' }));
+    await screen.findByText('row at 0');
+    expect(lastQuery()).toMatchObject({ sort: [{ column: 'Name', direction: 'desc' }] });
+    expect(screen.getByText('This sort references a column that no longer exists (Gone).')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear sort' }));
+    await waitFor(() => expect(currentParams().has('sort')).toBe(false));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Clear sort' })).toBeNull());
+  });
+
+  it('an unreadable sort (a column twice) is not sent and says so', async () => {
+    render(ui({ sort: '[{"column":"Name"},{"column":"name","direction":"desc"}]' }));
+    await screen.findByText('row at 0');
+    expect(lastQuery()).toMatchObject({ sort: null });
+    expect(screen.getByText("This link's sort could not be read.")).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear sort' }));
+    await waitFor(() => expect(currentParams().has('sort')).toBe(false));
   });
 
   it('re-queries rows on table_changed only when the schema version matches', async () => {

@@ -15,14 +15,25 @@
  * Operand shapes match filters.py `_parse_leaf`:
  * - nullary ops (`is_null`, `not_null`, `is_empty`) carry no `value` key.
  * - numbers are canonical decimal strings (trimmed, the server's plain
- *   decimal grammar: no thousands separators, units or NaN); `between` is
- *   `[lo, hi]` with lo <= hi.
+ *   decimal grammar: no thousands separators, units or NaN, at most 38
+ *   significant digits); `between` is `[lo, hi]` with lo <= hi, compared
+ *   exactly as decimals (`compareDecimals`).
+ * - text operands are sent exactly as typed (never trimmed). A url column's
+ *   `eq` / `ne` / `in` operands must be http(s) URLs with a host
+ *   (`isHttpUrl`, schema.py `_coerce_url`); its substring ops take any text.
  * - booleans are JSON booleans, never strings.
  * - enum options exactly as the schema spells them; a multi-enum `eq` / `ne`
  *   operand is itself a list of options (the exact set), `contains` one
  *   option, `contains_any` / `contains_all` a non-empty list.
- * - `in` is a non-empty list of single values (at most 100). A multi-enum
- *   `in` (a list of lists) is valid DSL but not offered: it reads as custom.
+ * - `in`, `contains_any` and `contains_all` are non-empty lists of at most
+ *   100 values (`TABLE_FILTER_IN_MAX_VALUES`); only a multi-enum `eq` / `ne`
+ *   operand (one exact option set) may hold up to 200 options. A
+ *   multi-enum `in` (a list of lists) is valid DSL but not offered: it
+ *   reads as custom.
+ *
+ * Round trip: for every leaf `filterToConditions` accepts as a regular chip,
+ * conditions -> DSL -> conditions -> DSL is the identity, so re-emitting an
+ * untouched chip (when another chip is edited) never changes it.
  *
  * URL: the params hold the DSL JSON itself (what the rows API takes), so a
  * filtered link is the API filter verbatim. Encoding is
@@ -37,6 +48,8 @@ export const FILTER_MAX_CONDITIONS = 20;
 export const FILTER_IN_MAX_VALUES = 100;
 export const FILTER_ENUM_MAX_OPTIONS = 200;
 export const SORT_MAX_KEYS = 3;
+export const NUMBER_MAX_DIGITS = 38;
+export const URL_MAX_CHARS = 2048;
 
 /** A condition's operand in builder state (see `valueKind`). */
 export type FilterValue = null | string | boolean | string[] | boolean[];
@@ -191,12 +204,141 @@ export function isDecimalString(value: string): boolean {
   return DECIMAL_RE.test(value.trim());
 }
 
-/** Split a one-per-line list entry (numbers may also be comma separated). */
+interface DecimalParts {
+  negative: boolean;
+  /** Significant digits, no leading or trailing zeros ('' for zero). */
+  digits: string;
+  /** value = digits * 10^exponent. */
+  exponent: bigint;
+}
+
+/** A decimal string (`isDecimalString`) split exactly, or null. */
+function decimalParts(value: string): DecimalParts | null {
+  const text = value.trim();
+  if (!DECIMAL_RE.test(text)) return null;
+  const negative = text.startsWith('-');
+  const unsigned = text.replace(/^[+-]/, '');
+  const [mantissa, exp = '0'] = unsigned.split(/[eE]/);
+  const [intPart, fracPart = ''] = mantissa.split('.');
+  const all = `${intPart}${fracPart}`;
+  const lead = all.replace(/^0+/, '');
+  const digits = lead.replace(/0+$/, '');
+  if (digits === '') return { negative: false, digits: '', exponent: 0n };
+  const trailing = BigInt(lead.length - digits.length);
+  return { negative, digits, exponent: BigInt(exp) - BigInt(fracPart.length) + trailing };
+}
+
+/**
+ * Compare two decimal strings exactly (no float rounding): -1, 0 or 1, or
+ * null when either is not a decimal string. "1e2" equals "100".
+ */
+export function compareDecimals(a: string, b: string): -1 | 0 | 1 | null {
+  const x = decimalParts(a);
+  const y = decimalParts(b);
+  if (!x || !y) return null;
+  const sign = (p: DecimalParts) => (p.digits === '' ? 0 : p.negative ? -1 : 1);
+  const sx = sign(x);
+  const sy = sign(y);
+  if (sx !== sy) return sx < sy ? -1 : 1;
+  if (sx === 0) return 0;
+  // Same sign: compare magnitudes by the position of the leading digit,
+  // then digit by digit.
+  const adjX = x.exponent + BigInt(x.digits.length);
+  const adjY = y.exponent + BigInt(y.digits.length);
+  let magnitude: -1 | 0 | 1;
+  if (adjX !== adjY) {
+    magnitude = adjX < adjY ? -1 : 1;
+  } else {
+    const width = Math.max(x.digits.length, y.digits.length);
+    const dx = x.digits.padEnd(width, '0');
+    const dy = y.digits.padEnd(width, '0');
+    magnitude = dx === dy ? 0 : dx < dy ? -1 : 1;
+  }
+  return (sx < 0 ? -magnitude : magnitude) as -1 | 0 | 1;
+}
+
+/**
+ * The digits the server's canonical rendering of a decimal string needs
+ * (schema.py `_coerce_number` without a precision: plain notation, integer
+ * digits plus fractional digits, no leading or trailing zeros), or null
+ * when it is not a decimal string. Zero needs 0.
+ */
+export function decimalDigitCount(value: string): number | null {
+  const parts = decimalParts(value);
+  if (!parts) return null;
+  if (parts.digits === '') return 0;
+  const length = BigInt(parts.digits.length);
+  const exp = parts.exponent;
+  let count: bigint;
+  if (exp >= 0n) {
+    count = length + exp;
+  } else {
+    const intDigits = length + exp > 0n ? length + exp : 0n;
+    count = intDigits - exp;
+  }
+  return count > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(count);
+}
+
+/** A decimal string the server accepts as a number operand (<= 38 digits). */
+function numberProblem(value: unknown): 'nan' | 'digits' | null {
+  if (typeof value !== 'string' || !isDecimalString(value)) return 'nan';
+  return (decimalDigitCount(value) ?? 0) > NUMBER_MAX_DIGITS ? 'digits' : null;
+}
+
+const TOO_MANY_DIGITS = `Use at most ${NUMBER_MAX_DIGITS} digits`;
+
+// Python str.isspace / Cc / Cf / unpaired surrogates (schema.py
+// `_coerce_url` and `_text_problem` with controls=False); U+2028 / U+2029
+// are \s.
+const URL_BAD_CHAR_RE = /[\s\\\p{Cc}\p{Cf}\p{Cs}]/u;
+const URL_HEAD_RE = /^https?:\/\/([^/?#]*)/i;
+
+/**
+ * True when the server would accept `raw` as a url-column `eq` / `ne` /
+ * `in` operand (schema.py `_coerce_url`): trimmed, non-empty, at most 2048
+ * characters, no whitespace, control, format or backslash characters,
+ * `http://` or `https://` with a non-empty host and a valid port.
+ */
+export function isHttpUrl(raw: string): boolean {
+  const url = raw.trim();
+  if (url === '' || [...url].length > URL_MAX_CHARS) return false;
+  if (URL_BAD_CHAR_RE.test(url)) return false;
+  const head = URL_HEAD_RE.exec(url);
+  if (!head) return false;
+  const authority = head[1];
+  const hostPort = authority.slice(authority.lastIndexOf('@') + 1);
+  if (authority.includes('[') !== authority.includes(']')) return false;
+  let host: string;
+  let port: string;
+  if (hostPort.startsWith('[')) {
+    const end = hostPort.indexOf(']');
+    host = hostPort.slice(1, end);
+    if (!/^[0-9a-f:.]+$/i.test(host) && !/^v[0-9a-f]+\..+$/i.test(host)) return false;
+    port = hostPort.slice(end + 1).replace(/^[^:]*:?/, '');
+  } else {
+    const colon = hostPort.indexOf(':');
+    host = colon < 0 ? hostPort : hostPort.slice(0, colon);
+    port = colon < 0 ? '' : hostPort.slice(colon + 1);
+  }
+  if (host === '') return false;
+  if (port !== '' && (!/^[0-9]+$/.test(port) || Number(port) > 65535)) return false;
+  return true;
+}
+
+const URL_PROBLEM = 'Enter an http(s) URL';
+
+/**
+ * Split a one-per-line list entry. Lines that are empty or only whitespace
+ * are dropped; other lines are kept exactly (text values are compared as
+ * typed), except that with `numbers` each is trimmed (the server trims
+ * number strings). Only newlines separate values: "1,234" stays one value
+ * (and is refused as not a decimal).
+ */
 export function splitLines(raw: string, numbers = false): string[] {
   return raw
-    .split(numbers ? /[\n,]/ : /\n/)
-    .map((part) => part.trim())
-    .filter((part) => part !== '');
+    .split('\n')
+    .map((part) => (numbers ? part.trim() : part))
+    .filter((part) => part.trim() !== '');
 }
 
 let idCounter = 0;
@@ -207,7 +349,13 @@ export function newConditionId(): string {
   return `fc${idCounter}`;
 }
 
-/** Find a column by name: exact, else the one case-insensitive match (as the server). */
+/**
+ * Find a column by name: exact, else the one case-insensitive match (as the
+ * server). The server folds with Python `casefold`, this with
+ * `toLowerCase`; they differ only for rare Unicode names (e.g. "ß" vs
+ * "SS"), which a hand-made link may then name in a form that reads as
+ * missing here.
+ */
 export function findColumn(schema: TableColumn[], name: string): TableColumn | null {
   const exact = schema.find((column) => column.name === name);
   if (exact) return exact;
@@ -234,15 +382,24 @@ export function conditionError(condition: FilterCondition, schema: TableColumn[]
     case 'none':
       return null;
     case 'text':
-      return typeof value === 'string' && value !== '' ? null : 'Enter a value';
-    case 'number':
-      return typeof value === 'string' && isDecimalString(value) ? null : 'Enter a number';
+      if (typeof value !== 'string' || value === '') return 'Enter a value';
+      if (column.type === 'url' && condition.op !== 'contains' && condition.op !== 'starts_with'
+        && condition.op !== 'ends_with' && !isHttpUrl(value)) {
+        return URL_PROBLEM;
+      }
+      return null;
+    case 'number': {
+      const issue = numberProblem(value);
+      return issue === 'nan' ? 'Enter a number' : issue === 'digits' ? TOO_MANY_DIGITS : null;
+    }
     case 'pair': {
       if (!isStringList(value) || value.length !== 2) return 'Enter both bounds';
       const [lo, hi] = value;
       if (lo.trim() === '' || hi.trim() === '') return 'Enter both bounds';
-      if (!isDecimalString(lo) || !isDecimalString(hi)) return 'Enter numbers';
-      return Number(lo) <= Number(hi) ? null : 'The first bound must not be larger';
+      const issues = [numberProblem(lo), numberProblem(hi)];
+      if (issues.includes('nan')) return 'Enter numbers';
+      if (issues.includes('digits')) return TOO_MANY_DIGITS;
+      return compareDecimals(lo, hi)! <= 0 ? null : 'The first bound must not be larger';
     }
     case 'boolean':
       return typeof value === 'boolean' ? null : 'Choose true or false';
@@ -255,14 +412,22 @@ export function conditionError(condition: FilterCondition, schema: TableColumn[]
     case 'options': {
       if (!isStringList(value) || value.length === 0) return 'Choose at least one option';
       if (!value.every((item) => options.includes(item))) return 'Unknown option';
-      const cap = condition.op === 'in' ? FILTER_IN_MAX_VALUES : FILTER_ENUM_MAX_OPTIONS;
+      // One exact option set (multi-enum eq / ne) holds up to 200 options;
+      // every list op (in, contains_any, contains_all) at most 100.
+      const exactSet = column.multiple && (condition.op === 'eq' || condition.op === 'ne');
+      const cap = exactSet ? FILTER_ENUM_MAX_OPTIONS : FILTER_IN_MAX_VALUES;
       return value.length <= cap ? null : `At most ${cap} options`;
     }
     case 'lines': {
       if (!isStringList(value) || value.length === 0) return 'Enter at least one value';
       if (value.some((item) => item.trim() === '')) return 'Remove the empty value';
       if (value.length > FILTER_IN_MAX_VALUES) return `At most ${FILTER_IN_MAX_VALUES} values`;
-      if (column.type === 'number' && !value.every(isDecimalString)) return 'Enter numbers only';
+      if (column.type === 'number') {
+        const issues = value.map(numberProblem);
+        if (issues.includes('nan')) return 'Enter numbers only';
+        if (issues.includes('digits')) return TOO_MANY_DIGITS;
+      }
+      if (column.type === 'url' && !value.every(isHttpUrl)) return URL_PROBLEM;
       return null;
     }
   }
@@ -319,7 +484,9 @@ export function conditionToLeaf(condition: FilterCondition, schema: TableColumn[
     case 'booleans':
       return { column: name, op: condition.op, value: dedupe(value as boolean[]) };
     case 'lines': {
-      const items = (value as string[]).map((item) => item.trim());
+      // Numbers are trimmed (the server trims them too); text and url
+      // values go as typed, so a re-emitted chip never changes.
+      const items = (value as string[]).map((item) => (column.type === 'number' ? item.trim() : item));
       return { column: name, op: condition.op, value: dedupe(items) };
     }
     default:
@@ -358,6 +525,10 @@ function leafToCondition(node: unknown, schema: TableColumn[]): FilterCondition 
 
   const raw = rec.value;
   let value: FilterValue;
+  // A JSON number operand is read as its JS string form. The UI always
+  // emits decimal strings; a hand-made link with a JSON number of more than
+  // 15 significant digits has already lost precision in JSON.parse (the
+  // server would have read it exactly), so such links should quote it.
   const asDecimal = (item: unknown): string | null =>
     typeof item === 'string' ? item : typeof item === 'number' && Number.isFinite(item) ? String(item) : null;
   switch (valueKind(column, op)) {
@@ -383,6 +554,8 @@ function leafToCondition(node: unknown, schema: TableColumn[]): FilterCondition 
       if (!Array.isArray(raw)) return 'bad value';
       const items = raw.map((item) => (column.type === 'number' ? asDecimal(item) : item));
       if (!isStringList(items)) return 'bad value';
+      // One value per textarea line: a value spanning lines cannot be shown.
+      if (items.some((item) => /[\r\n]/.test(item))) return 'a value spans lines';
       value = items;
       break;
     }
@@ -529,7 +702,10 @@ export function sortToSearchParam(keys: SortKey[] | null): string | null {
 
 /**
  * A raw `sort` param as sort keys (a bare `{column, direction}` object is
- * accepted too; at most 3 keys), else null when absent or malformed.
+ * accepted too; at most 3 keys; a missing or null `direction` is `asc`, as
+ * the server reads it), else null when absent or malformed, including a
+ * column named twice (the server refuses that; see the viewer for names
+ * that differ only in case).
  */
 export function searchParamToSort(raw: string | null): SortKey[] | null {
   if (!raw) return null;
@@ -546,8 +722,10 @@ export function searchParamToSort(raw: string | null): SortKey[] | null {
     if (!item || typeof item !== 'object') return null;
     const { column, direction } = item as { column?: unknown; direction?: unknown };
     if (typeof column !== 'string' || !column) return null;
-    if (direction !== 'asc' && direction !== 'desc') return null;
-    keys.push({ column, direction });
+    const dir = direction ?? 'asc';
+    if (dir !== 'asc' && dir !== 'desc') return null;
+    if (keys.some((key) => key.column === column)) return null;
+    keys.push({ column, direction: dir });
   }
   return keys;
 }
