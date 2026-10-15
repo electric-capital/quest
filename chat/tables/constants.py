@@ -115,3 +115,10 @@ def tables_disabled_message() -> str:
         "Quest Tables is not enabled for this user. An admin can enable it "
         "in Settings > Features."
     )
+
+# --- History detail (GET /tables/{id}/changes/{change_id}) -----------------
+
+# Most row images (before/after pairs) one change detail response carries,
+# and the most bytes of images it spells out; the rest is summarized.
+TABLE_CHANGE_DETAIL_MAX_ROWS = 50
+TABLE_CHANGE_DETAIL_MAX_BYTES = 200 * 1024

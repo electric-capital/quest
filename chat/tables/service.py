@@ -8,7 +8,11 @@ precards preview with :func:`preview_row_write` /
 published) and their executors pin what the card showed through
 :func:`apply_row_write`'s ``expected_schema_version`` /
 ``expected_rows_digest`` (:func:`rows_digest`) and
-:func:`apply_schema_change`'s ``expected_schema_version``. Every operation follows
+:func:`apply_schema_change`'s ``expected_schema_version``. The HTTP routes also get the owner-only
+metadata edit and share roster (:func:`update_metadata`,
+:func:`add_share`, :func:`remove_share`), the editors-only history
+(:func:`list_changes`, :func:`get_change`) and downloads
+(:func:`export_table`) here. Every operation follows
 the same pipeline in this one place::
 
     feature gate -> table lookup (db/table_store) -> resolve_table_access
@@ -29,12 +33,17 @@ the same doc-source lookup), :class:`TableApprovalRequired`
 (``approval_required``, carries the verdict and the ``write_table_rows``
 suggested request), :class:`TableDenied` (``denied``, the verdict's deny
 reason), :class:`TableForbidden` (``forbidden``, owner-only actions) and
-:class:`StaleSchema` (``stale_schema``, carries the current table dict)
+:class:`StaleSchema` (``stale_schema``, carries the current table dict),
+:class:`StaleUpdate` (``stale_update``, a metadata edit's
+``expected_updated_at`` is stale; carries the current table dict)
 and :class:`RowsChanged` (``rows_changed``, the rows a card showed changed
 before its approval; carries their current values).
 Other ``TableError`` codes: ``invalid_args``, ``project_not_found``,
 ``mode_mismatch``, ``duplicate_title``, ``table_limit``,
-``invalid_request``.
+``invalid_request``, ``cannot_share_with_owner``, ``user_not_found``,
+``share_not_found``. History
+refusals for readers are :class:`TableForbidden` with
+:data:`HISTORY_FORBIDDEN_MESSAGE`.
 
 Errors from the layers below propagate UNCHANGED so the tools and routes
 map them by their ``.code``: :class:`chat.tables.storage.TableStorageError`
@@ -118,14 +127,17 @@ __all__ = [
     "ROW_OPS",
     "TABLE_SCOPES",
     "Caller",
+    "HISTORY_FORBIDDEN_MESSAGE",
     "RowsChanged",
     "StaleSchema",
+    "StaleUpdate",
     "TableApprovalRequired",
     "TableDenied",
     "TableDisabled",
     "TableError",
     "TableForbidden",
     "TableNotFound",
+    "add_share",
     "apply_restore",
     "apply_row_write",
     "apply_schema_change",
@@ -133,15 +145,20 @@ __all__ = [
     "create_table",
     "delete_table",
     "delete_table_dirs",
+    "export_table",
+    "get_change",
     "get_visible_table",
+    "list_changes",
     "list_visible_tables",
     "preview_row_write",
     "preview_schema_change",
     "query_rows",
+    "remove_share",
     "require_enabled",
     "resolve",
     "rows_digest",
     "sample_rows",
+    "update_metadata",
 ]
 
 ROW_OPS = ("insert", "update", "upsert", "delete")
@@ -221,6 +238,23 @@ class StaleSchema(TableError):
             "table and try again.",
         )
         self.current = current
+
+
+class StaleUpdate(TableError):
+    """``expected_updated_at`` no longer matches (metadata edit); ``current``
+    is the current table dict (with shares)."""
+
+    def __init__(self, current: dict):
+        super().__init__(
+            "stale_update",
+            "The table was changed by someone else; reload it and try again.",
+        )
+        self.current = current
+
+
+# Shown to readers asking for a table's history (editors only, like docs:
+# before images can hold rows the owner deleted before sharing).
+HISTORY_FORBIDDEN_MESSAGE = "History is available to people who can edit this table."
 
 
 # Most rows a RowsChanged message spells out.
@@ -410,6 +444,32 @@ async def _shielded(coro):
                 )
         task.add_done_callback(_log_done)
         raise
+
+
+async def _finish_before_cancel(coro):
+    """Run ``coro`` to completion; if the awaiting task is cancelled, wait
+    for ``coro`` to finish first and only then raise ``CancelledError``.
+
+    Unlike :func:`_shielded` (which returns to the cancelled caller at
+    once), the caller does not resume until the work is done: a download
+    route that removes its temp directory on cancellation must not do so
+    while a thread still writes into it, and the table lock must not be
+    released while ``VACUUM INTO`` still reads ``table.db``."""
+    task = asyncio.ensure_future(coro)
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.wait({task})
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        if not task.cancelled() and task.exception() is not None:
+            logger.warning(
+                "[tables] work finished with an error after the caller was "
+                "cancelled: %s", task.exception(),
+            )
+        raise asyncio.CancelledError
+    return task.result()
 
 
 def _events():
@@ -1383,6 +1443,352 @@ async def delete_table(caller: Caller, table_id: str) -> dict:
             events.publish_table_gone_to(audience, current["id"])
             events.publish_table_list_changed_to(audience)
             return current
+
+    return await _shielded(_locked())
+
+
+# ---------------------------------------------------------------------------
+# Metadata, history, export and shares (the HTTP routes)
+# ---------------------------------------------------------------------------
+
+
+def _require_owner(table: dict, caller: Caller, message: str) -> None:
+    if table["owner_id"] != caller.user["id"]:
+        raise TableForbidden(message)
+
+
+async def update_metadata(
+    caller: Caller,
+    table_id: str,
+    *,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    require_approval: Optional[bool] = None,
+    expected_updated_at: Optional[str] = None,
+) -> dict:
+    """Owner-only rename / description / ``require_approval`` edit
+    (``PUT /tables/{id}``), under the table lock (shielded) through
+    ``table_store.update_table_metadata``. A metadata-only change is not a
+    table.db change (no change-log entry; table.db's ``meta.title`` keeps
+    the title of the last schema change or restore). Publishes
+    ``table_changed`` when ``updated_at`` moved (something changed).
+
+    Returns:
+        The table dict with shares.
+
+    Raises:
+        TableDisabled, TableNotFound, TableForbidden, StaleUpdate,
+        TableError (``duplicate_title``, ``invalid_request``,
+        ``invalid_args``).
+    """
+    require_enabled(caller)
+    table, _access = await _lookup(caller, table_id)
+    owner_message = "Only the table's owner can change its settings."
+    _require_owner(table, caller, owner_message)
+
+    async def _locked() -> dict:
+        async with _table_lock(table["id"]):
+            fresh, _fresh_access = await _lookup(caller, table_id)
+            _require_owner(fresh, caller, owner_message)
+            try:
+                updated = await table_store.update_table_metadata(
+                    fresh["id"],
+                    title=title,
+                    description=description,
+                    require_approval=require_approval,
+                    expected_updated_at=expected_updated_at,
+                )
+            except table_store.StaleTableError as exc:
+                raise StaleUpdate(exc.current) from None
+            except table_store.DuplicateTableTitleError as exc:
+                raise TableError("duplicate_title", str(exc)) from None
+            except table_store.TableValidationError as exc:
+                raise TableError("invalid_request", str(exc)) from None
+            if updated is None:
+                raise TableNotFound(table_id)
+            if updated["updated_at"] != fresh["updated_at"]:
+                _events().publish_table_write(updated)
+            return updated
+
+    return await _shielded(_locked())
+
+
+def _is_editor(access: TableAccess) -> bool:
+    """Editors (history, restore, downloads with history), for ``ui``
+    callers ONLY: the ``ui`` rows verdict ``"free"``, i.e. the owner or a
+    write-share recipient. For any other run kind ``rows == "free"`` means
+    something else (e.g. an owner's unshared table in a conversation), so
+    :func:`_require_ui` guards every use. The owner's ``require_approval``
+    switch never touches the ``ui`` verdict (chat/artifact_access.py), so
+    the owner stays an editor with it on."""
+    return access.rows == "free"
+
+
+def _require_ui(caller: Caller) -> None:
+    """History and history downloads are Quest UI features only."""
+    if caller.run_kind != "ui":
+        raise TableError("invalid_args", "Table history is only available in the Quest UI.")
+
+
+def _require_editor(access: TableAccess) -> None:
+    if not _is_editor(access):
+        raise TableForbidden(HISTORY_FORBIDDEN_MESSAGE)
+
+
+def _check_int(value, name: str, *, optional: bool = False) -> None:
+    if optional and value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TableError("invalid_args", f"{name} must be an integer.")
+
+
+async def _editor_read(caller: Caller, table_id: str, fn):
+    """:func:`_locked_read` for editors only: the editor check runs on the
+    verdict outside the lock and again on the re-resolved one under it.
+    ``fn(table_dir, columns, table)`` runs in a thread."""
+    require_enabled(caller)
+    _require_ui(caller)
+    _table, access = await _lookup(caller, table_id)
+    _require_editor(access)
+    async with _table_lock(table_id):
+        table, access = await _lookup(caller, table_id)
+        _require_editor(access)
+        columns = load_schema(table["schema"])
+        result = await _file_call(table, fn, _table_dir(table["id"]), columns, table)
+        return table, access, result
+
+
+async def list_changes(
+    caller: Caller,
+    table_id: str,
+    *,
+    limit: int = 50,
+    before_id: Optional[int] = None,
+) -> tuple[dict, TableAccess, list[dict]]:
+    """A page of the change log, newest first (``GET /tables/{id}/changes``).
+    Editors only (:data:`HISTORY_FORBIDDEN_MESSAGE`). Each entry: the
+    ``storage.list_changes`` summary fields (``id, created_at, source,
+    actor_user_id, kind, op, summary, schema_before, schema_after,
+    size_bytes, restore_to, row_count``) plus ``in_effect``
+    (:func:`chat.tables.revert.list_changes_in_effect`). ``limit`` is
+    clamped by storage; ``before_id`` pages to older entries.
+
+    Raises:
+        TableDisabled, TableNotFound, TableForbidden, TableError
+        ``invalid_args`` (also for a non-``ui`` caller), TableStorageError.
+    """
+    require_enabled(caller)
+    _check_int(limit, "limit")
+    _check_int(before_id, "before_id", optional=True)
+
+    def _run(table_dir: Path, _columns, _table: dict) -> list[dict]:
+        return revert.list_changes_in_effect(table_dir, limit=limit, before_id=before_id)
+
+    return await _editor_read(caller, table_id, _run)
+
+
+async def get_change(
+    caller: Caller, table_id: str, change_id: int,
+) -> tuple[dict, TableAccess, dict]:
+    """One change with ``row_ids``, ``before`` and ``after`` decoded
+    (``storage.get_change``), editors only. Shaping and size caps are the
+    route's job.
+
+    Raises:
+        TableDisabled, TableNotFound, TableForbidden, TableError
+        ``invalid_args`` (``change_id`` not an integer),
+        ``revert.UnknownChangeError`` (``unknown_change``), TableStorageError.
+    """
+    require_enabled(caller)
+    _check_int(change_id, "change_id")
+
+    def _run(table_dir: Path, _columns, _table: dict) -> dict:
+        change = storage.get_change(table_dir, change_id)
+        if change is None:
+            raise revert.UnknownChangeError(change_id)
+        return change
+
+    return await _editor_read(caller, table_id, _run)
+
+
+EXPORT_FORMATS = ("csv", "sqlite")
+
+
+async def export_table(
+    caller: Caller,
+    table_id: str,
+    *,
+    fmt: str,
+    include_history: bool = False,
+    dest_dir: Path,
+) -> tuple[dict, Path]:
+    """Write a download copy of the table into ``dest_dir`` (an existing
+    real directory the caller created and removes; ``ValueError``
+    otherwise) and return ``(table, path)``.
+
+    Every reader may export. ``fmt="csv"``: the rows are snapshotted with
+    ``storage.dump_rows`` under the table lock and written to
+    ``dest_dir/table.csv`` outside it (:func:`chat.tables.export.write_csv`,
+    in a thread). ``fmt="sqlite"``: ``storage.copy_for_download`` to
+    ``dest_dir/table.sqlite`` under the lock (in a thread), without the
+    ``changes`` table unless ``include_history``, which is editors only
+    (:class:`TableForbidden`; ``ui`` callers only, ``invalid_args``
+    otherwise) and only valid with ``sqlite``. A cancelled call returns
+    only after the file work has finished (:func:`_finish_before_cancel`),
+    so the caller may then remove ``dest_dir`` safely.
+
+    Raises:
+        TableDisabled, TableNotFound, TableForbidden, TableError
+        ``invalid_args``, TableStorageError, ValueError (bad ``dest_dir``).
+    """
+    require_enabled(caller)
+    if fmt not in EXPORT_FORMATS:
+        raise TableError("invalid_args", f"format must be one of: {', '.join(EXPORT_FORMATS)}.")
+    if not isinstance(include_history, bool):
+        raise TableError("invalid_args", "include_history must be a boolean.")
+    if include_history and fmt != "sqlite":
+        raise TableError("invalid_args", "include_history is only available for sqlite downloads.")
+    dest_dir = Path(dest_dir)
+    try:
+        st = os.lstat(dest_dir)
+    except FileNotFoundError:
+        raise ValueError(f"dest_dir {dest_dir} does not exist") from None
+    if not stat.S_ISDIR(st.st_mode):
+        raise ValueError(f"dest_dir {dest_dir} is not a real directory")
+
+    if include_history:
+        _require_ui(caller)
+
+    _table, access = await _lookup(caller, table_id)
+    if include_history:
+        _require_editor(access)
+
+    async def _work() -> tuple[dict, Path]:
+        async with _table_lock(table_id):
+            table, fresh_access = await _lookup(caller, table_id)
+            if include_history:
+                _require_editor(fresh_access)
+            table_dir = _table_dir(table["id"])
+            columns = load_schema(table["schema"])
+            if fmt == "sqlite":
+                path = await _file_call(
+                    table, storage.copy_for_download, table_dir, dest_dir / "table.sqlite",
+                    include_history=include_history,
+                )
+                return table, path
+            rows = await _file_call(table, storage.dump_rows, table_dir, columns)
+        from chat.tables import export
+        path = await asyncio.to_thread(export.write_csv, dest_dir / "table.csv", columns, rows)
+        return table, path
+
+    return await _finish_before_cancel(_work())
+
+
+def _publish_roster_change(before: dict, after: dict) -> None:
+    """A share roster changed: ``table_changed {updated_at: null}`` and
+    ``table_list_changed`` to the old and new audiences together, so a
+    removed recipient's viewer closes and every list refreshes."""
+    events = _events()
+    audience = events.tables_audience([before, after])
+    events.publish_table_gone_to(audience, after["id"])
+    events.publish_table_list_changed_to(audience)
+
+
+_SHARE_OWNER_MESSAGE = "Only the table's owner can manage its sharing."
+
+
+async def add_share(
+    caller: Caller,
+    table_id: str,
+    *,
+    user_id: Optional[int],
+    permission: str,
+) -> tuple[dict, bool]:
+    """Owner-only: grant ``permission`` (``read`` / ``write``) to
+    ``user_id`` or to everyone (None), an upsert (``table_store.add_share``:
+    one row per recipient). Under the table lock (shielded), so a queued
+    read or write re-resolves with the new roster. ``changed`` is False
+    when the recipient already had this permission (nothing published).
+    Does not bump ``updated_at``.
+
+    Returns:
+        ``(table with shares, changed)``.
+
+    Raises:
+        TableDisabled, TableNotFound, TableForbidden, TableError
+        (``cannot_share_with_owner``, ``user_not_found``,
+        ``invalid_request``).
+    """
+    require_enabled(caller)
+    table, _access = await _lookup(caller, table_id)
+    _require_owner(table, caller, _SHARE_OWNER_MESSAGE)
+
+    async def _locked() -> tuple[dict, bool]:
+        async with _table_lock(table["id"]):
+            before, _fresh_access = await _lookup(caller, table_id)
+            _require_owner(before, caller, _SHARE_OWNER_MESSAGE)
+            if user_id is not None and user_id == before["owner_id"]:
+                raise TableError(
+                    "cannot_share_with_owner",
+                    "You own this table; share it with someone else.",
+                )
+            previous = next(
+                (s for s in before["shares"] if s["user_id"] == user_id), None,
+            )
+            try:
+                await table_store.add_share(before["id"], user_id, permission)
+            except table_store.TableValidationError as exc:
+                # The table may be gone (an account delete does not take
+                # the table lock): the store then refuses with a plain
+                # TableValidationError or a ShareTargetGoneError.
+                if await table_store.get_table(before["id"], with_shares=False) is None:
+                    raise TableNotFound(table_id) from None
+                if isinstance(exc, table_store.ShareTargetGoneError):
+                    raise TableError("user_not_found", "That user no longer exists.") from None
+                raise TableError("invalid_request", str(exc)) from None
+            after = await table_store.get_table(before["id"], with_shares=True)
+            if after is None:
+                raise TableNotFound(table_id)
+            changed = previous is None or previous["permission"] != permission
+            if changed:
+                _publish_roster_change(before, after)
+            return after, changed
+
+    return await _shielded(_locked())
+
+
+async def remove_share(caller: Caller, table_id: str, share_id: int) -> dict:
+    """Owner-only: remove one share row of this table, under the table lock
+    (shielded). The old and new audiences are told (the removed recipient
+    gets ``table_changed {updated_at: null}``). Does not bump
+    ``updated_at``.
+
+    Returns:
+        The table with shares.
+
+    Raises:
+        TableDisabled, TableNotFound, TableForbidden, TableError
+        ``share_not_found`` (also for a non-integer id).
+    """
+    require_enabled(caller)
+    table, _access = await _lookup(caller, table_id)
+    _require_owner(table, caller, _SHARE_OWNER_MESSAGE)
+    if isinstance(share_id, bool) or not isinstance(share_id, int):
+        raise TableError("share_not_found", "Share not found.")
+
+    async def _locked() -> dict:
+        async with _table_lock(table["id"]):
+            before, _fresh_access = await _lookup(caller, table_id)
+            _require_owner(before, caller, _SHARE_OWNER_MESSAGE)
+            if not any(s["id"] == share_id for s in before["shares"]) or not (
+                await table_store.remove_share(before["id"], share_id)
+            ):
+                raise TableError("share_not_found", "Share not found.")
+            after = await table_store.get_table(before["id"], with_shares=True)
+            if after is None:
+                raise TableNotFound(table_id)
+            _publish_roster_change(before, after)
+            return after
 
     return await _shielded(_locked())
 

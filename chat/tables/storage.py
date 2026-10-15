@@ -2476,11 +2476,12 @@ def _list_changes(
     conn: sqlite3.Connection, *, limit: int, before_id: int | None
 ) -> list[dict]:
     """The body of :func:`list_changes` on an open connection (arguments
-    already checked). A restore entry whose ``after`` is not JSON is
-    ``corrupt_storage``."""
+    already checked). A restore entry whose ``after`` is not JSON, or an
+    entry whose ``row_ids`` is malformed JSON, is ``corrupt_storage``."""
     sql = (
         f"SELECT {', '.join(_CHANGE_SUMMARY_FIELDS)}, CASE WHEN kind = 'restore' "
-        "THEN json_extract(after, '$.restore_to') END FROM changes"
+        "THEN json_extract(after, '$.restore_to') END, "
+        "json_array_length(row_ids) FROM changes"
     )
     params: list[Any] = []
     if before_id is not None:
@@ -2496,14 +2497,18 @@ def _list_changes(
         raise TableStorageError(
             "corrupt_storage", "The table's change log is invalid."
         ) from exc
-    return [dict(zip((*_CHANGE_SUMMARY_FIELDS, "restore_to"), row)) for row in rows]
+    return [
+        dict(zip((*_CHANGE_SUMMARY_FIELDS, "restore_to", "row_count"), row))
+        for row in rows
+    ]
 
 
 def list_changes(
     table_dir: Path, *, limit: int = 50, before_id: int | None = None
 ) -> list[dict]:
     """Changes newest first, summary fields only (no images or row ids)
-    plus ``restore_to`` (a restore entry's target id, else None);
+    plus ``restore_to`` (a restore entry's target id, else None) and
+    ``row_count`` (how many row ids the change records);
     ``before_id`` (an int or None) pages to older entries. ``limit`` is
     clamped to 1.._LIST_CHANGES_MAX. The same page with ``in_effect``
     flags comes from :func:`chat.tables.revert.list_changes_in_effect`."""
