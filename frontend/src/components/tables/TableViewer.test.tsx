@@ -1,12 +1,15 @@
-// TableViewer: route-param parsing, the loading / gone / error states, sort
-// and paging state (offset reset on sort change, clamp on a shrinking
-// total), stale columns dropped, and when rows re-query on table_changed.
+// TableViewer: route-param parsing, the loading / gone / error states, the
+// URL as the source of truth for filter and sort (the bar and the headers
+// navigate, the viewer reads the route), paging (offset reset on change,
+// clamp on a shrinking total), stale columns, and when rows re-query on
+// table_changed.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { ApiClientError } from '../../api/request';
 import type { TableColumn, TableDetail, TableRowsPage } from '../../api/types';
 import type { TableView } from '../../hooks/useTable';
+import { parseTablesRoute, tableViewerPath } from '../../utils/tablesRoute';
 import { TableViewer, filterColumnNames, parseFilterParam, parseSortParam } from './TableViewer';
 
 const mocks = vi.hoisted(() => ({
@@ -65,12 +68,34 @@ function view(overrides: Partial<TableView> = {}): TableView {
   };
 }
 
-function ui(props: { filter?: string | null; sort?: string | null } = {}) {
+/** The app's wiring: the viewer gets its props from the current location. */
+function RouteHost() {
+  const location = useLocation();
+  const route = parseTablesRoute(location.pathname, location.search);
   return (
-    <MemoryRouter>
-      <TableViewer tableId="t1" filter={props.filter ?? null} sort={props.sort ?? null} />
+    <>
+      <output data-testid="location">{location.pathname + location.search}</output>
+      {route?.kind === 'viewer' && (
+        <TableViewer tableId={route.tableId} filter={route.filter} sort={route.sort} />
+      )}
+    </>
+  );
+}
+
+function ui(props: { filter?: string | null; sort?: string | null; extra?: string } = {}) {
+  let path = tableViewerPath('t1', { filter: props.filter, sort: props.sort });
+  if (props.extra) path += (path.includes('?') ? '&' : '?') + props.extra;
+  return (
+    <MemoryRouter initialEntries={[path]}>
+      <RouteHost />
     </MemoryRouter>
   );
+}
+
+/** The current location's search params. */
+function currentParams() {
+  const text = screen.getByTestId('location').textContent ?? '';
+  return new URLSearchParams(text.slice(text.indexOf('?') + 1 || text.length));
 }
 
 function lastQuery() {
@@ -226,5 +251,128 @@ describe('TableViewer', () => {
     render(ui({ filter: '{"column":"Status","op":"eq","value":"nope"}' }));
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('This filter cannot be applied: Bad value for Status.');
+  });
+  it('a sort header click navigates to ?sort= (replace, other params kept)', async () => {
+    render(ui({ filter: '{"column":"Status","op":"eq","value":"open"}', extra: 'keep=1' }));
+    await screen.findByText('row at 0');
+    fireEvent.click(screen.getByRole('button', { name: 'Name' }));
+    await waitFor(() => expect(currentParams().get('sort')).toBe('[{"column":"Name","direction":"asc"}]'));
+    expect(currentParams().get('keep')).toBe('1');
+    expect(currentParams().get('filter')).toBe('{"column":"Status","op":"eq","value":"open"}');
+    await waitFor(() =>
+      expect(lastQuery()).toMatchObject({ sort: [{ column: 'Name', direction: 'asc' }], offset: 0 }),
+    );
+    // asc -> desc -> none: the param goes away.
+    fireEvent.click(screen.getByRole('button', { name: 'Name' }));
+    await waitFor(() => expect(currentParams().get('sort')).toBe('[{"column":"Name","direction":"desc"}]'));
+    fireEvent.click(screen.getByRole('button', { name: 'Name' }));
+    await waitFor(() => expect(currentParams().has('sort')).toBe(false));
+    await waitFor(() => expect(lastQuery()).toMatchObject({ sort: null }));
+  });
+
+  it('adding a filter on the bar navigates to ?filter= and re-queries from the first page', async () => {
+    render(ui({ sort: '[{"column":"Name","direction":"desc"}]' }));
+    await screen.findByText('row at 0');
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('row at 200');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add filter' }));
+    fireEvent.change(screen.getByLabelText('Column'), { target: { value: 'Status' } });
+    fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'won' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() =>
+      expect(currentParams().get('filter')).toBe('{"column":"Status","op":"eq","value":"won"}'),
+    );
+    expect(currentParams().get('sort')).toBe('[{"column":"Name","direction":"desc"}]');
+    await waitFor(() =>
+      expect(lastQuery()).toMatchObject({
+        filter: { column: 'Status', op: 'eq', value: 'won' },
+        sort: [{ column: 'Name', direction: 'desc' }],
+        offset: 0,
+      }),
+    );
+    expect(screen.getByRole('button', { name: 'Edit filter: Status is won' })).toBeTruthy();
+
+    // Removing the chip clears the param and the filter.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove filter: Status is won' }));
+    await waitFor(() => expect(currentParams().has('filter')).toBe(false));
+    await waitFor(() => expect(lastQuery()).toMatchObject({ filter: null }));
+  });
+
+  it('sends a custom filter as-is and offers Clear', async () => {
+    const custom = { or: [{ column: 'Status', op: 'eq', value: 'won' }, { column: 'Name', op: 'is_null' }] };
+    render(ui({ filter: JSON.stringify(custom) }));
+    await screen.findByText('row at 0');
+    expect(lastQuery()).toMatchObject({ filter: custom });
+    expect(screen.getByText('Custom filter')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Add filter' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(currentParams().has('filter')).toBe(false));
+  });
+
+  it('names a filter column the schema no longer has instead of dropping it silently', async () => {
+    render(ui({ filter: '{"column":"Gone","op":"is_null"}' }));
+    await screen.findByText('row at 0');
+    expect(lastQuery()).toMatchObject({ filter: null });
+    expect(screen.getByText(/references a column that no longer exists \(Gone\)/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(currentParams().has('filter')).toBe(false));
+  });
+
+  it('a filter param that is not JSON is not sent and can be cleared', async () => {
+    render(ui({ filter: '{oops' }));
+    await screen.findByText('row at 0');
+    expect(lastQuery()).toMatchObject({ filter: null });
+    expect(screen.getByText(/could not be read/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(currentParams().has('filter')).toBe(false));
+  });
+
+  it('marks the chip a server filter error points at', async () => {
+    mocks.queryTableRows.mockRejectedValue(
+      new ApiClientError('Unknown option.', 400, 'invalid_value', undefined, {
+        detail: { error: 'invalid_value', message: 'Unknown option.', path: 'and[1].value' },
+      }),
+    );
+    const filter = { and: [{ column: 'Name', op: 'contains', value: 'a' }, { column: 'Status', op: 'eq', value: 'won' }] };
+    render(ui({ filter: JSON.stringify(filter) }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe('This filter cannot be applied: Unknown option.');
+    expect(screen.getByRole('button', { name: 'Edit filter: Status is won (invalid)' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Edit filter: Name contains a' })).toBeTruthy();
+    // Shown once, on the bar.
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+  });
+
+  it('a sort error is a rows error, not a filter error', async () => {
+    mocks.queryTableRows.mockRejectedValue(
+      new ApiClientError('Bad sort.', 400, 'invalid_sort', undefined, {
+        detail: { error: 'invalid_sort', message: 'Bad sort.', path: 'sort[0].direction' },
+      }),
+    );
+    render(ui());
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Failed to load rows: Bad sort.');
+  });
+
+  it('does not re-query rows on a delete / roster event (updated_at null)', async () => {
+    const { rerender } = render(ui());
+    await screen.findByText('row at 0');
+    expect(mocks.queryTableRows).toHaveBeenCalledTimes(1);
+    mocks.view = view({ changeSeq: 1, lastChange: { table_id: 't1', updated_at: null, schema_version: 1 } });
+    rerender(ui());
+    await act(async () => {});
+    expect(mocks.queryTableRows).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-fetch the detail for a rows page on an older schema version', async () => {
+    mocks.queryTableRows.mockImplementation(async () => page(350, 0, 1));
+    const refresh = vi.fn(async () => {});
+    mocks.view = view({ table: detail({ schema_version: 3 }), refresh });
+    render(ui());
+    await screen.findByText('row at 0');
+    await act(async () => {});
+    expect(refresh).not.toHaveBeenCalled();
   });
 });

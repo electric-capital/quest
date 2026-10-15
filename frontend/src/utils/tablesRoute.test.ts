@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseTablesRoute, tableViewerPath, tablesListPath } from './tablesRoute'
+import { parseTablesRoute, tableViewerPath, tableViewerSearch, tablesListPath } from './tablesRoute'
 
 const UUID = '3f2a9c1e-7b4d-4e8a-9c21-0f6d8e5a1b2c'
 
@@ -128,5 +128,21 @@ describe('tableViewerPath', () => {
     expect(path).not.toMatch(/[ #+"{}[\]]/)
     expect(roundTrip(path)).toEqual(viewer(UUID, filter, sort))
     expect(roundTrip(tableViewerPath('t_1-A', { sort }))).toEqual(viewer('t_1-A', null, sort))
+  })
+})
+
+describe('tableViewerSearch', () => {
+  it('sets and removes filter / sort, keeping other params', () => {
+    const filter = '{"column":"A & B","op":"contains","value":"x+y #2 100%"}'
+    const sort = '[{"column":"A & B","direction":"asc"}]'
+    const search = tableViewerSearch('?other=1', { filter, sort })
+    expect(parseTablesRoute('/tables/xyz', search)).toEqual(viewer('xyz', filter, sort))
+    expect(new URLSearchParams(search).get('other')).toBe('1')
+    expect(search).not.toMatch(/[ #"{}]/)
+    expect(tableViewerSearch(search, { filter: null, sort })).toBe(
+      `?other=1&sort=${new URLSearchParams({ sort }).toString().slice(5)}`,
+    )
+    expect(tableViewerSearch(search, { filter: '', sort: null })).toBe('?other=1')
+    expect(tableViewerSearch('?filter=x', { filter: null, sort: null })).toBe('')
   })
 })

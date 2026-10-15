@@ -1,0 +1,553 @@
+/**
+ * Quest Tables filter bar logic (pure): the builder state, its mapping to the
+ * query_rows filter DSL (spec 6.1, chat/tables/filters.py), validation, and
+ * the `?filter=` / `?sort=` URL encoding.
+ *
+ * Builder state: a list of `FilterCondition`s joined with AND, one chip each.
+ * A condition names its column by NAME (as the DSL does; keys are never
+ * shown or sent). `conditionsToFilter` emits `null` for no conditions, the
+ * bare leaf for one, else `{"and": [...]}`; `filterToConditions` is the
+ * inverse for exactly those shapes (and `{"and": [leaf]}`). Anything else --
+ * `or`, `not`, nesting, an unknown column, an op the bar does not offer for
+ * the column type, or a value it would refuse -- is reported as `custom` so
+ * the UI shows "Custom filter" with a Clear button instead of dropping it.
+ *
+ * Operand shapes match filters.py `_parse_leaf`:
+ * - nullary ops (`is_null`, `not_null`, `is_empty`) carry no `value` key.
+ * - numbers are canonical decimal strings (trimmed, the server's plain
+ *   decimal grammar: no thousands separators, units or NaN); `between` is
+ *   `[lo, hi]` with lo <= hi.
+ * - booleans are JSON booleans, never strings.
+ * - enum options exactly as the schema spells them; a multi-enum `eq` / `ne`
+ *   operand is itself a list of options (the exact set), `contains` one
+ *   option, `contains_any` / `contains_all` a non-empty list.
+ * - `in` is a non-empty list of single values (at most 100). A multi-enum
+ *   `in` (a list of lists) is valid DSL but not offered: it reads as custom.
+ *
+ * URL: the params hold the DSL JSON itself (what the rows API takes), so a
+ * filtered link is the API filter verbatim. Encoding is
+ * encodeURIComponent / URLSearchParams, so `+`, `&`, `#`, `%`, quotes and
+ * non-ASCII text survive the round trip (utils/tablesRoute.ts).
+ */
+
+import type { FilterNode, FilterOp, SortKey, TableColumn } from '../api/types';
+
+/** Server caps (chat/tables/constants.py). */
+export const FILTER_MAX_CONDITIONS = 20;
+export const FILTER_IN_MAX_VALUES = 100;
+export const FILTER_ENUM_MAX_OPTIONS = 200;
+export const SORT_MAX_KEYS = 3;
+
+/** A condition's operand in builder state (see `valueKind`). */
+export type FilterValue = null | string | boolean | string[] | boolean[];
+
+export interface FilterCondition {
+  /** Stable id for React keys and chip editing (never sent). */
+  id: string;
+  /** Column NAME. */
+  column: string;
+  op: FilterOp;
+  value: FilterValue;
+}
+
+/**
+ * The input a condition's value needs:
+ * - `none`: no value (nullary ops).
+ * - `text`: one string (text / url).
+ * - `number`: one decimal string.
+ * - `pair`: `[lo, hi]` decimal strings (between).
+ * - `boolean`: true / false.
+ * - `booleans`: a list of booleans (boolean `in`).
+ * - `option`: one enum option.
+ * - `options`: a list of enum options.
+ * - `lines`: a list of strings typed one per line (text / url / number `in`).
+ */
+export type ValueKind =
+  | 'none'
+  | 'text'
+  | 'number'
+  | 'pair'
+  | 'boolean'
+  | 'booleans'
+  | 'option'
+  | 'options'
+  | 'lines';
+
+export interface OpChoice {
+  op: FilterOp;
+  label: string;
+}
+
+const NULL_OPS: OpChoice[] = [
+  { op: 'is_null', label: 'is empty' },
+  { op: 'not_null', label: 'is not empty' },
+];
+
+const TEXT_OPS: OpChoice[] = [
+  { op: 'eq', label: 'is' },
+  { op: 'ne', label: 'is not' },
+  { op: 'contains', label: 'contains' },
+  { op: 'starts_with', label: 'starts with' },
+  { op: 'ends_with', label: 'ends with' },
+  { op: 'in', label: 'is any of' },
+  ...NULL_OPS,
+];
+
+const NUMBER_OPS: OpChoice[] = [
+  { op: 'eq', label: '=' },
+  { op: 'ne', label: '≠' },
+  { op: 'lt', label: '<' },
+  { op: 'lte', label: '≤' },
+  { op: 'gt', label: '>' },
+  { op: 'gte', label: '≥' },
+  { op: 'between', label: 'between' },
+  { op: 'in', label: 'is any of' },
+  ...NULL_OPS,
+];
+
+const SINGLE_OPS: OpChoice[] = [
+  { op: 'eq', label: 'is' },
+  { op: 'ne', label: 'is not' },
+  { op: 'in', label: 'is any of' },
+  ...NULL_OPS,
+];
+
+const MULTI_OPS: OpChoice[] = [
+  { op: 'contains', label: 'has' },
+  { op: 'contains_any', label: 'has any of' },
+  { op: 'contains_all', label: 'has all of' },
+  { op: 'eq', label: 'is exactly' },
+  { op: 'ne', label: 'is not exactly' },
+  { op: 'is_empty', label: 'is empty' },
+  { op: 'not_null', label: 'is not empty' },
+];
+
+/** The ops the bar offers for a column, in menu order, with labels. */
+export function opsForColumn(column: TableColumn): OpChoice[] {
+  switch (column.type) {
+    case 'text':
+    case 'url':
+      return TEXT_OPS;
+    case 'number':
+      return NUMBER_OPS;
+    case 'enum':
+      return column.multiple ? MULTI_OPS : SINGLE_OPS;
+    default:
+      return SINGLE_OPS;
+  }
+}
+
+/** The label of `op` on `column`, or the raw op when not offered. */
+export function opLabel(column: TableColumn, op: FilterOp): string {
+  return opsForColumn(column).find((choice) => choice.op === op)?.label ?? op;
+}
+
+/** The value input `op` takes on `column`. */
+export function valueKind(column: TableColumn, op: FilterOp): ValueKind {
+  if (op === 'is_null' || op === 'not_null' || op === 'is_empty') return 'none';
+  const multi = column.type === 'enum' && column.multiple;
+  if (multi) {
+    return op === 'contains' ? 'option' : 'options';
+  }
+  if (op === 'in') {
+    if (column.type === 'boolean') return 'booleans';
+    if (column.type === 'enum') return 'options';
+    return 'lines';
+  }
+  switch (column.type) {
+    case 'number':
+      return op === 'between' ? 'pair' : 'number';
+    case 'boolean':
+      return 'boolean';
+    case 'enum':
+      return 'option';
+    default:
+      return 'text';
+  }
+}
+
+/** The empty value a fresh condition starts from for `kind`. */
+export function emptyValue(kind: ValueKind): FilterValue {
+  switch (kind) {
+    case 'none':
+    case 'boolean':
+      return null;
+    case 'text':
+    case 'number':
+    case 'option':
+      return '';
+    case 'pair':
+      return ['', ''];
+    default:
+      return [];
+  }
+}
+
+/** The server's plain decimal grammar (schema.py `_NUMBER_RE`). */
+const DECIMAL_RE = /^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/;
+
+/** A trimmed plain decimal string ("1,234", "1e", "NaN" are not). */
+export function isDecimalString(value: string): boolean {
+  return DECIMAL_RE.test(value.trim());
+}
+
+/** Split a one-per-line list entry (numbers may also be comma separated). */
+export function splitLines(raw: string, numbers = false): string[] {
+  return raw
+    .split(numbers ? /[\n,]/ : /\n/)
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+}
+
+let idCounter = 0;
+
+/** A fresh condition id. */
+export function newConditionId(): string {
+  idCounter += 1;
+  return `fc${idCounter}`;
+}
+
+/** Find a column by name: exact, else the one case-insensitive match (as the server). */
+export function findColumn(schema: TableColumn[], name: string): TableColumn | null {
+  const exact = schema.find((column) => column.name === name);
+  if (exact) return exact;
+  const folded = name.toLowerCase();
+  return schema.find((column) => column.name.toLowerCase() === folded) ?? null;
+}
+
+const isStringList = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === 'string');
+
+/**
+ * Why `condition` cannot be applied against `schema`, or null when it can.
+ * Messages are short, for the form ("Enter a number").
+ */
+export function conditionError(condition: FilterCondition, schema: TableColumn[]): string | null {
+  const column = findColumn(schema, condition.column);
+  if (!column) return 'Choose a column';
+  if (!opsForColumn(column).some((choice) => choice.op === condition.op)) {
+    return 'Choose a condition';
+  }
+  const value = condition.value;
+  const options = column.options ?? [];
+  switch (valueKind(column, condition.op)) {
+    case 'none':
+      return null;
+    case 'text':
+      return typeof value === 'string' && value !== '' ? null : 'Enter a value';
+    case 'number':
+      return typeof value === 'string' && isDecimalString(value) ? null : 'Enter a number';
+    case 'pair': {
+      if (!isStringList(value) || value.length !== 2) return 'Enter both bounds';
+      const [lo, hi] = value;
+      if (lo.trim() === '' || hi.trim() === '') return 'Enter both bounds';
+      if (!isDecimalString(lo) || !isDecimalString(hi)) return 'Enter numbers';
+      return Number(lo) <= Number(hi) ? null : 'The first bound must not be larger';
+    }
+    case 'boolean':
+      return typeof value === 'boolean' ? null : 'Choose true or false';
+    case 'booleans':
+      return Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === 'boolean')
+        ? null
+        : 'Choose at least one';
+    case 'option':
+      return typeof value === 'string' && options.includes(value) ? null : 'Choose an option';
+    case 'options': {
+      if (!isStringList(value) || value.length === 0) return 'Choose at least one option';
+      if (!value.every((item) => options.includes(item))) return 'Unknown option';
+      const cap = condition.op === 'in' ? FILTER_IN_MAX_VALUES : FILTER_ENUM_MAX_OPTIONS;
+      return value.length <= cap ? null : `At most ${cap} options`;
+    }
+    case 'lines': {
+      if (!isStringList(value) || value.length === 0) return 'Enter at least one value';
+      if (value.some((item) => item.trim() === '')) return 'Remove the empty value';
+      if (value.length > FILTER_IN_MAX_VALUES) return `At most ${FILTER_IN_MAX_VALUES} values`;
+      if (column.type === 'number' && !value.every(isDecimalString)) return 'Enter numbers only';
+      return null;
+    }
+  }
+}
+
+/** True when `condition` is complete and valid against `schema`. */
+export function isConditionComplete(condition: FilterCondition, schema: TableColumn[]): boolean {
+  return conditionError(condition, schema) === null;
+}
+
+/** Why the condition list cannot be applied (the first problem), or null. */
+export function conditionsError(conditions: FilterCondition[], schema: TableColumn[]): string | null {
+  if (conditions.length > FILTER_MAX_CONDITIONS) {
+    return `At most ${FILTER_MAX_CONDITIONS} filters`;
+  }
+  for (const condition of conditions) {
+    const error = conditionError(condition, schema);
+    if (error) return error;
+  }
+  return null;
+}
+
+function dedupe<T>(items: T[]): T[] {
+  return items.filter((item, index) => items.indexOf(item) === index);
+}
+
+/**
+ * One condition as a DSL leaf, in canonical form (numbers trimmed decimal
+ * strings, option lists in schema order without repeats). The condition
+ * should be complete (`isConditionComplete`); the column name is the
+ * schema's spelling when the column is known.
+ */
+export function conditionToLeaf(condition: FilterCondition, schema: TableColumn[]): FilterNode {
+  const column = findColumn(schema, condition.column);
+  const name = column?.name ?? condition.column;
+  if (!column) return { column: name, op: condition.op, value: condition.value };
+  const value = condition.value;
+  const options = column.options ?? [];
+  switch (valueKind(column, condition.op)) {
+    case 'none':
+      return { column: name, op: condition.op };
+    case 'number':
+      return { column: name, op: condition.op, value: String(value).trim() };
+    case 'pair': {
+      const [lo, hi] = value as string[];
+      return { column: name, op: condition.op, value: [lo.trim(), hi.trim()] };
+    }
+    case 'options':
+      return {
+        column: name,
+        op: condition.op,
+        value: options.filter((option) => (value as string[]).includes(option)),
+      };
+    case 'booleans':
+      return { column: name, op: condition.op, value: dedupe(value as boolean[]) };
+    case 'lines': {
+      const items = (value as string[]).map((item) => item.trim());
+      return { column: name, op: condition.op, value: dedupe(items) };
+    }
+    default:
+      return { column: name, op: condition.op, value };
+  }
+}
+
+/** The builder state as a filter: null (none), the bare leaf (one), else `and`. */
+export function conditionsToFilter(
+  conditions: FilterCondition[],
+  schema: TableColumn[],
+): FilterNode | null {
+  if (conditions.length === 0) return null;
+  const leaves = conditions.map((condition) => conditionToLeaf(condition, schema));
+  return leaves.length === 1 ? leaves[0] : { and: leaves };
+}
+
+/** What a filter is to the bar. */
+export type FilterParse =
+  | { kind: 'none' }
+  | { kind: 'conditions'; conditions: FilterCondition[] }
+  | { kind: 'custom'; reason: string };
+
+function leafToCondition(node: unknown, schema: TableColumn[]): FilterCondition | string {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return 'not a condition';
+  const rec = node as Record<string, unknown>;
+  const keys = Object.keys(rec);
+  if (keys.some((key) => key !== 'column' && key !== 'op' && key !== 'value')) {
+    return 'uses and / or / not';
+  }
+  if (typeof rec.column !== 'string' || typeof rec.op !== 'string') return 'not a condition';
+  const column = findColumn(schema, rec.column);
+  if (!column) return `no column named ${rec.column}`;
+  const op = rec.op as FilterOp;
+  if (!opsForColumn(column).some((choice) => choice.op === op)) return `op ${op} is not offered`;
+
+  const raw = rec.value;
+  let value: FilterValue;
+  const asDecimal = (item: unknown): string | null =>
+    typeof item === 'string' ? item : typeof item === 'number' && Number.isFinite(item) ? String(item) : null;
+  switch (valueKind(column, op)) {
+    case 'none':
+      if (raw !== undefined && raw !== null) return 'unexpected value';
+      value = null;
+      break;
+    case 'number': {
+      const text = asDecimal(raw);
+      if (text === null) return 'bad value';
+      value = text;
+      break;
+    }
+    case 'pair': {
+      if (!Array.isArray(raw) || raw.length !== 2) return 'bad value';
+      const lo = asDecimal(raw[0]);
+      const hi = asDecimal(raw[1]);
+      if (lo === null || hi === null) return 'bad value';
+      value = [lo, hi];
+      break;
+    }
+    case 'lines': {
+      if (!Array.isArray(raw)) return 'bad value';
+      const items = raw.map((item) => (column.type === 'number' ? asDecimal(item) : item));
+      if (!isStringList(items)) return 'bad value';
+      value = items;
+      break;
+    }
+    case 'booleans':
+      if (!Array.isArray(raw) || !raw.every((item) => typeof item === 'boolean')) return 'bad value';
+      value = raw as boolean[];
+      break;
+    case 'options':
+      if (!isStringList(raw)) return 'bad value';
+      value = raw;
+      break;
+    case 'boolean':
+      if (typeof raw !== 'boolean') return 'bad value';
+      value = raw;
+      break;
+    default:
+      if (typeof raw !== 'string') return 'bad value';
+      value = raw;
+  }
+  const condition: FilterCondition = { id: newConditionId(), column: column.name, op, value };
+  const error = conditionError(condition, schema);
+  return error ? `invalid value (${error})` : condition;
+}
+
+/**
+ * A filter as builder conditions: `none` for null, `conditions` for a leaf
+ * or a flat `and` of leaves the bar can show, else `custom` with a reason.
+ */
+export function filterToConditions(node: FilterNode | null, schema: TableColumn[]): FilterParse {
+  if (node === null) return { kind: 'none' };
+  if (!node || typeof node !== 'object' || Array.isArray(node)) {
+    return { kind: 'custom', reason: 'not a filter' };
+  }
+  const rec = node as Record<string, unknown>;
+  let leaves: unknown[];
+  if ('and' in rec && Object.keys(rec).length === 1) {
+    if (!Array.isArray(rec.and) || rec.and.length === 0) return { kind: 'custom', reason: 'empty and' };
+    leaves = rec.and;
+  } else {
+    leaves = [node];
+  }
+  if (leaves.length > FILTER_MAX_CONDITIONS) {
+    return { kind: 'custom', reason: `more than ${FILTER_MAX_CONDITIONS} conditions` };
+  }
+  const conditions: FilterCondition[] = [];
+  for (const leaf of leaves) {
+    const result = leafToCondition(leaf, schema);
+    if (typeof result === 'string') return { kind: 'custom', reason: result };
+    conditions.push(result);
+  }
+  return { kind: 'conditions', conditions };
+}
+
+/** Every column name a filter's leaves reference (walks and / or / not). */
+export function filterColumnNames(node: FilterNode): string[] {
+  const out: string[] = [];
+  const walk = (n: unknown, depth: number) => {
+    if (!n || typeof n !== 'object' || depth > 16) return;
+    const rec = n as Record<string, unknown>;
+    if (Array.isArray(rec.and)) rec.and.forEach((child) => walk(child, depth + 1));
+    else if (Array.isArray(rec.or)) rec.or.forEach((child) => walk(child, depth + 1));
+    else if ('not' in rec) walk(rec.not, depth + 1);
+    else if (typeof rec.column === 'string') out.push(rec.column);
+  };
+  walk(node, 0);
+  return out;
+}
+
+/** The column names `node` references that `schema` lacks (dropped or renamed). */
+export function missingFilterColumns(node: FilterNode | null, schema: TableColumn[]): string[] {
+  if (!node) return [];
+  const missing = filterColumnNames(node).filter((name) => !findColumn(schema, name));
+  return missing.filter((name, index) => missing.indexOf(name) === index);
+}
+
+/** Chip text: "Status is Customer", "Revenue between 10 and 20", "Notes is empty". */
+export function conditionLabel(condition: FilterCondition, schema: TableColumn[]): string {
+  const column = findColumn(schema, condition.column);
+  if (!column) return `${condition.column} ${condition.op}`;
+  const head = `${column.name} ${opLabel(column, condition.op)}`;
+  const value = condition.value;
+  switch (valueKind(column, condition.op)) {
+    case 'none':
+      return head;
+    case 'pair': {
+      const [lo, hi] = value as string[];
+      return `${head} ${lo.trim()} and ${hi.trim()}`;
+    }
+    case 'boolean':
+      return `${head} ${String(value)}`;
+    case 'booleans':
+      return `${head} ${(value as boolean[]).map(String).join(', ')}`;
+    case 'options':
+    case 'lines':
+      return `${head} ${(value as string[]).join(', ')}`;
+    case 'number':
+      return `${head} ${String(value).trim()}`;
+    default:
+      return `${head} ${String(value)}`;
+  }
+}
+
+/**
+ * Which chip a server filter error points at (`filterErrorPath`): the
+ * condition index, `-1` for the filter as a whole (root, `and`, a bad JSON
+ * `filter` param), or null when the error is not about the filter (sort,
+ * paging, columns). `conditionCount` is how many chips the URL filter has;
+ * with one chip the leaf is the root (paths `column`, `op`, `value...`).
+ */
+export function filterErrorTarget(path: string | null, conditionCount: number): number | null {
+  if (path === null) return null;
+  if (/^(sort|limit|offset|columns)\b/.test(path)) return null;
+  const indexed = /^and\[(\d+)\]/.exec(path);
+  if (indexed) {
+    const index = Number(indexed[1]);
+    return index < conditionCount ? index : -1;
+  }
+  if (conditionCount === 1 && /^(column|op|value)\b/.test(path)) return 0;
+  return -1;
+}
+
+// --- URL params ---------------------------------------------------------------
+
+/** The `filter` param value for a filter (its JSON), or null for none. */
+export function filterToSearchParam(node: FilterNode | null): string | null {
+  return node === null ? null : JSON.stringify(node);
+}
+
+/** A raw `filter` param as a filter node (any JSON object), else null. */
+export function searchParamToFilter(raw: string | null): FilterNode | null {
+  if (!raw) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    return value && typeof value === 'object' && !Array.isArray(value) ? (value as FilterNode) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The `sort` param value for sort keys (`[{column, direction}]` JSON), or null for none. */
+export function sortToSearchParam(keys: SortKey[] | null): string | null {
+  return keys && keys.length > 0 ? JSON.stringify(keys) : null;
+}
+
+/**
+ * A raw `sort` param as sort keys (a bare `{column, direction}` object is
+ * accepted too; at most 3 keys), else null when absent or malformed.
+ */
+export function searchParamToSort(raw: string | null): SortKey[] | null {
+  if (!raw) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const items = Array.isArray(value) ? value : [value];
+  if (items.length === 0 || items.length > SORT_MAX_KEYS) return null;
+  const keys: SortKey[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object') return null;
+    const { column, direction } = item as { column?: unknown; direction?: unknown };
+    if (typeof column !== 'string' || !column) return null;
+    if (direction !== 'asc' && direction !== 'desc') return null;
+    keys.push({ column, direction });
+  }
+  return keys;
+}

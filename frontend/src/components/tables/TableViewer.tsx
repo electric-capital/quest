@@ -7,38 +7,52 @@
  * useTableRows (one grid page). Loading / error / not-found states follow
  * DocViewer.
  *
+ * The URL is the single source of truth for the filter and the sort: the
+ * route's `filter` / `sort` params (utils/tableFilter searchParamToFilter /
+ * parseSortParam, the first `[{column, direction}]` key). The filter bar
+ * (TableFilterBar) and the grid's sort headers report changes, and the viewer
+ * navigates to the new `?filter=` / `?sort=` with `replace: true`, keeping
+ * any other params (tableViewerSearch). A filter the bar cannot show as chips
+ * is still sent as-is (it is valid DSL); the bar shows "Custom filter". A
+ * sort or filter naming a column the loaded schema no longer has (dropped or
+ * renamed) is not sent (a 400 unknown_column); the bar says so for a filter.
+ *
  * Viewer state (`TableViewerState`, kept per table: the inner component is
- * keyed by the id):
- * - `sort`: one SortKey by column NAME, or null. Initialized from the `sort`
- *   route param when it parses as `[{column, direction}]` (parseSortParam)
- *   and re-read whenever that param changes.
- * - `offset`: the grid page start; back to 0 whenever the sort or the filter
- *   changes, and stepped back to the last page when the total shrinks below
- *   it (clampOffset).
- * The filter is the route's `filter` param, parsed as JSON (parseFilterParam;
- * the filter bar of phase B4 owns building / validating it and the URL
- * sync). A sort or filter naming a column the loaded schema no longer has
- * (dropped or renamed) is ignored rather than sent (a 400 unknown_column).
+ * keyed by the id) is only `offset`, the grid page start: local, not in the
+ * URL (a link opens on the first page). It goes back to 0 whenever the sort
+ * or the filter param changes, and steps back to the last page when the
+ * total shrinks below it (clampOffset).
  *
  * Rows re-query on every accepted `table_changed` (`rowsRefreshKey`): an
- * event whose `schema_version` differs from the loaded schema waits for the
+ * event without `updated_at` (a delete or a share-roster change; useTable
+ * re-fetches the detail) does not, an event whose `schema_version` differs from the loaded schema waits for the
  * detail re-fetch instead (old column names would 400 and the rows would be
  * keyed by columns the loaded schema lacks), and a schema_version change of
  * the loaded detail always re-queries. A rows page whose schema_version
- * differs from the detail's asks useTable for a re-fetch.
+ * is newer than the detail's asks useTable for a re-fetch (an older page is
+ * a rows response that lags, not a stale detail).
  *
- * Plug-in points for later phases: the filter bar slot below the header
- * (B4), and the header's `onOpenColumns` / `onOpenHistory` / `onOpenShare`
+ * Plug-in points for later phases: the header's `onOpenColumns` / `onOpenHistory` / `onOpenShare`
  * (B5 / B6), left unset so the menu shows them as disabled slots.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { filterErrorPath } from '../../api/tablesApi';
 import type { FilterNode, SortKey } from '../../api/types';
 import { useTable } from '../../hooks/useTable';
 import { useTableRows } from '../../hooks/useTableRows';
-import { tablesListPath } from '../../utils/tablesRoute';
+import {
+  filterErrorTarget,
+  filterToSearchParam,
+  findColumn,
+  missingFilterColumns,
+  searchParamToFilter,
+  searchParamToSort,
+  sortToSearchParam,
+} from '../../utils/tableFilter';
+import { tableViewerSearch, tablesListPath } from '../../utils/tablesRoute';
+import { TableFilterBar } from './TableFilterBar';
 import { ROW_ID_COLUMN, TABLE_GRID_PAGE_SIZE, TableGrid, clampOffset } from './TableGrid';
 import { TableFooter } from './TableFooter';
 import { TableHeader } from './TableHeader';
@@ -53,9 +67,8 @@ export interface TableViewerProps {
   sort: string | null;
 }
 
-/** The viewer's own state (the filter comes from the route). */
+/** The viewer's own state (filter and sort come from the route). */
 export interface TableViewerState {
-  sort: SortKey | null;
   offset: number;
 }
 
@@ -65,46 +78,13 @@ export interface TableViewerState {
  * absent or does not parse as one.
  */
 export function parseSortParam(raw: string | null): SortKey | null {
-  if (!raw) return null;
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  const first = Array.isArray(value) ? value[0] : value;
-  if (!first || typeof first !== 'object') return null;
-  const { column, direction } = first as { column?: unknown; direction?: unknown };
-  if (typeof column !== 'string' || !column) return null;
-  if (direction !== 'asc' && direction !== 'desc') return null;
-  return { column, direction };
+  return searchParamToSort(raw)?.[0] ?? null;
 }
 
 /** The `filter` route param as a filter node (any JSON object), else null. */
-export function parseFilterParam(raw: string | null): FilterNode | null {
-  if (!raw) return null;
-  try {
-    const value: unknown = JSON.parse(raw);
-    return value && typeof value === 'object' && !Array.isArray(value) ? (value as FilterNode) : null;
-  } catch {
-    return null;
-  }
-}
+export const parseFilterParam: (raw: string | null) => FilterNode | null = searchParamToFilter;
 
-/** Every column name a filter's leaves reference. */
-export function filterColumnNames(node: FilterNode): string[] {
-  const out: string[] = [];
-  const walk = (n: unknown) => {
-    if (!n || typeof n !== 'object') return;
-    const rec = n as Record<string, unknown>;
-    if (Array.isArray(rec.and)) rec.and.forEach(walk);
-    else if (Array.isArray(rec.or)) rec.or.forEach(walk);
-    else if ('not' in rec) walk(rec.not);
-    else if (typeof rec.column === 'string') out.push(rec.column);
-  };
-  walk(node);
-  return out;
-}
+export { filterColumnNames } from '../../utils/tableFilter';
 
 export function TableViewer({ tableId, filter, sort }: TableViewerProps) {
   return <TableViewerBody key={tableId} tableId={tableId} filterParam={filter} sortParam={sort} />;
@@ -128,36 +108,25 @@ function TableViewerBody({
   const { table, loading, error, notFound, refresh, changeSeq, lastChange, applyDetail, applyRow } =
     useTable(tableId);
 
-  const [view, setView] = useState<ViewState>(() => ({
-    sort: parseSortParam(sortParam),
-    offset: 0,
-    sortParam,
-    filterParam,
-  }));
-  // Route params moved (a link, back / forward): re-sync during render.
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const [view, setView] = useState<ViewState>(() => ({ offset: 0, sortParam, filterParam }));
+  // Filter or sort moved (the bar, a header click, a link, back / forward):
+  // back to the first page, re-synced during render.
   if (view.sortParam !== sortParam || view.filterParam !== filterParam) {
-    setView({
-      sort: view.sortParam !== sortParam ? parseSortParam(sortParam) : view.sort,
-      offset: 0,
-      sortParam,
-      filterParam,
-    });
+    setView({ offset: 0, sortParam, filterParam });
   }
 
   const schema = table?.schema;
-  const columnNames = useMemo(
-    () => (schema ? new Set(schema.map((column) => column.name)) : null),
-    [schema],
-  );
-  const parsedFilter = useMemo(() => parseFilterParam(filterParam), [filterParam]);
+  const parsedFilter = useMemo(() => searchParamToFilter(filterParam), [filterParam]);
+  const parsedSort = useMemo(() => parseSortParam(sortParam), [sortParam]);
   const effectiveFilter =
-    parsedFilter && columnNames && filterColumnNames(parsedFilter).some((name) => !columnNames.has(name))
-      ? null
-      : parsedFilter;
+    parsedFilter && schema && missingFilterColumns(parsedFilter, schema).length > 0 ? null : parsedFilter;
   const effectiveSort =
-    view.sort && columnNames && view.sort.column !== ROW_ID_COLUMN && !columnNames.has(view.sort.column)
+    parsedSort && schema && parsedSort.column !== ROW_ID_COLUMN && !findColumn(schema, parsedSort.column)
       ? null
-      : view.sort;
+      : parsedSort;
   const sortKeys = useMemo(() => (effectiveSort ? [effectiveSort] : null), [effectiveSort]);
 
   // Rows refresh counter (see the module docstring).
@@ -169,7 +138,10 @@ function TableViewerBody({
   lastChangeRef.current = lastChange;
   useEffect(() => {
     if (changeSeq === 0) return;
-    const eventVersion = lastChangeRef.current?.schema_version ?? null;
+    const change = lastChangeRef.current;
+    // Deleted / share roster changed: useTable re-fetches the detail.
+    if (change && change.updated_at === null) return;
+    const eventVersion = change?.schema_version ?? null;
     if (eventVersion === null || eventVersion === schemaVersionRef.current) {
       setRowsRefreshKey((key) => key + 1);
     }
@@ -194,11 +166,11 @@ function TableViewerBody({
   });
   const page = rows.page;
 
-  // A page built on another schema version: the detail is behind.
+  // A page built on a newer schema version: the detail is behind.
   const mismatchRef = useRef<number | null>(null);
   useEffect(() => {
     if (!page || schemaVersion === null) return;
-    if (page.schema_version !== schemaVersion && mismatchRef.current !== page.schema_version) {
+    if (page.schema_version > schemaVersion && mismatchRef.current !== page.schema_version) {
       mismatchRef.current = page.schema_version;
       void refresh();
     }
@@ -211,9 +183,28 @@ function TableViewerBody({
     if (clamped !== view.offset) setView((prev) => ({ ...prev, offset: clamped }));
   }, [page, view.offset]);
 
-  const setSort = useCallback((next: SortKey | null) => {
-    setView((prev) => ({ ...prev, sort: next, offset: 0 }));
-  }, []);
+  // Filter / sort changes go to the URL (replace: no history entry per click).
+  const navigateParams = useCallback(
+    (next: { filter: string | null; sort: string | null }) => {
+      navigate(
+        { pathname: location.pathname, search: tableViewerSearch(location.search, next) },
+        { replace: true },
+      );
+    },
+    [navigate, location.pathname, location.search],
+  );
+  const setSort = useCallback(
+    (next: SortKey | null) => {
+      navigateParams({ filter: filterParam, sort: sortToSearchParam(next ? [next] : null) });
+    },
+    [navigateParams, filterParam],
+  );
+  const setFilter = useCallback(
+    (next: FilterNode | null) => {
+      navigateParams({ filter: filterToSearchParam(next), sort: sortParam });
+    },
+    [navigateParams, sortParam],
+  );
   const setOffset = useCallback((next: number) => {
     setView((prev) => ({ ...prev, offset: Math.max(0, next) }));
   }, []);
@@ -260,7 +251,13 @@ function TableViewerBody({
   }
 
   const rowsError = rows.error;
-  const isFilterError = rowsError !== null && filterErrorPath(rowsError) !== null;
+  // A refusal of the filter shows on the bar; anything else (sort, paging,
+  // the network) shows here.
+  const errorPath = rowsError ? filterErrorPath(rowsError) : null;
+  const filterError =
+    rowsError && errorPath !== null && filterErrorTarget(errorPath, 0) !== null
+      ? { path: errorPath, message: rowsError.message }
+      : null;
 
   return (
     <div className="table-viewer">
@@ -272,16 +269,17 @@ function TableViewerBody({
         onStale={() => void refresh()}
       />
 
-      {/* Filter bar slot (phase B4): it builds the filter DSL, syncs it to
-          the route's `filter` param and reads `rows.error` with
-          filterErrorPath to point at the offending condition. */}
+      <TableFilterBar
+        columns={table.schema}
+        filter={parsedFilter}
+        invalidParam={filterParam !== null && parsedFilter === null}
+        onChange={setFilter}
+        error={filterError}
+      />
 
-      {rowsError && (
+      {rowsError && !filterError && (
         <div className="table-viewer-rows-error" role="alert">
-          <span>
-            {isFilterError ? 'This filter cannot be applied: ' : 'Failed to load rows: '}
-            {rowsError.message}
-          </span>
+          <span>Failed to load rows: {rowsError.message}</span>
           <button
             type="button"
             className="table-viewer-rows-retry"

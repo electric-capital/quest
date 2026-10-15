@@ -81,3 +81,25 @@ export function tableViewerPath(
   const base = `${TABLES_PREFIX}/${encodeURIComponent(tableId)}`
   return query.length > 0 ? `${base}?${query.join('&')}` : base
 }
+
+/**
+ * The viewer's query string (with a leading "?", or "" when empty) after
+ * setting its `filter` / `sort` params to the given raw JSON strings (null /
+ * empty = removed), keeping every other param of `search` as it was. The
+ * filter bar and the sort headers navigate to `pathname + this`.
+ * URLSearchParams encodes `+`, `&`, `#`, `%`, quotes and non-ASCII text, and
+ * parseTablesRoute decodes them back unchanged.
+ */
+export function tableViewerSearch(
+  search: string,
+  opts: { filter: string | null; sort: string | null },
+): string {
+  const params = new URLSearchParams(search)
+  for (const name of ['filter', 'sort'] as const) {
+    const value = opts[name]
+    if (value) params.set(name, value)
+    else params.delete(name)
+  }
+  const query = params.toString()
+  return query ? `?${query}` : ''
+}
