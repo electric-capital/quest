@@ -28,13 +28,33 @@ TABLE_MAX_PER_OWNER = 200
 TABLE_WRITE_MAX_ROWS = 500
 
 # query_rows: rows per page and response size (rows halved until it fits).
-# The remaining query, filter and listing limits live with the code that
-# enforces them (filters, tools, routes).
+# The filter, sort and paging limits are in "Queries and filters" below;
+# listing limits live with the tools and routes that enforce them.
 TABLE_QUERY_MAX_ROWS = 1000
 TABLE_QUERY_MAX_BYTES = 100 * 1024
 
 # table.db connections wait this long on a locked database.
 TABLE_DB_BUSY_TIMEOUT_S = 5
+
+# --- Queries and filters (chat/tables/filters.py) --------------------------
+
+# query_rows paging: rows per page when ``limit`` is omitted, and the
+# largest ``offset``. ``GET /tables/{id}/rows`` (the grid) caps a page at
+# TABLE_GRID_MAX_LIMIT instead of TABLE_QUERY_MAX_ROWS; the route enforces it.
+TABLE_QUERY_DEFAULT_LIMIT = 100
+TABLE_QUERY_MAX_OFFSET = 100_000
+TABLE_GRID_MAX_LIMIT = 200
+
+# Filter DSL: nesting depth (a bare leaf is 1, each and/or/not adds 1) and
+# leaves per filter.
+TABLE_FILTER_MAX_DEPTH = 3
+TABLE_FILTER_MAX_LEAVES = 20
+# Values in one ``in`` / ``contains_any`` / ``contains_all`` list. The spec
+# sets no number; this is a default.
+TABLE_FILTER_IN_MAX_VALUES = 100
+
+# Sort keys per query.
+TABLE_SORT_MAX_KEYS = 3
 
 # --- Columns and values ----------------------------------------------------
 
