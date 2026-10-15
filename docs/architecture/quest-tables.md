@@ -2,7 +2,7 @@
 
 ## Overview
 
-A **Quest Table** is a typed table that lives inside Quest, owned by a user (a **user table**) or by a project (a **project table**, owned by the project owner). Each table is a `data_tables` row in `quest.db` holding its metadata and ordered column schema, plus a directory `<data_dir>/tables/<table_id>/` for its own `table.db` (rows and change log); the rows never live in `quest.db`. This doc covers the metadata store, the column and value model, schema operations, the table file (row writes, schema changes, change log, restore), the access rule, the service layer every caller goes through, the table action requests, the realtime events, the delete sweeps and the `tables` [feature gate](feature-gates.md). The query language, the model tools, results and refusals as callers see them are in the [Quest Tables API](../api/tables-api.md). Ownership, scope, modes and shares follow [Quest Docs](quest-docs.md#concepts-and-invariants), with the same terms.
+A **Quest Table** is a typed table that lives inside Quest, owned by a user (a **user table**) or by a project (a **project table**, owned by the project owner). Each table is a `data_tables` row in `quest.db` holding its metadata and ordered column schema, plus a directory `<data_dir>/tables/<table_id>/` for its own `table.db` (rows and change log); the rows never live in `quest.db`. This doc covers the metadata store, the column and value model, schema operations, the table file (row writes, schema changes, change log, restore), the access rule, the service layer every caller goes through, the realtime events, the delete sweeps, prompting and the `tables` [feature gate](feature-gates.md). The query language, results and refusals, the model tools, the table action requests and the HTTP routes are in the [Quest Tables API](../api/tables-api.md). Ownership, scope, modes and shares follow [Quest Docs](quest-docs.md#concepts-and-invariants), with the same terms.
 
 ## Key Files
 
@@ -18,7 +18,9 @@ A **Quest Table** is a typed table that lives inside Quest, owned by a user (a *
 | `chat/tables/service.py` | The one read/write path for table files: gate, access, the per-table lock, quest.db bumps, events; its module docstring holds the pipeline and the error classes ([Service Layer](#service-layer)) |
 | `chat/tables/events.py` / `chat/realtime/events.py` | The two realtime globals: audience and publishers (module docstring); the `make_table_*` envelopes ([Realtime Events](#realtime-events)) |
 | `chat/gemini_api/tool_handlers/tables.py` / `chat/tables/write_request.py` | The model tools over the service and the `write_table_rows` params shape ([Quest Tables API -- Model Tools](../api/tables-api.md#model-tools)) |
-| `chat/action_request_types/table_precard.py` | The table cards' shared pre-card dispatch and helpers; each type has a handler module and, for the schema and rows cards, a pre-card module beside it ([Action Requests](#action-requests)) |
+| `chat/action_request_types/table_precard.py` | The table cards' shared pre-card dispatch ([Quest Tables API -- Action Requests](../api/tables-api.md#action-requests)) |
+| `chat/tables/routes.py` / `chat/tables/history_routes.py` / `chat/tables/download_routes.py` / `chat/tables/share_routes.py` / `chat/tables/export.py` | The HTTP routes and the CSV export; each module docstring is its contract ([Quest Tables API -- HTTP Routes](../api/tables-api.md#http-routes)) |
+| `chat/system_skills/catalog.py` / `chat/gemini_api/system_prompt.py` | `system:tables` and the prompt paragraphs ([Prompting](#prompting)) |
 | `chat/artifact_access.py` | `resolve_core()`, the visibility and write procedure shared with Quest Docs ([Quest Docs -- Access Rule](quest-docs.md#access-rule)) |
 | `db/table_store.py` | Async metadata CRUD, title uniqueness, the per-owner cap, candidate lists, the concurrency tokens, shares |
 | `db/models.py` | `DataTable`, `DataTableShare` |
@@ -174,7 +176,7 @@ Updating `quest.db` from the `RestoreResult` is the caller's job (`service.apply
 
 ## Download Copy
 
-`copy_for_download()` writes a single-file SQLite copy with `VACUUM INTO`: `rows` and `meta`, plus `changes` only with `include_history`. The copy is left in rollback-journal mode, so no side file belongs to it. The destination must not exist (`copy_exists`), and a partial copy is removed on failure.
+`copy_for_download()`, behind the SQLite download (`service.export_table()`), writes a single-file SQLite copy with `VACUUM INTO`: `rows` and `meta`, plus `changes` only with `include_history`. The copy is left in rollback-journal mode, so no side file belongs to it. The destination must not exist (`copy_exists`), and a partial copy is removed on failure.
 
 ## Access
 
@@ -184,7 +186,7 @@ Updating `quest.db` from the `RestoreResult` is the caller's job (`service.apply
 
 **Schema** is a second verdict, never `free`: no model-facing tool changes a schema, only the `change_table_schema` card executor and the UI routes do. It is denied with the rows reason wherever the rows verdict is read-only; otherwise it is an approval (a card) where the rows path could reach one, and denied in Slack runs and public conversations, with a reason that tells the model to ask the user to make the change in the Quest UI. In the UI the owner gets approval (their own save in the schema editor is the approval) and a write-share recipient is denied: schema edits are owner-only, though the recipient edits rows and may restore the table, schema changes included, because the restore route gates on rows `free` with `run_kind="ui"`, not on `schema`. Since the two verdicts can differ, `TableAccess` carries `schema_deny_reason` beside `deny_reason`.
 
-The module's helpers word a verdict for callers ([Refusals](../api/tables-api.md#refusals)); `create_table_deny_reason()` limits `create_table` cards to top-level private conversations. A hidden table is indistinguishable from a missing one: `not_found_message()` returns `table_not_found_message()` for both, and callers make the same lookups on both paths. Ownership-only actions (rename, `require_approval`, delete, shares) are checked by the routes, outside the matrix.
+The module's helpers word a verdict for callers ([Refusals](../api/tables-api.md#refusals)); `create_table_deny_reason()` limits `create_table` cards to top-level private conversations. A hidden table is indistinguishable from a missing one: `not_found_message()` returns `table_not_found_message()` for both, and callers make the same lookups on both paths. Ownership-only actions (rename, `require_approval`, delete, shares) are checked outside the matrix, by the routes and again by the service under the lock. History, restore and history downloads are for editors, the `ui` rows verdict `free` (`_is_editor()`), since before images can hold rows deleted before the table was shared.
 
 ## Service Layer
 
@@ -196,7 +198,7 @@ The module's helpers word a verdict for callers ([Refusals](../api/tables-api.md
 
 - **Resolve twice.** Access is resolved before the lock, so a hidden or denied table never takes or creates one, then the row is re-fetched and re-resolved under it, so a share revoked or a schema changed while the call queued decides the outcome. Without `bypass_approval`, an approval verdict dry-runs the write under the lock first, so invalid rows get the free path's refusal and only a write that would succeed raises `TableApprovalRequired`. With `bypass_approval=True` (the card executor) an approval verdict proceeds, while hidden and denied still refuse.
 - **Previews and pins.** `preview_row_write()` and `preview_schema_change()` dry-run a row write and a schema change under the lock, with nothing written, bumped or published. The first adds the change's row images by column name and `rows_digest()` of its before images; the second returns the plan, `schema_diff()` and the `check_schema_violations()` counts. The executors pin what their card showed through `apply_row_write()` and `apply_schema_change()` ([Action Requests](#action-requests)).
-- **Shielding.** Row writes, schema changes, restores, creates and deletes run shielded from cancellation (`_shielded()`), so the Stop button mid-turn cannot land between the file commit and the `quest.db` bump; the caller still sees the cancellation.
+- **Shielding.** Every write (rows, schema, restore, create, delete, metadata, shares) runs shielded from cancellation (`_shielded()`), so the Stop button mid-turn cannot land between the file commit and the `quest.db` bump; the caller still sees the cancellation. `export_table()` instead holds a cancelled caller until the export finishes (`_finish_before_cancel()`), so the lock is never released and the temp directory never removed while `VACUUM INTO` runs.
 - **Lost schema bump.** If the `quest.db` bump of a schema change or restore is lost anyway (the file committed, then `update_schema()` failed or the process died), every later call would fail the file's schema check. On that `schema_mismatch`, `_heal_lost_schema_bump()` records the file's schema, row count and newest source in `quest.db` when the file is exactly one version ahead and tells the audience; the call still refuses, so its retry works.
 - **Schema changes and restores** both record through `update_schema()`, since a restore always bumps `schema_version`. A `rename_table` title goes to `quest.db` first, so a collision refuses before the file changes, and is rolled back if the file change fails.
 - **Create** lays out the directory under a fresh id, then inserts the row; a failed insert removes the directory, so a crash in between leaves an invisible orphan directory, never a row without a file. Creates are serialized per owner (an `owner:<id>` lock), so the store's check-then-insert title rule and per-owner cap hold. Authorizing a create is the caller's job (the routes, the `create_table` card); the service checks the gate, the column specs, the project's owner and the mode (`mode_mismatch`: a conversation creates only tables of its own mode).
@@ -204,12 +206,11 @@ The module's helpers word a verdict for callers ([Refusals](../api/tables-api.md
 
 ## Action Requests
 
-`create_table`, `change_table_schema` and `write_table_rows` are the approval forms of a create, a schema change and a row write; the card contract is in [Quest Tables API -- Action Requests](../api/tables-api.md#action-requests). The pipeline is the one of [the write_doc card](quest-docs.md#the-write_doc-action-request): `validate_params` checks shape only, a pre-card dry-runs the proposal against the live table and injects the preview, and `execute` re-checks against the table at Approve.
+`create_table`, `change_table_schema` and `write_table_rows` are the approval forms of a create, a schema change and a row write. Their contract and pipeline (pre-card, approve-time caller, TOCTOU pins, attribution) are in [Quest Tables API -- Action Requests](../api/tables-api.md#action-requests).
 
-- **Pre-card.** `table_precard_check()` (called from the `create_action_request` arm after the `write_doc` pre-card) dispatches to one arm per type. Each arm checks the gate before any DB work and decides with the proposal's conversation as caller (`run_kind` `top_level`, or `slack` for a Slack run; `is_public` from the conversation's project). A refusal is a same-turn `Invalid parameters` with no card; tables-layer errors keep their code and text, so a hidden table stays byte-equal to a missing one. A row write that needs no card is refused (`use_tool_directly`).
-- **Approve-time caller.** `execute_caller()` rebuilds the caller from the proposal's conversation and project, never a UI caller, so a card from a private conversation can never write a public table and a share revoked meanwhile hides the table. A refusal raises `RuntimeError` and leaves the request open ([Execution Failure Behavior](action-requests.md#execution-failure-behavior)).
-- **TOCTOU.** `create_table` refuses `stale_request` unless the columns still parse to the card's `column_specs`, and the store re-checks the title collision under the per-owner lock (`duplicate_title`). `change_table_schema` passes the card's `expected_schema_version` (`stale_schema`), and the change re-runs the `rows_violate` checks under the lock. `write_table_rows` pins the proposal's `schema_version` and `rows_digest`: after its re-fetch, in the same lock hold as the write, `apply_row_write()` checks the version (`stale_schema`), then dry-runs the write and compares the digest of the rows it would touch (`rows_changed`, naming their current values). The digest covers row ids and stored cells, not the schema, hence the version pin beside it.
-- **Attribution.** The resolve route passes `request_id` to these types (`REQUEST_ID_TYPES` in `chat/action_request_routes.py`). The change's source and the table's `last_write_source` are `action_request:<id>` (`write_source()`), the actor the approver; a card is approved in its own conversation, so that is the proposer, whom `get_action_request_owners()` returns for the id.
+## HTTP Routes
+
+Four routers under `/app/api`, mounted in `quest.py`, are the UI surface; their contract is [Quest Tables API -- HTTP Routes](../api/tables-api.md#http-routes). Every handler calls the service with `caller_for_ui()`, so the routes add only what the matrix does not decide: ownership, the editors-only history, the request shapes and the column-key row shape the grid needs. `serve_spa_tables` in `quest.py` serves the `/tables` deep links.
 
 ## Realtime Events
 
@@ -220,6 +221,13 @@ The audience is the owner plus every direct share recipient, and every user conn
 ## Lifecycle
 
 A project delete (`delete_user_project()` in `chat/project_routes.py`) collects the project's tables with their shares before the cascade, then removes their directories (`service.delete_table_dirs()`) and publishes a null `table_changed` per table and one `table_list_changed` to the combined audience. An account delete (`delete_account()` in `chat/routes/user.py`) collects `list_table_ids_for_user()` before the cascade and removes the directories after it. Both sweeps run after the rows are gone and without the table lock, so a call still queued on the lock fails its re-fetch as not found; a sweep failure is logged, never raised.
+
+## Prompting
+
+- **`system:tables`** (`_tables_content` in `chat/system_skills/catalog.py`) is the model's guide to the tools, verdicts, paging, upserts, the `write_table_rows` handoff and the two cards, ahead of the tool reference the loader appends. It requires the `tables` pseudo-key.
+- **Public prompt**: `_PUBLIC_TABLES_SECTION` stands in for the skill while `tables_enabled`; it covers the tools only, since no card opens there, and may not name internal-only tools or skills.
+- **Project database**: while `_tables_open()`, the "Project Database" paragraph of the standard and sub-agent prompts gets a note marking `project_db_query` as legacy and pointing new records at tables (`_PROJECT_DB_TABLES_NOTE`, `_SUB_AGENT_PROJECT_DB_TABLES_NOTE`, the read-only variant).
+- No table titles are injected into any prompt; discovery is `list_tables` only.
 
 ## Feature Gate
 

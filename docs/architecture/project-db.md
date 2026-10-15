@@ -52,7 +52,7 @@ The tool is only visible and available in project conversations. This is control
 
 2. **Handler guard**: `_handle_project_db_query()` in `chat/gemini_api/tool_handlers/project_db.py` returns a JSON error if `project_id` is `None`, preventing execution even if the LLM somehow invokes the tool in a standalone conversation.
 
-The `has_project` flag is set to `bool(project_id)` in both `conversation.py` (for top-level agents) and `sub_agent.py` (for sub-agents). When `has_project` is `True`, the system prompt also includes a "Project Database" paragraph instructing the LLM on how to use the tool.
+The `has_project` flag is set to `bool(project_id)` in both `conversation.py` (for top-level agents) and `sub_agent.py` (for sub-agents). When `has_project` is `True`, the system prompt also includes a "Project Database" paragraph instructing the LLM on how to use the tool; while Quest Tables is offered, it adds a note that marks the database as legacy and points new records at tables ([Quest Tables -- Prompting](quest-tables.md#prompting)).
 
 ## Query Execution Flow
 
