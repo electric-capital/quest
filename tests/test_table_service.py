@@ -275,8 +275,14 @@ class TestLock:
             )
 
         first, second = _run(go())
-        assert [first["change_id"], second["change_id"]] == [2, 3]
-        assert second["row_count"] == 3
+        # Which writer takes the lock first is up to the scheduler (each
+        # does DB work before queueing); the writes still serialize into
+        # two distinct, ordered changes, and each sees the other's rows or
+        # none of them.
+        by_change = sorted([first, second], key=lambda r: r["change_id"])
+        assert [r["change_id"] for r in by_change] == [2, 3]
+        assert by_change[1]["row_count"] == 3
+        assert by_change[0]["row_count"] == by_change[0]["inserted"]
         log = changes(env, table)
         assert [c["id"] for c in log] == [1, 2, 3]
         assert [c["op"] for c in log[1:]] == ["insert", "insert"]
