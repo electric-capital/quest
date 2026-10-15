@@ -55,7 +55,12 @@ outside the lock (a hidden or denied table never takes or creates a lock)
 and then re-fetches the row and re-resolves under it (a share revoked or
 a schema changed while the call queued changes the outcome). Writes,
 restores and deletes are shielded from cancellation (the Stop button
-mid-turn) so table.db and quest.db never disagree. The project-delete and
+mid-turn) so table.db and quest.db never disagree. If a schema change's
+or restore's quest.db bump is lost anyway (``update_schema`` failed after
+table.db committed), the next call under the lock hits the schema
+version check and records table.db's schema in quest.db
+(:func:`_heal_lost_schema_bump`) before refusing with ``schema_mismatch``,
+so a retry works. The project-delete and
 account-delete directory sweeps (:func:`delete_table_dirs`) run after the
 rows are gone without the lock; a call still queued on the lock then fails
 its re-fetch with :class:`TableNotFound`.
@@ -352,6 +357,61 @@ def _actor(actor_user_id: Optional[int], caller: Caller) -> int:
     return caller.user["id"] if actor_user_id is None else actor_user_id
 
 
+async def _file_call(table: dict, fn, *args, **kwargs):
+    """Run one table.db call in a thread (the caller holds the table lock).
+
+    A :class:`chat.tables.storage.SchemaMismatchError` first goes through
+    :func:`_heal_lost_schema_bump`, then propagates unchanged (its text
+    already says "reload the table and retry")."""
+    try:
+        return await asyncio.to_thread(fn, *args, **kwargs)
+    except storage.SchemaMismatchError:
+        await _heal_lost_schema_bump(table)
+        raise
+
+
+async def _heal_lost_schema_bump(table: dict) -> None:
+    """Record in quest.db a schema change or restore whose quest.db bump
+    was lost (table.db committed, then ``update_schema`` failed or the
+    process died). Every table.db call checks the schema version, so
+    without this the table would refuse every read and write for good.
+
+    Only the one unambiguous case is healed: table.db's ``meta`` is exactly
+    one version ahead of quest.db (a lost bump blocks every later change,
+    so it can never be more). quest.db then takes table.db's schema, row
+    count and the newest change's source, and the audience is told.
+    Best-effort: any failure is logged and the caller's error stands.
+    Lock held; event loop only."""
+    table_dir = _table_dir(table["id"])
+    try:
+        meta = await asyncio.to_thread(storage.read_meta, table_dir)
+        if meta.schema_version != table["schema_version"] + 1:
+            return
+        count = await asyncio.to_thread(storage.row_count, table_dir)
+        newest = await asyncio.to_thread(storage.list_changes, table_dir, limit=1)
+        source = newest[0]["source"] if newest else table.get("last_write_source")
+        updated = await table_store.update_schema(
+            table["id"],
+            schema=dump_schema(meta.schema),
+            expected_schema_version=table["schema_version"],
+            row_count=count,
+            last_write_source=source,
+        )
+    except Exception:
+        logger.warning(
+            "[tables] could not reconcile quest.db with table.db for %s",
+            table["id"], exc_info=True,
+        )
+        return
+    if updated is None:
+        return
+    logger.warning(
+        "[tables] recorded a lost schema bump for %s (schema_version %s -> %s)",
+        table["id"], table["schema_version"], updated["schema_version"],
+    )
+    _events().publish_table_write(updated)
+
+
 # ---------------------------------------------------------------------------
 # Visibility + reads
 # ---------------------------------------------------------------------------
@@ -434,7 +494,7 @@ async def _locked_read(caller: Caller, table_id: str, fn):
     async with _table_lock(table_id):
         table, access = await _lookup(caller, table_id)
         columns = load_schema(table["schema"])
-        result = await asyncio.to_thread(fn, _table_dir(table["id"]), columns, table)
+        result = await _file_call(table, fn, _table_dir(table["id"]), columns, table)
         return table, access, result
 
 
@@ -589,8 +649,8 @@ async def apply_row_write(
             fresh, fresh_access = await _lookup(caller, table_id)
             _check_row_verdict(fresh_access, fresh["id"], op, clean, bypass_approval)
             columns = load_schema(fresh["schema"])
-            result = await asyncio.to_thread(
-                _run_row_op, _table_dir(fresh["id"]), columns, op, clean,
+            result = await _file_call(
+                fresh, _run_row_op, _table_dir(fresh["id"]), columns, op, clean,
                 schema_version=fresh["schema_version"], source=source,
                 actor_user_id=actor,
             )
@@ -729,8 +789,8 @@ async def apply_schema_change(
                 except table_store.TableValidationError as exc:
                     raise TableError("invalid_request", str(exc)) from None
             try:
-                result = await asyncio.to_thread(
-                    storage.apply_schema_change, table_dir, columns, plan,
+                result = await _file_call(
+                    fresh, storage.apply_schema_change, table_dir, columns, plan,
                     schema_version=fresh["schema_version"], source=source,
                     actor_user_id=actor, title=old_title,
                 )
@@ -795,7 +855,8 @@ async def apply_restore(
     Raises:
         TableDisabled, TableNotFound, TableDenied, TableStorageError
         (``unknown_change``, ``schema_mismatch``, ``corrupt_storage``,
-        ``busy``), ValueError (``change_id`` not an integer).
+        ``busy``), TableError ``invalid_args`` (``change_id`` not an
+        integer).
     """
     require_enabled(caller)
     if isinstance(change_id, bool) or not isinstance(change_id, int):
@@ -814,8 +875,8 @@ async def apply_restore(
                     fresh_access.deny_reason or "Restoring needs edit access to this table."
                 )
             columns = load_schema(fresh["schema"])
-            result = await asyncio.to_thread(
-                revert.restore_to, _table_dir(fresh["id"]), columns, change_id,
+            result = await _file_call(
+                fresh, revert.restore_to, _table_dir(fresh["id"]), columns, change_id,
                 schema_version=fresh["schema_version"], source=source,
                 actor_user_id=actor,
             )

@@ -372,6 +372,109 @@ class TestLock:
         assert [t for _u, t, _i, _n in events(env)] == ["table_changed", "table_list_changed"]
 
 
+    def test_second_write_waits_for_first_bump(self, env, monkeypatch):
+        """The second writer enters storage only after the first one's
+        quest.db bump: row_count lands in write order."""
+        table = make_table(env)
+        caller = convo(env)
+        entered, release = threading.Event(), threading.Event()
+        calls: list[str] = []
+        real_insert = storage.insert_rows
+        real_bump = env.store.update_after_write
+
+        def gated_insert(*a, **k):
+            calls.append("insert")
+            if len(calls) == 1:
+                entered.set()
+                assert release.wait(5)
+            return real_insert(*a, **k)
+
+        async def recording_bump(*a, **k):
+            calls.append(f"bump:{k['row_count']}")
+            return await real_bump(*a, **k)
+
+        monkeypatch.setattr(storage, "insert_rows", gated_insert)
+        monkeypatch.setattr(env.store, "update_after_write", recording_bump)
+
+        async def go():
+            first = asyncio.ensure_future(service.apply_row_write(
+                caller, table["id"], "insert", {"rows": [{"Name": "a"}]}))
+            while not entered.is_set():
+                await asyncio.sleep(0.01)
+            second = asyncio.ensure_future(service.apply_row_write(
+                caller, table["id"], "insert", {"rows": [{"Name": "b"}, {"Name": "c"}]}))
+            await asyncio.sleep(0.1)
+            assert calls == ["insert"] and not second.done()
+            release.set()
+            return await first, await second
+
+        first, second = _run(go())
+        assert calls == ["insert", "bump:1", "insert", "bump:3"]
+        assert (first["change_id"], second["change_id"]) == (2, 3)
+        assert fetch(env, table)["row_count"] == 3
+
+    def test_access_re_resolved_under_the_lock(self, env):
+        """A share revoked while the write queued: the write refuses with
+        the not-found text and writes nothing."""
+        table = make_table(env, shares=[("bob", "write")])
+        share_id = fetch(env, table)["shares"][0]["id"]
+
+        async def go():
+            lock = service._table_lock(table["id"])
+            await lock.acquire()
+            task = asyncio.ensure_future(service.apply_row_write(
+                convo(env, "bob"), table["id"], "insert", {"rows": [{"Name": "a"}]},
+                bypass_approval=True,
+            ))
+            await asyncio.sleep(0.05)
+            assert not task.done()
+            assert await env.store.remove_share(table["id"], share_id)
+            lock.release()
+            with pytest.raises(TableNotFound) as exc:
+                await task
+            return exc.value
+
+        exc = _run(go())
+        assert str(exc) == table_not_found_message(table["id"])
+        assert [c["id"] for c in changes(env, table)] == [1]
+        assert env.published == []
+
+    def test_cancelled_restore_lands_fully(self, env, monkeypatch):
+        table = make_table(env)
+        _run(service.apply_row_write(convo(env), table["id"], "insert", {"rows": [{"Name": "a"}]}))
+        env.published.clear()
+        entered, release = threading.Event(), threading.Event()
+        real_restore = service.revert.restore_to
+
+        def slow_restore(*a, **k):
+            entered.set()
+            assert release.wait(5)
+            return real_restore(*a, **k)
+
+        monkeypatch.setattr(service.revert, "restore_to", slow_restore)
+
+        async def go():
+            task = asyncio.ensure_future(service.apply_restore(ui(env), table["id"], 1))
+            while not entered.is_set():
+                await asyncio.sleep(0.01)
+            task.cancel()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            for _ in range(500):
+                if env.published:
+                    break
+                await asyncio.sleep(0.01)
+
+        _run(go())
+        row = fetch(env, table)
+        meta = storage.read_meta(table_dir(env, table))
+        assert row["schema_version"] == meta.schema_version == 2
+        assert row["row_count"] == 0 == storage.row_count(table_dir(env, table))
+        assert row["last_write_source"] == "revert:1"
+        assert [t for _u, t, _i, _n in events(env)] == ["table_changed", "table_list_changed"]
+
+
 # ---------------------------------------------------------------------------
 # Verdicts
 # ---------------------------------------------------------------------------
@@ -541,6 +644,67 @@ class TestSchemaAndRestore:
             _run(service.apply_restore(ui(env), table["id"], 99))
         assert exc.value.code == "unknown_change"
         assert fetch(env, table)["schema_version"] == 1
+
+
+    def test_rename_rolled_back_when_the_file_change_fails(self, env, monkeypatch):
+        table = make_table(env)
+
+        def broken(*_a, **_k):
+            raise storage.TableStorageError("busy", "boom")
+
+        monkeypatch.setattr(storage, "apply_schema_change", broken)
+        with pytest.raises(storage.TableStorageError):
+            _run(service.apply_schema_change(
+                ui(env), table["id"], [{"op": "rename_table", "title": "Stock"}],
+                expected_schema_version=1,
+            ))
+        row = fetch(env, table)
+        assert row["title"] == "Inventory" and row["schema_version"] == 1
+        assert env.published == []
+
+    def test_lost_schema_bump_is_healed(self, env, monkeypatch):
+        """table.db committed a schema change but quest.db's bump failed:
+        the next call refuses with schema_mismatch after recording
+        table.db's schema, and a retry works."""
+        table = make_table(env)
+        _run(service.apply_row_write(convo(env), table["id"], "insert", {"rows": [{"Name": "a"}]}))
+        real_update = env.store.update_schema
+
+        async def failing(*_a, **_k):
+            raise RuntimeError("quest.db unavailable")
+
+        monkeypatch.setattr(env.store, "update_schema", failing)
+        with pytest.raises(RuntimeError):
+            _run(service.apply_schema_change(
+                ui(env), table["id"],
+                [{"op": "add_column", "column": {"name": "Notes", "type": "text"}}],
+                expected_schema_version=1,
+            ))
+        assert fetch(env, table)["schema_version"] == 1
+        assert storage.read_meta(table_dir(env, table)).schema_version == 2
+        monkeypatch.setattr(env.store, "update_schema", real_update)
+        env.published.clear()
+
+        with pytest.raises(storage.SchemaMismatchError):
+            _run(service.query_rows(convo(env), table["id"]))
+        row = fetch(env, table)
+        meta = storage.read_meta(table_dir(env, table))
+        assert row["schema_version"] == meta.schema_version == 2
+        assert load_schema(row["schema"]) == meta.schema
+        assert row["row_count"] == 1
+        assert row["last_write_source"] == f"ui:{uid(env, 'alice')}"
+        assert [t for _u, t, _i, _n in events(env)] == ["table_changed", "table_list_changed"]
+        _t, _a, result = _run(service.query_rows(convo(env), table["id"]))
+        assert result.total == 1 and result.rows[0]["Notes"] is None
+        # A plain mismatch with nothing to heal leaves quest.db alone.
+        with pytest.raises(storage.SchemaMismatchError):
+            _run(service._file_call(
+                {**row, "schema_version": 7}, storage.insert_rows,
+                table_dir(env, table), load_schema(row["schema"]),
+                rows=[{"Name": "z"}], schema_version=7,
+                source="ui:1", actor_user_id=None,
+            ))
+        assert fetch(env, table)["schema_version"] == 2
 
 
 class TestCreateDelete:

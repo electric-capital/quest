@@ -578,7 +578,7 @@ def restore_to(
 
     ``schema`` / ``schema_version`` are what the caller loaded from
     quest.db. Updating quest.db from the result (schema, ``schema_version``,
-    title, ``row_count``, ``last_write_source = "revert:<new entry id>"``)
+    title, ``row_count``, ``last_write_source = "revert:<change_id>"``, the restore target)
     is the caller's job.
 
     Steps: open the live file, remove temp files a crashed restore left
