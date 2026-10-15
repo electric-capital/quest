@@ -1,0 +1,30 @@
+/* TablesGateClosed -- centered notice on /tables URLs while the tables gate is closed */
+
+.tables-gate-closed {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem 16px;
+  text-align: center;
+}
+
+.tables-gate-closed-icon {
+  color: var(--text-muted);
+  margin-bottom: 0.25rem;
+}
+
+.tables-gate-closed-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.tables-gate-closed-hint {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}

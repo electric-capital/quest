@@ -1302,6 +1302,380 @@ export interface UpdateDocRequest {
   expected_updated_at?: string;
 }
 
+// Quest Tables types (/app/api/tables; see docs/api/tables-api.md). Field
+// names match chat/tables/routes.py (`_ui_row`, `_ui_detail`) and
+// chat/tables/history_routes.py exactly.
+
+/** A user table is always private; a project table mirrors its project's `public` flag. */
+export type TableMode = 'private' | 'public';
+
+/** `project` when the table belongs to a project (`project_id` set), else `user`. */
+export type TableScope = 'user' | 'project';
+
+export type TableColumnType = 'text' | 'number' | 'url' | 'boolean' | 'enum';
+
+/**
+ * One stored column (spec 4.3). `key` (`c_` + 8 hex) is server-assigned and
+ * stable across renames: the UI addresses cells by it.
+ */
+export interface TableColumn {
+  key: string;
+  name: string;
+  type: TableColumnType;
+  required: boolean;
+  unique: boolean;
+  // A logical cell value (multi-enum: a list of options), or null.
+  default: TableCellValue;
+  // Enum columns only, else null.
+  options: string[] | null;
+  multiple: boolean;
+  // Number columns only (0..10), else null.
+  precision: number | null;
+  description: string;
+}
+
+/**
+ * A column spec for POST /tables and the `add_column` operation: no `key`
+ * (the server refuses one); every field but name and type optional.
+ */
+export interface TableColumnSpec {
+  name: string;
+  type: TableColumnType;
+  required?: boolean;
+  unique?: boolean;
+  default?: TableCellValue;
+  options?: string[] | null;
+  multiple?: boolean;
+  precision?: number | null;
+  description?: string;
+}
+
+/**
+ * A cell in logical form: text / url / number as strings (numbers are
+ * canonical decimal strings, e.g. "1.1"), booleans as true/false, a
+ * multi-enum as a list of options, null for no value.
+ */
+export type TableCellValue = string | boolean | string[] | null;
+
+/** The raw UI verdicts of chat/tables/access.py. */
+export type TableRowsVerdict = 'free' | 'approval' | 'denied';
+export type TableSchemaVerdict = 'approval' | 'denied';
+
+/** What the UI may offer for this table, computed server-side per viewer. */
+export interface TableAccess {
+  can_read: boolean;
+  rows: TableRowsVerdict;
+  schema: TableSchemaVerdict | string;
+  // rows === 'free': the owner or a write share.
+  can_edit: boolean;
+  can_restore: boolean;
+  // Owner only.
+  can_rename: boolean;
+  can_delete: boolean;
+  can_share: boolean;
+  can_edit_schema: boolean;
+  can_require_approval: boolean;
+  // = can_edit: a SQLite download with the change log.
+  can_download_history: boolean;
+  deny_reason: string | null;
+  schema_deny_reason: string | null;
+}
+
+export type TableSharePermission = 'read' | 'write';
+
+/** Safe identity fields of another Quest user; name / email null once deleted. */
+export interface TableUserRef {
+  id: number;
+  name: string | null;
+  email: string | null;
+}
+
+/** One share-roster entry; `user_id` / `user` null means everyone. Owner only. */
+export interface TableShare {
+  id: number;
+  user_id: number | null;
+  permission: TableSharePermission;
+  created_at: string;
+  user: TableUserRef | null;
+}
+
+/** Table row as returned by GET /tables and the share routes (`_ui_row`). */
+export interface TableListRow {
+  id: string;
+  owner_id: number;
+  project_id: string | null;
+  title: string;
+  description: string;
+  mode: TableMode;
+  schema_version: number;
+  row_count: number;
+  // 'ui:<user_id>', 'conversation:<id>', 'action_request:<id>',
+  // 'revert:<change_id>', or null (always null for non-owners).
+  last_write_source: string | null;
+  // The owner's "Require approval for agent writes" switch.
+  require_approval: boolean;
+  // Naive-UTC ISO strings (no 'Z'; parse with parseUTCTimestamp).
+  // `updated_at` doubles as the metadata-edit concurrency token.
+  created_at: string;
+  updated_at: string;
+  scope: TableScope;
+  column_count: number;
+  // The table has at least one share.
+  shared: boolean;
+  // True when the viewer is not the owner.
+  shared_with_me: boolean;
+  // The viewer's effective share; null for the owner.
+  permission: TableSharePermission | null;
+  // The owner, for share recipients; null for the owner.
+  owner: TableUserRef | null;
+  // Owner only (null for everyone else).
+  shares: TableShare[] | null;
+  // Owner only: the user behind a `ui:<id>` source, or the proposer of an
+  // `action_request:<id>` one when that is not the owner.
+  last_write_user: TableUserRef | null;
+  access: TableAccess;
+}
+
+/** The conversation named by `last_write_source`, for the viewer footer. */
+export interface TableWriteConversation {
+  id: string;
+  title: string;
+  project_id: string | null;
+}
+
+/**
+ * GET / POST / PUT one table (`_ui_detail`): the row plus the full schema.
+ * `last_write_conversation` is only on GET /tables/{id}.
+ */
+export interface TableDetail extends TableListRow {
+  schema: TableColumn[];
+  last_write_conversation?: TableWriteConversation | null;
+}
+
+/** PUT /tables/{id}/schema: the detail plus the new change's id. */
+export interface TableSchemaChangeResponse extends TableDetail {
+  change_id: number;
+}
+
+export interface ListTablesResponse {
+  tables: TableListRow[];
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+export interface CreateTableRequest {
+  title: string;
+  description?: string;
+  // No `mode`: a user table is private, a project table takes its project's.
+  project_id?: string | null;
+  columns: TableColumnSpec[];
+}
+
+export interface UpdateTableRequest {
+  title?: string;
+  description?: string;
+  require_approval?: boolean;
+  // The row's updated_at as loaded; a mismatch rejects with the flat 409
+  // stale_update carrying `current` (a TableListRow).
+  expected_updated_at?: string;
+}
+
+/**
+ * One schema operation (spec 4.4, chat/tables/schema_ops.py `_OP_PARAMS`).
+ * Columns are addressed by NAME, as for the change_table_schema card.
+ */
+export type TableSchemaOperation =
+  | { op: 'add_column'; column: TableColumnSpec; after?: string | null }
+  | { op: 'rename_column'; name: string; new_name: string }
+  | { op: 'drop_column'; name: string }
+  | { op: 'reorder_columns'; names: string[] }
+  | { op: 'set_description'; name: string; description: string }
+  | { op: 'set_required'; name: string; required: boolean }
+  | { op: 'set_unique'; name: string; unique: boolean }
+  | { op: 'set_default'; name: string; default: TableCellValue }
+  | { op: 'set_precision'; name: string; precision: number | null }
+  | { op: 'add_enum_option'; name: string; option: string; after?: string | null }
+  | { op: 'rename_enum_option'; name: string; option: string; new_option: string }
+  | { op: 'remove_enum_option'; name: string; option: string }
+  | { op: 'set_enum_multiple'; name: string; multiple: boolean }
+  | { op: 'rename_table'; title: string };
+
+export interface UpdateTableSchemaRequest {
+  operations: TableSchemaOperation[];
+  expected_schema_version: number;
+}
+
+/** Filter operators of the query DSL (spec 6.1, chat/tables/filters.py). */
+export type FilterOp =
+  | 'eq'
+  | 'ne'
+  | 'in'
+  | 'is_null'
+  | 'not_null'
+  | 'contains'
+  | 'starts_with'
+  | 'ends_with'
+  | 'lt'
+  | 'lte'
+  | 'gt'
+  | 'gte'
+  | 'between'
+  | 'contains_any'
+  | 'contains_all'
+  | 'is_empty';
+
+/** A condition on one column, addressed by NAME. `value` per op (spec 6.1). */
+export interface FilterLeaf {
+  column: string;
+  op: FilterOp;
+  value?: unknown;
+}
+
+/** The filter DSL: max depth 3, max 20 leaves (validated server-side). */
+export type FilterNode =
+  | { and: FilterNode[] }
+  | { or: FilterNode[] }
+  | { not: FilterNode }
+  | FilterLeaf;
+
+/** One sort key (max 3), by column NAME; nulls sort last. */
+export interface SortKey {
+  column: string;
+  direction: SortDirection;
+}
+
+/**
+ * A grid row: cells keyed by column KEY, plus the row id and timestamp.
+ * Read a cell as `row[column.key] as TableCellValue`.
+ */
+export interface TableRow {
+  // The row's integer id (never reused, survives restores).
+  _id: number;
+  _updated_at: string;
+  [columnKey: string]: TableCellValue | number;
+}
+
+/** GET /tables/{id}/rows. */
+export interface TableRowsPage {
+  rows: TableRow[];
+  // Filtered count, ignoring paging.
+  total: number;
+  limit: number;
+  offset: number;
+  // More rows match past this page (offset + rows.length < total).
+  truncated: boolean;
+  // Lets the grid tell its loaded schema went stale.
+  schema_version: number;
+}
+
+export type TableChangeKind = 'rows' | 'schema' | 'restore';
+
+/** One change-log entry (GET /tables/{id}/changes; history_routes.py Entry). */
+export interface TableChange {
+  id: number;
+  created_at: string;
+  // Raw write source, owner only (null otherwise).
+  source: string | null;
+  // Phrased for the viewer ("you", a name, a conversation title,
+  // "Request #12", "Restored to #4", ...).
+  source_label: string;
+  // The conversation behind the source when the viewer owns it.
+  conversation: TableWriteConversation | null;
+  actor: { user_id: number; name: string } | null;
+  kind: TableChangeKind | string;
+  op: string;
+  summary: string;
+  row_count: number | null;
+  // False once a restore rewound past this entry.
+  in_effect: boolean | null;
+  // A restore entry's target change id, else null.
+  restore_to: number | null;
+  schema_before: number;
+  schema_after: number;
+  size_bytes: number;
+}
+
+export interface ListTableChangesResponse {
+  changes: TableChange[];
+  has_more: boolean;
+  next_before_id: number | null;
+}
+
+/** A column label in a change detail; `type` null for a key no longer known. */
+export interface TableChangeColumn {
+  key: string;
+  name: string;
+  type: TableColumnType | null;
+  multiple: boolean;
+  options: string[] | null;
+  precision: number | null;
+  // The key is in the table's current schema.
+  current: boolean;
+}
+
+/** One entry of a schema diff (chat/tables/schema_ops.py `schema_diff`). */
+export interface TableSchemaDiffEntry {
+  key: string;
+  status: 'added' | 'dropped' | 'renamed' | 'changed' | 'unchanged';
+  moved: boolean;
+  before: TableColumn | null;
+  after: TableColumn | null;
+  changes: Record<string, { before: unknown; after: unknown }>;
+  options_added: string[];
+  options_removed: string[];
+}
+
+export interface TableSchemaDiff {
+  columns: TableSchemaDiffEntry[];
+  order_changed: boolean;
+  before_order: string[];
+  after_order: string[];
+  changed: boolean;
+}
+
+/** A row image in a change detail: cells keyed by column KEY. */
+export interface TableChangeRowImage {
+  _id: number;
+  _created_at?: string;
+  _updated_at?: string;
+  [columnKey: string]: unknown;
+}
+
+/**
+ * GET /tables/{id}/changes/{change_id}: the entry plus its images. A rows
+ * change has row-image lists in `before` / `after`; a schema change has
+ * `{columns, title, dropped_values}` / `{op?, columns, title, operations,
+ * backfill}` objects; a restore `{}` / `{restore_to}`.
+ */
+export interface TableChangeDetail extends TableChange {
+  columns: TableChangeColumn[];
+  before: TableChangeRowImage[] | Record<string, unknown>;
+  after: TableChangeRowImage[] | Record<string, unknown>;
+  truncated: { before: boolean; after: boolean };
+  before_total: number | null;
+  after_total: number | null;
+  schema_diff: TableSchemaDiff | null;
+  operations: Record<string, unknown>[] | null;
+  row_ids: number[];
+  row_ids_total: number;
+}
+
+/** POST /tables/{id}/restore. `change` null if edit access was lost meanwhile. */
+export interface RestoreTableResponse {
+  change: TableChange | null;
+  table: TableDetail;
+  schema_version: number;
+  row_count: number;
+  restored_to: number;
+}
+
+/** POST /tables/{id}/shares: exactly one of `user_email` / `everyone: true`. */
+export interface ShareTableRequest {
+  user_email?: string;
+  everyone?: boolean;
+  permission: TableSharePermission;
+}
+
 // Project table types
 export interface ProjectTable {
   name: string;

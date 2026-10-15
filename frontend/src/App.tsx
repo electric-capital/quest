@@ -19,8 +19,12 @@ import { DocsListView } from './components/docs/DocsListView'
 import { DocViewer } from './components/docs/DocViewer'
 import { DocsGateClosed } from './components/docs/DocsGateClosed'
 import { DOCS_FEATURE } from './api/docsApi'
+import { TablesGateClosed } from './components/tables/TablesGateClosed'
+import { TablesPlaceholder } from './components/tables/TablesPlaceholder'
+import { TABLES_FEATURE } from './api/tablesApi'
 import { useIsMobile } from './hooks/useIsMobile'
 import { parseDocsRoute } from './utils/docsRoute'
+import { parseTablesRoute } from './utils/tablesRoute'
 import { LazyBoundary, lazyNamed } from './components/LazyBoundary'
 
 // Admin-only page: a separate chunk, fetched on the first visit.
@@ -52,6 +56,10 @@ function AppContent() {
   // NavigationContext flag, and activeConversationId is null on these routes.
   const docsRoute = parseDocsRoute(location.pathname, location.search)
   const docsEnabled = enabledFeatures.includes(DOCS_FEATURE)
+  // Quest Tables views (/tables, /tables?project=<id>, /tables/<id>): the
+  // same URL-only main-pane takeover as the docs views.
+  const tablesRoute = parseTablesRoute(location.pathname, location.search)
+  const tablesEnabled = enabledFeatures.includes(TABLES_FEATURE)
 
   // Sync URL -> inbox state. /inbox (Requests tab) and /inbox/memories
   // (Memories tab) are the deep-linkable addresses of the RequestsView
@@ -148,6 +156,8 @@ function AppContent() {
         onProjectIdLoaded={handleProjectIdLoaded}
         docsRoute={docsRoute}
         docsEnabled={docsEnabled}
+        tablesRoute={tablesRoute}
+        tablesEnabled={tablesEnabled}
       />
     )
   }
@@ -170,6 +180,15 @@ function AppContent() {
             <DocsListView projectId={docsRoute.projectId} />
           ) : (
             <DocViewer docId={docsRoute.docId} />
+          )}
+        </div>
+      ) : tablesRoute ? (
+        // Full takeover like the docs views: no RightPanel beside a table.
+        <div className="main-content docs-main tables-main">
+          {!tablesEnabled ? (
+            <TablesGateClosed />
+          ) : (
+            <TablesPlaceholder route={tablesRoute} />
           )}
         </div>
       ) : (
@@ -239,6 +258,9 @@ function App() {
         {/* Quest Docs: All Docs (?project=<id> filter) and the viewer. */}
         <Route path="/docs" element={<AppContent />} />
         <Route path="/docs/:docId" element={<AppContent />} />
+        {/* Quest Tables: All Tables (?project=<id> filter) and the viewer. */}
+        <Route path="/tables" element={<AppContent />} />
+        <Route path="/tables/:tableId" element={<AppContent />} />
         {/* Set-password links (invites, sign-up, resets); works signed out. */}
         <Route path="/set-password" element={<SetPasswordScreen />} />
         <Route path="/admin/system-reports" element={<AdminSystemReportsRoute />} />
