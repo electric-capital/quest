@@ -520,7 +520,7 @@ export function TableHeader({
 
           {hasMeta && (
             <div className="doc-header-meta">
-              {showModeBadge && <DocModeBadge mode={table.mode} />}
+              {showModeBadge && <DocModeBadge mode={table.mode} noun="table" />}
               {table.require_approval && (
                 <span
                   className="doc-header-project-chip doc-header-chip--static doc-header-approval-chip"

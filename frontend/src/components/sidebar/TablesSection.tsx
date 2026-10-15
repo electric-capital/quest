@@ -77,7 +77,7 @@ export function TablesSection({
             <Table2 size={14} className="doc-row-icon" aria-hidden="true" />
             <span className="doc-row-title">{table.title}</span>
             {shouldShowDocModeBadge(table.mode) && (
-              <DocModeBadge mode={table.mode} size="sm" />
+              <DocModeBadge mode={table.mode} size="sm" noun="table" />
             )}
             <span className="doc-row-time" title={formatSidebarDocTimeTitle(table.updated_at)}>
               {formatSidebarDocTime(table.updated_at)}

@@ -127,24 +127,29 @@ export function TableGrid({
   }
   const range = pageRange(offset, limit, page.total);
 
-  const header = (name: string, label: string, extraClass = '') => (
+  const header = (reactKey: string, name: string, label: string, extraClass = '', buttonLabel?: string) => {
+    const direction = ariaSort(sort, name);
+    return (
     <th
-      key={name}
+      key={reactKey}
       scope="col"
-      aria-sort={ariaSort(sort, name)}
+      // ARIA: aria-sort belongs on the sorted column only.
+      aria-sort={direction === 'none' ? undefined : direction}
       className={`table-grid-th${extraClass}`}
     >
       <button
         type="button"
         className="table-grid-sort-button"
         onClick={() => onSortChange(nextSort(sort, name))}
-        title={`Sort by ${label}`}
+        title={`Sort by ${buttonLabel ?? label}`}
+        aria-label={buttonLabel ? `Sort by ${buttonLabel}` : undefined}
       >
         <span className="table-grid-th-label">{label}</span>
         <SortIcon sort={sort} columnName={name} />
       </button>
     </th>
-  );
+    );
+  };
 
   return (
     <div className="table-grid">
@@ -155,9 +160,9 @@ export function TableGrid({
         <table className="table-grid-table">
           <thead>
             <tr>
-              {header(ROW_ID_COLUMN, '#', ' table-grid-th--id')}
+              {header(ROW_ID_COLUMN, ROW_ID_COLUMN, '#', ' table-grid-th--id', 'row number')}
               {columns.map((column) =>
-                header(column.name, column.name, column.type === 'number' ? ' table-grid-th--number' : ''),
+                header(column.key, column.name, column.name, column.type === 'number' ? ' table-grid-th--number' : ''),
               )}
             </tr>
           </thead>

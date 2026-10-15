@@ -261,10 +261,10 @@ export function MobileShell({
               <TablesListView projectId={tablesRoute.projectId} />
             ) : (
               <TableViewer
-              tableId={tablesRoute.tableId}
-              filter={tablesRoute.filter}
-              sort={tablesRoute.sort}
-            />
+                tableId={tablesRoute.tableId}
+                filter={tablesRoute.filter}
+                sort={tablesRoute.sort}
+              />
             )}
           </div>
         ) : activeConversationId ? (

@@ -116,12 +116,13 @@ describe('TableGrid', () => {
     const sort: SortKey = { column: 'Name', direction: 'asc' };
     const { onSortChange } = renderGrid({ sort });
     const [idTh, nameTh, amountTh] = screen.getAllByRole('columnheader');
-    expect(idTh.getAttribute('aria-sort')).toBe('none');
+    // Only the sorted column carries aria-sort.
+    expect(idTh.hasAttribute('aria-sort')).toBe(false);
     expect(nameTh.getAttribute('aria-sort')).toBe('ascending');
-    expect(amountTh.getAttribute('aria-sort')).toBe('none');
+    expect(amountTh.hasAttribute('aria-sort')).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'Name' }));
     expect(onSortChange).toHaveBeenCalledWith({ column: 'Name', direction: 'desc' });
-    fireEvent.click(screen.getByRole('button', { name: '#' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by row number' }));
     expect(onSortChange).toHaveBeenLastCalledWith({ column: '_id', direction: 'asc' });
   });
 

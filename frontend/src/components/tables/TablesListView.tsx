@@ -343,7 +343,7 @@ function TableRowLink({ table, project }: { table: TableListRow; project: Projec
         {table.description && <span className="tables-row-description">{table.description}</span>}
       </span>
       <span className="tables-row-mode">
-        {shouldShowDocModeBadge(table.mode) && <DocModeBadge mode={table.mode} size="sm" />}
+        {shouldShowDocModeBadge(table.mode) && <DocModeBadge mode={table.mode} size="sm" noun="table" />}
       </span>
       <span className="tables-row-meta tables-row-scope" title={tableScopeTitle(table)}>
         {tableScopeLabel(table, project)}
