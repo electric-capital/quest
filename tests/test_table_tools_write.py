@@ -131,7 +131,8 @@ def _state(env, table):
 
 def _snapshot(env, table):
     """What a refused write must leave alone: table.db rows and change
-    count, quest.db row_count and updated_at."""
+    count, quest.db row_count, updated_at and last_write_source, and the
+    realtime events published so far."""
     fresh = _run(env.store.get_table(table["id"]))
     return (
         _state(env, table),
@@ -139,6 +140,8 @@ def _snapshot(env, table):
         storage.row_count(_tdir(env, table)),
         fresh["row_count"],
         fresh["updated_at"],
+        fresh["last_write_source"],
+        len(env.published),
     )
 
 
@@ -299,6 +302,12 @@ MATRIX = [
     ("alice", "slack", "mine", True, "denied", DENY_SLACK_APPROVAL_REQUIRED),
     ("alice", "slack", "write_shared", False, "denied", DENY_SLACK_NEEDS_APPROVAL),
     ("alice", "slack", "mine", False, "free", None),
+    ("bob", "private", "write_shared", True, "approval", APPROVAL_REQUIRED_BY_OWNER_MESSAGE),
+    ("bob", "public", "open_write", True, "denied", DENY_PUBLIC_APPROVAL_REQUIRED),
+    ("bob", "slack", "read_shared", False, "denied", DENY_READ_ONLY_SHARE),
+    ("bob", "slack", "write_shared", True, "denied", DENY_SLACK_APPROVAL_REQUIRED),
+    ("alice", "private", "open", False, "not_found", None),
+    ("alice", "doc_source", "mine", False, "free", None),
 ]
 
 

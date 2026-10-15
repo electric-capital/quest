@@ -13,7 +13,11 @@ Tool tiers:
 import copy
 
 from chat.docs.constants import DOCS_SERVICE_KEY
-from chat.tables.constants import TABLE_FILTER_IN_MAX_VALUES, TABLES_SERVICE_KEY
+from chat.tables.constants import (
+    TABLE_FILTER_IN_MAX_VALUES,
+    TABLE_WRITE_MAX_ROWS,
+    TABLES_SERVICE_KEY,
+)
 from chat.llm.base import ToolSpec
 from chat.workspace_hints import PROJECT_COPY_FIRST_SENTENCE
 from db.models import ActionRequestType
@@ -163,7 +167,7 @@ _GMAIL_ATTACHMENTS_SCHEMA = {
 _TABLE_WRITE_RULES = (
     "Values are validated against the column types (numbers may be sent as "
     "numbers or strings; enum values must be listed options; required and "
-    "unique columns are enforced). One call writes at most 500 rows as a "
+    f"unique columns are enforced). One call writes at most {TABLE_WRITE_MAX_ROWS} rows as a "
     "single all-or-nothing change: if any row is invalid nothing is "
     "written and the error lists every problem as invalid_rows "
     "problems [{row, column, reason}] (row = index in the list)."
@@ -2274,7 +2278,8 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                     "type": "array",
                     "items": {"type": "object"},
                     "description": (
-                        "The new rows (1-500), e.g. [{\"Name\": \"Widget\", "
+                        f"The new rows (1-{TABLE_WRITE_MAX_ROWS}), e.g. "
+                        "[{\"Name\": \"Widget\", "
                         "\"Price\": 9.5}]."
                     ),
                 },
@@ -2306,7 +2311,8 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                     "type": "array",
                     "items": {"type": "object"},
                     "description": (
-                        "Partial patches (1-500), e.g. [{\"_id\": 4, "
+                        f"Partial patches (1-{TABLE_WRITE_MAX_ROWS}), e.g. "
+                        "[{\"_id\": 4, "
                         "\"Status\": \"Done\"}]."
                     ),
                 },
@@ -2345,7 +2351,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                     "type": "array",
                     "items": {"type": "object"},
                     "description": (
-                        "The rows (1-500), each with a value in key_column, "
+                        f"The rows (1-{TABLE_WRITE_MAX_ROWS}), each with a value in key_column, "
                         "e.g. [{\"SKU\": \"A-1\", \"Price\": 12}]."
                     ),
                 },
@@ -2361,7 +2367,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
         "description": (
             "Delete rows of a Quest Table, either by _id (row_ids) or by a "
             "query_rows filter -- give exactly one. A filter matching more "
-            "than 500 rows is refused with too_many_rows and the matching "
+            f"than {TABLE_WRITE_MAX_ROWS} rows is refused with too_many_rows and the matching "
             "count: narrow the filter or delete in pages. A filter matching "
             "nothing deletes nothing (change_id null). The call is one "
             "change that the user can restore from the table's history. "
@@ -2378,7 +2384,10 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                 "row_ids": {
                     "type": "array",
                     "items": {"type": "integer"},
-                    "description": "The _id values to delete (1-500); every one must exist.",
+                    "description": (
+                        f"The _id values to delete (1-{TABLE_WRITE_MAX_ROWS}); "
+                        "every one must exist."
+                    ),
                 },
                 "filter": {
                     "type": "object",
