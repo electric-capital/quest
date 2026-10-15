@@ -100,10 +100,15 @@ function LocationProbe() {
   return <div data-testid="location">{location.pathname + location.search}</div>;
 }
 
-function renderSidebar(path = '/') {
+function renderSidebar(path = '/', onNavigateAway?: () => void) {
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <Sidebar activeConversationId={null} onConversationSelect={vi.fn()} onNewConversation={vi.fn()} />
+      <Sidebar
+        activeConversationId={null}
+        onConversationSelect={vi.fn()}
+        onNewConversation={vi.fn()}
+        onNavigateAway={onNavigateAway}
+      />
       <LocationProbe />
     </MemoryRouter>,
   );
@@ -154,14 +159,18 @@ describe('Sidebar Tables block', () => {
 
   it('navigates to /tables/<id> and /tables, and highlights the open table', () => {
     mocks.enabledFeatures = ['tables'];
-    const { container } = renderSidebar('/tables/t2');
+    // The phone drawer passes onNavigateAway to close itself.
+    const onNavigateAway = vi.fn();
+    const { container } = renderSidebar('/tables/t2', onNavigateAway);
     expect(container.querySelector('.table-row.active')?.textContent).toContain('Table t2');
 
     fireEvent.click(screen.getByRole('button', { name: /Table t1/ }));
     expect(screen.getByTestId('location').textContent).toBe('/tables/t1');
+    expect(onNavigateAway).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByTitle('All tables'));
     expect(screen.getByTestId('location').textContent).toBe('/tables');
+    expect(onNavigateAway).toHaveBeenCalledTimes(2);
     expect(screen.getByTitle('All tables').getAttribute('aria-current')).toBe('page');
   });
 

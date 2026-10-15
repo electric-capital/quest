@@ -134,7 +134,9 @@ export function TablesListView({ projectId, onNewTable }: TablesListViewProps) {
         <p className="tables-list-empty-title">
           {filtered ? 'No tables in this project yet.' : 'No tables yet.'}
         </p>
-        <p className="tables-list-empty-hint">Ask Quest to create one, or use New Table.</p>
+        <p className="tables-list-empty-hint">
+          {onNewTable ? 'Ask Quest to create one, or use New Table.' : 'Ask Quest to create one.'}
+        </p>
       </div>
     );
   } else {
@@ -250,11 +252,11 @@ export function TablesListView({ projectId, onNewTable }: TablesListViewProps) {
                 type="button"
                 className="tables-list-new-button"
                 disabled
-                aria-disabled="true"
                 title="Coming soon"
               >
                 <Plus size={16} aria-hidden="true" />
                 New Table
+                <span className="tables-list-new-hint"> (coming soon)</span>
               </button>
             )}
           </div>

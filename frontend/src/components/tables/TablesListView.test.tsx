@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiClientError } from '../../api/request';
 import type { ListTablesOptions } from '../../api/tablesApi';
 import type { ListTablesResponse, Project, TableListRow } from '../../api/types';
 import { TablesListView } from './TablesListView';
@@ -247,7 +248,8 @@ describe('TablesListView', () => {
     expect(screen.getByText('Loading...')).toBeTruthy();
     resolveOwn(page([]));
     await waitFor(() => expect(screen.getByText('No tables yet.')).toBeTruthy());
-    expect(screen.getByText('Ask Quest to create one, or use New Table.')).toBeTruthy();
+    // New Table is inert until the schema editor lands, so the hint omits it.
+    expect(screen.getByText('Ask Quest to create one.')).toBeTruthy();
   });
 
   it('shows the filtered empty state', async () => {
@@ -274,9 +276,9 @@ describe('TablesListView', () => {
   it('renders New Table disabled ("Coming soon") without onNewTable', async () => {
     mocks.listTables.mockResolvedValue(page([]));
     renderView(null);
-    const button = screen.getByRole('button', { name: 'New Table' }) as HTMLButtonElement;
+    const button = screen.getByRole('button', { name: /New Table/ }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
-    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(button.textContent).toContain('(coming soon)');
     expect(button.getAttribute('title')).toBe('Coming soon');
     await waitFor(() => expect(screen.getByText('No tables yet.')).toBeTruthy());
   });
@@ -291,5 +293,18 @@ describe('TablesListView', () => {
     fireEvent.click(button);
     expect(onNewTable).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.getByText('No tables yet.')).toBeTruthy());
+    expect(screen.getByText('Ask Quest to create one, or use New Table.')).toBeTruthy();
+  });
+
+  it('shows an error under a generic heading for an unknown or foreign project', async () => {
+    mocks.projects = [];
+    mocks.listTables.mockRejectedValue(
+      new ApiClientError('Project not found', 404, 'project_not_found'),
+    );
+    renderView('nope');
+    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(1));
+    expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('Project');
+    expect(screen.queryByText('No tables in this project yet.')).toBeNull();
+    expect(screen.getByText('All tables')).toBeTruthy();
   });
 });

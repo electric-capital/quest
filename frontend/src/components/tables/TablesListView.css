@@ -370,7 +370,23 @@
 /* The unit word ("rows", "columns") only reads on the phone meta line; the
  * desktop column labels already say it. */
 .tables-row-unit {
-  display: none;
+  /* Visually hidden on desktop (the column label names the unit) but still
+     read by screen readers; shown inline on the phone meta line. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.tables-list-new-hint {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 /* States */
@@ -504,7 +520,11 @@
   }
 
   .tables-row-unit {
-    display: inline;
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip: auto;
   }
 
   .tables-row-rows::before,
