@@ -9,4 +9,6 @@ Modules:
   load/dump, and cell value canonicalization.
 - ``schema_ops`` -- schema operations, their side effects and the schema
   diff.
+- ``storage`` -- the per-table ``table.db``: DDL and guarded open, row
+  writes, the change log, reads and the download copy.
 """

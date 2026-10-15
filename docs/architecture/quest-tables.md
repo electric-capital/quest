@@ -2,7 +2,7 @@
 
 ## Overview
 
-A **Quest Table** is a typed table that lives inside Quest, owned by a user (a **user table**) or by a project (a **project table**, owned by the project owner). Each table is a `data_tables` row in `quest.db` holding its metadata and ordered column schema, plus a directory `<data_dir>/tables/<table_id>/` for its own `table.db` (rows and change log); the rows never live in `quest.db`. This doc covers the metadata layer (the two `quest.db` tables, the store module and its rules, the on-disk path, the constants and the per-user `tables` [feature gate](feature-gates.md)) and the column layer: the column schema model, canonical cell values and schema operations. Ownership, scope, modes and shares follow [Quest Docs](quest-docs.md#concepts-and-invariants), with the same terms.
+A **Quest Table** is a typed table that lives inside Quest, owned by a user (a **user table**) or by a project (a **project table**, owned by the project owner). Each table is a `data_tables` row in `quest.db` holding its metadata and ordered column schema, plus a directory `<data_dir>/tables/<table_id>/` for its own `table.db` (rows and change log); the rows never live in `quest.db`. This doc covers the metadata layer (the two `quest.db` tables, the store module and its rules, the on-disk path, the constants and the per-user `tables` [feature gate](feature-gates.md)) the column layer (the column schema model, canonical cell values and schema operations) and the table file layer (the `table.db` layout, its guarded open, row writes, the change log and the download copy). Ownership, scope, modes and shares follow [Quest Docs](quest-docs.md#concepts-and-invariants), with the same terms.
 
 ## Key Files
 
@@ -11,6 +11,7 @@ A **Quest Table** is a typed table that lives inside Quest, owned by a user (a *
 | `chat/tables/constants.py` | The caps and retention numbers shared across modules (`TABLE_*`), the mode, share-permission and column-type sets, the prompt pseudo-key `TABLES_SERVICE_KEY`, `table_not_found_message()` (the one not-found text) and `tables_disabled_message()` |
 | `chat/tables/schema.py` | The column model (`Column`), column spec parsing, the stored schema JSON and cell value canonicalization; pure, no I/O |
 | `chat/tables/schema_ops.py` | Schema operations (`apply_schema_operations()`), the side effects they emit, and `schema_diff()`; pure, no I/O |
+| `chat/tables/storage.py` | The table file layer: `table.db` DDL and its guarded open, the row writes, the change log and its pruning, row and change reads, the download copy; synchronous `sqlite3` |
 | `db/table_store.py` | Async metadata CRUD, title uniqueness (`_title_taken()`), the per-owner cap, the keyset candidate lists, the two concurrency tokens, the id collectors for directory sweeps, the share helpers |
 | `db/models.py` | `DataTable`, `DataTableShare` |
 | `alembic/versions/e5c97b362821_create_data_tables_and_shares.py` | Creates `data_tables` + `data_table_shares` and their indexes |
@@ -25,7 +26,7 @@ Tables have the two modes of Quest Docs, `private` and `public`, with the same p
 
 ### On-disk layout
 
-A table's files live under `TABLES_DIR/<table_id>/`, a path produced only by `ChatStorage.get_table_dir()`, which applies the canonical-id and containment checks of every resolver and does not create the directory ([Data Paths](data-paths.md#conversation-project-doc-and-table-path-resolution)). The store never touches the directory: `delete_table()` removes the row and its shares, and the caller removes the directory afterwards. `list_table_ids_for_project()` and `list_table_ids_for_user()` exist so a project or account delete can collect the ids before the row cascade and sweep the directories after it.
+A table's files live under `TABLES_DIR/<table_id>/`, a path produced only by `ChatStorage.get_table_dir()`, which applies the canonical-id and containment checks of every resolver and does not create the directory ([Data Paths](data-paths.md#conversation-project-doc-and-table-path-resolution)). The store never touches the directory: `delete_table()` removes the row and its shares, and the caller removes the directory afterwards. Only `create_table_db()` creates it ([The Table File](#the-table-file)). `list_table_ids_for_project()` and `list_table_ids_for_user()` exist so a project or account delete can collect the ids before the row cascade and sweep the directories after it.
 
 ### Tables
 
@@ -58,7 +59,7 @@ A `Column` is frozen (tuples inside, fresh lists handed out). Its `key` is immut
 
 **Column specs** go through `parse_column_spec()` (one column joining existing ones) or `parse_columns()` (a new table's full list). Each rule has its own `ColumnSpecError` code:
 
-- Names: `validate_column_name()` checks the shape (no control characters, format characters such as zero-width or bidi controls, or line and paragraph separators; the same rule covers enum options and table titles); uniqueness is case-insensitive (`name_taken()`), while operations address a column by its exact name (`find_column()`).
+- Names: `validate_column_name()` checks the shape (no control characters, format characters such as zero-width or bidi controls, or line and paragraph separators; the same rule covers enum options and table titles); uniqueness is case-insensitive (`name_taken()`), while operations address a column by its exact name (`find_column()`). The names of the server-maintained row columns (`RESERVED_COLUMN_NAMES`) are refused in any letter case (`reserved_name`).
 - Enum options: a bounded, non-empty list of bounded strings with no surrounding whitespace or control characters, unique case-insensitively. `options` and `multiple` are refused on other types.
 - `unique` is allowed only on the types in `TABLE_UNIQUE_COLUMN_TYPES`; `precision` only on numbers, bounded by `TABLE_NUMBER_MAX_PRECISION`.
 - A `default` is canonicalized with the column's own value rules, so a stored default is always a canonical value.
@@ -98,6 +99,51 @@ A `rename_table` title is only validated; title collision is the store's (`_titl
 
 **`schema_diff()`** compares two column lists by key for previews, so a rename is a rename rather than a drop plus an add. Each entry has a status, its field changes, a `moved` flag (moving one column flags only that column) and the enum options added and removed; `order_changed` covers the whole list. It sees columns only, so an option rename appears as one removed and one added option, and the caller labels renames from the plan's `EnumRewrite` effects, taken in sequence.
 
+## The Table File
+
+`chat/tables/storage.py` owns everything inside a table's directory; its module docstring describes the layout. Every public function takes the table directory from `ChatStorage.get_table_dir()`, never a database path. `table.db` holds three tables:
+
+- `rows`: `_id INTEGER PRIMARY KEY AUTOINCREMENT`, `_created_at` and `_updated_at` (fixed-width UTC ISO strings, so text order is time order), then one column per schema column named by its key, typed by `sql_type()`. User columns carry no NOT NULL. Each `unique` column has a unique index named by `unique_index_name()`. Only keys that pass `is_valid_column_key()` are interpolated into SQL (`_ident()`).
+- `changes`: the [change log](#change-log); its columns are the DDL in `create_table_db()`.
+- `meta`: the schema JSON, `schema_version`, `table_id` and `title` (`write_meta()`, `read_meta()`), so a downloaded copy is self-describing. `quest.db` stays the source of truth.
+
+`create_table_db()` is the only function that creates the directory, and creates it exclusively (`storage_exists` for an existing entry of any kind), so a new table never inherits an orphan file; on any failure it removes what it made, so a retry starts clean. The DDL, the meta rows and change #1 (kind `schema`, shape in the docstring) commit in one transaction, so the file has a change log entry from its first commit. Every other function refuses a missing directory with `storage_missing`.
+
+### Opening
+
+Every connection comes from `connect()`: synchronous `sqlite3`, one connection per call, which the service calls through `asyncio.to_thread` under its per-table lock. Each connection runs in WAL mode with the busy timeout `TABLE_DB_BUSY_TIMEOUT_S` (a lock held past it refuses with `busy`) and with SQLite's double-quoted-string fallback disabled, so a quoted key that names no column fails as `schema_mismatch` instead of reading as a string literal. An authorizer denies ATTACH, as for the [project database](project-db.md), although no model SQL reaches the file. `VACUUM INTO` compiles to an ATTACH of its target, so the download copy allows exactly that filename for that one statement (`_attach_allowed()`).
+
+The path guards refuse with `unsafe_path`: a table directory that is not a real directory (`lstat`, so a symlink fails); a `table.db` that is a symlink or not a regular file (`O_NOFOLLOW` plus `fstat`, opened non-blocking so a planted FIFO cannot hang the open); a `-wal`, `-shm` or `-journal` side file that is not a regular file, checked before and after the pragmas since enabling WAL creates them; and a `table.db` whose device and inode changed between the check and the connect.
+
+## Row Writes
+
+`insert_rows()`, `update_rows()`, `upsert_rows()` and `delete_rows()` each run one `BEGIN IMMEDIATE` transaction (`_write_txn()`): check the live file against the schema and `schema_version` the caller passed, validate every row collecting every problem, apply the caps, check unique columns against the state after the write, apply it, append the change entry and prune. Any refusal rolls back, so nothing is written. Payload rows address columns by name; stored rows, images and `dump_rows()` output are keyed by key. Values go through `apply_default()` (inserts) or `canonicalize()` (patches), then `to_storage()`. `RowWriteResult` describes the outcome.
+
+- **insert**: an omitted column takes its default, an explicit null does not.
+- **update**: each entry names an `_id` and a partial patch; only the named columns change, an explicit null clears a cell, `_updated_at` moves and `_created_at` stays. An unknown `_id` fails the whole call. Unique values may swap between rows in one call.
+- **upsert**: `key_column` must name a unique column, checked before any row work. Each row needs a key value, at most once per call. A row whose key is stored is a partial patch as in update; any other row is an insert with defaults, and only inserts count against `TABLE_MAX_ROWS`.
+- **delete**: exactly one of a list of ids or a prepared `(where_sql, params)` pair, which must be trusted SQL built from validated keys with every value bound, never model text. A filter matching more than `TABLE_WRITE_MAX_ROWS` rows refuses with the matching count; one matching nothing writes no change and returns `change_id` None.
+
+## Change Log
+
+Every write appends one `changes` entry inside its own transaction (`append_change()`). A `rows` change's `before` and `after` are lists of full stored rows sorted by `_id`: `_id`, both timestamps and every schema column, keyed by key, cells in stored form. An insert carries only `after`, a delete only `before`, an update both, and an upsert's `before` holds only the rows that existed before the call. The images carry what a revert needs to replay a change as a plain INSERT, UPDATE or DELETE.
+
+`size_bytes` is the UTF-8 length of both encoded images. Above `TABLE_CHANGE_MAX_BYTES` the write is refused (`ChangeTooLargeError`, with a caller-supplied hint on how to split it), so every recorded change stays undoable. `prune_changes()` runs in the same transaction, dropping entries older than `TABLE_CHANGE_RETENTION_DAYS` and then all but the newest `TABLE_CHANGE_MAX_COUNT`. `get_change()` and `list_changes()` read the log.
+
+## Refusals
+
+Every refusal is a `TableStorageError` with a machine `code` and a model-facing `message`; the class docstring lists the plain codes, and each subclass carries its own. Each write's docstring names the refusals and problem codes it can raise. What the docstrings do not say:
+
+- `invalid_rows` (`InvalidRowsError`) carries every problem of the call as `{row, column, code, reason}`, ordered by row, then schema column order.
+- `too_many_rows`, `table_full` and `change_too_large` are the caps; `unknown_key_column` and `key_not_unique` (`UpsertKeyError`) refuse an upsert key.
+- `schema_mismatch` means `quest.db` and `table.db` disagree on the schema; it is the file-level check, distinct from the store's `StaleTableSchemaError` token.
+- `constraint_failed` is a residual SQLite integrity error that the Python checks should have caught; its message is fixed, so no SQLite text reaches a model.
+- `busy`, `unsafe_path`, `storage_missing`, `storage_exists` and `corrupt_storage` come from the file itself; `no_rows`, `invalid_selector` and `copy_exists` from malformed calls.
+
+## Download Copy
+
+`copy_for_download()` writes a single-file SQLite copy with `VACUUM INTO`: `rows` and `meta`, plus `changes` only with `include_history`. The copy is left in rollback-journal mode, so no side file belongs to it. The destination must not exist (`copy_exists`), and a partial copy is removed on failure.
+
 ## Feature Gate
 
 The off-by-default, per-user `tables` gate (`FEATURE_TABLES`, `tables_enabled_for()`) is mirrored into the connected-services map as the pseudo-key `tables` (`TABLES_SERVICE_KEY`), so tools and skills that declare `requires_service: "tables"` drop out of the prompt while the gate is closed for the user. The gate deletes nothing. See [Feature Gates -- Enforcement Layers (Quest Tables)](feature-gates.md#enforcement-layers-quest-tables).
@@ -132,3 +178,15 @@ Cells are stored under the key, so a rename edits only the schema JSON and never
 
 **Why no column type changes?**
 Converting stored values in place needs a rule per type pair and a lossy undo; adding a column of the new type and copying with row writes keeps every step an ordinary, undoable change.
+
+**Why synchronous `sqlite3` through `asyncio.to_thread` instead of `aiosqlite`?**
+The guards need the raw connection before the first statement (authorizer, double-quoted-string setting, inode recheck) and an authorizer swap around `VACUUM INTO`; and since writes are serialized by the per-table lock, wrapping one whole write function costs one thread hop per write where `aiosqlite` hops once per statement.
+
+**Why AUTOINCREMENT on `rows._id`?**
+A plain `INTEGER PRIMARY KEY` hands a deleted top id out again. Undo re-inserts a deleted row under its original `_id`, so reuse would let a later insert collide with a pending undo and make a change's `row_ids` ambiguous.
+
+**Why change images of full stored rows keyed by key?**
+Keys survive renames, so an old image still applies after a column rename; full rows in stored form make a replay a plain INSERT or UPDATE, with no re-canonicalization and no merge against the current row.
+
+**Why no NOT NULL on user columns?**
+`required` is enforced in Python on every write and by violation checks on schema changes; in the DDL, toggling it would need a table rebuild, since SQLite cannot alter a column constraint.
