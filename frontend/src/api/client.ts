@@ -35,6 +35,9 @@ import type {
   MemorySuggestion,
   MemorySuggestionsListResponse,
   AcceptMemorySuggestionResponse,
+  MemoryInboxCountsResponse,
+  MemoryInboxPendingResponse,
+  MemoryInboxResolvedResponse,
   ProjectMemory,
   ProjectMemoriesListResponse,
   ProjectMemorySuggestion,
@@ -275,6 +278,27 @@ export function acceptMemorySuggestion(
 
 export function dismissMemorySuggestion(suggestionId: string): Promise<{ suggestion: MemorySuggestion }> {
   return apiPost(`${endpoints.memorySuggestion(suggestionId)}/dismiss`);
+}
+
+// The inbox's Memories tab: both kinds across all conversations
+
+export function fetchMemoryInboxCounts(): Promise<MemoryInboxCountsResponse> {
+  return apiGet(endpoints.memoryInboxCounts());
+}
+
+export function fetchMemoryInboxPending(): Promise<MemoryInboxPendingResponse> {
+  return apiGet(endpoints.memoryInboxPending());
+}
+
+/** One page of reviewed suggestions, newest first; pass the previous
+ *  page's ``next_cursor`` for the following one. */
+export function fetchMemoryInboxResolved(
+  cursor?: string | null,
+  limit?: number,
+): Promise<MemoryInboxResolvedResponse> {
+  return apiGet(endpoints.memoryInboxResolved(), {
+    query: { cursor: cursor ?? undefined, limit },
+  });
 }
 
 // Project memories (chat/project_memory_routes.py)

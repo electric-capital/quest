@@ -1,0 +1,284 @@
+/* The inbox's Memories tab (MemoryInbox.tsx): the open-suggestions section
+   reuses the row styles of MemorySuggestions.css; the reviewed list below
+   it is read-only. Dark-first like RequestsView.css, with the light block
+   at the end. */
+
+.memory-inbox {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.memory-inbox-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.memory-inbox-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.memory-inbox-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.memory-inbox-section-count {
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: rgb(var(--accent-rgb) / 0.18);
+  color: var(--accent-text);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.memory-inbox-bulk {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.memory-inbox-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.memory-inbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+/* The shared rows sit on the inbox surface rather than inside a panel. */
+.memory-inbox .memory-suggestion-row {
+  background-color: #222222;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.memory-inbox .memory-suggestion-row--user {
+  border-color: rgb(var(--accent-rgb) / 0.4);
+}
+
+.memory-inbox .memory-suggestion-row--project {
+  border-color: rgb(245 158 11 / 0.4);
+}
+
+.memory-inbox-status,
+.memory-inbox-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 1.5rem 1rem;
+  font-size: 0.875rem;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* Where a suggestion came from: kind pill + conversation link. */
+.memory-inbox-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.5rem;
+  font-size: 0.76rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.memory-inbox-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid rgb(var(--accent-rgb) / 0.4);
+  color: var(--accent-text);
+  white-space: nowrap;
+}
+
+.memory-inbox-kind--project {
+  border-color: rgb(245 158 11 / 0.45);
+  color: #fbbf24;
+}
+
+.memory-inbox-conversation-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.memory-inbox-conversation-link:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.memory-inbox-project {
+  color: rgba(255, 255, 255, 0.65);
+}
+
+/* Reviewed (accepted / dismissed) rows. */
+.memory-inbox-reviewed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background-color: #222222;
+}
+
+.memory-inbox-reviewed--accepted {
+  border-color: rgba(80, 200, 120, 0.25);
+}
+
+.memory-inbox-reviewed--dismissed {
+  opacity: 0.75;
+}
+
+.memory-inbox-reviewed-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.5rem;
+}
+
+.memory-inbox-status-pill {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+}
+
+.memory-inbox-status-pill--accepted {
+  background-color: rgba(80, 200, 120, 0.15);
+  color: #50c878;
+}
+
+.memory-inbox-status-pill--dismissed {
+  background-color: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.memory-inbox-time {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.memory-inbox-reviewed-content {
+  padding: 0 0.5rem;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.85);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-inbox-sentinel {
+  height: 1px;
+}
+
+.memory-inbox-load-more {
+  align-self: center;
+  padding: 0.35rem 0.9rem;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: none;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.memory-inbox-load-more:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+@media (prefers-color-scheme: light) {
+  .memory-inbox-section-title {
+    color: rgba(0, 0, 0, 0.85);
+  }
+
+  .memory-inbox-hint {
+    color: rgba(0, 0, 0, 0.5);
+  }
+
+  .memory-inbox .memory-suggestion-row,
+  .memory-inbox-reviewed {
+    background-color: #fafafa;
+    border-color: rgba(0, 0, 0, 0.1);
+  }
+
+  .memory-inbox .memory-suggestion-row--user {
+    border-color: rgb(var(--accent-rgb) / 0.35);
+  }
+
+  .memory-inbox .memory-suggestion-row--project {
+    border-color: rgb(245 158 11 / 0.5);
+  }
+
+  .memory-inbox-reviewed--accepted {
+    border-color: rgba(80, 200, 120, 0.3);
+  }
+
+  .memory-inbox-status,
+  .memory-inbox-empty {
+    color: rgba(0, 0, 0, 0.45);
+  }
+
+  .memory-inbox-source {
+    color: rgba(0, 0, 0, 0.5);
+  }
+
+  .memory-inbox-kind--project {
+    color: #a3540a;
+  }
+
+  .memory-inbox-project {
+    color: rgba(0, 0, 0, 0.65);
+  }
+
+  .memory-inbox-status-pill--accepted {
+    background-color: rgba(80, 200, 120, 0.1);
+    color: #2e8b57;
+  }
+
+  .memory-inbox-status-pill--dismissed {
+    background-color: rgba(0, 0, 0, 0.06);
+    color: rgba(0, 0, 0, 0.55);
+  }
+
+  .memory-inbox-time {
+    color: rgba(0, 0, 0, 0.35);
+  }
+
+  .memory-inbox-reviewed-content {
+    color: rgba(0, 0, 0, 0.8);
+  }
+
+  .memory-inbox-load-more {
+    border-color: rgba(0, 0, 0, 0.15);
+    color: rgba(0, 0, 0, 0.6);
+  }
+
+  .memory-inbox-load-more:hover {
+    border-color: rgba(0, 0, 0, 0.3);
+    color: rgba(0, 0, 0, 0.85);
+  }
+}

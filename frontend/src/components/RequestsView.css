@@ -25,6 +25,48 @@
   color: rgba(255, 255, 255, 0.9);
 }
 
+/* Requests / Memories tabs */
+.requests-view-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.requests-view-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: -1px;
+  padding: 0.45rem 0.85rem;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.requests-view-tab:hover {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.requests-view-tab.active {
+  color: rgba(255, 255, 255, 0.95);
+  border-bottom-color: var(--accent);
+}
+
+.requests-view-tab-count {
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: rgb(var(--accent-rgb) / 0.18);
+  color: var(--accent-text);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
 /* Filter pills */
 .requests-filter-pills {
   display: flex;
@@ -415,6 +457,22 @@
 @media (prefers-color-scheme: light) {
   .requests-view-header h2 {
     color: rgba(0, 0, 0, 0.85);
+  }
+
+  .requests-view-tabs {
+    border-bottom-color: rgba(0, 0, 0, 0.1);
+  }
+
+  .requests-view-tab {
+    color: rgba(0, 0, 0, 0.55);
+  }
+
+  .requests-view-tab:hover {
+    color: rgba(0, 0, 0, 0.8);
+  }
+
+  .requests-view-tab.active {
+    color: rgba(0, 0, 0, 0.9);
   }
 
   .requests-filter-pill {

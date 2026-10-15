@@ -1,11 +1,19 @@
 /**
- * RequestsView - Full-pane view for all action requests.
- * Replaces the chat panel + file browser when the user clicks "Requests" in the sidebar.
+ * RequestsView - the full-pane inbox, replacing the chat panel + file
+ * browser when the user clicks the inbox button in the sidebar. Two tabs,
+ * each with its own URL: Requests (/inbox) lists every action request;
+ * Memories (/inbox/memories) is the MemoryInbox of suggested memories
+ * awaiting review. The tab labels carry the unanswered counts.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { fetchActionRequestsEnriched, fetchActionRequestCounts, resolveActionRequest } from '../api/client';
+import { useLocation, useNavigate } from 'react-router-dom';
+import {
+  fetchActionRequestsEnriched,
+  fetchActionRequestCounts,
+  fetchMemoryInboxCounts,
+  resolveActionRequest,
+} from '../api/client';
 import type { EnrichedActionRequest, ActionRequestCountsResponse } from '../api/types';
 import { useNavigationState } from '../contexts/NavigationContext';
 import { onRequestCountChange } from '../services/requestEvents';
@@ -13,10 +21,49 @@ import { persistentWebSocket } from '../services/PersistentWebSocket';
 import { ReviseFeedbackForm } from './ReviseFeedbackForm';
 import { ActionRequestPreviewFields } from './ActionRequestPreviewFields';
 import { AnimatedWidthButton } from './AnimatedWidthButton';
+import { MemoryInbox } from './MemoryInbox';
 import './RequestsView.css';
 
 type FilterStatus = 'all' | 'open' | 'executed' | 'denied' | 'stopped';
 type PendingAction = 'approve' | 'revise' | 'stop';
+type InboxTab = 'requests' | 'memories';
+
+export const INBOX_TAB_PATHS: Record<InboxTab, string> = {
+  requests: '/inbox',
+  memories: '/inbox/memories',
+};
+
+/**
+ * The user's pending suggested memories of both kinds, for the Memories
+ * tab label: fetched once, then followed through the per-user globals'
+ * ``total_pending``.
+ */
+function usePendingMemoryCount(): number {
+  const [counts, setCounts] = useState({ user: 0, project: 0 });
+  useEffect(() => {
+    let cancelled = false;
+    fetchMemoryInboxCounts()
+      .then((resp) => {
+        if (!cancelled) setCounts({ user: resp.user, project: resp.project });
+      })
+      .catch(() => {
+        // The label just keeps its last value.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    return persistentWebSocket.onGlobalEvent((event) => {
+      const isProject = event.type === 'project_memory_suggestions_changed';
+      if (!isProject && event.type !== 'memory_suggestions_changed') return;
+      const total = event.total_pending;
+      if (typeof total !== 'number') return;
+      setCounts((prev) => (isProject ? { ...prev, project: total } : { ...prev, user: total }));
+    });
+  }, []);
+  return counts.user + counts.project;
+}
 
 /** Format a timestamp as a relative or absolute string. */
 function formatTimestamp(isoTimestamp: string): string {
@@ -45,6 +92,10 @@ export function RequestsView() {
   const { setShowRequestsView } = useNavigationState();
 
   const navigate = useNavigate();
+  const location = useLocation();
+  // The URL picks the tab (App.tsx keeps the view open on both paths).
+  const tab: InboxTab = location.pathname === INBOX_TAB_PATHS.memories ? 'memories' : 'requests';
+  const pendingMemoryCount = usePendingMemoryCount();
 
   const [requests, setRequests] = useState<EnrichedActionRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -364,26 +415,54 @@ export function RequestsView() {
     { key: 'all', label: 'All' },
   ];
 
+  const tabs: { key: InboxTab; label: string; count: number }[] = [
+    { key: 'requests', label: 'Requests', count: counts.open },
+    { key: 'memories', label: 'Memories', count: pendingMemoryCount },
+  ];
+
   return (
     <div className="requests-view">
       <div className="requests-view-header">
-        <h2>Requests</h2>
-        <div className="requests-filter-pills">
-          {filterOptions.map((opt) => (
+        <h2>Inbox</h2>
+        <div className="requests-view-tabs" role="tablist" aria-label="Inbox sections">
+          {tabs.map((t) => (
             <button
-              key={opt.key}
-              className={`requests-filter-pill${filter === opt.key ? ' active' : ''}`}
-              onClick={() => handleFilterChange(opt.key)}
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.key}
+              className={`requests-view-tab${tab === t.key ? ' active' : ''}`}
+              onClick={() => navigate(INBOX_TAB_PATHS[t.key])}
             >
-              {opt.label}
-              <span className="pill-count">({counts[opt.key]})</span>
+              {t.label}
+              {t.count > 0 && (
+                <span className="requests-view-tab-count">{t.count}</span>
+              )}
             </button>
           ))}
         </div>
+        {tab === 'requests' && (
+          <div className="requests-filter-pills">
+            {filterOptions.map((opt) => (
+              <button
+                key={opt.key}
+                className={`requests-filter-pill${filter === opt.key ? ' active' : ''}`}
+                onClick={() => handleFilterChange(opt.key)}
+              >
+                {opt.label}
+                <span className="pill-count">({counts[opt.key]})</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="requests-view-content" ref={contentRef}>
         <div className="requests-view-inner">
+          {tab === 'memories' ? (
+            <MemoryInbox onGoToConversation={handleGoToConversation} />
+          ) : (
+          <>
           {newRequestCount > 0 && !loading && (
             <button
               className="new-requests-banner"
@@ -504,6 +583,8 @@ export function RequestsView() {
                 </div>
               </div>
             ))
+          )}
+          </>
           )}
         </div>
       </div>

@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
+from chat import memory_inbox
 from chat.auth import get_current_user_cookie_or_apikey_checked
 from chat.conversation_access import require_owned_conversation
 from chat.memory_suggestions import (
@@ -331,6 +332,50 @@ async def list_conversation_memory_suggestions(
     await require_owned_conversation(user_id, conversation_id)
     suggestions = await list_pending(user_id, conversation_id)
     return {"suggestions": suggestions, "pending_count": len(suggestions)}
+
+
+@router.get("/memory-inbox/counts")
+async def memory_inbox_counts(
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """The user's pending suggestions across all conversations, per kind
+    and in total (the sidebar inbox badge adds ``pending_count`` to the
+    open action requests)."""
+    return await memory_inbox.count_pending(user["id"])
+
+
+@router.get("/memory-inbox/pending")
+async def memory_inbox_pending(
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Every pending personal and project suggestion of the user, oldest
+    first, each tagged ``kind`` and carrying its conversation's title and
+    project (the inbox Memories tab's open list)."""
+    suggestions = await memory_inbox.list_pending(user["id"])
+    return {"suggestions": suggestions, "pending_count": len(suggestions)}
+
+
+@router.get("/memory-inbox/resolved")
+async def memory_inbox_resolved(
+    cursor: Optional[str] = Query(default=None, description="Keyset cursor of the next page"),
+    limit: int = Query(
+        default=memory_inbox.DEFAULT_RESOLVED_PAGE_SIZE,
+        ge=1, le=memory_inbox.MAX_RESOLVED_PAGE_SIZE,
+    ),
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """One page of the user's accepted / dismissed suggestions of both
+    kinds, most recently resolved first; ``next_cursor`` is null at the end."""
+    try:
+        suggestions, next_cursor = await memory_inbox.list_resolved(
+            user["id"], limit, cursor,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_cursor", "message": "Malformed cursor."},
+        )
+    return {"suggestions": suggestions, "next_cursor": next_cursor}
 
 
 @router.post("/memory-suggestions/{suggestion_id}/accept")

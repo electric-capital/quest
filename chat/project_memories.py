@@ -36,13 +36,16 @@ async def publish_changed(user_id: int, conversation_id: str) -> int:
     Returns the count; a bus failure is logged and never fails the write.
     """
     pending_count = await store.count_pending(user_id, conversation_id)
+    total_pending = await store.count_pending_for_user(user_id)
     try:
         from chat.realtime.bus import bus
         from chat.realtime.events import make_project_memory_suggestions_changed
 
         bus.publish_to_user(
             user_id,
-            make_project_memory_suggestions_changed(conversation_id, pending_count),
+            make_project_memory_suggestions_changed(
+                conversation_id, pending_count, total_pending,
+            ),
         )
     except Exception:  # pragma: no cover - defensive
         logger.exception(

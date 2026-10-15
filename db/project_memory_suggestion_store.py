@@ -16,9 +16,11 @@ from sqlalchemy import func, select, update
 from db.engine import AsyncSessionLocal
 from db.memory_suggestion_store import (
     MAX_PENDING_PER_CONVERSATION,
+    RESOLVED_STATUSES,
     SuggestionAlreadyResolvedError,
     _normalize_reasoning,
     normalize_content,
+    resolved_keyset_filter,
 )
 from db.models import (
     MemorySuggestionStatus,
@@ -31,11 +33,15 @@ __all__ = [
     "SuggestionAlreadyResolvedError",
     "accept_suggestion",
     "count_pending",
+    "count_pending_for_user",
     "create_suggestion",
     "dismiss_suggestion",
     "find_active_memory_with_content",
     "find_pending_with_content",
     "list_pending",
+    "list_pending_for_user",
+    "list_pending_summaries",
+    "list_resolved_for_user",
     "normalize_content",
 ]
 
@@ -121,6 +127,90 @@ async def count_pending(user_id: int, conversation_id: str) -> int:
             )
         )
         return int(result.scalar_one())
+
+
+async def count_pending_for_user(user_id: int) -> int:
+    """Pending project-memory suggestions across all of the user's conversations."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(func.count())
+            .select_from(ProjectMemorySuggestion)
+            .where(
+                ProjectMemorySuggestion.user_id == user_id,
+                ProjectMemorySuggestion.status == MemorySuggestionStatus.PENDING,
+            )
+        )
+        return int(result.scalar_one())
+
+
+async def list_pending_for_user(user_id: int) -> list[dict]:
+    """Every pending suggestion of the user, oldest first, with
+    ``replaces_content`` like :func:`list_pending`."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ProjectMemorySuggestion, ProjectMemory.content)
+            .outerjoin(
+                ProjectMemory,
+                ProjectMemory.id == ProjectMemorySuggestion.replaces_memory_id,
+            )
+            .where(
+                ProjectMemorySuggestion.user_id == user_id,
+                ProjectMemorySuggestion.status == MemorySuggestionStatus.PENDING,
+            )
+            .order_by(
+                ProjectMemorySuggestion.created_at.asc(),
+                ProjectMemorySuggestion.id.asc(),
+            )
+        )
+        return [
+            {**_to_dict(row), "replaces_content": replaced_content}
+            for row, replaced_content in result.all()
+        ]
+
+
+async def list_resolved_for_user(
+    user_id: int, limit: int, cursor: Optional[tuple[datetime, str]] = None,
+) -> list[dict]:
+    """One keyset page of the user's accepted / dismissed project-memory
+    suggestions, most recently resolved first; same contract as
+    ``memory_suggestion_store.list_resolved_for_user``."""
+    async with AsyncSessionLocal() as db:
+        stmt = (
+            select(ProjectMemorySuggestion)
+            .where(
+                ProjectMemorySuggestion.user_id == user_id,
+                ProjectMemorySuggestion.status.in_(RESOLVED_STATUSES),
+            )
+            .order_by(
+                ProjectMemorySuggestion.resolved_at.desc(),
+                ProjectMemorySuggestion.id.desc(),
+            )
+            .limit(limit)
+        )
+        keyset = resolved_keyset_filter(ProjectMemorySuggestion, cursor)
+        if keyset is not None:
+            stmt = stmt.where(keyset)
+        result = await db.execute(stmt)
+        return [_to_dict(row) for row in result.scalars().all()]
+
+
+async def list_pending_summaries() -> list[dict]:
+    """One row per user with pending project-memory suggestions, across all
+    users; same shape as ``memory_suggestion_store.list_pending_summaries``."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(
+                ProjectMemorySuggestion.user_id,
+                func.count(ProjectMemorySuggestion.id),
+                func.min(ProjectMemorySuggestion.created_at),
+            )
+            .where(ProjectMemorySuggestion.status == MemorySuggestionStatus.PENDING)
+            .group_by(ProjectMemorySuggestion.user_id)
+        )
+        return [
+            {"user_id": user_id, "pending_count": count, "oldest_created_at": oldest}
+            for user_id, count, oldest in result.all()
+        ]
 
 
 async def find_pending_with_content(

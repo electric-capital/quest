@@ -22,7 +22,7 @@ Every project, public ones included, keeps its own memories beside each user's p
 
 1. The model reads with `project_memory_search` / `project_memory_list`, then proposes with `suggest_project_memory`, unprompted or because the user asked.
 2. `register_suggestion()` in `chat/project_memories.py` stores the row and publishes the pending count; `useConversation.ts` feeds it into `pendingProjectMemorySuggestions` in `conversationStore.ts`.
-3. The user accepts or dismisses from the project panel (`/app/api/project-memory-suggestions/{id}/accept|dismiss`), or edits memories directly in Project Settings.
+3. The user accepts or dismisses from the project panel or the inbox's Memories tab (`/app/api/project-memory-suggestions/{id}/accept|dismiss`; the inbox lists project suggestions beside personal ones, see [Memory Suggestions -- The Inbox's Memories Tab](memory-suggestions.md#the-inboxs-memories-tab)), or edits memories directly in Project Settings.
 
 ## Who Sees Them
 

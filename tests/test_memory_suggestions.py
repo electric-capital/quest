@@ -266,6 +266,7 @@ class TestRegisterSuggestion:
             "type": "memory_suggestions_changed",
             "conversation_id": cid,
             "pending_count": 1,
+            "total_pending": 1,
         })]
 
     def test_duplicate_guards(self, env):

@@ -2,8 +2,10 @@
 
 Exercises one poll cycle (``_poll_once``) with all collaborators patched at
 their source modules (the notifier imports them lazily): the cross-user
-open-request summary query, the user lookup, the bot-token loader, and the
-actual Slack send. No database or network is touched.
+open-request and pending-suggestion summary queries, the user lookup, the
+bot-token loader, and the actual Slack send. No database or network is
+touched. The merged counts and the DM wording are covered in
+tests/test_memory_inbox.py.
 """
 
 import asyncio
@@ -48,7 +50,14 @@ def _summary(user_id=1, open_count=2, age_minutes=DEFAULT_INTERVAL_MINUTES + 5):
     return {"user_id": user_id, "open_count": open_count, "oldest_created_at": oldest}
 
 
-def _poll(summaries, users, bot_token="xoxb-test"):
+def _suggestion_summary(user_id=1, pending_count=1, age_minutes=DEFAULT_INTERVAL_MINUTES + 5):
+    oldest = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        minutes=age_minutes,
+    )
+    return {"user_id": user_id, "pending_count": pending_count, "oldest_created_at": oldest}
+
+
+def _poll(summaries, users, bot_token="xoxb-test", suggestions=()):
     """Run one poll cycle; returns the mocked ``_send_reminder``."""
     users_by_id = {u["id"]: u for u in users}
 
@@ -64,6 +73,9 @@ def _poll(summaries, users, bot_token="xoxb-test"):
     with patch(
         "db.action_request_store.list_open_request_summaries",
         AsyncMock(return_value=summaries),
+    ), patch(
+        "chat.memory_inbox.list_pending_summaries",
+        AsyncMock(return_value=list(suggestions)),
     ), patch("db.user_store.get_user_by_id", AsyncMock(side_effect=get_user)), \
          patch("auth.config.load_slack_bot_token", token_loader), \
          patch.object(slack_notifier, "_send_reminder", send):
@@ -73,8 +85,27 @@ def _poll(summaries, users, bot_token="xoxb-test"):
 
 def test_reminds_user_with_old_open_requests():
     send = _poll([_summary(user_id=1, open_count=3)], [_user(1)])
-    send.assert_awaited_once_with("xoxb-test", "U0001", 3)
+    send.assert_awaited_once_with("xoxb-test", "U0001", 3, 0)
     assert 1 in slack_notifier._last_notified
+
+
+def test_reminds_about_suggested_memories_alone():
+    send = _poll([], [_user(1)], suggestions=[_suggestion_summary(user_id=1, pending_count=2)])
+    send.assert_awaited_once_with("xoxb-test", "U0001", 0, 2)
+
+
+def test_young_suggestions_not_yet_reminded():
+    send = _poll([], [_user(1)], suggestions=[_suggestion_summary(user_id=1, age_minutes=10)])
+    send.assert_not_awaited()
+
+
+def test_old_suggestion_makes_a_young_request_due():
+    # The age gate looks at the oldest unanswered item of either kind.
+    send = _poll(
+        [_summary(user_id=1, open_count=1, age_minutes=10)], [_user(1)],
+        suggestions=[_suggestion_summary(user_id=1, pending_count=2)],
+    )
+    send.assert_awaited_once_with("xoxb-test", "U0001", 1, 2)
 
 
 def test_throttles_within_interval():
@@ -146,7 +177,8 @@ def test_send_failure_still_records_attempt():
     with patch(
         "db.action_request_store.list_open_request_summaries",
         AsyncMock(return_value=[_summary(user_id=1)]),
-    ), patch("db.user_store.get_user_by_id", AsyncMock(side_effect=get_user)), \
+    ), patch("chat.memory_inbox.list_pending_summaries", AsyncMock(return_value=[])), \
+         patch("db.user_store.get_user_by_id", AsyncMock(side_effect=get_user)), \
          patch("auth.config.load_slack_bot_token", lambda: "xoxb-test"), \
          patch.object(
              slack_notifier, "_send_reminder",
@@ -168,7 +200,8 @@ def test_one_user_failure_does_not_block_others():
     with patch(
         "db.action_request_store.list_open_request_summaries",
         AsyncMock(return_value=[_summary(user_id=1), _summary(user_id=2)]),
-    ), patch("db.user_store.get_user_by_id", AsyncMock(side_effect=get_user)), \
+    ), patch("chat.memory_inbox.list_pending_summaries", AsyncMock(return_value=[])), \
+         patch("db.user_store.get_user_by_id", AsyncMock(side_effect=get_user)), \
          patch("auth.config.load_slack_bot_token", lambda: "xoxb-test"), \
          patch.object(slack_notifier, "_send_reminder", send):
         asyncio.run(slack_notifier._poll_once())

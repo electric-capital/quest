@@ -28,19 +28,21 @@ logger = logging.getLogger(__name__)
 
 
 async def publish_changed(user_id: int, conversation_id: str) -> int:
-    """Publish ``memory_suggestions_changed`` with the fresh pending count.
+    """Publish ``memory_suggestions_changed`` with the fresh pending counts
+    (the conversation's, and the user's total for the inbox badge).
 
-    Returns the count. Publishing is best-effort: a bus failure is logged
-    and never fails the write that triggered it.
+    Returns the conversation's count. Publishing is best-effort: a bus
+    failure is logged and never fails the write that triggered it.
     """
     pending_count = await store.count_pending(user_id, conversation_id)
+    total_pending = await store.count_pending_for_user(user_id)
     try:
         from chat.realtime.bus import bus
         from chat.realtime.events import make_memory_suggestions_changed
 
         bus.publish_to_user(
             user_id,
-            make_memory_suggestions_changed(conversation_id, pending_count),
+            make_memory_suggestions_changed(conversation_id, pending_count, total_pending),
         )
     except Exception:  # pragma: no cover - defensive
         logger.exception(

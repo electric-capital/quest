@@ -900,6 +900,35 @@ export interface MemorySuggestionsListResponse {
   pending_count: number;
 }
 
+/** A row of the inbox's Memories tab (chat/memory_inbox.py): a personal or
+ *  project suggestion plus where it came from. */
+export interface MemoryInboxSuggestion extends MemorySuggestion {
+  kind: 'user' | 'project';
+  /** The project suggestion's project, or the conversation's project. */
+  project_id: string | null;
+  project_name: string | null;
+  /** The conversation's sidebar title; null when it has none yet or is gone. */
+  conversation_title: string | null;
+}
+
+export interface MemoryInboxCountsResponse {
+  user: number;
+  project: number;
+  /** Pending suggestions of both kinds across all conversations. */
+  pending_count: number;
+}
+
+export interface MemoryInboxPendingResponse {
+  suggestions: MemoryInboxSuggestion[];
+  pending_count: number;
+}
+
+export interface MemoryInboxResolvedResponse {
+  suggestions: MemoryInboxSuggestion[];
+  /** Cursor of the next page; null at the end. */
+  next_cursor: string | null;
+}
+
 export interface AcceptMemorySuggestionResponse {
   suggestion: MemorySuggestion;
   memory: Memory;

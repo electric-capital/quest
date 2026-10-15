@@ -82,6 +82,11 @@ export const endpoints = {
 
   memorySuggestion: (id: string) => `${API_BASE_URL}/memory-suggestions/${id}`,
 
+  // The inbox's Memories tab: every suggestion of both kinds (chat/memory_inbox.py).
+  memoryInboxCounts: () => `${API_BASE_URL}/memory-inbox/counts`,
+  memoryInboxPending: () => `${API_BASE_URL}/memory-inbox/pending`,
+  memoryInboxResolved: () => `${API_BASE_URL}/memory-inbox/resolved`,
+
   projectMemories: (projectId: string) => `${API_BASE_URL}/projects/${projectId}/memories`,
 
   projectMemory: (projectId: string, id: string) =>

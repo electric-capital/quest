@@ -610,9 +610,10 @@ async def serve_spa_admin(rest: str):
     return FileResponse(FRONTEND_BUILD_DIR / "index.html")
 
 @app.get("/inbox")
+@app.get("/inbox/memories")
 async def serve_spa_inbox():
-    """Serve SPA for the /inbox deep link (the requests inbox view --
-    linked from Slack pending-request reminder DMs)."""
+    """Serve SPA for the inbox deep links (the Requests and Memories tabs
+    of the inbox view -- linked from Slack pending-request reminder DMs)."""
     return FileResponse(FRONTEND_BUILD_DIR / "index.html")
 
 @app.get("/docs")

@@ -245,6 +245,7 @@ class TestSuggestions:
             "type": "project_memory_suggestions_changed",
             "conversation_id": cid,
             "pending_count": 1,
+            "total_pending": 1,
         }]
         # The personal-memory event is untouched.
         assert _events(env, "memory_suggestions_changed") == []

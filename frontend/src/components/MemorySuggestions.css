@@ -2,7 +2,9 @@
    pops up over the conversation. Personal memories use the accent family;
    project memories (.memory-suggestions--project) swap in a fixed amber so
    the two bubbles read apart under every colour theme. Both kinds draw
-   through the --suggestion-* variables below. */
+   through the --suggestion-* variables below. The suggestion rows
+   (MemorySuggestionRow.tsx) are shared with the inbox's Memories tab,
+   which carries the same variables on .memory-suggestion-row--<kind>. */
 
 /* Row holding the personal and project bubbles side by side; the panels
    position against it so either one spans the chat column. */
@@ -16,16 +18,21 @@
   z-index: 20;
 }
 
-.memory-suggestions {
+.memory-suggestions,
+.memory-suggestion-row--user {
   --suggestion-rgb: var(--accent-rgb);
   --suggestion-solid: var(--accent);
   --suggestion-contrast: var(--accent-contrast, #fff);
   --suggestion-text: var(--accent-text);
+}
+
+.memory-suggestions {
   display: flex;
   justify-content: center;
 }
 
-.memory-suggestions--project {
+.memory-suggestions--project,
+.memory-suggestion-row--project {
   --suggestion-rgb: 245 158 11;
   --suggestion-solid: #d97706;
   --suggestion-contrast: #fff;
@@ -33,7 +40,8 @@
 }
 
 @media (prefers-color-scheme: light) {
-  .memory-suggestions--project {
+  .memory-suggestions--project,
+  .memory-suggestion-row--project {
     --suggestion-solid: #b45309;
     --suggestion-text: #a3540a;
   }

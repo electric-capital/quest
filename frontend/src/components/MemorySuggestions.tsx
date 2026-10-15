@@ -7,6 +7,8 @@
  * (kept fresh by ``memory_suggestions_changed`` events via useConversation);
  * clicking it opens a panel that overlays the conversation, where each
  * suggestion can be edited, accepted (creating the memory) or dismissed.
+ * The same rows, across every conversation, make up the inbox's Memories
+ * tab (MemoryInbox.tsx).
  *
  * ``kind="project"`` renders the project-memory twin for the model's
  * ``suggest_project_memory`` proposals (chat/project_memories.py): same
@@ -14,9 +16,8 @@
  * folder icon and wording, so the two bubbles never read as one.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { TextareaHTMLAttributes } from 'react';
-import { Brain, Check, ChevronDown, ChevronUp, FolderBookmark, LoaderCircle, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Brain, ChevronDown, ChevronUp, FolderBookmark, LoaderCircle, X } from 'lucide-react';
 import {
   acceptMemorySuggestion,
   acceptProjectMemorySuggestion,
@@ -28,10 +29,11 @@ import {
 import { ApiClientError } from '../api/request';
 import type { MemorySuggestion } from '../api/types';
 import { conversationStore } from '../store/conversationStore';
-import { wordDiff } from '../utils/wordDiff';
+import { MemorySuggestionRow } from './MemorySuggestionRow';
+import type { MemorySuggestionKind } from './MemorySuggestionRow';
 import './MemorySuggestions.css';
 
-export type MemorySuggestionKind = 'user' | 'project';
+export type { MemorySuggestionKind };
 
 interface MemorySuggestionsProps {
   conversationId: string;
@@ -50,9 +52,6 @@ const KIND_CONFIG = {
     hint: 'The assistant thought these were worth remembering across chats. Edit '
       + 'the text if you like, then accept to save it as a memory or dismiss it. '
       + 'Nothing is saved until you accept.',
-    textLabel: 'Memory text',
-    replacesLabel: 'Replaces an existing memory',
-    replacesTitle: 'Accepting archives the memory this one updates',
     saveError: 'Failed to save memory',
     fetchList: fetchMemorySuggestions,
     accept: acceptMemorySuggestion,
@@ -68,9 +67,6 @@ const KIND_CONFIG = {
     hint: 'The assistant thought these facts about this project are worth keeping '
       + 'for every chat in it. Edit the text if you like, then accept to save it '
       + 'to the project\'s memories or dismiss it. Nothing is saved until you accept.',
-    textLabel: 'Project memory text',
-    replacesLabel: 'Replaces an existing project memory',
-    replacesTitle: 'Accepting archives the project memory this one updates',
     saveError: 'Failed to save project memory',
     fetchList: fetchProjectMemorySuggestions,
     accept: acceptProjectMemorySuggestion,
@@ -79,64 +75,9 @@ const KIND_CONFIG = {
   },
 } as const;
 
-/** Textarea that grows with its (wrapped) content instead of clipping it. */
-function AutoGrowTextarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  const ref = useRef<HTMLTextAreaElement>(null);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight}px`;
-  }, [props.value]);
-  return <textarea ref={ref} rows={1} {...props} />;
-}
-
 function errorMessage(err: unknown, fallback: string): string {
   if (err instanceof Error && err.message) return err.message;
   return fallback;
-}
-
-/**
- * What accepting a replacement changes: the replaced memory's text with
- * the words the draft drops struck through on red and the words it adds on
- * green. Follows the draft as the user edits it.
- */
-function ReplacementDiff({
-  before,
-  after,
-  label,
-  title,
-}: { before: string; after: string; label: string; title: string }) {
-  const segments = useMemo(() => wordDiff(before, after.trim()), [before, after]);
-  const unchanged = segments.every((s) => s.type === 'equal');
-  return (
-    <div className="memory-suggestion-diff" data-testid="memory-suggestion-diff">
-      <div className="memory-suggestion-diff-label">
-        <span title={title}>{label}</span>
-        {unchanged ? (
-          <span className="memory-suggestion-diff-note">(same text)</span>
-        ) : (
-          <span className="memory-suggestion-diff-legend" aria-hidden="true">
-            <span className="memory-suggestion-diff-del">removed</span>
-            <span className="memory-suggestion-diff-add">added</span>
-          </span>
-        )}
-      </div>
-      <div className="memory-suggestion-diff-body">
-        {segments.map((segment, i) => {
-          if (segment.type === 'equal') return <span key={i}>{segment.text}</span>;
-          // The whitespace before a changed word is spacing, not a change.
-          const [, lead, text] = /^(\s*)([\s\S]*)$/.exec(segment.text)!;
-          return (
-            <span key={i}>
-              {lead}
-              <span className={`memory-suggestion-diff-${segment.type}`}>{text}</span>
-            </span>
-          );
-        })}
-      </div>
-    </div>
-  );
 }
 
 export function MemorySuggestions({
@@ -379,77 +320,19 @@ export function MemorySuggestions({
               {!isLoading && !loadError && suggestions.length === 0 && (
                 <div className="memory-suggestions-empty">No pending suggestions.</div>
               )}
-              {suggestions.map((suggestion) => {
-                const busy = busyIds.has(suggestion.id);
-                const draft = drafts[suggestion.id] ?? suggestion.content;
-                const rowError = rowErrors[suggestion.id];
-                // A replacement with the old text in hand gets the diff; one
-                // without (memory deleted meanwhile) keeps the plain pill.
-                const replacedText = suggestion.replaces_memory_id
-                  ? suggestion.replaces_content ?? null
-                  : null;
-                return (
-                  <div
-                    key={suggestion.id}
-                    className={`memory-suggestion-row${busy ? ' is-busy' : ''}`}
-                  >
-                    <AutoGrowTextarea
-                      className="memory-suggestion-content"
-                      value={draft}
-                      onChange={(e) => setDrafts((prev) => ({ ...prev, [suggestion.id]: e.target.value }))}
-                      disabled={busy}
-                      aria-label={config.textLabel}
-                    />
-                    {replacedText !== null && (
-                      <ReplacementDiff
-                        before={replacedText}
-                        after={draft}
-                        label={config.replacesLabel}
-                        title={config.replacesTitle}
-                      />
-                    )}
-                    {(suggestion.reasoning || (suggestion.replaces_memory_id && replacedText === null)) && (
-                      <div className="memory-suggestion-meta">
-                        {suggestion.reasoning && (
-                          <span className="memory-suggestion-reasoning">{suggestion.reasoning}</span>
-                        )}
-                        {suggestion.replaces_memory_id && replacedText === null && (
-                          <span className="memory-suggestion-replaces" title={config.replacesTitle}>
-                            {config.replacesLabel}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                    {rowError && (
-                      <div className="memory-suggestions-error" role="alert">{rowError}</div>
-                    )}
-                    <div className="memory-suggestion-actions">
-                      <button
-                        type="button"
-                        className="memory-suggestion-accept"
-                        onClick={() => resolveOne(suggestion, 'accept')}
-                        disabled={busy || !draft.trim()}
-                      >
-                        {busy ? (
-                          <LoaderCircle size={14} className="memory-suggestions-spinner" aria-hidden="true" />
-                        ) : (
-                          <Check size={14} aria-hidden="true" />
-                        )}
-                        Accept
-                      </button>
-                      <button
-                        type="button"
-                        className="memory-suggestion-dismiss"
-                        onClick={() => resolveOne(suggestion, 'dismiss')}
-                        disabled={busy}
-                      >
-                        <X size={14} aria-hidden="true" />
-                        Dismiss
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+              {suggestions.map((suggestion) => (
+                <MemorySuggestionRow
+                  key={suggestion.id}
+                  suggestion={suggestion}
+                  kind={kind}
+                  draft={drafts[suggestion.id] ?? suggestion.content}
+                  onDraftChange={(text) => setDrafts((prev) => ({ ...prev, [suggestion.id]: text }))}
+                  busy={busyIds.has(suggestion.id)}
+                  error={rowErrors[suggestion.id]}
+                  onAccept={() => resolveOne(suggestion, 'accept')}
+                  onDismiss={() => resolveOne(suggestion, 'dismiss')}
+                />
+              ))}
             </div>
           </div>
         </>

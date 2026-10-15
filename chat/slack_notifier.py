@@ -2,13 +2,14 @@
 
 Runs as an asyncio background task within the FastAPI process (started
 and cancelled from the FastAPI lifespan in quest.py, mirroring
-chat/scheduler.py). Periodically finds users with open ("unanswered")
-action requests and sends them a Slack bot DM reminder.
+chat/scheduler.py). Periodically finds users with something "unanswered"
+in their inbox -- open action requests, or suggested memories awaiting
+review (chat/memory_inbox.py) -- and sends them a Slack bot DM reminder.
 
-A user is reminded only when their oldest open request has itself been
+A user is reminded only when their oldest unanswered item has itself been
 open for at least the reminder interval (so a card the user is about to
 click is never insta-DMed), and then at most once per interval while any
-open request remains. The interval defaults to DEFAULT_INTERVAL_MINUTES
+item remains. The interval defaults to DEFAULT_INTERVAL_MINUTES
 and is tunable per user via the ``slack_pending_notification_interval_minutes``
 key in ``users.settings`` (Settings > Slack); the feature can be turned
 off per user with ``slack_pending_notifications_enabled`` (absent = on).
@@ -94,20 +95,36 @@ def _as_aware_utc(dt: datetime) -> datetime:
     return dt
 
 
-def _build_reminder(open_count: int) -> tuple[str, list[dict]]:
-    """The (fallback_text, blocks) for a pending-request reminder DM."""
+def _describe_pending(open_count: int, suggestion_count: int) -> str:
+    """``2 unanswered requests and 1 suggested memory`` -- whichever is
+    non-zero, both joined with "and"."""
+    parts = []
+    if open_count:
+        noun = "request" if open_count == 1 else "requests"
+        parts.append(f"{open_count} unanswered {noun}")
+    if suggestion_count:
+        noun = "memory" if suggestion_count == 1 else "memories"
+        parts.append(f"{suggestion_count} suggested {noun}")
+    return " and ".join(parts)
+
+
+def _build_reminder(open_count: int, suggestion_count: int = 0) -> tuple[str, list[dict]]:
+    """The (fallback_text, blocks) for a reminder DM about ``open_count``
+    open action requests and ``suggestion_count`` suggested memories."""
     from config.server_config import get_app_base_url
 
-    noun = "request" if open_count == 1 else "requests"
+    summary = _describe_pending(open_count, suggestion_count)
     base_url = get_app_base_url()
     text = (
-        f":hourglass_flowing_sand: You have {open_count} unanswered {noun} in "
-        "Quest waiting for your review."
+        f":hourglass_flowing_sand: You have {summary} in Quest waiting for "
+        "your review."
     )
     if base_url:
-        # /inbox deep-links straight into the requests inbox (RequestsView);
-        # served by the SPA route in quest.py.
-        text += f" <{base_url}/inbox|Open your inbox>"
+        # /inbox deep-links straight into the inbox (RequestsView), on its
+        # Memories tab when only suggestions wait; served by the SPA routes
+        # in quest.py.
+        path = "/inbox/memories" if suggestion_count and not open_count else "/inbox"
+        text += f" <{base_url}{path}|Open your inbox>"
     blocks = [
         {
             "type": "section",
@@ -128,21 +145,45 @@ def _build_reminder(open_count: int) -> tuple[str, list[dict]]:
     ]
     # The plain-text fallback (notification banners etc.) must not carry
     # mrkdwn link syntax.
-    fallback = (
-        f"You have {open_count} unanswered {noun} in Quest "
-        "waiting for your review."
-    )
+    fallback = f"You have {summary} in Quest waiting for your review."
     return fallback, blocks
+
+
+async def _collect_pending() -> list[dict]:
+    """One row per user with anything unanswered: ``{"user_id",
+    "open_count", "suggestion_count", "oldest_created_at"}``, the age being
+    the oldest item of either kind."""
+    from chat.memory_inbox import list_pending_summaries
+    from db.action_request_store import list_open_request_summaries
+
+    by_user: dict[int, dict] = {}
+    for summary in await list_open_request_summaries():
+        by_user[summary["user_id"]] = {
+            "user_id": summary["user_id"],
+            "open_count": summary["open_count"],
+            "suggestion_count": 0,
+            "oldest_created_at": summary["oldest_created_at"],
+        }
+    for summary in await list_pending_summaries():
+        row = by_user.setdefault(summary["user_id"], {
+            "user_id": summary["user_id"],
+            "open_count": 0,
+            "suggestion_count": 0,
+            "oldest_created_at": summary["oldest_created_at"],
+        })
+        row["suggestion_count"] = summary["pending_count"]
+        row["oldest_created_at"] = min(
+            row["oldest_created_at"], summary["oldest_created_at"],
+        )
+    return list(by_user.values())
 
 
 async def _poll_once() -> None:
     """Single poll cycle: remind every user whose reminder is due."""
-    from db.action_request_store import list_open_request_summaries
+    summaries = await _collect_pending()
 
-    summaries = await list_open_request_summaries()
-
-    # Forget users who no longer have open requests so their next pending
-    # request starts a fresh interval (and the dict stays bounded).
+    # Forget users with nothing unanswered any more so their next pending
+    # item starts a fresh interval (and the dict stays bounded).
     active_ids = {s["user_id"] for s in summaries}
     for user_id in list(_last_notified):
         if user_id not in active_ids:
@@ -187,11 +228,15 @@ async def _poll_once() -> None:
             # Recorded before the send so a persistent Slack error waits
             # out the same interval instead of retrying every poll tick.
             _last_notified[user_id] = now
-            await _send_reminder(bot_token, slack_user_id, summary["open_count"])
+            await _send_reminder(
+                bot_token, slack_user_id,
+                summary["open_count"], summary["suggestion_count"],
+            )
             logger.info(
                 "[slack-notifier] Sent pending-request reminder to user %s "
-                "(%d open, oldest %s)",
-                user_id, summary["open_count"], oldest.isoformat(),
+                "(%d open requests, %d suggested memories, oldest %s)",
+                user_id, summary["open_count"], summary["suggestion_count"],
+                oldest.isoformat(),
             )
         except Exception:
             logger.warning(
@@ -200,11 +245,13 @@ async def _poll_once() -> None:
             )
 
 
-async def _send_reminder(bot_token: str, slack_user_id: str, open_count: int) -> None:
+async def _send_reminder(
+    bot_token: str, slack_user_id: str, open_count: int, suggestion_count: int = 0,
+) -> None:
     """Post the reminder DM. Slack accepts a bare user id as channel."""
     from slack_sdk.web.async_client import AsyncWebClient
 
-    fallback, blocks = _build_reminder(open_count)
+    fallback, blocks = _build_reminder(open_count, suggestion_count)
     client = AsyncWebClient(token=bot_token)
     await client.chat_postMessage(
         channel=slack_user_id, text=fallback, blocks=blocks,

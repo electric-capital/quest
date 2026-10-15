@@ -53,10 +53,11 @@ function AppContent() {
   const docsRoute = parseDocsRoute(location.pathname, location.search)
   const docsEnabled = enabledFeatures.includes(DOCS_FEATURE)
 
-  // Sync URL -> requests-inbox state. /inbox is the deep-linkable address of
-  // the RequestsView (linked from Slack pending-request reminder DMs); any
-  // navigation away (conversation click, new chat, browser back) closes it.
-  const isInboxRoute = location.pathname === '/inbox'
+  // Sync URL -> inbox state. /inbox (Requests tab) and /inbox/memories
+  // (Memories tab) are the deep-linkable addresses of the RequestsView
+  // (linked from Slack pending-request reminder DMs); any navigation away
+  // (conversation click, new chat, browser back) closes it.
+  const isInboxRoute = location.pathname === '/inbox' || location.pathname === '/inbox/memories'
   useEffect(() => {
     setShowRequestsView(isInboxRoute)
   }, [isInboxRoute, setShowRequestsView])
@@ -234,6 +235,7 @@ function App() {
         <Route path="/chats/:conversationId" element={<AppContent />} />
         <Route path="/projects/:projectId/:conversationId" element={<AppContent />} />
         <Route path="/inbox" element={<AppContent />} />
+        <Route path="/inbox/memories" element={<AppContent />} />
         {/* Quest Docs: All Docs (?project=<id> filter) and the viewer. */}
         <Route path="/docs" element={<AppContent />} />
         <Route path="/docs/:docId" element={<AppContent />} />

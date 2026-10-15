@@ -166,6 +166,7 @@ def make_table_changed(
 def make_memory_suggestions_changed(
     conversation_id: str,
     pending_count: int,
+    total_pending: int,
 ) -> dict[str, Any]:
     """Envelope for ``memory_suggestions_changed``.
 
@@ -173,29 +174,35 @@ def make_memory_suggestions_changed(
     memory-suggestion set changes (the ``suggest_memory`` tool registered
     one, or the user accepted / dismissed one from any tab). Carries the
     conversation's new pending count so the composer bubble updates
-    without a fetch; the open panel re-fetches the list.
+    without a fetch (the open panel re-fetches the list), and the user's
+    pending count across all conversations (``total_pending``) for the
+    sidebar inbox badge and the inbox's Memories tab.
     """
     return {
         "type": "memory_suggestions_changed",
         "conversation_id": conversation_id,
         "pending_count": pending_count,
+        "total_pending": total_pending,
     }
 
 
 def make_project_memory_suggestions_changed(
     conversation_id: str,
     pending_count: int,
+    total_pending: int,
 ) -> dict[str, Any]:
     """Envelope for ``project_memory_suggestions_changed``.
 
     The project-memory twin of ``memory_suggestions_changed``: published
     when a conversation's pending ``suggest_project_memory`` set changes,
-    driving the composer's separate project-memory bubble.
+    driving the composer's separate project-memory bubble; ``total_pending``
+    is the user's pending project-memory count across all conversations.
     """
     return {
         "type": "project_memory_suggestions_changed",
         "conversation_id": conversation_id,
         "pending_count": pending_count,
+        "total_pending": total_pending,
     }
 
 

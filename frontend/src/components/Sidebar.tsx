@@ -477,8 +477,8 @@ export const Sidebar = React.memo(function Sidebar({
                 setShowRequestsView(true);
                 navigate('/inbox');
               }}
-              title="Requests"
-              aria-label="Open requests"
+              title="Inbox"
+              aria-label="Open inbox"
             >
               <Inbox size={18} />
               <RequestsBadge />

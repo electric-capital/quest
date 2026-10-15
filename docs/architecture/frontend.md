@@ -93,9 +93,9 @@ The per-conversation entry point (`UseConversationResult`). It loads the convers
 
 ## URL-Based Routing
 
-Every conversation has its own URL, so deep links, reloads and back / forward work. `frontend/src/main.tsx` wraps the app in `BrowserRouter`; the `<Routes>` in `App.tsx` send `/`, `/chats/<id>` (standalone), `/projects/<pid>/<id>` (project conversation), `/inbox` and the Quest Docs routes to `AppContent`, and render `/set-password` and the admin reports page outside it.
+Every conversation has its own URL, so deep links, reloads and back / forward work. `frontend/src/main.tsx` wraps the app in `BrowserRouter`; the `<Routes>` in `App.tsx` send `/`, `/chats/<id>` (standalone), `/projects/<pid>/<id>` (project conversation), `/inbox`, `/inbox/memories` and the Quest Docs routes to `AppContent`, and render `/set-password` and the admin reports page outside it.
 
-The URL is the source of truth: a `useEffect` in `AppContent` copies the params into `activeConversationId` and `activeProjectId`, and selection goes through `navigate()` in `handleConversationSelect` / `handleNewConversation`, both `useCallback`-stable for the memoized Sidebar. `/inbox` is mirrored into `showRequestsView`; docs routes are parsed on every render by `parseDocsRoute()` (`frontend/src/utils/docsRoute.ts`), with no context field. Keeping the selection only in React state was rejected: it would be lost on reload and conversations could not be linked.
+The URL is the source of truth: a `useEffect` in `AppContent` copies the params into `activeConversationId` and `activeProjectId`, and selection goes through `navigate()` in `handleConversationSelect` / `handleNewConversation`, both `useCallback`-stable for the memoized Sidebar. `/inbox*` is mirrored into `showRequestsView`; docs routes are parsed on every render by `parseDocsRoute()` (`frontend/src/utils/docsRoute.ts`), with no context field. Keeping the selection only in React state was rejected: it would be lost on reload and conversations could not be linked.
 
 ### Project Redirect
 
@@ -127,7 +127,7 @@ The browser authenticates only with the session cookie (`COOKIE_NAME` in `auth/c
 - **Paging.** The top-level list fetches `CONVERSATIONS_PAGE_SIZE` rows at a time with `exclude_projects=true` and the keyset `next_cursor`; an `IntersectionObserver` on the Load more row pages on scroll, and background refreshes re-fetch the whole loaded window.
 - **Drilled list.** `useProjectConversations` polls on `PROJECT_CONVERSATIONS_POLL_INTERVAL_MS` for scheduled routine runs (paused in hidden tabs) and refreshes silently on realtime events; the non-silent loader, which swaps in a loading placeholder, runs only on the first drill-in and the archive toggle.
 - **Re-sort animation.** `hooks/useFlipListAnimation.ts` glides re-ordered rows to their new slot. It measures on every commit, deliberately without a dependency array, because the rendered order can change without any prop identity changing.
-- **Requests badge.** `RequestsBadge` is its own component so a count change re-renders only the badge. It follows the `request_count_changed` per-user global, plus the same-tab bus in `services/requestEvents.ts` that `ActionRequestMessage.tsx` emits on after an answer, for instant feedback.
+- **Inbox badge.** `RequestsBadge` is its own component so a count change re-renders only the badge. It sums open requests and pending memory suggestions from the `request_count_changed` and `*memory_suggestions_changed` globals, plus the same-tab bus in `services/requestEvents.ts`.
 - **Elsewhere:** `updateAvailable` shows a reload prompt; custom names (`custom_name` on `Conversation`, `db/models.py`) override derived titles; Create Project from Chat opens `ConvertToProjectModal.tsx` ([Projects -- Converting a Conversation into a Project](projects.md#converting-a-conversation-into-a-project)); both routine modals show `ROUTINE_PROMPT_FILES_HINT` ([Routines -- File Spaces in Routine Prompts](routines.md#file-spaces-in-routine-prompts)).
 
 ## Composer Component

@@ -11,11 +11,17 @@ and archives the optional ``replaces_memory_id`` memory -- or
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 
 from db.engine import AsyncSessionLocal
 from db.memory_store import MAX_MEMORY_SIZE
-from db.models import Memory, MemorySuggestion, MemorySuggestionStatus
+from db.models import (
+    Conversation,
+    Memory,
+    MemorySuggestion,
+    MemorySuggestionStatus,
+    Project,
+)
 
 
 # Pending suggestions one conversation may hold; the tool refuses beyond it
@@ -24,6 +30,43 @@ MAX_PENDING_PER_CONVERSATION = 20
 
 # Longest reasoning line kept (characters); longer text is cut, not refused.
 MAX_REASONING_LENGTH = 500
+
+# Statuses a reviewed suggestion can hold (the inbox's "recently reviewed").
+RESOLVED_STATUSES = (
+    MemorySuggestionStatus.ACCEPTED,
+    MemorySuggestionStatus.DISMISSED,
+)
+
+
+def encode_resolved_cursor(row: dict) -> str:
+    """Keyset cursor for the resolved list: ``<resolved_at iso>|<id>``.
+
+    Shared by the project-memory twin so one cursor pages both tables in
+    the inbox's merged list (chat/memory_inbox.py).
+    """
+    return f"{row['resolved_at']}|{row['id']}"
+
+
+def decode_resolved_cursor(cursor: Optional[str]) -> Optional[tuple[datetime, str]]:
+    """Inverse of :func:`encode_resolved_cursor`; ValueError on junk."""
+    if not cursor:
+        return None
+    resolved_at, sep, row_id = cursor.partition("|")
+    if not sep or not row_id:
+        raise ValueError("Malformed cursor.")
+    return datetime.fromisoformat(resolved_at), row_id
+
+
+def resolved_keyset_filter(model, cursor: Optional[tuple[datetime, str]]):
+    """The ``WHERE`` clause continuing a resolved_at-desc, id-desc keyset
+    page after ``cursor``, or None for the first page."""
+    if cursor is None:
+        return None
+    resolved_at, row_id = cursor
+    return or_(
+        model.resolved_at < resolved_at,
+        (model.resolved_at == resolved_at) & (model.id < row_id),
+    )
 
 
 class SuggestionAlreadyResolvedError(Exception):
@@ -138,6 +181,112 @@ async def count_pending(user_id: int, conversation_id: str) -> int:
             )
         )
         return int(result.scalar_one())
+
+
+async def count_pending_for_user(user_id: int) -> int:
+    """Pending suggestions across all of the user's conversations."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(func.count())
+            .select_from(MemorySuggestion)
+            .where(
+                MemorySuggestion.user_id == user_id,
+                MemorySuggestion.status == MemorySuggestionStatus.PENDING,
+            )
+        )
+        return int(result.scalar_one())
+
+
+async def list_pending_for_user(user_id: int) -> list[dict]:
+    """Every pending suggestion of the user, oldest first, each with
+    ``replaces_content`` like :func:`list_pending` (the inbox's open list)."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(MemorySuggestion, Memory.content)
+            .outerjoin(Memory, Memory.id == MemorySuggestion.replaces_memory_id)
+            .where(
+                MemorySuggestion.user_id == user_id,
+                MemorySuggestion.status == MemorySuggestionStatus.PENDING,
+            )
+            .order_by(MemorySuggestion.created_at.asc(), MemorySuggestion.id.asc())
+        )
+        return [
+            {**_to_dict(row), "replaces_content": replaced_content}
+            for row, replaced_content in result.all()
+        ]
+
+
+async def list_resolved_for_user(
+    user_id: int, limit: int, cursor: Optional[tuple[datetime, str]] = None,
+) -> list[dict]:
+    """One keyset page of the user's accepted / dismissed suggestions, most
+    recently resolved first (``cursor`` from :func:`decode_resolved_cursor`
+    continues after that row). At most ``limit`` rows."""
+    async with AsyncSessionLocal() as db:
+        stmt = (
+            select(MemorySuggestion)
+            .where(
+                MemorySuggestion.user_id == user_id,
+                MemorySuggestion.status.in_(RESOLVED_STATUSES),
+            )
+            .order_by(MemorySuggestion.resolved_at.desc(), MemorySuggestion.id.desc())
+            .limit(limit)
+        )
+        keyset = resolved_keyset_filter(MemorySuggestion, cursor)
+        if keyset is not None:
+            stmt = stmt.where(keyset)
+        result = await db.execute(stmt)
+        return [_to_dict(row) for row in result.scalars().all()]
+
+
+async def list_pending_summaries() -> list[dict]:
+    """One row per user with pending suggestions, across all users:
+    ``[{"user_id", "pending_count", "oldest_created_at"}]`` (naive UTC as
+    stored). The Slack reminder's counterpart of
+    ``action_request_store.list_open_request_summaries``."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(
+                MemorySuggestion.user_id,
+                func.count(MemorySuggestion.id),
+                func.min(MemorySuggestion.created_at),
+            )
+            .where(MemorySuggestion.status == MemorySuggestionStatus.PENDING)
+            .group_by(MemorySuggestion.user_id)
+        )
+        return [
+            {"user_id": user_id, "pending_count": count, "oldest_created_at": oldest}
+            for user_id, count, oldest in result.all()
+        ]
+
+
+async def conversation_context(conversation_ids: list[str]) -> dict[str, dict]:
+    """``{conversation_id: {"conversation_title", "project_id",
+    "project_name"}}`` for the inbox rows' "from" line. The title follows
+    the sidebar's rule (custom name, else the cached auto title, else None);
+    conversations deleted meanwhile are simply absent."""
+    if not conversation_ids:
+        return {}
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(
+                Conversation.id,
+                Conversation.custom_name,
+                Conversation.auto_title,
+                Conversation.project_id,
+                Project.name,
+            )
+            .outerjoin(Project, Project.id == Conversation.project_id)
+            .where(Conversation.id.in_(conversation_ids))
+        )
+        return {
+            cid: {
+                "conversation_title": custom_name or auto_title or None,
+                "project_id": project_id,
+                "project_name": project_name,
+            }
+            for cid, custom_name, auto_title, project_id, project_name in result.all()
+        }
 
 
 async def find_pending_with_content(
