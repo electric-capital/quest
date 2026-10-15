@@ -350,29 +350,30 @@ Defined in the model loop in `chat/gemini_api/conversation.py`, the realtime pub
   - **`wait_handle_resolved`** (`conversation_id`, `handle_id`, `kind`, `status`, optional `request_id`, optional `response`),
   - **`routine_list_changed`** (`project_id`; emitted when a `create_routine`/`edit_routine` action request executes so the sidebar refreshes its cached per-project routine list),
   - **`doc_list_changed`** (no payload) and **`doc_changed`** (`doc_id`, `updated_at`; null when the doc's existence or the receiver's access changed): Quest Docs list/viewer refresh signals sent to the doc's audience (owner + share recipients, every connected user for a doc shared with everyone); see [Quest Docs API](quest-docs-api.md#realtime-events).
+  - **`table_list_changed`** (no payload) and **`table_changed`** (`table_id`, `updated_at`, `schema_version`; null on existence or access changes); see [Quest Tables -- Realtime Events](../architecture/quest-tables.md#realtime-events).
 - Liveness / errors: **`ping`** / **`pong`**, **`error`** (carries `code` and `error`/`message`; codes include 4400 invalid op, 4401 auth, 4404 not found, 4503 queue overflow, 4500 internal).
 
 The durable-event set persisted to `chat_history.json` is `FLUSH_EVENT_TYPES` in `chat/_flush_helper.py`; these events advance `seq` and trigger `message_appended`. Streaming text is bundled into a synthetic `text` message at the next flush boundary by both the backend (the model loop) and the frontend (`WebSocketManager`'s text-delta buffer).
 
 ### Message Persistence
 
-Durable messages are saved to `chat_history.json` at the flush-event boundary by `chat/_flush_helper.py:make_flush_callback` -- the single fan-out point that advances `conversations.last_message_seq` and publishes `message_appended` to every persistent-WS subscriber. The user message at turn-start uses the single-message path (`ChatStorage.append_message`) which also stamps a `seq` and publishes via the shared `_publish_appended_to_bus` helper. Timestamps use ISO 8601 UTC with "Z" suffix via `utc_timestamp()` in `chat/storage.py`.
+Durable messages are saved to `chat_history.json` at the flush-event boundary by `chat/_flush_helper.py:make_flush_callback` -- the one point that advances `conversations.last_message_seq` and publishes `message_appended`. The user message at turn-start uses the single-message path (`ChatStorage.append_message`) which also stamps a `seq` and publishes via the shared `_publish_appended_to_bus` helper. Timestamps are ISO 8601 UTC with a "Z" (`utc_timestamp()` in `chat/storage.py`).
 
 ### WebSocket Close Codes
 
-Custom 4xxx codes from `chat/realtime/socket.py`: 4401 (auth failed / revoked), 4408 (heartbeat timeout), 4503 (per-user queue overflow), 4500 (internal). The 4401 close triggers a `GET /app/api/me` probe on the client; success retries the socket, failure routes to the existing unauth flow.
+Custom 4xxx codes from `chat/realtime/socket.py`: 4401 (auth failed / revoked), 4408 (heartbeat timeout), 4503 (per-user queue overflow), 4500 (internal). On 4401 the client probes `GET /app/api/me`: success retries the socket, failure goes to the unauth flow.
 
 ---
 
 ### Get Current User (Session-Based) -- DEPRECATED
 
-`GET /app/api/user` -- Deprecated. Returns user email and API key from session cookie. Kept for backward compatibility with external tools/scripts. The frontend uses `GET /app/api/me` instead.
+`GET /app/api/user` -- Deprecated: returns user email and API key from the session cookie, for external tools; the frontend uses `GET /app/api/me`.
 
 ---
 
 ### Get Current User Info
 
-`GET /app/api/me` -- Returns user email, display name, connection status, admin flag, `default_model` (the per-user "last-used" default web/composer model for private conversations, raw from `users.settings.default_model`) and `public_default_model` (the same for public-project conversations, raw from `users.settings.public_default_model`) plus `default_thinking_effort` / `public_default_thinking_effort`; either model may be `null` -- the FE owns the fallback per visibility: Opus 4.8 when allowed + credentialed, else the admin's first top-level pick, else the first offerable model per `available_models` on `GET /app/api/config`. See `get_current_user_info()` in `chat/routes/user.py`. Response type: `UserInfo` in `frontend/src/api/types.ts`. The FE re-reads it on every fresh new-chat composer mount and private<->public context switch (see [Frontend](../architecture/frontend.md), ConversationModelsContext `refreshDefaultModel`).
+`GET /app/api/me` -- Returns user email, display name, connection status, admin flag, `default_model` (the per-user "last-used" default web/composer model for private conversations, raw from `users.settings.default_model`) and `public_default_model` (the same for public-project conversations, raw from `users.settings.public_default_model`) plus `default_thinking_effort` / `public_default_thinking_effort`; either model may be `null` -- the FE owns the fallback: Opus 4.8 when allowed + credentialed, else the admin's first top-level pick, else the first offerable model per `available_models` on `GET /app/api/config`. See `get_current_user_info()` in `chat/routes/user.py`. Response type: `UserInfo` in `frontend/src/api/types.ts`. The FE re-reads it on every new-chat composer mount and private<->public switch (ConversationModelsContext `refreshDefaultModel`, see [Frontend](../architecture/frontend.md)).
 
 The `has_any_service_connected` flag drives auto-opening the settings panel to Data Connections for new users. The `is_admin` flag (from `admin_emails` in `server_config.json`) controls visibility of the `AdminOpsMenu` component.
 

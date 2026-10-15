@@ -36,6 +36,8 @@ The allowlist: `get_current_time`, the four workspace file tools (allowlisted so
 
 The seven [Quest Docs](quest-docs.md) tools (`list_docs`, `search_docs`, `read_doc`, `create_doc`, `edit_doc`, `append_to_doc`, `add_doc_image`) are allowlisted too. Docs are mode-partitioned. In a public conversation the access rule (`resolve_doc_access` with `is_public=True`) hides every private doc, so a private doc id behaves exactly like a nonexistent one, and the conversation creates and writes only public docs, which by construction hold sandbox-originated content. Public writes are never approval-gated, because a public doc's verdict there is free or denied, which fits with `create_action_request` staying blocked. The tools and the prompt's "Quest Docs" paragraph appear only while the `docs` gate is open for the user (the `docs_enabled` argument of `get_public_project_system_prompt()`).
 
+The seven Quest Tables tools are allowlisted on the same terms: tables are mode-partitioned, a private table is invisible there, and a public table's verdict is free or denied. They appear only while the `tables` gate is open (`tables_enabled`); see [Quest Tables API -- Tiers](../api/tables-api.md#tiers).
+
 ## Public sandbox profile (two separate images)
 
 There are two podman images, each with its own Dockerfile + entrypoint, so the tooling inside can be customized independently (see [Script Runner Architecture](script-runner.md)):

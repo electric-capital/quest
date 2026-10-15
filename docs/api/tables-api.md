@@ -2,7 +2,7 @@
 
 ## Overview
 
-The caller-facing contract of [Quest Tables](../architecture/quest-tables.md): the query language a caller passes to read or select rows (filter, sort, column list, paging), the result it gets back, and the refusals it can receive, each a machine `code` plus a message written for a model or a person. Storage, schema operations, the change log, restore and the access matrix are architecture and live in the architecture doc.
+The caller-facing contract of [Quest Tables](../architecture/quest-tables.md): the query language a caller passes to read or select rows (filter, sort, column list, paging), the result it gets back, the refusals it can receive, each a machine `code` plus a message written for a model or a person, and the model tools built on them. Storage, schema operations, the change log, restore and the access matrix are architecture and live in the architecture doc.
 
 ## Key Files
 
@@ -14,6 +14,10 @@ The caller-facing contract of [Quest Tables](../architecture/quest-tables.md): t
 | `chat/tables/schema.py` / `chat/tables/schema_ops.py` | `ColumnSpecError`, `TableValueError`, `SchemaOperationError` |
 | `chat/tables/access.py` | Deny reasons, notes, `approval_required` and not-found messages |
 | `db/table_store.py` | The metadata refusals (title, cap, concurrency tokens, shares) |
+| `chat/tables/service.py` | `TableError` and its subclasses, the refusals the service layer decides |
+| `chat/llm/tool_schemas.py` | The seven table tool specs (`requires_service: "tables"`, row writes `mutating`), their allowlist and skill entries |
+| `chat/gemini_api/tool_handlers/tables.py` | The tool handlers: argument coercion, result shaping, the error payloads (module docstring) |
+| `chat/tables/write_request.py` | The `write_table_rows` params shape shared by the row write tools and the action request (module docstring) |
 
 ## Queries
 
@@ -47,6 +51,40 @@ Every refusal carries a machine `code` and a `message` safe to show a model; no 
 - **Queries**: `FilterError` ([Queries](#queries)).
 - **Metadata** (`db/table_store.py`): `DuplicateTableTitleError`, `TableLimitError`, `TableValidationError`, `ShareTargetGoneError`, and the two concurrency tokens, `StaleTableError` (carrying the current row) and `StaleTableSchemaError`.
 - **Access** (`chat/tables/access.py`): a denied verdict carries `deny_reason` for rows and `schema_deny_reason` for schema changes, worded to tell the model what to do instead; an approval verdict maps to the `approval_required` message of its request type. A hidden table and a missing one get the same `table_not_found_message()`, so a refusal never reveals that a table exists.
+
+## Model Tools
+
+Models reach tables through seven `TOOL_CALL_REGISTRY` specs, dispatched through `tool_call` to `chat/gemini_api/tool_handlers/tables.py`. The handlers coerce loose arguments (numbers and booleans sent as strings; a filter, sort, column list or row list sent as a JSON string), call `chat/tables/service.py` and shape the result; nothing else reaches a table from a model. The spec descriptions document the parameters and stand alone, since the public prompt carries no skills.
+
+- **Reads**: `list_tables(scope?, limit?)`, `get_table(table_id)`, `query_rows(table_id, filter?, sort?, columns?, limit?, offset?, count_only?)`.
+- **Row writes**: `insert_rows(table_id, rows)`, `update_rows(table_id, updates)` (each update an `_id` plus a partial patch), `upsert_rows(table_id, key_column, rows)`, `delete_rows(table_id, row_ids | filter)`, with the semantics of [Row Writes](../architecture/quest-tables.md#row-writes).
+
+### Results
+
+- `list_tables` returns `{tables, count}`, one summary per visible table (`_summary()`): metadata, scope, `row_count`, the column labels, `writable` (the rows verdict) with `write_note`, and `schema_change` (the schema verdict). Scopes are `TABLE_SCOPES` in the service; the limit bounds are `LIST_DEFAULT_LIMIT` / `LIST_MAX_LIMIT`. A table whose stored schema does not load is skipped and logged, so it cannot hide the rest.
+- `get_table` returns the detail (`_detail()`): every column definition in order, `schema_version`, both verdicts with their notes, and `sample_rows`, the first `SAMPLE_ROWS` rows by `_id` in the query row shape.
+- `query_rows` returns `{rows, total, truncated, offset, limit}` with the rows of [Results](#results), at most `TABLE_QUERY_MAX_ROWS` per page; `count_only` returns `{total}`. A payload over `TABLE_QUERY_MAX_BYTES` is halved until it fits (`_fit_rows()`, the `project_db_query` convention): `truncated` is true and `hint` names the offset to continue from, or asks for fewer `columns` when one row alone is too large.
+- A row write returns its op's counts (an upsert adds `inserted_ids` and `updated_ids`), `row_ids`, `change_id` (null only for a filter delete that matched nothing), `row_count` and `updated_at` (`_write_result()`).
+
+A column appears as `Name:type`, a multi enum as `Name:enum[]` (`_column_label()`). A column's key never appears in any tool output: `get_table` drops it, and refusal payloads leave out `column_key`.
+
+### Tool Errors
+
+Every error is `{"error": <code>, "message": <text>}` plus the refusal's structured fields:
+
+- `tables_disabled` comes before anything else, with no DB work, while the gate is closed.
+- `table_not_found` is the one answer for a missing and a hidden table, byte-equal, after the same lookups.
+- `approval_required` adds `suggested_request: {"request_type": "write_table_rows", "params"}`, which the model forwards unchanged through `create_action_request`. The params are the tool's own arguments plus `operation` (shape in the `chat/tables/write_request.py` module docstring), so the round trip to `apply_row_write()` at Approve is lossless. Arguments are shape-checked before the verdict (`invalid_args`, or `too_many_rows` with `count` and `cap` past `TABLE_WRITE_MAX_ROWS`), so an approval result always carries a well-formed card.
+- A `FilterError` adds `path`; storage and schema refusals add their fields (`_ERROR_FIELDS`), such as the `problems` list of `invalid_rows` ([Refusals](#refusals)).
+- Every other service refusal carries its code, such as `denied` with the verdict's deny reason or `invalid_args`.
+
+### Tiers
+
+- **Prompt**: every spec has `requires_service: "tables"`, so the tools leave the prompt while the [feature gate](../architecture/feature-gates.md#enforcement-layers-quest-tables) is closed. All seven are documented by the `system:tables` skill (`_SKILL_DOCUMENTED_TOOLS`), whose content is a short placeholder ahead of the tool reference the loader appends.
+- **Public conversations**: all seven are in `PUBLIC_TOOL_CALL_ALLOWLIST`. The access rule hides every private table there and gives a public table only `free` or `denied`, so no card is needed.
+- **Script bridge**: the three reads only (`SCRIPT_TOOL_CALL_ALLOWLIST`), with a caller that has no project, so scripts see user tables only ([Service Layer](../architecture/quest-tables.md#service-layer)).
+- **Read-only tiers**: sub-agent and cross-user subagent prompts leave out `_table_write_tool_names()` (`chat/gemini_api/system_prompt.py`); the access rule denies the writes there anyway.
+- **Inference API runs**: the `mutating` row writes are refused at dispatch and on the run's sandbox lease ([Inference API](inference-api.md)).
 
 ## Design Decisions
 

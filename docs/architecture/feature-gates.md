@@ -89,7 +89,12 @@ Nothing is deleted. Doc rows, files and revisions survive, and restoring access 
 
 ## Enforcement Layers (Quest Tables)
 
-`tables` gates [Quest Tables](quest-tables.md) and supports per-user access. Its enforcement point is the prompt: `get_user_connected_services()` sets the capability pseudo-key `tables` from `tables_enabled_for(email)`, so registry specs with `requires_service: "tables"` and skills with `requires="tables"` drop out like a disconnected service, through the same `PSEUDO_SERVICE_KEYS` handling as `docs` (left out of `GET /me`'s `has_any_service_connected`, a reserved plugin id). `tables_disabled_message()` in `chat/tables/constants.py` is the canonical gate-closed text for the enforcement points. Closing the gate deletes no table rows or files.
+`tables` gates [Quest Tables](quest-tables.md) and supports per-user access. Every layer calls `tables_enabled_for(email)` with the acting user, and `tables_disabled_message()` in `chat/tables/constants.py` is the one gate-closed text. While closed for a user:
+
+1. **Tools and service**: each of the seven table tools returns `{"error": "tables_disabled", ...}` before any DB work (`service.require_enabled()`, checked first in `chat/gemini_api/tool_handlers/tables.py`); every operation of `chat/tables/service.py` checks it too, so every other caller of the service fails the same way.
+2. **Prompt**: `get_user_connected_services()` sets the capability pseudo-key `tables` from the gate, so registry specs with `requires_service: "tables"` and the `system:tables` skill (`requires="tables"`) drop out like a disconnected service, through the same `PSEUDO_SERVICE_KEYS` handling as `docs`. An explicit `load_skills` of `system:tables` returns `tables_disabled_message()` rather than the connector text (`load_system_skills()`). The public-project prompt gets the gate as `tables_enabled` on `get_public_project_system_prompt()`, which leaves the table tools out while it is false.
+
+Nothing is deleted: table rows and files survive, and restoring access brings them back.
 
 ## Scope Notes
 
