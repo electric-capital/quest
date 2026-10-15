@@ -2,7 +2,13 @@
 
 The model-facing table tools, the table action requests (``create_table``,
 ``change_table_schema``, ``write_table_rows``) and the HTTP routes call the
-functions below; nothing else opens a ``table.db``. Every operation follows
+functions below; nothing else opens a ``table.db``. The action requests'
+precards preview with :func:`preview_row_write` /
+:func:`preview_schema_change` (dry runs: nothing written, bumped or
+published) and their executors pin what the card showed through
+:func:`apply_row_write`'s ``expected_schema_version`` /
+``expected_rows_digest`` (:func:`rows_digest`) and
+:func:`apply_schema_change`'s ``expected_schema_version``. Every operation follows
 the same pipeline in this one place::
 
     feature gate -> table lookup (db/table_store) -> resolve_table_access
@@ -23,7 +29,9 @@ the same doc-source lookup), :class:`TableApprovalRequired`
 (``approval_required``, carries the verdict and the ``write_table_rows``
 suggested request), :class:`TableDenied` (``denied``, the verdict's deny
 reason), :class:`TableForbidden` (``forbidden``, owner-only actions) and
-:class:`StaleSchema` (``stale_schema``, carries the current table dict).
+:class:`StaleSchema` (``stale_schema``, carries the current table dict)
+and :class:`RowsChanged` (``rows_changed``, the rows a card showed changed
+before its approval; carries their current values).
 Other ``TableError`` codes: ``invalid_args``, ``project_not_found``,
 ``mode_mismatch``, ``duplicate_title``, ``table_limit``,
 ``invalid_request``.
@@ -72,6 +80,8 @@ Realtime publishers run on the event loop only, never inside
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import shutil
@@ -81,7 +91,7 @@ import weakref
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional, Sequence
 
 from chat.storage import ChatStorage
 from chat.tables import filters, revert, schema_ops, storage
@@ -92,7 +102,13 @@ from chat.tables.access import (
     resolve_table_access,
 )
 from chat.tables.constants import table_not_found_message, tables_disabled_message
-from chat.tables.schema import dump_schema, load_schema, parse_columns
+from chat.tables.schema import (
+    Column,
+    dump_schema,
+    from_storage,
+    load_schema,
+    parse_columns,
+)
 from config import feature_gates
 from db import table_store
 
@@ -102,6 +118,7 @@ __all__ = [
     "ROW_OPS",
     "TABLE_SCOPES",
     "Caller",
+    "RowsChanged",
     "StaleSchema",
     "TableApprovalRequired",
     "TableDenied",
@@ -119,9 +136,11 @@ __all__ = [
     "get_visible_table",
     "list_visible_tables",
     "preview_row_write",
+    "preview_schema_change",
     "query_rows",
     "require_enabled",
     "resolve",
+    "rows_digest",
     "sample_rows",
 ]
 
@@ -202,6 +221,66 @@ class StaleSchema(TableError):
             "table and try again.",
         )
         self.current = current
+
+
+# Most rows a RowsChanged message spells out.
+ROWS_CHANGED_MESSAGE_MAX = 10
+# Longest stretch of one row's values in a RowsChanged message.
+_ROWS_CHANGED_ROW_CHARS = 300
+
+
+class RowsChanged(TableError):
+    """The rows a ``write_table_rows`` card showed changed before its
+    approval (``expected_rows_digest`` no longer matches): a row's value
+    changed, a row vanished, or the write now touches other rows (a filter
+    delete matching another row, an upsert key now matching a stored row).
+
+    ``op`` is the row op; ``by_filter`` is True for a filter delete.
+    ``current_rows`` are the rows the write would touch now, before it
+    (``{"_id", <column name>: logical value}``); ``vanished_ids`` the
+    ``_id``\\ s the request names that no longer exist. ``str(e)`` names
+    their current values (at most :data:`ROWS_CHANGED_MESSAGE_MAX` rows),
+    e.g. ``Row 7 now: {"Status": "Done"}`` / ``Row 9 no longer exists``.
+    When no row is left to show it says so per op: an upsert "now matches
+    no stored rows (it would insert them instead)", a filter delete "now
+    matches no rows".
+    """
+
+    def __init__(
+        self,
+        op: str,
+        current_rows: list[dict],
+        vanished_ids: Sequence[int] = (),
+        *,
+        by_filter: bool = False,
+    ):
+        parts = [f"Row {row_id} no longer exists" for row_id in vanished_ids]
+        for row in current_rows:
+            values = {k: v for k, v in row.items() if k != "_id"}
+            text = json.dumps(values, ensure_ascii=False)
+            if len(text) > _ROWS_CHANGED_ROW_CHARS:
+                text = text[:_ROWS_CHANGED_ROW_CHARS] + "…"
+            parts.append(f"Row {row['_id']} now: {text}")
+        shown = parts[:ROWS_CHANGED_MESSAGE_MAX]
+        if len(parts) > len(shown):
+            shown.append(f"and {len(parts) - len(shown)} more")
+        if shown:
+            detail = "; ".join(shown)
+        elif op == "upsert":
+            detail = "The upsert now matches no stored rows (it would insert them instead)"
+        elif op == "delete" and by_filter:
+            detail = "The filter now matches no rows"
+        else:
+            detail = "The write now touches no rows"
+        super().__init__(
+            "rows_changed",
+            "The rows changed since this write was proposed; nothing was "
+            f"written. {detail}.",
+        )
+        self.op = op
+        self.by_filter = by_filter
+        self.current_rows = current_rows
+        self.vanished_ids = list(vanished_ids)
 
 
 @dataclass(frozen=True)
@@ -600,6 +679,52 @@ def _run_row_op(
     return storage.delete_rows(table_dir, columns, where=where, **common)
 
 
+def rows_digest(images: Iterable[dict]) -> str:
+    """sha256 hex digest of row images (stored form, keyed by column key):
+    each row's ``_id`` and stored cells, timestamps left out, as canonical
+    JSON sorted by ``_id``. Equal over unchanged rows; differs when any
+    row's cell changes, a row disappears or the set of rows changes.
+
+    :func:`preview_row_write` computes it over a dry run's before images
+    (``rows_digest``) and :func:`apply_row_write` recomputes it at approve
+    time (``expected_rows_digest``) with this same function."""
+    rows = sorted(
+        (
+            {k: v for k, v in image.items() if k not in ("_created_at", "_updated_at")}
+            for image in images
+        ),
+        key=lambda row: row["_id"],
+    )
+    canonical = json.dumps(
+        rows, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _logical_images(columns: Sequence[Column], images: Iterable[dict]) -> list[dict]:
+    """Row images as ``{"_id", <column name>: logical value}`` (timestamps
+    dropped), for previews and :class:`RowsChanged`."""
+    out = []
+    for image in images:
+        row: dict[str, Any] = {"_id": image.get("_id")}
+        for column in columns:
+            row[column.name] = from_storage(column, image.get(column.key))
+        out.append(row)
+    return out
+
+
+def _named_ids(op: str, clean: dict) -> list[int]:
+    """The ``_id``\\ s a request names explicitly (update ``updates``,
+    delete ``row_ids``); valid integers only."""
+    if op == "update" and isinstance(clean.get("updates"), (list, tuple)):
+        ids = [u.get("_id") for u in clean["updates"] if isinstance(u, dict)]
+    elif op == "delete" and isinstance(clean.get("row_ids"), (list, tuple)):
+        ids = list(clean["row_ids"])
+    else:
+        return []
+    return [i for i in ids if isinstance(i, int) and not isinstance(i, bool)]
+
+
 def _row_result(result: storage.RowWriteResult, table: dict) -> dict:
     return {
         "op": result.op,
@@ -625,6 +750,8 @@ async def apply_row_write(
     write_source: Optional[str] = None,
     actor_user_id: Optional[int] = None,
     bypass_approval: bool = False,
+    expected_schema_version: Optional[int] = None,
+    expected_rows_digest: Optional[str] = None,
 ) -> dict:
     """Run one row write (``op`` in :data:`ROW_OPS`).
 
@@ -645,6 +772,22 @@ async def apply_row_write(
     write that would succeed raises :class:`TableApprovalRequired` with
     its suggested request.
 
+    The executor also pins what the card showed, checked under the lock
+    after the re-fetch: ``expected_schema_version`` (the version at
+    proposal) must equal the table's, else :class:`StaleSchema`; with
+    ``expected_rows_digest`` (the preview's ``rows_digest``) the write is
+    first dry-run in the same lock hold and :func:`rows_digest` of its
+    before images must match, else :class:`RowsChanged` (a request naming
+    an ``_id`` that no longer exists raises it too, instead of storage's
+    ``unknown_row``). ``expected_rows_digest`` needs
+    ``expected_schema_version`` (``invalid_args`` otherwise): the digest
+    covers row ids and stored cells keyed by column key, not the schema,
+    so a schema change in between (a renamed option, a changed rule)
+    would go unnoticed without the version pin. Every other validation error of the live schema and
+    rows (an enum option removed meanwhile, a unique clash) raises the
+    storage error unchanged. The real write then runs in the same lock
+    hold.
+
     Returns:
         ``{op, inserted, updated, deleted, row_ids, inserted_ids,
         updated_ids, change_id, row_count, updated_at, schema_version}``
@@ -653,10 +796,25 @@ async def apply_row_write(
 
     Raises:
         TableDisabled, TableNotFound, TableDenied, TableApprovalRequired,
-        TableError ``invalid_args``, FilterError, TableStorageError.
+        StaleSchema, RowsChanged, TableError ``invalid_args``, FilterError,
+        TableStorageError.
     """
     require_enabled(caller)
     clean = _clean_row_params(op, params)
+    if expected_schema_version is not None and (
+        isinstance(expected_schema_version, bool)
+        or not isinstance(expected_schema_version, int)
+    ):
+        raise TableError("invalid_args", "expected_schema_version must be an integer.")
+    if expected_rows_digest is not None and not isinstance(expected_rows_digest, str):
+        raise TableError("invalid_args", "expected_rows_digest must be a string.")
+    if expected_rows_digest is not None and expected_schema_version is None:
+        # The digest does not cover the schema; only the version pin does.
+        raise TableError(
+            "invalid_args",
+            "expected_rows_digest needs expected_schema_version: the digest "
+            "does not cover the table's schema.",
+        )
     table, access = await _lookup(caller, table_id)
     _check_rows_not_denied(access)
     source = _write_source(write_source, caller)
@@ -666,8 +824,18 @@ async def apply_row_write(
         async with _table_lock(table["id"]):
             fresh, fresh_access = await _lookup(caller, table_id)
             _check_rows_not_denied(fresh_access)
+            if (
+                expected_schema_version is not None
+                and expected_schema_version != fresh["schema_version"]
+            ):
+                raise StaleSchema(fresh)
             needs_card = fresh_access.rows == "approval" and not bypass_approval
             columns = load_schema(fresh["schema"])
+            if expected_rows_digest is not None:
+                await _check_rows_digest(
+                    fresh, columns, op, clean, expected_rows_digest,
+                    source=source, actor_user_id=actor,
+                )
             result = await _file_call(
                 fresh, _run_row_op, _table_dir(fresh["id"]), columns, op, clean,
                 schema_version=fresh["schema_version"], source=source,
@@ -692,6 +860,39 @@ async def apply_row_write(
     return await _shielded(_locked())
 
 
+async def _check_rows_digest(
+    table: dict, columns, op: str, clean: dict, expected: str, *,
+    source: str, actor_user_id: int,
+) -> None:
+    """Dry-run the write and compare :func:`rows_digest` of its before
+    images with ``expected``; :class:`RowsChanged` on a mismatch or when a
+    named ``_id`` vanished. Lock held."""
+    table_dir = _table_dir(table["id"])
+    try:
+        dry = await _file_call(
+            table, _run_row_op, table_dir, columns, op, clean,
+            schema_version=table["schema_version"], source=source,
+            actor_user_id=actor_user_id, dry_run=True,
+        )
+    except storage.InvalidRowsError as exc:
+        if not exc.problems or any(p["code"] != "unknown_row" for p in exc.problems):
+            raise
+        named = _named_ids(op, clean)
+        alive = await _file_call(table, storage.get_rows_by_ids, table_dir, columns, named)
+        alive_ids = {row["_id"] for row in alive}
+        current = [
+            {"_id": row["_id"], **{c.name: row[c.key] for c in columns}} for row in alive
+        ]
+        raise RowsChanged(
+            op, current, vanished_ids=sorted({i for i in named if i not in alive_ids}),
+        ) from None
+    if rows_digest(dry.before_images) != expected:
+        raise RowsChanged(
+            op, _logical_images(columns, dry.before_images),
+            by_filter=op == "delete" and "filter" in clean,
+        )
+
+
 async def preview_row_write(
     caller: Caller, table_id: str, op: str, params: dict,
 ) -> tuple[dict, TableAccess, dict]:
@@ -700,8 +901,19 @@ async def preview_row_write(
     ``change_id`` None (the ids an insert would assign, the rows an update,
     upsert or delete would touch, the row count after). Every check of the
     real write runs against the live schema and rows and nothing is
-    written, bumped or published. The ``write_table_rows`` precard (A13)
-    uses it.
+    written, bumped or published (except that a ``schema_mismatch`` may
+    first let :func:`_heal_lost_schema_bump` record an earlier lost schema
+    bump in quest.db, as on every table.db call). The ``write_table_rows``
+    precard (A13) uses it.
+
+    ``result`` also carries the change's row images for the card:
+    ``before_rows`` / ``after_rows`` (``{"_id", <column name>: logical
+    value}``, ``_id`` order, timestamps dropped; insert: ``[]`` / the new
+    rows under the ids the dry run assigned; update: the touched rows
+    before / after; upsert: the pre-existing matched rows only / every
+    written row; delete: the rows to delete / ``[]``) and ``rows_digest``
+    (:func:`rows_digest` of the before images), which the executor passes
+    back as ``apply_row_write(expected_rows_digest=...)``.
 
     Any row verdict but ``denied`` may preview (``approval`` included).
 
@@ -722,7 +934,11 @@ async def preview_row_write(
             schema_version=fresh["schema_version"], source="ui:dry-run",
             actor_user_id=caller.user["id"], dry_run=True,
         )
-        return fresh, fresh_access, _row_result(result, fresh)
+        out = _row_result(result, fresh)
+        out["before_rows"] = _logical_images(columns, result.before_images)
+        out["after_rows"] = _logical_images(columns, result.after_images)
+        out["rows_digest"] = rows_digest(result.before_images)
+        return fresh, fresh_access, out
 
 
 # ---------------------------------------------------------------------------
@@ -763,6 +979,89 @@ async def _record_schema(
             if renamed is not None:
                 updated = renamed
     return updated
+
+
+async def preview_schema_change(
+    caller: Caller,
+    table_id: str,
+    operations: list,
+    *,
+    expected_schema_version: int,
+) -> dict:
+    """Dry run of :func:`apply_schema_change` for the
+    ``change_table_schema`` precard (A12): the same gate, verdict
+    (``schema == "approval"``, else :class:`TableDenied`), version check,
+    plan and ``rows_violate`` checks, under the table lock, with nothing
+    written, bumped or published (except that a ``schema_mismatch`` may
+    first let :func:`_heal_lost_schema_bump` record an earlier lost schema
+    bump in quest.db, as on every table.db call). A ``rename_table`` to a title another
+    table of the same (owner, project, mode) uses refuses with
+    ``duplicate_title`` (an invalid title with ``invalid_request``), as
+    the real change would.
+
+    Returns:
+        ``{"table": the fresh table dict (with shares), "access": the
+        verdict, "plan": the SchemaChangePlan, "columns_before": [Column],
+        "columns_after": plan.columns, "schema_diff":
+        schema_ops.schema_diff(before, after), "stats":
+        storage.check_schema_violations' counts ({"cells_rewritten": {key:
+        n}, "rows_backfilled": n, "dropped_values": {key: n}}),
+        "row_count": n, "new_title": plan.new_title}``. Column keys appear
+        in ``schema_diff`` and ``stats``; the card strips them.
+
+    Raises:
+        TableDisabled, TableNotFound, TableDenied, StaleSchema, TableError
+        (``invalid_args``, ``duplicate_title``, ``invalid_request``),
+        TableSchemaError (``SchemaOperationError``), TableStorageError
+        (``rows_violate``, ``change_too_large``, ``schema_mismatch``,
+        ``busy``).
+    """
+    require_enabled(caller)
+    if isinstance(expected_schema_version, bool) or not isinstance(expected_schema_version, int):
+        raise TableError("invalid_args", "expected_schema_version must be an integer.")
+    table, access = await _lookup(caller, table_id)
+    if access.schema != "approval":
+        raise TableDenied(access.schema_deny_reason)
+    async with _table_lock(table["id"]):
+        fresh, fresh_access = await _lookup(caller, table_id)
+        if fresh_access.schema != "approval":
+            raise TableDenied(fresh_access.schema_deny_reason)
+        if expected_schema_version != fresh["schema_version"]:
+            raise StaleSchema(fresh)
+        columns = load_schema(fresh["schema"])
+        table_dir = _table_dir(fresh["id"])
+        count = await asyncio.to_thread(storage.row_count, table_dir)
+        plan = schema_ops.apply_schema_operations(
+            columns, operations, table_empty=count == 0,
+        )
+        if plan.new_title is not None and plan.new_title != fresh["title"]:
+            try:
+                clean_title = table_store._validate_title(plan.new_title)
+            except table_store.TableValidationError as exc:
+                raise TableError("invalid_request", str(exc)) from None
+            if await table_store.title_taken(
+                fresh["owner_id"], fresh["project_id"], fresh["mode"], clean_title,
+                exclude_table_id=fresh["id"],
+            ):
+                raise TableError(
+                    "duplicate_title",
+                    str(table_store._duplicate_title_error(clean_title, fresh["project_id"])),
+                )
+        stats = await _file_call(
+            fresh, storage.check_schema_violations, table_dir, columns, plan,
+            schema_version=fresh["schema_version"],
+        )
+        return {
+            "table": fresh,
+            "access": fresh_access,
+            "plan": plan,
+            "columns_before": columns,
+            "columns_after": list(plan.columns),
+            "schema_diff": schema_ops.schema_diff(columns, plan.columns),
+            "stats": stats,
+            "row_count": count,
+            "new_title": plan.new_title,
+        }
 
 
 async def apply_schema_change(

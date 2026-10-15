@@ -932,7 +932,30 @@ class TestDryRun:
         before = snapshot(table_dir)
         plan = plan_for(schema, [{"op": "drop_column", "name": "SKU"},
                                  {"op": "rename_table", "title": "Other"}])
-        assert check_schema_violations(table_dir, schema, plan, schema_version=1) is None
+        stats = check_schema_violations(table_dir, schema, plan, schema_version=1)
+        assert stats == {
+            "cells_rewritten": {}, "rows_backfilled": 0, "dropped_values": {K_SKU: 2},
+        }
+        assert snapshot(table_dir) == before
+
+    def test_stats_count_rewrites_in_sequence(self, table_dir, schema):
+        before = snapshot(table_dir)
+        plan = plan_for(schema, [
+            {"op": "rename_enum_option", "name": "Status", "option": "Open",
+             "new_option": "Pending"},
+            {"op": "set_enum_multiple", "name": "Status", "multiple": True},
+            {"op": "rename_enum_option", "name": "Tags", "option": "b",
+             "new_option": "x"},
+            {"op": "add_column", "column": {"name": "Qty", "type": "number",
+                                            "required": True, "default": 0}},
+        ])
+        stats = check_schema_violations(table_dir, schema, plan, schema_version=1)
+        # Status: 2 renamed cells (A, D's default) + 3 wrapped non-null cells.
+        assert stats == {
+            "cells_rewritten": {K_STATUS: 5, K_TAGS: 2},
+            "rows_backfilled": 4,
+            "dropped_values": {},
+        }
         assert snapshot(table_dir) == before
 
     def test_violation(self, table_dir, schema):

@@ -53,7 +53,8 @@ Every row write takes ``dry_run=True``: the same transaction runs to its
 end (every check, the write and the change entry's size cap) and is then
 rolled back, so it raises exactly what the real write would and otherwise
 returns the :class:`RowWriteResult` the write would have, with
-``change_id`` None (the approval path and precards validate this way).
+``change_id`` None and the change entry's row images in ``before_images``
+/ ``after_images`` (the approval path and precards validate this way).
 Values go through :func:`apply_default` (insert) or :func:`canonicalize`
 (patches), then :func:`to_storage`; reads go through :func:`from_storage`.
 Payload rows are keyed by column **name**; images, stored rows and
@@ -77,7 +78,8 @@ cell rewrites (wraps and option renames, compact) a restore replays
 forward, each backfilled column's value and the normalized operations.
 Change #1 (``create_table``) keeps its own image shape (see
 :func:`create_table_db`).
-:func:`check_schema_violations` is the same run, always rolled back.
+:func:`check_schema_violations` is the same run, always rolled back,
+returning counts of what it would touch.
 
 The caps come from :mod:`chat.tables.constants` imported by name; this
 module's globals are the patch point (tests monkeypatch
@@ -95,7 +97,7 @@ build their own transactions from the private helpers here:
 
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import errno
 import json
@@ -276,6 +278,15 @@ class RowWriteResult:
     the table after the commit. ``change_id``: None when nothing was
     written (a where-delete that matched no row, or a dry run; a dry run's
     ids are the ones the write would assign or touch).
+
+    ``before_images`` / ``after_images``: the change entry's ``before`` /
+    ``after`` row images (stored form, keyed by column key, sorted by
+    ``_id``; see the module docstring), filled on a dry run only (empty
+    tuples after a real write): insert ``[]`` / the rows it would insert
+    under the ids the dry run assigned; update the touched rows before /
+    after; upsert the pre-existing matched rows only / every written row;
+    delete the rows it would delete / ``[]``. The action-request previews
+    and the ``rows_changed`` check read them.
     """
 
     op: str
@@ -287,6 +298,8 @@ class RowWriteResult:
     updated_ids: list[int]
     row_count: int
     change_id: int | None
+    before_images: Sequence[dict] = field(default=())
+    after_images: Sequence[dict] = field(default=())
 
 
 @dataclass(frozen=True)
@@ -1143,6 +1156,14 @@ def _apply_patches(
         )
 
 
+def _dry_images(dry_run: bool, before: list[dict], after: list[dict]) -> dict:
+    """The :class:`RowWriteResult` image fields: the change entry's images
+    on a dry run, nothing (the empty defaults) after a real write."""
+    if not dry_run:
+        return {}
+    return {"before_images": before, "after_images": after}
+
+
 # --- Row writes ----------------------------------------------------------------
 
 
@@ -1182,6 +1203,7 @@ def insert_rows(
         _check_unique(conn, problems, schema, prepared, touched_ids=())
         problems.raise_if_any()
         ids = [_insert_row(conn, schema, values, stamp) for _, values in prepared]
+        after = _row_images(conn, schema, ids)
         change_id = append_change(
             conn,
             now=now,
@@ -1194,7 +1216,7 @@ def insert_rows(
             schema_after=schema_version,
             row_ids=ids,
             before=[],
-            after=_row_images(conn, schema, ids),
+            after=after,
         )
     return RowWriteResult(
         op="insert",
@@ -1206,6 +1228,7 @@ def insert_rows(
         updated_ids=[],
         row_count=current + len(ids),
         change_id=None if dry_run else change_id,
+        **_dry_images(dry_run, [], after),
     )
 
 
@@ -1312,6 +1335,7 @@ def update_rows(
         ids = sorted(row_id for row_id, _ in patches)
         before = _row_images(conn, schema, ids)
         _apply_patches(conn, schema, patches, stamp)
+        after = _row_images(conn, schema, ids)
         change_id = append_change(
             conn,
             now=now,
@@ -1324,7 +1348,7 @@ def update_rows(
             schema_after=schema_version,
             row_ids=ids,
             before=before,
-            after=_row_images(conn, schema, ids),
+            after=after,
         )
         count = _count(conn)
     return RowWriteResult(
@@ -1337,6 +1361,7 @@ def update_rows(
         updated_ids=[row_id for row_id, _ in patches],
         row_count=count,
         change_id=None if dry_run else change_id,
+        **_dry_images(dry_run, before, after),
     )
 
 
@@ -1489,6 +1514,7 @@ def upsert_rows(
         _apply_patches(conn, schema, patches, stamp)
         inserted_ids = [_insert_row(conn, schema, values, stamp) for values in inserts]
         ids = sorted(updated_ids + inserted_ids)
+        after = _row_images(conn, schema, ids)
         change_id = append_change(
             conn,
             now=now,
@@ -1503,7 +1529,7 @@ def upsert_rows(
             schema_after=schema_version,
             row_ids=ids,
             before=before,
-            after=_row_images(conn, schema, ids),
+            after=after,
         )
     return RowWriteResult(
         op="upsert",
@@ -1515,6 +1541,7 @@ def upsert_rows(
         updated_ids=updated_ids,
         row_count=current + len(inserted_ids),
         change_id=None if dry_run else change_id,
+        **_dry_images(dry_run, before, after),
     )
 
 
@@ -1649,6 +1676,7 @@ def delete_rows(
         updated_ids=[],
         row_count=count,
         change_id=None if dry_run else change_id,
+        **_dry_images(dry_run, before, []),
     )
 
 
@@ -1885,9 +1913,11 @@ def _execute_schema_change(
     now: datetime,
     source: str,
     actor_user_id: int | None,
+    stats: dict | None = None,
 ) -> SchemaChangeResult:
     """The body of :func:`apply_schema_change`, inside the caller's
-    transaction (see that docstring)."""
+    transaction (see that docstring). ``stats``, when given, is filled in
+    place with :func:`check_schema_violations`'s counts."""
     _check_schema_matches(conn, schema, schema_version)
     before_keys = {c.key for c in schema}
     after_by_key = {c.key: c for c in plan.columns}
@@ -1907,6 +1937,12 @@ def _execute_schema_change(
     # Cell rewrites of pre-existing columns, in execution order (see
     # apply_schema_change); filtered to surviving columns at the end.
     rewrites: list[dict[str, Any]] = []
+    # key -> cells each EnumRewrite / WrapMulti effect touched, summed.
+    cells_rewritten: dict[str, int] = {}
+
+    def count_rewrites(key: str, n: int) -> None:
+        if n:
+            cells_rewritten[key] = cells_rewritten.get(key, 0) + n
 
     def remember(key: str, row_id: int, stored: Any) -> None:
         if key in before_keys:
@@ -1976,6 +2012,7 @@ def _execute_schema_change(
                     f"(SELECT 1 FROM json_each(rows.{col}) WHERE value = ?) ORDER BY _id",
                     (effect.old_option,),
                 ).fetchall()
+                count_rewrites(key, len(hits))
                 for row_id, stored in hits:
                     values = [
                         effect.new_option if v == effect.old_option else v
@@ -1997,6 +2034,7 @@ def _execute_schema_change(
                     f"SELECT _id, {col} FROM rows WHERE {col} = ? ORDER BY _id",
                     (effect.old_option,),
                 ).fetchall()
+                count_rewrites(key, len(hits))
                 for row_id, stored in hits:
                     remember(key, row_id, stored)
                 conn.execute(
@@ -2013,6 +2051,7 @@ def _execute_schema_change(
             hits = conn.execute(
                 f"SELECT _id, {col} FROM rows WHERE {col} IS NOT NULL ORDER BY _id"
             ).fetchall()
+            count_rewrites(key, len(hits))
             for row_id, stored in hits:
                 remember(key, row_id, stored)
                 conn.execute(
@@ -2053,6 +2092,14 @@ def _execute_schema_change(
         backfill[key] = {"value": first[0]}
     if backfill:
         touched.update(row[0] for row in conn.execute("SELECT _id FROM rows"))
+    if stats is not None:
+        stats["cells_rewritten"] = {
+            key: n for key, n in cells_rewritten.items() if key in after_by_key
+        }
+        stats["rows_backfilled"] = _count(conn) if backfill else 0
+        stats["dropped_values"] = {
+            key: len(values) for key, values in dropped_values.items()
+        }
     for values in dropped_values.values():
         touched.update(int(i) for i in values)
 
@@ -2246,16 +2293,28 @@ def check_schema_violations(
     plan: SchemaChangePlan,
     *,
     schema_version: int,
-) -> None:
+) -> dict:
     """Dry run of :func:`apply_schema_change`: execute the whole change in
     a transaction that is always rolled back, so it raises exactly what the
     real call would (:class:`SchemaMismatchError`,
-    :class:`RowsViolateError`, :class:`ChangeTooLargeError`, ``busy``) and
-    returns None when the change would apply. Nothing is ever written. The
-    title comes from ``meta``. It takes the write lock for its duration,
-    like a write."""
+    :class:`RowsViolateError`, :class:`ChangeTooLargeError`, ``busy``).
+    Nothing is ever written. The title comes from ``meta``. It takes the
+    write lock for its duration, like a write.
+
+    Returns, when the change would apply, what it would touch (JSON-ready,
+    for the ``change_table_schema`` preview)::
+
+        {"cells_rewritten": {key: n},   # cells each enum-rename / wrap
+                                        # effect touches, summed in effect
+                                        # order; columns of plan.columns only
+         "rows_backfilled": n,          # rows a surviving added column's
+                                        # backfill fills (the row count), or 0
+         "dropped_values": {key: n}}    # non-null cells of each dropped
+                                        # pre-existing column
+    """
     _check_plan_keys(schema, plan)
     now = _resolve_now(None)
+    stats: dict = {}
     with connect(table_dir) as conn, _busy_as_refusal():
         try:
             with _write_txn(conn):
@@ -2269,10 +2328,12 @@ def check_schema_violations(
                     now=now,
                     source="ui:dry-run",
                     actor_user_id=None,
+                    stats=stats,
                 )
                 raise _DryRun
         except _DryRun:
             pass
+    return stats
 
 
 # --- Reads -----------------------------------------------------------------

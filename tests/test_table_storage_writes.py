@@ -829,8 +829,17 @@ def test_dry_run_predicts_the_write_and_writes_nothing(table_dir, schema, op, kw
     real = _write(op, table_dir, schema, dry_run=False, **kw)
     # Same outcome, inserted ids included (the rolled-back sequence bump
     # hands the real write the same ids).
-    assert {**real.__dict__, "change_id": None} == dry.__dict__
+    assert {**real.__dict__, "change_id": None} == {
+        **dry.__dict__, "before_images": (), "after_images": (),
+    }
     assert real.change_id == (None if real.row_ids == [] else 3)
+    # The dry run exposes the change entry's images (a real write does not).
+    if real.change_id is None:
+        assert (list(dry.before_images), list(dry.after_images)) == ([], [])
+    else:
+        change = get_change(table_dir, real.change_id)
+        assert list(dry.before_images) == change["before"]
+        assert list(dry.after_images) == change["after"]
 
 
 def _set(monkeypatch, name, value):
