@@ -242,6 +242,26 @@ async def _title_taken(
     return any(t.strip().casefold() == wanted for _id, t in result.all())
 
 
+async def title_taken(
+    owner_id: int,
+    project_id: Optional[str],
+    mode: str,
+    title: str,
+    *,
+    exclude_table_id: Optional[str] = None,
+) -> bool:
+    """Public form of :func:`_title_taken` in its own session (same
+    casefold rule, same ``(owner_id, project_id, mode)`` scope). For
+    pre-checks such as the ``create_table`` pre-card; :func:`create_table`
+    re-checks under the service's per-owner lock, so a result can go stale
+    but never lets a duplicate through."""
+    async with AsyncSessionLocal() as db:
+        return await _title_taken(
+            db, owner_id, project_id, mode, title.strip(),
+            exclude_table_id=exclude_table_id,
+        )
+
+
 async def _load_shares(db, table_ids: list[str]) -> dict[str, list[DataTableShare]]:
     """Return ``{table_id: [DataTableShare, ...]}`` (ordered by share id)."""
     by_table: dict[str, list[DataTableShare]] = {t: [] for t in table_ids}

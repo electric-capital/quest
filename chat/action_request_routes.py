@@ -26,6 +26,15 @@ from db.models import ActionRequestStatus, ToolWaitHandleStatus
 
 logger = logging.getLogger(__name__)
 
+# Handlers whose execute() takes the request id (they record
+# last_write_source = "action_request:<id>").
+REQUEST_ID_TYPES = frozenset({
+    "write_doc",
+    "create_table",
+    "change_table_schema",
+    "write_table_rows",
+})
+
 # Server-side cap on deny-feedback length. The model only needs a short
 # explanation; truncate (with a debug log) rather than 400 so the deny
 # itself never fails on a long rant.
@@ -556,11 +565,11 @@ async def _resolve_locked(
         if conv:
             project_id = conv.get("project_id")
 
-    # write_doc records last_write_source = "action_request:<id>", so it is
-    # the one handler that receives the request id. (Its doc_changed /
-    # doc_list_changed events are published by the docs service itself.)
+    # write_doc and the table handlers record last_write_source =
+    # "action_request:<id>", so they receive the request id. (Their
+    # doc / table events are published by the docs / tables services.)
     execute_kwargs: dict = {}
-    if req["request_type"] == "write_doc":
+    if req["request_type"] in REQUEST_ID_TYPES:
         execute_kwargs["request_id"] = request_id
 
     try:

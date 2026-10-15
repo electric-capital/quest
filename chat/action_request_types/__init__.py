@@ -42,6 +42,7 @@ from chat.action_request_types.reset_gcp_instance import ResetGcpInstanceHandler
 from chat.action_request_types.run_user_subagent import RunUserSubagentHandler
 from chat.action_request_types.subagent_return import SubagentReturnHandler
 from chat.action_request_types.write_doc import WriteDocHandler
+from chat.action_request_types.create_table import CreateTableHandler
 
 # Register built-in handlers
 register_handler(CreateCalendarInviteHandler())
@@ -58,3 +59,4 @@ register_handler(ResetGcpInstanceHandler())
 register_handler(RunUserSubagentHandler())
 register_handler(SubagentReturnHandler())
 register_handler(WriteDocHandler())
+register_handler(CreateTableHandler())

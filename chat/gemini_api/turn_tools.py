@@ -1211,6 +1211,20 @@ async def _handle_create_action_request(
                 validated_params, ctx.user, ctx.project_id,
                 ctx.conversation_id,
             )
+        # Quest Tables pre-card checks (create_table / change_table_schema /
+        # write_table_rows): gate, the access rule with the conversation's
+        # context, full validation against the live table, and the
+        # server-only preview keys. Same contract as the skill pre-card
+        # check above; public and Slack runs are refused again there.
+        from chat.action_request_types.table_precard import (
+            TABLE_REQUEST_TYPES,
+            table_precard_check,
+        )
+        if req_type in TABLE_REQUEST_TYPES:
+            await table_precard_check(
+                req_type, validated_params, ctx.user, ctx.project_id,
+                ctx.conversation_id, is_slack_origin=ctx.is_slack_origin,
+            )
     except ValueError as e:
         return json.dumps({
             "error": f"Invalid parameters: {e}",
