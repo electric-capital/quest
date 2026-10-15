@@ -202,3 +202,39 @@ def test_first_message_with_flags_line_persists_verbatim_clean_title(
     meta = _run(conv_store_mod.get_conversation_meta(user_id, conversation_id))
     assert meta["auto_title"] == "Research the quarterly numbers"
     assert "%%flags" not in meta["auto_title"]
+
+
+def test_each_append_updates_the_row_in_one_db_session(
+    _isolated_storage, _seed_conversation, monkeypatch,
+):
+    """Sidebar timestamp, seq cache and auto title share one session per
+    append instead of one session each."""
+    storage_mod, conv_store_mod, _ = _isolated_storage
+    user_id, conversation_id = _seed_conversation
+
+    real_session = conv_store_mod.AsyncSessionLocal
+    opened: list[int] = []
+
+    def _counting_session():
+        opened.append(1)
+        return real_session()
+
+    monkeypatch.setattr(conv_store_mod, "AsyncSessionLocal", _counting_session)
+
+    _run(storage_mod.ChatStorage.append_message(
+        conversation_id, "user", "Plan the offsite", timestamp="2026-10-14T09:30:00Z",
+    ))
+    assert len(opened) == 1
+    _run(storage_mod.ChatStorage.append_structured_messages(conversation_id, [
+        {"type": "tool_use", "tool_name": "x", "tool_input": {}, "tool_id": "t1",
+         "timestamp": "2026-10-14T09:30:01Z"},
+        {"type": "text", "role": "user", "content": "A later user row",
+         "timestamp": "2026-10-14T09:30:02Z"},
+    ]))
+    assert len(opened) == 2
+
+    monkeypatch.setattr(conv_store_mod, "AsyncSessionLocal", real_session)
+    meta = _run(conv_store_mod.get_conversation_meta(user_id, conversation_id))
+    assert meta["last_message_seq"] == 3
+    assert meta["auto_title"] == "Plan the offsite"  # set once, never overwritten
+    assert meta["last_message_at"].startswith("2026-10-14T09:30:02")

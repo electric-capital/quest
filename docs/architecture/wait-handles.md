@@ -66,13 +66,13 @@ Tools that block on user input do **not** themselves use a model-facing tool to 
 The dispatch arm of any blocking tool follows the same shape:
 
 1. Insert a `pending` row via `create_handle()`.
-2. Save `sdk_history.json` -- already done by the boundary save in `_capturing_on_event` at the `tool_use` event for the registering call; see [SDK History Persistence](gemini-api.md#sdk-history-persistence).
+2. Save `sdk_history.json` -- already done by `run_conversation_turn()` right after the model response that made the call, before dispatch; see [SDK History Persistence](gemini-api.md#sdk-history-persistence).
 3. For `wait_for_handles`: time out any requested row whose `expires_at` has already passed (returning at once if nothing is left pending), persist the wait's deadline on the still-pending rows via `set_expires_at()`, schedule a per-handle expiry timer via `wait_timer.schedule_timeout_for_handles()`, then raise `SuspendForWaitHandles`. See [Expiry](#expiry).
    For `send_slack_reply_and_get_response`: post the Slack reply via `slack_driven_runtime.post_thread_reply()`, then raise `SuspendForSlackReply`.
    For `create_action_request`: emit the `action_request` websocket event and append the structured chat-history message, then raise `SuspendForActionRequest`. This sentinel alone is caught **inside** the dispatch loop's per-call arm: the loop records it, keeps dispatching the remaining calls of the same parallel batch (each further `create_action_request` opens another card + row; regular tools run and persist their `tool_result`), then re-raises the first sentinel after the batch with the other cards' handle ids on `sibling_handle_ids`.
 4. The top-level `run_conversation_turn()` catches the sentinel, logs an info line, and returns the structured-messages list cleanly. No error event is emitted; this is a successful suspend, not a turn-end.
 
-On disk, `sdk_history.json` ends on an assistant turn whose last content block is the dangling tool_use (`wait_for_handles`, `send_slack_reply_and_get_response`, or `create_action_request`). The `chat_history.json` flush events that drive the boundary save are listed in `chat/_flush_helper.py` (`FLUSH_EVENT_TYPES`).
+On disk, `sdk_history.json` ends on an assistant turn whose last content block is the dangling tool_use (`wait_for_handles`, `send_slack_reply_and_get_response`, or `create_action_request`). The `chat_history.json` flush events (`FLUSH_EVENT_TYPES` in `chat/_flush_helper.py`) persist the `tool_use` row and any card before the sentinel is raised.
 
 Resolution writes the row first (first writer wins via the conditional update in `resolve_handle()`), then calls `wait_resume.maybe_kick_resume(app, user, conversation_id)`. Callers:
 

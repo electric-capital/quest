@@ -337,8 +337,9 @@ async def _handle_threaded_reply(
     # No active run -- the previous turn has fully completed (or the
     # server was restarted while it was suspended). sdk_history.json
     # should exist either from the end-of-loop save (normal completion)
-    # or from the boundary save inside _capturing_on_event during a
-    # send_slack_reply_and_get_response suspend. If it is missing the
+    # or from the save run_conversation_turn makes right after the model
+    # response that called send_slack_reply_and_get_response (before the
+    # tool is dispatched and suspends). If it is missing the
     # model will see an empty session, so log a warning to make the case
     # visible in production logs.
     try:

@@ -66,9 +66,8 @@ class RunContext:
     resolved_skills_content: str
 
     # Output channels. on_event is the capturing wrapper (sub-agent event
-    # capture + boundary SDK-history save), already bound to this run's
-    # chat/provider. structured_messages is the caller's messages_out
-    # list -- append-only, never rebind or copy it.
+    # capture around the caller's on_event). structured_messages is the
+    # caller's messages_out list -- append-only, never rebind or copy it.
     on_event: Callable[[dict], Awaitable[None]]
     structured_messages: list[dict]
 

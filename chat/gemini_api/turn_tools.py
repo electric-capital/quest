@@ -289,9 +289,9 @@ async def _emit_durable(
     The structured copy (plus ``durable_extra`` fields and a timestamp)
     is appended to ``ctx.structured_messages`` BEFORE ``ctx.on_event`` is
     awaited, so an on_event callback that flushes messages_out to disk
-    (and the boundary SDK-history save riding on it) always sees the
-    message it is flushing. This makes the persist-before-emit invariant
-    structural instead of comment-enforced at each site.
+    always sees the message it is flushing. This makes the
+    persist-before-emit invariant structural instead of comment-enforced
+    at each site.
     """
     ctx.structured_messages.append({
         **event,
@@ -550,11 +550,10 @@ async def _open_action_request_card(
     columns (populated at create time because the request_id is known up
     front); the resume bucket on the next run reads the row's response to
     close the dangling tool_use. The structured card message is appended
-    BEFORE the event is emitted (via ``_emit_durable``) so an on_event
-    flush sees it -- the boundary save inside ``_capturing_on_event``
-    then persists chat_history.json so the card and the dangling
-    tool_use are both on disk before the caller raises the suspend
-    sentinel.
+    BEFORE the event is emitted (via ``_emit_durable``) so the on_event
+    flush persists it to chat_history.json; sdk_history.json already
+    ends on the dangling tool_use (saved before dispatch), so both are
+    on disk before the caller raises the suspend sentinel.
 
     ``reasoning`` is stored on the action-request row; ``card_reasoning``
     is what the inline card displays (``return_to_caller`` stores the

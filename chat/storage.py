@@ -21,18 +21,34 @@ db/conversation_store.py.  The actual conversation content lives on disk:
 
 User subdirectories (data/chats/{user_id}/) are no longer used after the
 b3f9a1c2d4e5 Alembic migration.
+
+chat_history.json write path: every writer replaces the file atomically
+with compact JSON (``write_json_atomic``), and every read-modify-write
+holds the conversation's file lock (``_transcript_file_lock``). Message appends run
+their read-modify-write in a worker thread, one at a time per
+conversation in call order (``_transcript_append_lock``); the few
+synchronous writers (notice flags, guide snapshot, action-request status)
+take the same file lock on the event loop, so they never interleave with
+a threaded append.
 """
 
+import asyncio
+import contextlib
 import json
 import logging
+import os
+import threading
 import uuid
+import weakref
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import Any, Awaitable, List, Dict, Optional, TypeVar
 
 from config.paths import CHATS_DIR, DOCS_DIR, PROJECTS_DIR, TABLES_DIR
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 
 # Server-set, persisted-once booleans at the top level of chat_history.json
@@ -146,6 +162,131 @@ def _publish_appended_to_bus(
                 "(conversation=%s, seq=%s)",
                 conversation_id, seq, exc_info=True,
             )
+
+
+# ----------------------------------------------------------------------
+# chat_history.json write path (see the module docstring)
+# ----------------------------------------------------------------------
+
+# Per-conversation locks, held only while in use (weak values), so the
+# registries do not grow with every conversation the process touches.
+_transcript_file_locks: "weakref.WeakValueDictionary[str, Any]" = (
+    weakref.WeakValueDictionary()
+)
+_transcript_file_locks_guard = threading.Lock()
+_transcript_append_locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = (
+    weakref.WeakValueDictionary()
+)
+
+
+def _transcript_file_lock(conversation_id: str) -> Any:
+    """Return the ``threading.Lock`` guarding this conversation's chat_history.json.
+
+    Every read-modify-write of the file holds it, whether it runs in a
+    worker thread (message appends) or on the event loop (the synchronous
+    writers). An event-loop writer can therefore block for at most one
+    in-flight append write.
+    """
+    with _transcript_file_locks_guard:
+        lock = _transcript_file_locks.get(conversation_id)
+        if lock is None:
+            lock = threading.Lock()
+            _transcript_file_locks[conversation_id] = lock
+        return lock
+
+
+def _transcript_append_lock(conversation_id: str) -> asyncio.Lock:
+    """Return the ``asyncio.Lock`` that orders this conversation's appends.
+
+    ``asyncio.Lock`` wakes waiters FIFO, so appends to one conversation
+    land (and get their seqs) in call order and never overlap, while
+    appends to other conversations proceed in parallel. Only touched from
+    the event loop, so the registry needs no guard.
+    """
+    lock = _transcript_append_locks.get(conversation_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _transcript_append_locks[conversation_id] = lock
+    return lock
+
+
+def write_json_atomic(path: Path, data: Any) -> None:
+    """Replace ``path`` with ``data`` as compact JSON.
+
+    Serializes with the C encoder in one call, writes a sibling temp file
+    and ``os.replace``s it over ``path``, so a concurrent reader (on the
+    loop or in a thread) sees either the old or the new file, never a
+    partial one, and a process dying mid-write leaves the old file. No
+    fsync (the files are rewritten on every flushed event): surviving a
+    power loss is left to the OS, as with a plain in-place write.
+    """
+    payload = json.dumps(data, separators=(",", ":"))
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with open(tmp, "w") as f:
+            f.write(payload)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+
+
+def _seq_high_water_from(chat_data: Any) -> int:
+    """Highest ``seq`` in an already-parsed chat_history.json.
+
+    Pre-migration files have no ``seq`` field on any message; in that
+    case the high water is ``len(messages)`` so the next append starts
+    numbering from one past the existing message count.
+    """
+    messages = (chat_data.get("messages") if isinstance(chat_data, dict) else None) or []
+    max_seq = 0
+    any_seq = False
+    for msg in messages:
+        if isinstance(msg, dict) and isinstance(msg.get("seq"), int):
+            any_seq = True
+            if msg["seq"] > max_seq:
+                max_seq = msg["seq"]
+    if any_seq:
+        return max_seq
+    return len(messages)
+
+
+def _retrieve_task_result(task: "asyncio.Future") -> None:
+    """Mark a finished task's outcome as retrieved, logging a failure."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning(
+            "[storage] work finished after its caller was cancelled, with an error",
+            exc_info=exc,
+        )
+
+
+async def run_to_completion(awaitable: Awaitable[_T]) -> _T:
+    """Await ``awaitable`` so that cancelling the caller cannot abandon it midway.
+
+    The work runs as its own task. When the caller is cancelled while it is
+    in flight, the caller keeps waiting for it to finish and then re-raises
+    the cancellation. A transcript write and its bookkeeping (DB cache,
+    flush counter, bus publish) therefore either have not started or have
+    fully finished by the time the caller's cancel handlers run -- a
+    half-recorded write would otherwise be re-appended by the final flush.
+    A second cancel stops the waiting; the work still finishes on its own.
+    """
+    task = asyncio.ensure_future(awaitable)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if not task.done():
+            try:
+                await asyncio.wait([task])
+            except asyncio.CancelledError:
+                task.add_done_callback(_retrieve_task_result)
+                raise
+        _retrieve_task_result(task)
+        raise
 
 
 class InvalidStorageIdError(ValueError):
@@ -370,8 +511,7 @@ class ChatStorage:
         }
 
         chat_file = ChatStorage._get_chat_history_file(conversation_id)
-        with open(chat_file, "w") as f:
-            json.dump(chat_data, f, indent=2)
+        write_json_atomic(chat_file, chat_data)
 
         # Insert metadata row into SQLite
         created_at_dt = _parse_datetime(created_at_str)
@@ -423,8 +563,7 @@ class ChatStorage:
         }
 
         chat_file = ChatStorage._get_chat_history_file(conversation_id)
-        with open(chat_file, "w") as f:
-            json.dump(chat_data, f, indent=2)
+        write_json_atomic(chat_file, chat_data)
 
         created_at_dt = _parse_datetime(created_at_str)
         await db_create_conversation(
@@ -476,8 +615,7 @@ class ChatStorage:
         }
 
         chat_file = ChatStorage._get_chat_history_file(conversation_id)
-        with open(chat_file, "w") as f:
-            json.dump(chat_data, f, indent=2)
+        write_json_atomic(chat_file, chat_data)
 
         created_at_dt = _parse_datetime(created_at_str)
         await db_create_conversation(
@@ -527,8 +665,7 @@ class ChatStorage:
         }
 
         chat_file = ChatStorage._get_chat_history_file(conversation_id)
-        with open(chat_file, "w") as f:
-            json.dump(chat_data, f, indent=2)
+        write_json_atomic(chat_file, chat_data)
 
         created_at_dt = _parse_datetime(created_at_str)
         await db_create_conversation(
@@ -716,7 +853,9 @@ class ChatStorage:
         numbering from one past the existing message count. This is
         idempotent across restarts: the JSON file remains the source of
         truth, and the migration backfill plus this read keep the DB
-        ``last_message_seq`` aligned.
+        ``last_message_seq`` aligned. The appends do not call this: they
+        compute the same value (``_seq_high_water_from``) from the
+        transcript they already parsed.
         """
         chat_file = ChatStorage._get_chat_history_file(conversation_id)
         if not chat_file.exists():
@@ -726,21 +865,96 @@ class ChatStorage:
                 chat_data = json.load(f)
         except Exception:
             return 0
-        messages = chat_data.get("messages") or []
-        if not messages:
-            return 0
-        max_seq = 0
-        any_seq = False
-        for msg in messages:
-            if isinstance(msg, dict) and isinstance(msg.get("seq"), int):
-                any_seq = True
-                if msg["seq"] > max_seq:
-                    max_seq = msg["seq"]
-        if any_seq:
-            return max_seq
-        # Pre-migration file: number from the existing length so the first
-        # newly-stamped message gets seq = len(messages) + 1.
-        return len(messages)
+        return _seq_high_water_from(chat_data)
+
+    @staticmethod
+    def _append_messages_to_file(
+        conversation_id: str, messages: List[Dict],
+    ) -> list[tuple[int, Dict]]:
+        """Stamp ``messages`` with seqs and append them to chat_history.json.
+
+        The blocking half of an append, run in a worker thread under the
+        conversation's file lock: one read and parse of the transcript, the
+        seq high water taken from that same parse, one atomic compact
+        rewrite. Returns ``[(seq, message), ...]``; the dicts are stamped
+        in place.
+
+        Raises:
+            FileNotFoundError: the conversation has no chat_history.json.
+        """
+        chat_file = ChatStorage._get_chat_history_file(conversation_id)
+        with _transcript_file_lock(conversation_id):
+            if not chat_file.exists():
+                raise FileNotFoundError(f"Conversation {conversation_id} not found")
+            if not messages:
+                return []
+            with open(chat_file, "r") as f:
+                chat_data = json.load(f)
+            next_seq = _seq_high_water_from(chat_data)
+            appended: list[tuple[int, Dict]] = []
+            for message in messages:
+                next_seq += 1
+                message["seq"] = next_seq
+                chat_data["messages"].append(message)
+                appended.append((next_seq, message))
+            write_json_atomic(chat_file, chat_data)
+        return appended
+
+    @staticmethod
+    async def _append_to_transcript(
+        conversation_id: str,
+        messages: List[Dict],
+        *,
+        latest_ts: Optional[str],
+        auto_title: Optional[str],
+    ) -> list[tuple[int, Dict]]:
+        """Shared core of ``append_message`` / ``append_structured_messages``.
+
+        Under the conversation's append lock: the file write in a worker
+        thread (``_append_messages_to_file``), then ONE DB session for the
+        sidebar timestamp, the ``last_message_seq`` cache and the auto
+        title (``record_messages_appended``; failures are logged and
+        non-fatal, the file stays the source of truth). The whole append
+        runs to completion even if the caller is cancelled meanwhile.
+        """
+        from db.conversation_store import record_messages_appended
+
+        async def _commit() -> list[tuple[int, Dict]]:
+            async with _transcript_append_lock(conversation_id):
+                appended = await asyncio.to_thread(
+                    ChatStorage._append_messages_to_file, conversation_id, messages,
+                )
+                if appended:
+                    try:
+                        await record_messages_appended(
+                            conversation_id,
+                            last_message_at=_parse_datetime(latest_ts) if latest_ts else None,
+                            last_message_seq=appended[-1][0],
+                            auto_title=auto_title or None,
+                        )
+                    except Exception:
+                        # Non-fatal: the messages are on disk; the next
+                        # append (or the startup backfill) realigns the DB.
+                        logger.warning(
+                            "[storage] conversation metadata update failed "
+                            "(conversation=%s)", conversation_id, exc_info=True,
+                        )
+                return appended
+
+        return await run_to_completion(_commit())
+
+    @staticmethod
+    def _auto_title_for(content: Any) -> str:
+        """Sidebar title for a user message, ignoring a leading flags line.
+
+        The ``%%flags[...]`` magic line stays in the persisted message (the
+        visible bubble keeps it so it survives copy-paste); only the title
+        is derived from a flags-stripped copy. ``parse_flags_line`` is a
+        no-op for a message without that line.
+        """
+        from chat.conversation_flags import parse_flags_line
+        _, title_source = parse_flags_line(content)
+        return _compute_auto_title(title_source)
 
     @staticmethod
     async def append_message(
@@ -752,9 +966,10 @@ class ChatStorage:
     ) -> tuple[int, dict]:
         """Append a message to conversation history.
 
-        After writing the file, updates last_message_at and last_message_seq
-        in the DB so the sidebar sort order and the WS subscribe handler
-        both stay current.
+        After writing the file, updates last_message_at, last_message_seq
+        (and, for a user message, the cached auto title) in the DB so the
+        sidebar sort order and the WS subscribe handler both stay current.
+        The file write runs off the event loop; see ``_append_to_transcript``.
 
         Args:
             conversation_id: Conversation UUID.
@@ -771,68 +986,21 @@ class ChatStorage:
             persistent-WS flush callback uses the seq to publish a
             ``message_appended`` event after the disk write.
         """
-        from db.conversation_store import (
-            set_conversation_auto_title,
-            update_last_message_at,
-            update_last_message_seq,
-        )
-
-        chat_file = ChatStorage._get_chat_history_file(conversation_id)
-
-        if not chat_file.exists():
-            raise FileNotFoundError(f"Conversation {conversation_id} not found")
-
-        with open(chat_file, "r") as f:
-            chat_data = json.load(f)
-
         ts = timestamp or utc_timestamp()
-        previous_high_water = ChatStorage._read_seq_high_water(conversation_id)
-        new_seq = previous_high_water + 1
-        message = {
+        message: dict = {
             "role": role,
             "content": content,
             "timestamp": ts,
-            "seq": new_seq,
         }
         if attachments:
             message["attachments"] = attachments
 
-        chat_data["messages"].append(message)
-
-        with open(chat_file, "w") as f:
-            json.dump(chat_data, f, indent=2)
-
-        # Update DB timestamp so sidebar ordering is always current.
-        try:
-            await update_last_message_at(conversation_id, _parse_datetime(ts))
-        except Exception:
-            pass  # Non-fatal; the message was written to disk successfully
-
-        # Mirror the high-water mark into the DB cache.
-        try:
-            await update_last_message_seq(conversation_id, new_seq)
-        except Exception:
-            pass
-
-        # Cache the auto-derived sidebar title on the first user message so
-        # the conversation-list endpoint doesn't have to re-open the JSON.
-        # ``set_conversation_auto_title`` is idempotent (no-op when already set).
-        if role == "user":
-            # Derive the sidebar title from a flags-stripped copy so a first
-            # message that begins with the ``%%flags[...]`` magic line does not
-            # show the magic syntax as its leading title text. The visible chat
-            # bubble still keeps the magic line (persisted ``content`` above);
-            # only the title is cleaned. ``parse_flags_line`` is a no-op for any
-            # message without a leading magic line, so this is safe to call
-            # unconditionally (including on non-first messages).
-            from chat.conversation_flags import parse_flags_line
-            _, title_source = parse_flags_line(content)
-            title = _compute_auto_title(title_source)
-            if title:
-                try:
-                    await set_conversation_auto_title(conversation_id, title)
-                except Exception:
-                    pass
+        # The first user message's flags-stripped body becomes the cached
+        # sidebar title (the store only fills it in once).
+        auto_title = ChatStorage._auto_title_for(content) if role == "user" else None
+        ((new_seq, message),) = await ChatStorage._append_to_transcript(
+            conversation_id, [message], latest_ts=ts, auto_title=auto_title,
+        )
 
         # Publish ``message_appended`` for this message so persistent-WS
         # subscribers (other tabs / the web UI watching a Slack-driven
@@ -862,7 +1030,8 @@ class ChatStorage:
         resync without re-reading the file.
 
         After writing the file, updates last_message_at in the DB to the
-        timestamp of the last message in the batch.
+        timestamp of the last message in the batch. The file write runs off
+        the event loop; see ``_append_to_transcript``.
 
         Args:
             conversation_id: Conversation UUID.
@@ -874,33 +1043,12 @@ class ChatStorage:
             values to publish ``message_appended`` events on the persistent
             WS bus after the disk write succeeds.
         """
-        from db.conversation_store import (
-            set_conversation_auto_title,
-            update_last_message_at,
-            update_last_message_seq,
-        )
-
-        chat_file = ChatStorage._get_chat_history_file(conversation_id)
-
-        if not chat_file.exists():
-            raise FileNotFoundError(f"Conversation {conversation_id} not found")
-
-        with open(chat_file, "r") as f:
-            chat_data = json.load(f)
-
-        previous_high_water = ChatStorage._read_seq_high_water(conversation_id)
         latest_ts: Optional[str] = None
-        appended: list[tuple[int, Dict]] = []
-        next_seq = previous_high_water
         first_user_content: Optional[str] = None
         for message in messages:
             if "timestamp" not in message:
                 message["timestamp"] = utc_timestamp()
             latest_ts = message["timestamp"]
-            next_seq += 1
-            message["seq"] = next_seq
-            chat_data["messages"].append(message)
-            appended.append((next_seq, message))
             if (
                 first_user_content is None
                 and message.get("role") == "user"
@@ -908,37 +1056,15 @@ class ChatStorage:
             ):
                 first_user_content = message["content"]
 
-        with open(chat_file, "w") as f:
-            json.dump(chat_data, f, indent=2)
-
-        # Update DB timestamp to the last message's timestamp
-        if latest_ts:
-            try:
-                await update_last_message_at(conversation_id, _parse_datetime(latest_ts))
-            except Exception:
-                pass  # Non-fatal; the messages were written to disk successfully
-
-        if appended:
-            try:
-                await update_last_message_seq(conversation_id, appended[-1][0])
-            except Exception:
-                pass
-
-        # Cache the auto-derived sidebar title from the first user message in
-        # this batch (idempotent across batches; no-op when already set). Strip
-        # any leading ``%%flags[...]`` magic line for title purposes only so the
-        # sidebar never shows the magic syntax (no-op for normal messages).
-        if first_user_content is not None:
-            from chat.conversation_flags import parse_flags_line
-            _, title_source = parse_flags_line(first_user_content)
-            title = _compute_auto_title(title_source)
-            if title:
-                try:
-                    await set_conversation_auto_title(conversation_id, title)
-                except Exception:
-                    pass
-
-        return appended
+        # The first user message in the batch supplies the cached sidebar
+        # title (idempotent across batches; flags line stripped).
+        auto_title = (
+            ChatStorage._auto_title_for(first_user_content)
+            if first_user_content is not None else None
+        )
+        return await ChatStorage._append_to_transcript(
+            conversation_id, messages, latest_ts=latest_ts, auto_title=auto_title,
+        )
 
     @staticmethod
     def update_action_request_message(
@@ -954,43 +1080,44 @@ class ChatStorage:
         entry in chat_history.json and rewrites its ``status`` (and adds
         ``result`` / ``feedback`` fields when provided) so a page reload
         or replay shows the same outcome the live UI shows. Best-effort:
-        a missing file or missing entry is a silent no-op.
+        a missing file or missing entry is a silent no-op. Holds the
+        conversation's file lock (see the module docstring).
         """
         chat_file = ChatStorage._get_chat_history_file(conversation_id)
-        if not chat_file.exists():
-            return
+        with _transcript_file_lock(conversation_id):
+            if not chat_file.exists():
+                return
 
-        try:
-            with open(chat_file, "r") as f:
-                chat_data = json.load(f)
-        except Exception:
-            return
+            try:
+                with open(chat_file, "r") as f:
+                    chat_data = json.load(f)
+            except Exception:
+                return
 
-        messages = chat_data.get("messages") or []
-        changed = False
-        for msg in messages:
-            if (
-                isinstance(msg, dict)
-                and msg.get("type") == "action_request"
-                and msg.get("request_id") == request_id
-            ):
-                msg["status"] = status
-                if result is not None:
-                    msg["result"] = result
-                if feedback is not None:
-                    msg["feedback"] = feedback
-                changed = True
-                break
+            messages = chat_data.get("messages") or []
+            changed = False
+            for msg in messages:
+                if (
+                    isinstance(msg, dict)
+                    and msg.get("type") == "action_request"
+                    and msg.get("request_id") == request_id
+                ):
+                    msg["status"] = status
+                    if result is not None:
+                        msg["result"] = result
+                    if feedback is not None:
+                        msg["feedback"] = feedback
+                    changed = True
+                    break
 
-        if not changed:
-            return
+            if not changed:
+                return
 
-        try:
-            with open(chat_file, "w") as f:
-                json.dump(chat_data, f, indent=2)
-        except Exception:
-            # Best-effort: a failed disk write must not break the resolve.
-            pass
+            try:
+                write_json_atomic(chat_file, chat_data)
+            except Exception:
+                # Best-effort: a failed disk write must not break the resolve.
+                pass
 
     @staticmethod
     def set_guide_snapshot(
@@ -1010,22 +1137,21 @@ class ChatStorage:
             guide_content: Guide system prompt content at time of snapshot.
         """
         chat_file = ChatStorage._get_chat_history_file(conversation_id)
-        if not chat_file.exists():
-            return
+        with _transcript_file_lock(conversation_id):
+            if not chat_file.exists():
+                return
 
-        with open(chat_file, "r") as f:
-            chat_data = json.load(f)
+            with open(chat_file, "r") as f:
+                chat_data = json.load(f)
 
-        # Only set if not already snapshotted
-        if "guide_id" not in chat_data or chat_data["guide_id"] is None:
-            chat_data["guide_id"] = guide_id
-            chat_data["guide_snapshot"] = {
-                "name": guide_name,
-                "content": guide_content,
-            }
-
-            with open(chat_file, "w") as f:
-                json.dump(chat_data, f, indent=2)
+            # Only set if not already snapshotted
+            if "guide_id" not in chat_data or chat_data["guide_id"] is None:
+                chat_data["guide_id"] = guide_id
+                chat_data["guide_snapshot"] = {
+                    "name": guide_name,
+                    "content": guide_content,
+                }
+                write_json_atomic(chat_file, chat_data)
 
     @staticmethod
     def guide_snapshot_from(chat_data: Optional[Dict]) -> Optional[Dict]:
@@ -1119,12 +1245,9 @@ class ChatStorage:
         or non-object chat_history.json is also a logged no-op (nothing is
         written), mirroring ``get_conversation_flags``.
 
-        Concurrency note: this is the same synchronous, non-atomic
-        read-modify-write as the other chat_history.json writers. It is safe
-        only because there is no ``await`` between the read and the write
-        and everything runs on the single event loop, so it cannot
-        interleave with a message append; keep it fully synchronous and on
-        the event loop (never in a worker thread).
+        Concurrency note: the read-modify-write holds the conversation's
+        file lock, the same lock a threaded message append holds, so the
+        two can never interleave (see the module docstring).
 
         Raises:
             ValueError: a key is not one of ``CONVERSATION_NOTICE_FLAGS``
@@ -1135,40 +1258,40 @@ class ChatStorage:
                 raise ValueError(f"Unknown conversation flag: {name!r}")
         names = ", ".join(flags)
         chat_file = ChatStorage._get_chat_history_file(conversation_id)
-        if not chat_file.exists():
-            logger.warning(
-                "set_conversation_flags(%s, %s): no chat_history.json; skipped",
-                conversation_id, names,
-            )
-            return False
-        try:
-            with open(chat_file, "r") as f:
-                chat_data = json.load(f)
-        except Exception:
-            logger.warning(
-                "set_conversation_flags(%s, %s): unreadable chat_history.json; skipped",
-                conversation_id, names, exc_info=True,
-            )
-            return False
-        if not isinstance(chat_data, dict):
-            logger.warning(
-                "set_conversation_flags(%s, %s): chat_history.json is not an object; skipped",
-                conversation_id, names,
-            )
-            return False
-        if only_if_unset and chat_data.get(only_if_unset):
-            return False
-        changed = False
-        for name, value in flags.items():
-            value = bool(value)
-            if chat_data.get(name) is not value:
-                chat_data[name] = value
-                changed = True
-        if not changed:
-            return False
-        with open(chat_file, "w") as f:
-            json.dump(chat_data, f, indent=2)
-        return True
+        with _transcript_file_lock(conversation_id):
+            if not chat_file.exists():
+                logger.warning(
+                    "set_conversation_flags(%s, %s): no chat_history.json; skipped",
+                    conversation_id, names,
+                )
+                return False
+            try:
+                with open(chat_file, "r") as f:
+                    chat_data = json.load(f)
+            except Exception:
+                logger.warning(
+                    "set_conversation_flags(%s, %s): unreadable chat_history.json; skipped",
+                    conversation_id, names, exc_info=True,
+                )
+                return False
+            if not isinstance(chat_data, dict):
+                logger.warning(
+                    "set_conversation_flags(%s, %s): chat_history.json is not an object; skipped",
+                    conversation_id, names,
+                )
+                return False
+            if only_if_unset and chat_data.get(only_if_unset):
+                return False
+            changed = False
+            for name, value in flags.items():
+                value = bool(value)
+                if chat_data.get(name) is not value:
+                    chat_data[name] = value
+                    changed = True
+            if not changed:
+                return False
+            write_json_atomic(chat_file, chat_data)
+            return True
 
     # ------------------------------------------------------------------
     # Loaded skills (per-conversation, manually loaded by user)
@@ -1650,8 +1773,7 @@ class ChatStorage:
         }
 
         chat_file = ChatStorage._get_chat_history_file(conversation_id)
-        with open(chat_file, "w") as f:
-            json.dump(chat_data, f, indent=2)
+        write_json_atomic(chat_file, chat_data)
 
         # Routine runs are named after their routine (the prompt is the same
         # for every run, and the sidebar groups them under the routine

@@ -211,7 +211,7 @@ The `legacy_shared_workspace` and `converted_from_standalone` flags in `chat_his
 
 `sdk_history.json`, beside `chat_history.json`, holds the provider-native session history: `_save_sdk_history()` in `chat/gemini_api/history.py` serializes through `provider.save_history()` into a `{provider, history}` envelope, and `_load_sdk_history()` returns `(history, provider_name)`. Both log and swallow failures.
 
-The save fires at every flush boundary: `_capturing_on_event` in `chat/gemini_api/conversation.py` saves after each event in `FLUSH_EVENT_TYPES` (`chat/_flush_helper.py`), the set that also flushes `chat_history.json`, so the two files advance together. Suspends depend on it: when a sentinel unwinds the loop, the file already ends on the dangling tool_use the resume bucket closes ([Wait Handles -- Suspend / Resume](wait-handles.md#suspend--resume); [Slack Socket Mode -- Restart Resilience](slack-socket-mode.md#restart-resilience)).
+`run_conversation_turn()` in `chat/gemini_api/conversation.py` saves after each model response that requested tools, before dispatching any: `_persist_sdk_history()` writes in a worker thread and finishes even if the run is cancelled meanwhile. Dispatch never touches the session, so the file ends on the dangling tool_use(s) a suspend, a Stop or a restart mid-tool resumes from ([Wait Handles -- Suspend / Resume](wait-handles.md#suspend--resume); [Slack Socket Mode -- Restart Resilience](slack-socket-mode.md#restart-resilience)). Turn end and errors save once more, synchronously after the final flush; a cancelled turn is not saved (see Interrupted Turns).
 
 ### Model Change History Preservation
 
@@ -276,7 +276,7 @@ Sub-agent activity logs under `[agent_task]` / `[agent_task_parallel]` / `[agent
 
 **Why a separate `sdk_history.json`?** `chat_history.json` holds display messages and the provider history holds native content; one file would need a lossy translation in both directions.
 
-**Why save SDK history at every flush boundary instead of at turn end?** A suspended turn (a Slack reply or approval card can wait for days) ends at a dangling tool_use, and a restart before turn end would lose it. Keying the save to `FLUSH_EVENT_TYPES` keeps both files in step and keeps the cancel helper a small tail edit instead of a provider-specific rebuild.
+**Why save SDK history after each tool-requesting response, not only at turn end?** A suspended turn (a Slack reply or approval card can wait for days) ends at a dangling tool_use that a restart or Stop must find on disk, and the cancel helper stays a small tail edit instead of a provider-specific rebuild. Saving per flushed event would rewrite the same session several times a round. The turn-end save is synchronous so no Stop lands between it and the return, where the helper would append the turn's text twice.
 
 **Why put the interruption marker on the assistant message?** A separate user message would break the strict user / assistant alternation Anthropic requires.
 

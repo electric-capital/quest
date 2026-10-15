@@ -79,7 +79,7 @@ The handler classifies an accepted DM by whether its `thread_ts` is unset or equ
 `_dispatch_slack_model_run()` mirrors the pattern used by the scheduler (see [Scheduling Architecture](scheduling.md)) but with three Slack-specific knobs:
 
 - `origin="slack"` and `slack_context={"channel_id", "thread_ts"}` are passed to `run_conversation_turn` so the system prompt switches to Slack Reply Mode and the blocking tool knows where to post
-- Incremental flushing: the caller passes a shared `messages_out` list plus an `on_event` callback built from `make_flush_callback()` in `chat/_flush_helper.py`, which writes newly-appended structured messages to `chat_history.json` on the events in `FLUSH_EVENT_TYPES` (`tool_use`, `tool_result`, `action_request`, `stats`). The boundary save hook in `run_conversation_turn()` keys off the same set so `sdk_history.json` advances together. This is critical because the model suspends inside `send_slack_reply_and_get_response` for potentially hours -- without incremental flushing the web UI would show only the initial user message on refresh
+- Incremental flushing: the caller passes a shared `messages_out` list plus an `on_event` callback built from `make_flush_callback()` in `chat/_flush_helper.py`, which writes newly-appended structured messages to `chat_history.json` on the events in `FLUSH_EVENT_TYPES` (`tool_use`, `tool_result`, `action_request`, `stats`). This is critical because the model suspends inside `send_slack_reply_and_get_response` for potentially hours -- without incremental flushing the web UI would show only the initial user message on refresh
 - Cancellation: the task is registered in `slack_driven_runtime._active_runs`; `shutdown()` cancels it, the coroutine catches `CancelledError`, flushes what it has, and re-raises
 
 The conversation's model is read from `db/conversation_store.get_conversation_meta()` so threaded replies reuse the same model the conversation was first run with. The model for a newly-created Slack conversation is chosen by `_handle_top_level_dm()`; see [Per-User Default Model](#per-user-default-model) below.
@@ -98,7 +98,7 @@ Defined as `_SEND_SLACK_REPLY` in `chat/llm/tool_schemas.py` and exposed only vi
 
 The dispatch handler (`_handle_send_slack_reply()` in `chat/gemini_api/turn_tools.py`) validates the text, posts a threaded reply via `slack_driven_runtime.post_thread_reply()`, inserts a `kind="slack_reply"` `tool_wait_handles` row whose payload carries `{channel, thread_ts, posted_text, posted_ts}`, and raises `SuspendForSlackReply`.
 
-The top-level loop catches the sentinel, returns cleanly, and leaves a dangling `send_slack_reply_and_get_response` tool_use on disk (the boundary save in `_capturing_on_event` already persisted `sdk_history.json` at the `tool_use` event for this call).
+The top-level loop catches the sentinel, returns cleanly, and leaves a dangling `send_slack_reply_and_get_response` tool_use on disk (`run_conversation_turn()` saved `sdk_history.json` right after the model response that made this call, before dispatch).
 
 When the user replies, the debounce flush in `slack_driven_runtime._flush_after()` resolves the row with the collated `user_reply` and calls `wait_resume.maybe_kick_resume()`; the resume bucket reads the row and closes the dangling tool_use with `{"user_reply": ..., "posted_ts": ...}`.
 
@@ -108,7 +108,7 @@ When the user replies, the debounce flush in `slack_driven_runtime._flush_after(
 
 A Slack-driven run can stay suspended inside `send_slack_reply_and_get_response` for hours or days waiting for the user's next reply. The Slack Reply Mode prompt tells the model to end every turn by calling the blocking tool, so the in-memory session never reaches a clean turn-end -- the suspension always lands on a dangling `send_slack_reply_and_get_response` tool_use, with the matching `slack_reply` wait-handle row holding the durable state.
 
-**Save invariant: the flush-event boundary** (see [SDK History Persistence](gemini-api.md#sdk-history-persistence)). The `tool_use` event for `send_slack_reply_and_get_response` fires before the dispatch arm posts the Slack reply or inserts the wait-handle row, so by the time `SuspendForSlackReply` is raised, `sdk_history.json` already ends on the dangling-tool_use shape the resume bucket closes.
+**Save invariant: saved before dispatch** (see [SDK History Persistence](gemini-api.md#sdk-history-persistence)). The session is saved after the model response that called `send_slack_reply_and_get_response` and before the dispatch arm posts the Slack reply or inserts the wait-handle row, so by the time `SuspendForSlackReply` is raised, `sdk_history.json` already ends on the dangling-tool_use shape the resume bucket closes.
 
 **Cancellation tail edit.** `_dispatch_slack_model_run()` in `chat/slack_socket_mode.py` catches `CancelledError`, calls `_save_interrupted_sdk_history()` for any partial-text tail edit, and then calls `remove_chat_session()` so any follow-up turn in the same process rebuilds cleanly from disk. `_save_interrupted_sdk_history()` skips the tail edit when the on-disk last entry already ends on a dangling tool_use; appending text there would leave an unmatched tool_use followed by user text, which Anthropic rejects with `"tool_use ids were found without tool_result blocks immediately after"`.
 

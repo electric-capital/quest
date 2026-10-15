@@ -12,7 +12,12 @@ import asyncio
 import logging
 from typing import Awaitable, Callable
 
-from chat.storage import ChatStorage, _publish_appended_to_bus, utc_timestamp
+from chat.storage import (
+    ChatStorage,
+    _publish_appended_to_bus,
+    run_to_completion,
+    utc_timestamp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +25,7 @@ logger = logging.getLogger(__name__)
 # The set of event types after which a complete structured message (or
 # batch of them) has been appended to messages_out. Flushing on these
 # preserves ordering and minimises redundant disk writes compared to
-# flushing on every streaming text chunk. The boundary save hook in
-# run_conversation_turn keys off the same set so chat_history.json and
-# sdk_history.json advance together.
+# flushing on every streaming text chunk.
 FLUSH_EVENT_TYPES: frozenset[str] = frozenset({
     "tool_use",
     "tool_result",
@@ -72,12 +75,30 @@ def make_flush_callback(
     to the persistent-WS bus and pushes them into the per-conversation
     replay ring buffer so reconnecting clients can catch up. The publishes
     are best-effort: a publish failure does not roll back the disk write.
+
+    A started flush runs to completion (``run_to_completion``) even when
+    the run is cancelled meanwhile -- the disk write happens in a worker
+    thread and cannot be abandoned -- so the counter and the publish
+    always match what is on disk and the caller's final flush in its
+    ``finally`` never appends the same messages twice.
     """
     flush_lock = asyncio.Lock()
     flushed_count = 0
 
-    async def flush() -> None:
+    async def _write(new_msgs: list[dict]) -> None:
         nonlocal flushed_count
+        appended = await ChatStorage.append_structured_messages(
+            conversation_id=conversation_id,
+            messages=new_msgs,
+        )
+        flushed_count += len(new_msgs)
+        # Fan out ``message_appended`` to the persistent-WS bus and
+        # push into the per-conversation replay ring buffer. Shared
+        # with the single-message path in ``ChatStorage.append_message``
+        # so every appended message reaches onlooker tabs the same way.
+        _publish_appended_to_bus(conversation_id, appended)
+
+    async def flush() -> None:
         async with flush_lock:
             if flushed_count >= len(messages_out):
                 return
@@ -87,22 +108,11 @@ def make_flush_callback(
                 if "timestamp" not in msg:
                     msg["timestamp"] = now_ts
             try:
-                appended = await ChatStorage.append_structured_messages(
-                    conversation_id=conversation_id,
-                    messages=new_msgs,
-                )
-                flushed_count += len(new_msgs)
+                await run_to_completion(_write(new_msgs))
             except Exception:
                 logger.exception(
                     "%s Incremental flush failed (conversation=%s)",
                     log_prefix, conversation_id,
                 )
-                return
-
-            # Fan out ``message_appended`` to the persistent-WS bus and
-            # push into the per-conversation replay ring buffer. Shared
-            # with the single-message path in ``ChatStorage.append_message``
-            # so every appended message reaches onlooker tabs the same way.
-            _publish_appended_to_bus(conversation_id, appended)
 
     return flush, flush_lock

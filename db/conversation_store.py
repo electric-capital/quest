@@ -223,22 +223,41 @@ async def update_last_message_at(conversation_id: str, ts: datetime) -> None:
         await db.commit()
 
 
-async def update_last_message_seq(conversation_id: str, new_seq: int) -> None:
-    """Advance ``last_message_seq`` to ``new_seq`` if higher than the current
-    value (idempotent).
+async def record_messages_appended(
+    conversation_id: str,
+    *,
+    last_message_at: Optional[datetime] = None,
+    last_message_seq: Optional[int] = None,
+    auto_title: Optional[str] = None,
+) -> None:
+    """Record a ``chat_history.json`` append on the row, in one session.
 
-    Used by ``ChatStorage.append_*`` to keep the DB cache aligned with the
-    JSON file's high-water mark. If the row is missing the call is a no-op
-    -- the next append will re-attempt and the on-disk file remains the
-    source of truth either way.
+    Called by ``ChatStorage.append_message`` / ``append_structured_messages``
+    after each append:
+
+    * ``last_message_at`` is set as given (sidebar sort order);
+    * ``last_message_seq`` is advanced only if higher than the stored value
+      (idempotent), keeping the DB cache aligned with the file's high-water
+      mark;
+    * ``auto_title`` is set only if the row has none yet, so the sidebar
+      list derives titles without opening chat_history.json.
+
+    ``None`` leaves a field alone. A missing row is a no-op -- the on-disk
+    file remains the source of truth and the next append re-attempts.
     """
     async with AsyncSessionLocal() as db:
         conv = await db.get(Conversation, conversation_id)
         if conv is None:
             return
-        if conv.last_message_seq is None or new_seq > conv.last_message_seq:
-            conv.last_message_seq = new_seq
-            await db.commit()
+        if last_message_at is not None:
+            conv.last_message_at = last_message_at
+        if last_message_seq is not None and (
+            conv.last_message_seq is None or last_message_seq > conv.last_message_seq
+        ):
+            conv.last_message_seq = last_message_seq
+        if auto_title and conv.auto_title is None:
+            conv.auto_title = auto_title
+        await db.commit()
 
 
 async def get_last_message_seq(conversation_id: str) -> int:
@@ -409,8 +428,8 @@ async def set_conversation_flags(conversation_id: str, flags: list[str]) -> None
     """Set the per-conversation ``flags`` array, only if not already set.
 
     Flags are start-of-conversation only (parsed from the magic ``%%flags[...]``
-    first line), so this mirrors ``update_conversation_model`` /
-    ``set_conversation_auto_title``: it is a no-op once any flags are present, or
+    first line), so this mirrors ``update_conversation_model`` and the auto
+    title in ``record_messages_appended``: it is a no-op once any flags are present, or
     if the conversation is not found. An empty ``flags`` list is also a no-op
     (nothing to persist).
 
@@ -626,21 +645,3 @@ def _admin_conversation_row(conv: Conversation, email: str, name: str | None) ->
         # "model used by the most recent model output".
         "last_model": conv.model,
     }
-
-
-async def set_conversation_auto_title(conversation_id: str, auto_title: str) -> None:
-    """Set ``auto_title`` on a conversation, only if not already set.
-
-    Called from ``ChatStorage.append_message`` / ``append_structured_messages``
-    on the first user message so the sidebar list endpoint can derive titles
-    from the DB without opening chat_history.json. No-op if the row already
-    has a cached title or if the row does not exist.
-    """
-    async with AsyncSessionLocal() as db:
-        conv = await db.get(Conversation, conversation_id)
-        if conv is None:
-            return
-        if conv.auto_title is not None:
-            return
-        conv.auto_title = auto_title
-        await db.commit()

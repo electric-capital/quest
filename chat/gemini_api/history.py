@@ -9,7 +9,7 @@ can deserialize on load.
 import json
 import logging
 
-from chat.storage import ChatStorage
+from chat.storage import ChatStorage, write_json_atomic
 from chat.gemini_api.constants import _SDK_HISTORY_FILENAME
 
 logger = logging.getLogger(__name__)
@@ -32,15 +32,19 @@ def _provider_name(provider) -> str:
 def _write_sdk_history_file(
     conversation_id: str, serialized: list, provider_name: str,
 ) -> None:
-    """Write the provider-named envelope to sdk_history.json."""
+    """Write the provider-named envelope to sdk_history.json.
+
+    Compact JSON, replaced atomically (``write_json_atomic``), so a reader
+    such as the cancel handler's ``_save_interrupted_sdk_history`` never
+    sees a partially written file while a threaded save is in flight.
+    """
     envelope = {
         "provider": provider_name,
         "history": serialized,
     }
     conversation_dir = ChatStorage._get_conversation_dir(conversation_id)
     history_file = conversation_dir / _SDK_HISTORY_FILENAME
-    with open(history_file, "w") as f:
-        json.dump(envelope, f, separators=(",", ":"))
+    write_json_atomic(history_file, envelope)
 
 
 def _save_sdk_history(conversation_id: str, session, provider) -> None:

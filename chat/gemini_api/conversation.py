@@ -14,9 +14,8 @@ from datetime import datetime, timezone as dt_timezone
 from typing import Any, Callable, Awaitable
 from zoneinfo import ZoneInfo, available_timezones
 
-from chat.storage import utc_timestamp, ChatStorage
+from chat.storage import utc_timestamp, ChatStorage, run_to_completion
 from config.server_config import load_server_config
-from chat._flush_helper import FLUSH_EVENT_TYPES
 from db.llm_call_store import record_api_call
 from db.models import ApiCallType, ToolWaitHandleStatus
 from db import tool_wait_handle_store
@@ -301,6 +300,29 @@ async def _stream_turn(
     return text_parts, function_calls
 
 
+async def _persist_sdk_history(conversation_id: str, chat: Any, provider: Any) -> None:
+    """Save the session to sdk_history.json in a worker thread.
+
+    The mid-turn save point of ``run_conversation_turn``: called once per
+    model response that requested tools, before any of them is dispatched,
+    so the file ends on the dangling tool_use(s) that a suspend, a Stop or
+    a restart mid-tool resumes from. Nothing else touches the session
+    while the run awaits this, so serializing it off the loop is safe. The
+    write runs to completion even if the run is cancelled meanwhile, so a
+    cancel handler that amends the file never races it.
+    ``_save_sdk_history`` logs and swallows its own failures.
+    """
+    try:
+        await run_to_completion(
+            asyncio.to_thread(_save_sdk_history, conversation_id, chat, provider),
+        )
+    except Exception:
+        logger.warning(
+            "SDK history save failed (conversation=%s)",
+            conversation_id, exc_info=True,
+        )
+
+
 def _load_persisted_tool_results(conversation_id: str) -> dict[str, str]:
     """Map ``tool_id`` -> ``tool_output`` for every ``tool_result`` row in
     the conversation's ``chat_history.json``.
@@ -368,11 +390,10 @@ async def _read_chat_history(conversation_id: str) -> dict | None:
     """Read and parse chat_history.json once for the turn-start lookups.
 
     The read + parse runs in a worker thread (the file grows with the
-    transcript). A failed threaded read -- e.g. a parse error from catching
-    a concurrent writer mid-write -- is retried once synchronously on the
-    event loop, where every chat_history.json writer runs, so that read can
-    never see a torn file; a genuinely corrupt file raises from there, as
-    as a direct read always did.
+    transcript). Writers replace the file atomically, so a read never sees
+    a partial write; a failed threaded read is still retried once
+    synchronously on the event loop, and a genuinely corrupt file raises
+    from there, as a direct read always did.
     """
     try:
         return await asyncio.to_thread(ChatStorage.get_conversation, conversation_id)
@@ -546,23 +567,12 @@ async def run_conversation_turn(
             if parent_id:
                 _sub_agent_events.setdefault(parent_id, []).append(event)
         await _original_on_event(event)
-        # Boundary save: when the caller's on_event has just flushed
-        # chat_history.json (its only flush point is on these event
-        # types), persist the SDK session history too. This keeps
-        # chat_history.json and sdk_history.json aligned without any
-        # per-call-site explicit save sites. Best-effort: a save failure
-        # is logged inside _save_sdk_history and swallowed so a flaky
-        # disk does not abort the model loop.
-        if event_type in FLUSH_EVENT_TYPES:
-            try:
-                _save_sdk_history(conversation_id, chat, provider)
-            except Exception:
-                logger.warning(
-                    "Boundary SDK history save failed (conversation=%s)",
-                    conversation_id, exc_info=True,
-                )
 
     on_event = _capturing_on_event
+
+    # Bound once the session exists; the error path saves it if so.
+    chat = None
+    provider = None
 
     try:
         # Load config and resolve model
@@ -1304,6 +1314,14 @@ async def run_conversation_turn(
             if not function_calls:
                 break
 
+            # Save the session now that it ends on this response's
+            # tool_use(s): the state a suspend, a Stop (the cancel handlers
+            # amend this file, then rebuild the session from it) or a
+            # restart mid-tool resumes from. Tool dispatch never touches
+            # the session, so this one save covers the whole batch and any
+            # suspend or inference finish raised from it.
+            await _persist_sdk_history(conversation_id, chat, provider)
+
             # Execute each function call and collect responses
             tool_results = []
             turn_state = TurnState()
@@ -1482,11 +1500,18 @@ async def run_conversation_turn(
             model=model,
         )
         await _emit_durable(ctx, {"type": "stats", "stats": stats})
+        # Turn-end save, synchronous and after the last await of the turn:
+        # a Stop that lands earlier finds the previous save on disk (the
+        # cancel handlers amend that), and none can land between this save
+        # and the return -- a Stop there would make the cancel handler
+        # append this turn's text to a history that already holds it.
+        _save_sdk_history(conversation_id, chat, provider)
 
     except SuspendForWaitHandles as exc:
         # Conversation suspended on a wait_for_handles tool_use. The dangling
-        # tool_use is already on disk via the boundary save inside
-        # _capturing_on_event (commit b675c45) -- nothing else to do here.
+        # tool_use is already in sdk_history.json (saved right after the
+        # model response that requested it, before dispatch) -- nothing
+        # else to do here.
         # The resume bucket on the next run reads the (then-resolved) DB row
         # and closes the tool_use cleanly. Do NOT emit error/stats events;
         # this is a successful suspend, not a turn-end.
@@ -1526,8 +1551,8 @@ async def run_conversation_turn(
     except FinishInferenceResponse as exc:
         # One-shot inference API run delivered its final answer. This is a
         # successful completion, not a suspend: the tool_use/tool_result
-        # pair is already in structured_messages (and flushed to disk by
-        # the boundary save). Do NOT emit error/stats events.
+        # pair is already in structured_messages (and flushed to
+        # chat_history.json). Do NOT emit error/stats events.
         logger.info(
             "[inference-api] Conversation %s finished via "
             "return_final_response (tool_id=%s, user=%s)",
@@ -1554,6 +1579,10 @@ async def run_conversation_turn(
             "error": error_summary,
             "stacktrace": traceback.format_exc(),
         })
+        # Same rule as the turn-end save: after the error flush, with no
+        # await before the raise.
+        if chat is not None:
+            _save_sdk_history(conversation_id, chat, provider)
         raise
 
     return structured_messages

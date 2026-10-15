@@ -20,7 +20,7 @@ This is the channel that lets resumed runs (memory accept, action-request approv
 - `chat/storage.py` -- `_publish_appended_to_bus()` is the shared helper called from both `append_message()` (single-message path used by user-message-at-turn-start) and `make_flush_callback()` (structured-message batch path). It pushes into `replay_buffer` and publishes `message_appended` to the bus. Failures are best-effort; they never roll back the disk write.
 - `chat/routes/conversations.py` -- `GET /conversations/{id}` returns `last_message_seq` so the client can subscribe with a usable `last_seq` right after hydration; `GET /conversations/{id}/tail?after_seq=N` returns the message tail each `message_appended` triggers.
 - `db/models.py:Conversation` -- the `last_message_seq` integer column (non-nullable, zero on both the server and application side so pre-migration rows start unstamped). Cached high-water mark; the JSON file is the source of truth for the actual seq stamped on each message.
-- `db/conversation_store.py` -- `update_last_message_seq()` mirrors the high-water seq into the DB. `_conversation_to_dict` includes `last_message_seq`. `get_conversation_meta()` is what `_handle_subscribe` reads to compute `current_seq` without re-reading the file.
+- `db/conversation_store.py` -- `record_messages_appended()` mirrors the high-water seq into the DB. `_conversation_to_dict` includes `last_message_seq`. `get_conversation_meta()` is what `_handle_subscribe` reads to compute `current_seq` without re-reading the file.
 - `alembic/versions/2a4c7e9b1d3f_add_last_message_seq_to_conversations.py` -- adds the column. Backfill happens in `quest.py:lifespan` rather than in the Alembic op (the migration cannot portably read JSON files); the lifespan iterates rows with `last_message_seq = 0` and a non-empty file, counts messages, and writes the count back. Idempotent on every boot until clean.
 - `quest.py` -- registers `chat.realtime.socket.router` and spawns `chat.realtime.replay_buffer.eviction_loop()` from the lifespan.
 
@@ -148,9 +148,11 @@ The explicit `{op: "unsubscribe"}` op still exists for genuine teardown -- it re
 
 `chat_history.json` is the source of truth: every appended message is stamped with a per-conversation monotonic `seq` inside the same write that appends it. `conversations.last_message_seq` is a denormalised cache so the subscribe handler can answer `up_to_date` / `catchup` / `resync` without re-reading the file.
 
-The seq is computed by `ChatStorage._read_seq_high_water()` in `chat/storage.py`: it returns the max `seq` already on disk, or for a pre-migration file with no stamps it falls back to `len(messages)` so the first stamped message gets `len + 1`. Both `append_message()` (single-message path) and `append_structured_messages()` (batch path) read the high-water, stamp, write the file, and call `update_last_message_seq()` to advance the DB cache. Both paths return `(seq, message)` pairs (or a list of them) to their callers, so the bus publish can advertise a seq the disk already records.
+`append_message()` (single-message path) and `append_structured_messages()` (batch path) in `chat/storage.py` share `_append_to_transcript()`. Under a per-conversation `asyncio.Lock` (appends to one conversation land in call order; other conversations proceed), a worker thread does the read-modify-write: one parse, the high-water from that parse (`_seq_high_water_from()`: the max `seq`, or `len(messages)` for a pre-migration file with no stamps), the stamps, one rewrite. One DB session (`record_messages_appended()`) then advances `last_message_seq` and updates `last_message_at` and `auto_title`. Both paths return `(seq, message)` pairs, so the bus publish advertises a seq the disk already records. A started append finishes even if its caller is cancelled (`run_to_completion()`), so the flush counter and the publish match the disk.
 
-The bus publish happens AFTER both writes succeed. A DB-write failure after a successful file write is recovered on the next append: `_read_seq_high_water` re-reads from the file and the DB column is overwritten back to truth.
+Every `chat_history.json` writer replaces the file atomically with compact JSON (`write_json_atomic()`) under the conversation's file lock (a `threading.Lock`). The synchronous writers on the event loop (notice flags, guide snapshot, action-request status) take that lock too, so they never interleave with a threaded append, and readers never see a partial file.
+
+The bus publish happens AFTER both writes succeed. A DB-write failure after a successful file write is recovered on the next append, which takes the high-water from the file and overwrites the DB column back to truth.
 
 ## Replay Buffer
 
@@ -239,7 +241,7 @@ When the tail-fetch lands, `insertMessagesBySeq` replaces the synthetic entry in
 
 ## Sub-Agent Events
 
-Sub-agent events (`sub_agent_tool_use`, `sub_agent_tool_result`, `sub_agent_finished`) are transient on the wire -- they ride the per-conversation channel during a live run. Persistence happens at the parent `tool_result` flush boundary: the boundary save in `_capturing_on_event` (see [Gemini API -- SDK History Persistence](gemini-api.md#sdk-history-persistence)) attaches the accumulated sub-agent events to the parent message's `sub_agent_tool_calls` array.
+Sub-agent events (`sub_agent_tool_use`, `sub_agent_tool_result`, `sub_agent_finished`) are transient on the wire -- they ride the per-conversation channel during a live run. Persistence happens at the parent `tool_result` flush boundary: `run_conversation_turn()` attaches the accumulated sub-agent events to the parent message's `sub_agent_tool_calls` array.
 
 So a viewer who joins mid-`agent_task_parallel` misses the live sub-agent stream, but on the next `message_appended` for the parent `tool_result`, the REST tail-fetch hydrates the full sub-agent tree from the persisted message. Every event carries `parent_tool_id` + `agent_name` so the FE groups them under the right 1st-level agent row.
 
@@ -281,7 +283,7 @@ The bytes always land under `pasted/<attachment_id>.<ext>` in the conversation w
 - **Single-process FastAPI deploy.** The bus is a plain `asyncio` singleton with no Redis. Multi-process scaling would require a cross-process fan-out layer; the Slack Socket Mode constraint already pins this deployment to a single process. See [Slack Socket Mode -- Constraints](slack-socket-mode.md).
 - **Replay buffer is in-memory only.** A server restart drops every buffer; clients recover from the file as described in [Replay Buffer](#replay-buffer).
 - **Backpressure is per-subscriber.** A slow consumer is dropped (per-conversation: `resync`; per-user: socket close) rather than backpressured against the publisher; publishers never block on the bus.
-- **`chat_history.json` writes are not multi-process safe.** Single-process deploy plus the per-conversation send lock plus the per-conversation flush lock make this a non-issue in practice; documented for completeness.
+- **`chat_history.json` writes are not multi-process safe.** The per-conversation append and file locks are in-process; the single-process deploy makes this a non-issue in practice.
 
 ## Design Decisions
 
@@ -289,7 +291,7 @@ The bytes always land under `pasted/<attachment_id>.<ext>` in the conversation w
 Three problems forced the rewrite. First, the per-turn WS closed when the model suspended on a wait handle, so the headless resume's continuation could not be pushed -- the user had to reload. Second, Slack-driven conversations had no live channel to the web UI; a tab navigated to one saw zero progress while the bot ran. Third, the open-request badge polled every 30s. One persistent socket fixes all three with a single fan-out point and removes a polling loop.
 
 **Why JSON file as seq truth instead of the DB?**
-Two writes (file + DB) cannot be made atomic across processes, but the file write is the one a client ultimately reads bodies from. Stamping seq inside the same write that appends the body means seq and message ordering are atomic on disk. The DB cache is denormalised; if it falls behind on a write failure, the next append's `_read_seq_high_water` recovers it. Treating the DB as truth would require either an Alembic-backed migration of message bodies (awkward) or a window where seq is on disk but not in the DB (a subscribing client could be told `current_seq=N` while the file already shows `N+1`).
+Two writes (file + DB) cannot be made atomic across processes, but the file write is the one a client ultimately reads bodies from. Stamping seq inside the same write that appends the body means seq and message ordering are atomic on disk. The DB cache is denormalised; if it falls behind on a write failure, the next append recovers it from the file's high-water. Treating the DB as truth would require either an Alembic-backed migration of message bodies (awkward) or a window where seq is on disk but not in the DB (a subscribing client could be told `current_seq=N` while the file already shows `N+1`).
 
 **Why durable + transient instead of pushing every event with a seq?**
 Stamping every text delta with a seq would multiply append-points by orders of magnitude (every chunk versus every flush event), and a late subscriber needing to replay 5,000 deltas through the buffer would be useless anyway. The existing `FLUSH_EVENT_TYPES` boundary set already gives the natural durable-event cadence -- one seq per appended `chat_history.json` message -- and transients fold themselves into the next flushed text/tool message at the same boundary.

@@ -182,10 +182,7 @@ class TestConversationFlags:
         async def _noop(*args, **kwargs):
             return None
 
-        for name in (
-            "create_conversation", "update_last_message_at",
-            "update_last_message_seq", "set_conversation_auto_title",
-        ):
+        for name in ("create_conversation", "record_messages_appended"):
             monkeypatch.setattr(conv_store, name, _noop)
         monkeypatch.setattr(storage_mod, "_publish_appended_to_bus", lambda *a: None)
 

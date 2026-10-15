@@ -942,8 +942,8 @@ async def _run_send_message(
     """Background task that drives ``run_conversation_turn`` for a persistent-WS
     send. Kept symmetrical with ``_handle_api_mode`` so the regression
     surface is the same: sentinel suspends close themselves via the
-    boundary save hook, cancellations save an interrupted SDK history
-    plus cancel pending wait handles, and a final flush captures any
+    pre-dispatch SDK history save, cancellations save an interrupted SDK
+    history plus cancel pending wait handles, and a final flush captures any
     trailing messages.
 
     ``routine_run`` marks the one-click routine run (the routine prompt as

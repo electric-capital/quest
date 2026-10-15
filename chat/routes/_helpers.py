@@ -24,13 +24,13 @@ def _save_interrupted_sdk_history(
 ) -> None:
     """Append an interruption marker to the on-disk SDK history if safe.
 
-    With the boundary save hook in ``run_conversation_turn`` writing
-    ``sdk_history.json`` on every flush event, the on-disk file is
-    already up to date as of the most recent flush boundary. The only
-    state this helper still needs to capture is partial assistant text
-    that was streamed AFTER the last flush event but BEFORE the user
-    cancelled (e.g. mid-stream cancel during the first text block of a
-    turn, before any tool_use fires).
+    ``run_conversation_turn`` writes ``sdk_history.json`` after every
+    model response that requested tools (before dispatching them) and at
+    turn end, never on cancel, so the on-disk file holds the state as of
+    the last such save. The only state this helper still needs to
+    capture is partial assistant text that was streamed AFTER that save
+    but BEFORE the user cancelled (e.g. mid-stream cancel during the
+    first text block of a turn, before any tool_use fires).
 
     Behaviour:
 
