@@ -1,0 +1,184 @@
+/* Schema diff (change_table_schema card and table History): a before /
+   after list. Status colours come from the shared --diff-* tokens in
+   src/index.css; chips from TableColumnsPreview.css; the stacked
+   full-width card field is ActionRequestPreviewFields.css's
+   .table-preview-field. */
+
+.table-schema-diff {
+  overflow-x: auto;
+  margin-top: 0.5rem;
+  max-width: 100%;
+  font-size: 0.8rem;
+}
+
+.table-schema-diff-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.table-schema-diff-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 0.2rem 0.5rem;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.table-schema-diff-table td {
+  padding: 0.25rem 0.5rem;
+  vertical-align: top;
+}
+
+/* Text for screen readers only (the badge column's header). */
+.table-schema-diff-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.table-schema-diff-entry {
+  border-bottom: 1px solid var(--border);
+}
+
+.table-schema-diff-entry.quiet {
+  color: var(--text-muted);
+}
+
+.table-schema-diff-badges {
+  white-space: nowrap;
+  width: 1%;
+}
+
+.table-schema-diff-col {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.table-schema-diff-name {
+  font-weight: 600;
+}
+
+.table-schema-diff-entry.quiet .table-schema-diff-name {
+  font-weight: 400;
+}
+
+.table-schema-diff-type {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.table-schema-diff-flag {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.table-schema-diff-none {
+  color: var(--text-muted);
+}
+
+.table-schema-diff-details td {
+  padding-top: 0;
+}
+
+.table-schema-diff-lines {
+  margin: 0 0 0.2rem;
+  padding-left: 1rem;
+  color: var(--text-secondary);
+}
+
+.table-schema-diff-rewritten {
+  margin-top: 0.2rem;
+  color: var(--diff-changed-text);
+}
+
+.table-schema-diff-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.table-schema-diff-toggle {
+  background: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+}
+
+.table-schema-diff-toggle:hover {
+  color: var(--text);
+}
+
+/* Status badges: added green, dropped red, renamed / changed / moved
+   amber, unchanged muted. */
+.table-diff-badge {
+  display: inline-block;
+  margin-right: 0.25rem;
+  padding: 0 0.4rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.5;
+  border: 1px solid transparent;
+}
+
+.table-diff-badge.status-added {
+  background-color: var(--diff-added-bg);
+  border-color: var(--diff-added-strong);
+  color: var(--diff-added-text);
+}
+
+.table-diff-badge.status-dropped {
+  background-color: var(--diff-removed-bg);
+  border-color: var(--diff-removed-strong);
+  color: var(--diff-removed-text);
+}
+
+.table-diff-badge.status-renamed,
+.table-diff-badge.status-changed,
+.table-diff-badge.status-moved {
+  background-color: var(--diff-changed-bg);
+  border-color: var(--diff-changed-strong);
+  color: var(--diff-changed-text);
+}
+
+.table-diff-badge.status-unchanged {
+  border-color: var(--border-strong);
+  color: var(--text-muted);
+}
+
+/* Option chips by kind. */
+.table-diff-chip.added {
+  background-color: var(--diff-added-bg);
+  border-color: var(--diff-added-strong);
+  color: var(--diff-added-text);
+}
+
+.table-diff-chip.removed {
+  background-color: var(--diff-removed-bg);
+  border-color: var(--diff-removed-strong);
+  color: var(--diff-removed-text);
+}
+
+.table-diff-chip.renamed {
+  background-color: var(--diff-changed-bg);
+  border-color: var(--diff-changed-strong);
+  color: var(--diff-changed-text);
+}
+
+/* A dropped column's sides read as removed. */
+.table-schema-diff-entry.status-dropped .table-schema-diff-name {
+  text-decoration: line-through;
+  color: var(--diff-removed-text);
+}

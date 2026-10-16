@@ -1,0 +1,285 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`TableRowsDiffPreview > renders a delete (snapshot) 1`] = `
+<DocumentFragment>
+  <div
+    class="table-rows-diff"
+  >
+    <div
+      class="sheet-diff-scroll"
+    >
+      <table
+        class="sheet-diff-table rows-variant"
+      >
+        <thead>
+          <tr>
+            <th
+              class="sheet-diff-corner"
+              scope="col"
+            >
+              <span
+                class="sheet-diff-sr-only"
+              >
+                Row
+              </span>
+            </th>
+            <th
+              class="sheet-diff-col-label"
+              scope="col"
+            >
+              Name
+            </th>
+            <th
+              class="sheet-diff-col-label"
+              scope="col"
+            >
+              Done
+            </th>
+            <th
+              class="sheet-diff-col-label"
+              scope="col"
+            >
+              Tags
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            class="sheet-diff-row-deleted"
+          >
+            <th
+              class="sheet-diff-row-label"
+              scope="row"
+            >
+              <span
+                aria-hidden="true"
+                class="sheet-diff-row-mark"
+              >
+                − 
+              </span>
+              3
+              <span
+                class="sheet-diff-sr-only"
+              >
+                 deleted
+              </span>
+            </th>
+            <td
+              class="sheet-diff-cell target unchanged"
+              title="Old task"
+            >
+              Old task
+            </td>
+            <td
+              class="sheet-diff-cell target unchanged"
+              title="true"
+            >
+              true
+            </td>
+            <td
+              class="sheet-diff-cell target unchanged"
+              title="a, b"
+            >
+              a, b
+            </td>
+          </tr>
+          <tr
+            class="sheet-diff-row-deleted"
+          >
+            <th
+              class="sheet-diff-row-label"
+              scope="row"
+            >
+              <span
+                aria-hidden="true"
+                class="sheet-diff-row-mark"
+              >
+                − 
+              </span>
+              9
+              <span
+                class="sheet-diff-sr-only"
+              >
+                 deleted
+              </span>
+            </th>
+            <td
+              class="sheet-diff-cell target unchanged"
+              title=""
+            />
+            <td
+              class="sheet-diff-cell target unchanged"
+              title="false"
+            >
+              false
+            </td>
+            <td
+              class="sheet-diff-cell target unchanged"
+              title=""
+            >
+              <span
+                class="sheet-diff-null"
+              >
+                NULL
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div
+        class="sheet-diff-legend"
+      >
+        <span
+          class="sheet-diff-legend-item"
+        >
+          <span
+            class="sheet-diff-swatch row-deleted"
+          />
+           deleted
+        </span>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`TableRowsDiffPreview > renders the upsert card payload (snapshot) 1`] = `
+<DocumentFragment>
+  <div
+    class="table-rows-diff"
+  >
+    <div
+      class="sheet-diff-scroll"
+    >
+      <table
+        class="sheet-diff-table rows-variant"
+      >
+        <thead>
+          <tr>
+            <th
+              class="sheet-diff-corner"
+              scope="col"
+            >
+              <span
+                class="sheet-diff-sr-only"
+              >
+                Row
+              </span>
+            </th>
+            <th
+              class="sheet-diff-col-label"
+              scope="col"
+            >
+              Name
+            </th>
+            <th
+              class="sheet-diff-col-label"
+              scope="col"
+            >
+              Status
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            class="sheet-diff-row-changed"
+          >
+            <th
+              class="sheet-diff-row-label"
+              scope="row"
+            >
+              <span
+                aria-hidden="true"
+                class="sheet-diff-row-mark"
+              >
+                ~ 
+              </span>
+              7
+              <span
+                class="sheet-diff-sr-only"
+              >
+                 changed
+              </span>
+            </th>
+            <td
+              class="sheet-diff-cell target unchanged"
+              title="Ada"
+            >
+              Ada
+            </td>
+            <td
+              class="sheet-diff-cell target changed"
+            >
+              <span
+                class="sheet-diff-old"
+                title="Open"
+              >
+                Open
+              </span>
+              <span
+                class="sheet-diff-new"
+                title="Done"
+              >
+                Done
+              </span>
+            </td>
+          </tr>
+          <tr
+            class="sheet-diff-row-added"
+          >
+            <th
+              class="sheet-diff-row-label"
+              scope="row"
+            >
+              <span
+                aria-hidden="true"
+                class="sheet-diff-row-mark"
+              >
+                + 
+              </span>
+              new
+              <span
+                class="sheet-diff-sr-only"
+              >
+                 added
+              </span>
+            </th>
+            <td
+              class="sheet-diff-cell target unchanged"
+              title="Lin"
+            >
+              Lin
+            </td>
+            <td
+              class="sheet-diff-cell target unchanged"
+              title="Open"
+            >
+              Open
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div
+        class="sheet-diff-legend"
+      >
+        <span
+          class="sheet-diff-legend-item"
+        >
+          <span
+            class="sheet-diff-swatch row-added"
+          />
+           added
+        </span>
+        <span
+          class="sheet-diff-legend-item"
+        >
+          <span
+            class="sheet-diff-swatch row-changed"
+          />
+           changed
+        </span>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;

@@ -331,6 +331,11 @@ export interface PreviewField {
   diff?: SkillContentDiff;
   files?: SubagentReturnFileEntry[];
   image?: DocImagePreview;
+  // Quest Tables cards: 'table_columns' (create_table), 'table_schema_diff'
+  // (change_table_schema), 'table_rows_diff' (write_table_rows).
+  columns?: TableSchemaDiffColumn[];
+  schema_diff?: TableSchemaDiff;
+  rows_diff?: TableRowsDiff;
 }
 
 export interface ActionRequestMessage {
@@ -1613,17 +1618,29 @@ export interface TableChangeColumn {
   current: boolean;
 }
 
-/** One entry of a schema diff (chat/tables/schema_ops.py `schema_diff`). */
+/**
+ * One entry of a schema diff (chat/tables/schema_ops.py `schema_diff`). The
+ * history detail sends it with column keys; the change_table_schema card
+ * sends it key-less with the rewrite counts (`cells_rewritten`,
+ * `options_renamed`). The column dicts are key-less on the card too.
+ */
 export interface TableSchemaDiffEntry {
-  key: string;
+  key?: string;
   status: 'added' | 'dropped' | 'renamed' | 'changed' | 'unchanged';
   moved: boolean;
-  before: TableColumn | null;
-  after: TableColumn | null;
+  before: TableSchemaDiffColumn | null;
+  after: TableSchemaDiffColumn | null;
   changes: Record<string, { before: unknown; after: unknown }>;
   options_added: string[];
   options_removed: string[];
+  // Card only: distinct cells of this column an option rename rewrites.
+  cells_rewritten?: number;
+  // Card only: this column's rename_enum_option rewrites, in order.
+  options_renamed?: { option: string; new_option: string }[];
 }
+
+/** A column dict inside a schema diff: a TableColumn, `key` absent on cards. */
+export type TableSchemaDiffColumn = Omit<TableColumn, 'key'> & { key?: string };
 
 export interface TableSchemaDiff {
   columns: TableSchemaDiffEntry[];
@@ -1631,6 +1648,31 @@ export interface TableSchemaDiff {
   before_order: string[];
   after_order: string[];
   changed: boolean;
+  // Card only: the sum of the entries' cells_rewritten.
+  cells_rewritten_total?: number;
+}
+
+/**
+ * A before/after row grid: the write_table_rows card's `rows_diff` (values
+ * keyed by column NAME, `columns` the names in schema order), and the shape
+ * the History detail maps a rows change onto, so both render through
+ * TableRowsDiffPreview.
+ */
+export interface TableRowsDiff {
+  columns: string[];
+  rows: TableRowsDiffRow[];
+  // The full count of affected rows (rows may be cut short).
+  total: number;
+  truncated: boolean;
+}
+
+export interface TableRowsDiffRow {
+  // Null for a row an insert would add.
+  _id: number | null;
+  status: 'added' | 'changed' | 'deleted';
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  changed_columns: string[];
 }
 
 /** A row image in a change detail: cells keyed by column KEY. */

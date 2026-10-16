@@ -1,0 +1,16 @@
+/* Row diff (write_table_rows card and table History). The grid and its
+   row-status colours are SpreadsheetDiffPreview's "rows" variant
+   (SpreadsheetDiffPreview.css, --diff-* tokens in src/index.css); the
+   stacked full-width card field is ActionRequestPreviewFields.css's
+   .table-preview-field. */
+
+.table-rows-diff {
+  min-width: 0;
+}
+
+.table-rows-diff-note {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}

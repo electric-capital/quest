@@ -1,0 +1,8 @@
+/* The generic preview fields are flex rows (key left, value right); the
+   Quest Tables previews (column table, schema diff, row grid) need the full
+   card width, so their fields stack instead. Chat card and Requests pane. */
+.action-request-preview-field.table-preview-field,
+.request-preview-field.table-preview-field {
+  display: block;
+  min-width: 0;
+}

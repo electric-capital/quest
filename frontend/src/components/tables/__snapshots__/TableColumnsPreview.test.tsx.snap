@@ -1,0 +1,192 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`TableColumnsPreview > renders the column table (snapshot) 1`] = `
+<DocumentFragment>
+  <div
+    class="table-columns-preview"
+  >
+    <table
+      class="table-columns-table"
+    >
+      <thead>
+        <tr>
+          <th
+            scope="col"
+          >
+            Name
+          </th>
+          <th
+            scope="col"
+          >
+            Type
+          </th>
+          <th
+            scope="col"
+          >
+            Required
+          </th>
+          <th
+            scope="col"
+          >
+            Unique
+          </th>
+          <th
+            scope="col"
+          >
+            Default
+          </th>
+          <th
+            scope="col"
+          >
+            Options
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td
+            class="table-columns-name-cell"
+          >
+            <span
+              class="table-columns-name"
+            >
+              Name
+            </span>
+            <span
+              class="table-columns-desc"
+              title="Who to contact"
+            >
+              Who to contact
+            </span>
+          </td>
+          <td
+            class="table-columns-type"
+          >
+            text
+          </td>
+          <td>
+            yes
+          </td>
+          <td>
+            yes
+          </td>
+          <td
+            class="table-columns-default"
+          />
+          <td />
+        </tr>
+        <tr>
+          <td
+            class="table-columns-name-cell"
+          >
+            <span
+              class="table-columns-name"
+            >
+              Status
+            </span>
+          </td>
+          <td
+            class="table-columns-type"
+          >
+            enum
+          </td>
+          <td />
+          <td />
+          <td
+            class="table-columns-default"
+            title="Open"
+          >
+            Open
+          </td>
+          <td>
+            <span
+              class="table-diff-chips"
+            >
+              <span
+                class="table-diff-chip"
+              >
+                Open
+              </span>
+              <span
+                class="table-diff-chip"
+              >
+                Done
+              </span>
+            </span>
+          </td>
+        </tr>
+        <tr>
+          <td
+            class="table-columns-name-cell"
+          >
+            <span
+              class="table-columns-name"
+            >
+              Budget
+            </span>
+          </td>
+          <td
+            class="table-columns-type"
+          >
+            number (2 dp)
+          </td>
+          <td />
+          <td />
+          <td
+            class="table-columns-default"
+            title="0"
+          >
+            0
+          </td>
+          <td />
+        </tr>
+        <tr>
+          <td
+            class="table-columns-name-cell"
+          >
+            <span
+              class="table-columns-name"
+            >
+              Tags
+            </span>
+          </td>
+          <td
+            class="table-columns-type"
+          >
+            enum[]
+          </td>
+          <td />
+          <td />
+          <td
+            class="table-columns-default"
+            title="a, b"
+          >
+            a, b
+          </td>
+          <td>
+            <span
+              class="table-diff-chips"
+            >
+              <span
+                class="table-diff-chip"
+              >
+                a
+              </span>
+              <span
+                class="table-diff-chip"
+              >
+                b
+              </span>
+              <span
+                class="table-diff-chip"
+              >
+                c
+              </span>
+            </span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</DocumentFragment>
+`;

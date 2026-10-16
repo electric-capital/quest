@@ -1,0 +1,76 @@
+/* create_table card: the proposed columns as a table. The chip style here
+   is shared with TableSchemaDiffPreview; the stacked full-width card field
+   is ActionRequestPreviewFields.css's .table-preview-field. */
+
+.table-columns-preview {
+  overflow-x: auto;
+  margin-top: 0.5rem;
+  max-width: 100%;
+}
+
+.table-columns-table {
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.table-columns-table th,
+.table-columns-table td {
+  border: 1px solid var(--border-strong);
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.table-columns-table th {
+  color: var(--text-secondary);
+  font-weight: 600;
+  background-color: var(--hover);
+  white-space: nowrap;
+}
+
+.table-columns-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.table-columns-desc {
+  display: block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.table-columns-type {
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.table-columns-default {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Option chips (also used by TableSchemaDiffPreview). */
+.table-diff-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.table-diff-chip {
+  display: inline-block;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background-color: var(--hover);
+  color: var(--text);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: nowrap;
+}

@@ -1,4 +1,6 @@
-/* Spreadsheet diff table shown inside edit_spreadsheet approval cards. */
+/* Spreadsheet diff table shown inside edit_spreadsheet approval cards, and
+   (variant "rows") the Quest Tables row diff, whose status colours are the
+   shared --diff-* tokens in src/index.css. */
 
 /* The generic preview fields are flex rows (key left, value right); the
    diff table needs the full card width, so its field stacks instead.
@@ -121,6 +123,99 @@
 
 .sheet-diff-swatch.context {
   background-color: rgba(255, 255, 255, 0.06);
+}
+
+/* NULL marker (a cell with no value, distinct from an empty string). */
+.sheet-diff-null {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Text for screen readers only (row status word, corner label). */
+.sheet-diff-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Status marker before a row label ("+ 7", "− 3", "~ 9"). */
+.sheet-diff-row-mark {
+  font-weight: 700;
+}
+
+.sheet-diff-row-added .sheet-diff-row-mark {
+  color: var(--diff-added-text);
+}
+
+.sheet-diff-row-deleted .sheet-diff-row-mark {
+  color: var(--diff-removed-text);
+}
+
+.sheet-diff-row-changed .sheet-diff-row-mark {
+  color: var(--diff-changed-text);
+}
+
+/* Variant "rows" (Quest Tables row diff): unchanged cells are plain, the
+   row status (rowStatus) colours the row, a changed cell is amber with the
+   old value (red, struck) over the new one (plain text), each on its own
+   ellipsized line so a long old value never hides the new one. */
+.sheet-diff-table.rows-variant td {
+  vertical-align: top;
+}
+
+.sheet-diff-table.rows-variant .sheet-diff-cell.target.unchanged {
+  color: var(--text);
+  background-color: transparent;
+}
+
+.sheet-diff-table.rows-variant .sheet-diff-cell.target.changed {
+  background-color: var(--diff-changed-bg);
+  white-space: normal;
+}
+
+.sheet-diff-table.rows-variant .sheet-diff-cell.changed .sheet-diff-old,
+.sheet-diff-table.rows-variant .sheet-diff-cell.changed .sheet-diff-new {
+  display: block;
+  max-width: 220px;
+  margin-right: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-diff-table.rows-variant .sheet-diff-old {
+  color: var(--diff-removed-text);
+}
+
+.sheet-diff-table.rows-variant .sheet-diff-new {
+  color: var(--text);
+}
+
+/* After the unchanged rule above (same specificity): an added / deleted
+   row colours all its cells. */
+.sheet-diff-table.rows-variant .sheet-diff-row-added .sheet-diff-cell.target {
+  background-color: var(--diff-added-bg);
+}
+
+.sheet-diff-table.rows-variant .sheet-diff-row-deleted .sheet-diff-cell.target {
+  background-color: var(--diff-removed-bg);
+  color: var(--diff-removed-text);
+  text-decoration: line-through;
+}
+
+.sheet-diff-swatch.row-added {
+  background-color: var(--diff-added-strong);
+}
+
+.sheet-diff-swatch.row-deleted {
+  background-color: var(--diff-removed-strong);
+}
+
+.sheet-diff-swatch.row-changed {
+  background-color: var(--diff-changed-strong);
 }
 
 /* Light mode support (base styles above are dark-first, matching
