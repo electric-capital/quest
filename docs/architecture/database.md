@@ -224,7 +224,7 @@ The columns are on the class (`skill_id` = the shared skill, `user_id` = the rec
 - `docs.require_approval` (migration `a9c2e7f4b1d3`, default false) is the owner's switch that makes every model-initiated write an approval card (access rule 7 in `chat/docs/access.py`).
 - `doc_shares.user_id` NULL means everyone on the install; the partial unique index `ix_doc_shares_everyone` allows one such row per doc.
 - Title uniqueness (case-insensitive per owner, project and mode) is enforced in `db/doc_store.py`, not by an index.
-- `ProjectDocSource` (`project_doc_sources`, migration `b4d7e2a9c6f1`) links a private project to a public project whose docs its conversations may read (composite PK `(project_id, source_project_id)`, both cascading with their project); see [Projects -- Docs Access](projects.md#docs-access-doc-sources).
+- `ProjectDocSource` (`project_doc_sources`, migration `b4d7e2a9c6f1`) links a private project to a public project whose docs its conversations may read (composite PK `(project_id, source_project_id)`, both cascading with their project); see [Projects -- Project Access](projects.md#project-access-doc-sources).
 
 See [Quest Docs -- Tables](quest-docs.md#tables).
 

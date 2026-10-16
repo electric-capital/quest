@@ -107,7 +107,7 @@ __all__ = [
 # conversation's project docs (from a standalone conversation: the docs of
 # all of the user's own projects, read-only), ``public`` = the public docs
 # this project may read from its doc sources (the public projects listed
-# in Project Settings > Docs access; for a public conversation the same
+# in Project Settings > Project Access; for a public conversation the same
 # set as ``project``), ``all`` = every doc the conversation can see.
 DOC_SCOPES = ("user", "project", "public", "all")
 WRITE_OPERATIONS = ("edit", "append", "add_image")
@@ -245,7 +245,7 @@ def _has_doc_sources(caller: Caller) -> bool:
 
 async def _doc_sources(caller: Caller) -> frozenset[str]:
     """The public projects whose docs this caller's project may read
-    (``project_doc_sources``, Project Settings > Docs access); empty for
+    (``project_doc_sources``, Project Settings > Project Access); empty for
     every caller that is not a private project conversation."""
     if not _has_doc_sources(caller):
         return frozenset()

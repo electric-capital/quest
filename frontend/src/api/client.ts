@@ -780,7 +780,7 @@ export function unarchiveProject(projectId: string): Promise<Project> {
 
 /**
  * The public projects whose Quest Docs this (private) project's
- * conversations may read (Project Settings > Docs Access).
+ * conversations may read (Project Settings > Project Access).
  */
 export function fetchProjectDocSources(projectId: string): Promise<ProjectDocSourcesResponse> {
   return apiGet(`${endpoints.project(projectId)}/doc-sources`);

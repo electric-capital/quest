@@ -1,6 +1,7 @@
 /**
- * Project Settings > Docs Access: which of the user's public projects this
- * private project's conversations may read Quest Docs from (read-only;
+ * Project Settings > Project Access: which of the user's public projects this
+ * private project's conversations may read Quest Docs and Quest Tables from
+ * (read-only; one grant covers both, stored as the project's doc sources via
  * GET/PUT /projects/{id}/doc-sources). The candidate list is the user's own
  * public projects from ProjectsContext (archived ones included, flagged);
  * the saved list is a full replacement.
@@ -18,6 +19,8 @@ interface ProjectDocSourcesSectionProps {
   projectId: string;
   /** Whether the Quest Docs feature is on for this user (enabled_features). */
   docsEnabled: boolean;
+  /** Whether the Quest Tables feature is on for this user (enabled_features). */
+  tablesEnabled: boolean;
 }
 
 function sameSet(a: string[], b: string[]): boolean {
@@ -26,7 +29,11 @@ function sameSet(a: string[], b: string[]): boolean {
   return b.every((id) => set.has(id));
 }
 
-export function ProjectDocSourcesSection({ projectId, docsEnabled }: ProjectDocSourcesSectionProps) {
+export function ProjectDocSourcesSection({
+  projectId,
+  docsEnabled,
+  tablesEnabled,
+}: ProjectDocSourcesSectionProps) {
   const { projects } = useProjects();
   const [saved, setSaved] = useState<string[] | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
@@ -59,7 +66,7 @@ export function ProjectDocSourcesSection({ projectId, docsEnabled }: ProjectDocS
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof ApiClientError ? err.message : 'Failed to load docs access');
+        setError(err instanceof ApiClientError ? err.message : 'Failed to load project access');
         setSaved([]);
       });
     return () => {
@@ -88,7 +95,7 @@ export function ProjectDocSourcesSection({ projectId, docsEnabled }: ProjectDocS
       setUnknownSources(res.sources.filter((s) => !known.has(s.id)).map((s) => ({ id: s.id, name: s.name })));
       setSaveStatus('saved');
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : 'Failed to save docs access');
+      setError(err instanceof ApiClientError ? err.message : 'Failed to save project access');
     } finally {
       setIsSaving(false);
     }
@@ -98,25 +105,36 @@ export function ProjectDocSourcesSection({ projectId, docsEnabled }: ProjectDocS
 
   return (
     <div className="project-doc-sources">
-      <h3>Docs Access</h3>
+      <h3>Project Access</h3>
       <p className="project-doc-sources-intro">
-        Let conversations in this project read the Quest Docs of your public
-        projects. Access is read-only: conversations here can look things up
-        in those docs but never change them, and public projects never see
-        this project's docs.
+        Let conversations in this project read the Quest Docs and Quest Tables
+        of your public projects. One setting covers both. Access is read-only:
+        conversations here can look things up in those docs and tables but
+        never change them, and public projects never see this project's docs
+        or tables.
       </p>
-      {!docsEnabled && (
+      {!docsEnabled && !tablesEnabled ? (
         <div className="project-settings-public-note">
-          Quest Docs is turned off for your account, so these settings have
-          no effect until it is enabled.
+          Quest Docs and Quest Tables are turned off for your account, so these
+          settings have no effect until one of them is enabled.
         </div>
-      )}
+      ) : !docsEnabled ? (
+        <div className="project-settings-public-note">
+          Quest Docs is turned off for your account, so this setting only
+          affects tables until it is enabled.
+        </div>
+      ) : !tablesEnabled ? (
+        <div className="project-settings-public-note">
+          Quest Tables is turned off for your account, so this setting only
+          affects docs until it is enabled.
+        </div>
+      ) : null}
       {error && <div className="project-settings-error">{error}</div>}
       {saved === null && !error ? (
-        <div className="project-settings-loading">Loading docs access...</div>
+        <div className="project-settings-loading">Loading project access...</div>
       ) : candidates.length === 0 && unknownSources.length === 0 ? (
         <div className="project-doc-sources-empty">
-          You have no public projects. Create one to give this project access to its docs.
+          You have no public projects. Create one to give this project access to its docs and tables.
         </div>
       ) : (
         <div className="project-doc-sources-list" role="group" aria-label="Public projects">

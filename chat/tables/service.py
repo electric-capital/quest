@@ -365,7 +365,7 @@ def _has_doc_sources(caller: Caller) -> bool:
 
 async def _doc_sources(caller: Caller) -> frozenset[str]:
     """The public projects whose public tables this caller's project may
-    read (``project_doc_sources``, "Docs & Tables access"); empty for every
+    read (``project_doc_sources``, "Project Access"); empty for every
     caller that is not a private project conversation."""
     if not _has_doc_sources(caller):
         return frozenset()

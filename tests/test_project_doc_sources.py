@@ -1,4 +1,4 @@
-"""Project doc sources: the per-project "Docs access" setting that lets a
+"""Project doc sources: the per-project "Project Access" setting that lets a
 private project's conversations read the Quest Docs of chosen public
 projects.
 

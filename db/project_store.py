@@ -298,7 +298,7 @@ class ProjectDocSourceError(ValueError):
 
 async def list_doc_source_project_ids(project_id: str) -> list[str]:
     """Ids of the public projects whose docs ``project_id``'s conversations
-    may read (Project Settings > Docs access).
+    may read (Project Settings > Project Access).
 
     No ownership scoping: the caller already resolved the project. Rows
     whose source project was deleted cascade away, so every id returned

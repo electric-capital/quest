@@ -288,7 +288,7 @@ class TestPrecardRefusals:
 
     def test_public_table_from_private_conversation_denied(self, env):
         """Invariant 1: a private conversation that reads a public table
-        (Docs & Tables access) can never propose changing it."""
+        (Project Access) can never propose changing it."""
         import db.project_store as project_store
 
         table = make(env, project_id=env.public_project)
