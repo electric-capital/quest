@@ -165,9 +165,11 @@
   color: var(--text-muted);
 }
 
+/* The card header's name: see the type summary's rule below. */
 .schema-editor-column-name {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 2.5rem;
+  max-width: calc(100% - 14px - 0.75rem);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -180,10 +182,14 @@
   font-weight: 400;
 }
 
-/* In a card header the type summary gives way first, so the name stays
- * readable. */
+/* In a card header (collapsed or expanded) the type summary gives way
+ * first: the name keeps its full width, up to the room left beside the
+ * chevron and the two gaps (then it ellipsizes and the summary is gone),
+ * and the summary takes what remains, ellipsized. Shrink weights cannot do
+ * this: they always take a sliver from the name too, and a sliver of
+ * overflow is enough for an ellipsis that eats the name's last letters. */
 .schema-editor-column-toggle .schema-editor-column-type {
-  flex: 0 1000 auto;
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

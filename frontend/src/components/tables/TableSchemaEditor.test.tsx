@@ -11,7 +11,8 @@
 // the panel, and the viewer switching panels through the ref handle),
 // the shared type labels in summaries, keyboard focus across moves
 // and saves, "Has problems" on a collapsed card and the "N problems to fix"
-// reveal, a removed option typed again, and the read-only view.
+// reveal, a removed option typed again, the read-only view (defaults in the
+// cards' true / false vocabulary) and the phone sheet as a modal dialog.
 import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -27,11 +28,15 @@ import {
   type TableSchemaEditorHandle,
 } from './TableSchemaEditor';
 
-const mocks = vi.hoisted(() => ({ updateTableSchema: vi.fn() }));
+const mocks = vi.hoisted(() => ({ updateTableSchema: vi.fn(), isMobile: false }));
 
 vi.mock('../../api/tablesApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/tablesApi')>()),
   updateTableSchema: mocks.updateTableSchema,
+}));
+
+vi.mock('../../hooks/useIsMobile', () => ({
+  useIsMobile: () => mocks.isMobile,
 }));
 
 function col(key: string, name: string, overrides: Partial<TableColumn> = {}): TableColumn {
@@ -105,6 +110,7 @@ function saveButton() {
 }
 
 beforeEach(() => {
+  mocks.isMobile = false;
   mocks.updateTableSchema.mockReset();
   handlers.onClose.mockReset();
   handlers.onDetailApplied.mockReset();
@@ -634,6 +640,46 @@ describe('read-only for non-owners', () => {
     expect(screen.getByText('Default: open')).toBeTruthy();
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+  });
+
+  it('writes boolean and multi defaults as the cards and History do', () => {
+    const schema = [
+      col('c_00000004', 'Done', { type: 'boolean', default: true }),
+      col('c_00000005', 'Archived', { type: 'boolean', default: false }),
+      col('c_00000003', 'Tags', { type: 'enum', options: ['a', 'b'], multiple: true, default: ['a', 'b'] }),
+    ];
+    renderPanel(detail({ schema, access: { ...detail().access, can_edit_schema: false } }));
+    expect(screen.getByText('Default: true')).toBeTruthy();
+    expect(screen.getByText('Default: false')).toBeTruthy();
+    expect(screen.getByText('Default: a, b')).toBeTruthy();
+    expect(screen.queryByText(/Checked/)).toBeNull();
+  });
+});
+
+describe('boolean defaults in the form', () => {
+  it('offers true / false, the one boolean vocabulary', () => {
+    renderPanel();
+    expand('Done');
+    const select = within(card('Done')).getByLabelText(/Default/) as HTMLSelectElement;
+    expect([...select.options].map((o) => o.textContent)).toEqual(['No default', 'true', 'false']);
+  });
+});
+
+describe('phone sheet', () => {
+  it('is a modal dialog named by its heading on phones, a landmark otherwise', () => {
+    mocks.isMobile = true;
+    renderPanel();
+    const sheet = screen.getByRole('dialog', { name: 'Columns' });
+    expect(sheet.getAttribute('aria-modal')).toBe('true');
+    expect(screen.queryByRole('complementary')).toBeNull();
+    // Escape inside it still closes it.
+    fireEvent.keyDown(within(sheet).getByRole('button', { name: 'Expand Name' }), { key: 'Escape' });
+    expect(handlers.onClose).toHaveBeenCalledTimes(1);
+    cleanup();
+    mocks.isMobile = false;
+    renderPanel();
+    expect(screen.getByRole('complementary', { name: 'Columns' })).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });
 

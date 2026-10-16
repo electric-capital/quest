@@ -224,7 +224,7 @@ The audience is the owner plus every direct share recipient, and every user conn
 
 ## Lifecycle
 
-A project delete (`delete_user_project()` in `chat/project_routes.py`) collects the project's tables and shares before the cascade, then removes their directories (`service.delete_table_dirs()`) and publishes a null `table_changed` per table and one `table_list_changed` to the combined audience. An account delete (`delete_account()` in `chat/routes/user.py`) collects `list_table_ids_for_user()` before the cascade and removes the directories after it. Both sweeps run after the rows are gone and without the table lock, so a call still queued on the lock fails its re-fetch as not found; a sweep failure is logged, never raised.
+A project delete (`delete_user_project()` in `chat/project_routes.py`) collects the project's tables with their shares before the cascade, then removes their directories (`service.delete_table_dirs()`) and publishes a null `table_changed` per table and one `table_list_changed` to the combined audience. An account delete (`delete_account()` in `chat/routes/user.py`) collects `list_table_ids_for_user()` before the cascade and removes the directories after it. Both sweeps run after the rows are gone and without the table lock, so a call still queued on the lock fails its re-fetch as not found; a sweep failure is logged, never raised.
 
 ## Prompting
 

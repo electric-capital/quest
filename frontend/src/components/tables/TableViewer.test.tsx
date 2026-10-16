@@ -34,6 +34,12 @@ vi.mock('../../contexts/ProjectsContext', () => ({
   useProjects: () => ({ projects: [] }),
 }));
 
+// jsdom has no matchMedia: the desktop layout (TableSchemaEditor's tests
+// cover the phone sheet).
+vi.mock('../../hooks/useIsMobile', () => ({
+  useIsMobile: () => false,
+}));
+
 vi.mock('./TableHistory', () => ({
   TableHistory: ({
     table,
@@ -530,10 +536,18 @@ describe('TableViewer', () => {
       fireEvent.keyDown(document, { key: 'c' });
       const panel = screen.getByRole('complementary', { name: 'Columns' });
       expect(screen.queryByRole('menu')).toBeNull();
-      // Typing in the panel never reaches the (closed) menu's keys.
+      // With the menu open again, typing "h" in a panel field does not run
+      // History: the menu's keys never act from a text field.
       fireEvent.click(within(panel).getByRole('button', { name: 'Expand Name' }));
+      fireEvent.click(menuButton);
+      expect(screen.getByRole('menu')).toBeTruthy();
       fireEvent.keyDown(within(panel).getByLabelText('Name'), { key: 'h' });
       expect(screen.queryByRole('complementary', { name: 'History' })).toBeNull();
+      expect(screen.getByRole('complementary', { name: 'Columns' })).toBeTruthy();
+      expect(screen.getByRole('menu')).toBeTruthy();
+      // The control: the same key from outside a field does run it.
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(screen.queryByRole('menu')).toBeNull();
       fireEvent.keyDown(within(panel).getByLabelText('Name'), { key: 'Escape' });
       expect(screen.queryByRole('complementary', { name: 'Columns' })).toBeNull();
       expect(document.activeElement).toBe(menuButton);

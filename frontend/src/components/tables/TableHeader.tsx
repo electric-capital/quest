@@ -11,6 +11,9 @@
  *   that passes none gets no item);
  * - History (can_edit, editors): opens the History drawer through
  *   `onOpenHistory` (the viewer passes it; no item without it);
+ * - Edit rows (can_edit, editors): a reserved slot, always disabled (the
+ *   page has no row editing yet), with EDIT_ROWS_UNAVAILABLE_NOTE as its
+ *   visible reason, as for Share below; no key;
  * - Download CSV, Download SQLite (everyone) and Download SQLite with history
  *   (can_download_history, editors): plain `<a href download>` links;
  * - "Require approval for agent writes" (can_require_approval, owner): PUT
@@ -29,7 +32,8 @@
  * Keys: while the menu is open, single keys act on the items, mirroring
  * DocHeader -- R rename, C columns, H history, A the approval switch, S
  * share, D delete, Escape closes the menu. The key hint shows on an enabled
- * item only, and a key acts only when its item is shown and enabled. No key
+ * item only (the approval switch is disabled while it saves), and a key
+ * acts only when its item is shown and enabled. No key
  * acts (Escape still closes the menu) while focus is in a text field, a
  * select or contenteditable, or while a dialog is open (`menuKeysBlocked`):
  * the menu stays open when focus moves on by keyboard, and typing there
@@ -51,7 +55,7 @@
  * recipient who shared it and whether they can edit.
  */
 
-import { useCallback, useEffect, useId, useRef, useState, type Ref } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type Ref } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
@@ -62,6 +66,7 @@ import {
   Folder,
   History,
   Pencil,
+  Rows3,
   ShieldCheck,
   Square,
   SquareCheck,
@@ -97,6 +102,8 @@ export const TABLE_APPROVAL_CHIP_TITLE =
   "Conversations need the owner's approval before changing this table.";
 /** Why the disabled Share slot does nothing (sharing UI: phase C2). */
 export const SHARE_UNAVAILABLE_NOTE = "Sharing isn't available here yet";
+/** Why the disabled Edit rows slot does nothing (no row editing in the UI yet). */
+export const EDIT_ROWS_UNAVAILABLE_NOTE = "Editing rows here isn't available yet";
 /** Rename rejections the user fixes by editing the typed title. */
 const KEEP_EDITING_ERRORS = new Set(['duplicate_title', 'invalid_title']);
 
@@ -118,6 +125,43 @@ export function menuKeysBlocked(event: KeyboardEvent): boolean {
 
 function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
+}
+
+/**
+ * A reserved menu slot: disabled, its reason as visible secondary text
+ * (touch screens show no `title`) and as its description (a disabled
+ * button's `title` is not read out). No key hint: no key acts on it.
+ */
+function UnavailableMenuItem({
+  icon,
+  label,
+  note,
+  noteId,
+}: {
+  icon: ReactNode;
+  label: string;
+  note: string;
+  noteId: string;
+}) {
+  return (
+    <button
+      type="button"
+      className="doc-header-menu-item table-header-menu-item--unavailable"
+      role="menuitem"
+      disabled
+      aria-label={label}
+      aria-describedby={noteId}
+      title={note}
+    >
+      {icon}
+      <span className="table-header-menu-text">
+        <span>{label}</span>
+        <span id={noteId} className="table-header-menu-note">
+          {note}
+        </span>
+      </span>
+    </button>
+  );
 }
 
 function rowsPhrase(count: number): string {
@@ -171,8 +215,10 @@ export function TableHeader({
   const showShare = access.can_share;
   const columnsEnabled = Boolean(onOpenColumns);
   const historyEnabled = access.can_edit && Boolean(onOpenHistory);
+  const showEditRows = access.can_edit;
   const shareEnabled = showShare && Boolean(onOpenShare);
   const shareNoteId = useId();
+  const editRowsNoteId = useId();
   const showModeBadge = shouldShowDocModeBadge(table.mode);
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -376,15 +422,15 @@ export function TableHeader({
       if (key === 'r' && canRename) { e.preventDefault(); startRename(); }
       else if (key === 'c' && columnsEnabled) { e.preventDefault(); runColumns(); }
       else if (key === 'h' && historyEnabled) { e.preventDefault(); runHistory(); }
-      else if (key === 'a' && canRequireApproval) { e.preventDefault(); void toggleRequireApproval(); }
+      else if (key === 'a' && canRequireApproval && !approvalSaving) { e.preventDefault(); void toggleRequireApproval(); }
       else if (key === 's' && shareEnabled) { e.preventDefault(); runShare(); }
       else if (key === 'd' && canDelete) { e.preventDefault(); openDelete(); }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [
-    menuOpen, canRename, columnsEnabled, historyEnabled, canRequireApproval, shareEnabled, canDelete,
-    startRename, runColumns, runHistory, toggleRequireApproval, runShare, openDelete,
+    menuOpen, canRename, columnsEnabled, historyEnabled, canRequireApproval, approvalSaving, shareEnabled,
+    canDelete, startRename, runColumns, runHistory, toggleRequireApproval, runShare, openDelete,
   ]);
 
   const closeMenu = () => setMenuOpen(false);
@@ -460,6 +506,14 @@ export function TableHeader({
                     <span className="doc-header-menu-key">H</span>
                   </button>
                 )}
+                {showEditRows && (
+                  <UnavailableMenuItem
+                    icon={<Rows3 size={16} className="doc-header-menu-icon" />}
+                    label="Edit rows"
+                    note={EDIT_ROWS_UNAVAILABLE_NOTE}
+                    noteId={editRowsNoteId}
+                  />
+                )}
                 {canRequireApproval && (
                   <button
                     type="button"
@@ -475,7 +529,8 @@ export function TableHeader({
                       ? <SquareCheck size={16} className="doc-header-menu-icon" aria-hidden="true" />
                       : <Square size={16} className="doc-header-menu-icon" aria-hidden="true" />}
                     <span>Require approval for agent writes</span>
-                    <span className="doc-header-menu-key">A</span>
+                    {/* No hint while disabled (saving): no key acts then. */}
+                    {!approvalSaving && <span className="doc-header-menu-key">A</span>}
                   </button>
                 )}
                 {shareEnabled && (
@@ -486,26 +541,12 @@ export function TableHeader({
                   </button>
                 )}
                 {showShare && !shareEnabled && (
-                  // The reason is visible text (touch screens show no
-                  // title) and the item's description (a disabled button's
-                  // title is not read out).
-                  <button
-                    type="button"
-                    className="doc-header-menu-item table-header-menu-item--unavailable"
-                    role="menuitem"
-                    disabled
-                    aria-label="Share"
-                    aria-describedby={shareNoteId}
-                    title={SHARE_UNAVAILABLE_NOTE}
-                  >
-                    <Users size={16} className="doc-header-menu-icon" />
-                    <span className="table-header-menu-text">
-                      <span>Share</span>
-                      <span id={shareNoteId} className="table-header-menu-note">
-                        {SHARE_UNAVAILABLE_NOTE}
-                      </span>
-                    </span>
-                  </button>
+                  <UnavailableMenuItem
+                    icon={<Users size={16} className="doc-header-menu-icon" />}
+                    label="Share"
+                    note={SHARE_UNAVAILABLE_NOTE}
+                    noteId={shareNoteId}
+                  />
                 )}
                 <div className="doc-header-menu-separator" role="separator" />
                 <a

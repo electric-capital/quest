@@ -1,11 +1,12 @@
 // ActionRequestPreviewFields: the Quest Tables field types dispatch to their
 // previews, stacked full width under the shared `table-preview-field` class
-// with the "key: value" label, in both class namespaces; a missing payload
-// falls back to the plain value.
+// with their label line ("Columns (n)" for the column table, "key: value"
+// for the others), in both class namespaces; a missing payload falls back
+// to the plain value.
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
 import type { PreviewField } from '../api/types';
-import { ActionRequestPreviewFields } from './ActionRequestPreviewFields';
+import { ActionRequestPreviewFields, tableFieldLabel } from './ActionRequestPreviewFields';
 
 const COLUMNS_FIELD: PreviewField = {
   key: 'Columns',
@@ -68,12 +69,13 @@ describe('ActionRequestPreviewFields (Quest Tables types)', () => {
     cleanup();
   });
 
-  it('renders table_columns as the column table', () => {
+  it('renders table_columns as the column table, labelled with the count', () => {
     const { container } = renderFields([COLUMNS_FIELD]);
     const field = container.querySelector('.action-request-preview-field.table-preview-field');
     expect(field).toBeTruthy();
-    expect(field?.querySelector('.action-request-preview-key')?.textContent)
-      .toBe('Columns: 1 column: Status (enum)');
+    // Not the server's value: it repeats the table in raw type names.
+    expect(field?.querySelector('.action-request-preview-key')?.textContent).toBe('Columns (1)');
+    expect(field?.textContent).not.toContain('(enum)');
     expect(field?.querySelector('.table-columns-preview .table-columns-table')).toBeTruthy();
     expect(field?.querySelector('.table-schema-diff, .table-rows-diff')).toBeNull();
   });
@@ -106,6 +108,13 @@ describe('ActionRequestPreviewFields (Quest Tables types)', () => {
     fields.forEach((field) => {
       expect(field.className).toBe('action-request-preview-field table-preview-field');
     });
+  });
+
+  it('tableFieldLabel: the count for the column table, key: value otherwise', () => {
+    const two = { ...COLUMNS_FIELD, columns: [...COLUMNS_FIELD.columns!, ...COLUMNS_FIELD.columns!] };
+    expect(tableFieldLabel(two)).toBe('Columns (2)');
+    expect(tableFieldLabel(SCHEMA_FIELD)).toBe('Changes: 1 operation: Renamed column State to Status');
+    expect(tableFieldLabel(ROWS_FIELD)).toBe('Rows: Insert 1 rows');
   });
 
   it('falls back to the plain value when the payload is missing', () => {

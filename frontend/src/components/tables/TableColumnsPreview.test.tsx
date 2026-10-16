@@ -1,10 +1,10 @@
 // TableColumnsPreview: the create_table card's column table (snapshot from
-// the docs/api/tables-api.md example payload) and its shared helpers.
+// the docs/api/tables-api.md example payload) and its shared previewText.
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import type { TableSchemaDiffColumn } from '../../api/types';
 import { TABLE_CELL_MAX_CHARS } from '../../utils/tableCells';
-import { TableColumnsPreview, previewText, tableValueText } from './TableColumnsPreview';
+import { TableColumnsPreview, previewText } from './TableColumnsPreview';
 
 // create_table Preview `table_columns` payload: Column.to_dict() without key.
 const COLUMNS: TableSchemaDiffColumn[] = [
@@ -77,20 +77,6 @@ describe('TableColumnsPreview', () => {
   });
 });
 
-describe('tableValueText', () => {
-  it('formats logical values and keeps null distinct from an empty string', () => {
-    expect(tableValueText(null)).toBeNull();
-    expect(tableValueText(undefined)).toBeNull();
-    expect(tableValueText('')).toBe('');
-    expect(tableValueText('x')).toBe('x');
-    expect(tableValueText(true)).toBe('true');
-    expect(tableValueText(false)).toBe('false');
-    expect(tableValueText(['a', 'b'])).toBe('a, b');
-    // An empty multi-enum list is no value, as in the viewer grid.
-    expect(tableValueText([])).toBeNull();
-    expect(tableValueText(3)).toBe('3');
-  });
-});
 
 describe('previewText', () => {
   it('keeps short text and cuts long text at TABLE_CELL_MAX_CHARS code points', () => {

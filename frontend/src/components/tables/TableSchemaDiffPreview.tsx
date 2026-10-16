@@ -37,8 +37,8 @@
  */
 import { useState } from 'react';
 import type { TableSchemaDiff, TableSchemaDiffColumn, TableSchemaDiffEntry } from '../../api/types';
-import { COLUMN_TYPE_LABELS, columnTypeLabel } from '../../utils/tableCells';
-import { previewText, tableValueText } from './TableColumnsPreview';
+import { COLUMN_TYPE_LABELS, columnTypeLabel, tableValueText } from '../../utils/tableCells';
+import { previewText } from './TableColumnsPreview';
 import './TableColumnsPreview.css';
 import './TableSchemaDiffPreview.css';
 

@@ -4,7 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiClientError } from '../../api/request';
 import type { ListTablesOptions } from '../../api/tablesApi';
 import type { ListTablesResponse, Project, TableListRow } from '../../api/types';
-import { EMPTY_HINT, PROJECT_EMPTY_HINT, TablesListView } from './TablesListView';
+import {
+  EMPTY_HINT,
+  PROJECT_EMPTY_HINT,
+  PUBLIC_PROJECT_EMPTY_HINT,
+  TablesListView,
+  emptyHint,
+} from './TablesListView';
 
 type GlobalListener = (event: { type: string; [key: string]: unknown }) => void;
 
@@ -268,6 +274,37 @@ describe('TablesListView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create a table' }));
     const dialog = screen.getByRole('dialog', { name: 'New Table' });
     expect((within(dialog).getByLabelText('Location') as HTMLSelectElement).value).toBe('pa');
+  });
+
+  it("a public project's empty state does not send the user to ask Quest", async () => {
+    mocks.projects = [project('pp', 'Open data', { public: true })];
+    mocks.listTables.mockResolvedValue(page([]));
+    renderView('pp');
+    await waitFor(() => expect(screen.getByText('No tables in this project yet.')).toBeTruthy());
+    expect(screen.getByText(PUBLIC_PROJECT_EMPTY_HINT)).toBeTruthy();
+    expect(screen.queryByText(/Ask Quest/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Create a table' })).toBeTruthy();
+  });
+
+  it('emptyHint picks the line by view and project', () => {
+    expect(emptyHint(false, null)).toBe(EMPTY_HINT);
+    expect(emptyHint(true, null)).toBe(PROJECT_EMPTY_HINT);
+    expect(emptyHint(true, project('pa', 'Alpha'))).toBe(PROJECT_EMPTY_HINT);
+    expect(emptyHint(true, project('pp', 'Open', { public: true }))).toBe(PUBLIC_PROJECT_EMPTY_HINT);
+  });
+
+  it('never reads as "No tables yet." while a project index failed', async () => {
+    mocks.projects = [project('pa', 'Alpha')];
+    mocks.listTables.mockImplementation(async (opts) => {
+      if (opts.projectId) throw new Error('boom');
+      return page([]);
+    });
+    renderView(null);
+    await waitFor(() => expect(screen.getByText('Some project tables could not be loaded.')).toBeTruthy());
+    expect(screen.queryByText('No tables yet.')).toBeNull();
+    expect(screen.queryByText(EMPTY_HINT)).toBeNull();
+    // The own group stays, saying it is empty.
+    expect(within(screen.getByRole('region', { name: 'Your tables' })).getByText('No tables of your own yet.')).toBeTruthy();
   });
 
   it('reports a failed own list and a failed shared list', async () => {

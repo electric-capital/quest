@@ -31,7 +31,12 @@
  * Empty states: no tables at all (or none in the filtered project) explain
  * in a line what a table is for and offer the same dialog ("Create a
  * table") beside the header's New Table; a group with no tables while
- * others have some says so in its own line.
+ * others have some says so in its own line. A public project's line does
+ * not send the user to ask Quest: its conversations can read and write its
+ * tables but not create one (`_PUBLIC_TABLES_SECTION` in
+ * chat/gemini_api/system_prompt.py). A failed load is never "no tables":
+ * while the own or shared list or some project's index failed, the view
+ * shows the groups it has and the failure instead of the empty state.
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -70,6 +75,15 @@ export const EMPTY_HINT =
   'A table holds typed rows that Quest reads and writes in your chats. Ask Quest to create one, or create one here.';
 export const PROJECT_EMPTY_HINT =
   "This project's conversations can read and write its tables. Ask Quest in one of them to create a table, or create one here.";
+/** A public project: its conversations cannot create tables. */
+export const PUBLIC_PROJECT_EMPTY_HINT =
+  "This project's conversations can read and write its tables, but only you can create one here.";
+
+/** The empty state's line: all tables, a project, or a public project. */
+export function emptyHint(filtered: boolean, project: Project | null): string {
+  if (!filtered) return EMPTY_HINT;
+  return project?.public ? PUBLIC_PROJECT_EMPTY_HINT : PROJECT_EMPTY_HINT;
+}
 
 export interface TablesListViewProps {
   /** The `?project=<id>` filter; null = all tables. */
@@ -169,13 +183,13 @@ export function TablesListView({ projectId, onNewTable }: TablesListViewProps) {
   let body: ReactNode;
   if (loading) {
     body = <div className="tables-list-status">Loading...</div>;
-  } else if (totalTables === 0 && !list.error && !shared.error) {
+  } else if (totalTables === 0 && !list.error && !shared.error && index.failedProjectIds.length === 0) {
     body = (
       <div className="tables-list-empty">
         <p className="tables-list-empty-title">
           {filtered ? 'No tables in this project yet.' : 'No tables yet.'}
         </p>
-        <p className="tables-list-empty-hint">{filtered ? PROJECT_EMPTY_HINT : EMPTY_HINT}</p>
+        <p className="tables-list-empty-hint">{emptyHint(filtered, filterProject)}</p>
         <button type="button" className="tables-list-empty-button" onClick={openNewTable}>
           <Plus size={15} aria-hidden="true" />
           Create a table

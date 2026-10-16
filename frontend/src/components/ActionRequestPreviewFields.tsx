@@ -27,6 +27,17 @@ function tableFieldPreview(field: PreviewField): ReactNode | null {
 }
 
 /**
+ * The label line over a Quest Tables preview. The column table's value
+ * ("5 columns: Title (text), ...") repeats the table below in the raw type
+ * names, so `table_columns` shows its key with the count ("Columns (5)");
+ * the schema diff and row grid keep "key: value", a useful summary.
+ */
+export function tableFieldLabel(field: PreviewField): string {
+  if (field.type === 'table_columns' && field.columns) return `${field.key} (${field.columns.length})`;
+  return `${field.key}: ${field.value}`;
+}
+
+/**
  * Structured action-request preview fields, shared by the chat card
  * (ActionRequestMessage) and the Requests view. `classPrefix` selects the
  * host's CSS namespace ('action-request-preview' or 'request-preview').
@@ -37,7 +48,7 @@ function tableFieldPreview(field: PreviewField): ReactNode | null {
  * the plain value. Quest Tables types: `table_columns` (`field.columns`,
  * create_table), `table_schema_diff` (`field.schema_diff`,
  * change_table_schema), `table_rows_diff` (`field.rows_diff`,
- * write_table_rows).
+ * write_table_rows); their label line is `tableFieldLabel()`.
  */
 export function ActionRequestPreviewFields({
   previewFields,
@@ -78,7 +89,7 @@ export function ActionRequestPreviewFields({
           </div>
         ) : tablePreview ? (
           <div key={i} className={`${classPrefix}-field table-preview-field`}>
-            <span className={`${classPrefix}-key`}>{field.key}: {field.value}</span>
+            <span className={`${classPrefix}-key`}>{tableFieldLabel(field)}</span>
             {tablePreview}
           </div>
         ) : field.type === 'doc_image' && field.image ? (

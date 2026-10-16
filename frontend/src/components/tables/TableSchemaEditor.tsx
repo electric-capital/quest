@@ -85,7 +85,10 @@
  * Phones (TableSchemaEditor.css, the 768px breakpoint of useIsMobile): the
  * panel is a full-screen sheet over the viewer -- its header with the close
  * button on top, the body scrolling, the Save / Discard footer pinned at the
- * bottom -- instead of a column beside the grid.
+ * bottom -- instead of a column beside the grid. It covers everything, so
+ * there it is a modal dialog for screen readers (`role="dialog"
+ * aria-modal="true"`, named by its heading) rather than a complementary
+ * landmark.
  */
 
 import {
@@ -113,6 +116,7 @@ import {
   type TableRowsViolation,
 } from '../../api/tablesApi';
 import type { FilterNode, SortKey, TableColumn, TableColumnType, TableDetail } from '../../api/types';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
 import { filterToSearchParam, sortToSearchParam } from '../../utils/tableFilter';
 import {
@@ -136,7 +140,7 @@ import {
   type DraftOption,
   type SchemaDraft,
 } from '../../utils/tableSchemaOps';
-import { COLUMN_TYPE_LABELS, columnTypeLabel } from '../../utils/tableCells';
+import { COLUMN_TYPE_LABELS, columnTypeLabel, tableValueText } from '../../utils/tableCells';
 import { tableViewerPath } from '../../utils/tablesRoute';
 import { DocConfirmDialog } from '../docs/DocConfirmDialog';
 import './TableSchemaEditor.css';
@@ -810,8 +814,8 @@ function DefaultInput({
     input = (
       <select id={id} className="schema-editor-input" value={column.defaultValue} onChange={(e) => onChange({ defaultValue: e.target.value })} {...common}>
         <option value="">No default</option>
-        <option value="true">Checked</option>
-        <option value="false">Unchecked</option>
+        <option value="true">{tableValueText(true)}</option>
+        <option value="false">{tableValueText(false)}</option>
       </select>
     );
   } else if (column.type === 'enum' && !column.multiple) {
@@ -885,14 +889,11 @@ function DefaultInput({
 
 // --- Read-only view ----------------------------------------------------------------
 
-function defaultText(column: TableColumn): string | null {
-  if (column.default === null) return null;
-  if (Array.isArray(column.default)) return column.default.join(', ');
-  if (typeof column.default === 'boolean') return column.default ? 'Checked' : 'Unchecked';
-  return column.default;
-}
-
-/** The columns and their settings as text (viewers who cannot edit). */
+/**
+ * The columns and their settings as text (viewers who cannot edit); a
+ * default reads as the cards and History write it (`tableValueText`:
+ * booleans true / false).
+ */
 export function ColumnsReadOnly({ columns }: { columns: TableColumn[] }) {
   return (
     <ol className="schema-editor-columns schema-editor-readonly">
@@ -902,7 +903,7 @@ export function ColumnsReadOnly({ columns }: { columns: TableColumn[] }) {
           column.required ? 'required' : null,
           column.unique ? 'unique' : null,
         ].filter(Boolean);
-        const fallback = defaultText(column);
+        const fallback = tableValueText(column.default);
         return (
           <li key={column.key} className="schema-editor-column">
             <div className="schema-editor-readonly-name">{column.name}</div>
@@ -1030,6 +1031,7 @@ function errorMessage(err: unknown, fallback: string): string {
 
 export function TableSchemaEditor({ table, onClose, onDetailApplied, onRefresh, ref }: TableSchemaEditorProps) {
   const canEdit = table.access.can_edit_schema;
+  const isMobile = useIsMobile();
   const headingId = useId();
   const headingRef = useRef<HTMLHeadingElement>(null);
   // The editor's own handle (its draft decides whether to confirm); the
@@ -1057,8 +1059,17 @@ export function TableSchemaEditor({ table, onClose, onDetailApplied, onRefresh, 
     e.stopPropagation();
     requestClose();
   };
+  // Phones: a full-screen sheet, so a modal dialog; a landmark beside the
+  // grid on wider screens. One element type either way, so crossing the
+  // breakpoint never remounts the panel (and its draft).
   return (
-    <aside className="table-side-panel schema-editor-panel" aria-labelledby={headingId} onKeyDown={handleKeyDown}>
+    <div
+      className="table-side-panel schema-editor-panel"
+      role={isMobile ? 'dialog' : 'complementary'}
+      aria-modal={isMobile ? true : undefined}
+      aria-labelledby={headingId}
+      onKeyDown={handleKeyDown}
+    >
       {canEdit ? (
         <ColumnsPanelEditor
           ref={editorRef}
@@ -1080,7 +1091,7 @@ export function TableSchemaEditor({ table, onClose, onDetailApplied, onRefresh, 
           </div>
         </>
       )}
-    </aside>
+    </div>
   );
 }
 

@@ -2,8 +2,8 @@
  * notice reuse DocHeader.css (the doc-header-* classes); only what tables
  * add lives here. Tokens only. */
 
-/* The reserved Share slot (sharing UI not built yet): muted, inert, with
- * its reason as a second line that wraps inside the menu. */
+/* The reserved slots (Share, Edit rows; not built yet): muted, inert, with
+ * the reason as a second line that wraps inside the menu. */
 .table-header .table-header-menu-item--unavailable {
   align-items: flex-start;
   color: var(--text-muted);

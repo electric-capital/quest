@@ -33,11 +33,14 @@
  * `changeDetailToRowsDiff` (keys -> names, rows paired by `_id`; memoized
  * per detail); one whose images were cut to nothing (a row past the detail
  * byte cap) says it is too large to show, with its row count. A schema
- * change renders TableSchemaDiffPreview over `schema_diff`, a title change,
- * and the dropped-values note ("at least" once for the block when the values
- * were cut). Change #1 (`after.op === 'create_table'`; its `schema_diff`
- * diffs [] against the columns, every column "added") renders the created
- * columns through TableColumnsPreview, as the create_table card does. A
+ * change renders TableSchemaDiffPreview over `schema_diff` -- given the
+ * card's `options_renamed` from the logged operations (`withOptionRenames`),
+ * so an option rename reads "A → B" here as on the change_table_schema card
+ * -- a title change, and the dropped-values note ("at least" once for the
+ * block when the values were cut). Change #1 (`after.op === 'create_table'`;
+ * its `schema_diff` diffs [] against the columns, every column "added")
+ * renders the created columns through TableColumnsPreview, as the
+ * create_table card does. A
  * restore says "Restored the table to #<n>.", the number a button selecting
  * the target. A target outside the loaded pages can be selected too (the
  * detail carries the entry fields).
@@ -61,12 +64,16 @@
  * closes only the confirm); Up / Down / Home / End move between list
  * entries.
  *
- * Phones (useIsMobile, as DocHistory): the drawer covers the screen and
- * shows the list alone; tapping an entry (or a "Show #n" target) opens its
- * detail full width with an "All changes" control back to the list, which
- * gets the focus. Escape steps back (detail -> list -> closed). Going back
- * focuses the selected entry. A restore keeps the detail open on the new
- * entry. TableHistory.css lays the phone panes out.
+ * Phones (useIsMobile, as DocHistory): the drawer covers the screen, so it
+ * is a modal dialog for screen readers (`role="dialog" aria-modal="true"`,
+ * named by its heading) rather than a complementary landmark, and shows the
+ * list alone; tapping an entry (or a "Show #n" target) opens its detail full
+ * width with an "All changes" control back to the list, which gets the
+ * focus -- also when a "#n" inside a detail switches to another change (the
+ * clicked button goes with the old detail). Escape steps back (detail ->
+ * list -> closed). Going back focuses the selected entry. A restore keeps
+ * the detail open on the new entry (back to the list when it returns no
+ * entry). TableHistory.css lays the phone panes out.
  */
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
@@ -83,7 +90,9 @@ import type {
   TableDetail,
   TableRowsDiff,
   TableRowsDiffRow,
+  TableSchemaDiff,
   TableSchemaDiffColumn,
+  TableSchemaDiffEntry,
   TableWriteConversation,
 } from '../../api/types';
 import { useIsMobile } from '../../hooks/useIsMobile';
@@ -324,6 +333,96 @@ export function restoreConfirmText(
   return lines;
 }
 
+type OptionRename = NonNullable<TableSchemaDiffEntry['options_renamed']>[number];
+
+function stringField(op: Record<string, unknown> | null | undefined, field: string): string | null {
+  const value = op?.[field];
+  return typeof value === 'string' ? value : null;
+}
+
+/**
+ * A history detail's `schema_diff` with each entry's `options_renamed`, the
+ * change_table_schema card's field that the history diff lacks, derived
+ * from the change's logged operations (`detail.operations`, the server's
+ * normalized list), so TableSchemaDiffPreview shows an option rename as
+ * "Churned → Lost" in History as on the card, not "+ Lost, - Churned".
+ *
+ * The operations ran in order and name columns as they were at that step.
+ * Each one that addresses a column also carries its immutable `key`
+ * (chat/tables/schema_ops.py), matched to the entry's `key`; without a
+ * match the column is followed by name, as the server's working copy did:
+ * starting from the entries' before names, `rename_column` moves a name to
+ * its new one, `drop_column` frees it, and `add_column` gives its name to
+ * the entry its spec's key names, else to the not yet matched added entry
+ * whose final name is the same, else to the first not yet matched added
+ * entry. Each `rename_enum_option` appends `{option, new_option}` to its
+ * column's entry, in order (the preview nets chains and round trips); a
+ * rename to the same spelling is skipped, as the card's server-side list
+ * skips it. Returns `diff` itself when there is no rename to add.
+ */
+export function withOptionRenames(
+  diff: TableSchemaDiff,
+  operations: TableChangeDetail['operations'],
+): TableSchemaDiff {
+  if (!operations || operations.length === 0) return diff;
+  const entries = diff.columns ?? [];
+  const byKey = new Map<string, number>();
+  const byName = new Map<string, number>();
+  entries.forEach((entry, index) => {
+    if (entry.key) byKey.set(entry.key, index);
+    if (entry.before) byName.set(entry.before.name, index);
+  });
+  // Entries some name already stands for (an added one only once).
+  const matched = new Set<number>(byName.values());
+  const columnOf = (op: Record<string, unknown>): number | undefined => {
+    const key = stringField(op, 'key');
+    if (key !== null && byKey.has(key)) return byKey.get(key);
+    const name = stringField(op, 'name');
+    return name === null ? undefined : byName.get(name);
+  };
+  const renames = new Map<number, OptionRename[]>();
+  for (const op of operations) {
+    if (!op || typeof op !== 'object') continue;
+    if (op.op === 'rename_column') {
+      const index = columnOf(op);
+      const name = stringField(op, 'name');
+      const newName = stringField(op, 'new_name');
+      if (name !== null) byName.delete(name);
+      if (index !== undefined && newName !== null) byName.set(newName, index);
+    } else if (op.op === 'drop_column') {
+      const name = stringField(op, 'name');
+      if (name !== null) byName.delete(name);
+    } else if (op.op === 'add_column') {
+      const spec = op.column !== null && typeof op.column === 'object' ? (op.column as Record<string, unknown>) : null;
+      const name = stringField(spec, 'name');
+      if (name === null) continue;
+      const key = stringField(spec, 'key');
+      const free = (entry: TableSchemaDiffEntry, i: number) => entry.status === 'added' && !matched.has(i);
+      let index = key !== null ? (byKey.get(key) ?? -1) : -1;
+      if (index === -1) index = entries.findIndex((entry, i) => free(entry, i) && entry.after?.name === name);
+      if (index === -1) index = entries.findIndex(free);
+      if (index !== -1) {
+        byName.set(name, index);
+        matched.add(index);
+      }
+    } else if (op.op === 'rename_enum_option') {
+      const index = columnOf(op);
+      const option = stringField(op, 'option');
+      const newOption = stringField(op, 'new_option');
+      if (index === undefined || option === null || newOption === null || option === newOption) continue;
+      renames.set(index, [...(renames.get(index) ?? []), { option, new_option: newOption }]);
+    }
+  }
+  if (renames.size === 0) return diff;
+  return {
+    ...diff,
+    columns: entries.map((entry, index) => {
+      const list = renames.get(index);
+      return list ? { ...entry, options_renamed: list } : entry;
+    }),
+  };
+}
+
 /** Dropped cells per column of a schema change: `[{name, count}]`. */
 export function droppedValueCounts(detail: TableChangeDetail): { name: string; count: number }[] {
   const before = Array.isArray(detail.before) ? null : detail.before;
@@ -435,6 +534,11 @@ function CreatedColumns({ detail }: { detail: TableChangeDetail }) {
 }
 
 function SchemaDetail({ detail }: { detail: TableChangeDetail }) {
+  // The card's option renames, so both read "A → B" (see withOptionRenames).
+  const diff = useMemo(
+    () => (detail.schema_diff ? withOptionRenames(detail.schema_diff, detail.operations) : null),
+    [detail],
+  );
   const before = Array.isArray(detail.before) ? null : detail.before;
   const after = Array.isArray(detail.after) ? null : detail.after;
   if (after?.op === 'create_table') return <CreatedColumns detail={detail} />;
@@ -442,7 +546,7 @@ function SchemaDetail({ detail }: { detail: TableChangeDetail }) {
   const titleAfter = typeof after?.title === 'string' ? after.title : null;
   const titleChanged = titleBefore !== null && titleAfter !== null && titleBefore !== titleAfter;
   const dropped = droppedValueCounts(detail);
-  const columnsChanged = detail.schema_diff !== null && detail.schema_diff.changed;
+  const columnsChanged = diff !== null && diff.changed;
   return (
     <div className="table-history-schema">
       {titleChanged && (
@@ -450,8 +554,8 @@ function SchemaDetail({ detail }: { detail: TableChangeDetail }) {
           Renamed the table from <strong>{titleBefore}</strong> to <strong>{titleAfter}</strong>.
         </p>
       )}
-      {detail.schema_diff ? (
-        (columnsChanged || !titleChanged) && <TableSchemaDiffPreview diff={detail.schema_diff} />
+      {diff ? (
+        (columnsChanged || !titleChanged) && <TableSchemaDiffPreview diff={diff} />
       ) : (
         <p className="table-history-muted">The column changes could not be read.</p>
       )}
@@ -591,16 +695,20 @@ export function TableHistory({ table, onClose, onRestored }: TableHistoryProps) 
   const selectedEntry: TableChange | null =
     selectedId === null ? null : (changes.find((c) => c.id === selectedId) ?? detail ?? null);
 
-  /** Select a change; on phones its detail replaces the list. */
+  /**
+   * Select a change; on phones its detail replaces the list, and focus goes
+   * to "All changes" -- also when already in a detail: the "#n" that was
+   * clicked goes with the old detail.
+   */
   const select = useCallback(
     (id: number) => {
       setSelectedId(id);
-      if (isMobile && !phoneDetail) {
+      if (isMobile) {
         pendingFocusRef.current = 'detail';
         setPhoneDetail(true);
       }
     },
-    [isMobile, phoneDetail],
+    [isMobile],
   );
 
   /** Select a change and bring its list entry into view when loaded (phones: open its detail). */
@@ -658,6 +766,8 @@ export function TableHistory({ table, onClose, onRestored }: TableHistoryProps) 
       // disabled) before the re-list lands.
       if (made) addChange(made);
       setSelectedId(made ? made.id : null);
+      // Phones: the new entry's detail, or the list when there is none.
+      setPhoneDetail(made !== null);
       setFocusAfterRestore({ id: made ? made.id : null });
       void refresh();
     } catch (err) {
@@ -705,8 +815,9 @@ export function TableHistory({ table, onClose, onRestored }: TableHistoryProps) 
     }
   }, [focusAfterRestore]);
 
-  // The phone pane switch landed: focus "All changes" (detail) or the
-  // selected entry (list), so focus never falls to the page.
+  // The phone pane switch (or a detail switching to another change) landed:
+  // focus "All changes" (detail) or the selected entry (list), so focus
+  // never falls to the page.
   useEffect(() => {
     const target = pendingFocusRef.current;
     if (target === null) return;
@@ -717,7 +828,7 @@ export function TableHistory({ table, onClose, onRestored }: TableHistoryProps) 
       button?.scrollIntoView?.({ block: 'nearest' });
       button?.focus();
     }
-  }, [phoneDetail]);
+  }, [phoneDetail, selectedId]);
 
   // A phone shows the detail only for a selection (a restore without an
   // entry clears it: back to the list).
@@ -979,8 +1090,17 @@ export function TableHistory({ table, onClose, onRestored }: TableHistoryProps) 
     );
   }
 
+  // Phones: the drawer covers the screen, so a modal dialog; a landmark
+  // over the viewer's edge on wider screens. One element type either way,
+  // so crossing the breakpoint never remounts the drawer.
   return (
-    <aside className="table-history" aria-labelledby={`${idPrefix}-title`} onKeyDown={handleRootKeyDown}>
+    <div
+      className="table-history"
+      role={isMobile ? 'dialog' : 'complementary'}
+      aria-modal={isMobile ? true : undefined}
+      aria-labelledby={`${idPrefix}-title`}
+      onKeyDown={handleRootKeyDown}
+    >
       <div className="table-history-header">
         <h2 id={`${idPrefix}-title`} ref={headingRef} tabIndex={-1} className="table-history-title">
           History
@@ -1010,6 +1130,6 @@ export function TableHistory({ table, onClose, onRestored }: TableHistoryProps) 
           <p key={line}>{line}</p>
         ))}
       </DocConfirmDialog>
-    </aside>
+    </div>
   );
 }

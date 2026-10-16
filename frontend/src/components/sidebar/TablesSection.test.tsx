@@ -1,10 +1,15 @@
 // TablesSection: the 5 newest tables, the active row, the header link, the
-// empty / failed states and the public-only mode badge (a copy of
-// DocsSection's rules).
+// empty / failed states (a public project's empty hint) and the public-only
+// mode badge (a copy of DocsSection's rules).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { TableListRow } from '../../api/types';
-import { TablesSection, type TablesSectionProps } from './TablesSection';
+import {
+  EMPTY_HINT,
+  PUBLIC_PROJECT_EMPTY_HINT,
+  TablesSection,
+  type TablesSectionProps,
+} from './TablesSection';
 
 function tableRow(id: string, day: number, overrides: Partial<TableListRow> = {}): TableListRow {
   return {
@@ -91,7 +96,8 @@ describe('TablesSection', () => {
 
   it('shows the create hint when empty, nothing while loading, and a failure line', () => {
     renderSection();
-    expect(screen.getByText('Ask Quest to create a table')).toBeTruthy();
+    expect(screen.getByText(EMPTY_HINT)).toBeTruthy();
+    expect(EMPTY_HINT).toBe('Ask Quest to create a table');
     cleanup();
 
     const { container } = renderSection({ loading: true });
@@ -100,7 +106,21 @@ describe('TablesSection', () => {
 
     renderSection({ error: 'boom' });
     expect(screen.getByText("Couldn't load tables")).toBeTruthy();
-    expect(screen.queryByText('Ask Quest to create a table')).toBeNull();
+    expect(screen.queryByText(EMPTY_HINT)).toBeNull();
+  });
+
+  it("a public project's empty block does not send the user to ask Quest", () => {
+    renderSection({ publicProject: true });
+    expect(screen.getByText(PUBLIC_PROJECT_EMPTY_HINT)).toBeTruthy();
+    expect(screen.queryByText(/Ask Quest/)).toBeNull();
+    cleanup();
+    // With tables, or failed: no hint either way.
+    renderSection({ publicProject: true, tables: [tableRow('t1', 1, { project_id: 'p1', scope: 'project', mode: 'public' })] });
+    expect(screen.queryByText(PUBLIC_PROJECT_EMPTY_HINT)).toBeNull();
+    cleanup();
+    renderSection({ publicProject: true, error: 'boom' });
+    expect(screen.getByText("Couldn't load tables")).toBeTruthy();
+    expect(screen.queryByText(PUBLIC_PROJECT_EMPTY_HINT)).toBeNull();
   });
 
   it('badges only a public table', () => {

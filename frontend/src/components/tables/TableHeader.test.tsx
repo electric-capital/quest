@@ -1,8 +1,9 @@
 // TableHeader: menu items follow the row's access flags (owner-only items
 // hidden for a reader; Columns and History shown once the viewer wires
-// them, Share a disabled slot with its reason until phase C2), the
+// them, Share and Edit rows disabled slots with their reasons), the
 // single-key shortcuts (enabled items only, never from a field or under a
-// dialog), rename and the approval switch send the concurrency token and
+// dialog; no approval hint or key while it saves), rename and the approval
+// switch send the concurrency token and
 // recover from stale_update, delete confirms with the row count and
 // navigates to the right list; `menuButtonRef` hands the host the title
 // (menu) button.
@@ -12,7 +13,12 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ApiClientError } from '../../api/request';
 import type { TableAccess, TableDetail, TableListRow } from '../../api/types';
-import { SHARE_UNAVAILABLE_NOTE, STALE_TABLE_NOTICE, TableHeader } from './TableHeader';
+import {
+  EDIT_ROWS_UNAVAILABLE_NOTE,
+  SHARE_UNAVAILABLE_NOTE,
+  STALE_TABLE_NOTICE,
+  TableHeader,
+} from './TableHeader';
 
 const mocks = vi.hoisted(() => ({
   updateTable: vi.fn(),
@@ -132,7 +138,7 @@ describe('TableHeader', () => {
   afterEach(() => cleanup());
 
   describe('menu items', () => {
-    it('owner gets every item; with the viewer wiring, only Share is a disabled slot', () => {
+    it('owner gets every item; with the viewer wiring, only Share and Edit rows are disabled slots', () => {
       renderHeader(detail(), { onOpenColumns: vi.fn(), onOpenHistory: vi.fn() });
       const menu = openMenu();
       expect(itemLabels(menu)).toEqual([
@@ -140,6 +146,7 @@ describe('TableHeader', () => {
         'ColumnsC',
         'HistoryH',
         // Disabled: no key hint, the reason as visible text.
+        `Edit rows${EDIT_ROWS_UNAVAILABLE_NOTE}`,
         `Share${SHARE_UNAVAILABLE_NOTE}`,
         'Download CSV',
         'Download SQLite',
@@ -156,6 +163,13 @@ describe('TableHeader', () => {
       const noteId = share.getAttribute('aria-describedby');
       expect(noteId).toBeTruthy();
       expect(document.getElementById(noteId as string)?.textContent).toBe(SHARE_UNAVAILABLE_NOTE);
+      const editRows = within(menu).getByRole('menuitem', { name: 'Edit rows' }) as HTMLButtonElement;
+      expect(editRows.disabled).toBe(true);
+      expect(editRows.title).toBe(EDIT_ROWS_UNAVAILABLE_NOTE);
+      const editNoteId = editRows.getAttribute('aria-describedby');
+      expect(editNoteId).toBeTruthy();
+      expect(editNoteId).not.toBe(noteId);
+      expect(document.getElementById(editNoteId as string)?.textContent).toBe(EDIT_ROWS_UNAVAILABLE_NOTE);
       expect(document.body.textContent).not.toContain('Coming soon');
       const checkbox = within(menu).getByRole('menuitemcheckbox', { name: /Require approval for agent writes/ });
       expect(checkbox.getAttribute('aria-checked')).toBe('false');
@@ -221,7 +235,8 @@ describe('TableHeader', () => {
         { onOpenColumns: vi.fn(), onOpenHistory: vi.fn() },
       );
       expect(itemLabels(openMenu())).toEqual([
-        'ColumnsC', 'HistoryH', 'Download CSV', 'Download SQLite', 'Download SQLite with history',
+        'ColumnsC', 'HistoryH', `Edit rows${EDIT_ROWS_UNAVAILABLE_NOTE}`,
+        'Download CSV', 'Download SQLite', 'Download SQLite with history',
       ]);
     });
 
@@ -461,6 +476,25 @@ describe('TableHeader', () => {
       expect(mocks.updateTable).toHaveBeenCalledWith('t1', { require_approval: true });
       expect(onDetailApplied).toHaveBeenCalledWith(on);
       expect(screen.getByRole('menu')).toBeTruthy();
+    });
+
+    it('hides the A hint and ignores the key while the switch saves', async () => {
+      let resolve: (value: TableDetail) => void = () => {};
+      mocks.updateTable.mockReturnValueOnce(new Promise<TableDetail>((res) => { resolve = res; }));
+      renderHeader(detail());
+      const menu = openMenu();
+      const item = () => within(menu).getByRole('menuitemcheckbox', { name: /Require approval/ }) as HTMLButtonElement;
+      expect(item().textContent).toBe('Require approval for agent writesA');
+      fireEvent.click(item());
+      expect(item().disabled).toBe(true);
+      expect(item().textContent).toBe('Require approval for agent writes');
+      fireEvent.keyDown(document, { key: 'a' });
+      expect(mocks.updateTable).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        resolve(detail({ require_approval: true }));
+      });
+      expect(item().disabled).toBe(false);
+      expect(item().textContent).toBe('Require approval for agent writesA');
     });
 
     it('shows a failure notice', async () => {

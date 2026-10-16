@@ -10,6 +10,12 @@
  * (utils/docMode's rule). Styling reuses the docs block's classes
  * (Sidebar.css), so the two blocks read alike; the `tables-section` /
  * `table-row` classes identify this one.
+ *
+ * Empty, the block points at asking Quest (EMPTY_HINT) -- except in a
+ * public project (`publicProject`), whose conversations cannot create
+ * tables (`_PUBLIC_TABLES_SECTION` in chat/gemini_api/system_prompt.py):
+ * there it points at the Tables view this header opens
+ * (PUBLIC_PROJECT_EMPTY_HINT). A failed load says so instead.
  */
 
 import { useMemo } from 'react';
@@ -20,6 +26,9 @@ import { shouldShowDocModeBadge } from '../../utils/docMode';
 import { deriveSidebarTableItems } from '../../utils/allTablesGrouping';
 import { formatSidebarDocTime, formatSidebarDocTimeTitle } from '../../utils/sidebarDocs';
 import { ChevronRightIcon } from './icons';
+
+export const EMPTY_HINT = 'Ask Quest to create a table';
+export const PUBLIC_PROJECT_EMPTY_HINT = 'Open Tables to create one';
 
 export interface TablesSectionProps {
   tables: TableListRow[];
@@ -33,6 +42,9 @@ export interface TablesSectionProps {
   onOpenAll: () => void;
   // The All Tables view this header opens is the one showing.
   headerActive?: boolean;
+  // The drill-down block of a public project (its conversations cannot
+  // create tables): the empty hint points at the Tables view instead.
+  publicProject?: boolean;
 }
 
 export function TablesSection({
@@ -43,6 +55,7 @@ export function TablesSection({
   onOpenTable,
   onOpenAll,
   headerActive = false,
+  publicProject = false,
 }: TablesSectionProps) {
   const items = useMemo(() => deriveSidebarTableItems(tables), [tables]);
   // A failed load is not "no tables": no create hint.
@@ -92,7 +105,7 @@ export function TablesSection({
         <div className="sidebar-empty">Couldn't load tables</div>
       ) : (
         !loading && tables.length === 0 && (
-          <div className="sidebar-empty">Ask Quest to create a table</div>
+          <div className="sidebar-empty">{publicProject ? PUBLIC_PROJECT_EMPTY_HINT : EMPTY_HINT}</div>
         )
       )}
     </div>

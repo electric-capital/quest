@@ -8,36 +8,19 @@
  * - Type: `columnTypeLabel()` (utils/tableCells), the editor's vocabulary:
  *   "Choice (several)", "Number (2 decimal places)", "Checkbox", ...
  * - Required / Unique: "yes", blank when off.
- * - Default: `tableValueText()` (booleans true / false, a multi-enum list
- *   joined with ", "), cut by `previewText()` in the cell and its `title`;
- *   blank when there is none.
+ * - Default: `tableValueText()` (utils/tableCells: booleans true / false, a
+ *   multi-enum list joined with ", "), cut by `previewText()` in the cell
+ *   and its `title`; blank when there is none.
  * - Options: enum options as chips.
  *
  * Header cells carry `scope="col"`. The column dicts are key-less on the
- * card; a `key`, if present, is only a React key and never rendered. The
- * helpers here are shared by TableSchemaDiffPreview and
+ * card; a `key`, if present, is only a React key and never rendered.
+ * `previewText()` is shared by TableSchemaDiffPreview and
  * TableRowsDiffPreview.
  */
 import type { TableSchemaDiffColumn } from '../../api/types';
-import { columnTypeLabel, truncateCellText } from '../../utils/tableCells';
+import { columnTypeLabel, tableValueText, truncateCellText } from '../../utils/tableCells';
 import './TableColumnsPreview.css';
-
-/**
- * A logical table value (cell or column default) as display text, or null
- * when there is no value (null / undefined, or an empty multi-enum list, as
- * in the viewer grid). Booleans are "true" / "false", a multi-enum list is
- * joined with ", ", an empty string stays empty.
- */
-export function tableValueText(value: unknown): string | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'string') return value;
-  if (typeof value === 'boolean' || typeof value === 'number') return String(value);
-  if (Array.isArray(value)) {
-    if (value.length === 0) return null;
-    return value.map((v) => tableValueText(v) ?? '').join(', ');
-  }
-  return JSON.stringify(value);
-}
 
 /**
  * A value's text as previews put it in the DOM and in `title`: cut at the

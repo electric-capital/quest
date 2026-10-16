@@ -216,6 +216,7 @@ export function ProjectPanel({
                 onOpenTable={onOpenTable}
                 onOpenAll={onOpenAllTables}
                 headerActive={tablesHeaderActive}
+                publicProject={Boolean(project.public)}
               />
             )}
 

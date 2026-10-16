@@ -28,7 +28,8 @@ import {
   type SpreadsheetDiffNullCells,
   type SpreadsheetDiffRowStatus,
 } from '../SpreadsheetDiffPreview';
-import { previewText, tableValueText } from './TableColumnsPreview';
+import { tableValueText } from '../../utils/tableCells';
+import { previewText } from './TableColumnsPreview';
 import './TableRowsDiffPreview.css';
 
 /** Row label of a row an insert would add (its `_id` is still null). */

@@ -1,11 +1,13 @@
 // TableHistory: list rendering states (in effect, rewound, restore entry,
 // conversation link, kind badges, Load more, zoned timestamps, Retry), the
-// rows-detail mapping (changeDetailToRowsDiff), restore impact / confirm
-// text, the detail cache, the Restore flow (focus after it, Escape in the
-// confirm) and its errors, the lost-access state (403 and 404
-// table_not_found), and the phone layout (list, then the detail with "All
-// changes", useIsMobile mocked). The two shared diff previews are mocked:
-// these tests check what the drawer hands them.
+// rows-detail mapping (changeDetailToRowsDiff), the option renames a schema
+// detail gets from its operations (withOptionRenames), restore impact /
+// confirm text, the detail cache, the Restore flow (focus after it, Escape
+// in the confirm) and its errors, the lost-access state (403 and 404
+// table_not_found), and the phone layout (a modal dialog: the list, then
+// the detail with "All changes", focus kept across switches; useIsMobile
+// mocked). The two shared diff previews are mocked: these tests check what
+// the drawer hands them.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -19,6 +21,8 @@ import type {
   TableDetail,
   TableRowsDiff,
   TableSchemaDiff,
+  TableSchemaDiffColumn,
+  TableSchemaDiffEntry,
 } from '../../api/types';
 import {
   REMOVED_COLUMN_LABEL,
@@ -31,6 +35,7 @@ import {
   isCurrentState,
   restoreConfirmText,
   restoreImpact,
+  withOptionRenames,
 } from './TableHistory';
 
 type GlobalListener = (event: { type: string; [key: string]: unknown }) => void;
@@ -347,6 +352,116 @@ describe('helpers', () => {
   });
 });
 
+describe('withOptionRenames', () => {
+  function enumCol(name: string, options: string[], key?: string): TableSchemaDiffColumn {
+    return {
+      ...(key ? { key } : {}), name, type: 'enum', required: false, unique: false, default: null,
+      options, multiple: false, precision: null, description: '',
+    };
+  }
+  function entry(
+    status: TableSchemaDiffEntry['status'],
+    before: TableSchemaDiffColumn | null,
+    after: TableSchemaDiffColumn | null,
+    key?: string,
+  ): TableSchemaDiffEntry {
+    const old = before?.options ?? [];
+    const cur = after?.options ?? [];
+    return {
+      ...(key ? { key } : {}), status, moved: false, before, after, changes: {},
+      options_added: before && after ? cur.filter((o) => !old.includes(o)) : [],
+      options_removed: before && after ? old.filter((o) => !cur.includes(o)) : [],
+    };
+  }
+  function diffOf(columns: TableSchemaDiffEntry[]): TableSchemaDiff {
+    return { columns, order_changed: false, before_order: [], after_order: [], changed: true };
+  }
+  // The real chips (the module is mocked for the component tests).
+  async function chips(e: TableSchemaDiffEntry) {
+    const actual = await vi.importActual<typeof import('./TableSchemaDiffPreview')>('./TableSchemaDiffPreview');
+    return actual.schemaOptionChips(e).map((chip) => chip.label);
+  }
+
+  it('adds an option rename by the column key, so the chips read as on the card', async () => {
+    const diff = diffOf([
+      entry('unchanged', enumCol('Name', ['x'], 'c_n'), enumCol('Name', ['x'], 'c_n'), 'c_n'),
+      entry('changed', enumCol('Status', ['Open', 'Churned'], 'c_s'), enumCol('Status', ['Open', 'Lost'], 'c_s'), 'c_s'),
+    ]);
+    const out = withOptionRenames(diff, [
+      { op: 'rename_enum_option', name: 'Status', option: 'Churned', new_option: 'Lost', key: 'c_s' },
+    ]);
+    expect(out.columns[1].options_renamed).toEqual([{ option: 'Churned', new_option: 'Lost' }]);
+    expect(out.columns[0]).toBe(diff.columns[0]);
+    expect(await chips(diff.columns[1])).toEqual(['+ Lost', '- Churned']);
+    expect(await chips(out.columns[1])).toEqual(['Churned → Lost']);
+  });
+
+  it('follows a column renamed in the same change by name when the operations carry no key', async () => {
+    const diff = diffOf([
+      entry('renamed', enumCol('State', ['Open', 'Churned']), enumCol('Status', ['Open', 'Lost'])),
+    ]);
+    const ops = [
+      { op: 'rename_column', name: 'State', new_name: 'Status' },
+      { op: 'rename_enum_option', name: 'Status', option: 'Churned', new_option: 'Lost' },
+    ];
+    const out = withOptionRenames(diff, ops);
+    expect(out.columns[0].options_renamed).toEqual([{ option: 'Churned', new_option: 'Lost' }]);
+    expect(await chips(out.columns[0])).toEqual(['Churned → Lost']);
+    // The option renamed before the column: addressed by the old name.
+    const earlier = withOptionRenames(diff, [{ ...ops[1], name: 'State' }, ops[0]]);
+    expect(earlier.columns[0].options_renamed).toEqual([{ option: 'Churned', new_option: 'Lost' }]);
+  });
+
+  it('keeps a chained option rename in order; the preview nets it', async () => {
+    const diff = diffOf([
+      entry('changed', enumCol('Stage', ['A', 'Z'], 'c_s'), enumCol('Stage', ['C', 'Z'], 'c_s'), 'c_s'),
+    ]);
+    const out = withOptionRenames(diff, [
+      { op: 'rename_enum_option', name: 'Stage', option: 'A', new_option: 'B', key: 'c_s' },
+      { op: 'rename_enum_option', name: 'Stage', option: 'B', new_option: 'C', key: 'c_s' },
+    ]);
+    expect(out.columns[0].options_renamed).toEqual([
+      { option: 'A', new_option: 'B' },
+      { option: 'B', new_option: 'C' },
+    ]);
+    expect(await chips(out.columns[0])).toEqual(['A → C']);
+  });
+
+  it('finds an added column by its spec key, else by its name among added entries', () => {
+    const diff = diffOf([
+      entry('added', null, enumCol('Phase', ['z', 'y'], 'c_p'), 'c_p'),
+      entry('added', null, enumCol('Kind', ['q'])),
+    ]);
+    const out = withOptionRenames(diff, [
+      { op: 'add_column', column: { name: 'Stage', key: 'c_p', type: 'enum' }, after: null },
+      { op: 'rename_enum_option', name: 'Stage', option: 'x', new_option: 'z' },
+      { op: 'rename_column', name: 'Stage', new_name: 'Phase' },
+      { op: 'add_column', column: { name: 'Kind', type: 'enum' }, after: null },
+      { op: 'rename_enum_option', name: 'Kind', option: 'p', new_option: 'q' },
+    ]);
+    expect(out.columns[0].options_renamed).toEqual([{ option: 'x', new_option: 'z' }]);
+    expect(out.columns[1].options_renamed).toEqual([{ option: 'p', new_option: 'q' }]);
+  });
+
+  it('skips a no-op rename, a dropped name and an unknown column; no rename -> the same diff', () => {
+    const diff = diffOf([
+      entry('changed', enumCol('Status', ['a']), enumCol('Status', ['a'])),
+      entry('dropped', enumCol('Old', ['o']), null),
+    ]);
+    expect(withOptionRenames(diff, null)).toBe(diff);
+    expect(withOptionRenames(diff, [])).toBe(diff);
+    expect(
+      withOptionRenames(diff, [
+        { op: 'rename_enum_option', name: 'Status', option: 'a', new_option: 'a' },
+        { op: 'drop_column', name: 'Old' },
+        { op: 'rename_enum_option', name: 'Old', option: 'o', new_option: 'p' },
+        { op: 'rename_enum_option', name: 'Nope', option: 'a', new_option: 'b' },
+        { op: 'rename_table', title: 'X' },
+      ]),
+    ).toBe(diff);
+  });
+});
+
 // --- Component -------------------------------------------------------------
 
 describe('TableHistory list', () => {
@@ -494,6 +609,35 @@ describe('TableHistory detail', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Added column Status/ }));
     expect(await screen.findByTestId('schema-diff')).toBeTruthy();
     expect(screen.getByText(/Dropped values/).textContent).toContain('Status: 1 value');
+  });
+
+  it('hands TableSchemaDiffPreview the option renames from the operations, as the card has them', async () => {
+    mocks.listTableChanges.mockResolvedValue(listPage(LOG));
+    const status = (options: string[]) => ({
+      key: 'c_s', name: 'Status', type: 'enum' as const, required: false, unique: false, default: null,
+      options, multiple: false, precision: null, description: '',
+    });
+    const schemaDiff: TableSchemaDiff = {
+      columns: [{
+        key: 'c_s', status: 'changed', moved: false, before: status(['Open', 'Churned']), after: status(['Open', 'Lost']),
+        changes: { options: { before: ['Open', 'Churned'], after: ['Open', 'Lost'] } },
+        options_added: ['Lost'], options_removed: ['Churned'],
+      }],
+      order_changed: false, before_order: ['Status'], after_order: ['Status'], changed: true,
+    };
+    mocks.getTableChange.mockResolvedValue(
+      detailOf(LOG[1], {
+        columns: [col('c_s', 'Status', { type: 'enum' })],
+        before: { columns: [], title: 'Leads' },
+        after: { columns: [], title: 'Leads' },
+        schema_diff: schemaDiff,
+        operations: [{ op: 'rename_enum_option', name: 'Status', option: 'Churned', new_option: 'Lost', key: 'c_s' }],
+      }),
+    );
+    renderHistory();
+    fireEvent.click(await screen.findByRole('button', { name: /Added column Status/ }));
+    const handed = JSON.parse((await screen.findByTestId('schema-diff')).textContent ?? '') as TableSchemaDiff;
+    expect(handed.columns[0].options_renamed).toEqual([{ option: 'Churned', new_option: 'Lost' }]);
   });
 
   it('lists the created columns for change #1 through the create_table column table', async () => {
@@ -745,6 +889,20 @@ describe('TableHistory on phones', () => {
     mocks.listTableChanges.mockResolvedValue(listPage(LOG));
   });
 
+  it('is a modal dialog named by its heading (a landmark on wider screens)', async () => {
+    renderHistory();
+    await screen.findByRole('list');
+    const drawer = screen.getByRole('dialog', { name: 'History' });
+    expect(drawer.getAttribute('aria-modal')).toBe('true');
+    expect(screen.queryByRole('complementary')).toBeNull();
+    cleanup();
+    mocks.isMobile = false;
+    renderHistory();
+    await screen.findByRole('list');
+    expect(screen.getByRole('complementary', { name: 'History' })).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it('shows the list alone; an entry opens its detail with All changes back to the list', async () => {
     mocks.getTableChange.mockResolvedValue(detailOf(LOG[3]));
     renderHistory();
@@ -790,9 +948,16 @@ describe('TableHistory on phones', () => {
     fireEvent.click(screen.getByRole('button', { name: 'All changes' }));
     fireEvent.click(screen.getByRole('button', { name: /^#5/ }));
     await screen.findByText(/Restored the table to/);
-    fireEvent.click(screen.getByRole('button', { name: '#2' }));
+    const target = screen.getByRole('button', { name: '#2' });
+    target.focus();
+    fireEvent.click(target);
     expect(await screen.findByRole('article', { name: 'Change #2' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'All changes' })).toBeTruthy();
+    // The clicked "#2" went with the old detail: focus is on All changes,
+    // so Escape still reaches the drawer (back to the list).
+    expect(target.isConnected).toBe(false);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'All changes' })));
+    fireEvent.keyDown(document.activeElement as Element, { key: 'Escape' });
+    expect(screen.getByRole('list')).toBeTruthy();
   });
 
   it('keeps the detail open on the new entry after a restore, focus on All changes', async () => {
@@ -801,7 +966,7 @@ describe('TableHistory on phones', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Created table/ }));
     await screen.findByRole('article', { name: 'Change #1' });
     fireEvent.click(screen.getByRole('button', { name: /Restore table to this point/ }));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await screen.findByRole('dialog', { name: 'Restore the table?' });
     const made = change(6, { kind: 'restore', op: 'restore', restore_to: 1, summary: 'Restored to #1', row_count: null });
     mocks.restoreTable.mockResolvedValue({
       change: made, table: table(), schema_version: 1, row_count: 0, restored_to: 1,
@@ -811,5 +976,27 @@ describe('TableHistory on phones', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Restore' }));
     expect(await screen.findByRole('article', { name: 'Change #6' })).toBeTruthy();
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'All changes' })));
+  });
+
+  it('goes back to the list after a restore that returns no entry; the next tap opens a detail', async () => {
+    mocks.getTableChange.mockResolvedValue(detailOf(LOG[4]));
+    renderHistory();
+    fireEvent.click(await screen.findByRole('button', { name: /Created table/ }));
+    await screen.findByRole('article', { name: 'Change #1' });
+    fireEvent.click(screen.getByRole('button', { name: /Restore table to this point/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Restore the table?' });
+    // Edit access went while restoring: the server returns no entry.
+    mocks.restoreTable.mockResolvedValue({
+      change: null, table: table(), schema_version: 1, row_count: 0, restored_to: 1,
+    } satisfies RestoreTableResponse);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Restore' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Restore the table?' })).toBeNull());
+    expect(screen.queryByRole('article')).toBeNull();
+    expect(screen.getByRole('list')).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'History' })));
+    mocks.getTableChange.mockResolvedValue(detailOf(LOG[3]));
+    fireEvent.click(screen.getByRole('button', { name: /Updated 2 rows/ }));
+    expect(await screen.findByRole('article', { name: 'Change #2' })).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'All changes' }));
   });
 });

@@ -1,6 +1,7 @@
 // Typed cell renderers of the tables grid: decimal formatting at a column
 // precision (pure string arithmetic, half-even), text truncation, url links,
-// boolean labels, enum chips and NULL; the shared column type labels.
+// boolean labels, enum chips and NULL; the shared column type labels and
+// value text (one boolean vocabulary: true / false).
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import type { TableCellValue, TableColumn } from '../api/types';
@@ -11,6 +12,7 @@ import {
   columnTypeLabel,
   formatDecimal,
   isNullCell,
+  tableValueText,
   truncateCellText,
   urlHost,
 } from './tableCells';
@@ -112,6 +114,19 @@ describe('helpers', () => {
     // An unknown type shows as sent.
     expect(columnTypeLabel({ type: 'date' })).toBe('date');
     expect(Object.keys(COLUMN_TYPE_LABELS).sort()).toEqual(['boolean', 'enum', 'number', 'text', 'url']);
+  });
+
+  it('tableValueText formats logical values; booleans read true / false; null stays distinct from ""', () => {
+    expect(tableValueText(null)).toBeNull();
+    expect(tableValueText(undefined)).toBeNull();
+    expect(tableValueText('')).toBe('');
+    expect(tableValueText('x')).toBe('x');
+    expect(tableValueText(true)).toBe('true');
+    expect(tableValueText(false)).toBe('false');
+    expect(tableValueText(['a', 'b'])).toBe('a, b');
+    // An empty multi-enum list is no value, as in the viewer grid.
+    expect(tableValueText([])).toBeNull();
+    expect(tableValueText(3)).toBe('3');
   });
 
   it('isNullCell treats null, missing and an empty multi-enum as no value', () => {
