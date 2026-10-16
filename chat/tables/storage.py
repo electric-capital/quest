@@ -106,6 +106,7 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import time
 from typing import Any
 
 from chat.tables.constants import (
@@ -362,6 +363,43 @@ def _check_real_dir(path: Path) -> None:
         raise TableStorageError("storage_missing", "Table storage is missing.") from None
     if not stat.S_ISDIR(st.st_mode):
         raise _unsafe(path.name, "not a directory")
+
+
+def describe_table_dir(table_dir: Path) -> str:
+    """One log-line summary of a table directory for diagnostics: whether
+    the directory exists, then ``table.db`` and each side file as
+    ``<name>=<size>B`` (with ``age=<seconds since its last change>`` for the
+    database), ``absent``, or the entry kind when it is not a regular file.
+    Never raises; an unreadable entry reports its error text."""
+    table_dir = Path(table_dir)
+    try:
+        st = os.lstat(table_dir)
+    except FileNotFoundError:
+        return "dir=missing"
+    except OSError as exc:
+        return f"dir=error:{exc.strerror or exc.__class__.__name__}"
+    if not stat.S_ISDIR(st.st_mode):
+        return "dir=not-a-directory"
+    db = table_dir / TABLE_DB_NAME
+    parts = ["dir=present"]
+    now = time.time()
+    for path in (db, *(db.with_name(db.name + suffix) for suffix in _SIDE_SUFFIXES)):
+        try:
+            pst = os.lstat(path)
+        except FileNotFoundError:
+            parts.append(f"{path.name}=absent")
+            continue
+        except OSError as exc:
+            parts.append(f"{path.name}=error:{exc.strerror or exc.__class__.__name__}")
+            continue
+        if not stat.S_ISREG(pst.st_mode):
+            parts.append(f"{path.name}=not-a-file")
+            continue
+        entry = f"{path.name}={pst.st_size}B"
+        if path == db:
+            entry += f" age={max(0.0, now - pst.st_mtime):.3f}s"
+        parts.append(entry)
+    return " ".join(parts)
 
 
 def _is_busy(exc: sqlite3.OperationalError) -> bool:

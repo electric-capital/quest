@@ -195,7 +195,7 @@ The module's helpers word a verdict for callers ([Refusals](../api/tables-api.md
 
 **Caller.** A `Caller` carries the user, conversation, project, `is_public` and `run_kind`, which the service passes to `resolve_table_access()` together with the doc-source projects (only a private project's conversations have them). Tool dispatch builds it in `_table_caller()` (`chat/gemini_api/tool_dispatch.py`): a script caller has no conversation and no project and is never public, so scripts see user tables only. Routes use `caller_for_ui()` (`run_kind="ui"`).
 
-**The per-table lock.** Each table id has one `asyncio.Lock`, held by every reader and every writer of `table.db` for the whole file call, and by writers also through the `quest.db` bump and the events, so `row_count`, `schema_version` and `updated_at` land in write order. Readers take it too, because a restore swaps the file in and needs no other connection open ([Restore](#restore)). The lock is process-local (one event loop per process).
+**The per-table lock.** Each table id has one `asyncio.Lock`, held by every reader and every writer of `table.db` for the whole file call, and by writers also through the `quest.db` bump and the events, so `row_count`, `schema_version` and `updated_at` land in write order. Readers take it too: a restore swaps the file in and needs no other connection open ([Restore](#restore)). The lock is process-local.
 
 - **Resolve twice.** Access is resolved before the lock, so a hidden or denied table never takes or creates one, then the row is re-fetched and re-resolved under it, so a share revoked or a schema changed while the call queued decides the outcome. Without `bypass_approval`, an approval verdict dry-runs the write under the lock first, so invalid rows get the free path's refusal and only a write that would succeed raises `TableApprovalRequired`. With `bypass_approval=True` (the card executor) an approval verdict proceeds, while hidden and denied still refuse.
 - **Previews and pins.** `preview_row_write()` and `preview_schema_change()` dry-run a row write and a schema change under the lock, with nothing written, bumped or published. The first adds the change's row images by column name and `rows_digest()` of its before images; the second returns the plan, `schema_diff()` and the `check_schema_violations()` counts. The executors pin what their card showed through `apply_row_write()` and `apply_schema_change()` ([Action Requests](#action-requests)).
@@ -204,6 +204,7 @@ The module's helpers word a verdict for callers ([Refusals](../api/tables-api.md
 - **Schema changes and restores** both record through `update_schema()`, since a restore always bumps `schema_version`. A `rename_table` title goes to `quest.db` first, so a collision refuses before the file changes, and is rolled back if the file change fails.
 - **Create** lays out the directory under a fresh id, then inserts the row; a failed insert removes the directory, so a crash in between leaves an invisible orphan directory, never a row without a file. Creates are serialized per owner (an `owner:<id>` lock), so the store's check-then-insert title rule and per-owner cap hold. Authorizing a create is the caller's job (the routes, the `create_table` card); the service checks the gate, the column specs, the project's owner and the mode (`mode_mismatch`: a conversation creates only tables of its own mode).
 - **Delete** (owner only) runs under the table lock: it captures the audience, deletes the row (the shares cascade), removes the directory best effort and then publishes to the captured audience.
+- **Diagnostics.** Creates, failed and slow reads and file-layer refusals leave `[tables]` log lines, and the viewer hooks log failed requests to the console: [Logging -- Quest Tables Diagnostics](logging.md#quest-tables-diagnostics).
 
 ## Action Requests
 
@@ -249,28 +250,28 @@ The off-by-default, per-user `tables` gate (`FEATURE_TABLES`, `tables_enabled_fo
 `tables` reads badly next to SQLAlchemy metadata (`Base.metadata.tables`); the feature, gate and constants still say tables.
 
 **Why scope title uniqueness per mode?**
-A per-owner or per-project scope that ignored mode would let a public conversation learn from a collision error that a private table of that title exists.
+A scope that ignored mode would let a public conversation learn from a collision error that a private table of that title exists.
 
 **Why two concurrency tokens instead of one?**
-Row writes bump `updated_at` constantly; a single token would make every schema edit in flight go stale on the next row write or rename. `schema_version` changes only with the schema, so it guards exactly the thing a schema edit depends on.
+Row writes bump `updated_at` constantly; a single token would make every schema edit in flight go stale on the next row write or rename. `schema_version` changes only with the schema, so it guards exactly what a schema edit depends on.
 
 **Why keep rows out of `quest.db`?**
 Each table's rows live in its own `table.db`, so deleting its data means removing one directory.
 
 **Why store numbers as canonical decimal strings instead of SQLite REAL?**
-A REAL rounds past about 15 significant digits and makes equality depend on binary representation; one canonical string per value makes equality and uniqueness exact string comparisons.
+A REAL rounds past about 15 significant digits and makes equality depend on binary representation; one canonical string per value makes equality and uniqueness exact.
 
 **Why does the digit cap count rendered digits rather than significant digits?**
-The rendered string is what is stored and shown; a significant-digit cap would let a value like 1e300 render as hundreds of digits.
+The rendered string is what is stored and shown; a significant-digit cap would let 1e300 render as hundreds of digits.
 
 **Why server-assigned, immutable column keys?**
 Cells are stored under the key, so a rename edits only the schema JSON and never touches DDL, and the change log and diff follow a column across renames; keeping keys out of model input means a model cannot forge or collide them.
 
 **Why no column type changes?**
-Converting stored values in place needs a rule per type pair and loses values; adding a column of the new type and copying with row writes keeps every step an ordinary change in the log.
+In-place conversion needs a rule per type pair and loses values; adding a column of the new type and copying with row writes keeps every step an ordinary logged change.
 
 **Why synchronous `sqlite3` through `asyncio.to_thread` instead of `aiosqlite`?**
-The guards need the raw connection before the first statement (authorizer, double-quoted-string setting, inode recheck) and an authorizer swap around `VACUUM INTO`; and since writes are serialized by the per-table lock, wrapping one whole write function costs one thread hop per write where `aiosqlite` hops once per statement.
+The guards need the raw connection before the first statement (authorizer, double-quoted-string setting, inode recheck) and an authorizer swap around `VACUUM INTO`; with writes serialized by the per-table lock, one thread hop per write beats `aiosqlite`'s hop per statement.
 
 **Why AUTOINCREMENT on `rows._id`?**
 A plain `INTEGER PRIMARY KEY` hands a deleted top id out again. A restore replays rows under their original `_id`s, so reuse would make one id name two different rows across the log.

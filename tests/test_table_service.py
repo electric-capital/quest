@@ -953,3 +953,56 @@ class TestAudiencesAndSweeps:
         assert not table_dir(env, user_table).exists()
         assert not table_dir(env, project_table).exists()
         assert table_dir(env, bobs).is_dir()
+
+
+def test_create_and_failed_read_leave_log_lines(env, monkeypatch, caplog):
+    import logging
+
+    from chat.tables import filters
+
+    with caplog.at_level(logging.INFO, logger="chat.tables.service"):
+        table = make_table(env)
+    created = [r for r in caplog.records if r.getMessage().startswith("[tables] created ")]
+    assert len(created) == 1
+    line = created[0].getMessage()
+    assert table["id"] in line and "user table" in line and "user=alice@" in line
+    assert "file=" in line and "row=" in line and "dir=present table.db=" in line
+
+    def boom(*_a, **_k):
+        raise storage.TableStorageError("busy", "The table is busy; try again.")
+
+    monkeypatch.setattr(filters, "run_query", boom)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="chat.tables.service"):
+        with pytest.raises(storage.TableStorageError) as info:
+            _run(service.query_rows(ui(env), table["id"]))
+    assert info.value.code == "busy"
+    failed = [r for r in caplog.records if "read of" in r.getMessage()]
+    assert len(failed) == 1
+    line = failed[0].getMessage()
+    assert line.startswith(f"[tables] read of {table['id']} failed: busy (The table is busy")
+    assert "lock_wait=" in line and "call=" in line
+    assert "dir=present table.db=" in line and "table.db-wal=absent" in line
+    assert line.endswith("user=alice@quest.local") or "user=alice@" in line
+
+
+def test_slow_read_logs_when_past_the_threshold(env, monkeypatch, caplog):
+    import logging
+
+    from chat.tables import filters
+
+    table = make_table(env)
+    monkeypatch.setattr(service, "TABLE_SLOW_READ_LOG_S", 0.0)
+    with caplog.at_level(logging.WARNING, logger="chat.tables.service"):
+        _t, _a, result = _run(service.query_rows(ui(env), table["id"]))
+    assert result.total == 0
+    slow = [r.getMessage() for r in caplog.records if "slow read of" in r.getMessage()]
+    assert len(slow) == 1 and slow[0].startswith(f"[tables] slow read of {table['id']}: lock_wait=")
+    assert "dir=present" in slow[0]
+    # Nothing is logged for an ordinary read.
+    monkeypatch.setattr(service, "TABLE_SLOW_READ_LOG_S", 60.0)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="chat.tables.service"):
+        _run(service.query_rows(ui(env), table["id"]))
+    assert not [r for r in caplog.records if "[tables]" in r.getMessage()]
+    monkeypatch.setattr(filters, "run_query", filters.run_query)

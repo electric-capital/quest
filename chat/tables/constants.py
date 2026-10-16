@@ -36,6 +36,11 @@ TABLE_QUERY_MAX_BYTES = 100 * 1024
 # table.db connections wait this long on a locked database.
 TABLE_DB_BUSY_TIMEOUT_S = 5
 
+# A read whose lock wait or file call takes longer than this is logged
+# (``[tables] slow read``), so a contended or slow table file leaves a trace
+# even when the read succeeds.
+TABLE_SLOW_READ_LOG_S = 1.0
+
 # --- Queries and filters (chat/tables/filters.py) --------------------------
 
 # query_rows paging: rows per page when ``limit`` is omitted, and the

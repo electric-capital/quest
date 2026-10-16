@@ -716,7 +716,9 @@ class TestDelete:
         assert not table_dir(env, table).exists()
 
 
-def test_raise_table_error_statuses():
+def test_raise_table_error_statuses(caplog):
+    import logging
+
     from chat.tables import routes, storage
     from chat.tables.revert import UnknownChangeError
 
@@ -736,10 +738,20 @@ def test_raise_table_error_statuses():
         (storage.ChangeTooLargeError(10, 5), 400),
     ]
     for exc, status in cases:
-        with pytest.raises(HTTPException) as info:
-            routes._raise_table_error(exc, "tid")
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="chat.tables.routes"):
+            with pytest.raises(HTTPException) as info:
+                routes._raise_table_error(exc, "tid")
         assert info.value.status_code == status, exc
         assert info.value.detail["error"] == exc.code
+        logged = [r.getMessage() for r in caplog.records if "[tables]" in r.getMessage()]
+        if status == 500:
+            assert logged == [f"[tables] storage error on tid: {exc.code}"]
+        elif isinstance(exc, storage.TableStorageError):
+            # A file-layer refusal (busy, schema_mismatch, ...) leaves a line.
+            assert logged == [f"[tables] storage refusal on tid: {exc.code} -> {status} ({exc})"]
+        else:
+            assert logged == []
     with pytest.raises(HTTPException) as info:
         routes._raise_table_error(service.TableNotFound("other"), "tid")
     assert info.value.status_code == 404

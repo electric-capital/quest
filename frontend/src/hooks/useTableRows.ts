@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { queryTableRows } from '../api/tablesApi';
-import { ApiClientError } from '../api/request';
+import { ApiClientError, describeRequestError } from '../api/request';
 import type { FilterNode, SortKey, TableRowsPage } from '../api/types';
 
 /** Default page size of the viewer grid (the server cap). */
@@ -97,6 +97,17 @@ export function useTableRows(tableId: string | null, opts: UseTableRowsOptions =
         });
         if (seq === seqRef.current) setState({ tableId: p.tableId, page, error: null });
       } catch (err) {
+        // Diagnostics for an intermittent failure (see quest-tables.md,
+        // Service Layer): the query as sent and what came back.
+        console.error('[tables] rows query failed', {
+          tableId: p.tableId,
+          filter: p.filter,
+          sort: p.sort,
+          offset: p.offset,
+          limit: p.limit,
+          superseded: seq !== seqRef.current,
+          ...describeRequestError(err),
+        });
         if (seq === seqRef.current) {
           const error =
             err instanceof ApiClientError

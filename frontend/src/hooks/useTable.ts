@@ -19,7 +19,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getTable } from '../api/tablesApi';
-import { ApiClientError } from '../api/request';
+import { ApiClientError, describeRequestError } from '../api/request';
 import type { TableDetail, TableListRow } from '../api/types';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
 
@@ -114,6 +114,13 @@ export function useTable(tableId: string | null): TableView {
         return;
       }
       const prev = stateRef.current;
+      // Diagnostics for an intermittent failure (see quest-tables.md,
+      // Service Layer): what failed, and whether a table was already shown.
+      console.error('[tables] detail fetch failed', {
+        tableId,
+        shown: prev.id === tableId && prev.table !== null,
+        ...describeRequestError(err),
+      });
       if (prev.id === tableId && (prev.table || prev.notFound)) return;
       const error =
         err instanceof ApiClientError

@@ -1130,3 +1130,24 @@ class TestCopyExtras:
         with pytest.raises(RuntimeError):
             copy_for_download(table_dir, dest)
         assert sorted(p.name for p in tmp_path.iterdir()) == ["tables"]
+
+
+def test_describe_table_dir_reports_each_entry(tmp_path, schema):
+    missing = tmp_path / "nope"
+    assert storage_mod.describe_table_dir(missing) == "dir=missing"
+    (tmp_path / "file").write_text("x")
+    assert storage_mod.describe_table_dir(tmp_path / "file") == "dir=not-a-directory"
+
+    table_dir = tmp_path / "t1"
+    create_table_db(
+        table_dir, table_id="t1", title="T", schema=schema, source="ui:1", actor_user_id=1,
+    )
+    report = storage_mod.describe_table_dir(table_dir)
+    assert report.startswith("dir=present table.db=")
+    assert " age=" in report
+    assert "table.db-wal=absent" in report
+    assert "table.db-shm=absent" in report
+    assert "table.db-journal=absent" in report
+
+    os.mkfifo(table_dir / "table.db-wal")
+    assert "table.db-wal=not-a-file" in storage_mod.describe_table_dir(table_dir)

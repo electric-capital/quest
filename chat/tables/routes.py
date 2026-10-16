@@ -268,6 +268,10 @@ def _raise_table_error(exc: Exception, table_id: Optional[str] = None):
     status = _ERROR_STATUS.get(code, 400)
     if status == 500:
         logger.warning("[tables] storage error on %s: %s", table_id, code, exc_info=exc)
+    elif isinstance(exc, storage.TableStorageError):
+        # busy, schema_mismatch, ...: refusals the file layer decided, which
+        # a retry may clear; logged so an intermittent one leaves a trace.
+        logger.warning("[tables] storage refusal on %s: %s -> %d (%s)", table_id, code, status, exc)
     raise _http_error(status, code, str(exc), **_error_extra(exc))
 
 

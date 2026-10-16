@@ -35,6 +35,23 @@ export class ApiClientError extends Error {
   }
 }
 
+/**
+ * A failed request as plain fields for a console log line: an
+ * ApiClientError's status, code and parsed body, or the name and message
+ * of anything else (a network failure is a TypeError "Failed to fetch"
+ * with no status). `online` is the browser's own view of connectivity at
+ * the time.
+ */
+export function describeRequestError(err: unknown): Record<string, unknown> {
+  const base = {
+    name: err instanceof Error ? err.name : typeof err,
+    message: err instanceof Error ? err.message : String(err),
+    online: typeof navigator === 'undefined' ? undefined : navigator.onLine,
+  };
+  if (!(err instanceof ApiClientError)) return base;
+  return { ...base, status: err.statusCode, code: err.errorCode, details: err.details };
+}
+
 type QueryValue = string | number | boolean | null | undefined;
 
 /** Query-string params; `undefined` and `null` entries are omitted. */

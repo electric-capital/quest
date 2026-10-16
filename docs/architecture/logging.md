@@ -47,6 +47,19 @@ All user-driven activity log entries include the user's email address using the 
 
 This makes it straightforward to filter logs for a specific user by searching for `user=someone@example.com`.
 
+## Quest Tables Diagnostics
+
+The tables service (`chat/tables/service.py`) and routes (`chat/tables/routes.py`) log on the `chat` logger with a `[tables]` prefix, so an intermittent failure on a table file leaves evidence ([Quest Tables -- Service Layer](quest-tables.md#service-layer)):
+
+- `[tables] created <id> (<user|project> table, <mode>, N columns) source=... user=<email> lock_wait=<ms> file=<ms> row=<ms> <dir report>` (INFO): every create, with the per-owner lock wait and the durations of the file layout and the `quest.db` insert. The stamp a later failed read is matched against.
+- `[tables] read of <id> failed: <code> (<message>) lock_wait=<ms> call=<ms> <dir report> user=<email>` (WARNING): a read whose file call raised (`busy`, `storage_missing`, `schema_mismatch`, an unexpected error), with the time spent waiting for the per-table lock and in the call.
+- `[tables] slow read of <id>: lock_wait=<ms> call=<ms> <dir report> user=<email>` (WARNING): a read that succeeded but waited for the lock or ran past `TABLE_SLOW_READ_LOG_S` (`chat/tables/constants.py`).
+- `[tables] storage refusal on <id>: <code> -> <status> (<message>)` (WARNING, routes): every file-layer refusal a route turned into a non-500 response, such as a 503 `busy`; a 500 logs `[tables] storage error on <id>: <code>` with the traceback instead.
+
+The dir report is `storage.describe_table_dir()`: `dir=missing`, or `dir=present` followed by `table.db=<size>B age=<seconds since its last change>` and `table.db-wal` / `-shm` / `-journal` as `<size>B`, `absent` or `not-a-file`, as they were at that moment.
+
+In the browser, `useTable` and `useTableRows` (`frontend/src/hooks/`) log `[tables] detail fetch failed` and `[tables] rows query failed` to the console with the request as sent, the response status, code and body (or the network error's name and message, "Failed to fetch" for a dropped connection) and `navigator.onLine`.
+
 ## Scheduler Decision Logging
 
 The background scheduler daemon (`chat/scheduler.py`) produces structured log output at INFO level for every poll cycle. All scheduler log lines use the `[scheduler]` prefix. See [Scheduling Architecture](scheduling.md) for full details on the scheduler daemon.

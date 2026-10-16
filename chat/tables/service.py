@@ -89,6 +89,7 @@ Realtime publishers run on the event loop only, never inside
 from __future__ import annotations
 
 import asyncio
+import time
 import hashlib
 import json
 import logging
@@ -110,7 +111,11 @@ from chat.tables.access import (
     not_found_message,
     resolve_table_access,
 )
-from chat.tables.constants import table_not_found_message, tables_disabled_message
+from chat.tables.constants import (
+    TABLE_SLOW_READ_LOG_S,
+    table_not_found_message,
+    tables_disabled_message,
+)
 from chat.tables.schema import (
     Column,
     dump_schema,
@@ -641,16 +646,52 @@ async def list_visible_tables(
         before = (datetime.fromisoformat(last["updated_at"]), last["id"])
 
 
+def _caller_email(caller: Caller) -> str:
+    return (caller.user or {}).get("email") or ""
+
+
+def _ms(seconds: float) -> int:
+    return int(round(seconds * 1000))
+
+
 async def _locked_read(caller: Caller, table_id: str, fn):
     """Gate + lookup outside the lock, then under the lock re-fetch,
     re-resolve and run ``fn(table_dir, columns, table)`` in a thread.
-    Returns ``(table, access, result)``."""
+    Returns ``(table, access, result)``.
+
+    Diagnostics (the ``chat`` logger, ``[tables]`` prefix): a file call
+    that raises logs ``read of <id> failed`` at WARNING with the error
+    code, the lock wait and call durations, the caller and
+    :func:`storage.describe_table_dir` of the directory (what was on disk
+    at that moment); a read that succeeds but whose lock wait or file call
+    passed ``TABLE_SLOW_READ_LOG_S`` logs ``slow read of <id>`` the same
+    way. The exception propagates unchanged either way."""
     require_enabled(caller)
     await _lookup(caller, table_id)  # hidden / missing never take a lock
+    lock_requested = time.monotonic()
     async with _table_lock(table_id):
+        lock_wait = time.monotonic() - lock_requested
         table, access = await _lookup(caller, table_id)
         columns = load_schema(table["schema"])
-        result = await _file_call(table, fn, _table_dir(table["id"]), columns, table)
+        table_dir = _table_dir(table["id"])
+        started = time.monotonic()
+        try:
+            result = await _file_call(table, fn, table_dir, columns, table)
+        except BaseException as exc:
+            logger.warning(
+                "[tables] read of %s failed: %s (%s) lock_wait=%dms call=%dms %s user=%s",
+                table["id"], getattr(exc, "code", type(exc).__name__), exc,
+                _ms(lock_wait), _ms(time.monotonic() - started),
+                storage.describe_table_dir(table_dir), _caller_email(caller),
+            )
+            raise
+        call = time.monotonic() - started
+        if lock_wait >= TABLE_SLOW_READ_LOG_S or call >= TABLE_SLOW_READ_LOG_S:
+            logger.warning(
+                "[tables] slow read of %s: lock_wait=%dms call=%dms %s user=%s",
+                table["id"], _ms(lock_wait), _ms(call),
+                storage.describe_table_dir(table_dir), _caller_email(caller),
+            )
         return table, access, result
 
 
@@ -1392,18 +1433,23 @@ async def create_table(
     table_dir = _table_dir(table_id)
 
     async def _locked() -> dict:
+        lock_requested = time.monotonic()
         async with _table_lock(f"owner:{owner}"):
+            lock_wait = time.monotonic() - lock_requested
             try:
+                file_started = time.monotonic()
                 await asyncio.to_thread(
                     storage.create_table_db, table_dir,
                     table_id=table_id, title=clean_title, schema=parsed,
                     source=source, actor_user_id=actor,
                 )
+                row_started = time.monotonic()
                 table = await table_store.create_table(
                     owner, clean_title,
                     mode=mode, schema=dump_schema(parsed), description=clean_description,
                     project_id=project_id, last_write_source=source, table_id=table_id,
                 )
+                row_done = time.monotonic()
             except BaseException as exc:
                 try:
                     await asyncio.to_thread(_remove_dir, table_dir)
@@ -1417,6 +1463,15 @@ async def create_table(
                     raise TableError("invalid_request", str(exc)) from None
                 raise
             _events().publish_table_list_changed(table["owner_id"])
+            # The stamp a later "read of <id> failed" line is matched against.
+            logger.info(
+                "[tables] created %s (%s table, %s, %d columns) source=%s user=%s "
+                "lock_wait=%dms file=%dms row=%dms %s",
+                table_id, "project" if project_id is not None else "user", mode,
+                len(parsed), source, _caller_email(caller), _ms(lock_wait),
+                _ms(row_started - file_started), _ms(row_done - row_started),
+                storage.describe_table_dir(table_dir),
+            )
             return table
 
     return await _shielded(_locked())
