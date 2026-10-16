@@ -1534,3 +1534,15 @@
     background-color: rgba(255, 255, 255, 0.92);
   }
 }
+
+/* Upload strip above the composer while a turn's queued files upload
+   (UploadProgress). Matches the composer strip's horizontal inset. */
+.chat-panel-upload-progress {
+  flex: none;
+  padding: 0 2rem;
+}
+
+.chat-panel-upload-progress .upload-progress {
+  max-width: 720px; /* the .composer-bubble width, so the strip sits on the bubble */
+  margin: 0 auto;
+}

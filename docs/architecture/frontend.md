@@ -158,9 +158,9 @@ The home composer must never write a lock: it is keyed by `HOME_DRAFT_KEY` (`fro
 
 `frontend/src/components/HomeComposer.tsx` renders at `/` when no conversation is selected. Its header comment covers the deferred-create flow, project awareness, the private / public default-model switch and the first-send file upload. Across files:
 
-- Every New Chat control lands here, so a conversation exists only once its first message is sent. While the Sidebar is drilled into a project, the first send creates the chat in that project (`createProjectConversation(drilledProjectId)`), and the right panel meanwhile shows that project's cards. `drilledProjectId` is distinct from the URL-mirrored `activeProjectId`, which is null at `/`.
+- Every New Chat control lands here, so a conversation exists only once its first message is sent. While the Sidebar is drilled into a project, the first send creates the chat there (`createProjectConversation(drilledProjectId)`), and the right panel shows that project's cards. `drilledProjectId` differs from the URL-mirrored `activeProjectId`, which is null at `/`.
 - The first send creates the conversation, seeds the store with `seedNewConversation()`, re-keys the queued skills, stashes the send in `pendingFirstMessage` (`PendingFirstMessage` in `NavigationContext.tsx`) and navigates. ChatPanel's auto-send effect performs the real send, persists the default model and locks the provider -- the only lock point for conversations started here.
-- Queued files upload after the conversation exists and before navigation; a hard failure aborts the send, a partial one proceeds with a notice.
+- Queued files upload after the conversation exists and before navigation, under an `UploadProgress` strip (`UploadProgress.tsx`; ChatPanel shows it too); a hard failure aborts the send, a partial one proceeds with a notice.
 
 The footer glyph is `HeartBoltMorph.tsx` (shared with Settings > About); its header comment explains why the morph uses SMIL rather than the CSS `d` property, which Safari lacks.
 

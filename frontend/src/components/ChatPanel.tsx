@@ -21,6 +21,7 @@ import type { ModelVisibility } from '../constants/models';
 import { Composer } from './Composer';
 import { ConvertToProjectModal } from './ConvertToProjectModal';
 import { ExpensiveResumeWarning } from './ExpensiveResumeWarning';
+import { UploadProgress, describeUpload, uploadPercent, type UploadStatus } from './UploadProgress';
 import { MemorySuggestions } from './MemorySuggestions';
 import { ConversationHeader } from './ConversationHeader';
 import { LazyFileViewerModal } from './LazyFileViewerModal';
@@ -124,6 +125,10 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   // Workspace file open in the viewer modal: composer attachments and inline
   // markdown images share it, so only the two fields the modal needs are kept.
   const [attachmentViewer, setAttachmentViewer] = useState<{ workspace_path: string; filename: string } | null>(null);
+  // Queued files uploading ahead of a send (see handleComposerSend): the
+  // composer has already cleared its chips, so this strip above it is the
+  // only sign a large upload is still running.
+  const [uploadStatus, setUploadStatus] = useState<UploadStatus | null>(null);
   const downloadWorkspaceFile = useWorkspaceDownload();
   const [isConvertModalOpen, setIsConvertModalOpen] = useState(false);
 
@@ -520,7 +525,11 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       // the uploaded names so this turn's metadata can list them. No files ->
       // straight send (the common path).
       if (files && files.length > 0) {
-        uploadFiles(conversationId, files, '')
+        const label = describeUpload(files);
+        setUploadStatus({ label, percent: null });
+        uploadFiles(conversationId, files, '', (loaded, total) => {
+          setUploadStatus({ label, percent: uploadPercent(loaded, total) });
+        })
           .then((resp) => {
             const attachedFilenames = resp.uploadedFiles.map((f) => f.name);
             sendMessage(text, model, undefined, skillIds, attachments, flags, attachedFilenames, thinkingEffort);
@@ -529,6 +538,9 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
             // Fall back to sending without the attached-filename hint rather
             // than dropping the message; the files just weren't uploaded.
             sendMessage(text, model, undefined, skillIds, attachments, flags, undefined, thinkingEffort);
+          })
+          .finally(() => {
+            setUploadStatus(null);
           });
         return;
       }
@@ -849,6 +861,12 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
           onCreateProject={handleOpenConvertModal}
           onContinueAnyway={acknowledgeExpensiveResume}
         />
+      )}
+
+      {uploadStatus && (
+        <div className="chat-panel-upload-progress">
+          <UploadProgress status={uploadStatus} />
+        </div>
       )}
 
       {/* Shared composer footer (textarea + Send/Stop + model selector +

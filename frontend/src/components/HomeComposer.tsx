@@ -33,6 +33,9 @@
  * navigation, via POST /files/upload. Their workspace-relative names are stashed
  * onto pendingFirstMessage.attachedFilenames so the first turn's metadata can
  * name them. (The image multimodal path remains disabled on the home screen.)
+ * While the create + upload run, an <UploadProgress> strip above the composer
+ * names the files and tracks the XHR progress, since the composer itself is
+ * already cleared and disabled by then.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -50,6 +53,13 @@ import { HOME_DRAFT_KEY } from '../constants/drafts';
 import type { ModelVisibility } from '../constants/models';
 import { Composer } from './Composer';
 import { HeartBoltMorph } from './HeartBoltMorph';
+import {
+  UploadProgress,
+  describeImageUpload,
+  describeUpload,
+  uploadPercent,
+  type UploadStatus,
+} from './UploadProgress';
 import './HomeComposer.css';
 
 interface HomeComposerProps {
@@ -118,6 +128,13 @@ export function HomeComposer({ onNewConversation }: HomeComposerProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submittingRef = useRef(false);
+  // What the first send is uploading, shown above the composer. The composer
+  // clears its text and file chips the moment Send is pressed and stays
+  // disabled until navigation, so a large upload would otherwise look like
+  // a dead screen. Set before the create call (the label covers that wait
+  // too), updated from the XHR progress events, cleared when the send
+  // settles either way.
+  const [uploadStatus, setUploadStatus] = useState<UploadStatus | null>(null);
 
   // Greeting: first name only; drop the name entirely when it's missing/blank.
   const firstName = userName?.trim().split(/\s+/)[0];
@@ -153,6 +170,12 @@ export function HomeComposer({ onNewConversation }: HomeComposerProps) {
       submittingRef.current = true;
       setSubmitting(true);
       setError(null);
+      const hasFiles = !!files && files.length > 0;
+      if (hasFiles) {
+        setUploadStatus({ label: describeUpload(files), percent: null });
+      } else if (hasImages) {
+        setUploadStatus({ label: describeImageUpload(imageFiles.length), percent: null });
+      }
 
       // Capture the drilled project at submit time so a mid-flight drill
       // in/out can't split the create target from the navigation target.
@@ -171,8 +194,11 @@ export function HomeComposer({ onNewConversation }: HomeComposerProps) {
           // hard failure, surface the error and do NOT proceed (the user keeps
           // their text and can retry); partial failures proceed with a notice.
           let attachedFilenames: string[] = [];
-          if (files && files.length > 0) {
-            const uploadResp = await uploadFiles(newId, files, '');
+          if (hasFiles) {
+            const label = describeUpload(files);
+            const uploadResp = await uploadFiles(newId, files, '', (loaded, total) => {
+              setUploadStatus({ label, percent: uploadPercent(loaded, total) });
+            });
             attachedFilenames = uploadResp.uploadedFiles.map((f) => f.name);
             if (uploadResp.errors && uploadResp.errors.length > 0) {
               setError(
@@ -189,6 +215,7 @@ export function HomeComposer({ onNewConversation }: HomeComposerProps) {
           // rejected, abort like a hard failure so the text isn't sent alone.
           let attachments: ComposerAttachmentRef[] = [];
           if (hasImages) {
+            setUploadStatus({ label: describeImageUpload(imageFiles.length), percent: null });
             const imgResp = await uploadComposerAttachments(newId, imageFiles);
             attachments = imgResp.attachments ?? [];
             if (imgResp.errors && imgResp.errors.length > 0) {
@@ -260,6 +287,7 @@ export function HomeComposer({ onNewConversation }: HomeComposerProps) {
         .finally(() => {
           submittingRef.current = false;
           setSubmitting(false);
+          setUploadStatus(null);
         });
     },
     [
@@ -289,6 +317,7 @@ export function HomeComposer({ onNewConversation }: HomeComposerProps) {
           {error && (
             <div className="home-composer-error" role="alert">{error}</div>
           )}
+          {uploadStatus && <UploadProgress status={uploadStatus} />}
           <div className="home-composer-composer">
             <Composer
               conversationId={HOME_DRAFT_KEY}
