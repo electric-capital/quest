@@ -1,8 +1,12 @@
 /* Table viewer History drawer (TableHistory): a fixed right-side panel over
  * the viewer, below modal dialogs (z-index 1000). Header, then a body that
  * stacks the change list (its own scroll box, at most ~45% of the height)
- * above the selected change's detail (scrolls with the rest). Full width on
- * phones. Tokens only; the diff grids keep their own CSS. */
+ * above the selected change's detail (scrolls with the rest). Phones
+ * (useIsMobile; `.table-history-body--phone` and the 768px block below):
+ * the drawer covers the screen, its header as tall as the top bar it
+ * covers, and the body shows the list alone (full height) or the detail
+ * alone with "All changes" on top. Tokens only; the diff grids keep their
+ * own CSS. */
 
 .table-history {
   position: fixed;
@@ -403,10 +407,44 @@
   line-height: 1.5;
 }
 
+/* Phone panes: one at a time, the list at full height. */
+.table-history-body--phone .table-history-list-pane {
+  flex: 1 0 auto;
+  max-height: none;
+  overflow-y: visible;
+  border-bottom: none;
+}
+
+.table-history-all-changes {
+  margin-bottom: 0.75rem;
+}
+
 @media (max-width: 768px) {
+  .table-history {
+    width: 100%;
+    border-left: none;
+    box-shadow: none;
+  }
+
   .table-history-header {
-    padding-left: 16px;
-    padding-right: 8px;
+    min-height: 48px;
+    box-sizing: border-box;
+    padding: 0 4px 0 16px;
+  }
+
+  .table-history-close {
+    width: 40px;
+    height: 40px;
+  }
+
+  .table-history-body {
+    overscroll-behavior: contain;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .table-history-item {
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
   }
 
   .table-history-list-pane {

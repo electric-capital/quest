@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import type { TableSchemaDiffColumn } from '../../api/types';
 import { TABLE_CELL_MAX_CHARS } from '../../utils/tableCells';
-import { TableColumnsPreview, columnTypeLabel, previewText, tableValueText } from './TableColumnsPreview';
+import { TableColumnsPreview, previewText, tableValueText } from './TableColumnsPreview';
 
 // create_table Preview `table_columns` payload: Column.to_dict() without key.
 const COLUMNS: TableSchemaDiffColumn[] = [
@@ -36,10 +36,12 @@ describe('TableColumnsPreview', () => {
     expect(asFragment()).toMatchSnapshot();
   });
 
-  it('shows type labels, flags, defaults, options and the description', () => {
+  it('shows type labels (the editor vocabulary), flags, defaults, options and the description', () => {
     render(<TableColumnsPreview columns={COLUMNS} />);
-    expect(screen.getByText('number (2 dp)')).toBeTruthy();
-    expect(screen.getByText('enum[]')).toBeTruthy();
+    expect(screen.getByText('Text')).toBeTruthy();
+    expect(screen.getByText('Choice')).toBeTruthy();
+    expect(screen.getByText('Number (2 decimal places)')).toBeTruthy();
+    expect(screen.getByText('Choice (several)')).toBeTruthy();
     expect(screen.getByText('a, b')).toBeTruthy();
     expect(screen.getByText('Who to contact')).toBeTruthy();
     expect(screen.getAllByText('yes')).toHaveLength(2);
@@ -72,16 +74,6 @@ describe('TableColumnsPreview', () => {
   it('renders nothing for no columns', () => {
     const { container } = render(<TableColumnsPreview columns={[]} />);
     expect(container.innerHTML).toBe('');
-  });
-});
-
-describe('columnTypeLabel', () => {
-  it('labels multi enums, number precision and plain types', () => {
-    expect(columnTypeLabel({ type: 'enum', multiple: true, precision: null })).toBe('enum[]');
-    expect(columnTypeLabel({ type: 'enum', multiple: false, precision: null })).toBe('enum');
-    expect(columnTypeLabel({ type: 'number', multiple: false, precision: 0 })).toBe('number (0 dp)');
-    expect(columnTypeLabel({ type: 'number', multiple: false, precision: null })).toBe('number');
-    expect(columnTypeLabel({ type: 'url', multiple: false, precision: null })).toBe('url');
   });
 });
 

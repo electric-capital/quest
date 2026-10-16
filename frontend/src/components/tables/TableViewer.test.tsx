@@ -469,6 +469,26 @@ describe('TableViewer', () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
+  it('an empty table says how rows get in; an empty filter result offers Clear filter', async () => {
+    mocks.queryTableRows.mockImplementation(async () => ({ ...page(0), rows: [], truncated: false }));
+    mocks.view = view({ table: detail({ row_count: 0 }) });
+    render(ui());
+    expect(await screen.findByText('No rows yet.')).toBeTruthy();
+    expect(screen.getByText('Ask Quest to add rows in a chat.')).toBeTruthy();
+    cleanup();
+    // Rows denied to this viewer: no suggestion.
+    mocks.view = view({ table: detail({ row_count: 0, access: { ...detail().access, rows: 'denied', can_edit: false } }) });
+    render(ui());
+    expect(await screen.findByText('No rows yet.')).toBeTruthy();
+    expect(screen.queryByText('Ask Quest to add rows in a chat.')).toBeNull();
+    cleanup();
+    mocks.view = view();
+    render(ui({ filter: '{"column":"Name","op":"eq","value":"zzz"}' }));
+    expect(await screen.findByText('No rows match this filter.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filter' }));
+    await waitFor(() => expect(currentParams().get('filter')).toBeNull());
+  });
+
   describe('side panels', () => {
     function openItem(name: RegExp) {
       fireEvent.click(screen.getByRole('button', { name: 'Leads' }));
@@ -500,6 +520,26 @@ describe('TableViewer', () => {
       fireEvent.click(within(screen.getByRole('dialog', { name: 'Discard column changes?' })).getByRole('button', { name: 'Discard' }));
       expect(screen.queryByRole('complementary', { name: 'Columns' })).toBeNull();
       expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Leads' }));
+    });
+
+    it('the header keys open the panels; Escape inside the Columns panel closes it', async () => {
+      render(ui());
+      await screen.findByText('row at 0');
+      const menuButton = screen.getByRole('button', { name: 'Leads' });
+      fireEvent.click(menuButton);
+      fireEvent.keyDown(document, { key: 'c' });
+      const panel = screen.getByRole('complementary', { name: 'Columns' });
+      expect(screen.queryByRole('menu')).toBeNull();
+      // Typing in the panel never reaches the (closed) menu's keys.
+      fireEvent.click(within(panel).getByRole('button', { name: 'Expand Name' }));
+      fireEvent.keyDown(within(panel).getByLabelText('Name'), { key: 'h' });
+      expect(screen.queryByRole('complementary', { name: 'History' })).toBeNull();
+      fireEvent.keyDown(within(panel).getByLabelText('Name'), { key: 'Escape' });
+      expect(screen.queryByRole('complementary', { name: 'Columns' })).toBeNull();
+      expect(document.activeElement).toBe(menuButton);
+      fireEvent.click(menuButton);
+      fireEvent.keyDown(document, { key: 'h' });
+      expect(screen.getByRole('complementary', { name: 'History' })).toBeTruthy();
     });
 
     it('History opens the drawer (one panel at a time), not beside the grid', async () => {

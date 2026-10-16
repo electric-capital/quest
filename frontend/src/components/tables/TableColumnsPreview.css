@@ -28,6 +28,16 @@
   white-space: nowrap;
 }
 
+/* Minimum widths: on a narrow card the table scrolls sideways instead of
+ * squeezing names and option chips to a word per line. */
+.table-columns-name-cell {
+  min-width: 7rem;
+}
+
+.table-columns-options {
+  min-width: 9rem;
+}
+
 .table-columns-name {
   font-weight: 600;
   color: var(--text);
@@ -44,7 +54,6 @@
 }
 
 .table-columns-type {
-  font-family: var(--font-mono);
   white-space: nowrap;
   color: var(--text-secondary);
 }
@@ -73,4 +82,11 @@
   font-size: 0.72rem;
   line-height: 1.5;
   white-space: nowrap;
+}
+
+/* Phone: a shorter description stub leaves room for the other columns. */
+@media (max-width: 768px) {
+  .table-columns-desc {
+    max-width: 10rem;
+  }
 }

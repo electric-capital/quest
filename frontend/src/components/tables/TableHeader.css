@@ -2,22 +2,54 @@
  * notice reuse DocHeader.css (the doc-header-* classes); only what tables
  * add lives here. Tokens only. */
 
-/* Reserved slots (Columns / History / Share before their panels exist). */
-.table-header .doc-header-menu-item:disabled:not(.doc-header-menu-item--checkbox) {
+/* The reserved Share slot (sharing UI not built yet): muted, inert, with
+ * its reason as a second line that wraps inside the menu. */
+.table-header .table-header-menu-item--unavailable {
+  align-items: flex-start;
   color: var(--text-muted);
   cursor: default;
 }
 
-.table-header .doc-header-menu-item:disabled:not(.doc-header-menu-item--checkbox):hover {
+.table-header .table-header-menu-item--unavailable:hover {
   background: none;
+  color: var(--text-muted);
+}
+
+.table-header .table-header-menu-item--unavailable .doc-header-menu-icon {
+  margin-top: 0.125rem;
+  color: var(--text-muted);
+}
+
+.table-header-menu-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.table-header-menu-note {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: normal;
 }
 
 .table-header-share-chip {
   max-width: 320px;
 }
 
+/* Phone (MobileShell): chips may take the row; the menu fits the screen
+ * width (DocHeader.css caps it) and its items wrap instead of overflowing
+ * it. */
 @media (max-width: 768px) {
   .table-header-share-chip {
     max-width: 100%;
+  }
+
+  .table-header .doc-header-menu {
+    min-width: min(240px, calc(100vw - 32px));
+  }
+
+  .table-header .doc-header-menu-item {
+    white-space: normal;
   }
 }

@@ -1,12 +1,14 @@
 // Typed cell renderers of the tables grid: decimal formatting at a column
 // precision (pure string arithmetic, half-even), text truncation, url links,
-// boolean labels, enum chips and NULL.
+// boolean labels, enum chips and NULL; the shared column type labels.
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import type { TableCellValue, TableColumn } from '../api/types';
 import {
+  COLUMN_TYPE_LABELS,
   TABLE_CELL_MAX_CHARS,
   TableCell,
+  columnTypeLabel,
   formatDecimal,
   isNullCell,
   truncateCellText,
@@ -95,6 +97,21 @@ describe('helpers', () => {
     expect(urlHost('https://example.com:8080/a?b=1')).toBe('example.com:8080');
     expect(urlHost('javascript:alert(1)')).toBeNull();
     expect(urlHost('not a url')).toBeNull();
+  });
+
+  it('columnTypeLabel names every type in the one UI vocabulary', () => {
+    expect(columnTypeLabel({ type: 'text' })).toBe('Text');
+    expect(columnTypeLabel({ type: 'url', multiple: false, precision: null })).toBe('URL');
+    expect(columnTypeLabel({ type: 'boolean' })).toBe('Checkbox');
+    expect(columnTypeLabel({ type: 'enum', multiple: false })).toBe('Choice');
+    expect(columnTypeLabel({ type: 'enum', multiple: true })).toBe('Choice (several)');
+    expect(columnTypeLabel({ type: 'number', precision: null })).toBe('Number');
+    expect(columnTypeLabel({ type: 'number', precision: 2 })).toBe('Number (2 decimal places)');
+    expect(columnTypeLabel({ type: 'number', precision: 1 })).toBe('Number (1 decimal place)');
+    expect(columnTypeLabel({ type: 'number', precision: 0 })).toBe('Number (0 decimal places)');
+    // An unknown type shows as sent.
+    expect(columnTypeLabel({ type: 'date' })).toBe('date');
+    expect(Object.keys(COLUMN_TYPE_LABELS).sort()).toEqual(['boolean', 'enum', 'number', 'text', 'url']);
   });
 
   it('isNullCell treats null, missing and an empty multi-enum as no value', () => {

@@ -1,20 +1,38 @@
 /* New Table dialog (NewTableDialog): NewDocModal's chrome (NewDocModal.css)
  * widened for the column editor (TableSchemaEditor.css styles the editor
- * body and the "N problems to fix" button). Phone width keeps NewDocModal's
- * 16px side margins; the line saying why Create is disabled then wraps
- * above the buttons. */
+ * body and the "N problems to fix" button). The modal is its own scroll
+ * box; the header sticks to its top and the action row (why Create is
+ * disabled, Cancel, Create) to its bottom, so both stay reachable however
+ * many columns the editor grows. Phones (768px, MobileShell): the dialog
+ * fills the screen. */
 
-.new-table-modal {
+.new-doc-modal.new-table-modal {
   width: 600px;
+}
+
+.new-table-modal .new-doc-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background-color: var(--surface-raised);
 }
 
 .new-table-modal .schema-editor {
   margin-top: 0.25rem;
 }
 
+/* Pinned to the bottom of the scroll box: the negative margins cancel the
+ * form's padding so the bar spans the dialog and ends at its edge. */
 .new-table-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
   flex-wrap: wrap;
   align-items: center;
+  margin: 1.25rem -1.5rem -1.5rem;
+  padding: 0.875rem 1.5rem 1.25rem;
+  border-top: 1px solid var(--border);
+  background-color: var(--surface-raised);
 }
 
 /* Why Create is disabled: at the left of the action row, wrapping above
@@ -31,4 +49,20 @@
   display: flex;
   gap: 0.75rem;
   margin-left: auto;
+}
+
+@media (max-width: 768px) {
+  .new-doc-modal.new-table-modal {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border-radius: 0;
+    overscroll-behavior: contain;
+  }
+
+  .new-table-actions {
+    margin: 1.25rem -1.25rem -1.25rem;
+    padding: 0.75rem 1.25rem calc(0.875rem + env(safe-area-inset-bottom, 0px));
+  }
 }

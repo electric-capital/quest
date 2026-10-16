@@ -5,10 +5,14 @@
  * light block), as DocHeader and the filter bar do.
  *
  * The side panel (`.table-side-panel`) is a fixed-width right column beside
- * the grid with its own scroll (header, scrolling body, footer). Narrow
- * screens stack it under the grid at full width (border included in the
- * width: no overflow past the gutter); the phone layout proper is phase
- * B8. */
+ * the grid with its own scroll (header, scrolling body, footer). Phones
+ * (the 768px breakpoint of useIsMobile, where MobileShell renders) get a
+ * full-screen sheet instead: absolutely positioned against `.mobile-shell`
+ * (position: fixed; no positioned ancestor in between), which MobileShell
+ * sizes to the visual viewport, so the Save / Discard footer stays above
+ * the on-screen keyboard -- the same reason ModelSelector's sheet sits
+ * there. It covers the top bar with a header of the same height; modal
+ * dialogs (the discard confirm, z-index 1000 on body) stay above it. */
 
 .table-side-panel {
   box-sizing: border-box;
@@ -26,6 +30,7 @@
 
 .table-side-panel-header {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
@@ -53,15 +58,20 @@
 
 .table-side-panel-footer {
   display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
   padding: 0.625rem 0.75rem;
   border-top: 1px solid var(--border);
 }
 
+/* The summary takes the row; once it is too narrow for its words the
+ * buttons wrap under it. */
 .schema-editor-summary {
-  flex: 1 1 auto;
+  flex: 1 1 10rem;
   min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--text-muted);
   font-size: 0.8125rem;
 }
@@ -156,6 +166,8 @@
 }
 
 .schema-editor-column-name {
+  flex: 0 1 auto;
+  min-width: 2.5rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -166,6 +178,16 @@
   color: var(--text-muted);
   font-size: 0.75rem;
   font-weight: 400;
+}
+
+/* In a card header the type summary gives way first, so the name stays
+ * readable. */
+.schema-editor-column-toggle .schema-editor-column-type {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .schema-editor-icon-button {
@@ -465,9 +487,43 @@
 
 @media (max-width: 768px) {
   .table-side-panel {
-    flex: 0 0 auto;
-    width: 100%;
-    max-height: 70vh;
+    position: absolute;
+    inset: 0;
+    z-index: 900;
+    width: auto;
+    border: none;
+    border-radius: 0;
+    background-color: var(--surface);
+  }
+
+  .table-side-panel-header {
+    min-height: 48px;
+    box-sizing: border-box;
+    padding: 0 0.25rem 0 16px;
+  }
+
+  .table-side-panel-header .schema-editor-icon-button {
+    width: 40px;
+    height: 40px;
+  }
+
+  .table-side-panel-body {
+    padding: 0.75rem 16px;
+    overscroll-behavior: contain;
+  }
+
+  .table-side-panel-footer {
+    padding: 0.625rem 16px calc(0.625rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Larger tap targets for Move up / down / Delete / Remove option. */
+  .schema-editor-icon-button {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+
+  .schema-editor-button {
+    padding: 0.45rem 1rem;
   }
 
   /* 16px fields keep iOS Safari from zooming on focus. */

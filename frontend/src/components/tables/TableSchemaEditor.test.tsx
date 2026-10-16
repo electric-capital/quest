@@ -7,8 +7,9 @@
 // banner and its two ways out, a schema_version move while open,
 // rows_violate links into the grid (a normal history entry), op_index
 // errors at their column, the discard confirm (the panel's Close, the
-// footer's Discard -- also clearing the conflict banner -- and the viewer
-// switching panels through the ref handle), keyboard focus across moves
+// footer's Discard -- also clearing the conflict banner -- Escape inside
+// the panel, and the viewer switching panels through the ref handle),
+// the shared type labels in summaries, keyboard focus across moves
 // and saves, "Has problems" on a collapsed card and the "N problems to fix"
 // reveal, a removed option typed again, and the read-only view.
 import { createRef } from 'react';
@@ -431,6 +432,28 @@ describe('keyboard focus across moves', () => {
     expect(document.activeElement).toBe(within(fresh).getByRole('button', { name: 'Move high down' }));
     expect(liveRegion().textContent).toBe('high moved to position 1 of 2');
   });
+
+  it('deleting a column focuses the card taking its place (the new last one at the end)', () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Status' }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Expand Tags' }));
+    expect(liveRegion().textContent).toBe('Status deleted');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Done' }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Expand Tags' }));
+    // Focus stayed in the panel: Escape still reaches it.
+    fireEvent.keyDown(document.activeElement as Element, { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'Discard column changes?' })).toBeTruthy();
+  });
+
+  it('removing an option focuses the option input taking its place', () => {
+    renderPanel();
+    expand('Tags');
+    const tags = card('Tags');
+    fireEvent.click(within(tags).getByRole('button', { name: 'Remove option a' }));
+    expect(document.activeElement).toBe(within(tags).getByLabelText('Option 1'));
+    expect((document.activeElement as HTMLInputElement).value).toBe('b');
+    expect(liveRegion().textContent).toBe('Option a removed');
+  });
 });
 
 describe('problems on collapsed cards', () => {
@@ -488,6 +511,66 @@ describe('closing', () => {
     const dialog = screen.getByRole('dialog', { name: 'Discard column changes?' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }));
     expect(handlers.onClose).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Escape', () => {
+  it('closes at once without edits, from a field too', () => {
+    renderPanel();
+    fireEvent.keyDown(screen.getByRole('heading', { name: 'Columns' }), { key: 'Escape' });
+    expect(handlers.onClose).toHaveBeenCalledTimes(1);
+    expand('Name');
+    fireEvent.keyDown(screen.getByLabelText('Name'), { key: 'Escape' });
+    expect(handlers.onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('with edits, asks first; Escape in the confirm closes only the confirm', () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Done' }));
+    fireEvent.keyDown(screen.getByRole('heading', { name: 'Columns' }), { key: 'Escape' });
+    expect(handlers.onClose).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('dialog', { name: 'Discard column changes?' });
+    fireEvent.keyDown(within(dialog).getByRole('button', { name: 'Cancel' }), { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(handlers.onClose).not.toHaveBeenCalled();
+    expect(screen.getByText('1 column removed')).toBeTruthy();
+  });
+
+  it('consumes the key, so a document Escape listener (the confirm\'s own) never sees it', () => {
+    renderPanel();
+    const seen = vi.fn();
+    document.addEventListener('keydown', seen);
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Delete Done' }));
+      fireEvent.keyDown(screen.getByRole('heading', { name: 'Columns' }), { key: 'Escape' });
+      expect(seen).not.toHaveBeenCalled();
+      expect(screen.getByRole('dialog', { name: 'Discard column changes?' })).toBeTruthy();
+    } finally {
+      document.removeEventListener('keydown', seen);
+    }
+  });
+
+  it('closes the read-only view', () => {
+    renderPanel(detail({ access: { ...detail().access, can_edit_schema: false } }));
+    fireEvent.keyDown(screen.getByRole('heading', { name: 'Columns' }), { key: 'Escape' });
+    expect(handlers.onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('type labels', () => {
+  it('summaries and the read-only list use the shared vocabulary', () => {
+    const columns = [
+      col('c_00000001', 'Name'),
+      col('c_00000003', 'Tags', { type: 'enum', options: ['a', 'b'], multiple: true }),
+      col('c_00000005', 'Budget', { type: 'number', precision: 2, required: true }),
+    ];
+    renderPanel(detail({ schema: columns }));
+    expect(within(card('Tags')).getByText('Choice (several)')).toBeTruthy();
+    expect(within(card('Budget')).getByText('Number (2 decimal places) · required')).toBeTruthy();
+    cleanup();
+    renderPanel(detail({ schema: columns, access: { ...detail().access, can_edit_schema: false } }));
+    expect(screen.getByText('Number (2 decimal places) · required')).toBeTruthy();
+    expect(screen.getByText('Choice (several)')).toBeTruthy();
   });
 });
 

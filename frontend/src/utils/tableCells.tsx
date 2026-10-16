@@ -24,10 +24,40 @@
  */
 
 import { Square, SquareCheck } from 'lucide-react';
-import type { TableCellValue, TableColumn } from '../api/types';
+import type { TableCellValue, TableColumn, TableColumnType } from '../api/types';
 
 /** Display cap for a text cell, in code points (the rest goes to `title`). */
 export const TABLE_CELL_MAX_CHARS = 200;
+
+/** User-facing names of the column types (the editor's type select). */
+export const COLUMN_TYPE_LABELS: Record<TableColumnType, string> = {
+  text: 'Text',
+  number: 'Number',
+  url: 'URL',
+  boolean: 'Checkbox',
+  enum: 'Choice',
+};
+
+/**
+ * A column's type in the one vocabulary every Quest Tables surface uses
+ * (the Columns panel's summaries and read-only list, the create_table card's
+ * column table, the schema diff of cards and History): the COLUMN_TYPE_LABELS
+ * name, "Choice (several)" for a choice column that allows several options,
+ * "Number (2 decimal places)" for a number with a precision. A type the
+ * client does not know shows as sent.
+ */
+export function columnTypeLabel(column: {
+  type: string;
+  multiple?: boolean | null;
+  precision?: number | null;
+}): string {
+  const label = COLUMN_TYPE_LABELS[column.type as TableColumnType] ?? column.type;
+  if (column.type === 'enum' && column.multiple) return `${label} (several)`;
+  if (column.type === 'number' && typeof column.precision === 'number') {
+    return `${label} (${column.precision} ${column.precision === 1 ? 'decimal place' : 'decimal places'})`;
+  }
+  return label;
+}
 
 const DECIMAL_RE = /^(-?)(\d+)(?:\.(\d+))?$/;
 

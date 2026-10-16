@@ -2,9 +2,10 @@
 // conversation link, kind badges, Load more, zoned timestamps, Retry), the
 // rows-detail mapping (changeDetailToRowsDiff), restore impact / confirm
 // text, the detail cache, the Restore flow (focus after it, Escape in the
-// confirm) and its errors, and the lost-access state (403 and 404
-// table_not_found). The two shared diff previews are mocked: these tests
-// check what the drawer hands them.
+// confirm) and its errors, the lost-access state (403 and 404
+// table_not_found), and the phone layout (list, then the detail with "All
+// changes", useIsMobile mocked). The two shared diff previews are mocked:
+// these tests check what the drawer hands them.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -39,6 +40,11 @@ const mocks = vi.hoisted(() => ({
   getTableChange: vi.fn(),
   restoreTable: vi.fn(),
   global: new Set<(event: { type: string; [key: string]: unknown }) => void>(),
+  isMobile: false,
+}));
+
+vi.mock('../../hooks/useIsMobile', () => ({
+  useIsMobile: () => mocks.isMobile,
 }));
 
 vi.mock('../../api/tablesApi', async (importOriginal) => ({
@@ -161,6 +167,7 @@ beforeEach(() => {
   mocks.getTableChange.mockReset();
   mocks.restoreTable.mockReset();
   mocks.global.clear();
+  mocks.isMobile = false;
 });
 
 afterEach(cleanup);
@@ -516,7 +523,7 @@ describe('TableHistory detail', () => {
     expect(rows).toHaveLength(3);
     expect(rows[1].textContent).toContain('Company');
     expect(rows[1].textContent).toContain('yes');
-    expect(rows[2].textContent).toContain('enum[]');
+    expect(rows[2].textContent).toContain('Choice (several)');
     expect(rows[2].textContent).toContain('Won');
     expect(screen.queryByTestId('schema-diff')).toBeNull();
     expect(document.body.textContent).not.toContain('c_a');
@@ -729,5 +736,80 @@ describe('TableHistory restore', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Restore' }));
     expect(await screen.findByText('You no longer have edit access to this table.')).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+});
+
+describe('TableHistory on phones', () => {
+  beforeEach(() => {
+    mocks.isMobile = true;
+    mocks.listTableChanges.mockResolvedValue(listPage(LOG));
+  });
+
+  it('shows the list alone; an entry opens its detail with All changes back to the list', async () => {
+    mocks.getTableChange.mockResolvedValue(detailOf(LOG[3]));
+    renderHistory();
+    await screen.findByRole('list');
+    // No detail pane (nor its placeholder) beside the list.
+    expect(screen.queryByText('Select a change to see what it did.')).toBeNull();
+    expect(screen.queryByRole('article')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /Updated 2 rows/ }));
+    expect(await screen.findByRole('article', { name: 'Change #2' })).toBeTruthy();
+    expect(screen.queryByRole('list')).toBeNull();
+    const back = screen.getByRole('button', { name: 'All changes' });
+    expect(document.activeElement).toBe(back);
+    // The restore button is in the detail.
+    expect(screen.getByRole('button', { name: /Restore table to this point/ })).toBeTruthy();
+
+    fireEvent.click(back);
+    expect(screen.queryByRole('article')).toBeNull();
+    const selected = screen.getByRole('button', { name: /Updated 2 rows/ });
+    expect(selected.getAttribute('aria-current')).toBe('true');
+    expect(document.activeElement).toBe(selected);
+  });
+
+  it('Escape steps back: detail -> list -> closed', async () => {
+    mocks.getTableChange.mockResolvedValue(detailOf(LOG[3]));
+    const { onClose } = renderHistory();
+    fireEvent.click(await screen.findByRole('button', { name: /Updated 2 rows/ }));
+    await screen.findByRole('article', { name: 'Change #2' });
+    fireEvent.keyDown(screen.getByRole('button', { name: 'All changes' }), { key: 'Escape' });
+    expect(screen.getByRole('list')).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole('button', { name: /Updated 2 rows/ }), { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('a "Show #n" target in the list opens that change; "#n" in a detail switches the detail', async () => {
+    mocks.getTableChange.mockImplementation(async (_t: string, id: number) =>
+      id === 5 ? detailOf(LOG[0], { before: {}, after: { restore_to: 2 } }) : detailOf(LOG[3]),
+    );
+    renderHistory();
+    fireEvent.click(await screen.findByRole('button', { name: 'Show #2' }));
+    expect(await screen.findByRole('article', { name: 'Change #2' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'All changes' }));
+    fireEvent.click(screen.getByRole('button', { name: /^#5/ }));
+    await screen.findByText(/Restored the table to/);
+    fireEvent.click(screen.getByRole('button', { name: '#2' }));
+    expect(await screen.findByRole('article', { name: 'Change #2' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'All changes' })).toBeTruthy();
+  });
+
+  it('keeps the detail open on the new entry after a restore, focus on All changes', async () => {
+    mocks.getTableChange.mockResolvedValue(detailOf(LOG[4]));
+    renderHistory();
+    fireEvent.click(await screen.findByRole('button', { name: /Created table/ }));
+    await screen.findByRole('article', { name: 'Change #1' });
+    fireEvent.click(screen.getByRole('button', { name: /Restore table to this point/ }));
+    const dialog = await screen.findByRole('dialog');
+    const made = change(6, { kind: 'restore', op: 'restore', restore_to: 1, summary: 'Restored to #1', row_count: null });
+    mocks.restoreTable.mockResolvedValue({
+      change: made, table: table(), schema_version: 1, row_count: 0, restored_to: 1,
+    } satisfies RestoreTableResponse);
+    mocks.listTableChanges.mockReturnValue(new Promise(() => {}));
+    mocks.getTableChange.mockResolvedValue(detailOf(made, { before: {}, after: { restore_to: 1 } }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Restore' }));
+    expect(await screen.findByRole('article', { name: 'Change #6' })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'All changes' })));
   });
 });

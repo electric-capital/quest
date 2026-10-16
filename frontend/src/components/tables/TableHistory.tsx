@@ -59,12 +59,19 @@
  * Keyboard: focus lands on the heading on open; Escape closes the drawer
  * while focus is inside it and no dialog is open (Escape in the confirm
  * closes only the confirm); Up / Down / Home / End move between list
- * entries. Phone layout is a stacked list over the detail (B8 polishes it).
+ * entries.
+ *
+ * Phones (useIsMobile, as DocHistory): the drawer covers the screen and
+ * shows the list alone; tapping an entry (or a "Show #n" target) opens its
+ * detail full width with an "All changes" control back to the list, which
+ * gets the focus. Escape steps back (detail -> list -> closed). Going back
+ * focuses the selected entry. A restore keeps the detail open on the new
+ * entry. TableHistory.css lays the phone panes out.
  */
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, RotateCcw, X } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, RotateCcw, X } from 'lucide-react';
 import { getTableChange, restoreTable } from '../../api/tablesApi';
 import { ApiClientError } from '../../api/request';
 import type {
@@ -79,6 +86,7 @@ import type {
   TableSchemaDiffColumn,
   TableWriteConversation,
 } from '../../api/types';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import { isLostTableAccess, useTableChanges } from '../../hooks/useTableChanges';
 import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatters';
 import { DocConfirmDialog } from '../docs/DocConfirmDialog';
@@ -487,9 +495,15 @@ type RestoreTarget = Pick<TableChange, 'id' | 'in_effect'>;
 export function TableHistory({ table, onClose, onRestored }: TableHistoryProps) {
   const tableId = table.id;
   const idPrefix = useId();
+  const isMobile = useIsMobile();
   const headingRef = useRef<HTMLHeadingElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const allChangesRef = useRef<HTMLButtonElement>(null);
+  // Phones: the detail shows (full width) instead of the list.
+  const [phoneDetail, setPhoneDetail] = useState(false);
+  // Where focus goes once the phone pane switch has rendered.
+  const pendingFocusRef = useRef<'detail' | 'list' | null>(null);
   // The table shown now, for a restore that settles after a switch.
   const tableIdRef = useRef(tableId);
   tableIdRef.current = tableId;
@@ -525,6 +539,7 @@ export function TableHistory({ table, onClose, onRestored }: TableHistoryProps) 
     setRestoreBusy(false);
     setRestoreError(null);
     setFocusAfterRestore(null);
+    setPhoneDetail(false);
   }
 
   // --- Detail --------------------------------------------------------------
@@ -576,16 +591,40 @@ export function TableHistory({ table, onClose, onRestored }: TableHistoryProps) 
   const selectedEntry: TableChange | null =
     selectedId === null ? null : (changes.find((c) => c.id === selectedId) ?? detail ?? null);
 
-  /** Select a change and bring its list entry into view when loaded. */
-  const jumpTo = useCallback((id: number) => {
-    setSelectedId(id);
-    setTimeout(() => {
-      const button = listRef.current?.querySelector<HTMLButtonElement>(`[data-change-id="${id}"]`);
-      if (button) {
-        button.scrollIntoView?.({ block: 'nearest' });
-        button.focus();
+  /** Select a change; on phones its detail replaces the list. */
+  const select = useCallback(
+    (id: number) => {
+      setSelectedId(id);
+      if (isMobile && !phoneDetail) {
+        pendingFocusRef.current = 'detail';
+        setPhoneDetail(true);
       }
-    }, 0);
+    },
+    [isMobile, phoneDetail],
+  );
+
+  /** Select a change and bring its list entry into view when loaded (phones: open its detail). */
+  const jumpTo = useCallback(
+    (id: number) => {
+      if (isMobile) {
+        select(id);
+        return;
+      }
+      setSelectedId(id);
+      setTimeout(() => {
+        const button = listRef.current?.querySelector<HTMLButtonElement>(`[data-change-id="${id}"]`);
+        if (button) {
+          button.scrollIntoView?.({ block: 'nearest' });
+          button.focus();
+        }
+      }, 0);
+    },
+    [isMobile, select],
+  );
+
+  const backToList = useCallback(() => {
+    pendingFocusRef.current = 'list';
+    setPhoneDetail(false);
   }, []);
 
   // --- Restore -------------------------------------------------------------
@@ -647,8 +686,9 @@ export function TableHistory({ table, onClose, onRestored }: TableHistoryProps) 
 
   // After a restore the button that opened the confirm is disabled or gone
   // (focus would fall to the page, where Escape no longer reaches the
-  // drawer): move it to the new entry's list button, else the heading. Runs
-  // after the confirm's own focus return (passive cleanups run first).
+  // drawer): move it to the new entry's list button, else (the phone
+  // detail) "All changes", else the heading. Runs after the confirm's own
+  // focus return (passive cleanups run first).
   useEffect(() => {
     if (focusAfterRestore === null) return;
     setFocusAfterRestore(null);
@@ -658,17 +698,39 @@ export function TableHistory({ table, onClose, onRestored }: TableHistoryProps) 
     if (button) {
       button.scrollIntoView?.({ block: 'nearest' });
       button.focus();
+    } else if (allChangesRef.current) {
+      allChangesRef.current.focus();
     } else {
       headingRef.current?.focus();
     }
   }, [focusAfterRestore]);
+
+  // The phone pane switch landed: focus "All changes" (detail) or the
+  // selected entry (list), so focus never falls to the page.
+  useEffect(() => {
+    const target = pendingFocusRef.current;
+    if (target === null) return;
+    pendingFocusRef.current = null;
+    if (target === 'detail') allChangesRef.current?.focus();
+    else {
+      const button = listRef.current?.querySelector<HTMLButtonElement>('.table-history-item-select[aria-current="true"]');
+      button?.scrollIntoView?.({ block: 'nearest' });
+      button?.focus();
+    }
+  }, [phoneDetail]);
+
+  // A phone shows the detail only for a selection (a restore without an
+  // entry clears it: back to the list).
+  const phoneShowsDetail = isMobile && phoneDetail && selectedId !== null;
+  const phoneDetailShown = phoneShowsDetail && !lostAccess && !list.loading && list.error === null;
 
   const handleRootKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     // The portaled dialog's key events bubble through here; its own Escape
     // closes it, not the drawer.
     if (e.key !== 'Escape' || e.defaultPrevented || restoreOpen) return;
     e.preventDefault();
-    onClose();
+    if (phoneDetailShown) backToList();
+    else onClose();
   };
 
   const handleListKeyDown = (e: KeyboardEvent<HTMLUListElement>) => {
@@ -702,7 +764,7 @@ export function TableHistory({ table, onClose, onRestored }: TableHistoryProps) 
           data-change-id={change.id}
           aria-current={selected ? 'true' : undefined}
           aria-describedby={metaId}
-          onClick={() => setSelectedId(change.id)}
+          onClick={() => select(change.id)}
         >
           <span className="table-history-item-id">#{change.id}</span>
           <KindBadge kind={change.kind} />
@@ -799,6 +861,17 @@ export function TableHistory({ table, onClose, onRestored }: TableHistoryProps) 
 
     return (
       <article className="table-history-detail" aria-label={`Change #${selectedId}`}>
+        {isMobile && (
+          <button
+            ref={allChangesRef}
+            type="button"
+            className="table-history-button table-history-all-changes"
+            onClick={backToList}
+          >
+            <ChevronLeft size={16} aria-hidden="true" />
+            All changes
+          </button>
+        )}
         <div className="table-history-detail-head">
           <div className="table-history-detail-heading">
             <h3 className={`table-history-detail-title${entry?.in_effect === false ? ' is-rewound' : ''}`}>
@@ -871,33 +944,37 @@ export function TableHistory({ table, onClose, onRestored }: TableHistoryProps) 
       </div>
     );
   } else {
+    const showList = !phoneShowsDetail;
+    const showDetail = !isMobile || phoneShowsDetail;
     content = (
-      <div className="table-history-body">
-        <section className="table-history-list-pane" aria-label="Changes">
-          {changes.length === 0 ? (
-            <p className="table-history-muted">No changes yet.</p>
-          ) : (
-            <ul ref={listRef} className="table-history-list" onKeyDown={handleListKeyDown}>
-              {changes.map(renderEntry)}
-            </ul>
-          )}
-          {hasMore && (
-            <button
-              type="button"
-              className="table-history-button table-history-more"
-              disabled={list.loadingMore}
-              onClick={list.loadMore}
-            >
-              {list.loadingMore ? 'Loading...' : 'Load more'}
-            </button>
-          )}
-          {list.loadMoreError && (
-            <p className="table-history-error" role="alert">
-              {list.loadMoreError}
-            </p>
-          )}
-        </section>
-        {renderDetail()}
+      <div className={`table-history-body${isMobile ? ' table-history-body--phone' : ''}`}>
+        {showList && (
+          <section className="table-history-list-pane" aria-label="Changes">
+            {changes.length === 0 ? (
+              <p className="table-history-muted">No changes yet.</p>
+            ) : (
+              <ul ref={listRef} className="table-history-list" onKeyDown={handleListKeyDown}>
+                {changes.map(renderEntry)}
+              </ul>
+            )}
+            {hasMore && (
+              <button
+                type="button"
+                className="table-history-button table-history-more"
+                disabled={list.loadingMore}
+                onClick={list.loadMore}
+              >
+                {list.loadingMore ? 'Loading...' : 'Load more'}
+              </button>
+            )}
+            {list.loadMoreError && (
+              <p className="table-history-error" role="alert">
+                {list.loadMoreError}
+              </p>
+            )}
+          </section>
+        )}
+        {showDetail && renderDetail()}
       </div>
     );
   }

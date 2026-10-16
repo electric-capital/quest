@@ -17,6 +17,12 @@
  * takes when the total shrank below its offset (rows deleted while on the
  * last page). While a refetch is in flight the previous page stays on screen,
  * dimmed (`loading`).
+ *
+ * Empty result: with a filter, "No rows match this filter." and a Clear
+ * filter button (`onClearFilter`); without one, "No rows yet." plus, when
+ * the viewer's conversations can write rows (`suggestAskQuest`), a pointer
+ * to asking Quest in a chat -- rows are written by models (approval cards
+ * included); the page has no row editing.
  */
 
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
@@ -109,7 +115,15 @@ export interface TableGridProps {
   onOffsetChange: (offset: number) => void;
   /** A filter is applied: an empty result says "no match", not "no rows". */
   filterActive?: boolean;
+  /** Clear the filter (the empty result's Clear filter button). */
+  onClearFilter?: () => void;
+  /** An empty table suggests asking Quest for rows (false: rows are denied to this viewer). */
+  suggestAskQuest?: boolean;
 }
+
+export const NO_ROWS_TEXT = 'No rows yet.';
+export const ASK_FOR_ROWS_TEXT = 'Ask Quest to add rows in a chat.';
+export const NO_MATCH_TEXT = 'No rows match this filter.';
 
 export function TableGrid({
   columns,
@@ -121,6 +135,8 @@ export function TableGrid({
   limit = TABLE_GRID_PAGE_SIZE,
   onOffsetChange,
   filterActive = false,
+  onClearFilter,
+  suggestAskQuest = true,
 }: TableGridProps) {
   if (!page) {
     return <div className="table-grid-state">{loading ? 'Loading rows...' : ''}</div>;
@@ -180,8 +196,22 @@ export function TableGrid({
           </tbody>
         </table>
         {page.total === 0 && (
-          <div className="table-grid-empty">
-            {filterActive ? 'No rows match this filter.' : 'This table has no rows yet.'}
+          <div className="table-grid-empty" role="status">
+            {filterActive ? (
+              <>
+                <p className="table-grid-empty-title">{NO_MATCH_TEXT}</p>
+                {onClearFilter && (
+                  <button type="button" className="table-grid-empty-action" onClick={onClearFilter}>
+                    Clear filter
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                <p className="table-grid-empty-title">{NO_ROWS_TEXT}</p>
+                {suggestAskQuest && <p className="table-grid-empty-hint">{ASK_FOR_ROWS_TEXT}</p>}
+              </>
+            )}
           </div>
         )}
       </div>

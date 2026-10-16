@@ -58,7 +58,7 @@ exports[`TableSchemaDiffPreview > renders added / dropped / moved / order change
               <span
                 class="table-schema-diff-type"
               >
-                text
+                Text
               </span>
             </span>
           </td>
@@ -76,7 +76,7 @@ exports[`TableSchemaDiffPreview > renders added / dropped / moved / order change
               <span
                 class="table-schema-diff-type"
               >
-                text
+                Text
               </span>
             </span>
           </td>
@@ -109,7 +109,7 @@ exports[`TableSchemaDiffPreview > renders added / dropped / moved / order change
               <span
                 class="table-schema-diff-type"
               >
-                text
+                Text
               </span>
             </span>
           </td>
@@ -127,7 +127,7 @@ exports[`TableSchemaDiffPreview > renders added / dropped / moved / order change
               <span
                 class="table-schema-diff-type"
               >
-                text
+                Text
               </span>
             </span>
           </td>
@@ -160,7 +160,7 @@ exports[`TableSchemaDiffPreview > renders added / dropped / moved / order change
               <span
                 class="table-schema-diff-type"
               >
-                text
+                Text
               </span>
             </span>
           </td>
@@ -202,7 +202,7 @@ exports[`TableSchemaDiffPreview > renders added / dropped / moved / order change
               <span
                 class="table-schema-diff-type"
               >
-                number (2 dp)
+                Number (2 decimal places)
               </span>
             </span>
           </td>
@@ -220,7 +220,7 @@ exports[`TableSchemaDiffPreview > renders added / dropped / moved / order change
               <span
                 class="table-schema-diff-type"
               >
-                number (0 dp)
+                Number (0 decimal places)
               </span>
               <span
                 class="table-schema-diff-flag"
@@ -241,7 +241,7 @@ exports[`TableSchemaDiffPreview > renders added / dropped / moved / order change
               class="table-schema-diff-lines"
             >
               <li>
-                Precision: 2 → 0
+                Decimal places: 2 → 0
               </li>
               <li>
                 Required: no → yes
@@ -292,7 +292,7 @@ exports[`TableSchemaDiffPreview > renders added / dropped / moved / order change
               <span
                 class="table-schema-diff-type"
               >
-                enum[]
+                Choice (several)
               </span>
             </span>
           </td>
@@ -370,7 +370,7 @@ exports[`TableSchemaDiffPreview > renders the rename card payload (snapshot) 1`]
               <span
                 class="table-schema-diff-type"
               >
-                enum
+                Choice
               </span>
             </span>
           </td>
@@ -388,7 +388,7 @@ exports[`TableSchemaDiffPreview > renders the rename card payload (snapshot) 1`]
               <span
                 class="table-schema-diff-type"
               >
-                enum
+                Choice
               </span>
             </span>
           </td>

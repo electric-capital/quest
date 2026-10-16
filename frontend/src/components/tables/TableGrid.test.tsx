@@ -137,13 +137,21 @@ describe('TableGrid', () => {
     expect(onOffsetChange).toHaveBeenCalledWith(200);
   });
 
-  it('says the table is empty, or that nothing matches a filter', () => {
+  it('says the table is empty and how rows get in, or that nothing matches a filter', () => {
     renderGrid({ page: page({ rows: [], total: 0 }) });
-    expect(screen.getByText('This table has no rows yet.')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toBe('No rows yet.Ask Quest to add rows in a chat.');
     expect(screen.queryByRole('button', { name: 'Next' })).toBeNull();
     cleanup();
-    renderGrid({ page: page({ rows: [], total: 0 }), filterActive: true });
+    // Rows denied to this viewer: no suggestion to ask for them.
+    renderGrid({ page: page({ rows: [], total: 0 }), suggestAskQuest: false });
+    expect(screen.getByRole('status').textContent).toBe('No rows yet.');
+    cleanup();
+    const onClearFilter = vi.fn();
+    renderGrid({ page: page({ rows: [], total: 0 }), filterActive: true, onClearFilter });
     expect(screen.getByText('No rows match this filter.')).toBeTruthy();
+    expect(screen.queryByText(/Ask Quest/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filter' }));
+    expect(onClearFilter).toHaveBeenCalledTimes(1);
   });
 
   it('dims the previous page while a refetch is in flight', () => {

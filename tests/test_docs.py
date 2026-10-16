@@ -34,7 +34,7 @@ DEFAULT_WORD_BUDGET = 6000
 # introduced. Each ceiling may only go DOWN: lower it when the doc shrinks,
 # never raise it to make room for new text -- trim or split the doc instead.
 OVER_BUDGET_CEILINGS = {
-    "docs/architecture/action-requests.md": 10500,
+    "docs/architecture/action-requests.md": 10481,
     "docs/architecture/database.md": 10950,
     "docs/architecture/quest-docs.md": 8500,
     "docs/architecture/realtime.md": 7500,

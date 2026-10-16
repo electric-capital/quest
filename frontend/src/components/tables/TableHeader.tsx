@@ -2,28 +2,38 @@
  * TableHeader -- the title unit at the top of the table viewer (/tables/<id>),
  * modeled on DocHeader (same dropdown, inline rename, chips, notice).
  *
- * The title plus a chevron open the menu; single-key hints act while it is
- * open. Items follow the row's server-computed `access` flags (never a
- * role recomputed here):
+ * The title plus a chevron open the menu. Items follow the row's
+ * server-computed `access` flags (never a role recomputed here):
  * - Rename (can_rename, owner): inline input, PUT title with
  *   `expected_updated_at` (one retry when only rows moved meanwhile);
  * - Columns (everyone): opens the Columns panel through `onOpenColumns`
- *   (the viewer passes it; the panel is read-only for non-owners);
+ *   (the viewer passes it; the panel is read-only for non-owners; a host
+ *   that passes none gets no item);
  * - History (can_edit, editors): opens the History drawer through
- *   `onOpenHistory` (the viewer passes it);
+ *   `onOpenHistory` (the viewer passes it; no item without it);
  * - Download CSV, Download SQLite (everyone) and Download SQLite with history
  *   (can_download_history, editors): plain `<a href download>` links;
  * - "Require approval for agent writes" (can_require_approval, owner): PUT
  *   require_approval without a concurrency token (row writes move
  *   updated_at); the menu stays open so the new state is visible;
  * - Share (can_share, owner): a reserved slot, disabled until a host passes
- *   `onOpenShare` (the sharing dialog is phase C2; the viewer passes none);
+ *   `onOpenShare` (the sharing dialog is phase C2; the viewer passes none).
+ *   The disabled item says why in visible secondary text
+ *   (SHARE_UNAVAILABLE_NOTE), linked with aria-describedby: a `title` alone
+ *   is neither shown on touch screens nor read on a disabled button;
  * - Delete (can_delete, owner): DocConfirmDialog naming the row count, then
  *   navigates to All Tables (the project's list for a project table).
- * Columns and History, too, render as disabled "Coming soon" slots for a
- * host that passes no callback. `menuButtonRef` hands the host the title
- * (menu) button, so focus can return to it when a panel the menu opened
- * closes.
+ * `menuButtonRef` hands the host the title (menu) button, so focus can
+ * return to it when a panel the menu opened closes.
+ *
+ * Keys: while the menu is open, single keys act on the items, mirroring
+ * DocHeader -- R rename, C columns, H history, A the approval switch, S
+ * share, D delete, Escape closes the menu. The key hint shows on an enabled
+ * item only, and a key acts only when its item is shown and enabled. No key
+ * acts (Escape still closes the menu) while focus is in a text field, a
+ * select or contenteditable, or while a dialog is open (`menuKeysBlocked`):
+ * the menu stays open when focus moves on by keyboard, and typing there
+ * must not trigger an item.
  *
  * A stale rename (409 stale_update) applies the server's
  * current row (`onRowApplied`, i.e. useTable.applyRow) -- or asks for a
@@ -41,7 +51,7 @@
  * recipient who shared it and whether they can edit.
  */
 
-import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type Ref } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
@@ -85,9 +95,26 @@ const REQUIRE_APPROVAL_ON_NOTICE = 'Agents now need your approval before changin
 const REQUIRE_APPROVAL_OFF_NOTICE = 'Agents can change this table without approval again.';
 export const TABLE_APPROVAL_CHIP_TITLE =
   "Conversations need the owner's approval before changing this table.";
-const SLOT_TITLE = 'Coming soon';
+/** Why the disabled Share slot does nothing (sharing UI: phase C2). */
+export const SHARE_UNAVAILABLE_NOTE = "Sharing isn't available here yet";
 /** Rename rejections the user fixes by editing the typed title. */
 const KEEP_EDITING_ERRORS = new Set(['duplicate_title', 'invalid_title']);
+
+/**
+ * True when the menu's single-key shortcuts must not act on `event`: its
+ * target is a text field, a select or contenteditable, or a dialog is open
+ * (any `[role=dialog]` / `[aria-modal=true]` element in the document, or the
+ * target sits inside one). Escape is the caller's to handle either way.
+ */
+export function menuKeysBlocked(event: KeyboardEvent): boolean {
+  const target = event.target instanceof Element ? event.target : null;
+  if (target) {
+    if (target.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return true;
+    if (target instanceof HTMLElement && target.isContentEditable) return true;
+    if (target.closest('[role="dialog"], [role="alertdialog"]')) return true;
+  }
+  return document.querySelector('[role="dialog"], [role="alertdialog"], [aria-modal="true"]') !== null;
+}
 
 function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
@@ -114,9 +141,9 @@ export interface TableHeaderProps {
   onRowApplied: (row: TableListRow) => void;
   /** Re-fetch the table (a stale_update without a `current` row). */
   onStale?: () => void;
-  /** Open the Columns panel; the item is a disabled slot without it. */
+  /** Open the Columns panel; no Columns item without it. */
   onOpenColumns?: () => void;
-  /** Open the History drawer (editors); a disabled slot without it. */
+  /** Open the History drawer (editors); no History item without it. */
   onOpenHistory?: () => void;
   /** Open the Share dialog (owner; phase C2); a disabled slot without it. */
   onOpenShare?: () => void;
@@ -141,11 +168,11 @@ export function TableHeader({
   const canDelete = access.can_delete;
   const canRequireApproval = access.can_require_approval;
   const canDownloadHistory = access.can_download_history;
-  const showHistory = access.can_edit;
   const showShare = access.can_share;
   const columnsEnabled = Boolean(onOpenColumns);
-  const historyEnabled = showHistory && Boolean(onOpenHistory);
+  const historyEnabled = access.can_edit && Boolean(onOpenHistory);
   const shareEnabled = showShare && Boolean(onOpenShare);
+  const shareNoteId = useId();
   const showModeBadge = shouldShowDocModeBadge(table.mode);
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -344,13 +371,14 @@ export function TableHeader({
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key.toLowerCase();
+      if (key === 'escape') { setMenuOpen(false); return; }
+      if (e.defaultPrevented || menuKeysBlocked(e)) return;
       if (key === 'r' && canRename) { e.preventDefault(); startRename(); }
       else if (key === 'c' && columnsEnabled) { e.preventDefault(); runColumns(); }
       else if (key === 'h' && historyEnabled) { e.preventDefault(); runHistory(); }
       else if (key === 'a' && canRequireApproval) { e.preventDefault(); void toggleRequireApproval(); }
       else if (key === 's' && shareEnabled) { e.preventDefault(); runShare(); }
       else if (key === 'd' && canDelete) { e.preventDefault(); openDelete(); }
-      else if (key === 'escape') { setMenuOpen(false); }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -418,27 +446,15 @@ export function TableHeader({
                     <span className="doc-header-menu-key">R</span>
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="doc-header-menu-item"
-                  role="menuitem"
-                  onClick={runColumns}
-                  disabled={!columnsEnabled}
-                  title={columnsEnabled ? undefined : SLOT_TITLE}
-                >
-                  <Columns3 size={16} className="doc-header-menu-icon" />
-                  <span>Columns</span>
-                  <span className="doc-header-menu-key">C</span>
-                </button>
-                {showHistory && (
-                  <button
-                    type="button"
-                    className="doc-header-menu-item"
-                    role="menuitem"
-                    onClick={runHistory}
-                    disabled={!historyEnabled}
-                    title={historyEnabled ? undefined : SLOT_TITLE}
-                  >
+                {columnsEnabled && (
+                  <button type="button" className="doc-header-menu-item" role="menuitem" onClick={runColumns}>
+                    <Columns3 size={16} className="doc-header-menu-icon" />
+                    <span>Columns</span>
+                    <span className="doc-header-menu-key">C</span>
+                  </button>
+                )}
+                {historyEnabled && (
+                  <button type="button" className="doc-header-menu-item" role="menuitem" onClick={runHistory}>
                     <History size={16} className="doc-header-menu-icon" />
                     <span>History</span>
                     <span className="doc-header-menu-key">H</span>
@@ -462,18 +478,33 @@ export function TableHeader({
                     <span className="doc-header-menu-key">A</span>
                   </button>
                 )}
-                {showShare && (
-                  <button
-                    type="button"
-                    className="doc-header-menu-item"
-                    role="menuitem"
-                    onClick={runShare}
-                    disabled={!shareEnabled}
-                    title={shareEnabled ? undefined : SLOT_TITLE}
-                  >
+                {shareEnabled && (
+                  <button type="button" className="doc-header-menu-item" role="menuitem" onClick={runShare}>
                     <Users size={16} className="doc-header-menu-icon" />
                     <span>Share</span>
                     <span className="doc-header-menu-key">S</span>
+                  </button>
+                )}
+                {showShare && !shareEnabled && (
+                  // The reason is visible text (touch screens show no
+                  // title) and the item's description (a disabled button's
+                  // title is not read out).
+                  <button
+                    type="button"
+                    className="doc-header-menu-item table-header-menu-item--unavailable"
+                    role="menuitem"
+                    disabled
+                    aria-label="Share"
+                    aria-describedby={shareNoteId}
+                    title={SHARE_UNAVAILABLE_NOTE}
+                  >
+                    <Users size={16} className="doc-header-menu-icon" />
+                    <span className="table-header-menu-text">
+                      <span>Share</span>
+                      <span id={shareNoteId} className="table-header-menu-note">
+                        {SHARE_UNAVAILABLE_NOTE}
+                      </span>
+                    </span>
                   </button>
                 )}
                 <div className="doc-header-menu-separator" role="separator" />

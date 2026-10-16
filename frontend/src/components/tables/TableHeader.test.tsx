@@ -1,16 +1,18 @@
 // TableHeader: menu items follow the row's access flags (owner-only items
-// hidden for a reader; Columns and History active once the viewer wires
-// them, Share a disabled slot until phase C2), rename and the
-// approval switch send the concurrency token and recover from stale_update,
-// delete confirms with the row count and navigates to the right list;
-// `menuButtonRef` hands the host the title (menu) button.
+// hidden for a reader; Columns and History shown once the viewer wires
+// them, Share a disabled slot with its reason until phase C2), the
+// single-key shortcuts (enabled items only, never from a field or under a
+// dialog), rename and the approval switch send the concurrency token and
+// recover from stale_update, delete confirms with the row count and
+// navigates to the right list; `menuButtonRef` hands the host the title
+// (menu) button.
 import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ApiClientError } from '../../api/request';
 import type { TableAccess, TableDetail, TableListRow } from '../../api/types';
-import { STALE_TABLE_NOTICE, TableHeader } from './TableHeader';
+import { SHARE_UNAVAILABLE_NOTE, STALE_TABLE_NOTICE, TableHeader } from './TableHeader';
 
 const mocks = vi.hoisted(() => ({
   updateTable: vi.fn(),
@@ -137,7 +139,8 @@ describe('TableHeader', () => {
         'RenameR',
         'ColumnsC',
         'HistoryH',
-        'ShareS',
+        // Disabled: no key hint, the reason as visible text.
+        `Share${SHARE_UNAVAILABLE_NOTE}`,
         'Download CSV',
         'Download SQLite',
         'Download SQLite with history',
@@ -146,9 +149,14 @@ describe('TableHeader', () => {
       for (const name of [/Columns/, /History/]) {
         expect((within(menu).getByRole('menuitem', { name }) as HTMLButtonElement).disabled).toBe(false);
       }
-      const share = within(menu).getByRole('menuitem', { name: /Share/ }) as HTMLButtonElement;
+      const share = within(menu).getByRole('menuitem', { name: 'Share' }) as HTMLButtonElement;
       expect(share.disabled).toBe(true);
-      expect(share.title).toBe('Coming soon');
+      expect(share.title).toBe(SHARE_UNAVAILABLE_NOTE);
+      // The reason is the item's description (a disabled button's title is not read).
+      const noteId = share.getAttribute('aria-describedby');
+      expect(noteId).toBeTruthy();
+      expect(document.getElementById(noteId as string)?.textContent).toBe(SHARE_UNAVAILABLE_NOTE);
+      expect(document.body.textContent).not.toContain('Coming soon');
       const checkbox = within(menu).getByRole('menuitemcheckbox', { name: /Require approval for agent writes/ });
       expect(checkbox.getAttribute('aria-checked')).toBe('false');
     });
@@ -173,12 +181,17 @@ describe('TableHeader', () => {
       ).toBe('/app/api/tables/t1/download?format=sqlite&include_history=true');
     });
 
-    it('a host that wires nothing gets Columns and History as disabled slots', () => {
+    it('a host that wires nothing gets no Columns or History item, and their keys do nothing', () => {
       renderHeader(detail());
       const menu = openMenu();
-      for (const name of [/Columns/, /History/, /Share/]) {
-        expect((within(menu).getByRole('menuitem', { name }) as HTMLButtonElement).disabled).toBe(true);
-      }
+      expect(within(menu).queryByRole('menuitem', { name: /Columns/ })).toBeNull();
+      expect(within(menu).queryByRole('menuitem', { name: /History/ })).toBeNull();
+      expect((within(menu).getByRole('menuitem', { name: 'Share' }) as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.keyDown(document, { key: 'c' });
+      fireEvent.keyDown(document, { key: 'h' });
+      fireEvent.keyDown(document, { key: 's' });
+      // Nothing acted: the menu is still open.
+      expect(screen.getByRole('menu')).toBeTruthy();
     });
 
     it('a reader gets Columns (the read-only panel) and the two plain downloads only', () => {
@@ -203,7 +216,10 @@ describe('TableHeader', () => {
     });
 
     it('a write-share recipient also gets History and the history download', () => {
-      renderHeader(detail({ ...READER, permission: 'write', access: { ...READER_ACCESS, rows: 'free', can_edit: true, can_restore: true, can_download_history: true } }));
+      renderHeader(
+        detail({ ...READER, permission: 'write', access: { ...READER_ACCESS, rows: 'free', can_edit: true, can_restore: true, can_download_history: true } }),
+        { onOpenColumns: vi.fn(), onOpenHistory: vi.fn() },
+      );
       expect(itemLabels(openMenu())).toEqual([
         'ColumnsC', 'HistoryH', 'Download CSV', 'Download SQLite', 'Download SQLite with history',
       ]);
@@ -222,6 +238,106 @@ describe('TableHeader', () => {
       openMenu();
       fireEvent.keyDown(document, { key: 's' });
       expect(onOpenShare).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('shortcuts', () => {
+    it('each key runs its item and closes the menu (the approval switch keeps it open)', async () => {
+      const onOpenColumns = vi.fn();
+      const onOpenHistory = vi.fn();
+      const onOpenShare = vi.fn();
+      mocks.updateTable.mockResolvedValue(detail({ require_approval: true }));
+      renderHeader(detail(), { onOpenColumns, onOpenHistory, onOpenShare });
+
+      openMenu();
+      fireEvent.keyDown(document, { key: 'C' });
+      expect(onOpenColumns).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('menu')).toBeNull();
+
+      openMenu();
+      fireEvent.keyDown(document, { key: 'h' });
+      expect(onOpenHistory).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('menu')).toBeNull();
+
+      openMenu();
+      fireEvent.keyDown(document, { key: 's' });
+      expect(onOpenShare).toHaveBeenCalledTimes(1);
+
+      openMenu();
+      await act(async () => {
+        fireEvent.keyDown(document, { key: 'a' });
+      });
+      expect(mocks.updateTable).toHaveBeenCalledWith('t1', { require_approval: true });
+      expect(screen.getByRole('menu')).toBeTruthy();
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(screen.queryByRole('menu')).toBeNull();
+
+      openMenu();
+      fireEvent.keyDown(document, { key: 'r' });
+      expect(screen.getByRole('textbox', { name: 'Rename table' })).toBeTruthy();
+      fireEvent.keyDown(screen.getByRole('textbox', { name: 'Rename table' }), { key: 'Escape' });
+
+      openMenu();
+      fireEvent.keyDown(document, { key: 'd' });
+      expect(screen.getByRole('dialog').textContent).toContain('Delete "Leads"');
+    });
+
+    it('ignores modified keys', () => {
+      const onOpenColumns = vi.fn();
+      renderHeader(detail(), { onOpenColumns });
+      openMenu();
+      fireEvent.keyDown(document, { key: 'c', ctrlKey: true });
+      fireEvent.keyDown(document, { key: 'c', metaKey: true });
+      expect(onOpenColumns).not.toHaveBeenCalled();
+    });
+
+    it('does not act while focus is in a field or contenteditable, but Escape still closes', () => {
+      const onOpenColumns = vi.fn();
+      const onOpenHistory = vi.fn();
+      renderHeader(detail(), { onOpenColumns, onOpenHistory });
+      const input = document.createElement('input');
+      const textarea = document.createElement('textarea');
+      const select = document.createElement('select');
+      const editable = document.createElement('div');
+      editable.setAttribute('contenteditable', 'true');
+      document.body.append(input, textarea, select, editable);
+      try {
+        openMenu();
+        for (const el of [input, textarea, select, editable]) {
+          fireEvent.keyDown(el, { key: 'c' });
+          fireEvent.keyDown(el, { key: 'h' });
+          fireEvent.keyDown(el, { key: 'd' });
+        }
+        expect(onOpenColumns).not.toHaveBeenCalled();
+        expect(onOpenHistory).not.toHaveBeenCalled();
+        expect(screen.queryByRole('dialog')).toBeNull();
+        expect(screen.getByRole('menu')).toBeTruthy();
+        fireEvent.keyDown(input, { key: 'Escape' });
+        expect(screen.queryByRole('menu')).toBeNull();
+      } finally {
+        input.remove();
+        textarea.remove();
+        select.remove();
+        editable.remove();
+      }
+    });
+
+    it('does not act while a dialog is open', () => {
+      const onOpenColumns = vi.fn();
+      renderHeader(detail(), { onOpenColumns });
+      const dialog = document.createElement('div');
+      dialog.setAttribute('role', 'dialog');
+      document.body.append(dialog);
+      try {
+        openMenu();
+        fireEvent.keyDown(document, { key: 'c' });
+        expect(onOpenColumns).not.toHaveBeenCalled();
+      } finally {
+        dialog.remove();
+      }
+      fireEvent.keyDown(document, { key: 'c' });
+      expect(onOpenColumns).toHaveBeenCalledTimes(1);
     });
   });
 

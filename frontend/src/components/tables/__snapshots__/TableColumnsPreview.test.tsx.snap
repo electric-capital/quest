@@ -62,7 +62,7 @@ exports[`TableColumnsPreview > renders the column table (snapshot) 1`] = `
           <td
             class="table-columns-type"
           >
-            text
+            Text
           </td>
           <td>
             yes
@@ -73,7 +73,9 @@ exports[`TableColumnsPreview > renders the column table (snapshot) 1`] = `
           <td
             class="table-columns-default"
           />
-          <td />
+          <td
+            class="table-columns-options"
+          />
         </tr>
         <tr>
           <td
@@ -88,7 +90,7 @@ exports[`TableColumnsPreview > renders the column table (snapshot) 1`] = `
           <td
             class="table-columns-type"
           >
-            enum
+            Choice
           </td>
           <td />
           <td />
@@ -98,7 +100,9 @@ exports[`TableColumnsPreview > renders the column table (snapshot) 1`] = `
           >
             Open
           </td>
-          <td>
+          <td
+            class="table-columns-options"
+          >
             <span
               class="table-diff-chips"
             >
@@ -128,7 +132,7 @@ exports[`TableColumnsPreview > renders the column table (snapshot) 1`] = `
           <td
             class="table-columns-type"
           >
-            number (2 dp)
+            Number (2 decimal places)
           </td>
           <td />
           <td />
@@ -138,7 +142,9 @@ exports[`TableColumnsPreview > renders the column table (snapshot) 1`] = `
           >
             0
           </td>
-          <td />
+          <td
+            class="table-columns-options"
+          />
         </tr>
         <tr>
           <td
@@ -153,7 +159,7 @@ exports[`TableColumnsPreview > renders the column table (snapshot) 1`] = `
           <td
             class="table-columns-type"
           >
-            enum[]
+            Choice (several)
           </td>
           <td />
           <td />
@@ -163,7 +169,9 @@ exports[`TableColumnsPreview > renders the column table (snapshot) 1`] = `
           >
             a, b
           </td>
-          <td>
+          <td
+            class="table-columns-options"
+          >
             <span
               class="table-diff-chips"
             >

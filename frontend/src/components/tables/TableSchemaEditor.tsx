@@ -24,7 +24,11 @@
  * new column's options) focus returns to the same button on the moved item,
  * or to the opposite one when the item reached an end and the button is
  * disabled, and a polite live region says "<name> moved to position n of
- * m". Every `validateDraft` problem shows at its field; a collapsed card
+ * m". Deleting a column moves focus to the card that takes its place (the
+ * new last one at the end), removing an option to the option input that
+ * takes its place (else Add option), so focus never falls to the page,
+ * where Escape would no longer reach the panel; the live region says what
+ * went. Every `validateDraft` problem shows at its field; a collapsed card
  * with a problem also says "Has problems" under its header (a red border
  * alone would be colour only), and `revealProblems()` on the ref handle
  * (SchemaEditorBodyHandle) expands every card with a problem and focuses
@@ -72,11 +76,16 @@
  * holds same-origin link clicks and tab closes. A link to this same table
  * (the rows_violate filter links) navigates without asking (a normal
  * history entry) -- the panel and its draft stay; any other link, the
- * panel's own Close, the footer's Discard and the viewer switching to
- * another panel (`requestClose(then)` on the ref handle,
- * TableSchemaEditorHandle) ask through DocConfirmDialog whether to discard
- * the edits. Discarding while the conflict banner is up takes the newer
- * schema and clears the banner.
+ * panel's own Close, Escape inside the panel, the footer's Discard and the
+ * viewer switching to another panel (`requestClose(then)` on the ref
+ * handle, TableSchemaEditorHandle) ask through DocConfirmDialog whether to
+ * discard the edits. Discarding while the conflict banner is up takes the
+ * newer schema and clears the banner.
+ *
+ * Phones (TableSchemaEditor.css, the 768px breakpoint of useIsMobile): the
+ * panel is a full-screen sheet over the viewer -- its header with the close
+ * button on top, the body scrolling, the Save / Discard footer pinned at the
+ * bottom -- instead of a column beside the grid.
  */
 
 import {
@@ -88,6 +97,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent,
   type ReactNode,
   type Ref,
   type RefObject,
@@ -126,18 +136,10 @@ import {
   type DraftOption,
   type SchemaDraft,
 } from '../../utils/tableSchemaOps';
+import { COLUMN_TYPE_LABELS, columnTypeLabel } from '../../utils/tableCells';
 import { tableViewerPath } from '../../utils/tablesRoute';
 import { DocConfirmDialog } from '../docs/DocConfirmDialog';
 import './TableSchemaEditor.css';
-
-/** User-facing names of the column types. */
-export const COLUMN_TYPE_LABELS: Record<TableColumnType, string> = {
-  text: 'Text',
-  number: 'Number',
-  url: 'URL',
-  boolean: 'Checkbox',
-  enum: 'Choice',
-};
 
 export const TYPE_FIXED_NOTE = "Type can't be changed after creation";
 export const MULTI_FIXED_NOTE = "Can't switch back to a single option";
@@ -262,8 +264,11 @@ export function SchemaEditorBody({
   const [announcement, setAnnouncement] = useState('');
   const { buttonRef, moved } = useMoveFocus();
   const cards = useRef(new Map<string, HTMLLIElement>());
+  const addButtonRef = useRef<HTMLButtonElement>(null);
   // revealProblems: the card whose first problem gets focus after render.
   const [reveal, setReveal] = useState<{ id: string } | null>(null);
+  // A deleted column's place: its successor's toggle gets focus after render.
+  const [removedAt, setRemovedAt] = useState<{ index: number } | null>(null);
 
   const columns = draft.columns;
   const full = columns.length >= TABLE_MAX_COLUMNS;
@@ -280,7 +285,13 @@ export function SchemaEditorBody({
     moved(column.id, delta < 0 ? 'up' : 'down');
     setAnnouncement(movedPhrase(column.name.trim() || 'Untitled column', target, columns.length));
   };
-  const remove = (id: string) => setColumns(columns.filter((c) => c.id !== id));
+  const remove = (id: string) => {
+    const index = columns.findIndex((c) => c.id === id);
+    if (index === -1) return;
+    setColumns(columns.filter((c) => c.id !== id));
+    setRemovedAt({ index });
+    setAnnouncement(`${columns[index].name.trim() || 'Untitled column'} deleted`);
+  };
   const add = () => {
     if (full) return;
     const column = newDraftColumn('', 'text');
@@ -302,6 +313,14 @@ export function SchemaEditorBody({
       setReveal({ id: ids[0] });
     },
   }));
+  useLayoutEffect(() => {
+    if (!removedAt) return;
+    const next = columns[Math.min(removedAt.index, columns.length - 1)];
+    const toggle = next ? cards.current.get(next.id)?.querySelector<HTMLElement>('.schema-editor-column-toggle') : null;
+    (toggle ?? addButtonRef.current)?.focus();
+    // Only the render that removed the column moves focus.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [removedAt]);
   useLayoutEffect(() => {
     if (!reveal) return;
     const card = cards.current.get(reveal.id);
@@ -411,6 +430,7 @@ export function SchemaEditorBody({
       <div className="schema-editor-add-row">
         <button
           type="button"
+          ref={addButtonRef}
           className="schema-editor-add"
           onClick={add}
           disabled={disabled || full}
@@ -433,9 +453,16 @@ export function SchemaEditorBody({
   );
 }
 
+/** A card's collapsed summary: the type (columnTypeLabel; a precision only once it is valid), flags. */
 function columnSummary(column: DraftColumn): string {
-  const parts = [COLUMN_TYPE_LABELS[column.type]];
-  if (column.type === 'enum' && column.multiple) parts[0] += ' (several)';
+  const precision = /^\d+$/.test(column.precision.trim()) ? Number(column.precision.trim()) : null;
+  const parts = [
+    columnTypeLabel({
+      type: column.type,
+      multiple: column.multiple,
+      precision: precision !== null && precision <= NUMBER_MAX_PRECISION ? precision : null,
+    }),
+  ];
   if (column.required) parts.push('required');
   if (column.unique && UNIQUE_COLUMN_TYPES.includes(column.type)) parts.push('unique');
   return parts.join(' · ');
@@ -632,7 +659,25 @@ function OptionsEditor({
   const isNew = column.key === null;
   const options = column.options;
   const { buttonRef, moved } = useMoveFocus();
+  const inputs = useRef(new Map<string, HTMLInputElement>());
+  const addOptionRef = useRef<HTMLButtonElement>(null);
+  // A removed option's place: the input that takes it gets focus after render.
+  const [removedAt, setRemovedAt] = useState<{ index: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!removedAt) return;
+    const next = options[Math.min(removedAt.index, options.length - 1)];
+    const input = next ? inputs.current.get(next.id) : undefined;
+    (input ?? addOptionRef.current)?.focus();
+    // Only the render that removed the option moves focus.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [removedAt]);
   const setOptions = (next: DraftOption[]) => onChange({ options: next });
+  const removeOption = (index: number) => {
+    const option = options[index];
+    setOptions(options.filter((o) => o.id !== option.id));
+    setRemovedAt({ index });
+    onAnnounce(`Option ${option.value.trim() || index + 1} removed`);
+  };
   const optionLabel = (option: DraftOption, index: number) => option.value.trim() || `option ${index + 1}`;
   const moveOption = (index: number, delta: number) => {
     const target = index + delta;
@@ -664,6 +709,10 @@ function OptionsEditor({
             <li key={option.id} className="schema-editor-option">
               <div className="schema-editor-option-row">
                 <input
+                  ref={(el) => {
+                    if (el) inputs.current.set(option.id, el);
+                    else inputs.current.delete(option.id);
+                  }}
                   className="schema-editor-input"
                   value={option.value}
                   aria-label={`Option ${index + 1}`}
@@ -702,7 +751,7 @@ function OptionsEditor({
                 <button
                   type="button"
                   className="schema-editor-icon-button schema-editor-icon-button--danger"
-                  onClick={() => setOptions(options.filter((o) => o.id !== option.id))}
+                  onClick={() => removeOption(index)}
                   disabled={disabled || last || usedByDefault}
                   aria-label={`Remove option ${label}`}
                   title={
@@ -724,6 +773,7 @@ function OptionsEditor({
       <FieldError id={`${idBase}-options-error`} message={errors?.options} />
       <button
         type="button"
+        ref={addOptionRef}
         className="schema-editor-add schema-editor-add--small"
         onClick={() => setOptions([...options, { id: newDraftId('opt'), original: null, value: '' }])}
         disabled={disabled}
@@ -848,10 +898,9 @@ export function ColumnsReadOnly({ columns }: { columns: TableColumn[] }) {
     <ol className="schema-editor-columns schema-editor-readonly">
       {columns.map((column) => {
         const flags = [
-          COLUMN_TYPE_LABELS[column.type] + (column.type === 'enum' && column.multiple ? ' (several)' : ''),
+          columnTypeLabel(column),
           column.required ? 'required' : null,
           column.unique ? 'unique' : null,
-          column.type === 'number' && column.precision !== null ? `${column.precision} decimal places` : null,
         ].filter(Boolean);
         const fallback = defaultText(column);
         return (
@@ -986,18 +1035,30 @@ export function TableSchemaEditor({ table, onClose, onDetailApplied, onRefresh, 
   // The editor's own handle (its draft decides whether to confirm); the
   // read-only view has nothing to lose.
   const editorRef = useRef<TableSchemaEditorHandle>(null);
-  useImperativeHandle(
-    ref,
-    () => ({
-      requestClose: (then?: () => void) => {
-        if (editorRef.current) editorRef.current.requestClose(then);
-        else (then ?? onClose)();
-      },
-    }),
+  const requestClose = useCallback(
+    (then?: () => void) => {
+      if (editorRef.current) editorRef.current.requestClose(then);
+      else (then ?? onClose)();
+    },
     [onClose],
   );
+  useImperativeHandle(ref, () => ({ requestClose }), [requestClose]);
+  // Escape from inside the panel closes it (through the discard confirm when
+  // there are edits). The portaled confirm's key events bubble through here
+  // too: only an event whose target is inside the panel's own DOM counts.
+  // The key is consumed here: the confirm it opens mounts during this
+  // dispatch and adds ModalShell's document Escape listener, which the same
+  // event would otherwise reach and close the confirm at once.
+  const handleKeyDown = (e: KeyboardEvent<HTMLElement>) => {
+    // An IME composition's Escape only cancels the composition.
+    if (e.key !== 'Escape' || e.defaultPrevented || e.nativeEvent.isComposing) return;
+    if (!(e.target instanceof Node) || !e.currentTarget.contains(e.target)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    requestClose();
+  };
   return (
-    <aside className="table-side-panel schema-editor-panel" aria-labelledby={headingId}>
+    <aside className="table-side-panel schema-editor-panel" aria-labelledby={headingId} onKeyDown={handleKeyDown}>
       {canEdit ? (
         <ColumnsPanelEditor
           ref={editorRef}

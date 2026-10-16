@@ -24,9 +24,14 @@
  *
  * New Table opens NewTableDialog (title, description, location preselected
  * to the filtered project, and the column editor), which creates the table
- * and navigates to it; closed without creating, it returns focus to the New
- * Table button. A host may pass `onNewTable` to open something else
- * instead; then the view renders no dialog of its own.
+ * and navigates to it; closed without creating, it returns focus to the
+ * button that opened it. A host may pass `onNewTable` to open something
+ * else instead; then the view renders no dialog of its own.
+ *
+ * Empty states: no tables at all (or none in the filtered project) explain
+ * in a line what a table is for and offer the same dialog ("Create a
+ * table") beside the header's New Table; a group with no tables while
+ * others have some says so in its own line.
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -61,6 +66,11 @@ const PAGE_SIZE = 50;
 
 const PUBLIC_PROJECT_TITLE = 'Public project — internet access, no internal data';
 
+export const EMPTY_HINT =
+  'A table holds typed rows that Quest reads and writes in your chats. Ask Quest to create one, or create one here.';
+export const PROJECT_EMPTY_HINT =
+  "This project's conversations can read and write its tables. Ask Quest in one of them to create a table, or create one here.";
+
 export interface TablesListViewProps {
   /** The `?project=<id>` filter; null = all tables. */
   projectId: string | null;
@@ -75,10 +85,20 @@ export function TablesListView({ projectId, onNewTable }: TablesListViewProps) {
   const { projects, projectsLoaded } = useProjects();
   const filtered = projectId !== null;
   const [newTableOpen, setNewTableOpen] = useState(false);
-  const openNewTable = onNewTable ?? (() => setNewTableOpen(true));
+  // The button that opened the dialog (the header's New Table, or the empty
+  // state's): focus goes back to it when the dialog closes.
+  const newButtonRef = useRef<HTMLButtonElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const openNewTable = (event: { currentTarget: HTMLElement }) => {
+    if (onNewTable) {
+      onNewTable();
+      return;
+    }
+    openerRef.current = event.currentTarget;
+    setNewTableOpen(true);
+  };
   // The dialog closed (without navigating away): focus back on its opener,
   // unless focus already went somewhere else on the page.
-  const newButtonRef = useRef<HTMLButtonElement>(null);
   const [dialogClosed, setDialogClosed] = useState(0);
   const closeNewTable = () => {
     setNewTableOpen(false);
@@ -87,7 +107,10 @@ export function TablesListView({ projectId, onNewTable }: TablesListViewProps) {
   useEffect(() => {
     if (dialogClosed === 0) return;
     const active = document.activeElement;
-    if (!active || active === document.body || !active.isConnected) newButtonRef.current?.focus();
+    if (!active || active === document.body || !active.isConnected) {
+      const opener = openerRef.current?.isConnected ? openerRef.current : newButtonRef.current;
+      opener?.focus();
+    }
   }, [dialogClosed]);
 
   // One paged list (the user's tables, or the filtered project's) plus the
@@ -152,9 +175,11 @@ export function TablesListView({ projectId, onNewTable }: TablesListViewProps) {
         <p className="tables-list-empty-title">
           {filtered ? 'No tables in this project yet.' : 'No tables yet.'}
         </p>
-        <p className="tables-list-empty-hint">
-          Ask Quest to create one, or use New Table.
-        </p>
+        <p className="tables-list-empty-hint">{filtered ? PROJECT_EMPTY_HINT : EMPTY_HINT}</p>
+        <button type="button" className="tables-list-empty-button" onClick={openNewTable}>
+          <Plus size={15} aria-hidden="true" />
+          Create a table
+        </button>
       </div>
     );
   } else {

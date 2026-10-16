@@ -14,12 +14,14 @@
  *   unchanged, plus "moved" when `moved`; a column that only moved shows
  *   just "moved"), the before side and the after side (name,
  *   `columnTypeLabel()`, required / unique flags; a dash for the side an
- *   added or dropped column lacks). The header cells carry `scope="col"`,
+ *   added or dropped column lacks; the type in the editor's vocabulary,
+ *   utils/tableCells). The header cells carry `scope="col"`,
  *   the empty badge header a visually hidden "Status".
  * - Under a row: the field changes as lines (`schemaChangeLines()`: "Type:
- *   text → enum", "Required: no → yes", "Default: Open → Done", "Precision:
- *   2 → 0", "Description changed"; name and options are left to the sides
- *   and chips; values cut by `previewText()`), the option chips
+ *   Text → Choice", "Required: no → yes", "Default: Open → Done", "Decimal
+ *   places: 2 → 0", "Several options: no → yes", "Description changed"; the
+ *   field names follow the Columns panel's; name and options are left to
+ *   the sides and chips; values cut by `previewText()`), the option chips
  *   (`schemaOptionChips()`: renames from `options_renamed` as "Done →
  *   Closed", the rest "+ Closed" / "- Done"), and "N cells rewritten".
  * - Unchanged, unmoved rows are muted; more than UNCHANGED_COLLAPSE_AT of
@@ -35,7 +37,8 @@
  */
 import { useState } from 'react';
 import type { TableSchemaDiff, TableSchemaDiffColumn, TableSchemaDiffEntry } from '../../api/types';
-import { columnTypeLabel, previewText, tableValueText } from './TableColumnsPreview';
+import { COLUMN_TYPE_LABELS, columnTypeLabel } from '../../utils/tableCells';
+import { previewText, tableValueText } from './TableColumnsPreview';
 import './TableColumnsPreview.css';
 import './TableSchemaDiffPreview.css';
 
@@ -50,10 +53,11 @@ const ARROW = '→';
 const FIELD_ORDER = ['type', 'multiple', 'precision', 'required', 'unique', 'default', 'description'];
 // Shown by the before / after sides and the option chips instead.
 const FIELDS_NOT_LISTED = new Set(['name', 'options', 'key']);
+// The Columns panel's names for the fields.
 const FIELD_LABELS: Record<string, string> = {
   type: 'Type',
-  multiple: 'Multiple',
-  precision: 'Precision',
+  multiple: 'Several options',
+  precision: 'Decimal places',
   required: 'Required',
   unique: 'Unique',
   default: 'Default',
@@ -63,6 +67,11 @@ function fieldValueText(field: string, value: unknown): string {
   if (field === 'required' || field === 'unique' || field === 'multiple') {
     return value ? 'yes' : 'no';
   }
+  if (field === 'type' && typeof value === 'string') {
+    return COLUMN_TYPE_LABELS[value as keyof typeof COLUMN_TYPE_LABELS] ?? value;
+  }
+  // No precision: the editor's "Any".
+  if (field === 'precision' && (value === null || value === undefined)) return 'any';
   const text = tableValueText(value);
   if (text === null) return 'none';
   if (text === '') return '""';

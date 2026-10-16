@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiClientError } from '../../api/request';
 import type { ListTablesOptions } from '../../api/tablesApi';
 import type { ListTablesResponse, Project, TableListRow } from '../../api/types';
-import { TablesListView } from './TablesListView';
+import { EMPTY_HINT, PROJECT_EMPTY_HINT, TablesListView } from './TablesListView';
 
 type GlobalListener = (event: { type: string; [key: string]: unknown }) => void;
 
@@ -248,8 +248,15 @@ describe('TablesListView', () => {
     expect(screen.getByText('Loading...')).toBeTruthy();
     resolveOwn(page([]));
     await waitFor(() => expect(screen.getByText('No tables yet.')).toBeTruthy());
-    // The hint points at New Table, which opens the dialog.
-    expect(screen.getByText('Ask Quest to create one, or use New Table.')).toBeTruthy();
+    // A line on what a table is for, and a button that opens the dialog.
+    expect(screen.getByText(EMPTY_HINT)).toBeTruthy();
+    const create = screen.getByRole('button', { name: 'Create a table' });
+    fireEvent.click(create);
+    const dialog = screen.getByRole('dialog', { name: 'New Table' });
+    expect((within(dialog).getByLabelText('Location') as HTMLSelectElement).value).toBe('');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    // Focus back on the button that opened it.
+    expect(document.activeElement).toBe(create);
   });
 
   it('shows the filtered empty state', async () => {
@@ -257,6 +264,10 @@ describe('TablesListView', () => {
     mocks.listTables.mockResolvedValue(page([]));
     renderView('pa');
     await waitFor(() => expect(screen.getByText('No tables in this project yet.')).toBeTruthy());
+    expect(screen.getByText(PROJECT_EMPTY_HINT)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Create a table' }));
+    const dialog = screen.getByRole('dialog', { name: 'New Table' });
+    expect((within(dialog).getByLabelText('Location') as HTMLSelectElement).value).toBe('pa');
   });
 
   it('reports a failed own list and a failed shared list', async () => {
@@ -301,7 +312,10 @@ describe('TablesListView', () => {
     fireEvent.click(button);
     expect(onNewTable).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.getByText('No tables yet.')).toBeTruthy());
-    expect(screen.getByText('Ask Quest to create one, or use New Table.')).toBeTruthy();
+    // The empty state's button goes to the host too.
+    fireEvent.click(screen.getByRole('button', { name: 'Create a table' }));
+    expect(onNewTable).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('shows an error under a generic heading for an unknown or foreign project', async () => {

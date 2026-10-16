@@ -46,18 +46,19 @@
  * Side panels, one at a time (`panel`, a `TableSidePanel` or null; local,
  * not in the URL):
  * - 'columns' (the header's Columns item, everyone): TableSchemaEditor,
- *   read-only for non-owners, beside the grid (it narrows the grid; stacked
- *   under it on narrow screens). It applies a saved detail through
+ *   read-only for non-owners, beside the grid (it narrows the grid; the
+ *   body gets `table-viewer-body--panel`), a full-screen sheet on phones
+ *   (TableSchemaEditor.css). It applies a saved detail through
  *   useTable.applyDetail and asks for a re-fetch on a conflict. It owns its
  *   draft and discard confirm: leaving it for another panel goes through
  *   its ref handle (`requestClose(then)`), which confirms when there are
- *   edits; its own Close clears `panel`. On narrow screens the body and
- *   the grid column take their content's height while it is open, so the
- *   page scrolls down to the panel instead of the panel covering the grid.
+ *   edits; its own Close and Escape inside it clear `panel` (after the
+ *   confirm when there are edits).
  * - 'history' (the header's History item, which the header shows to
  *   editors only; the mount is not gated, the drawer shows its own
  *   lost-access state): TableHistory, a drawer fixed over the right edge
- *   (TableHistory.css), so it takes no room in the grid layout. A restore
+ *   (full screen on phones, TableHistory.css), so it takes no room in the
+ *   grid layout. A restore
  *   applies `res.table` through applyDetail. A restore always bumps
  *   `schema_version` (chat/tables/revert.py), so the grid re-queries through
  *   the version change above; should the shown version already be the
@@ -65,10 +66,14 @@
  *   then), the viewer bumps the rows refresh key itself, so the grid can
  *   never keep showing pre-restore rows.
  *
- * Closing a panel (its Close, Escape in the drawer, a discard confirm)
+ * Closing a panel (its Close, Escape inside it, a discard confirm)
  * returns focus to the header's title (menu) button, which opened it --
  * unless focus already went somewhere else on the page. Switching panels
  * leaves focus to the new panel (its heading).
+ *
+ * Empty results: the grid says how rows get in (asking Quest, unless rows
+ * are denied to this viewer) or, under a filter, offers Clear filter,
+ * which navigates like the bar's.
  *
  * Plug-in point for a later phase: the header's `onOpenShare` (phase C2),
  * left unset so the menu shows Share as a disabled slot.
@@ -449,6 +454,8 @@ function TableViewerBody({
             limit={TABLE_GRID_PAGE_SIZE}
             onOffsetChange={setOffset}
             filterActive={effectiveFilter !== null}
+            onClearFilter={() => setFilter(null)}
+            suggestAskQuest={table.access.rows !== 'denied'}
           />
 
           <TableFooter table={table} matchingCount={effectiveFilter && page ? page.total : null} />

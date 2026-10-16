@@ -25,7 +25,9 @@
  * Chrome follows NewDocModal (ModalShell: overlay, Escape, focus on the
  * title when it opens). Escape and a backdrop click close the dialog only
  * while nothing has been typed; with a draft, only Cancel / the close button
- * do, so a stray click never throws the columns away.
+ * do, so a stray click never throws the columns away. The dialog scrolls as
+ * one box with its header and action row pinned (NewTableDialog.css); on
+ * phones it fills the screen.
  */
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';

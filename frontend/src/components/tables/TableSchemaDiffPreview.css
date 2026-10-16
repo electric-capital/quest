@@ -29,6 +29,12 @@
   vertical-align: top;
 }
 
+/* On a narrow card or the phone History the table scrolls sideways rather
+ * than squeezing each side to a word per line. */
+.table-schema-diff-side {
+  min-width: 8rem;
+}
+
 /* Text for screen readers only (the badge column's header). */
 .table-schema-diff-sr-only {
   position: absolute;
@@ -68,7 +74,6 @@
 }
 
 .table-schema-diff-type {
-  font-family: var(--font-mono);
   color: var(--text-secondary);
 }
 

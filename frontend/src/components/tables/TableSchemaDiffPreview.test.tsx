@@ -138,11 +138,11 @@ describe('TableSchemaDiffPreview', () => {
     render(<TableSchemaDiffPreview diff={MIXED_DIFF} />);
     expect(screen.getByText('Column order changed: Owner, Name, Due, Priority')).toBeTruthy();
     expect(screen.getByText('moved')).toBeTruthy();
-    expect(screen.getByText('Precision: 2 → 0')).toBeTruthy();
+    expect(screen.getByText('Decimal places: 2 → 0')).toBeTruthy();
     expect(screen.getByText('Required: no → yes')).toBeTruthy();
     expect(screen.getByText('Default: none → 1')).toBeTruthy();
     expect(screen.getByText('Description added')).toBeTruthy();
-    expect(screen.getByText('enum[]')).toBeTruthy();
+    expect(screen.getByText('Choice (several)')).toBeTruthy();
     expect(screen.queryByText(/rewritten/)).toBeNull();
   });
 
@@ -164,7 +164,7 @@ describe('TableSchemaDiffPreview', () => {
     delete withKeys.cells_rewritten_total;
     const { container } = render(<TableSchemaDiffPreview diff={withKeys} />);
     expect(container.textContent).not.toMatch(/c_abcdef/);
-    expect(screen.getByText('Precision: 2 → 0')).toBeTruthy();
+    expect(screen.getByText('Decimal places: 2 → 0')).toBeTruthy();
   });
 
   it('folds many unchanged columns behind a toggle', () => {
@@ -212,8 +212,8 @@ describe('schemaChangeLines', () => {
         multiple: { before: false, after: true },
       },
     })).toEqual([
-      'Type: text → enum',
-      'Multiple: no → yes',
+      'Type: Text → Choice',
+      'Several options: no → yes',
       'Unique: yes → no',
       'Default: Open → Done',
       'Description changed',
@@ -232,7 +232,7 @@ describe('schemaChangeLines', () => {
         precision: { before: null, after: 3 },
         default: { before: ['a', 'b'], after: '' },
       },
-    })).toEqual(['Precision: none → 3', 'Default: a, b → ""']);
+    })).toEqual(['Decimal places: any → 3', 'Default: a, b → ""']);
     expect(schemaChangeLines({ changes: { default: { before: true, after: false } } }))
       .toEqual(['Default: true → false']);
     expect(schemaChangeLines({ changes: { description: { before: 'x', after: '' } } }))

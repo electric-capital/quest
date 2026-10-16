@@ -5,8 +5,8 @@
  *
  * - Name: the column name; a description shows as a muted second line
  *   (clipped by CSS, full text in `title`).
- * - Type: `columnTypeLabel()`: `enum[]` for a multi-select enum,
- *   `number (2 dp)` for a number with a precision, else the type.
+ * - Type: `columnTypeLabel()` (utils/tableCells), the editor's vocabulary:
+ *   "Choice (several)", "Number (2 decimal places)", "Checkbox", ...
  * - Required / Unique: "yes", blank when off.
  * - Default: `tableValueText()` (booleans true / false, a multi-enum list
  *   joined with ", "), cut by `previewText()` in the cell and its `title`;
@@ -19,19 +19,8 @@
  * TableRowsDiffPreview.
  */
 import type { TableSchemaDiffColumn } from '../../api/types';
-import { truncateCellText } from '../../utils/tableCells';
+import { columnTypeLabel, truncateCellText } from '../../utils/tableCells';
 import './TableColumnsPreview.css';
-
-/** A column's type as shown in previews: `enum[]`, `number (2 dp)`, else the type. */
-export function columnTypeLabel(
-  column: Pick<TableSchemaDiffColumn, 'type' | 'multiple' | 'precision'>,
-): string {
-  if (column.type === 'enum' && column.multiple) return 'enum[]';
-  if (column.type === 'number' && column.precision !== null && column.precision !== undefined) {
-    return `number (${column.precision} dp)`;
-  }
-  return column.type;
-}
 
 /**
  * A logical table value (cell or column default) as display text, or null
@@ -98,7 +87,7 @@ export function TableColumnsPreview({ columns }: TableColumnsPreviewProps) {
                 <td className="table-columns-default" title={defaultText ?? undefined}>
                   {defaultText ?? ''}
                 </td>
-                <td>
+                <td className="table-columns-options">
                   {column.options && column.options.length > 0 && (
                     <span className="table-diff-chips">
                       {column.options.map((option) => (
