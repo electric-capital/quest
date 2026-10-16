@@ -27,14 +27,20 @@ defaults hold and what models see):
   (so columns stay immutable and hashable); every value this module hands
   out (:func:`coerce_value`, :func:`canonicalize`, :func:`apply_default`,
   :meth:`Column.to_dict`) is a fresh list.
+- ``date``: a calendar date as the stripped ``YYYY-MM-DD`` string, exactly
+  ten characters with a real day of a real month, year
+  ``TABLE_DATE_MIN_YEAR``..``TABLE_DATE_MAX_YEAR``; no time, no zone,
+  no other spelling. Text order of the canonical form is date order,
+  so ranges and sorting compare the stored string.
 
 :class:`TableValueError` codes: ``wrong_type``, ``too_long``,
 ``invalid_text``, ``invalid_number``, ``too_many_digits``,
-``invalid_url``, ``unknown_option``, ``required``.
+``invalid_url``, ``invalid_date``, ``unknown_option``, ``required``.
 """
 
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import date
 from decimal import (
     ROUND_HALF_EVEN,
     Context,
@@ -57,6 +63,8 @@ from chat.tables.constants import (
     TABLE_COLUMN_KEY_PREFIX,
     TABLE_COLUMN_NAME_MAX_LEN,
     TABLE_COLUMN_TYPES,
+    TABLE_DATE_MAX_YEAR,
+    TABLE_DATE_MIN_YEAR,
     TABLE_ENUM_MAX_OPTIONS,
     TABLE_ENUM_OPTION_MAX_LEN,
     TABLE_MAX_COLUMNS,
@@ -769,6 +777,11 @@ _DECIMAL_CONTEXT = Context(
 
 _URL_SCHEMES = ("http", "https")
 
+# The one accepted date spelling; ``date()`` then checks the calendar.
+_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", re.ASCII)
+# Longest string looked at as a date (bounds the strip and the message).
+_DATE_INPUT_MAX_CHARS = 100
+
 
 # Raw text longer than this is refused before NFC: normalization expands a
 # character at most about 3x and composition only shrinks, so no value
@@ -941,6 +954,34 @@ def _coerce_url(column: Column, value: Any) -> str:
     return url
 
 
+def _coerce_date(column: Column, value: Any) -> str:
+    if not isinstance(value, str):
+        raise _value_error(column, "wrong_type", "expected a date string (YYYY-MM-DD).")
+    if len(value) > _DATE_INPUT_MAX_CHARS:
+        raise _value_error(column, "too_long", "date string is too long.")
+    literal = value.strip()
+    if _DATE_RE.fullmatch(literal) is None:
+        raise _value_error(
+            column,
+            "invalid_date",
+            f"{literal[:40]!r} is not a date as YYYY-MM-DD (no time, no other format).",
+        )
+    year, month, day = (int(part) for part in literal.split("-"))
+    if not TABLE_DATE_MIN_YEAR <= year <= TABLE_DATE_MAX_YEAR:
+        raise _value_error(
+            column,
+            "invalid_date",
+            f"year must be {TABLE_DATE_MIN_YEAR:04d} to {TABLE_DATE_MAX_YEAR:04d}.",
+        )
+    try:
+        date(year, month, day)
+    except ValueError:
+        raise _value_error(
+            column, "invalid_date", f"{literal!r} is not a real calendar date."
+        ) from None
+    return literal
+
+
 def _coerce_enum(column: Column, value: Any) -> str | list[str] | None:
     options = column.options or ()
     if not column.multiple:
@@ -1004,6 +1045,8 @@ def coerce_value(column: Column, value: Any) -> Any:
         return value
     if column.type == "enum":
         return _coerce_enum(column, value)
+    if column.type == "date":
+        return _coerce_date(column, value)
     raise _value_error(column, "wrong_type", f"unknown column type {column.type!r}.")
 
 

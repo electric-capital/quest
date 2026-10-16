@@ -554,7 +554,7 @@ REFUSAL_CASES = [
     pytest.param({"op": "add_column", "column": {"name": "X", "type": "text",
                                                  "required": True}},
                  False, "required_needs_default", id="required-needs-default"),
-    pytest.param({"op": "add_column", "column": {"name": "X", "type": "date"}}, False,
+    pytest.param({"op": "add_column", "column": {"name": "X", "type": "time"}}, False,
                  "invalid_type", id="add-invalid-type"),
     pytest.param({"op": "add_column", "column": {"name": "X", "type": "text",
                                                  "bogus": 1}},

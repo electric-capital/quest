@@ -11,8 +11,9 @@
  * button; a `filter` param that is not JSON shows a note with Clear.
  *
  * "Add filter" (or a click on a chip) opens a small dialog under the bar:
- * column -> condition (per column type) -> a typed value input, Apply
- * disabled while the condition is incomplete or invalid (`conditionError`).
+ * column -> condition (per column type) -> a typed value input (a native
+ * date picker, or two for a date range), Apply disabled while the
+ * condition is incomplete or invalid (`conditionError`).
  * Escape, Cancel, a click outside or a second click on the button that
  * opened it (Add filter, or the chip) closes it and focus returns to that
  * button. The validation hint is linked to the value input(s) with
@@ -361,15 +362,31 @@ function FilterEditor({ columns, initial, isNew, toggle: toggleButton, onApply, 
         </label>
       );
       break;
-    case 'pair': {
+    case 'date':
+      valueInput = (
+        <label className="table-filter-field">
+          <span className="table-filter-field-label">Value</span>
+          <input
+            type="date"
+            className="table-filter-input"
+            value={typeof draft.value === 'string' ? draft.value : ''}
+            onChange={(event) => update({ value: event.target.value })}
+            aria-describedby={describedBy}
+          />
+        </label>
+      );
+      break;
+    case 'pair':
+    case 'date_pair': {
       const [lo, hi] = Array.isArray(draft.value) ? (draft.value as string[]) : ['', ''];
+      const dates = kind === 'date_pair';
       valueInput = (
         <div className="table-filter-pair">
           <label className="table-filter-field">
             <span className="table-filter-field-label">From</span>
             <input
-              type="text"
-              inputMode="decimal"
+              type={dates ? 'date' : 'text'}
+              inputMode={dates ? undefined : 'decimal'}
               className="table-filter-input"
               value={lo ?? ''}
               onChange={(event) => update({ value: [event.target.value, hi ?? ''] })}
@@ -380,8 +397,8 @@ function FilterEditor({ columns, initial, isNew, toggle: toggleButton, onApply, 
           <label className="table-filter-field">
             <span className="table-filter-field-label">To</span>
             <input
-              type="text"
-              inputMode="decimal"
+              type={dates ? 'date' : 'text'}
+              inputMode={dates ? undefined : 'decimal'}
               className="table-filter-input"
               value={hi ?? ''}
               onChange={(event) => update({ value: [lo ?? '', event.target.value] })}
@@ -479,6 +496,7 @@ function FilterEditor({ columns, initial, isNew, toggle: toggleButton, onApply, 
     }
     case 'lines': {
       const numbers = column?.type === 'number';
+      const dates = column?.type === 'date';
       valueInput = (
         <label className="table-filter-field">
           <span className="table-filter-field-label">Values (one per line)</span>
@@ -487,10 +505,10 @@ function FilterEditor({ columns, initial, isNew, toggle: toggleButton, onApply, 
             rows={3}
             value={linesText}
             aria-describedby={describedBy}
-            placeholder={numbers ? 'e.g. 12.5' : undefined}
+            placeholder={numbers ? 'e.g. 12.5' : dates ? 'e.g. 2026-10-16' : undefined}
             onChange={(event) => {
               setLinesText(event.target.value);
-              update({ value: splitLines(event.target.value, numbers) });
+              update({ value: splitLines(event.target.value, numbers || dates) });
             }}
           />
         </label>

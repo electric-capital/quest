@@ -111,9 +111,10 @@ describe('helpers', () => {
     expect(columnTypeLabel({ type: 'number', precision: 2 })).toBe('Number (2 decimal places)');
     expect(columnTypeLabel({ type: 'number', precision: 1 })).toBe('Number (1 decimal place)');
     expect(columnTypeLabel({ type: 'number', precision: 0 })).toBe('Number (0 decimal places)');
+    expect(columnTypeLabel({ type: 'date' })).toBe('Date');
     // An unknown type shows as sent.
-    expect(columnTypeLabel({ type: 'date' })).toBe('date');
-    expect(Object.keys(COLUMN_TYPE_LABELS).sort()).toEqual(['boolean', 'enum', 'number', 'text', 'url']);
+    expect(columnTypeLabel({ type: 'time' })).toBe('time');
+    expect(Object.keys(COLUMN_TYPE_LABELS).sort()).toEqual(['boolean', 'date', 'enum', 'number', 'text', 'url']);
   });
 
   it('tableValueText formats logical values; booleans read true / false; null stays distinct from ""', () => {
@@ -162,6 +163,13 @@ describe('TableCell', () => {
     expect(td.className).toContain('table-cell--number');
     cleanup();
     expect(renderCell(col({ type: 'number' }), '1234567.5').textContent).toBe('1234567.5');
+  });
+
+  it('renders a date as its YYYY-MM-DD string', () => {
+    const td = renderCell(col({ type: 'date' }), '2026-10-16');
+    expect(td.textContent).toBe('2026-10-16');
+    expect(td.className).toContain('table-cell--date');
+    expect(td.querySelector('a')).toBeNull();
   });
 
   it('renders a url as a new-tab link showing the host', () => {

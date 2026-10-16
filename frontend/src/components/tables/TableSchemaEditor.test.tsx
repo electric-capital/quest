@@ -1,5 +1,5 @@
 // TableSchemaEditor (the Columns panel): refused edits blocked in the form
-// (fixed type, single -> multi only, unique only on text / number / url,
+// (fixed type, single -> multi only, unique only on text / number / url / date,
 // duplicate names, a new required column without a default on a table with
 // rows, the last column, the last option, the default's option, a 101st
 // column), Save as one updateTableSchema with the derived operations and

@@ -58,9 +58,9 @@ TABLE_SORT_MAX_KEYS = 3
 
 # --- Columns and values ----------------------------------------------------
 
-TABLE_COLUMN_TYPES = ("text", "number", "url", "boolean", "enum")
+TABLE_COLUMN_TYPES = ("text", "number", "url", "boolean", "enum", "date")
 # Column ``unique`` is allowed on these types only.
-TABLE_UNIQUE_COLUMN_TYPES = ("text", "number", "url")
+TABLE_UNIQUE_COLUMN_TYPES = ("text", "number", "url", "date")
 
 TABLE_COLUMN_NAME_MAX_LEN = 80
 # Immutable server-assigned column key: prefix + this many hex digits
@@ -71,6 +71,10 @@ TABLE_TEXT_MAX_CHARS = 10_000
 TABLE_NUMBER_MAX_DIGITS = 38  # significant digits of a canonical Decimal
 TABLE_NUMBER_MAX_PRECISION = 10  # column ``precision`` is 0..10
 TABLE_URL_MAX_CHARS = 2048
+# A date cell is a calendar date ``YYYY-MM-DD`` in this year range (the
+# four-digit years of ISO 8601, so text order is date order).
+TABLE_DATE_MIN_YEAR = 1
+TABLE_DATE_MAX_YEAR = 9999
 TABLE_ENUM_MAX_OPTIONS = 200
 TABLE_ENUM_OPTION_MAX_LEN = 100
 # Column ``description``; matches the table description cap.

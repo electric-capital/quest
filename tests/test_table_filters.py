@@ -608,6 +608,139 @@ def test_numeric_not_string_ordering(tmp_path):
     assert [r["N"] for r in result.rows] == ["-10", "-2", "0.5", "1.25", "9", "10"]
 
 
+# --- Dates: string comparison, no CAST ---------------------------------------
+
+K_DUE = "c_00000009"
+DATE_SCHEMA = parse_columns(
+    [
+        {"key": K_NAME, "name": "Name", "type": "text"},
+        {"key": K_DUE, "name": "Due", "type": "date"},
+    ],
+    allow_key=True,
+)
+# Row i is _id i.
+DATE_ROWS = [
+    {"Name": "a", "Due": "2026-10-16"},
+    {"Name": "b", "Due": "2026-10-02"},
+    {"Name": "c", "Due": " 2024-02-29 "},  # "2024-02-29"
+    {"Name": "d", "Due": None},
+    {"Name": "e", "Due": "0999-12-31"},
+    {"Name": "f", "Due": "2026-10-16"},
+]
+DATE_COL = DATE_SCHEMA[1]
+
+
+@pytest.fixture(scope="module")
+def date_table(tmp_path_factory):
+    return build_table(tmp_path_factory.mktemp("dates") / "t1", DATE_SCHEMA, DATE_ROWS)
+
+
+def date_ids(table_dir, flt) -> set[int]:
+    where_sql, params = compile_filter(DATE_SCHEMA, flt)
+    with storage.connect(table_dir) as conn:
+        return {
+            r[0]
+            for r in conn.execute(f"SELECT _id FROM rows WHERE ({where_sql})", params)
+        }
+
+
+def test_date_allowed_ops_match_number():
+    assert allowed_ops(DATE_COL) == allowed_ops(SCHEMA[1])
+    assert allowed_ops(DATE_COL) == (
+        "eq", "ne", "in", "is_null", "not_null", "lt", "lte", "gt", "gte", "between",
+    )
+
+
+DATE_CASES = [
+    (leaf("Due", "eq", "2026-10-16"), {1, 6}),
+    (leaf("Due", "eq", " 2026-10-16 "), {1, 6}),  # operands are canonicalized
+    (leaf("Due", "ne", "2026-10-16"), {2, 3, 4, 5}),  # NULL matches ne
+    (leaf("Due", "in", ["2026-10-02", "2024-02-29", "2026-10-02"]), {2, 3}),
+    (leaf("Due", "is_null"), {4}),
+    (leaf("Due", "not_null"), {1, 2, 3, 5, 6}),
+    (leaf("Due", "lt", "2026-10-16"), {2, 3, 5}),
+    (leaf("Due", "lte", "2026-10-16"), {1, 2, 3, 5, 6}),
+    (leaf("Due", "gt", "2026-10-02"), {1, 6}),
+    (leaf("Due", "gte", "2026-10-02"), {1, 2, 6}),
+    (leaf("Due", "between", ["2024-02-29", "2026-10-02"]), {2, 3}),
+    (leaf("Due", "between", ["2026-10-16", "2026-10-16"]), {1, 6}),
+    # Four-digit years keep text order equal to date order.
+    (leaf("Due", "lt", "1000-01-01"), {5}),
+    ({"not": leaf("Due", "lt", "2026-10-16")}, {1, 4, 6}),
+]
+
+
+@pytest.mark.parametrize("flt,expected", DATE_CASES, ids=[str(c[0]) for c in DATE_CASES])
+def test_date_ops_against_table(date_table, flt, expected):
+    assert date_ids(date_table, flt) == expected
+
+
+def test_every_date_op_is_covered():
+    covered = {node["op"] for node, _ in DATE_CASES if "op" in node}
+    assert covered == set(allowed_ops(DATE_COL))
+
+
+@pytest.mark.parametrize("op", ["lt", "lte", "gt", "gte"])
+def test_date_range_ops_compare_strings(op):
+    sql, params = compile_filter(DATE_SCHEMA, leaf("Due", op, "2026-10-16"))
+    symbol = {"lt": "<", "lte": "<=", "gt": ">", "gte": ">="}[op]
+    assert sql == f'"{K_DUE}" {symbol} ?'
+    assert params == ["2026-10-16"]
+
+
+def test_date_between_compares_strings():
+    sql, params = compile_filter(DATE_SCHEMA, leaf("Due", "between", ["2026-01-01", "2026-12-31"]))
+    assert sql == f'"{K_DUE}" BETWEEN ? AND ?'
+    assert params == ["2026-01-01", "2026-12-31"]
+
+
+@pytest.mark.parametrize(
+    "flt,path",
+    [
+        (leaf("Due", "eq", "2026-13-01"), "value"),
+        (leaf("Due", "eq", "2026-10-16T00:00:00Z"), "value"),
+        (leaf("Due", "eq", 20261016), "value"),
+        (leaf("Due", "lt", "yesterday"), "value"),
+        (leaf("Due", "lt", None), "value"),
+        (leaf("Due", "in", ["2026-10-16", "nope"]), "value[1]"),
+        (leaf("Due", "between", ["2026-10-16", "2026-10-01"]), "value"),
+        (leaf("Due", "between", ["2026-10-16", "x"]), "value[1]"),
+        (leaf("Due", "between", ["2026-10-16"]), "value"),
+    ],
+)
+def test_date_invalid_values(flt, path):
+    with pytest.raises(FilterError) as info:
+        parse_filter(DATE_SCHEMA, flt)
+    assert info.value.code == "invalid_value"
+    assert info.value.path == path
+
+
+@pytest.mark.parametrize("op", ["contains", "starts_with", "ends_with", "contains_any"])
+def test_date_refuses_text_and_multi_ops(op):
+    with pytest.raises(FilterError) as info:
+        parse_filter(DATE_SCHEMA, leaf("Due", op, "2026"))
+    assert info.value.code == "op_not_allowed"
+
+
+def test_date_sort_is_date_order_nulls_last(date_table):
+    def ids(direction):
+        result = run_query(
+            date_table, DATE_SCHEMA, sort=[{"column": "Due", "direction": direction}]
+        )
+        return [r["_id"] for r in result.rows]
+
+    assert ids("asc") == [5, 3, 2, 1, 6, 4]
+    assert ids("desc") == [1, 6, 2, 3, 5, 4]
+    keys = parse_sort(DATE_SCHEMA, [{"column": "Due"}])
+    assert keys[0] == SortKey("Due", K_DUE, "date", "asc")
+    assert to_order_by(keys) == f'("{K_DUE}" IS NULL), "{K_DUE}" ASC, _id ASC'
+
+
+def test_date_rows_come_back_canonical(date_table):
+    result = run_query(date_table, DATE_SCHEMA, filter=leaf("Name", "eq", "c"))
+    assert result.rows[0]["Due"] == "2024-02-29"
+
+
 def test_between_rules(table_dir):
     assert ids_for(table_dir, leaf("Price", "between", [9, 9])) == {2}
     assert ids_for(table_dir, leaf("Price", "between", ["-3.5", "9"])) == {2, 3, 6}

@@ -48,6 +48,7 @@ ENUM = Column(key="c_00000005", name="Status", type="enum", options=("A", "B", "
 MULTI = Column(
     key="c_00000006", name="Tags", type="enum", options=("A", "B", "C"), multiple=True
 )
+DATE = Column(key="c_00000008", name="Due", type="date")
 
 
 def num(precision):
@@ -354,6 +355,59 @@ def test_boolean_reject(value):
     assert_value_error(BOOL, value, "wrong_type")
 
 
+# --- date -----------------------------------------------------------------------
+
+DATE_ACCEPT = [
+    ("plain", "2026-10-16", "2026-10-16"),
+    ("stripped", "  2026-10-16\n", "2026-10-16"),
+    ("leap-day", "2024-02-29", "2024-02-29"),
+    ("min-year", "0001-01-01", "0001-01-01"),
+    ("max-year", "9999-12-31", "9999-12-31"),
+]
+
+DATE_REJECT = [
+    ("not-leap-day", "2023-02-29", "invalid_date"),
+    ("month-13", "2026-13-01", "invalid_date"),
+    ("day-0", "2026-10-00", "invalid_date"),
+    ("day-32", "2026-10-32", "invalid_date"),
+    ("year-0", "0000-01-01", "invalid_date"),
+    ("datetime", "2026-10-16T00:00:00Z", "invalid_date"),
+    ("datetime-space", "2026-10-16 10:00", "invalid_date"),
+    ("slashes", "2026/10/16", "invalid_date"),
+    ("us-order", "10/16/2026", "invalid_date"),
+    ("compact", "20261016", "invalid_date"),
+    ("short-month", "2026-1-16", "invalid_date"),
+    ("two-digit-year", "26-10-16", "invalid_date"),
+    ("five-digit-year", "12026-10-16", "invalid_date"),
+    ("non-ascii-digits", "２０２６-10-16", "invalid_date"),
+    ("words", "today", "invalid_date"),
+    ("empty", "", "invalid_date"),
+    ("whitespace-only", "   ", "invalid_date"),
+    ("inner-space", "2026-10 -16", "invalid_date"),
+    ("too-long", "2026-10-16" + " " * 100, "too_long"),
+    ("int", 20261016, "wrong_type"),
+    ("float", 2026.1, "wrong_type"),
+    ("bool", True, "wrong_type"),
+    ("list", ["2026-10-16"], "wrong_type"),
+]
+
+
+@pytest.mark.parametrize("value,expected", _cases(DATE_ACCEPT))
+def test_date_accept(value, expected):
+    assert coerce_value(DATE, value) == expected
+
+
+@pytest.mark.parametrize("value,code", _cases(DATE_REJECT))
+def test_date_reject(value, code):
+    assert_value_error(DATE, value, code)
+
+
+def test_date_canonical_order_is_text_order():
+    dates = ["0999-12-31", "1000-01-01", "2024-02-29", "2024-03-01", "2026-10-16"]
+    canonical = [coerce_value(DATE, d) for d in dates]
+    assert canonical == sorted(canonical)
+
+
 # --- enum -----------------------------------------------------------------------
 
 ENUM_ACCEPT = [
@@ -413,7 +467,7 @@ def test_canonicalize_optional_none():
 
 
 def test_coerce_none_is_none_for_every_type():
-    for column in (TEXT, NUMBER, URL, BOOL, ENUM, MULTI):
+    for column in (TEXT, NUMBER, URL, BOOL, ENUM, MULTI, DATE):
         assert coerce_value(column, None) is None
 
 
@@ -470,6 +524,7 @@ STORAGE = [
     ("text", TEXT, "héllo", "héllo"),
     ("number", NUMBER, "1.5", "1.5"),
     ("url", URL, "https://x.y/", "https://x.y/"),
+    ("date", DATE, "2026-10-16", "2026-10-16"),
     ("bool-true", BOOL, True, 1),
     ("bool-false", BOOL, False, 0),
     ("enum", ENUM, "A", "A"),
@@ -599,6 +654,13 @@ SPEC_ACCEPT = [
     ("unique-text", {"name": "N", "type": "text", "unique": True}, {"unique": True}),
     ("unique-number", {"name": "N", "type": "number", "unique": True}, {"unique": True}),
     ("unique-url", {"name": "N", "type": "url", "unique": True}, {"unique": True}),
+    ("unique-date", {"name": "N", "type": "date", "unique": True}, {"unique": True}),
+    (
+        "date-minimal",
+        {"name": "N", "type": "date"},
+        {"type": "date", "default": None, "options": None, "multiple": False,
+         "precision": None},
+    ),
     ("unique-false-boolean", {"name": "N", "type": "boolean", "unique": False}, {"unique": False}),
     (
         "unique-false-enum",
@@ -642,6 +704,8 @@ SPEC_ACCEPT = [
     ("default-url", {"name": "N", "type": "url", "default": " https://x.y "},
      {"default": "https://x.y"}),
     ("default-bool", {"name": "N", "type": "boolean", "default": False}, {"default": False}),
+    ("default-date", {"name": "N", "type": "date", "default": " 2026-01-01 "},
+     {"default": "2026-01-01"}),
     ("default-enum", {"name": "N", "type": "enum", "options": ["A", "B"], "default": "B"},
      {"default": "B"}),
     ("default-multi", {"name": "N", "type": "enum", "options": ["A", "B"], "multiple": True,
@@ -687,7 +751,7 @@ SPEC_REJECT = [
     ("name-reserved-created", {"name": "_created_at", "type": "text"}, "reserved_name"),
     ("name-reserved-updated-case", {"name": "_Updated_AT", "type": "text"}, "reserved_name"),
     ("name-duplicate-case", {"name": "EXISTING", "type": "text"}, "duplicate_name"),
-    ("type-unknown", {"name": "N", "type": "date"}, "invalid_type"),
+    ("type-unknown", {"name": "N", "type": "time"}, "invalid_type"),
     ("type-case", {"name": "N", "type": "Text"}, "invalid_type"),
     ("type-int", {"name": "N", "type": 1}, "invalid_type"),
     ("required-str", {"name": "N", "type": "text", "required": "yes"}, "invalid_field"),
@@ -736,6 +800,8 @@ SPEC_REJECT = [
     ("precision-on-text", {"name": "N", "type": "text", "precision": 2}, "field_not_allowed"),
     ("precision-on-enum", {"name": "N", "type": "enum", "options": ["A"], "precision": 0},
      "field_not_allowed"),
+    ("precision-on-date", {"name": "N", "type": "date", "precision": 0}, "field_not_allowed"),
+    ("options-on-date", {"name": "N", "type": "date", "options": ["A"]}, "field_not_allowed"),
     ("precision-neg", {"name": "N", "type": "number", "precision": -1}, "invalid_precision"),
     ("precision-11", {"name": "N", "type": "number", "precision": 11}, "invalid_precision"),
     ("precision-bool", {"name": "N", "type": "number", "precision": True}, "invalid_precision"),
@@ -751,6 +817,10 @@ SPEC_REJECT = [
     ("default-number-digits", {"name": "N", "type": "number", "precision": 0,
                                "default": "9" * 38 + ".9"}, "invalid_default"),
     ("default-url-bad", {"name": "N", "type": "url", "default": "ftp://x"}, "invalid_default"),
+    ("default-date-bad", {"name": "N", "type": "date", "default": "2026-02-30"},
+     "invalid_default"),
+    ("default-date-datetime", {"name": "N", "type": "date", "default": "2026-02-01T00:00"},
+     "invalid_default"),
     ("default-bool-int", {"name": "N", "type": "boolean", "default": 1}, "invalid_default"),
     ("default-enum-unknown", {"name": "N", "type": "enum", "options": ["A"], "default": "B"},
      "invalid_default"),
@@ -933,7 +1003,7 @@ FROM_DICT_REJECT = [
     ("extra-field", _stored(extra=1), "unknown_field"),
     ("key-null", _stored(key=None), "invalid_key"),
     ("key-bad", _stored(key="c_ZZZZZZZZ"), "invalid_key"),
-    ("type-bad", _stored(type="date"), "invalid_type"),
+    ("type-bad", _stored(type="time"), "invalid_type"),
     ("name-bad", _stored(name=" x"), "invalid_name"),
     ("required-int", _stored(required=0), "invalid_field"),
     ("multiple-null", _stored(multiple=None), "invalid_field"),

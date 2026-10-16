@@ -337,10 +337,13 @@ class TestShapes:
             {"name": "Tags", "type": "enum", "options": ["a", "b"], "multiple": True},
             {"name": "Ok", "type": "boolean"},
             {"name": "Link", "type": "url"},
+            {"name": "Due", "type": "date"},
         ]))
         row = next(r for r in _dispatch(world, "list_tables", {})["tables"]
                    if r["id"] == table["id"])
-        assert row["columns"] == ["Status:enum", "Tags:enum[]", "Ok:boolean", "Link:url"]
+        assert row["columns"] == [
+            "Status:enum", "Tags:enum[]", "Ok:boolean", "Link:url", "Due:date",
+        ]
 
     def test_get_table_shape_and_sample_rows(self, world):
         table = world.t["user"]

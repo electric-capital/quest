@@ -1317,7 +1317,7 @@ export type TableMode = 'private' | 'public';
 /** `project` when the table belongs to a project (`project_id` set), else `user`. */
 export type TableScope = 'user' | 'project';
 
-export type TableColumnType = 'text' | 'number' | 'url' | 'boolean' | 'enum';
+export type TableColumnType = 'text' | 'number' | 'url' | 'boolean' | 'enum' | 'date';
 
 /**
  * One stored column (spec 4.3). `key` (`c_` + 8 hex) is server-assigned and
@@ -1356,9 +1356,10 @@ export interface TableColumnSpec {
 }
 
 /**
- * A cell in logical form: text / url / number as strings (numbers are
- * canonical decimal strings, e.g. "1.1"), booleans as true/false, a
- * multi-enum as a list of options, null for no value.
+ * A cell in logical form: text / url / number / date as strings (numbers
+ * are canonical decimal strings, e.g. "1.1"; dates are "YYYY-MM-DD"),
+ * booleans as true/false, a multi-enum as a list of options, null for no
+ * value.
  */
 export type TableCellValue = string | boolean | string[] | null;
 

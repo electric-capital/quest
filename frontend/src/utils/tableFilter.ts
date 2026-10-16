@@ -21,6 +21,9 @@
  * - text operands are sent exactly as typed (never trimmed). A url column's
  *   `eq` / `ne` / `in` operands must be http(s) URLs with a host
  *   (`isHttpUrl`, schema.py `_coerce_url`); its substring ops take any text.
+ * - dates are "YYYY-MM-DD" strings naming a real calendar date (`isIsoDate`,
+ *   schema.py `_coerce_date`), trimmed like numbers; `between` is `[lo, hi]`
+ *   with lo <= hi, which for the canonical form is a string comparison.
  * - booleans are JSON booleans, never strings.
  * - enum options exactly as the schema spells them; a multi-enum `eq` / `ne`
  *   operand is itself a list of options (the exact set), `contains` one
@@ -69,17 +72,22 @@ export interface FilterCondition {
  * - `text`: one string (text / url).
  * - `number`: one decimal string.
  * - `pair`: `[lo, hi]` decimal strings (between).
+ * - `date`: one "YYYY-MM-DD" string.
+ * - `date_pair`: `[lo, hi]` date strings (between).
  * - `boolean`: true / false.
  * - `booleans`: a list of booleans (boolean `in`).
  * - `option`: one enum option.
  * - `options`: a list of enum options.
- * - `lines`: a list of strings typed one per line (text / url / number `in`).
+ * - `lines`: a list of strings typed one per line (text / url / number /
+ *   date `in`).
  */
 export type ValueKind =
   | 'none'
   | 'text'
   | 'number'
   | 'pair'
+  | 'date'
+  | 'date_pair'
   | 'boolean'
   | 'booleans'
   | 'option'
@@ -118,6 +126,18 @@ const NUMBER_OPS: OpChoice[] = [
   ...NULL_OPS,
 ];
 
+const DATE_OPS: OpChoice[] = [
+  { op: 'eq', label: 'is' },
+  { op: 'ne', label: 'is not' },
+  { op: 'lt', label: 'is before' },
+  { op: 'lte', label: 'is on or before' },
+  { op: 'gt', label: 'is after' },
+  { op: 'gte', label: 'is on or after' },
+  { op: 'between', label: 'is between' },
+  { op: 'in', label: 'is any of' },
+  ...NULL_OPS,
+];
+
 const SINGLE_OPS: OpChoice[] = [
   { op: 'eq', label: 'is' },
   { op: 'ne', label: 'is not' },
@@ -143,6 +163,8 @@ export function opsForColumn(column: TableColumn): OpChoice[] {
       return TEXT_OPS;
     case 'number':
       return NUMBER_OPS;
+    case 'date':
+      return DATE_OPS;
     case 'enum':
       return column.multiple ? MULTI_OPS : SINGLE_OPS;
     default:
@@ -170,6 +192,8 @@ export function valueKind(column: TableColumn, op: FilterOp): ValueKind {
   switch (column.type) {
     case 'number':
       return op === 'between' ? 'pair' : 'number';
+    case 'date':
+      return op === 'between' ? 'date_pair' : 'date';
     case 'boolean':
       return 'boolean';
     case 'enum':
@@ -187,9 +211,11 @@ export function emptyValue(kind: ValueKind): FilterValue {
       return null;
     case 'text':
     case 'number':
+    case 'date':
     case 'option':
       return '';
     case 'pair':
+    case 'date_pair':
       return ['', ''];
     default:
       return [];
@@ -327,17 +353,43 @@ export function isHttpUrl(raw: string): boolean {
 
 const URL_PROBLEM = 'Enter an http(s) URL';
 
+const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * True when the server accepts `raw` as a date (schema.py `_coerce_date`):
+ * trimmed, exactly "YYYY-MM-DD", a real day of a real month, year 0001 to
+ * 9999 (so a four-digit year, and text order is date order).
+ */
+export function isIsoDate(raw: string): boolean {
+  const match = ISO_DATE_RE.exec(raw.trim());
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1 || month < 1 || month > 12 || day < 1) return false;
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const lengths = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day <= lengths[month - 1];
+}
+
+const DATE_PROBLEM = 'Enter a date as YYYY-MM-DD';
+
+/** A date column's values are trimmed like numbers (the server strips both). */
+function trimsValues(column: TableColumn): boolean {
+  return column.type === 'number' || column.type === 'date';
+}
+
 /**
  * Split a one-per-line list entry. Lines that are empty or only whitespace
  * are dropped; other lines are kept exactly (text values are compared as
- * typed), except that with `numbers` each is trimmed (the server trims
- * number strings). Only newlines separate values: "1,234" stays one value
- * (and is refused as not a decimal).
+ * typed), except that with `trim` each is trimmed (the server trims number
+ * and date strings). Only newlines separate values: "1,234" stays one
+ * value (and is refused as not a decimal).
  */
-export function splitLines(raw: string, numbers = false): string[] {
+export function splitLines(raw: string, trim = false): string[] {
   return raw
     .split('\n')
-    .map((part) => (numbers ? part.trim() : part))
+    .map((part) => (trim ? part.trim() : part))
     .filter((part) => part.trim() !== '');
 }
 
@@ -401,6 +453,16 @@ export function conditionError(condition: FilterCondition, schema: TableColumn[]
       if (issues.includes('digits')) return TOO_MANY_DIGITS;
       return compareDecimals(lo, hi)! <= 0 ? null : 'The first bound must not be larger';
     }
+    case 'date':
+      return typeof value === 'string' && isIsoDate(value) ? null : DATE_PROBLEM;
+    case 'date_pair': {
+      if (!isStringList(value) || value.length !== 2) return 'Enter both dates';
+      const [lo, hi] = value;
+      if (lo.trim() === '' || hi.trim() === '') return 'Enter both dates';
+      if (!isIsoDate(lo) || !isIsoDate(hi)) return DATE_PROBLEM;
+      // Canonical dates compare as text.
+      return lo.trim() <= hi.trim() ? null : 'The first date must not be later';
+    }
     case 'boolean':
       return typeof value === 'boolean' ? null : 'Choose true or false';
     case 'booleans':
@@ -428,6 +490,7 @@ export function conditionError(condition: FilterCondition, schema: TableColumn[]
         if (issues.includes('digits')) return TOO_MANY_DIGITS;
       }
       if (column.type === 'url' && !value.every(isHttpUrl)) return URL_PROBLEM;
+      if (column.type === 'date' && !value.every(isIsoDate)) return DATE_PROBLEM;
       return null;
     }
   }
@@ -456,7 +519,7 @@ function dedupe<T>(items: T[]): T[] {
 
 /**
  * One condition as a DSL leaf, in canonical form (numbers trimmed decimal
- * strings, option lists in schema order without repeats). The condition
+ * strings, dates trimmed, option lists in schema order without repeats). The condition
  * should be complete (`isConditionComplete`); the column name is the
  * schema's spelling when the column is known.
  */
@@ -470,8 +533,10 @@ export function conditionToLeaf(condition: FilterCondition, schema: TableColumn[
     case 'none':
       return { column: name, op: condition.op };
     case 'number':
+    case 'date':
       return { column: name, op: condition.op, value: String(value).trim() };
-    case 'pair': {
+    case 'pair':
+    case 'date_pair': {
       const [lo, hi] = value as string[];
       return { column: name, op: condition.op, value: [lo.trim(), hi.trim()] };
     }
@@ -484,9 +549,9 @@ export function conditionToLeaf(condition: FilterCondition, schema: TableColumn[
     case 'booleans':
       return { column: name, op: condition.op, value: dedupe(value as boolean[]) };
     case 'lines': {
-      // Numbers are trimmed (the server trims them too); text and url
-      // values go as typed, so a re-emitted chip never changes.
-      const items = (value as string[]).map((item) => (column.type === 'number' ? item.trim() : item));
+      // Numbers and dates are trimmed (the server trims them too); text and
+      // url values go as typed, so a re-emitted chip never changes.
+      const items = (value as string[]).map((item) => (trimsValues(column) ? item.trim() : item));
       return { column: name, op: condition.op, value: dedupe(items) };
     }
     default:
@@ -548,6 +613,11 @@ function leafToCondition(node: unknown, schema: TableColumn[]): FilterCondition 
       const hi = asDecimal(raw[1]);
       if (lo === null || hi === null) return 'bad value';
       value = [lo, hi];
+      break;
+    }
+    case 'date_pair': {
+      if (!isStringList(raw) || raw.length !== 2) return 'bad value';
+      value = [raw[0], raw[1]];
       break;
     }
     case 'lines': {
@@ -640,7 +710,8 @@ export function conditionLabel(condition: FilterCondition, schema: TableColumn[]
   switch (valueKind(column, condition.op)) {
     case 'none':
       return head;
-    case 'pair': {
+    case 'pair':
+    case 'date_pair': {
       const [lo, hi] = value as string[];
       return `${head} ${lo.trim()} and ${hi.trim()}`;
     }
@@ -652,6 +723,7 @@ export function conditionLabel(condition: FilterCondition, schema: TableColumn[]
     case 'lines':
       return `${head} ${(value as string[]).join(', ')}`;
     case 'number':
+    case 'date':
       return `${head} ${String(value).trim()}`;
     default:
       return `${head} ${String(value)}`;

@@ -162,6 +162,10 @@
   text-align: right;
 }
 
+.table-cell--date {
+  font-variant-numeric: tabular-nums;
+}
+
 .table-cell--boolean {
   line-height: 0;
 }

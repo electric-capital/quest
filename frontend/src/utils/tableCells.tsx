@@ -2,10 +2,10 @@
  * Typed cell renderers of the Quest Tables grid (components/tables/TableGrid).
  *
  * Cells arrive in logical form (api/types.ts TableCellValue): text / url /
- * number as strings (numbers are canonical decimal strings: no exponent, no
- * trailing fractional zeros, "0" for every zero), booleans as JSON booleans,
- * a multi-enum as a list of options, null for no value. One renderer per
- * column type:
+ * number / date as strings (numbers are canonical decimal strings: no
+ * exponent, no trailing fractional zeros, "0" for every zero; dates are
+ * "YYYY-MM-DD"), booleans as JSON booleans, a multi-enum as a list of
+ * options, null for no value. One renderer per column type:
  *
  * - text: the string, cut at TABLE_CELL_MAX_CHARS code points with an
  *   ellipsis; the full value is in `title` whenever it was cut. The cell CSS
@@ -20,6 +20,9 @@
  * - boolean: a checkbox glyph, with "true" / "false" as visually hidden text
  *   for screen readers (`tableValueText`, the one boolean vocabulary).
  * - enum: single as one chip, multi as chips; an empty multi list is null.
+ * - date: the "YYYY-MM-DD" string as stored, in tabular digits and never
+ *   wrapped or localized, so the grid shows the value the model and the
+ *   CSV see and a column of dates lines up.
  * - null: a muted italic "NULL", as in TableViewerModal.
  */
 
@@ -36,6 +39,7 @@ export const COLUMN_TYPE_LABELS: Record<TableColumnType, string> = {
   url: 'URL',
   boolean: 'Checkbox',
   enum: 'Choice',
+  date: 'Date',
 };
 
 /**
@@ -212,6 +216,8 @@ export function TableCell({
         </td>
       );
     }
+    case 'date':
+      return <td className="table-cell table-cell--date">{String(value)}</td>;
     case 'enum': {
       const options = Array.isArray(value) ? value : [String(value)];
       return (

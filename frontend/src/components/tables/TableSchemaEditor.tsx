@@ -8,8 +8,9 @@
  * aria-labels name the column, Delete -- disabled for the last column) and a
  * collapsible form: name; type (fixed once the column exists: the select is
  * disabled with "Type can't be changed after creation"); description;
- * Required; Unique (text, number and URL columns only); precision (number,
- * 0..10); a typed default input; for a choice (enum) column the options
+ * Required; Unique (text, number, URL and date columns only); precision
+ * (number, 0..10); a typed default input (a native date picker for a date
+ * column); for a choice (enum) column the options
  * editor (add / rename / remove; Remove is disabled for the last option and
  * for an option the default uses) and "Allow several options" (single ->
  * multi only: disabled with a note once an existing column allows several).
@@ -862,6 +863,17 @@ function DefaultInput({
         </div>
         <FieldError id={errorId} message={error} />
       </fieldset>
+    );
+  } else if (column.type === 'date') {
+    input = (
+      <input
+        id={id}
+        type="date"
+        className="schema-editor-input schema-editor-input--short"
+        value={column.defaultValue}
+        onChange={(e) => onChange({ defaultValue: e.target.value })}
+        {...common}
+      />
     );
   } else {
     input = (

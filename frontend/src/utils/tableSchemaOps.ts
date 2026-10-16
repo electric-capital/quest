@@ -23,7 +23,8 @@
  * (`validate_column_description`), title (`validate_table_title`), the
  * precision / unique / multiple field rules (`_build_column`), defaults
  * (`coerce_value`: number grammar and 38 digits, http(s) URL with a host,
- * text length / NUL, options that exist), `required_needs_default`
+ * a YYYY-MM-DD calendar date, text length / NUL, options that exist),
+ * `required_needs_default`
  * (`_add_column` on a table with rows), `multi_to_single`
  * (`_set_enum_multiple`), `last_column` / `last_option`, `default_uses_option`
  * and the fixed type (`type_change_not_supported`) -- and leaves the rest to
@@ -92,7 +93,7 @@ import type {
   TableColumnType,
   TableSchemaOperation,
 } from '../api/types';
-import { compareDecimals, decimalDigitCount, isDecimalString, isHttpUrl } from './tableFilter';
+import { compareDecimals, decimalDigitCount, isDecimalString, isHttpUrl, isIsoDate } from './tableFilter';
 
 /** Server caps (chat/tables/constants.py). */
 export const TABLE_TITLE_MAX_LEN = 200;
@@ -107,8 +108,8 @@ export const TEXT_MAX_CHARS = 10_000;
 export const NUMBER_MAX_DIGITS = 38;
 /** Operations in one schema change (constants.py TABLE_SCHEMA_MAX_OPERATIONS). */
 export const TABLE_SCHEMA_MAX_OPERATIONS = 200;
-export const UNIQUE_COLUMN_TYPES: readonly TableColumnType[] = ['text', 'number', 'url'];
-export const COLUMN_TYPES: readonly TableColumnType[] = ['text', 'number', 'url', 'boolean', 'enum'];
+export const UNIQUE_COLUMN_TYPES: readonly TableColumnType[] = ['text', 'number', 'url', 'date'];
+export const COLUMN_TYPES: readonly TableColumnType[] = ['text', 'number', 'url', 'boolean', 'enum', 'date'];
 /** Server-maintained row fields a column may not be named (any case). */
 export const RESERVED_COLUMN_NAMES = ['_id', '_created_at', '_updated_at'];
 
@@ -130,7 +131,7 @@ export interface DraftColumn {
   description: string;
   required: boolean;
   unique: boolean;
-  /** text / number / url: the input text; boolean: 'true' / 'false'; '' = no default. */
+  /** text / number / url / date: the input text; boolean: 'true' / 'false'; '' = no default. */
   defaultValue: string;
   /** enum: the default as option ids (at most one unless `multiple`). */
   defaultOptionIds: string[];
@@ -255,15 +256,17 @@ function optionValues(column: DraftColumn): string[] {
 
 /**
  * The draft column's default as the logical value sent to the server (null
- * = none): the input text (number / url trimmed, as the server strips them),
- * a boolean, one option, or the chosen options in option order.
+ * = none): the input text (number / url / date trimmed, as the server
+ * strips them), a boolean, one option, or the chosen options in option
+ * order.
  */
 export function draftDefault(column: DraftColumn): TableCellValue {
   switch (column.type) {
     case 'text':
       return column.defaultValue === '' ? null : column.defaultValue;
     case 'number':
-    case 'url': {
+    case 'url':
+    case 'date': {
       const text = column.defaultValue.trim();
       return text === '' ? null : text;
     }
@@ -412,6 +415,11 @@ function defaultProblem(column: DraftColumn): string | null {
       if (value === '') return null;
       return isHttpUrl(value) ? null : 'Enter an http:// or https:// URL.';
     }
+    case 'date': {
+      const value = column.defaultValue.trim();
+      if (value === '') return null;
+      return isIsoDate(value) ? null : 'Enter a date as YYYY-MM-DD.';
+    }
     case 'boolean':
       return null;
     case 'enum': {
@@ -485,7 +493,7 @@ export function validateDraft(
     }
 
     if (column.unique && !UNIQUE_COLUMN_TYPES.includes(column.type)) {
-      set('unique', 'Only text, number and URL columns can be unique.');
+      set('unique', 'Only text, number, URL and date columns can be unique.');
     }
 
     const precisionText = column.precision.trim();

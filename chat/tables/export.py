@@ -10,17 +10,17 @@ holding a comma, a quote or a newline is quoted, so ``csv.reader`` gives
 it back unchanged). The header row is the column names in schema order;
 rows follow in ``_id`` order (the order ``dump_rows`` returns). Cells:
 text and url as stored, numbers as their canonical decimal string,
-booleans ``true`` / ``false``, a single enum its option, a multiple enum
-its options joined with ``"; "``, no value an empty cell. ``_id`` and the
-timestamps are not exported.
+dates as their ``YYYY-MM-DD`` string, booleans ``true`` / ``false``, a
+single enum its option, a multiple enum its options joined with ``"; "``,
+no value an empty cell. ``_id`` and the timestamps are not exported.
 
 Formula injection: spreadsheet apps run a cell starting with ``=``, ``+``,
 ``-``, ``@``, a tab or a carriage return as a formula. A text, url or enum
 cell (a multiple enum's joined string as a whole) and a header name that
 starts with one of those characters gets a leading ``'``, which the apps
-show as plain text. Number and boolean cells are never prefixed (a
-negative number keeps its ``-``), so the file stays numeric where the
-table is.
+show as plain text. Number, date and boolean cells are never prefixed (a
+negative number keeps its ``-``; a date starts with a digit), so the file
+stays numeric where the table is.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def csv_cell(column: Column, value: Any) -> str:
         return ""
     if column.type == "boolean":
         return "true" if value else "false"
-    if column.type == "number":
+    if column.type in ("number", "date"):
         return str(value)
     if column.type == "enum" and column.multiple:
         return _defuse(MULTI_ENUM_SEPARATOR.join(value))

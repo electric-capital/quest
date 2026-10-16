@@ -20,7 +20,7 @@ being walked in full.
 
 Ops per column type: every type takes ``eq``, ``ne``, ``in``, ``is_null``
 and ``not_null``; text and url add ``contains``, ``starts_with`` and
-``ends_with``; number adds ``lt``, ``lte``, ``gt``, ``gte`` and
+``ends_with``; number and date add ``lt``, ``lte``, ``gt``, ``gte`` and
 ``between``; a multiple enum adds ``contains`` (one option),
 ``contains_any``, ``contains_all`` and ``is_empty``. Boolean and single
 enum take only the common ops.
@@ -46,6 +46,8 @@ column. Exceptions:
   of at most ``TABLE_ENUM_MAX_OPTIONS`` options (``too_many_values``).
 - a multi-enum ``contains`` takes one option; ``contains_any`` /
   ``contains_all`` take a non-empty list of options.
+- a date operand is a ``YYYY-MM-DD`` string like a date cell; a
+  ``between`` pair needs low <= high as dates.
 
 SQL semantics:
 
@@ -65,6 +67,8 @@ SQL semantics:
 - number ranges compare ``CAST(cell AS REAL)`` to ``CAST(? AS REAL)``
   (approximate past 15 significant digits); number ``eq`` / ``ne`` / ``in``
   compare the canonical string exactly.
+- date ranges compare the stored string with ``<`` / ``BETWEEN``: the
+  canonical ``YYYY-MM-DD`` form sorts as text in date order, so no cast.
 - booleans bind 0 / 1.
 - multi enum: cells are always compact JSON arrays (written through
   ``to_storage``), so ``eq`` compares that string, and ``contains`` /
@@ -72,7 +76,7 @@ SQL semantics:
   (which yields nothing for NULL).
 
 Sort: up to ``TABLE_SORT_MAX_KEYS`` keys, nulls last in both directions,
-numbers through ``CAST(... AS REAL)``, text/url/enum by the raw stored
+numbers through ``CAST(... AS REAL)``, text/url/enum/date by the raw stored
 string (binary collation), always ending with ``_id ASC`` as a tiebreaker
 so pages are stable. The row fields ``_id``, ``_created_at`` and
 ``_updated_at`` are sortable but not filterable.
@@ -190,7 +194,7 @@ def allowed_ops(column: Column) -> tuple[str, ...]:
     """The filter ops ``column``'s type accepts, in a stable order."""
     if column.type in ("text", "url"):
         return _COMMON_OPS + _SUBSTRING_OPS
-    if column.type == "number":
+    if column.type in ("number", "date"):
         return _COMMON_OPS + _RANGE_OPS + ("between",)
     if column.type == "enum" and column.multiple:
         return _COMMON_OPS + _MULTI_OPS
@@ -339,7 +343,8 @@ def _canonical(column: Column, value: Any, path: str) -> tuple[Any, Any]:
 
 
 def _range_bound(column: Column, value: Any, path: str) -> str:
-    """A number range bound, canonicalized without the column precision."""
+    """A number or date range bound; a number is canonicalized without the
+    column precision."""
     if value is None:
         raise FilterError(
             "invalid_value",
@@ -506,7 +511,9 @@ def _parse_leaf(schema: Sequence[Column], node: dict, path: str) -> Leaf:
         )
     lo = _range_bound(column, value[0], f"{vpath}[0]")
     hi = _range_bound(column, value[1], f"{vpath}[1]")
-    if Decimal(lo) > Decimal(hi):
+    # Canonical dates compare as text; numbers as decimals.
+    out_of_order = lo > hi if column.type == "date" else Decimal(lo) > Decimal(hi)
+    if out_of_order:
         raise FilterError(
             "invalid_value",
             f"Column {clip_repr(column.name)}: between needs low <= high "
@@ -629,6 +636,11 @@ def _leaf_sql(leaf: Leaf) -> str:
             )
     if op in _SUBSTRING_OPS:
         return f"{cell} LIKE ? ESCAPE '\\'"
+    if column.type == "date":
+        if op in _RANGE_SQL:
+            return f"{cell} {_RANGE_SQL[op]} ?"
+        if op == "between":
+            return f"{cell} BETWEEN ? AND ?"
     if op in _RANGE_SQL:
         return f"CAST({cell} AS REAL) {_RANGE_SQL[op]} CAST(? AS REAL)"
     if op == "between":

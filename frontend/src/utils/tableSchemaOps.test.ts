@@ -760,8 +760,12 @@ describe('validateDraft: refused edits', () => {
     expect(withOptions(['a', 'b'])).toBeUndefined();
   });
 
-  it('unique only on text / number / url; precision number-only 0..10; multiple enum-only', () => {
+  it('unique only on text / number / url / date; precision number-only 0..10; multiple enum-only', () => {
     expect(ok(edit(draftOf(), 'Done', { unique: true })).columns.c_00000004.unique).toMatch(/Only text/);
+    const due = { ...newDraftColumn('Due', 'date'), unique: true };
+    expect(ok({ ...draftOf(), columns: [...draftOf().columns, due] }).count).toBe(0);
+    expect(ok({ ...draftOf(), columns: [...draftOf().columns, { ...due, precision: '2' }] }).columns[due.id].precision)
+      .toMatch(/Only number/);
     expect(ok(edit(draftOf(), 'Name', { precision: '2' })).columns.c_00000001.precision).toMatch(/Only number/);
     expect(ok(edit(draftOf(), 'Amount', { precision: '11' })).columns.c_00000002.precision).toMatch(/0 to 10/);
     expect(ok(edit(draftOf(), 'Amount', { precision: '1.5' })).columns.c_00000002.precision).toMatch(/0 to 10/);
@@ -773,6 +777,20 @@ describe('validateDraft: refused edits', () => {
     expect(ok(edit(draftOf(), 'Amount', { defaultValue: '1e3' })).count).toBe(0);
     expect(ok(edit(draftOf(), 'Site', { defaultValue: 'example.com' })).columns.c_00000005.default).toMatch(/http/);
     expect(ok(edit(draftOf(), 'Site', { defaultValue: 'https://example.com' })).count).toBe(0);
+    const due = newDraftColumn('Due', 'date');
+    const withDue = (defaultValue: string) => ({ ...draftOf(), columns: [...draftOf().columns, { ...due, defaultValue }] });
+    expect(ok(withDue('2026-02-30')).columns[due.id].default).toMatch(/YYYY-MM-DD/);
+    expect(ok(withDue('16/10/2026')).columns[due.id].default).toMatch(/YYYY-MM-DD/);
+    expect(ok(withDue(' 2026-10-16 ')).count).toBe(0);
+    expect(ok(withDue('')).count).toBe(0);
+  });
+
+  it('a date column default is sent trimmed as YYYY-MM-DD, with unique', () => {
+    const due = { ...newDraftColumn('Due', 'date'), unique: true, defaultValue: ' 2026-10-16 ' };
+    const ops = deriveOperations(BEFORE, 'Leads', { ...draftOf(), columns: [...draftOf().columns, due] });
+    expect(ops).toEqual([
+      { op: 'add_column', column: { name: 'Due', type: 'date', unique: true, default: '2026-10-16' }, after: 'Site' },
+    ]);
   });
 
   it('a new required column needs a default on a table with rows, not on an empty one', () => {

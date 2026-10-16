@@ -1028,7 +1028,7 @@ def _tables_content(_base_url: str, _api_key: str) -> str:
 
 A **Quest Table** is a typed table of records kept inside Quest: named
 columns (`text`, `number`, `url`, `boolean`, `enum`, optionally
-multi-choice), rows addressed by an integer `_id`, every change logged so
+multi-choice, `date`), rows addressed by an integer `_id`, every change logged so
 the user can restore it. It is owned by the user (scope `user`) or by a
 project (scope `project`), outlives this conversation, is shown as a grid
 in the Quest UI (downloadable as CSV), and any later conversation finds it
@@ -1066,13 +1066,15 @@ the reading-list table created under "Cards" below.)
 |---|---|
 | any | `eq`, `ne`, `in` (list), `is_null`, `not_null` |
 | text, url | also `contains`, `starts_with`, `ends_with` (case-insensitive for ASCII letters only) |
-| number | also `lt`, `lte`, `gt`, `gte`, `between` (`[low, high]`) |
+| number, date | also `lt`, `lte`, `gt`, `gte`, `between` (`[low, high]`) |
 | multi-choice enum | also `contains` (one option), `contains_any`, `contains_all` (lists), `is_empty`; `eq` / `ne` compare the whole list |
 
 `eq` and `in` never match an empty cell; `ne` and `not` do ("status is
 not Done" includes rows with no status). Use `is_null` / `not_null` for
 empty cells. Filter values are validated like writes, so `10` and `"10"`
-match the same numbers; `in`, `contains_any` and `contains_all` take at
+match the same numbers and a date bound is `"YYYY-MM-DD"` (`{{"column":
+"Finished on", "op": "lt", "value": "2026-11-01"}}` is everything finished
+before November); `in`, `contains_any` and `contains_all` take at
 most {TABLE_FILTER_IN_MAX_VALUES} values. An unknown column or an op the type does not take is
 refused with the offending `path`.
 
@@ -1104,8 +1106,9 @@ or an aggregate from a partial page: page through, or use `total`.
   Equality is exact, but sorting and range filters are approximate past 15
   significant digits. Booleans are JSON `true` / `false` only; enum values
   must be one of the column's options, exactly; a multi-choice enum takes a
-  list; `null` empties a cell. Omitted columns take their `default` on
-  insert.
+  list; a date is a `"YYYY-MM-DD"` string (`"2026-10-16"`), never a
+  datetime, a timestamp or another spelling, and comes back the same way;
+  `null` empties a cell. Omitted columns take their `default` on insert.
 - **`_id`s come only from queries** (`query_rows`, `get_table` sample
   rows, or `row_ids` a write returned). Never guess one. `update_rows`
   patches only the columns you name; an unknown `_id` fails the whole
@@ -1177,7 +1180,8 @@ create_action_request(
             {{"name": "Status", "type": "enum", "options": ["To read", "Reading", "Done"], "default": "To read"}},
             {{"name": "Tags", "type": "enum", "options": ["fiction", "work"], "multiple": true}},
             {{"name": "Rating", "type": "number", "precision": 1}},
-            {{"name": "Link", "type": "url"}}
+            {{"name": "Link", "type": "url"}},
+            {{"name": "Finished on", "type": "date"}}
         ]
     }},
     reasoning="...",
@@ -1185,7 +1189,7 @@ create_action_request(
 ```
 
 Column fields: `name`, `type`, and optionally `required`, `unique`
-(text, number and url only), `default`, `options` (enum), `multiple`
+(text, number, url and date only), `default`, `options` (enum), `multiple`
 (enum), `precision` (number, 0-10 decimals), `description`. Design the
 columns from the data: give records with a natural key a `unique` column
 so they can be upserted. Titles are unique per owner (per project for

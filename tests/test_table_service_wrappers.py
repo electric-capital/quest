@@ -44,6 +44,7 @@ ALL_TYPES = [
     {"name": "Active", "type": "boolean"},
     {"name": "Status", "type": "enum", "options": ["Open", "Done"]},
     {"name": "Tags", "type": "enum", "options": ["a", "b", "c"], "multiple": True},
+    {"name": "Due", "type": "date"},
 ]
 
 
@@ -361,7 +362,7 @@ class TestExport:
         tricky = 'Say "hi", then\nbye'
         insert(env, table, [
             {"Name": tricky, "Price": "12.50", "Link": "https://example.com/a?b=1",
-             "Active": True, "Status": "Done", "Tags": ["c", "a"]},
+             "Active": True, "Status": "Done", "Tags": ["c", "a"], "Due": " 2026-10-16 "},
             {"Name": "plain", "Price": 0, "Active": False, "Tags": []},
             {"Name": "ünïcode"},
         ])
@@ -372,13 +373,13 @@ class TestExport:
         assert path == tmp_path / "table.csv"
         raw = path.read_bytes()
         assert not raw.startswith(b"\xef\xbb\xbf")
-        assert raw.startswith(b"Name,Price,Link,Active,Status,Tags\r\n")
+        assert raw.startswith(b"Name,Price,Link,Active,Status,Tags,Due\r\n")
         rows = list(csv.reader(io.StringIO(raw.decode("utf-8"), newline="")))
         assert rows == [
-            ["Name", "Price", "Link", "Active", "Status", "Tags"],
-            [tricky, "12.5", "https://example.com/a?b=1", "true", "Done", "a; c"],
-            ["plain", "0", "", "false", "", ""],
-            ["ünïcode", "", "", "", "", ""],
+            ["Name", "Price", "Link", "Active", "Status", "Tags", "Due"],
+            [tricky, "12.5", "https://example.com/a?b=1", "true", "Done", "a; c", "2026-10-16"],
+            ["plain", "0", "", "false", "", "", ""],
+            ["ünïcode", "", "", "", "", "", ""],
         ]
 
     def test_csv_formula_injection_defused(self, env, tmp_path):

@@ -210,7 +210,7 @@ class TestPrecard:
     @pytest.mark.parametrize("columns, code, named", [
         ([{"name": "A", "type": "text"}, {"name": "a", "type": "number"}],
          "duplicate_name", "'a'"),
-        ([{"name": "A", "type": "date"}], "invalid_type", "'A'"),
+        ([{"name": "A", "type": "time"}], "invalid_type", "'A'"),
         ([{"name": "A", "type": "text", "key": "c_12345678"}], "unknown_field", "'A'"),
         ([{"name": "Flag", "type": "boolean", "unique": True}], None, "'Flag'"),
         ([{"name": "E", "type": "enum"}], None, "'E'"),
@@ -442,7 +442,7 @@ class TestExecute:
     def test_bad_columns_at_approve(self, env):
         caller = convo(env)
         validated = handler().validate_params(
-            {"title": "T", "columns": [{"name": "A", "type": "date"}]},
+            {"title": "T", "columns": [{"name": "A", "type": "time"}]},
         )
         with pytest.raises(RuntimeError, match="^invalid_type: "):
             execute(validated, caller)

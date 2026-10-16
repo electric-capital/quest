@@ -83,6 +83,7 @@ Every cell value has one canonical logical form, which defaults hold, models see
 - **url**: the stripped string as given, `http` or `https` with a host; a backslash is refused, since parsers and browsers disagree on the host.
 - **boolean**: JSON `true` or `false` only.
 - **enum**: one option by exact match. A `multiple` enum takes a list, deduplicated and sorted by option order; an empty list is no value.
+- **date**: the stripped `YYYY-MM-DD` string of a real date (year `TABLE_DATE_MIN_YEAR`..`TABLE_DATE_MAX_YEAR`), no time or other spelling: one string per day, so text order is date order and ranges, sorting, uniqueness and upsert keys need no cast.
 
 `coerce_value()` canonicalizes and lets None through; `canonicalize()` adds the `required` check. `apply_default()` is the insert path: an omitted key takes the column default, an explicit null does not. `coerce_option()` checks one option of an enum, the operand of a multi-enum `contains`.
 

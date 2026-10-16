@@ -21,6 +21,7 @@ import {
   isConditionComplete,
   isDecimalString,
   isHttpUrl,
+  isIsoDate,
   missingFilterColumns,
   opsForColumn,
   searchParamToFilter,
@@ -46,6 +47,7 @@ const SCHEMA: TableColumn[] = [
   col('Active', 'boolean'),
   col('Status', 'enum', { options: ['Lead', 'Customer', 'Churned'] }),
   col('Tags', 'enum', { options: ['a', 'b', 'c'], multiple: true }),
+  col('Due', 'date'),
 ];
 
 const byName = (name: string) => SCHEMA.find((c) => c.name === name)!;
@@ -65,12 +67,17 @@ describe('opsForColumn', () => {
     expect(ops('Active')).toEqual(['eq', 'ne', 'in', 'is_null', 'not_null']);
     expect(ops('Status')).toEqual(['eq', 'ne', 'in', 'is_null', 'not_null']);
     expect(ops('Tags')).toEqual(['contains', 'contains_any', 'contains_all', 'eq', 'ne', 'is_empty', 'not_null']);
+    expect(ops('Due')).toEqual(ops('Revenue'));
   });
 
   it('labels ops for people', () => {
     const labels = (name: string) => opsForColumn(byName(name)).map((c) => c.label);
     expect(labels('Revenue')).toEqual(['=', '≠', '<', '≤', '>', '≥', 'between', 'is any of', 'is empty', 'is not empty']);
     expect(labels('Tags')).toEqual(['has', 'has any of', 'has all of', 'is exactly', 'is not exactly', 'is empty', 'is not empty']);
+    expect(labels('Due')).toEqual([
+      'is', 'is not', 'is before', 'is on or before', 'is after', 'is on or after', 'is between', 'is any of',
+      'is empty', 'is not empty',
+    ]);
   });
 });
 
@@ -127,6 +134,18 @@ const LEAF_CASES: [string, FilterOp, FilterValue, FilterNode][] = [
   ['Tags', 'ne', ['b'], { column: 'Tags', op: 'ne', value: ['b'] }],
   ['Tags', 'is_empty', null, { column: 'Tags', op: 'is_empty' }],
   ['Tags', 'not_null', null, { column: 'Tags', op: 'not_null' }],
+  // date: YYYY-MM-DD strings, trimmed
+  ['Due', 'eq', ' 2026-10-16 ', { column: 'Due', op: 'eq', value: '2026-10-16' }],
+  ['Due', 'ne', '2026-10-16', { column: 'Due', op: 'ne', value: '2026-10-16' }],
+  ['Due', 'lt', '2026-01-01', { column: 'Due', op: 'lt', value: '2026-01-01' }],
+  ['Due', 'lte', '2024-02-29', { column: 'Due', op: 'lte', value: '2024-02-29' }],
+  ['Due', 'gt', '0001-01-01', { column: 'Due', op: 'gt', value: '0001-01-01' }],
+  ['Due', 'gte', '9999-12-31', { column: 'Due', op: 'gte', value: '9999-12-31' }],
+  ['Due', 'between', [' 2026-10-01', '2026-10-31 '], { column: 'Due', op: 'between', value: ['2026-10-01', '2026-10-31'] }],
+  ['Due', 'between', ['2026-10-16', '2026-10-16'], { column: 'Due', op: 'between', value: ['2026-10-16', '2026-10-16'] }],
+  ['Due', 'in', ['2026-10-16', ' 2026-10-02', '2026-10-16'], { column: 'Due', op: 'in', value: ['2026-10-16', '2026-10-02'] }],
+  ['Due', 'is_null', null, { column: 'Due', op: 'is_null' }],
+  ['Due', 'not_null', null, { column: 'Due', op: 'not_null' }],
 ];
 
 describe('conditionToLeaf / conditionsToFilter', () => {
@@ -214,6 +233,20 @@ describe('validation', () => {
     ['Tags', 'contains_any', [], 'Choose at least one option'],
     ['Tags', 'contains_all', ['a', 'z'], 'Unknown option'],
     ['Tags', 'eq', [], 'Choose at least one option'],
+    // dates are real calendar dates spelled YYYY-MM-DD
+    ['Due', 'eq', '', 'Enter a date as YYYY-MM-DD'],
+    ['Due', 'eq', '2026-02-30', 'Enter a date as YYYY-MM-DD'],
+    ['Due', 'eq', '2023-02-29', 'Enter a date as YYYY-MM-DD'],
+    ['Due', 'lt', '16/10/2026', 'Enter a date as YYYY-MM-DD'],
+    ['Due', 'gt', '2026-10-16T00:00', 'Enter a date as YYYY-MM-DD'],
+    ['Due', 'gte', '0000-01-01', 'Enter a date as YYYY-MM-DD'],
+    ['Due', 'between', ['2026-10-01', ''], 'Enter both dates'],
+    ['Due', 'between', ['', '2026-10-01'], 'Enter both dates'],
+    ['Due', 'between', ['2026-10-31', '2026-10-01'], 'The first date must not be later'],
+    ['Due', 'between', ['2026-10-01', 'x'], 'Enter a date as YYYY-MM-DD'],
+    ['Due', 'in', ['2026-10-01', 'soon'], 'Enter a date as YYYY-MM-DD'],
+    ['Due', 'in', [], 'Enter at least one value'],
+    ['Due', 'contains', '2026', 'Choose a condition'],
     ['Nope', 'eq', 'x', 'Choose a column'],
     ['Active', 'contains', 'x', 'Choose a condition'],
     ['Tags', 'in', [['a']] as unknown as string[], 'Choose a condition'],
@@ -313,9 +346,25 @@ describe('validation', () => {
     expect(splitLines('1,234', true)).toEqual(['1,234']);
   });
 
+  it('isIsoDate follows the server date rule', () => {
+    expect(isIsoDate('2026-10-16')).toBe(true);
+    expect(isIsoDate(' 2024-02-29 ')).toBe(true);
+    expect(isIsoDate('0001-01-01')).toBe(true);
+    expect(isIsoDate('9999-12-31')).toBe(true);
+    for (const bad of ['2023-02-29', '2026-13-01', '2026-10-00', '2026-10-32', '0000-01-01', '2026-1-16',
+      '20261016', '2026/10/16', '2026-10-16T00:00:00Z', '26-10-16', '12026-10-16', 'today', '']) {
+      expect(isIsoDate(bad)).toBe(false);
+    }
+  });
+
   it('valueKind and emptyValue', () => {
     expect(valueKind(byName('Revenue'), 'between')).toBe('pair');
     expect(valueKind(byName('Revenue'), 'in')).toBe('lines');
+    expect(valueKind(byName('Due'), 'eq')).toBe('date');
+    expect(valueKind(byName('Due'), 'between')).toBe('date_pair');
+    expect(valueKind(byName('Due'), 'in')).toBe('lines');
+    expect(emptyValue('date')).toBe('');
+    expect(emptyValue('date_pair')).toEqual(['', '']);
     expect(valueKind(byName('Active'), 'in')).toBe('booleans');
     expect(valueKind(byName('Status'), 'in')).toBe('options');
     expect(valueKind(byName('Tags'), 'contains')).toBe('option');
@@ -337,6 +386,9 @@ describe('conditionLabel', () => {
     expect(label('Name', 'is_null')).toBe('Name is empty');
     expect(label('Active', 'eq', false)).toBe('Active is false');
     expect(label('Tags', 'contains_any', ['a', 'b'])).toBe('Tags has any of a, b');
+    expect(label('Due', 'lt', ' 2026-11-01 ')).toBe('Due is before 2026-11-01');
+    expect(label('Due', 'between', ['2026-10-01', '2026-10-31'])).toBe('Due is between 2026-10-01 and 2026-10-31');
+    expect(label('Due', 'in', ['2026-10-01', '2026-10-02'])).toBe('Due is any of 2026-10-01, 2026-10-02');
   });
 });
 
@@ -426,6 +478,11 @@ describe('filterToConditions', () => {
     ['text in value spanning lines', { column: 'Name', op: 'in', value: ['a\nb'] }],
     ['whitespace-only text in value', { column: 'Name', op: 'in', value: [' '] }],
     ['url eq that is not a URL', { column: 'Site', op: 'eq', value: 'x.io' }],
+    ['date that is not a date', { column: 'Due', op: 'eq', value: '2026-02-30' }],
+    ['date between out of order', { column: 'Due', op: 'between', value: ['2026-12-01', '2026-01-01'] }],
+    ['date between one bound', { column: 'Due', op: 'between', value: ['2026-01-01'] }],
+    ['date as a number', { column: 'Due', op: 'eq', value: 20261016 }],
+    ['date substring op', { column: 'Due', op: 'starts_with', value: '2026' }],
     ['between out of order past float precision', { column: 'Revenue', op: 'between', value: ['0.30000000000000001', '0.3'] }],
   ];
 
