@@ -80,6 +80,7 @@ class ActionRequestType(StrEnum):
     CREATE_TABLE = "create_table"
     CHANGE_TABLE_SCHEMA = "change_table_schema"
     WRITE_TABLE_ROWS = "write_table_rows"
+    FORWARD_GMAIL_MESSAGE = "forward_gmail_message"
 
 
 class ActionRequestStatus(StrEnum):

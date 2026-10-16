@@ -150,6 +150,18 @@ def test_create_drive_folder_rejects_unknown_field():
         })
 
 
+def test_forward_gmail_message_rejects_unknown_field():
+    from chat.action_request_types.forward_gmail_message import ForwardGmailMessageHandler
+
+    handler = ForwardGmailMessageHandler()
+    with pytest.raises(ValueError, match="Unknown parameter for forward_gmail_message"):
+        handler.validate_params({
+            "message_id": "18f3c2a9b7e1d4f0",
+            "to": "receipts@example.com",
+            "original_subject": "Receipt",  # server-injected; model must not supply
+        })
+
+
 # ---------------------------------------------------------------------------
 # Multi-unknown-field deterministic listing.
 # ---------------------------------------------------------------------------

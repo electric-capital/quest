@@ -18,10 +18,11 @@ This document covers both the Simple API and the Raw API.
 | `api/gmail/constants.py` | API URLs, size limits (`_MAX_TOTAL_ATTACHMENT_SIZE`), regexes, unicode sets (`_INVISIBLE_UNICODE_CODEPOINTS`), URL replacement threshold (`_URL_REPLACEMENT_MIN_LENGTH`) |
 | `api/gmail/models.py` | Pydantic models: `DraftAttachment`, `CreateDraftRequest`, `SendEmailToSelfRequest` |
 | `api/gmail/helpers.py` | Pure helper functions: `clean_email_markdown()`, `replace_urls_with_identifiers()`, `convert_html_to_markdown()`, `convert_markdown_to_html()` + `sanitize_email_html()` (see [Outgoing HTML Sanitization](#outgoing-html-sanitization)), `extract_attachments()`, `render_message_markdown()` / `render_batch_markdown()` (markdown output for the Simple API fetch endpoints), `simplify_message()`, URL cache functions (`_cache_url_mapping()`, `_get_cached_url_mapping()`), and other transformation utilities |
-| `api/gmail/raw_endpoints.py` | Batch POST proxy endpoint (`batch_request`). `parse_and_validate_batch()` in `helpers.py` requires `multipart/mixed` with a declared boundary and splits the body on that same caller-declared boundary (the exact Content-Type forwarded to Gmail), so every part Gmail would execute is checked for GET + allow-listed path -- a fixed `--batch_*` split previously let a custom boundary hide a write request (#279215). The 7 former GET proxy endpoints were migrated to the `authed_get` pattern -- the LLM now calls `gmail.googleapis.com` directly via `tool_call(tool_name="authed_get", ...)` |
+| `api/gmail/raw_endpoints.py` | Batch POST proxy endpoint (`batch_request`). `parse_and_validate_batch()` in `helpers.py` requires `multipart/mixed` with a declared boundary and splits the body on that same caller-declared boundary (the exact Content-Type forwarded to Gmail), so every part Gmail would execute is checked for GET + allow-listed path; a fixed `--batch_*` split would let a custom boundary hide a write. Plain GET reads go through `authed_get` instead |
 | `chat/gemini_api/authed_get.py` | `handle_authed_get()` handler with `gmail.googleapis.com` entry in `_SERVICE_REGISTRY` for authenticated Gmail Raw API GET requests, including `allowed_endpoints` regex validation |
 | `api/gmail/simple_endpoints.py` | 6 LLM-friendly read endpoints: `get_message_simple`, `get_messages_batch`, `list_labels_simple`, `get_label_simple`, `get_urls_by_identifiers`, `get_urls_for_message`. The message/batch/label fetches are fully async via `make_authenticated_request()` (httpx); see [Async Read Endpoints](#async-read-endpoints). `_classify_status()` maps non-2xx HTTP status to the `(error_code, message)` pair used in batch error sections |
 | `api/gmail/draft_endpoints.py` | Draft creation (`create_draft`), send-to-self (`send_email_to_self`), attachment resolvers (`_resolve_drive_attachment`, `_resolve_workspace_attachment`, `_resolve_gmail_attachment`) |
+| `chat/action_request_types/forward_gmail_message.py` | `ForwardGmailMessageHandler` (the `forward_gmail_message` action request) and `build_forward_message()`, the MIME graft (see [Forward a Message](#forward-a-message)) |
 | `api/gmail/instructions.py` | `get_instructions()` for system prompt documentation (draft field docs, attachment schema, forward draft instructions, send-self documentation, URL replacement docs, and examples) |
 | `tests/test_email_cleanup.py` | Test suite (30 test cases) for `clean_email_markdown()` covering invisible Unicode stripping, trailing whitespace removal, newline collapsing, empty/whitespace-only inputs, and preservation of visible content |
 | `tests/test_email_html_sanitizer.py` | Test suite for `sanitize_email_html()` / `convert_markdown_to_html()`: remote-image removal (markdown and raw `<img>`, `data:`/protocol-relative/`srcset`), `cid:` images kept, `style`/`<style>`/`<script>`/`<iframe>`/`<svg>`/conditional-comment removal, link scheme allow-list, formatting preservation, an end-to-end `/api/gmail-simple/send-self` MIME check, and an end-to-end `/api/gmail-simple/drafts` check that an attached image gets a `Content-ID` + inline disposition and the `cid:` reference survives in the HTML |
@@ -92,7 +93,7 @@ All Simple API endpoints are defined in `api/gmail/simple_endpoints.py`. See tha
 
 ### Async Read Endpoints
 
-The single-message, batch, and label endpoints call the Gmail API through `make_authenticated_request()` (async `httpx.AsyncClient`) in `auth/google_credentials.py` -- the same path the draft/raw write endpoints use -- rather than the blocking synchronous `googleapiclient` (`.execute()`). This keeps the single uvicorn event loop free during upstream Gmail calls; the previous blocking calls pinned the loop and starved the DB connection pool under concurrent load (see [Database Architecture](../architecture/database.md), Connection PRAGMAs).
+The single-message, batch, and label endpoints call the Gmail API through `make_authenticated_request()` (async `httpx.AsyncClient`) in `auth/google_credentials.py` -- the same path the draft/raw write endpoints use -- rather than the blocking synchronous `googleapiclient` (`.execute()`). This keeps the single uvicorn event loop free during upstream Gmail calls; blocking calls would pin the loop and starve the DB connection pool (see [Database Architecture](../architecture/database.md), Connection PRAGMAs).
 
 Behavioral notes:
 
@@ -197,6 +198,24 @@ Optional `attachments` take the same `DraftAttachment` list as drafts and go thr
 Workspace attachments need the dispatch-injected `conversation_id` (ownership-checked via `require_owned_conversation()`), so they are tool-only -- a sandbox-script call to the HTTP route without one gets a 400 before anything is sent.
 
 See `SendEmailToSelfRequest` in `api/gmail/models.py` for request fields. Exercised by `test_send_self_attached_image_renders_inline_via_cid` / `test_send_self_workspace_attachment_requires_conversation_id` in `tests/test_email_html_sanitizer.py`.
+
+### Forward a Message
+
+**Action request:** `forward_gmail_message` (`ForwardGmailMessageHandler` in `chat/action_request_types/forward_gmail_message.py`; the approval mechanics are in [Action Requests](../architecture/action-requests.md))
+
+Forwards an existing message to other recipients without the model composing anything; unlike the draft path, which re-types the body as markdown, the original MIME tree is kept. The model supplies `message_id`, `to` (optional `cc` / `bcc`), an optional `subject` and a plain-text `note`.
+
+`validate_against_upstream()` reads the original (`format=full`) and injects the server-only `original_*` card fields (subject, from, date, to, attachment list) plus the default subject `Fwd: <original subject>` (an existing `Fwd:` / `Fw:` prefix is kept). A 404 or a missing Google connection rejects same-turn; other upstream failures only log.
+
+`execute()` requires one of the Gmail send scopes (`_SEND_SCOPES`), re-reads the message as `format=raw` and calls `build_forward_message()`, a pure function over the RFC 822 bytes:
+
+- The original is parsed with `email.policy.SMTP` and copied. Every top-level header that is not `Content-*` or `MIME-Version` is dropped (`Received`, `DKIM-Signature`, `Message-ID`, `List-*`, the original addressing), then `From` (the signed-in user), `To` / `Cc` / `Bcc` and `Subject` are set. Structure, boundaries, inline `cid:` images and attachment bytes are untouched.
+- The first non-attachment `text/plain` and `text/html` leaves are the body: each gets the attribution block (`---------- Forwarded message ---------` with the original From / Date / Subject / To / Cc) and the note prepended, in HTML right after the `<body>` open tag with every value escaped. The leaf is re-encoded UTF-8 quoted-printable; one whose charset cannot be decoded is left verbatim.
+- A message with no text body (a bare attachment) is wrapped in a new `multipart/mixed` with the attribution as its text part.
+
+The body is deliberately not passed through `sanitize_email_html()`: it is the sender's content, not model output, so the exfiltration argument behind the sanitizer does not apply. The only model-authored text, the note, is escaped.
+
+The send uses the `messages.send` media-upload endpoint (`uploadType=media`, body `message/rfc822`), so size is bounded by Gmail's send limit, not a base64 JSON body; no `threadId` is set. Exercised by `tests/test_forward_gmail_message_handler.py`.
 
 ### Outgoing HTML Sanitization
 
@@ -307,7 +326,7 @@ The Simple API exists for LLM consumption -- it decodes base64 content, converts
 The Simple API was originally reached by having the model construct `http://localhost:8000/api/gmail-simple/...` URLs for the generic `curl_proxy_get`/`curl_proxy_post` tools. Dedicated tools give each operation a typed schema (the model can't mistype a query parameter or URL path), let dispatch supply `conversation_id` without route-dispatch signature introspection, and make intent visible in the UI as a named tool call. The HTTP endpoints are deliberately kept registered: sandboxed scripts reach them over real HTTP through the local proxy (`QUEST_PORT`/`QUEST_API_KEY`), a path that never touched `curl_proxy_get`'s in-process dispatch.
 
 **Why return markdown from the message-fetch endpoints instead of JSON?**
-The LLM consumes these responses directly as tool-call output. A JSON envelope wrapping a markdown body (the previous shape) forced the model to read past quoted JSON punctuation and escape sequences to reach the email content, while the structured metadata next to it (headers, labels, attachment IDs) could just as easily be surfaced as labelled lines.
+The LLM consumes these responses directly as tool-call output. A JSON envelope wrapping a markdown body would force the model to read past quoted JSON punctuation and escape sequences to reach the email content, while the structured metadata (headers, labels, attachment IDs) reads just as well as labelled lines.
 
 Emitting a single markdown document (`render_message_markdown()` / `render_batch_markdown()` in `api/gmail/helpers.py`) gives the model a readable subject/headers/body/attachments layout, keeps every metadata field recoverable (including the `Message-ID` header used for reply threading and each attachment's `attachmentId`), and lets direct HTTP clients serve the same bytes with `Content-Type: text/markdown`.
 

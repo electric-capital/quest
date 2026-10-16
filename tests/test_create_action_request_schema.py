@@ -134,6 +134,12 @@ def test_system_calendar_documents_invite():
     assert "expected_updated" in content
 
 
+def test_system_gmail_documents_forward():
+    content = _skill_content("system:gmail")
+    assert "forward_gmail_message" in content
+    assert "message_id" in content
+
+
 def test_system_twitter_documents_dm(twitter_plugin):
     content = _skill_content("system:twitter")
     assert "send_twitter_dm" in content

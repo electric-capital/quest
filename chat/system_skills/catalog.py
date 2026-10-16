@@ -734,6 +734,7 @@ catalog** — exact `request_type` names and their required / optional
 - Telegram sends → `system:telegram`
 - Twitter/X DMs → `system:twitter`
 - Google Calendar invites → `system:calendar`
+- Gmail forwards of an existing message (`forward_gmail_message`) → `system:gmail`
 - Google Drive uploads and folder creation (`upload_to_drive`, `create_drive_folder`) → `system:drive`
 - Google Sheets cell edits (`edit_google_spreadsheet`) → `system:sheets`
 - GCP VM hard resets (`reset_gcp_instance`) → `system:gcp`
@@ -1499,7 +1500,7 @@ def register_system_skill(skill: SystemSkill) -> None:
 _register(SystemSkill(
     id="system:gmail",
     name="Gmail",
-    description="Read, draft, send-self, archive email via Gmail Simple tools and the Raw API.",
+    description="Read, draft, send-self, archive email via Gmail Simple tools and the Raw API; forward_gmail_message action request.",
     when_to_load="Load when the user asks about email, inbox, drafts, or attachments.",
     requires="google_services",
     content_builder=lambda base_url, _api_key: gmail_get_instructions(base_url),

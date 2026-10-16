@@ -15,6 +15,8 @@ Read and work with Gmail through dedicated dynamic tools invoked via `tool_call`
 | `create_gmail_draft` | Create a draft email (does NOT send). Body is markdown (`body_md`, rendered to HTML; plain-text `body` only on explicit request), with reply/forward threading and attachments |
 | `send_gmail_to_self` | Send an email to yourself immediately (subject auto-prefixed with [Quest], `body_md` markdown rendered to HTML, same attachments + inline `cid:` images as drafts) |
 
+Forwarding an existing message to someone else is an approval-gated action request, not a tool: `create_action_request(request_type="forward_gmail_message", ...)` -- see [Forward a Message](#forward-a-message-forward_gmail_message) below.
+
 **Important:**
 - These tools do NOT support search queries. To search emails, use the Gmail Raw API via authed_get: `tool_call(tool_name="authed_get", arguments={"url": "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=SEARCH_QUERY"})`, then fetch the returned message IDs with `get_gmail_messages`.
 - `get_gmail_messages` has a **hard limit of 50 IDs per call**. If you have more than 50 message IDs, split them into multiple calls.
@@ -212,7 +214,7 @@ tool_call(tool_name="create_gmail_draft", arguments={"to": "recipient@example.co
 3. Use the `Thread ID:` line from the response as `thread_id`
 4. Prefix the subject with "Re: " if not already present
 
-**Creating forward drafts:**
+**Creating forward drafts:** (a draft the user sends by hand, with the body re-typed as markdown; when the user wants the message actually sent, or wants the original's exact HTML and inline images preserved, use the `forward_gmail_message` action request described below instead)
 1. Fetch the original message with `get_gmail_messages`
 2. Note the `## Attachments` section in the response (each entry has a filename, mime type, size, and `attachmentId`)
 3. Prefix the subject with "Fwd: " if not already present
@@ -233,6 +235,34 @@ tool_call(tool_name="create_gmail_draft", arguments={"to": "recipient@example.co
 # Forward a message with its attachments
 tool_call(tool_name="create_gmail_draft", arguments={"to": "recipient@example.com", "subject": "Fwd: Original Subject", "body": "FYI see below.\\n\\n---------- Forwarded message ---------\\nFrom: sender@example.com\\nDate: Mon, 27 Jan 2025 10:00:00 -0800\\nSubject: Original Subject\\nTo: me@example.com\\n\\nOriginal message body here.", "thread_id": "THREAD_ID", "attachments": [{"type": "gmail", "message_id": "ORIGINAL_MSG_ID", "attachment_id": "ATT_ID_1", "filename": "report.pdf"}]})
 ```
+
+### Forward a Message (forward_gmail_message)
+
+To forward an existing Gmail message to someone else exactly as it arrived -- the original HTML with its styling, inline images and every attachment, byte for byte -- propose a `forward_gmail_message` action request. This is the right tool for receipts, invoices and newsletters that a downstream system or person must see unaltered (for example forwarding receipt emails to an expense-system intake address). You never compose the body: on approval the server fetches the original as raw MIME, prepends a standard `---------- Forwarded message ---------` attribution block (plus your optional note) to its text and HTML parts, and sends it from the user's account. Nothing is sent until the user approves the card.
+
+```
+create_action_request(
+    request_type="forward_gmail_message",
+    params={"message_id": "18f3c2a9b7e1d4f0", "to": "receipts@example.com", "note": "Receipt for the April invoice."},
+    reasoning="The user asked me to forward the Acme receipt to their expense inbox.",
+)
+```
+
+**Params:**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `message_id` | Yes | The `Gmail Message ID:` line from `get_gmail_messages` (NOT the `Message-ID:` header) |
+| `to` | Yes | Recipient address, or a list of addresses (max 20). Bare addresses, no display names |
+| `cc`, `bcc` | No | Extra recipients, same shape as `to` |
+| `subject` | No | Defaults to `Fwd: <original subject>` (the original's existing `Fwd:` / `Fw:` prefix is kept, not doubled) |
+| `note` | No | Plain text shown above the forwarded message (max 4000 chars). Rendered as text, never as HTML or markdown |
+
+**Notes:**
+- The approval card shows the recipients, the subject, who sent the original and when, and the original's attachment list; a `message_id` Gmail cannot find is rejected same-turn, before any card
+- Several messages mean several requests, one per message -- there is no batch shape
+- Do not re-attach the original's attachments or paste its body: they travel with the forward automatically. To forward with a different body or a subset of attachments, use `create_gmail_draft` instead
+- Requires Google Services connection via Settings > Data Connections; the user's Gmail connection must include send permission (reconnect if the approval fails with a permission error)
 
 ### Send Email to Self (send_gmail_to_self)
 
