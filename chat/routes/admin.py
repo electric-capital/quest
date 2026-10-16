@@ -26,10 +26,23 @@ from db.llm_call_store import (
     get_usage_by_model_for_conversations,
     get_usage_by_user,
 )
+from db.doc_store import list_all_doc_rows
 from db.guide_store import list_all_guides
+from db.memory_store import list_all_memory_rows
+from db.memory_suggestion_store import list_all_suggestion_rows
+from db.project_memory_store import list_all_project_memory_rows
+from db.project_memory_suggestion_store import (
+    list_all_suggestion_rows as list_all_project_suggestion_rows,
+)
 from db.project_store import list_all_project_guides
+from db.table_store import list_all_table_rows
 from db.routine_store import get_routine_labels
 from db.user_store import get_user_by_id, list_all_users, list_user_signup_dates
+from chat.feature_usage_report import (
+    build_docs_report,
+    build_memories_report,
+    build_tables_report,
+)
 from chat.usage_report import build_usage_report
 
 from chat.routes import router
@@ -747,6 +760,86 @@ async def admin_guides_report(
         r["name"].lower(),
     ))
     return {"guides": rows}
+
+
+@router.get("/admin/system-monitor/docs-report")
+async def admin_docs_report(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Return per-user Quest Docs adoption and activity for a date range.
+
+    One row per user who owns at least one doc (``total_users`` carries the
+    roster size for the "N of M users" summary): what they own now (docs,
+    the user/project and public splits, shared docs, docs whose latest
+    body write came from a model, total body bytes and images) next to
+    the docs created and updated inside the inclusive UTC ``start``/``end``
+    range (the ``_resolve_range_window`` semantics of the other ranged
+    reports). Only the ``docs`` metadata rows are read -- no body, title
+    or description leaves the store. Row shape and sort order are on
+    ``build_docs_report`` in chat/feature_usage_report.py.
+    """
+    _require_admin(user)
+    start_date, end_date, _, _ = _resolve_range_window(start, end)
+    rows = await list_all_doc_rows()
+    users = await list_all_users()
+    return await asyncio.to_thread(build_docs_report, rows, users, start_date, end_date)
+
+
+@router.get("/admin/system-monitor/tables-report")
+async def admin_tables_report(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Return per-user Quest Tables adoption and activity for a date range.
+
+    The tables twin of the docs report: one row per user who owns a table,
+    with the owned-now figures (tables, user/project and public splits,
+    shared tables, tables last written by a model, cached row and column
+    totals) and the tables created / updated in range. Reads the
+    ``data_tables`` metadata rows only; no ``table.db`` is opened. Row shape
+    and sort order are on ``build_tables_report`` in
+    chat/feature_usage_report.py.
+    """
+    _require_admin(user)
+    start_date, end_date, _, _ = _resolve_range_window(start, end)
+    rows = await list_all_table_rows()
+    users = await list_all_users()
+    return await asyncio.to_thread(build_tables_report, rows, users, start_date, end_date)
+
+
+@router.get("/admin/system-monitor/memories-report")
+async def admin_memories_report(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Return per-user memory adoption and the suggestion funnel for a date
+    range.
+
+    One row per user with any personal memory, memory suggestion, project
+    memory (in a project they own) or project memory suggestion (raised in
+    their conversation): active and archived memory counts with the
+    characters stored, memories created in range, and the suggestions
+    created in range split by their current status (accepted / dismissed /
+    pending), each for personal and for project memories. Memory text is
+    never returned. Row shape and sort order are on
+    ``build_memories_report`` in chat/feature_usage_report.py.
+    """
+    _require_admin(user)
+    start_date, end_date, _, _ = _resolve_range_window(start, end)
+    memory_rows = await list_all_memory_rows()
+    suggestion_rows = await list_all_suggestion_rows()
+    project_memory_rows = await list_all_project_memory_rows()
+    project_suggestion_rows = await list_all_project_suggestion_rows()
+    users = await list_all_users()
+    return await asyncio.to_thread(
+        build_memories_report,
+        memory_rows, suggestion_rows, project_memory_rows, project_suggestion_rows,
+        users, start_date, end_date,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -2101,6 +2101,98 @@ export interface AdminGuidesReportResponse {
   guides: AdminGuideReportRow[];
 }
 
+// Admin System Reports "Docs" / "Tables" sections
+// (GET /admin/system-monitor/docs-report and /tables-report): one row per
+// user who owns at least one doc / table, lifetime ownership figures next
+// to the items created / updated in the selected range. No titles or
+// bodies are ever shipped; see chat/feature_usage_report.py.
+interface AdminOwnedItemsReportRowBase {
+  user_id: number;
+  user_email: string;
+  user_name: string;
+  // Items whose latest body write came from a model (conversation or
+  // approved action request) rather than a person in the UI.
+  model_written_count: number;
+  // Items created, resp. last updated, inside the selected range.
+  created_in_range: number;
+  updated_in_range: number;
+  // Newest updated_at across the user's items (ISO, naive UTC).
+  last_updated_at: string | null;
+}
+
+export interface AdminDocsReportRow extends AdminOwnedItemsReportRowBase {
+  doc_count: number;
+  user_doc_count: number;
+  project_doc_count: number;
+  public_doc_count: number;
+  // Docs with at least one share grant (a user or "everyone").
+  shared_doc_count: number;
+  // Sum of the cached doc.md sizes, and of the embedded image counts.
+  content_bytes: number;
+  asset_count: number;
+}
+
+export interface AdminDocsReportResponse {
+  users: AdminDocsReportRow[];
+  // Roster size, for the "N of M users" summary.
+  total_users: number;
+}
+
+export interface AdminTablesReportRow extends AdminOwnedItemsReportRowBase {
+  table_count: number;
+  user_table_count: number;
+  project_table_count: number;
+  public_table_count: number;
+  shared_table_count: number;
+  // Sum of the cached row counts, and of the schema lengths.
+  row_total: number;
+  column_total: number;
+}
+
+export interface AdminTablesReportResponse {
+  users: AdminTablesReportRow[];
+  total_users: number;
+}
+
+// Admin System Reports "Memories" section
+// (GET /admin/system-monitor/memories-report): one row per user with any
+// personal memory, suggestion, project memory (in a project they own) or
+// project suggestion (raised in their conversation). The *_in_range
+// suggestion figures are suggestions created in the range, split by
+// their current status.
+export interface AdminMemoriesReportRow {
+  user_id: number;
+  user_email: string;
+  user_name: string;
+  // Active (not archived) personal memories, archived ones, and the
+  // characters stored in the active ones.
+  memory_count: number;
+  archived_count: number;
+  content_chars: number;
+  created_in_range: number;
+  suggested_in_range: number;
+  accepted_in_range: number;
+  dismissed_in_range: number;
+  pending_in_range: number;
+  // Project memories across the projects the user owns.
+  project_memory_count: number;
+  project_archived_count: number;
+  // Owned projects holding at least one project memory.
+  project_count: number;
+  project_created_in_range: number;
+  project_suggested_in_range: number;
+  project_accepted_in_range: number;
+  project_dismissed_in_range: number;
+  project_pending_in_range: number;
+  // Newest memory or suggestion timestamp of any kind (ISO, naive UTC).
+  last_activity_at: string | null;
+}
+
+export interface AdminMemoriesReportResponse {
+  users: AdminMemoriesReportRow[];
+  total_users: number;
+}
+
 // Admin feature gates (server-global on/off switches for optional features;
 // every feature is off by default)
 export interface FeatureGate {

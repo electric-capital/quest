@@ -75,6 +75,17 @@ export function formatCompactNumber(n: number): string {
 }
 
 /**
+ * Byte size for dense cells: 340 -> "340 B", 1,250 -> "1.2 KB",
+ * 2,100,000 -> "2.0 MB".
+ */
+export function formatBytes(bytes: number): string {
+  const n = Number.isFinite(bytes) && bytes > 0 ? Math.floor(bytes) : 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
  * Relative "last active" label for admin tables: minute granularity up to an
  * hour, then hours/days, then an absolute date for anything older than a week.
  */

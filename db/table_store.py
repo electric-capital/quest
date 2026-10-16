@@ -811,3 +811,58 @@ async def list_shares(table_id: str) -> list[dict]:
     async with AsyncSessionLocal() as db:
         shares = (await _load_shares(db, [table_id]))[table_id]
         return [_share_to_dict(s) for s in shares]
+
+
+async def list_all_table_rows() -> list[dict]:
+    """Every table's metadata for the admin Tables usage report, no data.
+
+    One narrow row per ``data_tables`` row across all owners: ``id``,
+    ``owner_id``, ``project_id``, ``mode``, ``row_count`` (the cached count),
+    ``column_count`` (the length of the schema), ``last_write_source``,
+    ``share_count`` (grants on the table, the everyone row included) and
+    naive-UTC ``created_at`` / ``updated_at`` as stored. Titles,
+    descriptions and the column definitions are not returned. Folded per
+    owner by ``build_tables_report()`` in chat/feature_usage_report.py.
+    """
+    share_counts = (
+        select(
+            DataTableShare.table_id,
+            func.count(DataTableShare.id).label("share_count"),
+        )
+        .group_by(DataTableShare.table_id)
+        .subquery()
+    )
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(
+                DataTable.id,
+                DataTable.owner_id,
+                DataTable.project_id,
+                DataTable.mode,
+                DataTable.row_count,
+                DataTable.table_schema,
+                DataTable.last_write_source,
+                DataTable.created_at,
+                DataTable.updated_at,
+                func.coalesce(share_counts.c.share_count, 0),
+            )
+            .outerjoin(share_counts, share_counts.c.table_id == DataTable.id)
+        )
+        return [
+            {
+                "id": table_id,
+                "owner_id": owner_id,
+                "project_id": project_id,
+                "mode": mode,
+                "row_count": int(row_count or 0),
+                "column_count": len(schema) if isinstance(schema, list) else 0,
+                "last_write_source": last_write_source,
+                "share_count": int(share_count or 0),
+                "created_at": created_at,
+                "updated_at": updated_at,
+            }
+            for (
+                table_id, owner_id, project_id, mode, row_count, schema,
+                last_write_source, created_at, updated_at, share_count,
+            ) in result.all()
+        ]

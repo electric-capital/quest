@@ -191,6 +191,9 @@ export const endpoints = {
   adminUserReport: () => `${API_BASE_URL}/admin/system-monitor/user-report`,
   adminModelReport: () => `${API_BASE_URL}/admin/system-monitor/model-report`,
   adminGuidesReport: () => `${API_BASE_URL}/admin/system-monitor/guides-report`,
+  adminDocsReport: () => `${API_BASE_URL}/admin/system-monitor/docs-report`,
+  adminTablesReport: () => `${API_BASE_URL}/admin/system-monitor/tables-report`,
+  adminMemoriesReport: () => `${API_BASE_URL}/admin/system-monitor/memories-report`,
   adminUsageReport: () => `${API_BASE_URL}/admin/system-monitor/usage-report`,
 
   adminSignIn: () => `${API_BASE_URL}/admin/sign-in`,

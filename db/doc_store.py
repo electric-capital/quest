@@ -22,7 +22,7 @@ from typing import Iterable, Optional
 from collections.abc import Collection
 import uuid
 
-from sqlalchemy import and_, delete, exists, or_, select
+from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from chat.docs.constants import (
@@ -717,3 +717,55 @@ async def list_shares(doc_id: str) -> list[dict]:
     async with AsyncSessionLocal() as db:
         shares = (await _load_shares(db, [doc_id]))[doc_id]
         return [_share_to_dict(s) for s in shares]
+
+
+async def list_all_doc_rows() -> list[dict]:
+    """Every doc's metadata for the admin Docs usage report, no bodies.
+
+    One narrow row per ``docs`` row across all owners: ``id``, ``owner_id``,
+    ``project_id``, ``mode``, ``content_size``, ``asset_count``,
+    ``last_write_source``, ``share_count`` (grants on the doc, the everyone
+    row included) and naive-UTC ``created_at`` / ``updated_at`` as stored.
+    Titles and descriptions are not returned -- the report counts and
+    sizes, it never lists what people wrote. Folded per owner by
+    ``build_docs_report()`` in chat/feature_usage_report.py.
+    """
+    share_counts = (
+        select(DocShare.doc_id, func.count(DocShare.id).label("share_count"))
+        .group_by(DocShare.doc_id)
+        .subquery()
+    )
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(
+                Doc.id,
+                Doc.owner_id,
+                Doc.project_id,
+                Doc.mode,
+                Doc.content_size,
+                Doc.asset_count,
+                Doc.last_write_source,
+                Doc.created_at,
+                Doc.updated_at,
+                func.coalesce(share_counts.c.share_count, 0),
+            )
+            .outerjoin(share_counts, share_counts.c.doc_id == Doc.id)
+        )
+        return [
+            {
+                "id": doc_id,
+                "owner_id": owner_id,
+                "project_id": project_id,
+                "mode": mode,
+                "content_size": int(content_size or 0),
+                "asset_count": int(asset_count or 0),
+                "last_write_source": last_write_source,
+                "share_count": int(share_count or 0),
+                "created_at": created_at,
+                "updated_at": updated_at,
+            }
+            for (
+                doc_id, owner_id, project_id, mode, content_size, asset_count,
+                last_write_source, created_at, updated_at, share_count,
+            ) in result.all()
+        ]

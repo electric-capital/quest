@@ -16,6 +16,9 @@ import { CostAnalysisTable } from '../components/CostAnalysisTable';
 import { UsersReportTable } from '../components/UsersReportTable';
 import { ModelsReportTable } from '../components/ModelsReportTable';
 import { GuidesReportTable } from '../components/GuidesReportTable';
+import { DocsReportTable } from '../components/DocsReportTable';
+import { TablesReportTable } from '../components/TablesReportTable';
+import { MemoriesReportTable } from '../components/MemoriesReportTable';
 import { AdminOpsMenu } from '../components/AdminOpsMenu';
 import './AdminSystemReportsPage.css';
 
@@ -44,6 +47,21 @@ const SECTIONS = [
     key: 'models',
     label: 'Models',
     component: ModelsReportTable,
+  },
+  {
+    key: 'docs',
+    label: 'Docs',
+    component: DocsReportTable,
+  },
+  {
+    key: 'tables',
+    label: 'Tables',
+    component: TablesReportTable,
+  },
+  {
+    key: 'memories',
+    label: 'Memories',
+    component: MemoriesReportTable,
   },
   {
     key: 'guides',

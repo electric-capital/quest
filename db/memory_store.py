@@ -7,7 +7,7 @@ backed by SQLite (via aiosqlite) with FTS5 for text search.
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select, delete, text
+from sqlalchemy import select, delete, func, text
 
 from db.engine import AsyncSessionLocal
 from db.models import Memory
@@ -237,3 +237,33 @@ def _memory_to_dict(memory: Memory) -> dict:
         "updated_at": memory.updated_at.isoformat() if memory.updated_at else None,
         "archived": memory.archived,
     }
+
+
+async def list_all_memory_rows() -> list[dict]:
+    """Every memory across all users for the admin Memories usage report.
+
+    One narrow row per ``memories`` row: ``user_id``, ``archived``,
+    ``content_length`` (characters; the text itself is never returned) and
+    naive-UTC ``created_at`` / ``updated_at`` as stored. Folded per user by
+    ``build_memories_report()`` in chat/feature_usage_report.py.
+    """
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(
+                Memory.user_id,
+                Memory.archived,
+                func.length(Memory.content),
+                Memory.created_at,
+                Memory.updated_at,
+            )
+        )
+        return [
+            {
+                "user_id": user_id,
+                "archived": bool(archived),
+                "content_length": int(length or 0),
+                "created_at": created_at,
+                "updated_at": updated_at,
+            }
+            for user_id, archived, length, created_at, updated_at in result.all()
+        ]

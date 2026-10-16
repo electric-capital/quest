@@ -338,3 +338,31 @@ def _to_dict(row: ProjectMemorySuggestion) -> dict:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
     }
+
+
+async def list_all_suggestion_rows() -> list[dict]:
+    """Every project memory suggestion across all users for the admin
+    Memories usage report: ``user_id`` (the suggesting conversation's
+    owner), ``project_id``, ``status`` and naive-UTC ``created_at`` /
+    ``resolved_at`` as stored, nothing else. Folded per user by
+    ``build_memories_report()`` in chat/feature_usage_report.py."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(
+                ProjectMemorySuggestion.user_id,
+                ProjectMemorySuggestion.project_id,
+                ProjectMemorySuggestion.status,
+                ProjectMemorySuggestion.created_at,
+                ProjectMemorySuggestion.resolved_at,
+            )
+        )
+        return [
+            {
+                "user_id": user_id,
+                "project_id": project_id,
+                "status": status,
+                "created_at": created_at,
+                "resolved_at": resolved_at,
+            }
+            for user_id, project_id, status, created_at, resolved_at in result.all()
+        ]

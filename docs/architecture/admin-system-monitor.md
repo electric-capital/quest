@@ -1,6 +1,6 @@
 # Admin System Reports
 
-Admin-only operator dashboard at `/admin/system-reports` (titled "System Reports"; the pre-rename `/admin/system-monitor` URL redirects, and the API prefix keeps the historical `system-monitor` name). A left-hand nav switches between report sections; ships with "Latest Conversations", "Total Usage", "Cost Analysis", "Users", "Models", and "Guides".
+Admin-only operator dashboard at `/admin/system-reports` (titled "System Reports"; the pre-rename `/admin/system-monitor` URL redirects, and the API prefix keeps the historical `system-monitor` name). A left-hand nav switches between report sections; ships with "Latest Conversations", "Total Usage", "Cost Analysis", "Users", "Models", "Docs", "Tables", "Memories", and "Guides".
 
 ## Overview
 
@@ -11,12 +11,15 @@ Admin gating is enforced on the backend via the inline `is_admin(user["email"])`
 ## Key Files
 
 **Backend:**
-- `chat/routes/admin.py` -- `admin_latest_active_conversations`, `admin_usage_report`, `admin_most_expensive_conversations`, `admin_user_report`, `admin_model_report`, and `admin_guides_report` handlers (admin check, limit clamping, date-range parsing via the shared `_resolve_range_window`, title resolution) sharing the `_admin_conversation_view` row assembler
+- `chat/routes/admin.py` -- `admin_latest_active_conversations`, `admin_usage_report`, `admin_most_expensive_conversations`, `admin_user_report`, `admin_model_report`, `admin_docs_report`, `admin_tables_report`, `admin_memories_report`, and `admin_guides_report` handlers (admin check, limit clamping, date-range parsing via the shared `_resolve_range_window`, title resolution) sharing the `_admin_conversation_view` row assembler
 - `chat/usage_report.py` -- `build_usage_report()`, the pure fold of per-day usage buckets into the Total Usage response (rolling windows with their previous periods, lifetime total, daily / weekly / monthly series; metric definitions in the module docstring)
+- `chat/feature_usage_report.py` -- `build_docs_report()`, `build_tables_report()` and `build_memories_report()`, the pure per-user folds behind the Docs, Tables and Memories sections (row shapes and the range semantics in the module docstring)
 - `db/conversation_store.py` -- `list_latest_active_conversations()` (joins `Conversation` to `User`, orders by `last_message_at DESC`) and the batch companion `get_conversations_with_users()`, sharing `_admin_conversation_row`; plus `list_conversation_activity_rows()`, the narrow all-conversation owner/routine/activity projection behind the user and Total Usage reports
 - `db/llm_call_store.py` -- `_collect_usage_buckets()` grouped `GROUP BY (conversation_id, model, long_context_flag)` aggregation over the per-provider `llm_calls_gemini` / `llm_calls_anthropic` raw tables (one query per table, optional conversation-id and `created_at`-window filters, optional `by_call_type` split adding the rows' `call_type` to the key, optional `by_day` split adding the UTC calendar day), behind `get_usage_by_model_for_conversations()` (batch), `get_most_expensive_conversations()` (date-range top-N ranking), `get_usage_by_user()` (date-range per-user fold with the routine cost split), `get_usage_by_model()` (date-range per-model fold with audience counts, routine + sub-agent cost shares and top users), and `get_daily_usage_buckets()` (the per-day (conversation, model) buckets behind Total Usage); plus `get_latest_context_tokens_for_conversations()` (batched latest top-level call context size)
 - `db/user_store.py` -- `list_user_signup_dates()` (user id -> `created_at`, the new-user counts of Total Usage)
 - `db/llm_pricing.py` -- per-model USD list-price tables and `estimate_cost_usd()` (cache read/write rates incl. the Anthropic 5m/1h TTL split; long-context tiers: Gemini Pro >200K, Claude Haiku 5.5 >100K via a per-entry `long_context_threshold`; date-ranged rate sets, so a call is priced at the rate in force on its `created_at` -- the convention for recording a price change is in the module docstring), consulted only for calls without a provider-reported amount
+- `db/doc_store.py` / `db/table_store.py` -- `list_all_doc_rows()` / `list_all_table_rows()`, the narrow all-rows metadata projections (owner, project, mode, cached sizes, last write source, share count, timestamps; never a title or body) behind the Docs and Tables sections
+- `db/memory_store.py`, `db/memory_suggestion_store.py`, `db/project_memory_store.py`, `db/project_memory_suggestion_store.py` -- `list_all_memory_rows()`, `list_all_suggestion_rows()` (both stores) and `list_all_project_memory_rows()` (joined to the project owner), the text-free projections behind the Memories section
 - `db/guide_store.py` / `db/project_store.py` -- `list_all_guides()` (every user guide joined to its owner plus a per-guide routine reference count) and `list_all_project_guides()` (projects with non-empty `projects.guide` instructions) behind the guides report
 - `chat/storage.py` -- `ChatStorage.count_user_message_active_days()` (distinct UTC days with user messages, from chat_history.json) and the range-clipped day-set variant `user_message_active_days()`
 
@@ -27,16 +30,18 @@ Admin gating is enforced on the backend via the inline `is_admin(user["email"])`
 - `frontend/src/components/CostAnalysisTable.tsx` / `.css` -- "Cost Analysis" section (date-range selector + ranked table, fetch-on-demand)
 - `frontend/src/components/UsersReportTable.tsx` / `.css` -- "Users" section (date-range selector + per-user activity/cost table, fetch-on-demand)
 - `frontend/src/components/ModelsReportTable.tsx` / `.css` -- "Models" section (date-range selector + per-model cost/audience table, fetch-on-demand)
+- `frontend/src/components/FeatureUsageReport.tsx` / `.css` -- the shared frame (header with summary, date range and refresh; loading / empty / error states), the `useRangedAdminReport` fetch hook and the cell helpers of the three feature-usage sections
+- `frontend/src/components/DocsReportTable.tsx`, `TablesReportTable.tsx`, `MemoriesReportTable.tsx` -- the "Docs", "Tables" and "Memories" sections (per-user tables on the shared frame)
 - `frontend/src/components/GuidesReportTable.tsx` / `.css` -- "Guides" section (deprecation tracker: every user guide and project guide with owner, fetch-on-demand, client-side "Hide empty" toggle)
 - `frontend/src/components/ReportDateRange.tsx` / `.css` -- shared date-range picker (presets + custom start/end, `resolveRange` date math) used by Cost Analysis, Users and Models
 - `frontend/src/components/ConversationUsageCell.tsx` / `.css` -- shared per-model token-usage breakdown cell (native-field row format + exact-numbers tooltip), used by both tables
 - `frontend/src/components/AdminOpsMenu.tsx` -- "System Reports" menu item (admin-only, hidden during impersonation; sibling to "Impersonate user" and the shutdown button)
 - `frontend/src/App.tsx` -- `AdminSystemReportsRoute` at `/admin/system-reports`, plus a legacy `/admin/system-monitor` redirect
 - `quest.py` -- `serve_spa_admin` SPA catch-all for `/admin/{rest:path}` so direct browser loads serve `index.html` instead of 404 (safe because all admin API routes live under `/app/api/admin/...`; see [Frontend -- Backend SPA Support](frontend.md#backend-spa-support))
-- `frontend/src/api/client.ts` -- `fetchLatestActiveConversations()`, `fetchAdminUsageReport()`, `fetchMostExpensiveConversations()`, `fetchAdminUserReport()`, `fetchAdminModelReport()`, `fetchAdminGuidesReport()`
-- `frontend/src/api/config.ts` -- `adminLatestActiveConversations`, `adminUsageReport`, `adminMostExpensiveConversations`, `adminUserReport`, `adminModelReport`, `adminGuidesReport` URL builders
-- `frontend/src/api/types.ts` -- `AdminActiveConversation`, `AdminConversationModelUsage`, `AdminConversationUsageTotal`, `AdminUsageReport` / `AdminUsageWindow` / `AdminUsageBucket`, `AdminUserReportRow`, `AdminModelReportRow`, `AdminGuideReportRow`, response types
-- `frontend/src/utils/formatters.ts` -- `formatRelativeTimestamp` shared by both tables' last-active columns, `formatCompactNumber` ("12.3K" / "4M") for the Total Usage cells and chart axes
+- `frontend/src/api/client.ts` -- `fetchLatestActiveConversations()`, `fetchAdminUsageReport()`, `fetchMostExpensiveConversations()`, `fetchAdminUserReport()`, `fetchAdminModelReport()`, `fetchAdminDocsReport()`, `fetchAdminTablesReport()`, `fetchAdminMemoriesReport()`, `fetchAdminGuidesReport()`
+- `frontend/src/api/config.ts` -- `adminLatestActiveConversations`, `adminUsageReport`, `adminMostExpensiveConversations`, `adminUserReport`, `adminModelReport`, `adminDocsReport`, `adminTablesReport`, `adminMemoriesReport`, `adminGuidesReport` URL builders
+- `frontend/src/api/types.ts` -- `AdminActiveConversation`, `AdminConversationModelUsage`, `AdminConversationUsageTotal`, `AdminUsageReport` / `AdminUsageWindow` / `AdminUsageBucket`, `AdminUserReportRow`, `AdminModelReportRow`, `AdminDocsReportRow`, `AdminTablesReportRow`, `AdminMemoriesReportRow`, `AdminGuideReportRow`, response types
+- `frontend/src/utils/formatters.ts` -- `formatRelativeTimestamp` shared by the tables' last-active columns, `formatCompactNumber` ("12.3K" / "4M") for the Total Usage cells and chart axes, `formatBytes` for the Docs section's size column
 
 See [Admin System Reports API](../api/admin-system-monitor-api.md) for the endpoint contracts.
 
@@ -127,6 +132,18 @@ Renders one row per model id with at least one recorded call in the selected dat
 
 Aggregation is `get_usage_by_model()` in `db/llm_call_store.py`: `_collect_usage_buckets(by_call_type=True)` widens the tier-bucketed grouped query with the rows' `call_type`, and the fold merges the (conversation, model, call_type) buckets per model while tracking distinct users/conversations, the two cost shares and per-user spend for the top-N list. See [Admin System Reports API](../api/admin-system-monitor-api.md) for the exact row contract.
 
+## Docs, Tables and Memories Sections
+
+Three feature-adoption reports answering "who uses this, and how much": one row per user who has anything of the feature, for a selected date range (the same `ReportDateRange` picker and fetch-on-demand pattern as Users, incl. the stale-response guard). The three sections share one frame, fetch hook and cell helpers (`FeatureUsageReport.tsx`), so they read as one report in three shapes. Each table mixes **lifetime** columns (what the user owns now) with **range-clipped** columns (green: what happened inside the selected range), and the header summary gives the instance totals and the number of users with rows out of the whole roster (`total_users`). Only metadata rows are read: no doc body or title, table row, schema or memory text ever reaches the dashboard. Row contracts are in [Admin System Reports API](../api/admin-system-monitor-api.md); the folds are the pure builders in `chat/feature_usage_report.py`, run in a worker thread like the other report handlers.
+
+**Docs** (`AdminDocsReportRow`): **Docs** owned now with the user / project split in the sub-line, **Public** (docs of public projects), **Shared** (docs with at least one share grant, the "everyone" row included), **By model** (docs whose latest body write came from a model: `last_write_source` of the `conversation:` or `action_request:` forms, as opposed to `ui`), **Size** (sum of the cached `content_size`), **Images** (sum of `asset_count`), then the range columns **Created** and **Updated** and the lifetime **Last activity** (newest `updated_at`). Sorted by docs updated in range, then docs owned, then email.
+
+**Tables** (`AdminTablesReportRow`): the same layout with **Rows** (sum of the cached `row_count`) and **Columns** (sum of the schema lengths) in place of size and images; a History restore (`revert:` source) counts as a human write. No `table.db` is opened.
+
+**Memories** (`AdminMemoriesReportRow`): **Memories** (active personal memories, archived ones in the sub-line), **Chars** (characters stored in the active ones), **Created** in range, the **Suggestions** funnel (suggestions the model raised in the user's conversations in range, split by their *current* status into accepted / dismissed / pending, with the acceptance rate in the tooltip), **Project memories** (active memories across the projects the user owns, with the number of those projects and the archived and created-in-range counts in the sub-line), the **Project suggestions** funnel (raised in the user's conversations, so attributed to the suggester, not the project owner) and **Last activity** (newest memory or suggestion timestamp of any kind). Sorted by in-range activity (memories created plus suggestions raised, personal and project), then active memories, then email.
+
+**"Updated in range" counts items, not writes.** `updated_at` is one timestamp per doc or table, bumped by any change (body, rename, share), so a doc written ten times in the range counts once, and a doc renamed in the range counts as updated. True write counts would need the per-doc revision snapshots (pruned by age and count) or every table's change log; see [Design Decisions](#design-decisions).
+
 ## Guides Section
 
 A deprecation tracker for the retired [guides](guides.md) feature: guide creation is already disabled, and this section lists who still has guides so the remaining users can be contacted before the feature is removed entirely. It renders one row per guide in the system, sorted by owner email (fetch-on-demand: on mount and via the refresh button; no date range -- guides are a current-state inventory, not an activity stream). Two kinds of rows share the table (`AdminGuideReportRow`, `kind` discriminated):
@@ -174,6 +191,12 @@ The other sections null out a figure as soon as one model in it is unpriced, whi
 
 **Why hand-rolled SVG charts instead of a chart library?**
 Four bar charts with gridlines, ticks and a hover readout are ~150 lines of SVG; a charting dependency would add hundreds of kilobytes to the bundle for an admin-only page, and the frontend already prefers dependency-free utilities (the CSV parser, the markdown renderers) where the need is this bounded.
+
+**Why do the Docs / Tables / Memories reports read only the metadata rows?**
+A per-user adoption view needs counts, sizes and timestamps, all of which the `docs` / `data_tables` / `memories` rows (and the suggestion rows) already carry. Counting actual writes would mean listing every doc's `revisions/` directory (snapshots are pruned past `DOC_REVISION_RETENTION_DAYS` and `DOC_REVISION_MAX_COUNT`, so old activity is gone anyway) or opening every table's `table.db` for its change log, one file per item on an admin request; the one-timestamp-per-item "updated in range" figure is cheap, honest about what it is, and enough to see who is active. For the same reason as the guides report, nothing a user wrote -- doc bodies, titles, table rows, memory text -- leaves the store.
+
+**Why does the Memories report attribute project memories to the project owner but project suggestions to the suggester?**
+A project memory belongs to the project, and the project to its owner, so "project memories" on a row are the memories of the projects that user owns. A suggestion is raised in one person's conversation (the `user_id` on the row) and is that person's to accept or dismiss, so the funnel measures how that person responds to the model's suggestions, whichever project they were working in.
 
 **Why does the guides report ship content length instead of the guide text?**
 The report exists to find owners, not to read prompts: an admin needs "who still has non-empty guides, and are any still wired to routines" to reach out before deprecation. Shipping every user's system-prompt text to a dashboard would be a needless disclosure for that purpose, and the length alone separates the empty auto-created default rows from real ones.

@@ -11,11 +11,11 @@ project).
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from db.engine import AsyncSessionLocal
 from db.memory_store import MAX_MEMORY_SIZE
-from db.models import ProjectMemory
+from db.models import Project, ProjectMemory
 
 
 def _check_content(content: str) -> None:
@@ -150,3 +150,39 @@ def _to_dict(memory: ProjectMemory) -> dict:
         "updated_at": _iso(memory.updated_at),
         "archived": memory.archived,
     }
+
+
+async def list_all_project_memory_rows() -> list[dict]:
+    """Every project memory across all projects for the admin Memories
+    usage report, attributed to the project's owner.
+
+    One narrow row per ``project_memories`` row joined to its project:
+    ``user_id`` (the project owner), ``project_id``, ``archived``,
+    ``content_length`` (characters; never the text) and naive-UTC
+    ``created_at`` / ``updated_at`` as stored. Folded per owner by
+    ``build_memories_report()`` in chat/feature_usage_report.py.
+    """
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(
+                Project.user_id,
+                ProjectMemory.project_id,
+                ProjectMemory.archived,
+                func.length(ProjectMemory.content),
+                ProjectMemory.created_at,
+                ProjectMemory.updated_at,
+            ).join(Project, Project.id == ProjectMemory.project_id)
+        )
+        return [
+            {
+                "user_id": user_id,
+                "project_id": project_id,
+                "archived": bool(archived),
+                "content_length": int(length or 0),
+                "created_at": created_at,
+                "updated_at": updated_at,
+            }
+            for (
+                user_id, project_id, archived, length, created_at, updated_at,
+            ) in result.all()
+        ]

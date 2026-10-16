@@ -1,0 +1,221 @@
+/* System Reports "Docs" / "Tables" / "Memories" sections: per-user
+   feature-usage tables with a date-range selector, sharing one frame
+   (FeatureUsageReport.tsx). Mirrors UsersReportTable.css so the report
+   sections read as one dashboard. */
+
+.feature-report {
+  background-color: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.feature-report-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.feature-report-header h3 {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.feature-report-header .header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.feature-report-summary {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+  font-variant-numeric: tabular-nums;
+}
+
+.feature-report-header .refresh-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.125rem;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+}
+
+.feature-report-header .refresh-button:hover:not(:disabled) {
+  color: rgba(255, 255, 255, 0.85);
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+.feature-report-header .refresh-button:disabled {
+  cursor: default;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.feature-report-header .refresh-button .spinning {
+  animation: feature-report-refresh-spin 0.8s linear infinite;
+}
+
+@keyframes feature-report-refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.feature-report table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.feature-report thead th {
+  text-align: left;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+  padding: 0.25rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background-color: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feature-report tbody td {
+  padding: 0.25rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.85);
+  vertical-align: top;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.feature-report tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Column widths: the owner column plus fixed-percentage numeric columns;
+   each table picks widths that sum to 100. */
+.feature-report .col-owner {
+  width: 20%;
+}
+
+.feature-report .col-w6 {
+  width: 6%;
+}
+
+.feature-report .col-w7 {
+  width: 7%;
+}
+
+.feature-report .col-w8 {
+  width: 8%;
+}
+
+.feature-report .col-w9 {
+  width: 9%;
+}
+
+.feature-report .col-w10 {
+  width: 10%;
+}
+
+.feature-report .col-w11 {
+  width: 11%;
+}
+
+.feature-report .col-w12 {
+  width: 12%;
+}
+
+.feature-report .col-w15 {
+  width: 15%;
+}
+
+.feature-report .col-w16 {
+  width: 16%;
+}
+
+.feature-report .col-when {
+  width: 12%;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* The range-clipped activity columns stand out from the lifetime ones. */
+.feature-report .col-range {
+  color: rgba(134, 239, 172, 0.9);
+  font-weight: 600;
+}
+
+.feature-report .col-range .cell-empty,
+.feature-report .col-range .cell-sub {
+  font-weight: 400;
+}
+
+.feature-report .owner-cell-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.feature-report .owner-cell-email {
+  display: block;
+  font-size: 0.6875rem;
+  color: rgba(255, 255, 255, 0.45);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Sub-lines wrap rather than truncate: the breakdown is the point. */
+.feature-report .cell-sub {
+  display: block;
+  font-size: 0.6875rem;
+  color: rgba(255, 255, 255, 0.45);
+  white-space: normal;
+}
+
+.feature-report .cell-empty {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.feature-report-empty,
+.feature-report-loading {
+  padding: 0.625rem 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+.feature-report-error {
+  padding: 0.375rem 0.75rem;
+  border-top: 1px solid rgba(255, 80, 80, 0.25);
+  background-color: rgba(255, 80, 80, 0.08);
+  color: rgba(255, 150, 150, 0.9);
+  font-size: 0.75rem;
+}
+
+.feature-report .col-owner.col-w17 {
+  width: 17%;
+}
+
+.feature-report .col-when.col-w15 {
+  width: 15%;
+}
