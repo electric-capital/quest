@@ -10,7 +10,7 @@ none of them re-derive any part of the rule below.
 The visibility and row-write procedure is the Quest Docs one, shared code
 in ``chat/artifact_access.py`` (rules 1-7 of ``chat/docs/access.py`` apply
 word for word with "table" for "doc", ``write_table_rows`` for
-``write_doc``, and "Docs & Tables access" for the project's doc sources,
+``write_doc``, and "Project Access" for the project's doc sources,
 still ``project_doc_sources`` / ``doc_source_project_ids``). This module
 adds the table wording and the second verdict, ``schema``. The matrix
 (columns as in docs; the last column covers sub_agent, inference_api,

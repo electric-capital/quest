@@ -1348,7 +1348,7 @@ through a `write_doc` action request) or `denied` (read-only here;
   that project's conversations (by the owner and people with write
   access). The conversations of a private project can read them -- never
   change them -- when the user listed that public project under the
-  private project's **Docs access** setting (Project Settings); they then
+  private project's **Project Access** setting (Project Settings); they then
   appear in `list_docs` with scope `public` or `all`. The user's own
   public projects' docs are also readable from a standalone chat (see
   Project docs below); everywhere else they are invisible. Read-only
@@ -1361,7 +1361,7 @@ through a `write_doc` action request) or `denied` (read-only here;
   projects (`list_docs` scope `project` or `all`; each row carries its
   `project_id`), but never change them; to change one, the user continues
   in that project: "{doc_access.DENY_OUTSIDE_PROJECT}" Other projects'
-  conversations never see them (the Docs access setting above is the one
+  conversations never see them (the Project Access setting above is the one
   exception, for public docs), and a project doc someone else shared with
   the user is reachable only in the Quest UI.
 - **Read-only runs** never write: sub-agents ("{doc_access.DENY_SUB_AGENT}"),

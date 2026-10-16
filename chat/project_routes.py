@@ -334,7 +334,7 @@ async def get_project_doc_sources(
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
     """The public projects whose Quest Docs this project's conversations
-    may read (Project Settings > Docs access), by name.
+    may read (Project Settings > Project Access), by name.
 
     404 for unknown projects and other users' projects, like every by-id
     endpoint.

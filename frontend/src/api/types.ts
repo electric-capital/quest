@@ -1052,7 +1052,7 @@ export interface ProjectsListResponse {
 
 /**
  * One public project whose Quest Docs a private project's conversations
- * may read (Project Settings > Docs Access). A row of
+ * may read (Project Settings > Project Access). A row of
  * GET/PUT /projects/{id}/doc-sources.
  */
 export interface ProjectDocSource {

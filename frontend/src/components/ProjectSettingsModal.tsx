@@ -1,8 +1,9 @@
 /**
  * Modal for editing project settings.
  *
- * Sidebar navigation with four sections: General, Skills, Docs Access (which
- * public projects' Quest Docs this private project may read) and Danger Zone
+ * Sidebar navigation with four sections: General, Skills, Project Access (which
+ * public projects' Quest Docs and Quest Tables this private project may read)
+ * and Danger Zone
  * (archive / unarchive, then the two-step delete).
  * Follows the same pattern as SettingsModal.tsx, including the mobile
  * full-screen two-tier takeover (section list first, content slides over).
@@ -45,12 +46,12 @@ const MAIN_SECTIONS: SectionEntry[] = [
   { id: 'general', label: 'General' },
   { id: 'memories', label: 'Memories' },
   { id: 'skills', label: 'Skills' },
-  { id: 'docs', label: 'Docs Access' },
+  { id: 'docs', label: 'Project Access' },
 ];
 
 /**
  * Public projects cannot have project skills and never read other
- * projects' docs, so the Skills and Docs Access sections are hidden.
+ * projects' docs or tables, so the Skills and Project Access sections are hidden.
  */
 const PUBLIC_MAIN_SECTIONS: SectionEntry[] = MAIN_SECTIONS.filter(
   (s) => s.id !== 'skills' && s.id !== 'docs'
@@ -292,6 +293,7 @@ export function ProjectSettingsModal({
           <ProjectDocSourcesSection
             projectId={projectId}
             docsEnabled={enabledFeatures.includes('docs')}
+            tablesEnabled={enabledFeatures.includes('tables')}
           />
         ) : null;
 

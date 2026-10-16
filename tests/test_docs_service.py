@@ -216,7 +216,7 @@ def make_legacy_public(env, doc_id):
 
 
 def give_doc_source(env, project_id, *source_ids, owner="alice"):
-    """Project Settings > Docs access: let ``project_id``'s conversations
+    """Project Settings > Project Access: let ``project_id``'s conversations
     read the public docs of ``source_ids`` (full replacement)."""
     import db.project_store as project_store
     return _run(project_store.set_doc_source_projects(

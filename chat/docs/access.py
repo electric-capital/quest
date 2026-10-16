@@ -63,7 +63,7 @@ Rules layered on the matrix, applied in this order:
    - A PUBLIC doc (a doc of a public project) is visible, read-only, from
      the conversations of a private project whose owner listed the doc's
      project among the project's **doc sources**
-     (``doc_source_project_ids``, Project Settings > Docs access; stored
+     (``doc_source_project_ids``, Project Settings > Project Access; stored
      in ``project_doc_sources``), so what a chosen public project gathers
      can be read there. Standalone conversations have no doc sources.
 
