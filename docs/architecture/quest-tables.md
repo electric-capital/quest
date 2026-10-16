@@ -118,13 +118,13 @@ A `rename_table` title is only validated; title collision is the store's (`_titl
 - `changes`: the [change log](#change-log); its columns are the DDL in `create_table_db()`.
 - `meta`: the schema JSON, `schema_version`, `table_id` and `title` (`write_meta()`, `read_meta()`), so a downloaded copy is self-describing. `quest.db` stays the source of truth.
 
-`create_table_db()` is the only function that creates the directory, and creates it exclusively (`storage_exists` for an existing entry of any kind), so a new table never inherits an orphan file; on any failure it removes what it made, so a retry starts clean. The DDL, the meta rows and change #1 (kind `schema`, shape in the docstring) commit in one transaction, so the file has a change log entry from its first commit. Every other function refuses a missing directory with `storage_missing`.
+`create_table_db()` is the only function that creates the directory, exclusively (`storage_exists` for an existing entry of any kind), so a new table never inherits an orphan file; on any failure it removes what it made, so a retry starts clean. The DDL, the meta rows and change #1 (kind `schema`, shape in the docstring) commit in one transaction, so the file carries a change from its first commit. Every other function refuses a missing directory with `storage_missing`.
 
 ### Opening
 
-Every connection comes from `connect()`: synchronous `sqlite3`, one connection per call, called through `asyncio.to_thread` under the [per-table lock](#service-layer). Each connection runs in WAL mode with the busy timeout `TABLE_DB_BUSY_TIMEOUT_S` (a lock held past it refuses with `busy`, for reads and writes alike) and with SQLite's double-quoted-string fallback disabled, so a quoted key that names no column fails as `schema_mismatch` instead of reading as a string literal. An authorizer denies ATTACH, as for the [project database](project-db.md). `VACUUM INTO` compiles to an ATTACH of its target, so the download copy allows exactly that filename for that one statement (`_attach_allowed()`).
+Every connection comes from `connect()`: synchronous `sqlite3`, one connection per call, called through `asyncio.to_thread` under the [per-table lock](#service-layer). Each connection runs in WAL mode with the busy timeout `TABLE_DB_BUSY_TIMEOUT_S` (a lock held past it refuses with `busy`, for reads and writes alike) and with SQLite's double-quoted-string fallback disabled, so a quoted key naming no column fails as `schema_mismatch` rather than reading as a string. An authorizer denies ATTACH, as for the [project database](project-db.md). `VACUUM INTO` compiles to an ATTACH of its target, so the download copy allows exactly that filename for that one statement (`_attach_allowed()`).
 
-The path guards (listed in the module docstring) refuse with `unsafe_path` anything in the table directory that is not the regular file or directory it should be, including a symlink, a planted FIFO, a side file of the wrong kind and a `table.db` swapped between the check and the connect; side files are checked before and after the pragmas, since enabling WAL creates them.
+The path guards refuse with `unsafe_path` anything in the table directory that is not the regular file or directory it should be, such as a symlink, a FIFO, a side file of the wrong kind or a `table.db` swapped between check and connect; side files are checked before and after the pragmas, since enabling WAL creates them.
 
 ## Row Writes
 
@@ -191,20 +191,20 @@ The module's helpers word a verdict for callers ([Refusals](../api/tables-api.md
 
 ## Service Layer
 
-`chat/tables/service.py` is the one read/write path for table files: the model tools, the table action requests and the HTTP routes call it, and nothing else opens a `table.db`. Its module docstring gives the pipeline (gate, lookup, verdict, lock, file call in a thread, `quest.db` bump, events) and the error classes; each function's docstring gives its result and refusals. Refusals the service decides are `TableError` subclasses with a `code`; those of the storage, filter and schema layers propagate unchanged, so tools and routes map every refusal by its `code` ([Refusals](../api/tables-api.md#refusals)).
+`chat/tables/service.py` is the one read/write path for table files: the model tools, the table action requests and the HTTP routes call it, and nothing else opens a `table.db`. Its module docstring gives the pipeline (gate, lookup, verdict, lock, file call in a thread, `quest.db` bump, events) and the error classes; each function's docstring its result and refusals. Refusals the service decides are `TableError` subclasses with a `code`; those of the storage, filter and schema layers propagate unchanged, so tools and routes map every refusal by its `code` ([Refusals](../api/tables-api.md#refusals)).
 
 **Caller.** A `Caller` carries the user, conversation, project, `is_public` and `run_kind`, which the service passes to `resolve_table_access()` together with the doc-source projects (only a private project's conversations have them). Tool dispatch builds it in `_table_caller()` (`chat/gemini_api/tool_dispatch.py`): a script caller has no conversation and no project and is never public, so scripts see user tables only. Routes use `caller_for_ui()` (`run_kind="ui"`).
 
-**The per-table lock.** Each table id has one `asyncio.Lock`, held by every reader and every writer of `table.db` for the whole file call, and by writers also through the `quest.db` bump and the events, so `row_count`, `schema_version` and `updated_at` land in write order. Readers take it too: a restore swaps the file in and needs no other connection open ([Restore](#restore)). The lock is process-local.
+**The per-table lock.** Each table id has one `asyncio.Lock`, held by every reader and writer of `table.db` for the whole file call, and by writers also through the `quest.db` bump and the events, so `row_count`, `schema_version` and `updated_at` land in write order. Readers take it too: a restore swaps the file in and needs no other connection open ([Restore](#restore)). The lock is process-local.
 
-- **Resolve twice.** Access is resolved before the lock, so a hidden or denied table never takes or creates one, then the row is re-fetched and re-resolved under it, so a share revoked or a schema changed while the call queued decides the outcome. Without `bypass_approval`, an approval verdict dry-runs the write under the lock first, so invalid rows get the free path's refusal and only a write that would succeed raises `TableApprovalRequired`. With `bypass_approval=True` (the card executor) an approval verdict proceeds, while hidden and denied still refuse.
+- **Resolve twice.** Access is resolved before the lock, so a hidden or denied table never takes or creates one, then the row is re-fetched and re-resolved under it, so a share revoked or schema changed while the call queued decides the outcome. Without `bypass_approval`, an approval verdict dry-runs the write under the lock first, so invalid rows get the free path's refusal and only a write that would succeed raises `TableApprovalRequired`. With `bypass_approval=True` (the card executor) an approval verdict proceeds, while hidden and denied still refuse.
 - **Previews and pins.** `preview_row_write()` and `preview_schema_change()` dry-run a row write and a schema change under the lock, with nothing written, bumped or published. The first adds the change's row images by column name and `rows_digest()` of its before images; the second returns the plan, `schema_diff()` and the `check_schema_violations()` counts. The executors pin what their card showed through `apply_row_write()` and `apply_schema_change()` ([Action Requests](#action-requests)).
 - **Shielding.** Every write (rows, schema, restore, create, delete, metadata, shares) runs shielded from cancellation (`_shielded()`), so the Stop button mid-turn cannot land between the file commit and the `quest.db` bump; the caller still sees the cancellation. `export_table()` instead holds a cancelled caller until the export finishes (`_finish_before_cancel()`), so the lock is never released and the temp directory never removed while `VACUUM INTO` runs.
 - **Lost schema bump.** If the `quest.db` bump of a schema change or restore is lost anyway (the file committed, then `update_schema()` failed or the process died), every later call would fail the file's schema check. On that `schema_mismatch`, `_heal_lost_schema_bump()` records the file's schema, row count and newest source in `quest.db` when the file is exactly one version ahead and tells the audience; the call still refuses, so its retry works.
 - **Schema changes and restores** both record through `update_schema()`, since a restore always bumps `schema_version`. A `rename_table` title goes to `quest.db` first, so a collision refuses before the file changes, and is rolled back if the file change fails.
-- **Create** lays out the directory under a fresh id, then inserts the row; a failed insert removes the directory, so a crash in between leaves an invisible orphan directory, never a row without a file. Creates are serialized per owner (an `owner:<id>` lock), so the store's check-then-insert title rule and per-owner cap hold. Authorizing a create is the caller's job (the routes, the `create_table` card); the service checks the gate, the column specs, the project's owner and the mode (`mode_mismatch`: a conversation creates only tables of its own mode).
-- **Delete** (owner only) runs under the table lock: it captures the audience, deletes the row (the shares cascade), removes the directory best effort and then publishes to the captured audience.
-- **Diagnostics.** Creates, failed and slow reads and file-layer refusals leave `[tables]` log lines, and the viewer hooks log failed requests to the console: [Logging -- Quest Tables Diagnostics](logging.md#quest-tables-diagnostics).
+- **Create** lays out the directory under a fresh id, then inserts the row; a failed insert removes the directory, so a crash in between leaves an orphan directory, never a row without a file. Creates are serialized per owner (an `owner:<id>` lock), so the store's check-then-insert title rule and per-owner cap hold. Authorizing a create is the caller's job (the routes, the `create_table` card); the service checks the gate, the column specs, the project's owner and the mode (`mode_mismatch`: a conversation creates only tables of its own mode).
+- **Delete** (owner only) runs under the table lock: it captures the audience, deletes the row (the shares cascade), removes the directory best effort and then publishes to it.
+- **Diagnostics.** Creates, failed or slow reads and file-layer refusals leave `[tables]` log lines, the viewer hooks console entries: [Logging -- Quest Tables Diagnostics](logging.md#quest-tables-diagnostics).
 
 ## Action Requests
 
@@ -247,7 +247,7 @@ The off-by-default, per-user `tables` gate (`FEATURE_TABLES`, `tables_enabled_fo
 ## Design Decisions
 
 **Why `data_tables` instead of `tables`?**
-`tables` reads badly next to SQLAlchemy metadata (`Base.metadata.tables`); the feature, gate and constants still say tables.
+`tables` reads badly next to SQLAlchemy's `Base.metadata.tables`; the feature, gate and constants still say tables.
 
 **Why scope title uniqueness per mode?**
 A scope that ignored mode would let a public conversation learn from a collision error that a private table of that title exists.
@@ -265,10 +265,10 @@ A REAL rounds past about 15 significant digits and makes equality depend on bina
 The rendered string is what is stored and shown; a significant-digit cap would let 1e300 render as hundreds of digits.
 
 **Why server-assigned, immutable column keys?**
-Cells are stored under the key, so a rename edits only the schema JSON and never touches DDL, and the change log and diff follow a column across renames; keeping keys out of model input means a model cannot forge or collide them.
+Cells are stored under the key, so a rename edits only the schema JSON and never touches DDL, and the change log and diff follow a column across renames; keys kept out of model input cannot be forged or collided.
 
 **Why no column type changes?**
-In-place conversion needs a rule per type pair and loses values; adding a column of the new type and copying with row writes keeps every step an ordinary logged change.
+In-place conversion needs a rule per type pair and loses values; a new column of the new type filled by row writes keeps every step an ordinary logged change.
 
 **Why synchronous `sqlite3` through `asyncio.to_thread` instead of `aiosqlite`?**
 The guards need the raw connection before the first statement (authorizer, double-quoted-string setting, inode recheck) and an authorizer swap around `VACUUM INTO`; with writes serialized by the per-table lock, one thread hop per write beats `aiosqlite`'s hop per statement.
