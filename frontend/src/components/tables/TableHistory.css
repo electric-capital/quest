@@ -1,0 +1,426 @@
+/* Table viewer History drawer (TableHistory): a fixed right-side panel over
+ * the viewer, below modal dialogs (z-index 1000). Header, then a body that
+ * stacks the change list (its own scroll box, at most ~45% of the height)
+ * above the selected change's detail (scrolls with the rest). Full width on
+ * phones. Tokens only; the diff grids keep their own CSS. */
+
+.table-history {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100vw);
+  box-sizing: border-box;
+  min-width: 0;
+  background-color: var(--surface);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+}
+
+.table-history-header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.table-history-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* Focused programmatically on open (tabIndex -1): no ring. */
+.table-history-title:focus {
+  outline: none;
+}
+
+.table-history-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.table-history-close:hover {
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+/* Outline buttons, as DocHistory's. */
+.table-history-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.3rem 0.625rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.table-history-button:hover:not(:disabled) {
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+.table-history-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.table-history-button:focus:not(:focus-visible),
+.table-history-close:focus:not(:focus-visible),
+.table-history-target:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.table-history-button svg {
+  flex-shrink: 0;
+}
+
+.table-history-button--primary {
+  border-color: transparent;
+  background-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.table-history-button--primary:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+  color: var(--accent-contrast);
+}
+
+/* Loading / load error / lost access. */
+.table-history-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 2.5rem 1.25rem 0;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  text-align: center;
+}
+
+.table-history-state-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.table-history-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* --- List --------------------------------------------------------------- */
+
+.table-history-list-pane {
+  flex-shrink: 0;
+  max-height: 45%;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.table-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.table-history-item {
+  position: relative;
+  padding: 0.4rem 0.625rem;
+  border-radius: 8px;
+  transition: background-color 0.15s;
+}
+
+.table-history-item:hover {
+  background-color: var(--hover);
+}
+
+.table-history-item.is-selected {
+  background-color: var(--accent-soft);
+}
+
+/* The select button stretches over the whole entry (::after); links and
+   the target button sit above that layer. */
+.table-history-item-select {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.table-history-item-select::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+}
+
+.table-history-item-select:focus {
+  outline: none;
+}
+
+.table-history-item-select:focus-visible::after {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.table-history-item-id {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.table-history-item-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Not in effect: rewound by a later restore. */
+.table-history-item.is-rewound .table-history-item-summary,
+.table-history-item.is-rewound .table-history-item-id,
+.table-history-detail-title.is-rewound {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.table-history-badge {
+  flex-shrink: 0;
+  padding: 0 0.4rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.125rem;
+}
+
+.table-history-badge--schema,
+.table-history-badge--restore {
+  border-color: rgb(var(--accent-rgb) / 0.4);
+  color: var(--accent-text);
+}
+
+.table-history-badge--restore {
+  background-color: var(--accent-soft);
+}
+
+.table-history-item-meta {
+  margin-top: 0.125rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.table-history-link {
+  position: relative;
+  z-index: 1;
+  color: var(--accent-text);
+  font-weight: 500;
+}
+
+.table-history-link:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+/* "Show #n" / "#n": select a restore's target. */
+.table-history-target {
+  position: relative;
+  z-index: 1;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent-text);
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.table-history-target:hover {
+  text-decoration: underline;
+}
+
+.table-history-more {
+  margin: 0.5rem 0.625rem 0.25rem;
+}
+
+.table-history-error {
+  margin: 0.375rem 0.625rem 0;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+/* Words for screen readers only. */
+.table-history-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* --- Detail ------------------------------------------------------------- */
+
+.table-history-detail {
+  flex: 1 0 auto;
+  min-width: 0;
+  padding: 1rem 1.25rem 1.5rem;
+}
+
+.table-history-placeholder {
+  padding: 1rem 1.25rem;
+}
+
+.table-history-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.table-history-detail-heading {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.table-history-detail-title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.table-history-detail-meta {
+  margin: 0.125rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.table-history-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+
+.table-history-note {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.table-history-detail-body {
+  margin-top: 1rem;
+  min-width: 0;
+}
+
+.table-history-detail-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.625rem;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+}
+
+.table-history-detail-caption {
+  margin: 0 0 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.table-history-muted {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.table-history-sep {
+  color: var(--text-muted);
+}
+
+.table-history-dropped {
+  margin: 0.75rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 768px) {
+  .table-history-header {
+    padding-left: 16px;
+    padding-right: 8px;
+  }
+
+  .table-history-list-pane {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .table-history-detail,
+  .table-history-placeholder {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .table-history-actions {
+    align-items: flex-start;
+  }
+}

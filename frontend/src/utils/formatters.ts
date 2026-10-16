@@ -4,11 +4,13 @@
 
 /**
  * Parse ISO timestamp as UTC Date.
- * Handles timestamps with or without Z suffix (for backwards compatibility).
+ * A naive timestamp (no zone, as most API rows send) is read as UTC; one
+ * that already carries a zone (`Z` or an offset such as `+00:00`, as the
+ * Quest Tables change log sends) is parsed as given.
  */
 export function parseUTCTimestamp(timestamp: string): Date {
-  const isoString = timestamp.endsWith('Z') ? timestamp : timestamp + 'Z';
-  return new Date(isoString);
+  const hasZone = /(?:Z|[+-]\d\d:?\d\d)$/i.test(timestamp);
+  return new Date(hasZone ? timestamp : timestamp + 'Z');
 }
 
 /**
