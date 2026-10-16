@@ -208,7 +208,10 @@
 }
 
 /* Preview: the real .model-menu is an upward-opening absolute popover;
-   render it in flow here. Items are inert (no hover, default cursor). */
+   render it in flow here. Items are inert (no hover, default cursor). The
+   real rows are <button>s, which browsers size as border-box; the preview's
+   rows are <div>s, so they need it set explicitly or their padding pushes
+   the "All models" chevron past the menu's edge. */
 .model-selection-preview .model-menu {
   position: static;
   width: 100%;
@@ -216,6 +219,7 @@
 }
 
 .model-selection-preview .model-menu-item {
+  box-sizing: border-box;
   cursor: default;
 }
 
