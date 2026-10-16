@@ -1,13 +1,16 @@
 // TableViewer: route-param parsing, the loading / gone / error states, the
 // URL as the source of truth for filter and sort (the bar and the headers
 // navigate, the viewer reads the route), paging (offset reset on change,
-// clamp on a shrinking total), stale columns, and when rows re-query on
-// table_changed.
+// clamp on a shrinking total), stale columns, when rows re-query on
+// table_changed, and the side panels: Columns (TableSchemaEditor) and
+// History (stubbed here: TableHistory has its own tests), one at a time,
+// leaving Columns through its discard confirm, focus back on the header's
+// menu button when a panel closes, a restore applying its detail.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { ApiClientError } from '../../api/request';
-import type { TableColumn, TableDetail, TableRowsPage } from '../../api/types';
+import type { RestoreTableResponse, TableColumn, TableDetail, TableRowsPage } from '../../api/types';
 import type { TableView } from '../../hooks/useTable';
 import { parseTablesRoute, tableViewerPath } from '../../utils/tablesRoute';
 import { TableViewer, filterColumnNames, parseFilterParam, parseSortParam, resolveSort } from './TableViewer';
@@ -15,6 +18,7 @@ import { TableViewer, filterColumnNames, parseFilterParam, parseSortParam, resol
 const mocks = vi.hoisted(() => ({
   queryTableRows: vi.fn(),
   view: null as unknown as TableView,
+  restoreResponse: null as unknown as RestoreTableResponse,
 }));
 
 vi.mock('../../api/tablesApi', async (importOriginal) => ({
@@ -28,6 +32,28 @@ vi.mock('../../hooks/useTable', () => ({
 
 vi.mock('../../contexts/ProjectsContext', () => ({
   useProjects: () => ({ projects: [] }),
+}));
+
+vi.mock('./TableHistory', () => ({
+  TableHistory: ({
+    table,
+    onClose,
+    onRestored,
+  }: {
+    table: TableDetail;
+    onClose: () => void;
+    onRestored: (res: RestoreTableResponse) => void;
+  }) => (
+    <aside aria-label="History">
+      <p>History of {table.title}</p>
+      <button type="button" onClick={() => onRestored(mocks.restoreResponse)}>
+        Fake restore
+      </button>
+      <button type="button" onClick={onClose}>
+        Close history
+      </button>
+    </aside>
+  ),
 }));
 
 const COLUMNS: TableColumn[] = [
@@ -441,5 +467,106 @@ describe('TableViewer', () => {
     await screen.findByText('row at 0');
     await act(async () => {});
     expect(refresh).not.toHaveBeenCalled();
+  });
+
+  describe('side panels', () => {
+    function openItem(name: RegExp) {
+      fireEvent.click(screen.getByRole('button', { name: 'Leads' }));
+      fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name }));
+    }
+
+    it('Columns opens the schema editor beside the grid; Close closes it', async () => {
+      render(ui());
+      await screen.findByText('row at 0');
+      expect(screen.queryByRole('complementary', { name: 'Columns' })).toBeNull();
+      openItem(/Columns/);
+      const panel = screen.getByRole('complementary', { name: 'Columns' });
+      expect(within(panel).getByRole('button', { name: 'Expand Status' })).toBeTruthy();
+      expect(document.querySelector('.table-viewer-body--panel')).not.toBeNull();
+      fireEvent.click(within(panel).getByRole('button', { name: 'Close columns panel' }));
+      expect(screen.queryByRole('complementary', { name: 'Columns' })).toBeNull();
+    });
+
+    it('closing the Columns panel returns focus to the header menu button', async () => {
+      render(ui());
+      await screen.findByText('row at 0');
+      openItem(/Columns/);
+      const panel = screen.getByRole('complementary', { name: 'Columns' });
+      // Focus moved into the panel (its heading) when it opened.
+      expect(panel.contains(document.activeElement)).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Delete Status' }));
+      fireEvent.click(within(panel).getByRole('button', { name: 'Close columns panel' }));
+      // With edits: through the discard confirm.
+      fireEvent.click(within(screen.getByRole('dialog', { name: 'Discard column changes?' })).getByRole('button', { name: 'Discard' }));
+      expect(screen.queryByRole('complementary', { name: 'Columns' })).toBeNull();
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Leads' }));
+    });
+
+    it('History opens the drawer (one panel at a time), not beside the grid', async () => {
+      render(ui());
+      await screen.findByText('row at 0');
+      openItem(/Columns/);
+      openItem(/History/);
+      expect(screen.getByRole('complementary', { name: 'History' })).toBeTruthy();
+      expect(screen.queryByRole('complementary', { name: 'Columns' })).toBeNull();
+      expect(document.querySelector('.table-viewer-body--panel')).toBeNull();
+      // And back: History has no draft to lose.
+      openItem(/Columns/);
+      expect(screen.getByRole('complementary', { name: 'Columns' })).toBeTruthy();
+      expect(screen.queryByRole('complementary', { name: 'History' })).toBeNull();
+    });
+
+    it('leaving Columns with edits for History asks to discard them first', async () => {
+      render(ui());
+      await screen.findByText('row at 0');
+      openItem(/Columns/);
+      fireEvent.click(screen.getByRole('button', { name: 'Delete Status' }));
+      openItem(/History/);
+      let dialog = screen.getByRole('dialog', { name: 'Discard column changes?' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      expect(screen.getByRole('complementary', { name: 'Columns' })).toBeTruthy();
+      expect(screen.queryByRole('complementary', { name: 'History' })).toBeNull();
+      openItem(/History/);
+      dialog = screen.getByRole('dialog', { name: 'Discard column changes?' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }));
+      expect(screen.getByRole('complementary', { name: 'History' })).toBeTruthy();
+      expect(screen.queryByRole('complementary', { name: 'Columns' })).toBeNull();
+    });
+
+    it('a restore applies the returned detail; the grid re-queries even when the version already moved', async () => {
+      const applyDetail = vi.fn();
+      mocks.view = view({ applyDetail });
+      // The shown detail is already at the restored version (the
+      // table_changed re-fetch landed first): the viewer re-queries itself.
+      const restored = detail({ schema_version: 1, updated_at: '2026-10-03T00:00:00', row_count: 12 });
+      mocks.restoreResponse = { change: null, table: restored, schema_version: 1, row_count: 12, restored_to: 4 };
+      render(ui());
+      await screen.findByText('row at 0');
+      expect(mocks.queryTableRows).toHaveBeenCalledTimes(1);
+      openItem(/History/);
+      fireEvent.click(screen.getByRole('button', { name: 'Fake restore' }));
+      expect(applyDetail).toHaveBeenCalledWith(restored);
+      await waitFor(() => expect(mocks.queryTableRows).toHaveBeenCalledTimes(2));
+      fireEvent.click(screen.getByRole('button', { name: 'Close history' }));
+      expect(screen.queryByRole('complementary', { name: 'History' })).toBeNull();
+    });
+
+    it('a restore to a new schema version re-queries through the version change', async () => {
+      const applyDetail = vi.fn();
+      mocks.view = view({ applyDetail });
+      const restored = detail({ schema_version: 2, updated_at: '2026-10-03T00:00:00' });
+      mocks.restoreResponse = { change: null, table: restored, schema_version: 2, row_count: 350, restored_to: 4 };
+      const { rerender } = render(ui());
+      await screen.findByText('row at 0');
+      openItem(/History/);
+      fireEvent.click(screen.getByRole('button', { name: 'Fake restore' }));
+      expect(applyDetail).toHaveBeenCalledWith(restored);
+      await act(async () => {});
+      expect(mocks.queryTableRows).toHaveBeenCalledTimes(1);
+      // useTable now shows the restored detail.
+      mocks.view = view({ table: restored, applyDetail });
+      rerender(ui());
+      await waitFor(() => expect(mocks.queryTableRows).toHaveBeenCalledTimes(2));
+    });
   });
 });

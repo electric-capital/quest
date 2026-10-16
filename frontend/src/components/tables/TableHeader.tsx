@@ -7,17 +7,23 @@
  * role recomputed here):
  * - Rename (can_rename, owner): inline input, PUT title with
  *   `expected_updated_at` (one retry when only rows moved meanwhile);
- * - Columns (everyone): opens the Columns panel; a disabled slot until the
- *   viewer passes `onOpenColumns` (phase B5);
- * - History (can_edit, editors): a disabled slot until `onOpenHistory` (B6);
+ * - Columns (everyone): opens the Columns panel through `onOpenColumns`
+ *   (the viewer passes it; the panel is read-only for non-owners);
+ * - History (can_edit, editors): opens the History drawer through
+ *   `onOpenHistory` (the viewer passes it);
  * - Download CSV, Download SQLite (everyone) and Download SQLite with history
  *   (can_download_history, editors): plain `<a href download>` links;
  * - "Require approval for agent writes" (can_require_approval, owner): PUT
  *   require_approval without a concurrency token (row writes move
  *   updated_at); the menu stays open so the new state is visible;
- * - Share (can_share, owner): a disabled slot until `onOpenShare` (B6);
+ * - Share (can_share, owner): a reserved slot, disabled until a host passes
+ *   `onOpenShare` (the sharing dialog is phase C2; the viewer passes none);
  * - Delete (can_delete, owner): DocConfirmDialog naming the row count, then
  *   navigates to All Tables (the project's list for a project table).
+ * Columns and History, too, render as disabled "Coming soon" slots for a
+ * host that passes no callback. `menuButtonRef` hands the host the title
+ * (menu) button, so focus can return to it when a panel the menu opened
+ * closes.
  *
  * A stale rename (409 stale_update) applies the server's
  * current row (`onRowApplied`, i.e. useTable.applyRow) -- or asks for a
@@ -35,7 +41,7 @@
  * recipient who shared it and whether they can edit.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
@@ -110,10 +116,12 @@ export interface TableHeaderProps {
   onStale?: () => void;
   /** Open the Columns panel; the item is a disabled slot without it. */
   onOpenColumns?: () => void;
-  /** Open History (editors); a disabled slot without it. */
+  /** Open the History drawer (editors); a disabled slot without it. */
   onOpenHistory?: () => void;
-  /** Open the Share dialog (owner); a disabled slot without it. */
+  /** Open the Share dialog (owner; phase C2); a disabled slot without it. */
   onOpenShare?: () => void;
+  /** The title (menu) button, for the host to return focus to. */
+  menuButtonRef?: Ref<HTMLButtonElement>;
 }
 
 export function TableHeader({
@@ -124,6 +132,7 @@ export function TableHeader({
   onOpenColumns,
   onOpenHistory,
   onOpenShare,
+  menuButtonRef,
 }: TableHeaderProps) {
   const { projects } = useProjects();
   const navigate = useNavigate();
@@ -383,6 +392,7 @@ export function TableHeader({
             ) : (
               <button
                 type="button"
+                ref={menuButtonRef}
                 className={`doc-header-title-button${menuOpen ? ' open' : ''}`}
                 onClick={(e) => {
                   e.stopPropagation();

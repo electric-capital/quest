@@ -273,7 +273,7 @@ export function staleSchemaCurrent(
 export interface TableRowsViolation {
   // Column name the operation targeted.
   column: string | null;
-  // The failing check, e.g. "required", "unique", "option".
+  // The failing check: "required", "unique" or "enum_option".
   check: string | null;
   // The enum option involved, for option checks.
   option: string | null;

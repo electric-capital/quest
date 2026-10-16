@@ -248,8 +248,8 @@ describe('TablesListView', () => {
     expect(screen.getByText('Loading...')).toBeTruthy();
     resolveOwn(page([]));
     await waitFor(() => expect(screen.getByText('No tables yet.')).toBeTruthy());
-    // New Table is inert until the schema editor lands, so the hint omits it.
-    expect(screen.getByText('Ask Quest to create one.')).toBeTruthy();
+    // The hint points at New Table, which opens the dialog.
+    expect(screen.getByText('Ask Quest to create one, or use New Table.')).toBeTruthy();
   });
 
   it('shows the filtered empty state', async () => {
@@ -273,14 +273,22 @@ describe('TablesListView', () => {
     expect(screen.queryByRole('region', { name: 'Your tables' })).toBeNull();
   });
 
-  it('renders New Table disabled ("Coming soon") without onNewTable', async () => {
+  it('opens its own New Table dialog without onNewTable', async () => {
     mocks.listTables.mockResolvedValue(page([]));
-    renderView(null);
-    const button = screen.getByRole('button', { name: /New Table/ }) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
-    expect(button.textContent).toContain('(coming soon)');
-    expect(button.getAttribute('title')).toBe('Coming soon');
-    await waitFor(() => expect(screen.getByText('No tables yet.')).toBeTruthy());
+    mocks.projects = [project('p1', 'Sales')];
+    renderView('p1');
+    const button = screen.getByRole('button', { name: 'New Table' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(button);
+    const dialog = screen.getByRole('dialog', { name: 'New Table' });
+    // Preselected to the filtered project.
+    expect((within(dialog).getByLabelText('Location') as HTMLSelectElement).value).toBe('p1');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // Closed without creating: focus back on the button that opened it.
+    expect(document.activeElement).toBe(button);
+    await waitFor(() => expect(screen.getByText('No tables in this project yet.')).toBeTruthy());
   });
 
   it('calls onNewTable from an enabled New Table button', async () => {

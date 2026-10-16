@@ -130,12 +130,6 @@
   border-color: transparent;
 }
 
-/* No New Table dialog yet (phase B5): visible but inert. */
-.tables-list-new-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 /* Content column */
 .tables-list-content {
   padding: 0.5rem 2rem 2.5rem;
@@ -372,15 +366,6 @@
 .tables-row-unit {
   /* Visually hidden on desktop (the column label names the unit) but still
      read by screen readers; shown inline on the phone meta line. */
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
-.tables-list-new-hint {
   position: absolute;
   width: 1px;
   height: 1px;

@@ -4,7 +4,11 @@
  * after the header, and long tables scroll inside it with the header row
  * pinned. 2rem gutters on desktop, 16px on phones; no horizontal page
  * scroll (wide tables scroll inside the grid). The loading / not-found /
- * error states reuse DocViewer.css (.doc-viewer-state). */
+ * error states reuse DocViewer.css (.doc-viewer-state). The Columns panel
+ * sits right of the grid on desktop and stacks under it on narrow screens
+ * (the page then scrolls past the grid to the panel);
+ * the History drawer (TableHistory.css) is fixed over the right edge
+ * instead, so it takes no room in this layout. */
 
 .table-viewer {
   flex: 1 1 0;
@@ -16,6 +20,25 @@
   min-height: 0;
   box-sizing: border-box;
   padding: 1rem 2rem 1rem;
+}
+
+/* Below the header: the grid column and, when open, a side panel
+ * (TableSchemaEditor.css `.table-side-panel`) to its right. */
+.table-viewer-body {
+  flex: 1 1 0;
+  display: flex;
+  gap: 0.75rem;
+  min-width: 0;
+  min-height: 0;
+}
+
+.table-viewer-main {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+  min-height: 0;
 }
 
 .table-viewer-rows-error {
@@ -82,5 +105,18 @@
 @media (max-width: 768px) {
   .table-viewer {
     padding: 0.75rem 16px 1rem;
+  }
+
+  /* Narrow: the panel stacks under the grid (phone layout: phase B8). The
+   * body and the grid column then take their content's height and the
+   * page scrolls, so the panel sits below the grid instead of being
+   * squeezed over it. */
+  .table-viewer-body--panel {
+    flex: 1 0 auto;
+    flex-direction: column;
+  }
+
+  .table-viewer-body--panel .table-viewer-main {
+    flex: 0 0 auto;
   }
 }

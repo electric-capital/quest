@@ -1,7 +1,10 @@
 // TableHeader: menu items follow the row's access flags (owner-only items
-// hidden for a reader, reserved slots disabled until wired), rename and the
+// hidden for a reader; Columns and History active once the viewer wires
+// them, Share a disabled slot until phase C2), rename and the
 // approval switch send the concurrency token and recover from stale_update,
-// delete confirms with the row count and navigates to the right list.
+// delete confirms with the row count and navigates to the right list;
+// `menuButtonRef` hands the host the title (menu) button.
+import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
@@ -127,8 +130,8 @@ describe('TableHeader', () => {
   afterEach(() => cleanup());
 
   describe('menu items', () => {
-    it('owner gets every item; the reserved slots are disabled until wired', () => {
-      renderHeader(detail());
+    it('owner gets every item; with the viewer wiring, only Share is a disabled slot', () => {
+      renderHeader(detail(), { onOpenColumns: vi.fn(), onOpenHistory: vi.fn() });
       const menu = openMenu();
       expect(itemLabels(menu)).toEqual([
         'RenameR',
@@ -140,11 +143,20 @@ describe('TableHeader', () => {
         'Download SQLite with history',
         'DeleteD',
       ]);
-      for (const name of [/Columns/, /History/, /Share/]) {
-        expect((within(menu).getByRole('menuitem', { name }) as HTMLButtonElement).disabled).toBe(true);
+      for (const name of [/Columns/, /History/]) {
+        expect((within(menu).getByRole('menuitem', { name }) as HTMLButtonElement).disabled).toBe(false);
       }
+      const share = within(menu).getByRole('menuitem', { name: /Share/ }) as HTMLButtonElement;
+      expect(share.disabled).toBe(true);
+      expect(share.title).toBe('Coming soon');
       const checkbox = within(menu).getByRole('menuitemcheckbox', { name: /Require approval for agent writes/ });
       expect(checkbox.getAttribute('aria-checked')).toBe('false');
+    });
+
+    it('hands the host the title (menu) button through menuButtonRef', () => {
+      const menuButtonRef = createRef<HTMLButtonElement>();
+      renderHeader(detail(), { menuButtonRef });
+      expect(menuButtonRef.current).toBe(screen.getByRole('button', { name: 'Leads' }));
     });
 
     it('downloads are cookie-authed links with download', () => {
@@ -161,10 +173,23 @@ describe('TableHeader', () => {
       ).toBe('/app/api/tables/t1/download?format=sqlite&include_history=true');
     });
 
-    it('a reader gets Columns (disabled) and the two plain downloads only', () => {
-      renderHeader(READER);
+    it('a host that wires nothing gets Columns and History as disabled slots', () => {
+      renderHeader(detail());
+      const menu = openMenu();
+      for (const name of [/Columns/, /History/, /Share/]) {
+        expect((within(menu).getByRole('menuitem', { name }) as HTMLButtonElement).disabled).toBe(true);
+      }
+    });
+
+    it('a reader gets Columns (the read-only panel) and the two plain downloads only', () => {
+      const onOpenColumns = vi.fn();
+      const onOpenHistory = vi.fn();
+      renderHeader(READER, { onOpenColumns, onOpenHistory });
       const menu = openMenu();
       expect(itemLabels(menu)).toEqual(['ColumnsC', 'Download CSV', 'Download SQLite']);
+      expect((within(menu).getByRole('menuitem', { name: /Columns/ }) as HTMLButtonElement).disabled).toBe(false);
+      fireEvent.keyDown(document, { key: 'h' });
+      expect(onOpenHistory).not.toHaveBeenCalled();
       expect(within(menu).queryByRole('menuitemcheckbox')).toBeNull();
       fireEvent.keyDown(document, { key: 'r' });
       fireEvent.keyDown(document, { key: 'd' });
@@ -172,6 +197,9 @@ describe('TableHeader', () => {
       expect(screen.queryByRole('dialog')).toBeNull();
       // Who shared it, and the view-only permission.
       expect(screen.getByText('Shared by Bea · Can view')).toBeTruthy();
+      // The menu is still open (those keys did nothing): C opens Columns.
+      fireEvent.keyDown(document, { key: 'c' });
+      expect(onOpenColumns).toHaveBeenCalledTimes(1);
     });
 
     it('a write-share recipient also gets History and the history download', () => {

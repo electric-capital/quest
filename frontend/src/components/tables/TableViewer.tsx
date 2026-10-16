@@ -43,14 +43,41 @@
  * is newer than the detail's asks useTable for a re-fetch (an older page is
  * a rows response that lags, not a stale detail).
  *
- * Plug-in points for later phases: the header's `onOpenColumns` / `onOpenHistory` / `onOpenShare`
- * (B5 / B6), left unset so the menu shows them as disabled slots.
+ * Side panels, one at a time (`panel`, a `TableSidePanel` or null; local,
+ * not in the URL):
+ * - 'columns' (the header's Columns item, everyone): TableSchemaEditor,
+ *   read-only for non-owners, beside the grid (it narrows the grid; stacked
+ *   under it on narrow screens). It applies a saved detail through
+ *   useTable.applyDetail and asks for a re-fetch on a conflict. It owns its
+ *   draft and discard confirm: leaving it for another panel goes through
+ *   its ref handle (`requestClose(then)`), which confirms when there are
+ *   edits; its own Close clears `panel`. On narrow screens the body and
+ *   the grid column take their content's height while it is open, so the
+ *   page scrolls down to the panel instead of the panel covering the grid.
+ * - 'history' (the header's History item, which the header shows to
+ *   editors only; the mount is not gated, the drawer shows its own
+ *   lost-access state): TableHistory, a drawer fixed over the right edge
+ *   (TableHistory.css), so it takes no room in the grid layout. A restore
+ *   applies `res.table` through applyDetail. A restore always bumps
+ *   `schema_version` (chat/tables/revert.py), so the grid re-queries through
+ *   the version change above; should the shown version already be the
+ *   restored one (the table_changed re-fetch landed first, and re-queried
+ *   then), the viewer bumps the rows refresh key itself, so the grid can
+ *   never keep showing pre-restore rows.
+ *
+ * Closing a panel (its Close, Escape in the drawer, a discard confirm)
+ * returns focus to the header's title (menu) button, which opened it --
+ * unless focus already went somewhere else on the page. Switching panels
+ * leaves focus to the new panel (its heading).
+ *
+ * Plug-in point for a later phase: the header's `onOpenShare` (phase C2),
+ * left unset so the menu shows Share as a disabled slot.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { filterErrorPath } from '../../api/tablesApi';
-import type { FilterNode, SortKey, TableColumn } from '../../api/types';
+import type { FilterNode, RestoreTableResponse, SortKey, TableColumn } from '../../api/types';
 import { useTable } from '../../hooks/useTable';
 import { useTableRows } from '../../hooks/useTableRows';
 import {
@@ -67,6 +94,8 @@ import { TableFilterBar } from './TableFilterBar';
 import { TABLE_GRID_PAGE_SIZE, TableGrid, clampOffset } from './TableGrid';
 import { TableFooter } from './TableFooter';
 import { TableHeader } from './TableHeader';
+import { TableHistory } from './TableHistory';
+import { TableSchemaEditor, type TableSchemaEditorHandle } from './TableSchemaEditor';
 import '../docs/DocViewer.css';
 import './TableViewer.css';
 
@@ -77,6 +106,9 @@ export interface TableViewerProps {
   /** Raw `sort` route param (`[{column, direction}]` JSON), or null. */
   sort: string | null;
 }
+
+/** The side panel open over / beside the grid (one at a time). */
+export type TableSidePanel = 'columns' | 'history';
 
 /** The viewer's own state (filter and sort come from the route). */
 export interface TableViewerState {
@@ -274,6 +306,43 @@ function TableViewerBody({
     setView((prev) => ({ ...prev, offset: Math.max(0, next) }));
   }, []);
 
+  const [panel, setPanel] = useState<TableSidePanel | null>(null);
+  const panelRef = useRef(panel);
+  panelRef.current = panel;
+  const editorRef = useRef<TableSchemaEditorHandle>(null);
+  const openPanel = useCallback((next: TableSidePanel) => {
+    if (panelRef.current === next) return;
+    // Leaving the Columns panel goes through its discard confirm.
+    if (panelRef.current === 'columns' && editorRef.current) {
+      editorRef.current.requestClose(() => setPanel(next));
+    } else {
+      setPanel(next);
+    }
+  }, []);
+  const openColumns = useCallback(() => openPanel('columns'), [openPanel]);
+  const openHistory = useCallback(() => openPanel('history'), [openPanel]);
+  // Focus goes back to the menu button that opened the panel, once the
+  // panel is gone (when focus fell to the page with it).
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const [panelClosed, setPanelClosed] = useState(0);
+  const closePanel = useCallback(() => {
+    setPanel(null);
+    setPanelClosed((n) => n + 1);
+  }, []);
+  useEffect(() => {
+    if (panelClosed === 0) return;
+    const active = document.activeElement;
+    if (!active || active === document.body || !active.isConnected) menuButtonRef.current?.focus();
+  }, [panelClosed]);
+  const handleRestored = useCallback(
+    (res: RestoreTableResponse) => {
+      const shownVersion = schemaVersionRef.current;
+      applyDetail(res.table);
+      if (res.table.schema_version === shownVersion) setRowsRefreshKey((key) => key + 1);
+    },
+    [applyDetail],
+  );
+
   const [retrying, setRetrying] = useState(false);
   const retry = useCallback(async () => {
     setRetrying(true);
@@ -332,52 +401,70 @@ function TableViewerBody({
         onDetailApplied={applyDetail}
         onRowApplied={applyRow}
         onStale={() => void refresh()}
+        onOpenColumns={openColumns}
+        onOpenHistory={openHistory}
+        menuButtonRef={menuButtonRef}
       />
 
-      <TableFilterBar
-        columns={table.schema}
-        filter={parsedFilter}
-        invalidParam={filterParam !== null && parsedFilter === null}
-        onChange={setFilter}
-        error={filterError}
-      />
+      <div className={`table-viewer-body${panel === 'columns' ? ' table-viewer-body--panel' : ''}`}>
+        <div className="table-viewer-main">
+          <TableFilterBar
+            columns={table.schema}
+            filter={parsedFilter}
+            invalidParam={filterParam !== null && parsedFilter === null}
+            onChange={setFilter}
+            error={filterError}
+          />
 
-      {(resolvedSort.unreadable || resolvedSort.missing.length > 0) && (
-        <div className="table-filter-row table-sort-note">
-          <span className="table-filter-note">{sortNote(resolvedSort)}</span>
-          <button type="button" className="table-filter-clear" onClick={() => setSort(null)}>
-            Clear sort
-          </button>
+          {(resolvedSort.unreadable || resolvedSort.missing.length > 0) && (
+            <div className="table-filter-row table-sort-note">
+              <span className="table-filter-note">{sortNote(resolvedSort)}</span>
+              <button type="button" className="table-filter-clear" onClick={() => setSort(null)}>
+                Clear sort
+              </button>
+            </div>
+          )}
+
+          {rowsError && !filterError && (
+            <div className="table-viewer-rows-error" role="alert">
+              <span>Failed to load rows: {rowsError.message}</span>
+              <button
+                type="button"
+                className="table-viewer-rows-retry"
+                onClick={() => void rows.refresh()}
+                disabled={rows.loading}
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          <TableGrid
+            columns={table.schema}
+            page={page}
+            loading={rows.loading}
+            sort={primarySort}
+            onSortChange={setSort}
+            offset={view.offset}
+            limit={TABLE_GRID_PAGE_SIZE}
+            onOffsetChange={setOffset}
+            filterActive={effectiveFilter !== null}
+          />
+
+          <TableFooter table={table} matchingCount={effectiveFilter && page ? page.total : null} />
         </div>
-      )}
+        {panel === 'columns' && (
+          <TableSchemaEditor
+            ref={editorRef}
+            table={table}
+            onClose={closePanel}
+            onDetailApplied={applyDetail}
+            onRefresh={() => void refresh()}
+          />
+        )}
+      </div>
 
-      {rowsError && !filterError && (
-        <div className="table-viewer-rows-error" role="alert">
-          <span>Failed to load rows: {rowsError.message}</span>
-          <button
-            type="button"
-            className="table-viewer-rows-retry"
-            onClick={() => void rows.refresh()}
-            disabled={rows.loading}
-          >
-            Retry
-          </button>
-        </div>
-      )}
-
-      <TableGrid
-        columns={table.schema}
-        page={page}
-        loading={rows.loading}
-        sort={primarySort}
-        onSortChange={setSort}
-        offset={view.offset}
-        limit={TABLE_GRID_PAGE_SIZE}
-        onOffsetChange={setOffset}
-        filterActive={effectiveFilter !== null}
-      />
-
-      <TableFooter table={table} matchingCount={effectiveFilter && page ? page.total : null} />
+      {panel === 'history' && <TableHistory table={table} onClose={closePanel} onRestored={handleRestored} />}
     </div>
   );
 }
