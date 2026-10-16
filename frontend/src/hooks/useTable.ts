@@ -15,6 +15,15 @@
  * alone does not show the new rows). `table_list_changed` is ignored here:
  * it is broadcast install-wide for writes to everyone-shared tables, and
  * the lists (useTables) are what it is for.
+ *
+ * Opening: a fetch that fails in a way that may clear on its own (a
+ * dropped connection, a 5xx, a busy 503) is repeated a couple of times
+ * (`withTransientRetry`) before the view reports `error`, and a caller
+ * that already holds the detail (the New Table dialog's create response,
+ * carried as router state) passes it as `initial`: the view shows it from
+ * the first render, `loading` false, and the fetch on open becomes a
+ * background refresh, whose failure keeps the shown table. The detail then
+ * stays as current as the realtime stream keeps it.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -22,6 +31,7 @@ import { getTable } from '../api/tablesApi';
 import { ApiClientError } from '../api/request';
 import type { TableDetail, TableListRow } from '../api/types';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
+import { withTransientRetry } from '../utils/transientRetry';
 
 /** The payload of one `table_changed` event for the open table. */
 export interface TableChangedEvent {
@@ -76,13 +86,32 @@ interface ChangeState {
 
 const NO_CHANGES: ChangeState = { id: null, seq: 0, last: null };
 
-export function useTable(tableId: string | null): TableView {
-  const [state, setState] = useState<TableState>(EMPTY);
+export interface UseTableOptions {
+  /**
+   * A detail the caller already holds for `tableId` (ignored for any other
+   * id): shown at once, refreshed in the background.
+   */
+  initial?: TableDetail | null;
+}
+
+/** The state a table id opens with: the caller's detail, or nothing yet. */
+function opening(tableId: string | null, initial: TableDetail | null | undefined): TableState {
+  if (tableId === null || !initial || initial.id !== tableId) return EMPTY;
+  return { id: tableId, table: initial, error: null, notFound: false };
+}
+
+export function useTable(tableId: string | null, options: UseTableOptions = {}): TableView {
+  const { initial = null } = options;
+  const [state, setState] = useState<TableState>(() => opening(tableId, initial));
   const [changes, setChanges] = useState<ChangeState>(NO_CHANGES);
 
   // The committed state, written in step with setState so callbacks and
   // late responses always see the latest one (even before a re-render).
-  const stateRef = useRef<TableState>(EMPTY);
+  const stateRef = useRef<TableState>(state);
+  // Read when a table id opens, so a detail passed later (or a new object
+  // for the same one) neither re-seeds nor re-fetches.
+  const initialRef = useRef(initial);
+  initialRef.current = initial;
   const commit = useCallback((next: TableState) => {
     stateRef.current = next;
     setState(next);
@@ -104,7 +133,9 @@ export function useTable(tableId: string | null): TableView {
     const seq = ++requestSeqRef.current;
     pendingSeqRef.current = seq;
     try {
-      const detail = await getTable(tableId);
+      const detail = await withTransientRetry(() => getTable(tableId), {
+        stillWanted: () => seq === requestSeqRef.current,
+      });
       if (seq !== requestSeqRef.current) return;
       commit({ id: tableId, table: detail, error: null, notFound: false });
     } catch (err) {
@@ -133,15 +164,16 @@ export function useTable(tableId: string | null): TableView {
   refreshRef.current = refresh;
 
   // Load on mount and whenever the table id changes, dropping the previous
-  // table (and any in-flight response for it) first.
+  // table (and any in-flight response for it) first. A detail the caller
+  // holds for the new id is shown meanwhile (the fetch refreshes it).
   useEffect(() => {
     requestSeqRef.current += 1;
     pendingSeqRef.current = null;
     dirtyRef.current = false;
-    commit(EMPTY);
+    commit(opening(tableId, initialRef.current));
     setChanges(NO_CHANGES);
     void refresh();
-  }, [refresh, commit]);
+  }, [tableId, refresh, commit]);
 
   const applyDetail = useCallback(
     (detail: TableDetail) => {

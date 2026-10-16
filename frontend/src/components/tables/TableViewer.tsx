@@ -5,7 +5,9 @@
  *
  * Data: useTable (the detail, kept current by `table_changed`) and
  * useTableRows (one grid page). Loading / error / not-found states follow
- * DocViewer.
+ * DocViewer. A navigation that carries the detail as router state (the
+ * New Table dialog, `tableFromLocationState`) opens on it, with the first
+ * fetch as a background refresh.
  *
  * The URL is the single source of truth for the filter and the sort: the
  * route's `filter` / `sort` params (utils/tableFilter searchParamToFilter /
@@ -94,7 +96,7 @@ import {
   searchParamToSort,
   sortToSearchParam,
 } from '../../utils/tableFilter';
-import { tableViewerSearch, tablesListPath } from '../../utils/tablesRoute';
+import { tableFromLocationState, tableViewerSearch, tablesListPath } from '../../utils/tablesRoute';
 import { TableFilterBar } from './TableFilterBar';
 import { TABLE_GRID_PAGE_SIZE, TableGrid, clampOffset } from './TableGrid';
 import { TableFooter } from './TableFooter';
@@ -204,11 +206,13 @@ function TableViewerBody({
   filterParam: string | null;
   sortParam: string | null;
 }) {
-  const { table, loading, error, notFound, refresh, changeSeq, lastChange, applyDetail, applyRow } =
-    useTable(tableId);
-
   const navigate = useNavigate();
   const location = useLocation();
+  // The detail a navigation here carried (the New Table dialog's create
+  // response), read once per table: the body is keyed by the id.
+  const [initial] = useState(() => tableFromLocationState(location.state, tableId));
+  const { table, loading, error, notFound, refresh, changeSeq, lastChange, applyDetail, applyRow } =
+    useTable(tableId, { initial });
 
   const [view, setView] = useState<ViewState>(() => ({ offset: 0, sortParam, filterParam }));
   // Filter or sort moved (the bar, a header click, a link, back / forward):

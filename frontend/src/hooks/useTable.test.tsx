@@ -185,9 +185,43 @@ describe('useTable', () => {
     expect(result.current.notFound).toBe(false);
   });
 
+  it('retries a transient failure of the opening fetch before reporting it', async () => {
+    mocks.getTable.mockRejectedValueOnce(new ApiClientError('busy', 503, 'busy'));
+    mocks.getTable.mockResolvedValueOnce(detail('t1'));
+    const { result } = renderHook(() => useTable('t1'));
+    await waitFor(() => expect(result.current.loading).toBe(false), { timeout: 3000 });
+    expect(mocks.getTable).toHaveBeenCalledTimes(2);
+    expect(result.current.table?.id).toBe('t1');
+    expect(result.current.error).toBeNull();
+  });
+
+  it('opens on an initial detail, loading false, and refreshes it in the background', async () => {
+    mocks.getTable.mockResolvedValueOnce(detail('t1', { updated_at: T1 }));
+    const { result } = renderHook(() => useTable('t1', { initial: detail('t1') }));
+    expect(result.current.loading).toBe(false);
+    expect(result.current.table?.updated_at).toBe(T0);
+    await waitFor(() => expect(result.current.table?.updated_at).toBe(T1));
+    expect(mocks.getTable).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the initial detail when the opening fetch fails, and ignores one for another id', async () => {
+    mocks.getTable.mockRejectedValueOnce(new ApiClientError('off', 403, 'tables_disabled'));
+    const seeded = renderHook(() => useTable('t1', { initial: detail('t1') }));
+    await waitFor(() => expect(mocks.getTable).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    expect(seeded.result.current.table?.id).toBe('t1');
+    expect(seeded.result.current.error).toBeNull();
+
+    mocks.getTable.mockResolvedValueOnce(detail('t2'));
+    const other = renderHook(() => useTable('t2', { initial: detail('t1') }));
+    expect(other.result.current.loading).toBe(true);
+    expect(other.result.current.table).toBeNull();
+    await waitFor(() => expect(other.result.current.table?.id).toBe('t2'));
+  });
+
   it('keeps the loaded table when a background refresh fails', async () => {
     const { result } = await loaded();
-    mocks.getTable.mockRejectedValueOnce(new ApiClientError('busy', 503, 'busy'));
+    mocks.getTable.mockRejectedValueOnce(new ApiClientError('off', 403, 'tables_disabled'));
     await act(async () => {
       await result.current.refresh();
     });

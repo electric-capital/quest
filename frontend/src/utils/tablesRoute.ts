@@ -12,7 +12,14 @@
  * 6.1), carried through unparsed; the filter bar decodes and validates them.
  * Anything deeper than /tables/<id> is not a tables route. The server serves
  * the SPA for all of these (quest.py serve_spa_tables).
+ *
+ * A navigation to the viewer may carry the table's detail as router state
+ * (`TableViewerLocationState`): the New Table dialog passes the create
+ * response, so the viewer renders the new table from it at once instead of
+ * depending on its first fetch, which then runs as a background refresh.
  */
+
+import type { TableDetail } from '../api/types'
 
 export type TablesRoute =
   | { kind: 'list'; projectId: string | null }
@@ -102,4 +109,21 @@ export function tableViewerSearch(
   }
   const query = params.toString()
   return query ? `?${query}` : ''
+}
+
+/** Router state a navigation to `/tables/<id>` may carry. */
+export interface TableViewerLocationState {
+  /** The table's detail, as the navigator last saw it. */
+  table?: TableDetail
+}
+
+/**
+ * The detail carried by a viewer location's state when it is `tableId`'s,
+ * else null (no state, another table's, or not a detail at all).
+ */
+export function tableFromLocationState(state: unknown, tableId: string): TableDetail | null {
+  if (!state || typeof state !== 'object') return null
+  const table = (state as TableViewerLocationState).table
+  if (!table || typeof table !== 'object' || table.id !== tableId) return null
+  return Array.isArray(table.schema) ? table : null
 }

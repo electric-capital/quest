@@ -12,7 +12,9 @@
  * (`validateDraft` with the title, on an empty table: the title is checked
  * trimmed and in code points, as the server counts it, so the input has no
  * maxLength) and sends one `createTable` (`draftToCreateRequest`), then
- * navigates to the new table's viewer. While Create is disabled a line
+ * navigates to the new table's viewer with the created detail as router
+ * state (`TableViewerLocationState`), so the viewer shows the table from
+ * the response and only refreshes it. While Create is disabled a line
  * beside it says why: "Add a title to create the table." while the title
  * is blank, else "N problems to fix" -- a button that focuses the title
  * when it is the problem, else expands the columns with problems and
@@ -137,7 +139,7 @@ export function NewTableDialog({ isOpen, onClose, projects, initialProjectId }: 
       });
       const detail = await createTable(body);
       onClose();
-      navigate(tableViewerPath(detail.id));
+      navigate(tableViewerPath(detail.id), { state: { table: detail } });
     } catch (err) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to create the table.';
       const code = err instanceof ApiClientError ? err.errorCode : undefined;

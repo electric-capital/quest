@@ -131,6 +131,15 @@ describe('useTableRows', () => {
     expect(result.current.loading).toBe(false);
   });
 
+  it('retries a transient failure before reporting it', async () => {
+    mocks.apiGet.mockRejectedValueOnce(new ApiClientError('busy', 503, 'busy'));
+    mocks.apiGet.mockResolvedValueOnce(page(4));
+    const { result } = setup({});
+    await waitFor(() => expect(result.current.page?.total).toBe(4), { timeout: 3000 });
+    expect(mocks.apiGet).toHaveBeenCalledTimes(2);
+    expect(result.current.error).toBeNull();
+  });
+
   it('keeps the ApiClientError (with its filter path) and the last good page', async () => {
     mocks.apiGet.mockResolvedValueOnce(page(2));
     const { result, rerender } = setup({});

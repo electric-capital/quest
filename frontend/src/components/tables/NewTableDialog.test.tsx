@@ -39,7 +39,12 @@ function created(id: string): TableDetail {
 
 function LocationProbe() {
   const location = useLocation();
-  return <output data-testid="location">{location.pathname + location.search}</output>;
+  return (
+    <>
+      <output data-testid="location">{location.pathname + location.search}</output>
+      <output data-testid="state">{JSON.stringify(location.state)}</output>
+    </>
+  );
 }
 
 const onClose = vi.fn();
@@ -121,6 +126,8 @@ describe('NewTableDialog', () => {
     expect(createButton().disabled).toBe(false);
     fireEvent.click(createButton());
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/tables/t9'));
+    // The viewer opens on the create response (router state), not on a fetch.
+    expect(JSON.parse(screen.getByTestId('state').textContent ?? 'null')).toEqual({ table: { id: 't9' } });
     expect(mocks.createTable).toHaveBeenCalledTimes(1);
     expect(mocks.createTable).toHaveBeenCalledWith({
       title: 'Leads',

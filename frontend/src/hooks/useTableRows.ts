@@ -15,13 +15,17 @@
  *   flash); `loading` says one is. Opening another table drops the page.
  * - A failed fetch keeps the last good page and sets `error` (the
  *   ApiClientError itself, so the filter bar can read `filterErrorPath`);
- *   the next success clears it.
+ *   the next success clears it. A failure that may clear on its own (a
+ *   dropped connection, a 5xx, a busy 503) is retried a couple of times
+ *   first (`withTransientRetry`); a 400 such as an unknown filter column
+ *   is reported at once.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { queryTableRows } from '../api/tablesApi';
 import { ApiClientError } from '../api/request';
 import type { FilterNode, SortKey, TableRowsPage } from '../api/types';
+import { withTransientRetry } from '../utils/transientRetry';
 
 /** Default page size of the viewer grid (the server cap). */
 export const TABLE_ROWS_PAGE_SIZE = 200;
@@ -89,12 +93,17 @@ export function useTableRows(tableId: string | null, opts: UseTableRowsOptions =
       dirtyRef.current = false;
       setPending(true);
       try {
-        const page = await queryTableRows(p.tableId, {
-          filter: p.filter,
-          sort: p.sort,
-          offset: p.offset,
-          limit: p.limit,
-        });
+        const tableIdNow = p.tableId;
+        const page = await withTransientRetry(
+          () =>
+            queryTableRows(tableIdNow, {
+              filter: p.filter,
+              sort: p.sort,
+              offset: p.offset,
+              limit: p.limit,
+            }),
+          { stillWanted: () => seq === seqRef.current },
+        );
         if (seq === seqRef.current) setState({ tableId: p.tableId, page, error: null });
       } catch (err) {
         if (seq === seqRef.current) {

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { parseTablesRoute, tableViewerPath, tableViewerSearch, tablesListPath } from './tablesRoute'
+import type { TableDetail } from '../api/types'
+import {
+  parseTablesRoute,
+  tableFromLocationState,
+  tableViewerPath,
+  tableViewerSearch,
+  tablesListPath,
+} from './tablesRoute'
 
 const UUID = '3f2a9c1e-7b4d-4e8a-9c21-0f6d8e5a1b2c'
 
@@ -144,5 +151,23 @@ describe('tableViewerSearch', () => {
     )
     expect(tableViewerSearch(search, { filter: '', sort: null })).toBe('?other=1')
     expect(tableViewerSearch('?filter=x', { filter: null, sort: null })).toBe('')
+  })
+})
+
+describe('tableFromLocationState', () => {
+  const table = { id: UUID, title: 'Leads', schema: [] } as unknown as TableDetail
+
+  it('returns the carried detail for its own id only', () => {
+    expect(tableFromLocationState({ table }, UUID)).toBe(table)
+    expect(tableFromLocationState({ table }, 'other')).toBeNull()
+  })
+
+  it('ignores missing, foreign or malformed state', () => {
+    expect(tableFromLocationState(null, UUID)).toBeNull()
+    expect(tableFromLocationState(undefined, UUID)).toBeNull()
+    expect(tableFromLocationState('text', UUID)).toBeNull()
+    expect(tableFromLocationState({ from: '/tables' }, UUID)).toBeNull()
+    expect(tableFromLocationState({ table: { id: UUID } }, UUID)).toBeNull()
+    expect(tableFromLocationState({ table: 'x' }, UUID)).toBeNull()
   })
 })

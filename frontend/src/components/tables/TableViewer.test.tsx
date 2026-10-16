@@ -17,6 +17,7 @@ import { TableViewer, filterColumnNames, parseFilterParam, parseSortParam, resol
 
 const mocks = vi.hoisted(() => ({
   queryTableRows: vi.fn(),
+  useTableCalls: [] as unknown[][],
   view: null as unknown as TableView,
   restoreResponse: null as unknown as RestoreTableResponse,
 }));
@@ -27,7 +28,10 @@ vi.mock('../../api/tablesApi', async (importOriginal) => ({
 }));
 
 vi.mock('../../hooks/useTable', () => ({
-  useTable: () => mocks.view,
+  useTable: (...args: unknown[]) => {
+    mocks.useTableCalls.push(args);
+    return mocks.view;
+  },
 }));
 
 vi.mock('../../contexts/ProjectsContext', () => ({
@@ -199,6 +203,31 @@ describe('TableViewer', () => {
     mocks.view = view();
   });
   afterEach(() => cleanup());
+
+  it('opens on the detail a navigation carries as router state, for its own id only', async () => {
+    const seeded = detail({ title: 'Just created', row_count: 0 });
+    render(
+      <MemoryRouter initialEntries={[{ pathname: '/tables/t1', state: { table: seeded } }]}>
+        <RouteHost />
+      </MemoryRouter>,
+    );
+    await screen.findByText('row at 0');
+    expect(mocks.useTableCalls.at(-1)).toEqual(['t1', { initial: seeded }]);
+    cleanup();
+    mocks.useTableCalls.length = 0;
+    render(
+      <MemoryRouter initialEntries={[{ pathname: '/tables/t1', state: { table: detail({ id: 't2' }) } }]}>
+        <RouteHost />
+      </MemoryRouter>,
+    );
+    await screen.findByText('row at 0');
+    expect(mocks.useTableCalls.at(-1)).toEqual(['t1', { initial: null }]);
+    cleanup();
+    mocks.useTableCalls.length = 0;
+    render(ui());
+    await screen.findByText('row at 0');
+    expect(mocks.useTableCalls.at(-1)).toEqual(['t1', { initial: null }]);
+  });
 
   it('shows loading, gone and error states', async () => {
     mocks.view = view({ table: null, loading: true });
