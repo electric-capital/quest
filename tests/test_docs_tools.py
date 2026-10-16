@@ -393,7 +393,8 @@ class TestTiers:
         assert (proj_doc["mode"], proj_doc["scope"]) == ("private", "project")
 
     def test_private_dispatch_cannot_write_public_doc(self, docs_env):
-        doc = seed_doc(docs_env, mode="public", project_id=docs_env.public_project)
+        doc = seed_doc(docs_env, mode="public", project_id=docs_env.public_project,
+                       shares=[("bob", "write")])
         import db.project_store as project_store
         _run(project_store.set_doc_source_projects(
             docs_env.users["alice"]["id"], docs_env.private_project,
@@ -409,8 +410,13 @@ class TestTiers:
                 project_id=project_id,
             )
             assert result == {"error": DENY_PUBLIC_DOC_FROM_PRIVATE}
-        # A standalone chat has no doc sources.
+        # The owner's standalone chat reads every own project doc, read-only;
+        # a recipient's standalone chat sees no project doc.
         read = _dispatch(docs_env, "read_doc", {"doc_id": doc["id"]})
+        assert (read["writable"], read["write_note"]) == ("denied", DENY_PUBLIC_DOC_FROM_PRIVATE)
+        result = _dispatch(docs_env, "append_to_doc", {"doc_id": doc["id"], "content": "x"})
+        assert result == {"error": DENY_PUBLIC_DOC_FROM_PRIVATE}
+        read = _dispatch(docs_env, "read_doc", {"doc_id": doc["id"]}, who="bob")
         assert read == {"error": doc_not_found_message(doc["id"])}
 
     @pytest.mark.parametrize("tool", sorted(WRITE_TOOLS))

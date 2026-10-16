@@ -50,17 +50,26 @@ Rules layered on the matrix, applied in this order:
 
 1. No relationship (not the owner, no matching share row) -> Hidden. A
    share row with ``user_id=None`` grants everyone on the install.
-2. Project docs are visible only from conversations of that same project
-   (and from the UI); standalone conversations, other projects'
-   conversations and sandbox scripts (no conversation context) see Hidden.
-   Exception: a PUBLIC doc (a doc of a public project) is visible,
-   read-only, from the conversations of a private project whose owner
-   listed the doc's project among the project's **doc sources**
-   (``doc_source_project_ids``, Project Settings > Docs access; stored in
-   ``project_doc_sources``), so what a chosen public project gathers can
-   be read there. Standalone conversations have no doc sources, public
-   conversations stay confined to their own project's docs, and scripts
-   still see no project doc at all.
+2. Project docs follow the matrix only from conversations of that same
+   project (and from the UI). From every other conversation they are at
+   most readable, in two cases, else Hidden:
+
+   - The OWNER's standalone conversations (``project_id`` None, not
+     public) see the docs of all of the owner's projects, whatever their
+     mode, read-only (``DENY_OUTSIDE_PROJECT``; for a public doc the
+     public-from-private wording applies instead). Share recipients get
+     nothing from this: a shared project doc stays Hidden to all of the
+     recipient's conversations.
+   - A PUBLIC doc (a doc of a public project) is visible, read-only, from
+     the conversations of a private project whose owner listed the doc's
+     project among the project's **doc sources**
+     (``doc_source_project_ids``, Project Settings > Docs access; stored
+     in ``project_doc_sources``), so what a chosen public project gathers
+     can be read there. Standalone conversations have no doc sources.
+
+   Other projects' conversations see Hidden, public conversations stay
+   confined to their own project's docs, and sandbox scripts (no
+   conversation context) see no project doc at all.
 3. A public conversation never learns of a private doc (Hidden, even for
    the owner and even with a write share).
 4. Read-only run kinds (sub-agents, inference-API runs, cross-user subagent
@@ -117,6 +126,7 @@ __all__ = [
     "APPROVAL_REQUIRED_WRITE_NOTE",
     "APPROVAL_WRITE_NOTE",
     "DENY_INFERENCE_API",
+    "DENY_OUTSIDE_PROJECT",
     "DENY_PUBLIC_APPROVAL_REQUIRED",
     "DENY_PUBLIC_DOC_FROM_PRIVATE",
     "DENY_READ_ONLY_SHARE",
@@ -153,6 +163,10 @@ DENY_SCRIPT = (
 )
 DENY_READ_ONLY_SHARE = "You have read-only access to this shared doc."
 DENY_PUBLIC_DOC_FROM_PRIVATE = "Public docs are written only from public-project conversations."
+DENY_OUTSIDE_PROJECT = (
+    "This doc belongs to a project and is written only from that project's "
+    "conversations or in the Quest UI; here it is read-only."
+)
 DENY_SLACK_NEEDS_APPROVAL = (
     "This doc is shared, so changes need an approval card, which Slack-driven "
     "conversations cannot open. Continue from the Quest web UI."
@@ -181,6 +195,7 @@ _DENY_TEXT = {
     "script": DENY_SCRIPT,
     "read_only_share": DENY_READ_ONLY_SHARE,
     "public_from_private": DENY_PUBLIC_DOC_FROM_PRIVATE,
+    "outside_project": DENY_OUTSIDE_PROJECT,
     "slack_needs_approval": DENY_SLACK_NEEDS_APPROVAL,
     "slack_approval_required": DENY_SLACK_APPROVAL_REQUIRED,
     "public_approval_required": DENY_PUBLIC_APPROVAL_REQUIRED,

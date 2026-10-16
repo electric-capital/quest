@@ -15,6 +15,7 @@ from chat.docs.access import (
     APPROVAL_REQUIRED_WRITE_NOTE,
     APPROVAL_WRITE_NOTE,
     DENY_INFERENCE_API,
+    DENY_OUTSIDE_PROJECT,
     DENY_PUBLIC_APPROVAL_REQUIRED,
     DENY_PUBLIC_DOC_FROM_PRIVATE,
     DENY_READ_ONLY_SHARE,
@@ -304,20 +305,51 @@ def test_project_doc_hidden_from_other_project():
     assert _access(doc, project_id=OTHER_PROJECT) == HIDDEN
 
 
-def test_project_doc_hidden_from_standalone_conversation():
+def test_project_doc_read_only_from_owner_standalone_conversation():
+    """Rule 2: the owner's standalone conversations read the docs of all
+    of the owner's projects; shares, the owner's switch and the mode never
+    make them writable there."""
     doc = _doc("private", project_id=PROJECT)
-    assert _access(doc, project_id=None) == HIDDEN
+    assert _access(doc, project_id=None) == RO(DENY_OUTSIDE_PROJECT)
+    shared = _doc("private", [(RECIPIENT, "write"), (None, "read")], project_id=PROJECT)
+    assert _access(shared, project_id=None) == RO(DENY_OUTSIDE_PROJECT)
+    switched = {**_doc("private", project_id=PROJECT), "require_approval": True}
+    assert _access(switched, project_id=None) == RO(DENY_OUTSIDE_PROJECT)
+    assert _access(doc, project_id=None, run_kind="slack") == RO(DENY_OUTSIDE_PROJECT)
+    # A public project doc gets the public-from-private wording instead.
+    public = _doc("public", [(RECIPIENT, "write")], project_id=PROJECT)
+    assert _access(public, project_id=None) == RO(DENY_PUBLIC_DOC_FROM_PRIVATE)
+
+
+def test_project_doc_hidden_from_recipients_outside_the_project():
+    """Ownership, not a share, is what reaches a project doc from a
+    standalone conversation: project-doc shares stay UI-only."""
+    for mode in DOC_MODES:
+        doc = _doc(mode, [(RECIPIENT, "write"), (None, "write")], project_id=PROJECT)
+        for user_id in (RECIPIENT, STRANGER):
+            assert _access(doc, user_id=user_id, project_id=None) == HIDDEN
+            assert _access(doc, user_id=user_id, project_id=None, run_kind="slack") == HIDDEN
 
 
 @pytest.mark.parametrize("run_kind", [k for k in RUN_KINDS if k != "ui"])
-def test_project_doc_hidden_outside_project_for_every_conversation_kind(run_kind):
+def test_project_doc_outside_project_for_every_conversation_kind(run_kind):
     doc = _doc("private", [(RECIPIENT, "write")], project_id=PROJECT)
     for user_id in (OWNER, RECIPIENT):
-        assert _access(doc, user_id=user_id, project_id=None, run_kind=run_kind) == HIDDEN
+        # Other projects' conversations never see it.
         assert (
             _access(doc, user_id=user_id, project_id=OTHER_PROJECT, run_kind=run_kind)
             == HIDDEN
         )
+    # Standalone: the owner reads it (read-only kinds with their own
+    # reason), a recipient sees nothing, scripts see no project doc.
+    if run_kind == "script":
+        expected = HIDDEN
+    elif run_kind in READ_ONLY_RUN_KINDS:
+        expected = READ_ONLY_COLUMNS[f"owner_{run_kind}"]
+    else:
+        expected = RO(DENY_OUTSIDE_PROJECT)
+    assert _access(doc, user_id=OWNER, project_id=None, run_kind=run_kind) == expected
+    assert _access(doc, user_id=RECIPIENT, project_id=None, run_kind=run_kind) == HIDDEN
 
 
 def test_script_never_sees_project_docs():
@@ -402,8 +434,14 @@ def test_public_doc_hidden_without_the_source():
             _source_access(doc, user_id=user_id, sources=frozenset({OTHER_PROJECT}))
             == HIDDEN
         )
-        # A standalone conversation has no project, hence no sources.
-        assert _source_access(doc, user_id=user_id, project_id=None) == HIDDEN
+    # A standalone conversation has no project, hence no sources: a
+    # recipient sees nothing there, and the owner reads it by ownership
+    # (rule 2), sources or not.
+    assert _source_access(doc, user_id=RECIPIENT, project_id=None) == HIDDEN
+    assert _source_access(doc, project_id=None) == RO(DENY_PUBLIC_DOC_FROM_PRIVATE)
+    assert _source_access(doc, project_id=None, sources=frozenset()) == RO(
+        DENY_PUBLIC_DOC_FROM_PRIVATE
+    )
 
 
 def test_public_doc_hidden_from_scripts_and_other_public_projects_even_with_source():
@@ -499,17 +537,27 @@ def test_taint_and_invisibility_hold_everywhere(run_kind):
         # Taint: a private conversation never writes a public doc.
         if effective_mode == "public" and not is_public and run_kind != "ui":
             assert access.write == "denied"
-        # Reach: outside the doc's project, only a private project
-        # conversation whose sources name the doc's project sees a public
-        # doc; a public conversation only its own project's docs.
+        # Reach (rule 2): outside the doc's project a project doc is at
+        # most read-only, and visible only to its owner from a standalone
+        # conversation or, when public, from a private project whose
+        # sources name the doc's project; a public conversation sees only
+        # its own project's docs and scripts no project doc at all.
         related = user_id == OWNER or effective_share(doc, user_id) is not None
-        if effective_mode == "public" and related and run_kind not in ("script", "ui"):
-            if project_id == doc_project_id:
-                assert access.visible
-            else:
-                assert access.visible == (
-                    not is_public and project_id is not None and doc_project_id in sources
-                )
+        if doc_project_id is not None and run_kind != "ui" and project_id != doc_project_id:
+            from_standalone = project_id is None and user_id == OWNER
+            via_source = (
+                effective_mode == "public"
+                and project_id is not None
+                and doc_project_id in sources
+            )
+            assert access.visible == (
+                related and not is_public and run_kind != "script"
+                and (from_standalone or via_source)
+            )
+            if access.visible:
+                assert access.write == "denied"
+        elif effective_mode == "public" and related and run_kind not in ("script", "ui"):
+            assert access.visible
         # Read-only kinds never write.
         if run_kind in READ_ONLY_RUN_KINDS:
             assert access.write == "denied"
@@ -710,6 +758,10 @@ def test_deny_reason_texts_are_pinned():
     assert DENY_READ_ONLY_SHARE == "You have read-only access to this shared doc."
     assert DENY_PUBLIC_DOC_FROM_PRIVATE == (
         "Public docs are written only from public-project conversations."
+    )
+    assert DENY_OUTSIDE_PROJECT == (
+        "This doc belongs to a project and is written only from that project's "
+        "conversations or in the Quest UI; here it is read-only."
     )
     assert DENY_SLACK_NEEDS_APPROVAL == (
         "This doc is shared, so changes need an approval card, which Slack-driven "

@@ -14,7 +14,8 @@ Covers:
    public docs; public conversations never see private docs (the hidden
    error is byte-equal to a random missing id) and never create user docs
    (always private); a leftover public user doc is private everywhere;
-   project docs are hidden from standalone and other-project conversations.
+   project docs are hidden from other-project conversations and read-only
+   from the owner's standalone conversations.
 5. Read-only run kinds and Slack.
 6. Gate closed: DocDisabled before any DB work.
 7. list_docs / search_docs (snippets, title-only hits, truncated scan).
@@ -38,6 +39,7 @@ from chat.docs import constants
 from chat.docs.access import (
     APPROVAL_WRITE_NOTE,
     DENY_INFERENCE_API,
+    DENY_OUTSIDE_PROJECT,
     DENY_PUBLIC_DOC_FROM_PRIVATE,
     DENY_READ_ONLY_SHARE,
     DENY_SCRIPT,
@@ -993,12 +995,15 @@ class TestTaintAndVisibility:
             _run(svc().append_to_doc(bob, shared["id"], "b"))
         assert str(exc.value) == DENY_READ_ONLY_SHARE
 
-    def test_project_docs_hidden_outside_their_project(self, docs_env):
-        doc = seed_doc(docs_env, title="Proj", project_id=docs_env.private_project)
-        standalone = make_caller(docs_env)
+    def test_project_docs_hidden_from_other_projects(self, docs_env):
+        doc = seed_doc(docs_env, title="Proj", project_id=docs_env.private_project,
+                       shares=[("bob", "write")])
         other = make_caller(docs_env, project=docs_env.other_project)
         inside = make_caller(docs_env, project=docs_env.private_project)
-        for caller in (standalone, other):
+        # Other projects' conversations, and every conversation of a share
+        # recipient (project-doc shares are UI-only), see nothing.
+        for caller in (other, make_caller(docs_env, who="bob"),
+                       make_caller(docs_env, who="bob", project=docs_env.other_project)):
             with pytest.raises(DocError) as exc:
                 _run(svc().read_doc(caller, doc["id"]))
             assert str(exc.value) == doc_not_found_message(doc["id"])
@@ -1006,6 +1011,52 @@ class TestTaintAndVisibility:
         assert [d["id"] for d in _run(svc().list_docs(inside))] == [doc["id"]]
         assert _run(svc().list_docs(inside, scope="user")) == []
         assert _run(svc().read_doc(inside, doc["id"]))["scope"] == "project"
+
+    def test_owner_standalone_reads_every_own_project_doc(self, docs_env):
+        """Access rule 2: a standalone conversation lists, searches and
+        reads the docs of all of the owner's projects (scope ``project``,
+        in ``all``), never writes them, and never sees other users'."""
+        private = seed_doc(docs_env, title="Proj", content="needle one\n",
+                           project_id=docs_env.private_project)
+        other = seed_doc(docs_env, title="Other", content="needle two\n",
+                         project_id=docs_env.other_project)
+        public = seed_doc(docs_env, title="Open", content="needle three\n",
+                          mode="public", project_id=docs_env.public_project)
+        user_doc = seed_doc(docs_env, title="Mine", content="needle four\n")
+        bobs = seed_doc(docs_env, title="Bobs", content="needle five\n", owner="bob",
+                        project_id=docs_env.private_project, shares=[("alice", "write")])
+        alice = make_caller(docs_env)
+        project_ids = {private["id"], other["id"], public["id"]}
+        assert set(_ids(_run(svc().list_docs(alice, scope="project")))) == project_ids
+        assert set(_ids(_run(svc().list_docs(alice)))) == project_ids | {user_doc["id"]}
+        assert _ids(_run(svc().list_docs(alice, scope="user"))) == [user_doc["id"]]
+        assert _run(svc().list_docs(alice, scope="public")) == []
+        rows = {d["id"]: d for d in _run(svc().list_docs(alice))}
+        for doc_id in (private["id"], other["id"]):
+            assert rows[doc_id]["writable"] == "denied"
+            assert rows[doc_id]["write_note"] == DENY_OUTSIDE_PROJECT
+            assert rows[doc_id]["scope"] == "project"
+        assert rows[public["id"]]["write_note"] == DENY_PUBLIC_DOC_FROM_PRIVATE
+        found = _run(svc().search_docs(alice, "needle"))
+        assert {r["id"] for r in found["results"]} == project_ids | {user_doc["id"]}
+        read = _run(svc().read_doc(alice, private["id"]))
+        assert (read["writable"], read["write_note"]) == ("denied", DENY_OUTSIDE_PROJECT)
+        assert read["content"] == "needle one\n"
+        for fn in (
+            lambda: svc().append_to_doc(alice, private["id"], "x"),
+            lambda: svc().edit_doc(alice, private["id"], "needle", "thread"),
+        ):
+            with pytest.raises(DocError) as exc:
+                _run(fn())
+            assert str(exc.value) == DENY_OUTSIDE_PROJECT
+        assert body(private["id"]) == "needle one\n"
+        # Bob's project doc, shared with alice, stays hidden outside its project.
+        with pytest.raises(DocError) as exc:
+            _run(svc().read_doc(alice, bobs["id"]))
+        assert str(exc.value) == doc_not_found_message(bobs["id"])
+        # Scripts still see user docs only.
+        script = make_caller(docs_env, run_kind="script")
+        assert _ids(_run(svc().list_docs(script))) == [user_doc["id"]]
 
 
 # ---------------------------------------------------------------------------
@@ -1107,16 +1158,22 @@ class TestDocSources:
         )
         give_doc_source(docs_env, docs_env.private_project, docs_env.public_project)
         for caller in (
-            make_caller(docs_env),
             make_caller(docs_env, project=docs_env.other_project),
             make_caller(docs_env, run_kind="script"),
             make_caller(docs_env, project=other_public, public=True),
+            make_caller(docs_env, who="bob"),
         ):
             assert _run(svc().list_docs(caller)) == []
             assert _run(svc().list_docs(caller, scope="public")) == []
             with pytest.raises(DocError) as exc:
                 _run(svc().read_doc(caller, pub["id"]))
             assert str(exc.value) == doc_not_found_message(pub["id"])
+        # The owner's standalone chat reads it by ownership (scope
+        # ``project``), not through sources (scope ``public`` is empty).
+        standalone = make_caller(docs_env)
+        assert _ids(_run(svc().list_docs(standalone, scope="project"))) == [pub["id"]]
+        assert _run(svc().list_docs(standalone, scope="public")) == []
+        assert _run(svc().read_doc(standalone, pub["id"]))["writable"] == "denied"
 
     def test_recipients_read_only_through_their_own_project_source(self, docs_env):
         """Shares still gate the relationship; the source belongs to the

@@ -67,9 +67,9 @@ SCRIPT_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     "memory_search",
     "memory_list",
     # Quest Docs reads. Scripts run with run_kind="script" (is_script below):
-    # no conversation context, so only user docs are visible (project docs
-    # are reachable only from their project's conversations), and every doc
-    # write is refused by the access rule -- the write tools are not listed.
+    # no conversation context, so only user docs are visible (the access
+    # rule shows scripts no project doc), and every doc write is refused by
+    # the access rule -- the write tools are not listed.
     "list_docs",
     "search_docs",
     "read_doc",

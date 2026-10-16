@@ -2,9 +2,10 @@
 
 Docs (``chat.docs.access``) and Tables (``chat.tables.access``) use the
 same visibility and write matrix: owner / share recipient, private /
-public mode, project scoping with doc sources, public-conversation
-invisibility, read-only run kinds, the ``ui`` column, Slack runs and the
-owner's require-approval switch. This module is that procedure, written
+public mode, project scoping with doc sources and the owner's read-only
+reach from standalone conversations, public-conversation invisibility,
+read-only run kinds, the ``ui`` column, Slack runs and the owner's
+require-approval switch. This module is that procedure, written
 once. It returns a :class:`CoreVerdict` with a machine-readable ``cause``
 instead of text; each resolver turns it into its own verdict type and
 wording (docs say "doc", tables say "table"), and the tables resolver adds
@@ -62,6 +63,7 @@ DenyCause = Literal[
     "script",
     "read_only_share",       # read share (or read-only reach) in a conversation
     "public_from_private",   # public artifact seen from a private conversation
+    "outside_project",       # owner's project artifact, from a standalone conversation
     "slack_needs_approval",  # shared private artifact, Slack cannot open a card
     "slack_approval_required",   # owner switch on, Slack cannot open a card
     "public_approval_required",  # owner switch on, public convos have no cards
@@ -170,19 +172,20 @@ def resolve_core(
     if not is_owner and share is None:
         return _HIDDEN
 
-    # Project artifacts: only from that project's conversations (or the
-    # UI), except public ones of a listed source, which a private project's
-    # conversations may read. Public conversations stay confined to their
-    # own project; scripts (no conversation) see no project artifact;
-    # standalone conversations have no sources.
+    # Project artifacts: from that project's conversations (or the UI) they
+    # follow the matrix. From elsewhere they are reachable read-only in two
+    # cases, else hidden: the owner's own project artifacts (any project,
+    # any mode) from the owner's standalone conversations, and the public
+    # artifacts of a listed source from a private project's conversations.
+    # Public conversations stay confined to their own project; scripts (no
+    # conversation) see no project artifact.
     if item_project_id is not None and run_kind != "ui" and project_id != item_project_id:
-        if (
-            mode != "public"
-            or is_public
-            or run_kind == "script"
-            or project_id is None
-            or item_project_id not in source_project_ids
-        ):
+        if is_public or run_kind == "script":
+            return _HIDDEN
+        if project_id is None:
+            if not is_owner:
+                return _HIDDEN
+        elif mode != "public" or item_project_id not in source_project_ids:
             return _HIDDEN
 
     # Public conversations never learn of private artifacts.
@@ -192,6 +195,17 @@ def resolve_core(
     # Visible and readable; decide the write verdict.
     if run_kind in READ_ONLY_RUN_KINDS:
         return _read_only(run_kind, is_owner)  # type: ignore[arg-type]
+
+    # A private project artifact reached from outside its project (the
+    # owner's standalone conversation) is read-only; a public one reached
+    # that way falls under the public-from-private rule below.
+    if (
+        item_project_id is not None
+        and run_kind != "ui"
+        and project_id != item_project_id
+        and mode != "public"
+    ):
+        return _read_only("outside_project", is_owner)
 
     may_write = is_owner or share == "write"
 

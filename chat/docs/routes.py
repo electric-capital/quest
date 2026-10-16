@@ -41,8 +41,9 @@ docs (default), one project's docs (``project_id``), and docs shared WITH
 the caller (``shared=true``, user and project docs). A share recipient
 sees shared docs here (read; a write share may also edit and restore), but
 from the recipient's conversations only shared USER docs are reachable --
-project docs stay hidden outside their project's conversations, and
-projects are not shared (chat/docs/access.py, rule 2). The owner's first
+a project doc is reached from outside its project only by its owner's
+standalone conversations (read-only), and projects are not shared
+(chat/docs/access.py, rule 2). The owner's first
 share on a private doc turns the owner's own conversation writes into
 approval cards.
 

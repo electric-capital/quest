@@ -17,6 +17,7 @@ from chat.tables.access import (
     APPROVAL_REQUIRED_WRITE_NOTE,
     APPROVAL_WRITE_NOTE,
     DENY_INFERENCE_API,
+    DENY_OUTSIDE_PROJECT,
     DENY_PUBLIC_APPROVAL_REQUIRED,
     DENY_PUBLIC_TABLE_FROM_PRIVATE,
     DENY_READ_ONLY_SHARE,
@@ -508,15 +509,40 @@ def _access(table, *, user_id=OWNER, is_public=False, project_id=None,
     )
 
 
-def test_project_table_visible_from_same_project_only():
+def test_project_table_outside_its_project():
+    """Docs rule 2: other projects never see it; from a standalone
+    conversation the owner reads it (both verdicts denied), a recipient
+    sees nothing, scripts see no project table."""
     table = _table("private", [(RECIPIENT, "write")], project_id=PROJECT)
     assert _access(table, project_id=PROJECT) == AR_AR
+    read_only_reason = {
+        "sub_agent": DENY_SUB_AGENT, "inference_api": DENY_INFERENCE_API,
+        "user_subagent": DENY_USER_SUBAGENT,
+    }
     for run_kind in [k for k in RUN_KINDS if k != "ui"]:
         for user_id in (OWNER, RECIPIENT):
             assert _access(table, user_id=user_id, project_id=OTHER_PROJECT,
                            run_kind=run_kind) == HIDDEN
-            assert _access(table, user_id=user_id, project_id=None,
-                           run_kind=run_kind) == HIDDEN
+        assert _access(table, user_id=RECIPIENT, project_id=None,
+                       run_kind=run_kind) == HIDDEN
+        if run_kind == "script":
+            expected = HIDDEN
+        else:
+            expected = RO(read_only_reason.get(run_kind, DENY_OUTSIDE_PROJECT))
+        assert _access(table, user_id=OWNER, project_id=None, run_kind=run_kind) == expected
+
+
+def test_owner_standalone_reads_every_own_project_table():
+    """Shares, the owner's switch and the mode never make a project table
+    writable from a standalone conversation."""
+    expected = RO(DENY_OUTSIDE_PROJECT)
+    assert _access(_table("private", project_id=PROJECT)) == expected
+    assert _access(_table("private", [(None, "write")], project_id=PROJECT)) == expected
+    assert _access(_table("private", project_id=PROJECT, require_approval=True)) == expected
+    assert _access(_table("private", project_id=PROJECT), run_kind="slack") == expected
+    assert _access(_table("public", project_id=PROJECT)) == RO(DENY_PUBLIC_TABLE_FROM_PRIVATE)
+    # A stranger with no relationship still sees nothing.
+    assert _access(_table("private", project_id=PROJECT), user_id=STRANGER) == HIDDEN
 
 
 def test_public_project_table_from_its_public_project():
@@ -543,9 +569,14 @@ def test_doc_source_needs_the_source_and_a_relationship():
     table = _table("public", [(RECIPIENT, "write")], project_id=PROJECT)
     assert _access(table, project_id=OTHER_PROJECT) == HIDDEN
     assert _access(table, project_id=OTHER_PROJECT, sources={OTHER_PROJECT}) == HIDDEN
-    assert _access(table, project_id=None, sources={PROJECT}) == HIDDEN
+    assert _access(table, user_id=RECIPIENT, project_id=None, sources={PROJECT}) == HIDDEN
     assert _access(table, user_id=STRANGER, project_id=OTHER_PROJECT,
                    sources={PROJECT}) == HIDDEN
+    # The owner's standalone conversation reads it by ownership, not sources.
+    assert _access(table, project_id=None, sources={PROJECT}) == RO(
+        DENY_PUBLIC_TABLE_FROM_PRIVATE
+    )
+    assert _access(table, project_id=None) == RO(DENY_PUBLIC_TABLE_FROM_PRIVATE)
 
 
 def test_doc_source_private_tables_hidden():
@@ -618,6 +649,16 @@ def test_invariants_hold_everywhere(run_kind):
         assert not (is_public and effective_mode == "private")
         # Taint: a private conversation never writes a public table.
         if effective_mode == "public" and not is_public and run_kind != "ui":
+            assert access.rows == "denied" and access.schema == "denied"
+        # Reach outside the table's project (docs rule 2): read-only, and
+        # only for the owner from a standalone conversation or through a
+        # source naming a public table's project.
+        if table_project_id is not None and run_kind != "ui" and project_id != table_project_id:
+            assert not is_public and run_kind != "script"
+            assert (project_id is None and user_id == OWNER) or (
+                effective_mode == "public" and project_id is not None
+                and table_project_id in sources
+            )
             assert access.rows == "denied" and access.schema == "denied"
         # Schema approval only for a top-level private conversation or the
         # owner in the UI.
@@ -714,6 +755,10 @@ def test_texts_are_pinned():
         "owner requires approval for every change: use create_action_request(write_table_rows)"
     )
     assert DENY_READ_ONLY_SHARE == "You have read-only access to this shared table."
+    assert DENY_OUTSIDE_PROJECT == (
+        "This table belongs to a project; its rows and columns are changed only "
+        "from that project's conversations or in the Quest UI. Here it is read-only."
+    )
     assert DENY_PUBLIC_TABLE_FROM_PRIVATE == (
         "Public tables are written only from public-project conversations."
     )

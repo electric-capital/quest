@@ -272,17 +272,18 @@ class TestPrecardRefusals:
     def test_public_table_from_private_conversation_denied(self, world, key):
         # Invariant 1: never a card writing a public table from a private
         # conversation. The owner's private project reads it through its
-        # doc sources (denied); elsewhere it is hidden.
+        # doc sources and the owner's standalone chat by ownership (both
+        # denied); a recipient's standalone chat sees nothing.
         reader = convo(world, project=world.private_project)
         for op in TOOLS:
             tid = world.t[key]["id"]
-            assert refusal(reader, op_params(op, tid)) == (
-                f"denied: {DENY_PUBLIC_TABLE_FROM_PRIVATE}"
-            )
-            for who in ("alice", "bob"):
-                assert refusal(convo(world, who), op_params(op, tid)) == (
-                    f"table_not_found: {table_not_found_message(tid)}"
+            for caller in (reader, convo(world)):
+                assert refusal(caller, op_params(op, tid)) == (
+                    f"denied: {DENY_PUBLIC_TABLE_FROM_PRIVATE}"
                 )
+            assert refusal(convo(world, "bob"), op_params(op, tid)) == (
+                f"table_not_found: {table_not_found_message(tid)}"
+            )
 
     def test_slack_denied(self, world):
         assert refusal(
@@ -672,13 +673,11 @@ class TestExecute:
         card = {**handler().validate_params(op_params("insert", table["id"])),
                 "schema_version": table["schema_version"], "rows_digest": "0" * 64}
         before = _snapshot(world, table)
-        assert exec_error(card, convo(world, project=world.private_project)) == (
-            f"denied: {DENY_PUBLIC_TABLE_FROM_PRIVATE}"
+        for caller in (convo(world, project=world.private_project), convo(world)):
+            assert exec_error(card, caller) == f"denied: {DENY_PUBLIC_TABLE_FROM_PRIVATE}"
+        assert exec_error(card, convo(world, "bob")) == (
+            f"table_not_found: {table_not_found_message(table['id'])}"
         )
-        for who in ("alice", "bob"):
-            assert exec_error(card, convo(world, who)) == (
-                f"table_not_found: {table_not_found_message(table['id'])}"
-            )
         assert _snapshot(world, table) == before
 
 

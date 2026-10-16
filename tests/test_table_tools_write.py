@@ -34,6 +34,7 @@ from chat.tables.access import (
     APPROVAL_REQUIRED_BY_OWNER_MESSAGE,
     APPROVAL_REQUIRED_MESSAGE,
     DENY_INFERENCE_API,
+    DENY_OUTSIDE_PROJECT,
     DENY_PUBLIC_APPROVAL_REQUIRED,
     DENY_PUBLIC_TABLE_FROM_PRIVATE,
     DENY_READ_ONLY_SHARE,
@@ -153,15 +154,16 @@ def _set_require_approval(env, table, value=True):
 @pytest.fixture()
 def world(env):
     """alice owns: ``mine`` (user, unshared), ``read_shared`` / ``write_shared``
-    (user, shared with bob), ``open`` (public project, unshared),
-    ``open_write`` / ``open_read`` (public project, shared with bob). Each
-    holds the two SEED rows."""
+    (user, shared with bob), ``proj`` (private project, unshared), ``open``
+    (public project, unshared), ``open_write`` / ``open_read`` (public
+    project, shared with bob). Each holds the two SEED rows."""
     from db import project_store
 
     t = {
         "mine": make_table(env, "Mine"),
         "read_shared": make_table(env, "Read shared", shares=[("bob", "read")]),
         "write_shared": make_table(env, "Write shared", shares=[("bob", "write")]),
+        "proj": make_table(env, "Proj", project_id=env.private_project),
         "open": make_table(env, "Open", project_id=env.public_project),
         "open_write": make_table(env, "Open write", project_id=env.public_project,
                                  shares=[("bob", "write")]),
@@ -307,7 +309,13 @@ MATRIX = [
     ("bob", "public", "open_write", True, "denied", DENY_PUBLIC_APPROVAL_REQUIRED),
     ("bob", "slack", "read_shared", False, "denied", DENY_READ_ONLY_SHARE),
     ("bob", "slack", "write_shared", True, "denied", DENY_SLACK_APPROVAL_REQUIRED),
-    ("alice", "private", "open", False, "not_found", None),
+    # A standalone chat reads the owner's project tables, never writes them.
+    ("alice", "private", "open", False, "denied", DENY_PUBLIC_TABLE_FROM_PRIVATE),
+    ("alice", "private", "proj", False, "denied", DENY_OUTSIDE_PROJECT),
+    ("alice", "private", "proj", True, "denied", DENY_OUTSIDE_PROJECT),
+    ("bob", "private", "proj", False, "not_found", None),
+    ("alice", "doc_source", "proj", False, "free", None),
+    ("alice", "public", "proj", False, "not_found", None),
     ("alice", "doc_source", "mine", False, "free", None),
 ]
 

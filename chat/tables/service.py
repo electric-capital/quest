@@ -164,9 +164,10 @@ __all__ = [
 
 ROW_OPS = ("insert", "update", "upsert", "delete")
 # list_visible_tables scopes, as docs: ``user`` = user tables, ``project``
-# = this conversation's project tables, ``public`` = the public tables
-# readable from here (a private project's doc sources; a public
-# conversation's own project), ``all`` = everything visible.
+# = this conversation's project tables (from a standalone conversation:
+# the tables of all of the user's own projects, read-only), ``public`` =
+# the public tables readable from here (a private project's doc sources;
+# a public conversation's own project), ``all`` = everything visible.
 TABLE_SCOPES = ("user", "project", "public", "all")
 SAMPLE_ROWS_DEFAULT = 5
 
@@ -370,6 +371,17 @@ async def _doc_sources(caller: Caller) -> frozenset[str]:
         return frozenset()
     from db import project_store
     return frozenset(await project_store.list_doc_source_project_ids(caller.project_id))
+
+
+def _reaches_own_projects(caller: Caller) -> bool:
+    """Whether this caller is a standalone conversation, which reads the
+    tables of all of the user's own projects (docs access rule 2): no
+    project, not public, not a script and not the UI."""
+    return bool(
+        caller.project_id is None
+        and not caller.is_public
+        and caller.run_kind not in ("script", "ui")
+    )
 
 
 def resolve(
@@ -578,9 +590,10 @@ async def list_visible_tables(
 
     Candidates come from ``table_store.list_accessible_tables`` (owned or
     shared with the caller): user tables (never for a public conversation:
-    user tables are always private), this conversation's project tables,
-    and the public tables of the doc-source projects (a private project
-    conversation). Each candidate goes through the access rule; pages
+    user tables are always private), this conversation's project tables
+    (from a standalone conversation: the tables of all of the user's own
+    projects, read-only), and the public tables of the doc-source projects
+    (a private project conversation). Each candidate goes through the access rule; pages
     through the store's keyset cursor so hidden rows never eat into
     ``limit``. Payload shaping and limit clamping are the tool's job.
     """
@@ -596,8 +609,9 @@ async def list_visible_tables(
     include_project = bool(caller.project_id) and (
         scope in ("project", "all") or (scope == "public" and caller.is_public)
     )
+    include_own_projects = scope in ("project", "all") and _reaches_own_projects(caller)
     sources = await _doc_sources(caller) if scope in ("public", "all") else frozenset()
-    if not include_user and not include_project and not sources:
+    if not include_user and not include_project and not include_own_projects and not sources:
         return []
 
     out: list[tuple[dict, TableAccess]] = []
@@ -608,6 +622,7 @@ async def list_visible_tables(
             project_id=caller.project_id,
             include_user_tables=include_user,
             include_project_tables=include_project,
+            include_owned_project_tables=include_own_projects,
             source_project_ids=sources,
             mode="public" if caller.is_public else None,
             limit=limit,

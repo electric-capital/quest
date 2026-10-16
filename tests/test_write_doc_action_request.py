@@ -30,7 +30,11 @@ from datetime import datetime, timezone
 
 import pytest
 
-from chat.docs.access import DENY_READ_ONLY_SHARE
+from chat.docs.access import (
+    DENY_OUTSIDE_PROJECT,
+    DENY_PUBLIC_DOC_FROM_PRIVATE,
+    DENY_READ_ONLY_SHARE,
+)
 from chat.docs.constants import doc_not_found_message, docs_disabled_message
 from tests.test_docs_service import (  # noqa: F401  (docs_env is a fixture)
     PNG,
@@ -379,11 +383,15 @@ class TestPrecard:
         inside = make_caller(docs_env, project=docs_env.private_project)
         params = propose(inside, append_params(doc["id"]))
         assert params["doc_scope"] == "project"
-        for caller in (make_caller(docs_env),
-                       make_caller(docs_env, project=docs_env.other_project)):
-            with pytest.raises(ValueError) as exc:
-                propose(caller, append_params(doc["id"]))
-            assert str(exc.value) == doc_not_found_message(doc["id"])
+        # The owner's standalone chat reads the doc but gets no card for it;
+        # another project's conversation never sees it.
+        with pytest.raises(ValueError) as exc:
+            propose(make_caller(docs_env), append_params(doc["id"]))
+        assert str(exc.value) == DENY_OUTSIDE_PROJECT
+        with pytest.raises(ValueError) as exc:
+            propose(make_caller(docs_env, project=docs_env.other_project),
+                    append_params(doc["id"]))
+        assert str(exc.value) == doc_not_found_message(doc["id"])
 
     def test_unread_doc_for_edit(self, docs_env):
         doc = shared_doc(docs_env)
@@ -393,17 +401,20 @@ class TestPrecard:
     def test_public_doc_from_private_conversation(self, docs_env):
         # Public docs are public-project docs (user docs are always
         # private): every private conversation is outside that project, so
-        # it never sees one (the pre-card derives is_public from the
-        # project, so a "private caller in the public project" cannot occur).
+        # it is at most read-only there -- the owner's standalone chat sees
+        # it (denied), a private project without the source does not (the
+        # pre-card derives is_public from the project, so a "private caller
+        # in the public project" cannot occur).
         doc = shared_doc(
             docs_env, mode="public", permission="write", project_id=docs_env.public_project,
         )
-        for caller in (make_caller(docs_env),
-                       make_caller(docs_env, project=docs_env.private_project)):
-            for params in (edit_params(doc["id"]), append_params(doc["id"])):
-                with pytest.raises(ValueError) as exc:
-                    propose(caller, params)
-                assert str(exc.value) == doc_not_found_message(doc["id"])
+        for params in (edit_params(doc["id"]), append_params(doc["id"])):
+            with pytest.raises(ValueError) as exc:
+                propose(make_caller(docs_env), params)
+            assert str(exc.value) == DENY_PUBLIC_DOC_FROM_PRIVATE
+            with pytest.raises(ValueError) as exc:
+                propose(make_caller(docs_env, project=docs_env.private_project), params)
+            assert str(exc.value) == doc_not_found_message(doc["id"])
 
     def test_public_doc_never_needs_a_card(self, docs_env):
         # From its own public project the doc is written directly (or is a

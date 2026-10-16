@@ -25,6 +25,7 @@ from api import (
 )
 from api.gmail import get_instructions as gmail_get_instructions
 from chat.docs import access as doc_access
+from chat.tables import access as table_access
 from chat.docs.constants import (
     DOC_MAX_ASSETS,
     DOC_MAX_ASSETS_TOTAL_BYTES,
@@ -1047,7 +1048,12 @@ it.
 1. `list_tables` -- find the table (tables are not listed in your prompt).
    `writable` says whether rows are written directly (`free`), need the
    user's approval (`approval`) or are read-only here (`denied`, with
-   `write_note`); `schema_change` is `approval` or `denied`.
+   `write_note`); `schema_change` is `approval` or `denied`. A project's
+   tables are written only from that project's conversations (or in the
+   Quest UI): a standalone chat lists and reads the tables of all of the
+   user's own projects (scope `project`; each row carries its
+   `project_id`) but cannot change them --
+   "{table_access.DENY_OUTSIDE_PROJECT}"
 2. `get_table(table_id)` -- column names, types, `required` / `unique` /
    `default` / enum `options`, `schema_version` and the first 5 rows.
    Always call it before writing to a table you have not inspected in
@@ -1270,9 +1276,10 @@ database, short facts about the user in memories.
 Reads:
 
 - **list_docs(scope?, limit?)** -- the docs this conversation can see,
-  newest updated first. `scope`: `user` | `project` (this project's docs)
-  | `public` (the public docs this project was given access to) | `all`
-  (default); `limit` 1-200 (default 50). Each row: `id`, `title`, `description`,
+  newest updated first. `scope`: `user` | `project` (this project's docs;
+  from a standalone chat, the read-only docs of all of the user's own
+  projects) | `public` (the public docs this project was given access to)
+  | `all` (default); `limit` 1-200 (default 50). Each row: `id`, `title`, `description`,
   `mode`, `scope`, `project_id`, `content_size`, `asset_count`,
   `updated_at`, `shared` (true when the doc has share recipients),
   `writable`, `write_note`.
@@ -1338,14 +1345,21 @@ through a `write_doc` action request) or `denied` (read-only here;
   access). The conversations of a private project can read them -- never
   change them -- when the user listed that public project under the
   private project's **Docs access** setting (Project Settings); they then
-  appear in `list_docs` with scope `public` or `all`. Everywhere else
-  (standalone chats, other projects) they are invisible. Read-only means:
-  "{doc_access.DENY_PUBLIC_DOC_FROM_PRIVATE}"
+  appear in `list_docs` with scope `public` or `all`. The user's own
+  public projects' docs are also readable from a standalone chat (see
+  Project docs below); everywhere else they are invisible. Read-only
+  means: "{doc_access.DENY_PUBLIC_DOC_FROM_PRIVATE}"
 - **Private docs (every user doc included) are invisible to public-project
   conversations** -- there they behave exactly like a nonexistent id.
-- **Project docs** are visible only from conversations of that project;
-  standalone chats and other projects never see them (the Docs access
-  setting above is the one exception, for public docs).
+- **Project docs** are written only from conversations of their own
+  project (and in the Quest UI). A standalone chat (one outside any
+  project) can list, search and read the docs of ALL of the user's own
+  projects (`list_docs` scope `project` or `all`; each row carries its
+  `project_id`), but never change them; to change one, the user continues
+  in that project: "{doc_access.DENY_OUTSIDE_PROJECT}" Other projects'
+  conversations never see them (the Docs access setting above is the one
+  exception, for public docs), and a project doc someone else shared with
+  the user is reachable only in the Quest UI.
 - **Read-only runs** never write: sub-agents ("{doc_access.DENY_SUB_AGENT}"),
   inference API runs, cross-user subagent runs and sandbox scripts. A
   sub-agent returns the content to the top-level agent, which writes it.

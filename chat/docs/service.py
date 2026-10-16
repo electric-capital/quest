@@ -104,10 +104,11 @@ __all__ = [
 ]
 
 # list_docs / search_docs scopes: ``user`` = user docs, ``project`` = this
-# conversation's project docs, ``public`` = the public docs this project
-# may read from its doc sources (the public projects listed in Project
-# Settings > Docs access; for a public conversation the same set as
-# ``project``), ``all`` = every doc the conversation can see.
+# conversation's project docs (from a standalone conversation: the docs of
+# all of the user's own projects, read-only), ``public`` = the public docs
+# this project may read from its doc sources (the public projects listed
+# in Project Settings > Docs access; for a public conversation the same
+# set as ``project``), ``all`` = every doc the conversation can see.
 DOC_SCOPES = ("user", "project", "public", "all")
 WRITE_OPERATIONS = ("edit", "append", "add_image")
 IMAGE_PLACEMENTS = ("append", "none")
@@ -250,6 +251,17 @@ async def _doc_sources(caller: Caller) -> frozenset[str]:
         return frozenset()
     from db import project_store
     return frozenset(await project_store.list_doc_source_project_ids(caller.project_id))
+
+
+def _reaches_own_projects(caller: Caller) -> bool:
+    """Whether this caller is a standalone conversation, which reads the
+    docs of all of the user's own projects (access rule 2): no project,
+    not public, not a script and not the UI."""
+    return bool(
+        caller.project_id is None
+        and not caller.is_public
+        and caller.run_kind not in ("script", "ui")
+    )
 
 
 def _split_lines(body: str) -> list[str]:
@@ -481,14 +493,17 @@ async def _visible_docs(
     project's docs and never queries user docs at all -- not even a
     leftover row whose stored mode still says ``public``. A private
     project conversation additionally lists the public docs of its doc
-    sources (scope ``public``, included in ``all``).
+    sources (scope ``public``, included in ``all``). A standalone
+    conversation lists the docs of all of the user's own projects under
+    scope ``project`` (included in ``all``), read-only.
     """
     include_user = scope in ("user", "all") and not caller.is_public
     include_project = bool(caller.project_id) and (
         scope in ("project", "all") or (scope == "public" and caller.is_public)
     )
+    include_own_projects = scope in ("project", "all") and _reaches_own_projects(caller)
     sources = await _doc_sources(caller) if scope in ("public", "all") else frozenset()
-    if not include_user and not include_project and not sources:
+    if not include_user and not include_project and not include_own_projects and not sources:
         return []
 
     out: list[tuple[dict, DocAccess]] = []
@@ -499,6 +514,7 @@ async def _visible_docs(
             project_id=caller.project_id,
             include_user_docs=include_user,
             include_project_docs=include_project,
+            include_owned_project_docs=include_own_projects,
             source_project_ids=sources,
             # A public conversation can only ever see public docs; filtering
             # in SQL keeps hidden private rows from eating the LIMIT.
@@ -542,11 +558,12 @@ async def list_docs(
     """Docs this caller can see, newest-updated first.
 
     ``scope``: ``"user"`` (user docs), ``"project"`` (this conversation's
-    project docs; empty outside a project), ``"public"`` (the public docs
-    readable from here: from a private project conversation the docs of
-    its doc sources, from a public conversation its own project's docs,
-    nothing elsewhere) or ``"all"`` (everything). ``limit`` is clamped to
-    1..200. Hidden docs never appear.
+    project docs; from a standalone conversation the read-only docs of all
+    of the user's own projects), ``"public"`` (the public docs readable
+    from here: from a private project conversation the docs of its doc
+    sources, from a public conversation its own project's docs, nothing
+    elsewhere) or ``"all"`` (everything). ``limit`` is clamped to 1..200.
+    Hidden docs never appear.
     """
     require_enabled(caller)
     scope = _check_scope(scope)

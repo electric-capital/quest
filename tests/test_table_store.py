@@ -335,6 +335,17 @@ class TestListing:
         }
         with pytest.raises(store.TableValidationError):
             ids(mode="secret")
+        # include_owned_project_tables: every project table alice owns (any
+        # mode), not a project table another owner shared with her.
+        bobs = _create(env, owner=env["bob"], title="Bob proj", project_id=env["p1"])
+        _run(store.add_share(bobs["id"], env["alice"], "write"))
+        assert ids(include_owned_project_tables=True, include_user_tables=False) == {
+            p1_t["id"], pub_t["id"],
+        }
+        assert ids(include_owned_project_tables=True) == {
+            user_t["id"], p1_t["id"], pub_t["id"],
+        }
+        assert bobs["id"] in ids(project_id=env["p1"], include_project_tables=True)
 
     def test_source_project_ids(self, env):
         # A private project's linked sources: only their PUBLIC tables.

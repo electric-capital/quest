@@ -247,6 +247,17 @@ class TestListAccessible:
         assert ids(include_project_docs=True, include_user_docs=False) == set()
         assert ids(include_user_docs=False) == set()
         assert p2_doc["id"] not in ids(project_id=env["p1"], include_project_docs=True)
+        # include_owned_project_docs: every project doc alice owns, and only
+        # those -- a project doc shared with her by another owner is not one.
+        bobs = _create(env, owner=env["bob"], title="Bob proj", project_id=env["p2"])
+        _run(store.add_share(bobs["id"], env["alice"], "write"))
+        assert ids(include_owned_project_docs=True, include_user_docs=False) == {
+            p1_doc["id"], p2_doc["id"],
+        }
+        assert ids(include_owned_project_docs=True) == {
+            user_doc["id"], p1_doc["id"], p2_doc["id"],
+        }
+        assert bobs["id"] in ids(project_id=env["p2"], include_project_docs=True)
 
     def test_order_and_keyset_paging(self, env):
         store = env["store"]

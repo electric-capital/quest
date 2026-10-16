@@ -32,6 +32,11 @@ user_subagent and script runs)::
 (*) except ``script``: scripts see user tables only (never a project
 table), and public tables are always project tables, so Hidden.
 
+As for docs (rule 2), the owner's standalone conversations see the tables
+of all of the owner's projects read-only ("Read" in both verdicts, with
+:data:`DENY_OUTSIDE_PROJECT`, or the public-from-private wording for a
+public table).
+
 "Read" = rows AND schema denied, both with the same read-only reason.
 
 The ``schema`` verdict is never ``"free"`` (invariant 5: no model-facing
@@ -40,8 +45,9 @@ the UI routes). It is decided after the rows verdict, in this order:
 
 1. Hidden -> denied, no reason (the whole verdict is :data:`HIDDEN`).
 2. A read-only rows verdict (read-only run kind, read share, public table
-   from a private conversation, UI without a write relationship) ->
-   denied with the rows reason.
+   from a private conversation, the owner's project table from a
+   standalone conversation, UI without a write relationship) -> denied
+   with the rows reason.
 3. ``ui`` -> ``"approval"`` for the owner (the owner's own Save in the
    schema editor is the approval; the UI routes write the schema
    directly), denied (:data:`DENY_SCHEMA_UI_NOT_OWNER`) for a write-share
@@ -99,6 +105,7 @@ __all__ = [
     "APPROVAL_REQUIRED_WRITE_NOTE",
     "APPROVAL_WRITE_NOTE",
     "DENY_INFERENCE_API",
+    "DENY_OUTSIDE_PROJECT",
     "DENY_PUBLIC_APPROVAL_REQUIRED",
     "DENY_PUBLIC_TABLE_FROM_PRIVATE",
     "DENY_READ_ONLY_SHARE",
@@ -146,6 +153,10 @@ DENY_SCRIPT = (
 DENY_READ_ONLY_SHARE = "You have read-only access to this shared table."
 DENY_PUBLIC_TABLE_FROM_PRIVATE = (
     "Public tables are written only from public-project conversations."
+)
+DENY_OUTSIDE_PROJECT = (
+    "This table belongs to a project; its rows and columns are changed only "
+    "from that project's conversations or in the Quest UI. Here it is read-only."
 )
 DENY_SLACK_NEEDS_APPROVAL = (
     "This table is shared, so changes need an approval card, which Slack-driven "
@@ -209,6 +220,7 @@ _DENY_TEXT = {
     "script": DENY_SCRIPT,
     "read_only_share": DENY_READ_ONLY_SHARE,
     "public_from_private": DENY_PUBLIC_TABLE_FROM_PRIVATE,
+    "outside_project": DENY_OUTSIDE_PROJECT,
     "slack_needs_approval": DENY_SLACK_NEEDS_APPROVAL,
     "slack_approval_required": DENY_SLACK_APPROVAL_REQUIRED,
     "public_approval_required": DENY_PUBLIC_APPROVAL_REQUIRED,
@@ -223,6 +235,7 @@ _READ_ONLY_CAUSES = frozenset({
     *READ_ONLY_RUN_KINDS,
     "read_only_share",
     "public_from_private",
+    "outside_project",
     "ui_read_only",
 })
 

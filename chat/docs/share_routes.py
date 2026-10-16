@@ -31,9 +31,10 @@ What a share grants is decided by the one access rule
 share also edits / restores (no rename, delete, sharing or asset deletion);
 from the recipient's conversations a shared USER doc is readable (read
 share) or writable through a ``write_doc`` approval card (write share on a
-private doc), while a shared PROJECT doc stays hidden there (project docs
-are reachable only from their project's conversations, and projects are
-not shared). The first share on a private doc also turns the owner's own
+private doc), while a shared PROJECT doc stays hidden there (outside its
+project a project doc is reached only by its owner's standalone
+conversations, read-only, and projects are not shared). The first share
+on a private doc also turns the owner's own
 conversation writes into approval cards.
 
 Share changes do not bump ``updated_at`` (they are not content changes),

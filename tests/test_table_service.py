@@ -242,8 +242,22 @@ class TestGateAndVisibility:
         public = make_table(env, "Pub", project_id=env.public_project)
         make_table(env, "Hidden", owner="bob")
 
-        ids = [t["id"] for t, _a in _run(service.list_visible_tables(convo(env)))]
+        # A standalone conversation: user tables plus, read-only, the
+        # tables of all of alice's projects (scope ``project``).
+        listed = _run(service.list_visible_tables(convo(env)))
+        assert {t["id"] for t, _a in listed} == {
+            mine["id"], shared["id"], project["id"], public["id"],
+        }
+        verdicts = {t["id"]: a for t, a in listed}
+        assert verdicts[project["id"]].rows == "denied"
+        assert verdicts[project["id"]].schema == "denied"
+        assert verdicts[public["id"]].rows == "denied"
+        ids = [t["id"] for t, _a in _run(service.list_visible_tables(convo(env), scope="project"))]
+        assert set(ids) == {project["id"], public["id"]}
+        ids = [t["id"] for t, _a in _run(service.list_visible_tables(convo(env), scope="user"))]
         assert set(ids) == {mine["id"], shared["id"]}
+        assert _run(service.list_visible_tables(convo(env), scope="public")) == []
+        # Inside a project: that project's tables only, besides user tables.
         ids = [t["id"] for t, _a in _run(service.list_visible_tables(
             convo(env, project=env.private_project)))]
         assert set(ids) == {mine["id"], shared["id"], project["id"]}

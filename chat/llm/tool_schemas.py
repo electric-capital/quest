@@ -1734,7 +1734,8 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                     "default": "all",
                     "description": (
                         "'user' = the user's own docs, 'project' = this "
-                        "project's docs (empty outside a project), 'public' "
+                        "project's docs (outside a project: the read-only "
+                        "docs of all of the user's own projects), 'public' "
                         "= the read-only public docs of the public projects "
                         "this project was given access to (empty outside a "
                         "project), 'all' (default) = everything this "
@@ -2102,7 +2103,8 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                     "description": (
                         "'user' = user tables (own and shared; empty in a "
                         "public-project conversation), 'project' = this "
-                        "project's tables (empty outside a project), 'public' "
+                        "project's tables (outside a project: the read-only "
+                        "tables of all of the user's own projects), 'public' "
                         "= public tables readable here (a private project's "
                         "linked public projects; in a public-project "
                         "conversation, its own tables), 'all' (default) = "

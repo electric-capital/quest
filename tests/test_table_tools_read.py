@@ -30,6 +30,8 @@ import pytest
 from chat.tables import service
 from chat.tables.access import (
     DENY_INFERENCE_API,
+    DENY_OUTSIDE_PROJECT,
+    DENY_PUBLIC_TABLE_FROM_PRIVATE,
     DENY_SCRIPT,
     DENY_SUB_AGENT,
     DENY_USER_SUBAGENT,
@@ -186,13 +188,28 @@ class TestRegistry:
 
 class TestVisibility:
     def test_private_standalone(self, world):
+        """A standalone chat sees user tables plus, read-only, the tables of
+        all of the user's own projects (scope ``project``)."""
         t = world.t
         listed = _dispatch(world, "list_tables", {})
-        assert _ids(listed) == {t["user"]["id"], t["bob"]["id"]}
-        assert listed["count"] == 2
-        assert _dispatch(world, "list_tables", {"scope": "project"}) == {"tables": [], "count": 0}
+        assert _ids(listed) == {t[k]["id"] for k in ("user", "bob", "private", "public")}
+        assert listed["count"] == 4
+        project = _dispatch(world, "list_tables", {"scope": "project"})
+        assert _ids(project) == {t["private"]["id"], t["public"]["id"]}
+        for row in project["tables"]:
+            assert row["scope"] == "project"
+            assert row["writable"] == "denied" and row["schema_change"] == "denied"
+        assert _dispatch(world, "list_tables", {"scope": "user"})["count"] == 2
         assert _dispatch(world, "list_tables", {"scope": "public"}) == {"tables": [], "count": 0}
         got = _dispatch(world, "get_table", {"table_id": t["private"]["id"]})
+        assert (got["writable"], got["write_note"]) == ("denied", DENY_OUTSIDE_PROJECT)
+        assert (got["schema_change"], got["schema_note"]) == ("denied", DENY_OUTSIDE_PROJECT)
+        got = _dispatch(world, "get_table", {"table_id": t["public"]["id"]})
+        assert got["write_note"] == DENY_PUBLIC_TABLE_FROM_PRIVATE
+        rows = _dispatch(world, "query_rows", {"table_id": t["private"]["id"]})
+        assert rows["rows"] == [] and rows["total"] == 0
+        # Bob's standalone chat never sees alice's project tables.
+        got = _dispatch(world, "get_table", {"table_id": t["private"]["id"]}, who="bob")
         assert got["error"] == "table_not_found"
 
     def test_private_project(self, world):
@@ -259,9 +276,11 @@ class TestVisibility:
     def test_slack(self, world):
         t = world.t
         listed = _dispatch(world, "list_tables", {}, is_slack=True)
-        assert _ids(listed) == {t["user"]["id"], t["bob"]["id"]}
+        assert _ids(listed) == {t[k]["id"] for k in ("user", "bob", "private", "public")}
         own = next(r for r in listed["tables"] if r["id"] == t["user"]["id"])
         assert own["writable"] == "free" and own["schema_change"] == "denied"
+        proj = next(r for r in listed["tables"] if r["id"] == t["private"]["id"])
+        assert proj["writable"] == "denied" and proj["write_note"] == DENY_OUTSIDE_PROJECT
         assert _dispatch(world, "query_rows", {"table_id": t["user"]["id"]},
                          is_slack=True)["total"] == 7
 
@@ -278,7 +297,7 @@ class TestVisibility:
         assert listed["count"] == 1
         # Newest updated first: bob's table was created last.
         assert listed["tables"][0]["id"] == world.t["bob"]["id"]
-        assert _dispatch(world, "list_tables", {"limit": 5000})["count"] == 2  # clamped
+        assert _dispatch(world, "list_tables", {"limit": 5000})["count"] == 4  # clamped
         bad = _dispatch(world, "list_tables", {"scope": "everything"})
         assert bad["error"] == "invalid_args"
         assert _dispatch(world, "list_tables", {"limit": "many"})["error"] == "invalid_args"

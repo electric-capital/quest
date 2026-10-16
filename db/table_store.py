@@ -423,6 +423,7 @@ async def list_accessible_tables(
     project_id: Optional[str] = None,
     include_user_tables: bool = True,
     include_project_tables: bool = False,
+    include_owned_project_tables: bool = False,
     source_project_ids: Collection[str] = (),
     mode: Optional[str] = None,
     owned_only: bool = False,
@@ -439,6 +440,8 @@ async def list_accessible_tables(
     Scope filter (OR-ed):
         - ``include_user_tables``: user tables (``project_id IS NULL``);
         - ``include_project_tables`` with ``project_id``: that project's tables;
+        - ``include_owned_project_tables``: the tables of every project the
+          user owns (any mode) -- what a standalone conversation may read;
         - ``source_project_ids``: the public tables (``mode="public"``) of
           those projects -- a private project's linked sources, readable
           from its conversations.
@@ -449,6 +452,7 @@ async def list_accessible_tables(
         project_id: Project whose tables to include (with include_project_tables).
         include_user_tables: Include user (non-project) tables.
         include_project_tables: Include ``project_id``'s tables.
+        include_owned_project_tables: Include the project tables the user owns.
         source_project_ids: Projects whose public tables to include.
         mode: Optional ``"private"`` / ``"public"`` filter, so the SQL
             ``LIMIT`` applies to the set a public caller can see.
@@ -465,6 +469,10 @@ async def list_accessible_tables(
         scope_conds.append(DataTable.project_id.is_(None))
     if include_project_tables and project_id:
         scope_conds.append(DataTable.project_id == project_id)
+    if include_owned_project_tables:
+        scope_conds.append(
+            and_(DataTable.project_id.is_not(None), DataTable.owner_id == user_id)
+        )
     if source_project_ids:
         scope_conds.append(
             and_(
