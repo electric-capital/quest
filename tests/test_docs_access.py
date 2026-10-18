@@ -16,7 +16,6 @@ from chat.docs.access import (
     APPROVAL_WRITE_NOTE,
     DENY_INFERENCE_API,
     DENY_OUTSIDE_PROJECT,
-    DENY_PUBLIC_APPROVAL_REQUIRED,
     DENY_PUBLIC_DOC_FROM_PRIVATE,
     DENY_READ_ONLY_SHARE,
     DENY_SCRIPT,
@@ -774,10 +773,6 @@ def test_deny_reason_texts_are_pinned():
         "Slack-driven conversations cannot open approval cards. Continue from "
         "the Quest web UI."
     )
-    assert DENY_PUBLIC_APPROVAL_REQUIRED == (
-        "The owner requires approval for every change to this doc, and "
-        "public-project conversations cannot open approval cards."
-    )
     assert APPROVAL_REQUIRED_WRITE_NOTE == (
         "owner requires approval for every change: use create_action_request(write_doc)"
     )
@@ -792,12 +787,13 @@ def _with_switch(verdict, column):
     """What a cell becomes once ``require_approval`` is on.
 
     Every Free verdict a conversation would get becomes Approval (marked
-    ``required_by_owner``), a share-based Approval keeps the verdict but
-    takes the switch's wording, Slack and public conversations (no cards)
-    are denied with the switch's reasons, and every other cell -- reads,
-    Hidden, the read-only run kinds and the UI -- is untouched.
+    ``required_by_owner``), public conversations included (the write_doc
+    card is a public-safe action request), a share-based Approval keeps
+    the verdict but takes the switch's wording, Slack conversations (no
+    cards) are denied with the switch's reason, and every other cell --
+    reads, Hidden, the read-only run kinds and the UI -- is untouched.
     """
-    _uid, is_public, run_kind, _pid = COLUMNS[column]
+    _uid, _is_public, run_kind, _pid = COLUMNS[column]
     if run_kind == "ui" or run_kind in READ_ONLY_RUN_KINDS:
         return verdict
     if verdict == AR:
@@ -807,8 +803,6 @@ def _with_switch(verdict, column):
     if verdict == FREE:
         if run_kind == "slack":
             return RO(DENY_SLACK_APPROVAL_REQUIRED)
-        if is_public:
-            return RO(DENY_PUBLIC_APPROVAL_REQUIRED)
         return AR_REQ
     return verdict
 

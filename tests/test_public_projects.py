@@ -147,10 +147,31 @@ class TestBuildScriptPodmanCmd:
 
 
 class TestPublicToolTier:
-    def test_public_tools_are_the_three_expected(self):
+    def test_public_tools_are_the_four_expected(self):
         assert [t["name"] for t in PUBLIC_TOOLS] == [
-            "tool_call", "run_script", "run_python",
+            "tool_call", "run_script", "run_python", "create_action_request",
         ]
+
+    def test_public_create_action_request_offers_only_artifact_cards(self):
+        # The public create_action_request has its own fixed enum (the
+        # Quest Docs and Quest Tables cards), never the plugin-extended
+        # one, and a description naming no internal service or skill.
+        from chat.llm.tool_schemas import (
+            ACTION_REQUEST_TYPE_ENUM,
+            PUBLIC_ACTION_REQUEST_TYPES,
+        )
+        spec = next(t for t in PUBLIC_TOOLS if t["name"] == "create_action_request")
+        enum = spec["parameters"]["properties"]["request_type"]["enum"]
+        assert enum == sorted(PUBLIC_ACTION_REQUEST_TYPES)
+        assert PUBLIC_ACTION_REQUEST_TYPES == {
+            "write_doc", "create_table", "change_table_schema", "write_table_rows",
+        }
+        assert enum is not ACTION_REQUEST_TYPE_ENUM
+        assert set(enum) < set(ACTION_REQUEST_TYPE_ENUM)
+        text = json.dumps(spec)
+        for term in ("system:", "Slack", "Telegram", "calendar", "Drive",
+                     "wait_for_handles", "agent_task"):
+            assert term not in text, term
 
     def test_allowlist_is_subset_of_registry(self, slack_plugin):
         # send_slack_dm_to_self is served by the Slack plugin (the one
@@ -209,14 +230,58 @@ class TestPublicDispatchRejects:
 
 
 class TestPublicBlockedLoopTools:
-    def test_loop_blocklist_covers_spawners_and_action_requests(self):
+    def test_loop_blocklist_covers_spawners_and_origin_tools(self):
         from chat.gemini_api.conversation import _PUBLIC_BLOCKED_LOOP_TOOLS
+        from chat.gemini_api.turn_tools import WAIT_FOR_HANDLES_KEY
         for name in (
             "agent_task", "agent_task_parallel", "agent_task_parallel_template",
-            "create_action_request", "send_slack_reply_and_get_response",
-            "return_to_caller", "return_final_response",
+            "send_slack_reply_and_get_response",
+            "return_to_caller", "return_final_response", WAIT_FOR_HANDLES_KEY,
         ):
             assert name in _PUBLIC_BLOCKED_LOOP_TOOLS
+        # create_action_request is gated by its own arm instead (below).
+        assert "create_action_request" not in _PUBLIC_BLOCKED_LOOP_TOOLS
+
+
+class TestPublicActionRequestArm:
+    """The create_action_request arm in a public conversation admits only
+    PUBLIC_ACTION_REQUEST_TYPES, before the handler registry is consulted."""
+
+    def _propose(self, request_type, **overrides):
+        from chat.gemini_api.turn_tools import _handle_create_action_request
+        from tests.test_turn_tools_registry import _call, _make_ctx
+
+        ctx, _events = _make_ctx(is_public=True, project_id="proj-1", **overrides)
+        call = _call("create_action_request", {
+            "request_type": request_type, "params": {}, "reasoning": "r",
+        })
+        return json.loads(_run(_handle_create_action_request(ctx, call, None)))
+
+    @pytest.mark.parametrize("request_type", [
+        "create_memory", "create_skill", "create_routine", "run_user_subagent",
+        "upload_to_drive", "send_slack_message", "no_such_type", "",
+    ])
+    def test_internal_and_unknown_types_rejected(self, request_type):
+        result = self._propose(request_type)
+        assert "not available in public-project conversations" in result["error"]
+        assert result["supported_types"] == [
+            "change_table_schema", "create_table", "write_doc", "write_table_rows",
+        ]
+
+    @pytest.mark.parametrize("request_type", [
+        "write_doc", "create_table", "change_table_schema", "write_table_rows",
+    ])
+    def test_artifact_types_reach_their_handler(self, request_type, monkeypatch):
+        # Past the public gate the arm runs the type's own validation; an
+        # empty params dict fails it, which proves the handler was reached
+        # (the public reject names the project, this message does not).
+        result = self._propose(request_type)
+        assert result["error"].startswith("Invalid parameters: ")
+        assert "public-project" not in result["error"]
+
+    def test_slack_origin_still_refused_first(self):
+        result = self._propose("write_doc", is_slack_origin=True)
+        assert "Slack-driven" in result["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +325,7 @@ class TestPublicSystemPrompt:
         p = self._prompt(docs_enabled=docs_enabled)
         for term in (
             "memory_search", "authed_get", "authed_post", "load_skills",
-            "system:", "create_action_request(", "agent_task(",
+            "system:", "agent_task(",
             "load_gmail_attachment", "wait_for_handles",
         ):
             # get_response_content's registry description cross-references
@@ -274,6 +339,25 @@ class TestPublicSystemPrompt:
                 assert not re.search(r"(?<!project_)memory_search", p)
                 continue
             assert term not in p, term
+
+    @pytest.mark.parametrize("tables_enabled", [False, True])
+    def test_create_action_request_documented_for_artifact_cards_only(self, tables_enabled):
+        # The fourth tool is documented with the public-safe types only;
+        # the internal types never appear, with or without the Tables
+        # paragraph (which carries the create_table / change_table_schema
+        # examples).
+        p = self._prompt(docs_enabled=True, tables_enabled=tables_enabled)
+        assert "You have four tools available:" in p
+        assert "4. **create_action_request(request_type, params, reasoning)**" in p
+        for name in ("write_doc", "create_table", "change_table_schema", "write_table_rows"):
+            assert f"`{name}`" in p, name
+        for name in ("create_memory", "create_skill", "create_routine",
+                     "run_user_subagent", "upload_to_drive", "send_slack_message"):
+            assert name not in p, name
+        assert "cannot propose writes to external services" in p
+        assert ('create_action_request(request_type="create_table"' in p) is tables_enabled
+        assert ('create_action_request(request_type="change_table_schema"' in p) is tables_enabled
+        assert 'create_action_request(request_type="write_doc"' in p
 
     def test_keeps_identity_project_guide_and_public_tools(self):
         # docs_enabled / tables_enabled: every allowlisted tool, the doc and

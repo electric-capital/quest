@@ -34,6 +34,7 @@ from chat.tables.access import (
     DENY_PUBLIC_TABLE_FROM_PRIVATE,
     DENY_SCRIPT,
     DENY_SUB_AGENT,
+    SCHEMA_APPROVAL_NOTE,
     DENY_USER_SUBAGENT,
 )
 from chat.tables.constants import (
@@ -255,8 +256,9 @@ class TestVisibility:
                 got = _dispatch(world, tool, {"table_id": t[key]["id"]}, **kw)
                 assert got["error"] == "table_not_found", (key, tool)
         own = _dispatch(world, "get_table", {"table_id": t["public"]["id"]}, **kw)
-        assert own["writable"] == "free" and own["schema_change"] == "denied"
-        assert own["schema_note"]
+        # Rows free; the schema card (a public-safe action request).
+        assert own["writable"] == "free" and own["schema_change"] == "approval"
+        assert own["schema_note"] == SCHEMA_APPROVAL_NOTE
 
     @pytest.mark.parametrize("flags, reason", [
         ({"is_sub_agent": True}, DENY_SUB_AGENT),

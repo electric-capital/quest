@@ -3504,16 +3504,126 @@ PROJECT_HIDDEN_WORKSPACE_TOOLS: frozenset[str] = frozenset({
 
 # Public-project conversations: internet-enabled sandbox, cut off from every
 # internal resource. Only tool_call (restricted to
-# PUBLIC_TOOL_CALL_ALLOWLIST), run_script, and run_python -- NO curl_proxy_*
-# (internal proxy), NO skill tools, NO load_gmail_attachment, NO agent_task*
-# spawners, NO create_action_request. The schema-level trim is convenience;
-# the enforced boundary is the allowlist check in
+# PUBLIC_TOOL_CALL_ALLOWLIST), run_script, run_python and the public
+# create_action_request (restricted to PUBLIC_ACTION_REQUEST_TYPES) -- NO
+# curl_proxy_* (internal proxy), NO skill tools, NO load_gmail_attachment,
+# NO agent_task* spawners, NO wait_for_handles. The schema-level trim is
+# convenience; the enforced boundary is the allowlist check in
 # chat/gemini_api/tool_dispatch.py plus the loop-arm rejects in
-# chat/gemini_api/conversation.py.
+# chat/gemini_api/conversation.py and the request-type check in the
+# create_action_request arm (chat/gemini_api/turn_tools.py).
 _PUBLIC_BASE_TOOL_NAMES = {"tool_call", "run_script", "run_python"}
+
+# The action request types a public-project conversation may propose: the
+# Quest Docs and Quest Tables cards. Each one writes an in-app artifact that
+# the access rule (chat/artifact_access.py, with is_public=True) restricts
+# to the conversation's own public project -- a private doc or table is
+# hidden there and a public one holds sandbox-originated content by
+# construction -- and each needs the user's Approve, so the card is the
+# approval the owner's "require approval" switch asks for, and the only
+# path a schema change or a new table has. Every other type (connector
+# writes, memories, skills, routines, cross-user subagents, plugin types)
+# reads or writes internal data and is refused by the arm. Core-owned:
+# plugins cannot extend it. Pre-card and execute of every listed type
+# re-derive the conversation's mode from its project row, so the list
+# admits nothing the access rule does not.
+PUBLIC_ACTION_REQUEST_TYPES: frozenset[str] = frozenset({
+    ActionRequestType.WRITE_DOC.value,
+    ActionRequestType.CREATE_TABLE.value,
+    ActionRequestType.CHANGE_TABLE_SCHEMA.value,
+    ActionRequestType.WRITE_TABLE_ROWS.value,
+})
+assert PUBLIC_ACTION_REQUEST_TYPES <= set(ACTION_REQUEST_TYPE_ENUM)
+
+# The public conversations' create_action_request: the same parameters and
+# verdict contract as _CREATE_ACTION_REQUEST, with its own enum (a fixed
+# sorted list, never the plugin-extended ACTION_REQUEST_TYPE_ENUM) and a
+# description that names no internal service or skill (the public prompt
+# carries none; tests/test_public_projects.py).
+_PUBLIC_CREATE_ACTION_REQUEST: ToolSpec = {
+    "name": "create_action_request",
+    "description": (
+        "Propose a change to a Quest Doc or Quest Table of this project "
+        "that needs the user's approval. The request is shown inline in "
+        "the conversation with Approve / Revise / Stop buttons; nothing is "
+        "written until the user approves. "
+        "\n\n"
+        "This call BLOCKS until the user resolves the request. The return "
+        "value carries the verdict directly so you can keep going on the "
+        "same turn. The shape is "
+        "`{verdict: \"executed\"|\"denied\"|\"stopped\", request_id: N, "
+        "feedback?: \"<user text>\", result: {...}}`: on `executed`, "
+        "`result` carries the write's outcome (the new table's id and "
+        "columns, the rows written, the doc's new version); on `denied`, "
+        "`result` is `{\"denied\": true}` plus an optional `feedback` "
+        "field if the user clicked Revise and supplied a reason; on "
+        "`stopped`, the user pressed Stop, which halted the conversation "
+        "-- the call only returns once they send a new message, which "
+        "arrives in the same turn as the current instruction (a `note` "
+        "field says so). On a deny with feedback, read `feedback` and "
+        "adapt: fix the parameters and re-issue, or propose an "
+        "alternative. On `stopped`, do not re-issue the request unless "
+        "the new message asks for it. "
+        "\n\n"
+        "Only these request types exist here, each for this project's "
+        "public docs and tables: `write_doc` (a change to a doc whose "
+        "owner requires approval; the doc tools' `approval_required` "
+        "error gives the exact params as `suggested_request`), "
+        "`create_table` (params: `title`, `description`, "
+        "`target: \"project\"`, `columns` as `get_table` shows them, "
+        "without keys), `change_table_schema` (params: `table_id`, "
+        "`operations`, `expected_schema_version` from `get_table`; the "
+        "operations are `add_column`, `rename_column`, `drop_column`, "
+        "`reorder_columns`, `set_description`, `set_required`, "
+        "`set_unique`, `set_default`, `set_precision`, `add_enum_option`, "
+        "`rename_enum_option`, `remove_enum_option`, `set_enum_multiple` "
+        "and `rename_table`, each naming columns by name) and "
+        "`write_table_rows` (a row write the row tools refused with "
+        "`approval_required`; forward their `suggested_request` "
+        "unchanged). Writes to external services, memories, skills and "
+        "routines are not available in this project."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "request_type": {
+                "type": "string",
+                "description": (
+                    "The type of action request: one of the public-safe "
+                    "types listed in the tool description."
+                ),
+                "enum": sorted(PUBLIC_ACTION_REQUEST_TYPES),
+            },
+            "params": {
+                "type": "object",
+                "description": (
+                    "Type-specific parameters as a JSON object, as the "
+                    "tool description and the table and doc tools' "
+                    "`suggested_request` give them."
+                ),
+            },
+            "reasoning": {
+                "type": "string",
+                "description": (
+                    "Explain why you are making this request. This reasoning is shown "
+                    "to the user alongside the request to help them decide whether to approve it."
+                ),
+            },
+            "intent_message": {
+                "type": "string",
+                "description": (
+                    "A brief, user-friendly summary of your intent "
+                    "(max 50 characters). Example: 'Add a Status column'."
+                ),
+            },
+        },
+        "required": ["request_type", "params", "reasoning"],
+    },
+}
+
 PUBLIC_TOOLS: list[ToolSpec] = [
     t for t in BASE_TOOLS if t["name"] in _PUBLIC_BASE_TOOL_NAMES
-]
+] + [_PUBLIC_CREATE_ACTION_REQUEST]
 
 # Routine runs inside a public project (only while the
 # public_project_routines gate is open): the public subset plus the
@@ -3545,7 +3655,9 @@ PUBLIC_ROUTINE_TOOLS: list[ToolSpec] = PUBLIC_TOOLS + [_ROUTINE_COMPLETED]
 # (byte-equal to a nonexistent id, never listed); only public tables are
 # readable and writable there. The row writes need no gate beyond that
 # rule: a public table's content comes only from public conversations and
-# the UI (taint invariant), and approval-gated cases are denied there.
+# the UI (taint invariant); the approval-gated cases (the owner's switch,
+# column changes, new tables) go through the public create_action_request
+# (PUBLIC_ACTION_REQUEST_TYPES above).
 # The project memory tools are allowed: they read and propose only the
 # memories of the conversation's own (public) project, every suggestion
 # waits for the user's accept, and a public project's memories are never

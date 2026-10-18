@@ -712,20 +712,23 @@ class TestSchemaAndRestore:
         assert exc.value.code == "stale_schema"
         assert exc.value.current["schema_version"] == 2
 
-    def test_schema_change_denied_for_non_owner_and_public(self, env):
+    def test_schema_change_denied_for_non_owner_and_allowed_for_public(self, env):
         table = make_table(env, shares=[("bob", "write")])
         with pytest.raises(TableDenied):
             _run(service.apply_schema_change(
                 ui(env, "bob"), table["id"], [{"op": "rename_table", "title": "X"}],
                 expected_schema_version=1,
             ))
-        public = make_table(env, "Pub", project_id=env.public_project)
-        with pytest.raises(TableDenied):
-            _run(service.apply_schema_change(
-                convo(env, project=env.public_project, public=True), public["id"],
-                [{"op": "rename_table", "title": "X"}], expected_schema_version=1,
-            ))
         assert fetch(env, table)["schema_version"] == 1
+        # A public conversation's schema verdict on its own public table is
+        # "approval" (the change_table_schema card), which this entry point
+        # applies at Approve.
+        public = make_table(env, "Pub", project_id=env.public_project)
+        _run(service.apply_schema_change(
+            convo(env, project=env.public_project, public=True), public["id"],
+            [{"op": "rename_table", "title": "X"}], expected_schema_version=1,
+        ))
+        assert fetch(env, public)["title"] == "X"
 
     def test_restore_round_trip(self, env):
         table = make_table(env, shares=[("bob", "write")])

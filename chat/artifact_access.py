@@ -66,7 +66,6 @@ DenyCause = Literal[
     "outside_project",       # owner's project artifact, from a standalone conversation
     "slack_needs_approval",  # shared private artifact, Slack cannot open a card
     "slack_approval_required",   # owner switch on, Slack cannot open a card
-    "public_approval_required",  # owner switch on, public convos have no cards
     "ui_read_only",          # UI, no write relationship
 ]
 DENY_CAUSES: tuple[str, ...] = get_args(DenyCause)
@@ -220,7 +219,15 @@ def resolve_core(
         if not may_write:
             return _read_only("read_only_share", is_owner)
         if require_approval:
-            return _read_only("public_approval_required", is_owner)
+            # A public conversation opens the artifact cards (write_doc and
+            # the table cards), so the owner's switch gates it like a
+            # private one; the card keeps the public artifact's taint.
+            # Slack runs cannot open cards in any mode.
+            if run_kind == "slack":
+                return _read_only("slack_approval_required", is_owner)
+            return CoreVerdict(
+                visible=True, write="approval", required_by_owner=True, is_owner=is_owner,
+            )
         return CoreVerdict(visible=True, write="free", is_owner=is_owner)
 
     # Private artifact in a private conversation.

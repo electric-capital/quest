@@ -210,7 +210,7 @@ Error results come in three shapes:
 
 Enforcement outside the access rule:
 
-- **Public conversations**: all seven are in `PUBLIC_TOOL_CALL_ALLOWLIST`. The access rule hides every private doc there and public conversations only ever get `free` or `denied`, so the blocked `create_action_request` is never needed.
+- **Public conversations**: all seven are in `PUBLIC_TOOL_CALL_ALLOWLIST`. The access rule hides every private doc there; a public doc is `free` or `denied`, or `approval` under the owner's require-approval switch, served by the `write_doc` card (one of the four action request types a public conversation can open, [Public Projects -- Action requests](public-projects.md#action-requests)).
 - **Inference API runs**: the `mutating` flag puts the four writes in `mutating_tool_call_tools()`, which is hard-rejected at dispatch and refused for the run's sandbox lease (see [Inference API](../api/inference-api.md)). The access rule would deny them anyway.
 - **Sub-agents and cross-user subagents**: `get_sub_agent_system_prompt()` and `get_user_subagent_system_prompt()` exclude `_doc_write_tool_names()` from their prompts (the `system:quest_docs` enumeration line names only the reads). If called anyway, `create_doc` refuses through `_CREATE_DENY_REASONS` and the other writes through the access rule.
 
@@ -344,7 +344,7 @@ Treating every script as a private caller is safe because public containers get 
 
 **Why scope title uniqueness per mode?** One title namespace per (owner, project) regardless of mode would let a public conversation probe `create_doc(title=...)` and learn from the collision error that a private doc with that title exists, breaking invisibility. Since every project's docs share the project's mode, the mode key is defence in depth.
 
-**Why does a shared private doc need approval, but a shared public doc does not?** The approval card protects internal data that has several stakeholders. A public doc only ever holds sandbox-originated content, every writer is itself a credential-less public conversation, and the recipients opted into `write`.
+**Why does a shared private doc need approval, but a shared public doc does not?** The approval card protects internal data that has several stakeholders. A public doc only ever holds sandbox-originated content, every writer is itself a credential-less public conversation, and the recipients opted into `write`. The owner's require-approval switch is the exception: it gates a public doc in its public conversations too, since the `write_doc` card is one of the action requests a public conversation can open.
 
 **Why one access function?** Re-deriving parts of a matrix this size (mode x relationship x conversation kind x run kind) at each call site would drift. Tools, routes, the pre-card, the execute and the prompt all consume one `DocAccess`, and one table-driven test pins it.
 

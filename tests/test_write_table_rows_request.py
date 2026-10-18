@@ -255,12 +255,27 @@ class TestPrecardRefusals:
         assert _snapshot(world, table) == before
 
     def test_public_table_free_from_its_public_conversation(self, world):
-        # Defense in depth: public conversations never reach the pre-card,
-        # and their free verdict refuses the card anyway.
+        # A public conversation's free verdict refuses the card: the row
+        # tools write directly there.
         caller = convo(world, project=world.public_project, public=True)
         assert refusal(caller, op_params("insert", world.t["open"]["id"])).startswith(
             "use_tool_directly: ",
         )
+
+    def test_public_table_with_the_switch_gets_a_card(self, world):
+        # The owner's require_approval switch gates a public table in its
+        # public conversation like a private one: write_table_rows is a
+        # public-safe action request, so the card opens (required_by_owner).
+        table = world.t["open"]
+        _set_require_approval(world, table)
+        caller = convo(world, project=world.public_project, public=True)
+        out = propose(caller, op_params("insert", table["id"]))
+        assert out["approval_reason"] == "required_by_owner"
+        assert (out["table_mode"], out["require_approval"]) == ("public", True)
+        before = _snapshot(world, table)
+        result = execute(out, caller, request_id=11)
+        assert result["inserted"] == 1
+        assert _snapshot(world, table) != before
 
     @pytest.mark.parametrize("op", list(TOOLS))
     def test_read_share_denied(self, world, op):

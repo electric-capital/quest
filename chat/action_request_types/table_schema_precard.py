@@ -210,8 +210,8 @@ async def precard_change_table_schema(
     project (``project_not_found``) -> ``service.preview_schema_change``:
     a missing or hidden table (``table_not_found``, byte-equal), the
     schema verdict (``denied`` with the schema deny reason: a read share, a
-    public table from a private conversation, a public conversation, a
-    Slack run), the version pin (``stale_schema`` naming the current
+    public table from a private conversation, a Slack run), the version
+    pin (``stale_schema`` naming the current
     ``schema_version`` and the current key-less columns), each operation in
     order (its ``SchemaOperationError`` code, naming the operation), the
     title collision of ``rename_table`` (``duplicate_title``) and the live

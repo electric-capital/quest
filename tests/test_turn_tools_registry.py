@@ -130,12 +130,17 @@ class TestRegistryRouting:
     def test_public_blocklist_covers_every_registry_key(self):
         # Public-project conversations must never reach a loop-handled
         # arm; if a new handler is registered it must be blocked too (or
-        # this coupling consciously revisited). routine_completed is the
-        # one deliberate exception: a pure completion signal with no reads
-        # or writes, needed by routine runs in public projects.
-        completion_keys = {"routine_completed", ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY}
-        assert set(TURN_TOOL_HANDLERS) - completion_keys <= _PUBLIC_BLOCKED_LOOP_TOOLS
-        assert not (completion_keys & _PUBLIC_BLOCKED_LOOP_TOOLS)
+        # this coupling consciously revisited). Two deliberate exceptions:
+        # routine_completed, a pure completion signal with no reads or
+        # writes, needed by routine runs in public projects, and
+        # create_action_request, whose arm admits only the public-safe
+        # request types (PUBLIC_ACTION_REQUEST_TYPES) there.
+        exempt = {
+            "routine_completed", ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY,
+            "create_action_request",
+        }
+        assert set(TURN_TOOL_HANDLERS) - exempt <= _PUBLIC_BLOCKED_LOOP_TOOLS
+        assert not (exempt & _PUBLIC_BLOCKED_LOOP_TOOLS)
 
     def test_routine_completed_rides_on_tool_call_too(self):
         key = registry_key_for(

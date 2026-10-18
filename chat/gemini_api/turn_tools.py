@@ -47,6 +47,7 @@ from chat.gemini_api.sub_agent import (
     _run_parallel_sub_agents_template,
 )
 from chat.llm.config import get_provider_for_model, get_provider_instance, model_instance_id
+from chat.llm.tool_schemas import PUBLIC_ACTION_REQUEST_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -63,16 +64,18 @@ ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY = "tool_call:routine_completed"
 
 # Loop-handled tool arms hard-rejected in public-project conversations
 # (defense in depth beside the trimmed PUBLIC_TOOLS schema): sub-agent
-# spawners, action requests, and the origin-specific finish/reply tools.
+# spawners, wait_for_handles, and the origin-specific finish/reply tools.
 # Keyed by registry key, so the tool_call-riding wait_for_handles arm is
 # listed under WAIT_FOR_HANDLES_KEY. ``routine_completed`` (both keys) is
 # deliberately absent: it is a pure completion signal (no reads, no writes)
 # and routine runs in public projects need it (PUBLIC_ROUTINE_TOOLS).
+# ``create_action_request`` is absent too: its arm admits only the
+# public-safe request types there (PUBLIC_ACTION_REQUEST_TYPES, the Quest
+# Docs and Quest Tables cards) and rejects every other type itself.
 _PUBLIC_BLOCKED_LOOP_TOOLS = frozenset({
     "agent_task",
     "agent_task_parallel",
     "agent_task_parallel_template",
-    "create_action_request",
     "send_slack_reply_and_get_response",
     "return_to_caller",
     "return_final_response",
@@ -1115,6 +1118,23 @@ async def _handle_create_action_request(
     req_params = args.get("params", {})
     req_reasoning = args.get("reasoning", "")
 
+    if ctx.is_public and req_type not in PUBLIC_ACTION_REQUEST_TYPES:
+        # Public-project hard reject, before the registry is consulted:
+        # only the Quest Docs and Quest Tables cards exist there (the
+        # public tool schema advertises exactly these, but schema trimming
+        # is not a security boundary -- this is). Every other type reads
+        # or writes internal data; plugin types are never listed.
+        return json.dumps({
+            "error": (
+                f"Request type {req_type!r} is not available in "
+                "public-project conversations: only this project's public "
+                "docs and tables can be changed here, and writes to "
+                "external services, memories, skills and routines need a "
+                "regular (private) conversation."
+            ),
+            "supported_types": sorted(PUBLIC_ACTION_REQUEST_TYPES),
+        })
+
     # Feature-flagged: only conversations started with the user_subagents
     # flag may launch cross-user subagent runs.
     flag_blocked = (
@@ -1213,9 +1233,11 @@ async def _handle_create_action_request(
             )
         # Quest Tables pre-card checks (create_table / change_table_schema /
         # write_table_rows): gate, the access rule with the conversation's
-        # context, full validation against the live table, and the
-        # server-only preview keys. Same contract as the skill pre-card
-        # check above; public and Slack runs are refused again there.
+        # context (is_public re-derived from the project row, so a public
+        # conversation's card reaches only its own public tables), full
+        # validation against the live table, and the server-only preview
+        # keys. Same contract as the skill pre-card check above; Slack runs
+        # are refused again there.
         from chat.action_request_types.table_precard import (
             TABLE_REQUEST_TYPES,
             table_precard_check,

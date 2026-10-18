@@ -1237,9 +1237,9 @@ against them. `rows_violate` names rows that block the change (empty
 cells for `set_required`, duplicates for `set_unique`, cells using a
 removed option): fix those rows first, or ask the user.
 
-`schema_change: "denied"` (public-project and Slack-driven
-conversations, which cannot open cards): ask the user to create or
-change the table themselves in the Quest UI (Tables).
+`schema_change: "denied"` (Slack-driven conversations, which cannot
+open cards): ask the user to create or change the table themselves in
+the Quest UI (Tables).
 
 ### Not available to you
 
@@ -1340,10 +1340,9 @@ through a `write_doc` action request) or `denied` (read-only here;
 - **A doc whose owner switched on "Require approval for agent writes"**
   (in the doc's header menu): every change needs approval through a
   `write_doc` action request, even the owner's own unshared doc
-  (`write_note`: "{doc_access.APPROVAL_REQUIRED_WRITE_NOTE}"). On a public
-  doc this leaves the agent read-only, because public-project
-  conversations cannot open approval cards:
-  "{doc_access.DENY_PUBLIC_APPROVAL_REQUIRED}"
+  (`write_note`: "{doc_access.APPROVAL_REQUIRED_WRITE_NOTE}") and a public
+  doc in its own public project (the card is one of the few action
+  requests a public-project conversation can open).
 - **Public docs** (the docs of a public project) are written only from
   that project's conversations (by the owner and people with write
   access). The conversations of a private project can read them -- never

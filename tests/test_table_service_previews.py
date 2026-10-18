@@ -560,12 +560,14 @@ class TestPreviewSchemaChange:
                 ui(env, "bob"), table["id"], [{"op": "rename_table", "title": "X"}],
                 expected_schema_version=1,
             ))
+        # A public conversation's verdict on its own public table is
+        # "approval" (the change_table_schema card), so the preview runs.
         public = make_table(env, "Pub", project_id=env.public_project)
-        with pytest.raises(TableDenied):
-            _run(service.preview_schema_change(
-                convo(env, project=env.public_project, public=True), public["id"],
-                [{"op": "rename_table", "title": "X"}], expected_schema_version=1,
-            ))
+        preview = _run(service.preview_schema_change(
+            convo(env, project=env.public_project, public=True), public["id"],
+            [{"op": "rename_table", "title": "X"}], expected_schema_version=1,
+        ))
+        assert preview["access"].schema == "approval"
 
     def test_rows_violate(self, env):
         table = make_enum_table(env)

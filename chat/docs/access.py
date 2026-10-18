@@ -83,14 +83,14 @@ Rules layered on the matrix, applied in this order:
    the "Require approval for agent writes" checkbox in the doc header
    menu): every Free verdict a *conversation* would get becomes Approval
    (``required_by_owner=True`` on the verdict, so the notes say why) --
-   the owner's unshared private doc included. Where no approval card can
-   be opened the write is denied instead: Slack-driven runs
-   (``DENY_SLACK_APPROVAL_REQUIRED``) and public-project conversations,
-   which have no action requests at all (``DENY_PUBLIC_APPROVAL_REQUIRED``
-   -- so on a public doc the switch makes the doc read-only for the
-   agent). Read verdicts, Hidden cells, the read-only run kinds and the
-   ``ui`` column (a person editing is never approval-gated, invariant 5)
-   are unchanged.
+   the owner's unshared private doc and a public doc in its public
+   project included (public conversations open the ``write_doc`` card;
+   it is one of the public-safe action request types,
+   ``PUBLIC_ACTION_REQUEST_TYPES`` in ``chat/llm/tool_schemas.py``).
+   Where no approval card can be opened the write is denied instead:
+   Slack-driven runs (``DENY_SLACK_APPROVAL_REQUIRED``). Read verdicts,
+   Hidden cells, the read-only run kinds and the ``ui`` column (a person
+   editing is never approval-gated, invariant 5) are unchanged.
 
 Taint (invariant 1): a private conversation never gets a non-denied write
 verdict on a public doc, and a conversation only creates docs in its own
@@ -127,7 +127,6 @@ __all__ = [
     "APPROVAL_WRITE_NOTE",
     "DENY_INFERENCE_API",
     "DENY_OUTSIDE_PROJECT",
-    "DENY_PUBLIC_APPROVAL_REQUIRED",
     "DENY_PUBLIC_DOC_FROM_PRIVATE",
     "DENY_READ_ONLY_SHARE",
     "DENY_SCRIPT",
@@ -176,10 +175,6 @@ DENY_SLACK_APPROVAL_REQUIRED = (
     "Slack-driven conversations cannot open approval cards. Continue from "
     "the Quest web UI."
 )
-DENY_PUBLIC_APPROVAL_REQUIRED = (
-    "The owner requires approval for every change to this doc, and "
-    "public-project conversations cannot open approval cards."
-)
 DENY_UI_READ_ONLY = "You have read-only access to this doc."
 
 APPROVAL_WRITE_NOTE = "shared private doc: use create_action_request(write_doc)"
@@ -198,7 +193,6 @@ _DENY_TEXT = {
     "outside_project": DENY_OUTSIDE_PROJECT,
     "slack_needs_approval": DENY_SLACK_NEEDS_APPROVAL,
     "slack_approval_required": DENY_SLACK_APPROVAL_REQUIRED,
-    "public_approval_required": DENY_PUBLIC_APPROVAL_REQUIRED,
     "ui_read_only": DENY_UI_READ_ONLY,
 }
 assert set(_DENY_TEXT) == set(artifact_access.DENY_CAUSES)

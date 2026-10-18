@@ -416,15 +416,29 @@ class TestPrecard:
                 propose(make_caller(docs_env, project=docs_env.private_project), params)
             assert str(exc.value) == doc_not_found_message(doc["id"])
 
-    def test_public_doc_never_needs_a_card(self, docs_env):
+    def test_public_doc_without_the_switch_needs_no_card(self, docs_env):
         # From its own public project the doc is written directly (or is a
-        # read-only share): write_doc never applies to a public doc.
+        # read-only share); only the owner's switch makes write_doc apply.
         doc = shared_doc(
             docs_env, mode="public", permission="write", project_id=docs_env.public_project,
         )
         caller = make_caller(docs_env, project=docs_env.public_project, public=True)
         with pytest.raises(ValueError, match="writable directly"):
             propose(caller, append_params(doc["id"]))
+
+    def test_public_doc_with_the_switch_gets_a_card(self, docs_env):
+        # Rule 7 in a public conversation: write_doc is a public-safe action
+        # request, so the switch opens the card instead of denying.
+        doc = seed_doc(
+            docs_env, content=SHARED_BODY, mode="public", project_id=docs_env.public_project,
+        )
+        _run(docs_env.doc_store.update_doc_metadata(doc["id"], require_approval=True))
+        caller = make_caller(docs_env, project=docs_env.public_project, public=True)
+        params = propose(caller, append_params(doc["id"]))
+        assert params["require_approval"] is True
+        assert params["doc_mode"] == "public"
+        result = execute(params, caller, request_id=5)
+        assert result["doc_id"] == doc["id"]
 
     def test_stale_old_string(self, docs_env):
         doc = shared_doc(docs_env)

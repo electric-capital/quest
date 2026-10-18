@@ -24,10 +24,10 @@ user_subagent and script runs)::
     |                   | schema Appr.   | write: rows Appr. |                |                  |           |
     |                   |                |   schema Appr.    |                |                  |           |
     | Public, unshared  | Read           | n/a (Hidden)      | rows Free      | n/a (Hidden)     | Read (*)  |
-    |                   |                |                   | schema Denied  |                  |           |
+    |                   |                |                   | schema Appr.   |                  |           |
     | Public, shared    | Read           | Read              | rows Free      | read: Read       | Read (*)  |
-    |                   |                |                   | schema Denied  | write: rows Free |           |
-    |                   |                |                   |                |   schema Denied  |           |
+    |                   |                |                   | schema Appr.   | write: rows Free |           |
+    |                   |                |                   |                |   schema Appr.   |           |
 
 (*) except ``script``: scripts see user tables only (never a project
 table), and public tables are always project tables, so Hidden.
@@ -61,25 +61,28 @@ the UI routes). It is decided after the rows verdict, in this order:
    recipient may restore past a schema change it cannot make.
 4. Slack-driven runs -> denied (:data:`DENY_SCHEMA_SLACK`): no cards there;
    the model asks the user to make the change in the Quest UI.
-5. Public conversations -> denied (:data:`DENY_SCHEMA_PUBLIC`): public
-   conversations cannot open action requests.
-6. Otherwise (a top-level private conversation with a write relationship)
-   -> ``"approval"`` (a ``change_table_schema`` card).
+5. Otherwise (a top-level conversation with a write relationship, private
+   or public) -> ``"approval"`` (a ``change_table_schema`` card). A public
+   conversation opens the table cards: they are public-safe action
+   request types (``PUBLIC_ACTION_REQUEST_TYPES`` in
+   ``chat/llm/tool_schemas.py``), and a card proposed from a public
+   conversation only ever reaches a public table (invariant 1).
 
 The owner's ``require_approval`` switch changes the rows verdict only
-(docs rule 7: Free -> Approval tagged ``required_by_owner``; denied where
-no card can open, i.e. public conversations and Slack runs); the schema is
-gated already.
+(docs rule 7: Free -> Approval tagged ``required_by_owner``; denied in
+Slack runs, where no card can open); the schema is gated already.
 
 Unlike :class:`chat.docs.access.DocAccess`, a verdict carries two deny
 reasons, ``deny_reason`` for rows and ``schema_deny_reason`` for the
 schema, because the two can differ (rows Free with schema Denied in a
-public conversation). ``approval_reason`` (``"shared"`` or
-``"required_by_owner"``) tags a rows ``"approval"``; a schema approval
-needs no reason (every schema change is gated).
+Slack run). ``approval_reason`` (``"shared"`` or ``"required_by_owner"``)
+tags a rows ``"approval"``; a schema approval needs no reason (every
+schema change is gated).
 
-Creation (``create_table`` cards) is for top-level private conversations
-only: :func:`create_table_deny_reason`. A hidden table and a missing id
+Creation (``create_table`` cards) is for top-level conversations only,
+private or public: :func:`create_table_deny_reason` (a public conversation
+creates only public tables, i.e. tables of its own project; the pre-card
+refuses ``target="user"`` there). A hidden table and a missing id
 produce the same text: :func:`not_found_message`, built on
 ``chat.tables.constants.table_not_found_message``.
 
@@ -106,10 +109,8 @@ __all__ = [
     "APPROVAL_WRITE_NOTE",
     "DENY_INFERENCE_API",
     "DENY_OUTSIDE_PROJECT",
-    "DENY_PUBLIC_APPROVAL_REQUIRED",
     "DENY_PUBLIC_TABLE_FROM_PRIVATE",
     "DENY_READ_ONLY_SHARE",
-    "DENY_SCHEMA_PUBLIC",
     "DENY_SCHEMA_SLACK",
     "DENY_SCHEMA_UI_NOT_OWNER",
     "DENY_SCRIPT",
@@ -167,19 +168,10 @@ DENY_SLACK_APPROVAL_REQUIRED = (
     "Slack-driven conversations cannot open approval cards. Continue from "
     "the Quest web UI."
 )
-DENY_PUBLIC_APPROVAL_REQUIRED = (
-    "The owner requires approval for every change to this table, and "
-    "public-project conversations cannot open approval cards."
-)
 DENY_UI_READ_ONLY = "You have read-only access to this table."
 
 # --- Schema deny reasons (beyond the read-only ones above) -----------------
 
-DENY_SCHEMA_PUBLIC = (
-    "Public-project conversations cannot open approval cards, so they cannot "
-    "create tables or change a table's columns. Ask the user to make the "
-    "change in the Quest UI (Tables)."
-)
 DENY_SCHEMA_SLACK = (
     "Slack-driven conversations cannot open approval cards, so they cannot "
     "create tables or change a table's columns. Ask the user to make the "
@@ -223,14 +215,13 @@ _DENY_TEXT = {
     "outside_project": DENY_OUTSIDE_PROJECT,
     "slack_needs_approval": DENY_SLACK_NEEDS_APPROVAL,
     "slack_approval_required": DENY_SLACK_APPROVAL_REQUIRED,
-    "public_approval_required": DENY_PUBLIC_APPROVAL_REQUIRED,
     "ui_read_only": DENY_UI_READ_ONLY,
 }
 assert set(_DENY_TEXT) == set(artifact_access.DENY_CAUSES)
 
 # Causes that make the caller read-only on the table as a whole (schema
-# rule 2). The Slack / public approval causes are row-only: the schema
-# verdict there comes from rules 4-5.
+# rule 2). The Slack approval causes are row-only: the schema verdict
+# there comes from rule 4.
 _READ_ONLY_CAUSES = frozenset({
     *READ_ONLY_RUN_KINDS,
     "read_only_share",
@@ -341,7 +332,7 @@ def resolve_table_access(
     if core.write == "approval":
         approval_reason = "required_by_owner" if core.required_by_owner else "shared"
 
-    # Schema rules 2-6 (module docstring).
+    # Schema rules 2-5 (module docstring).
     schema: SchemaVerdict = "denied"
     if core.write == "denied" and core.cause in _READ_ONLY_CAUSES:
         schema_deny_reason: str | None = deny_reason
@@ -352,8 +343,6 @@ def resolve_table_access(
             schema_deny_reason = DENY_SCHEMA_UI_NOT_OWNER
     elif run_kind == "slack":
         schema_deny_reason = DENY_SCHEMA_SLACK
-    elif is_public:
-        schema_deny_reason = DENY_SCHEMA_PUBLIC
     else:
         schema, schema_deny_reason = "approval", None
 
@@ -424,11 +413,14 @@ def not_found_message(table_id: str, access: TableAccess | None) -> str | None:
 def create_table_deny_reason(*, is_public: bool, run_kind: str) -> str | None:
     """Why this caller may not propose a ``create_table`` card, or None.
 
-    Only top-level private conversations propose them (spec 5.1
-    "Creation"); the table is created private (a private conversation is a
-    standalone one or one of a private project). The UI creates tables
-    through ``POST /tables``, not a card, so ``run_kind="ui"`` raises
-    ValueError, as does an unknown run kind.
+    Only top-level conversations propose them (spec 5.1 "Creation"); the
+    table is created in the conversation's mode (private from a standalone
+    conversation or one of a private project, public from a public
+    project's conversation, where only ``target="project"`` is possible
+    since user tables are private). ``is_public`` is accepted for the
+    signature's symmetry with the rows rule; it never denies. The UI
+    creates tables through ``POST /tables``, not a card, so
+    ``run_kind="ui"`` raises ValueError, as does an unknown run kind.
     """
     if run_kind not in RUN_KINDS:
         raise ValueError(f"unknown run_kind: {run_kind!r}")
@@ -438,6 +430,4 @@ def create_table_deny_reason(*, is_public: bool, run_kind: str) -> str | None:
         return _DENY_TEXT[run_kind]
     if run_kind == "slack":
         return DENY_SCHEMA_SLACK
-    if is_public:
-        return DENY_SCHEMA_PUBLIC
     return None

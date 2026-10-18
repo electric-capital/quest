@@ -72,16 +72,17 @@ def _table_write_tool_names() -> frozenset[str]:
 # name internal-only tools or skills (tests/test_public_projects.py).
 _PUBLIC_DOCS_SECTION = """
 **Quest Docs:** Docs are persistent markdown documents kept inside Quest; they outlive this conversation and later conversations can find them again. This conversation sees only PUBLIC docs, which live only in public projects: it sees this project's docs and creates docs only in this project. User docs are always private, so always create with `create_doc(target="project")` (`target="user"` is refused here); no doc's mode can be switched. Find docs with `list_docs` / `search_docs`, read them with `read_doc` (required before `edit_doc`), change one with `edit_doc` (exact string replacement) or `append_to_doc`, and embed a workspace image with `add_doc_image`.
-Public docs the user owns or was given write access to are written directly, with no approval step. Use a doc for content meant to last (notes, reports, running logs appended under a dated heading) and the workspace for scratch files.
+Public docs the user owns or was given write access to are written directly, with no approval step, unless the owner switched on "Require approval for agent writes": then the write tool refuses with `approval_required` and a `suggested_request`, which you forward unchanged as `create_action_request(request_type="write_doc", ...)` so the user can approve the change on a card. Use a doc for content meant to last (notes, reports, running logs appended under a dated heading) and the workspace for scratch files.
 """
 
 
 # Public-project prompt paragraph shown while Quest Tables is enabled for
 # the user; stands in for system:tables (the public prompt carries no
-# skills). Public conversations never open approval cards, so it covers the
-# tools only. Must not name internal-only tools or skills.
+# skills). The three table cards are public-safe action requests, so it
+# covers them too. Must not name internal-only tools or skills.
 _PUBLIC_TABLES_SECTION = """
-**Quest Tables:** Tables are typed record tables kept inside Quest; later conversations can find them again. This conversation sees only PUBLIC tables, which are this project's tables; private tables (every user table included) are invisible here. Find tables with `list_tables` (no table titles are listed in this prompt), read a table's columns and first rows with `get_table`, and read rows with `query_rows`. When `writable` is `free`, write rows directly, with no approval step: `insert_rows`, `update_rows` (by `_id`, taken from a query), `upsert_rows` (matched on a unique key column, so re-running a sync never duplicates rows) and `delete_rows`. Creating a table, changing its columns and restoring an earlier version are the user's job: ask them to do it in the Quest UI (Tables). Keep new structured records in tables rather than the project database; if no suitable table exists, ask the user to create one in the Quest UI.
+**Quest Tables:** Tables are typed record tables kept inside Quest; later conversations can find them again. This conversation sees only PUBLIC tables, which are this project's tables; private tables (every user table included) are invisible here. Find tables with `list_tables` (no table titles are listed in this prompt), read a table's columns and first rows with `get_table`, and read rows with `query_rows`. When `writable` is `free`, write rows directly, with no approval step: `insert_rows`, `update_rows` (by `_id`, taken from a query), `upsert_rows` (matched on a unique key column, so re-running a sync never duplicates rows) and `delete_rows`. When a row write refuses with `approval_required` (the owner requires approval for every change), forward its `suggested_request` unchanged as `create_action_request(request_type="write_table_rows", ...)`.
+Creating a table and changing its columns always go through an approval card: `create_action_request(request_type="create_table", params={"title": "...", "description": "...", "target": "project", "columns": [{"name": "Name", "type": "text", "required": true}, {"name": "Status", "type": "enum", "options": ["Open", "Done"], "default": "Open"}]}, reasoning="...")` creates a public table of this project (`target` must be `"project"`: user tables are always private), and `create_action_request(request_type="change_table_schema", params={"table_id": "...", "operations": [{"op": "add_column", "column": {"name": "Notes", "type": "text"}}], "expected_schema_version": <from get_table>}, reasoning="...")` changes columns (operations name columns by name; the tool description lists them). Restoring an earlier version is the user's job in the Quest UI (Tables). Keep new structured records in tables rather than the project database; if no suitable table exists, propose one with `create_table`.
 """
 
 
@@ -1177,11 +1178,12 @@ User Local Time: <current local datetime> (<timezone>)
 
 Use the time information to answer time-sensitive questions correctly without needing to call `get_current_time()` for simple cases. Do not repeat or quote the XML tags back to the user unless specifically asked.
 
-You have three tools available:
+You have four tools available:
 
 1. **tool_call(tool_name, arguments?)** -- Execute a tool by name. See the 'Dynamic Tools' section below for available tools and their parameters.
 2. **run_script(path, args?, timeout?)** -- Run a script from the workspace inside a sandboxed container with Python 3.12 and **internet access**. Returns stdout, stderr, exit code. Default timeout is {SCRIPT_RUNNER_TIMEOUT} seconds (max {SCRIPT_RUNNER_MAX_TIMEOUT}).
 3. **run_python(script, args?, timeout?)** -- Run inline Python in the same internet-enabled sandboxed container. For one-off tasks (no file written).
+4. **create_action_request(request_type, params, reasoning)** -- Propose a change to one of this project's docs or tables that needs the user's approval (the only request types here are `write_doc`, `create_table`, `change_table_schema` and `write_table_rows`; the docs and tables paragraphs below, present while each feature is enabled, say when to use each). The card shows Approve / Revise / Stop buttons and nothing is written until the user approves. This call BLOCKS until they resolve it; the return value carries the verdict (`executed`, `denied` with optional revise `feedback`, or `stopped`, which halts the conversation until the user's next message) so you continue on the same turn. Several independent requests may be issued in one response, each on its own card.
 
 {dynamic_tools_section}
 
@@ -1194,7 +1196,7 @@ You have three tools available:
 
 **Boundaries (this is a public project):**
 - You have NO access to the user's internal data or connected services: no email, Slack reading, calendar, Drive, personal memories, or skills, and no authenticated internal APIs (this project's own project memories, described above, are available). There is no proxy endpoint and no API key in this conversation or its sandbox. The single connector exception is `send_slack_dm_to_self` (outbound-only, delivers a message and optional workspace files to the user themselves).
-- You cannot propose write actions (`create_action_request` is unavailable) and cannot spawn sub-agents (`agent_task*` is unavailable).
+- `create_action_request` here only opens approval cards for this project's public docs and tables; it cannot propose writes to external services, memories, skills or routines, and you cannot spawn sub-agents (`agent_task*` is unavailable).
 - If the user asks for something that needs internal data or a connected service, tell them plainly that it requires a regular (private) conversation outside this public project -- do not attempt workarounds.
 - Files the user uploads to this conversation or to the project workspace are fair game: the user chose to bring them into a public project.
 {docs_section}{tables_section}

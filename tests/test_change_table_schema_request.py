@@ -8,7 +8,8 @@ and a public project, realtime events captured). Covers:
    server-injected preview keys dropped.
 2. Pre-card refusals: gate closed (before any DB work), missing vs hidden
    byte-equal ``table_not_found``, each schema deny reason (read share,
-   public table from a private conversation, public conversation, Slack),
+   public table from a private conversation, Slack), a public
+   conversation's card on its own public table,
    ``stale_schema`` (current version + key-less columns), a
    ``SchemaOperationError`` naming its operation, ``rows_violate``
    (set_required, set_unique, remove_enum_option), ``duplicate_title``.
@@ -35,7 +36,6 @@ from chat.tables import service, storage
 from chat.tables.access import (
     DENY_PUBLIC_TABLE_FROM_PRIVATE,
     DENY_READ_ONLY_SHARE,
-    DENY_SCHEMA_PUBLIC,
     DENY_SCHEMA_SLACK,
 )
 from chat.tables.constants import table_not_found_message, tables_disabled_message
@@ -281,10 +281,17 @@ class TestPrecardRefusals:
             f"denied: {DENY_SCHEMA_SLACK}"
         )
 
-    def test_public_conversation_denied(self, env):
+    def test_public_conversation_proposes_a_card_on_its_public_table(self, env):
+        # change_table_schema is a public-safe action request: a public
+        # conversation gets the card for its own project's public table,
+        # and the card shows the table's mode.
         table = make(env, project_id=env.public_project)
         caller = convo(env, project=env.public_project, public=True)
-        assert refusal(caller, params(table, RENAME)) == f"denied: {DENY_SCHEMA_PUBLIC}"
+        out = propose(caller, params(table, RENAME))
+        assert (out["table_mode"], out["table_scope"]) == ("public", "project")
+        assert out["operation_summaries"] == ["Renamed column Notes to Comments"]
+        result = execute(out, caller, request_id=9)
+        assert result["columns"][-1]["name"] == "Comments"
 
     def test_public_table_from_private_conversation_denied(self, env):
         """Invariant 1: a private conversation that reads a public table

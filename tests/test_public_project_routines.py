@@ -440,4 +440,4 @@ class TestPublicRoutinePrompt:
         assert "already named after its routine" in routine
         # Still the public prompt: no proxy preamble, boundaries intact.
         assert "PUBLIC project" in routine
-        assert "create_action_request` is unavailable" in routine
+        assert "cannot propose writes to external services" in routine

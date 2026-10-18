@@ -1,8 +1,10 @@
 # Action Requests Architecture
 
-This document describes the Action Requests system, which allows the LLM agent to propose write operations to external services (e.g., sending a Slack message, Telegram message, creating a calendar invite, uploading a workspace file to Google Drive, creating a Google Drive folder, or editing a Google Spreadsheet cell range) -- plus internal-store writes (saving a memory, creating or editing a DB-backed skill, changing a shared private Quest Doc, and creating, re-shaping or writing a Quest Table) -- that require explicit user approval before execution.
+This document describes the Action Requests system, which allows the LLM agent to propose write operations to external services (e.g., sending a Slack message, creating a calendar invite, uploading a file to Google Drive, or editing a Google Spreadsheet cell range) -- plus internal-store writes (saving a memory, creating or editing a DB-backed skill, changing a shared private Quest Doc, and creating, re-shaping or writing a Quest Table) -- that require explicit user approval before execution.
 
 Plugins register additional request types (loaded via `plugins/` or `QUEST_PLUGIN_PATH` -- see [Plugins](plugins.md)); the mechanics below apply to core and plugin handlers alike.
+
+Public-project conversations open only the artifact cards ([Public Projects](public-projects.md#action-requests)).
 
 ## Overview
 

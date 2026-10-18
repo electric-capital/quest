@@ -18,10 +18,8 @@ from chat.tables.access import (
     APPROVAL_WRITE_NOTE,
     DENY_INFERENCE_API,
     DENY_OUTSIDE_PROJECT,
-    DENY_PUBLIC_APPROVAL_REQUIRED,
     DENY_PUBLIC_TABLE_FROM_PRIVATE,
     DENY_READ_ONLY_SHARE,
-    DENY_SCHEMA_PUBLIC,
     DENY_SCHEMA_SLACK,
     DENY_SCHEMA_UI_NOT_OWNER,
     DENY_SCRIPT,
@@ -91,8 +89,9 @@ FREE_AR = _v("free", "approval")
 # Shared private table: rows card (shared), schema card.
 AR_AR = _v("approval", "approval", approval="shared")
 AR_REQ_AR = _v("approval", "approval", approval="required_by_owner")
-# Public convo with a write relationship: rows free, schema denied.
-FREE_PUB = _v("free", "denied", schema_deny=DENY_SCHEMA_PUBLIC)
+# Public convo with a write relationship: rows free, schema card (the
+# table cards are public-safe action requests).
+FREE_PUB = _v("free", "approval")
 # Slack with a write relationship on an unshared private table.
 FREE_SLACK = _v("free", "denied", schema_deny=DENY_SCHEMA_SLACK)
 # UI editors.
@@ -403,13 +402,12 @@ def test_script_reads_user_tables_only():
 
 
 # The owner's require_approval switch, written out: rows Free -> Approval
-# (required_by_owner) in private conversations and denied in public and
+# (required_by_owner) in private and public conversations and denied in
 # Slack ones; a share-based Approval takes the switch's tag. Every cell not
 # listed here (reads, Hidden, read-only kinds, the UI) is unchanged.
 AR_SW = AR_REQ_AR
 SLACK_SW = SLACK_DENIED(DENY_SLACK_APPROVAL_REQUIRED)
-PUB_SW = _v("denied", "denied", deny=DENY_PUBLIC_APPROVAL_REQUIRED,
-            schema_deny=DENY_SCHEMA_PUBLIC)
+PUB_SW = AR_REQ_AR
 SWITCH_OVERRIDES = {
     ("private_unshared", "owner_private"): AR_SW,
     ("private_unshared", "owner_slack"): SLACK_SW,
@@ -475,8 +473,8 @@ def test_require_approval_private_public_slack():
         _table("public", project_id=PROJECT, require_approval=True),
         user_id=OWNER, is_public=True, project_id=PROJECT, run_kind="top_level",
     )
-    assert (public.rows, public.deny_reason) == ("denied", DENY_PUBLIC_APPROVAL_REQUIRED)
-    assert (public.schema, public.schema_deny_reason) == ("denied", DENY_SCHEMA_PUBLIC)
+    assert (public.rows, public.approval_reason) == ("approval", "required_by_owner")
+    assert (public.schema, public.schema_deny_reason) == ("approval", None)
     # A person in the UI is never approval-gated.
     assert resolve_table_access(
         table, user_id=OWNER, is_public=False, project_id=None, run_kind="ui",
@@ -660,15 +658,17 @@ def test_invariants_hold_everywhere(run_kind):
                 and table_project_id in sources
             )
             assert access.rows == "denied" and access.schema == "denied"
-        # Schema approval only for a top-level private conversation or the
-        # owner in the UI.
+        # Schema approval only for a top-level conversation (private or
+        # public) or the owner in the UI.
         if access.schema == "approval":
-            assert (run_kind == "top_level" and not is_public) or (
+            assert run_kind == "top_level" or (
                 run_kind == "ui" and user_id == OWNER
             )
-        # Public conversations and Slack runs never get a schema card (the
-        # UI carries no conversation; callers pass is_public=False).
-        if (is_public and run_kind != "ui") or run_kind == "slack":
+        # A public conversation gets a schema card only on a public table
+        # of its own project (invariant 1); Slack runs never get one.
+        if is_public and run_kind == "top_level" and access.schema == "approval":
+            assert effective_mode == "public" and table_project_id == project_id
+        if run_kind == "slack":
             assert access.schema == "denied"
             assert access.schema_deny_reason is not None
         if run_kind in READ_ONLY_RUN_KINDS:
@@ -725,7 +725,7 @@ def test_write_note_mapping():
 
 def test_schema_note_mapping():
     assert schema_note(FREE_AR) == SCHEMA_APPROVAL_NOTE
-    assert schema_note(FREE_PUB) == DENY_SCHEMA_PUBLIC
+    assert schema_note(FREE_PUB) == SCHEMA_APPROVAL_NOTE
     assert schema_note(FREE_SLACK) == DENY_SCHEMA_SLACK
     assert schema_note(RO(DENY_SUB_AGENT)) == DENY_SUB_AGENT
 
@@ -762,7 +762,6 @@ def test_texts_are_pinned():
     assert DENY_PUBLIC_TABLE_FROM_PRIVATE == (
         "Public tables are written only from public-project conversations."
     )
-    assert "Quest UI" in DENY_SCHEMA_PUBLIC and "Ask the user" in DENY_SCHEMA_PUBLIC
     assert "Quest web UI" in DENY_SCHEMA_SLACK and "Ask the user" in DENY_SCHEMA_SLACK
     assert DENY_SCHEMA_UI_NOT_OWNER == "Only the table's owner can change its columns."
 
@@ -782,7 +781,7 @@ def test_deny_texts_never_say_doc():
 
 def test_create_table_deny_reason():
     assert create_table_deny_reason(is_public=False, run_kind="top_level") is None
-    assert create_table_deny_reason(is_public=True, run_kind="top_level") == DENY_SCHEMA_PUBLIC
+    assert create_table_deny_reason(is_public=True, run_kind="top_level") is None
     assert create_table_deny_reason(is_public=False, run_kind="slack") == DENY_SCHEMA_SLACK
     assert create_table_deny_reason(is_public=False, run_kind="sub_agent") == DENY_SUB_AGENT
     assert create_table_deny_reason(is_public=False, run_kind="script") == DENY_SCRIPT

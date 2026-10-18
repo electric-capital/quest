@@ -397,8 +397,11 @@ class TestPublicPrompt:
         assert "Quest UI (Tables)" in paragraph
         for name in TABLE_TOOLS:
             assert f"`{name}`" in paragraph, name
-        # No cards, no skills, no other gated feature's text.
-        assert "create_action_request" not in paragraph
+        # The three table cards (public-safe action requests), with the
+        # create / schema examples; no skills, no other gated feature's text.
+        for request_type in ("create_table", "change_table_schema", "write_table_rows"):
+            assert f'create_action_request(request_type="{request_type}"' in paragraph
+        assert '"target": "project"' in paragraph
         assert "system:" not in p
         assert ("Quest Docs" in p) is docs_enabled
 
@@ -412,7 +415,7 @@ class TestPublicPrompt:
             assert _PROJECT_DB_TABLES_NOTE.rstrip("\n") not in p
             assert _SUB_AGENT_PROJECT_DB_TABLES_NOTE.rstrip("\n") not in p
         p = self._prompt(tables_enabled=True)
-        assert "ask the user to create one in the Quest UI" in p
+        assert "propose one with `create_table`" in p
 
     def test_routine_run_keeps_paragraph(self):
         p = self._prompt(tables_enabled=True, is_routine=True)

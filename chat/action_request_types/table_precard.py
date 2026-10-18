@@ -32,9 +32,13 @@ Conventions (shared by the three handlers):
 - The feature gate is checked first, before any DB work (``tables_disabled``).
 - The pre-card caller is the proposal's conversation: ``run_kind`` "slack"
   for a Slack-driven run, else "top_level", ``is_public`` from the
-  conversation's project. Public conversations and Slack runs never reach
-  here (``_PUBLIC_BLOCKED_LOOP_TOOLS`` / ``ctx.is_slack_origin``); the arms
-  still refuse them as defense in depth.
+  conversation's project. Slack runs never reach here
+  (``ctx.is_slack_origin``); the arms still refuse them as defense in
+  depth. Public conversations do reach here: the three table types are
+  public-safe action requests (``PUBLIC_ACTION_REQUEST_TYPES``), and the
+  access rule confines them to the conversation's own public tables (a
+  private table is hidden there; ``create_table`` makes a public table
+  of the conversation's project, never a user table).
 - Execute re-resolves everything with the PROPOSAL's conversation context
   (:func:`execute_caller`, never a UI caller: invariant 1), records
   ``write_source(request_id)`` = ``action_request:<id>`` and the approver as
@@ -319,15 +323,18 @@ async def precard_create_table(
     """Pre-card arm of ``create_table``.
 
     Order: gate (``tables_disabled``, no DB work) -> the conversation may
-    propose a table (``denied``: public conversations and Slack runs) ->
-    ``target: "project"`` needs a project conversation (``invalid_args``)
-    and the user's project (``project_not_found``) -> the mode (private;
-    a public result refuses ``mode_mismatch``, unreachable because public
-    conversations are refused, kept fail-closed) -> title / description
-    (``invalid_request``) -> column specs (the ``ColumnSpecError`` code,
-    naming the column) -> the title collision in the same ``(owner,
-    project, mode)`` scope (``duplicate_title``) -> the per-owner cap
-    (``table_limit``), the store's order.
+    propose a table (``denied``: Slack runs) -> ``target: "project"``
+    needs a project conversation (``invalid_args``) and the user's project
+    (``project_not_found``); ``target: "user"`` is refused from a public
+    conversation (``invalid_args``: user tables are always private) ->
+    the mode, which must be the conversation's own (the project's flag
+    for a project table, private for a user table; a disagreement with
+    ``caller.is_public`` refuses ``mode_mismatch``, fail-closed, as the
+    service does) -> title / description (``invalid_request``) -> column
+    specs (the ``ColumnSpecError`` code, naming the column) -> the title
+    collision in the same ``(owner, project, mode)`` scope
+    (``duplicate_title``) -> the per-owner cap (``table_limit``), the
+    store's order.
 
     On success normalizes ``title`` / ``description`` (stripped) and injects
     ``table_mode``, ``project_title`` (None for a user table) and
@@ -359,7 +366,14 @@ async def precard_create_table(
         table_project_id = project_id
         project_title = project.get("name")
         mode = "public" if project.get("public") else "private"
-    if mode == "public":
+    elif caller.is_public:
+        raise refuse(
+            "invalid_args",
+            "User tables are always private and cannot be created from a "
+            "public-project conversation; use target 'project' to create a "
+            "public table of this project.",
+        )
+    if (mode == "public") != caller.is_public:
         raise refuse("mode_mismatch", _MODE_MISMATCH)
 
     try:

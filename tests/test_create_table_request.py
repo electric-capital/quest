@@ -6,14 +6,16 @@ and a public project, realtime events captured). Covers:
 
 1. ``CreateTableHandler.validate_params``: defaults, shape errors, unknown
    keys, server-injected preview keys dropped.
-2. Pre-card refusals: gate closed (before any DB work), public
-   conversation, Slack run, target project without a project, bad column
-   specs (code + column named), duplicate title (case-insensitive, same
-   scope only), table cap; success injection (no column key anywhere).
+2. Pre-card refusals: gate closed (before any DB work), a user table from
+   a public conversation, Slack run, target project without a project, bad
+   column specs (code + column named), duplicate title (case-insensitive,
+   same scope only), table cap; success injection (no column key
+   anywhere), a public conversation's public project table.
 3. ``execute``: user and project tables (owner = proposer, private, change
    #1 "Created table" with ``action_request:<id>`` source and the approver
-   as actor, ``last_write_source``), approve-time collision TOCTOU (no
-   second table, no orphan directory), owner attribution through
+   as actor, ``last_write_source``), a public project table from its
+   public conversation, approve-time collision TOCTOU (no second table, no
+   orphan directory), owner attribution through
    ``get_action_request_owners``.
 4. Preview fields, summary snippet, labels, registration, the request-id
    route frozenset, ``_PUBLIC_BLOCKED_LOOP_TOOLS`` unchanged.
@@ -29,7 +31,7 @@ from datetime import datetime, timezone
 import pytest
 
 from chat.tables import service, storage
-from chat.tables.access import DENY_SCHEMA_PUBLIC, DENY_SCHEMA_SLACK
+from chat.tables.access import DENY_SCHEMA_SLACK
 from chat.tables.constants import tables_disabled_message
 from tests.test_table_service import (  # noqa: F401  (env is a fixture)
     convo,
@@ -179,10 +181,23 @@ class TestPrecard:
                 f"tables_disabled: {tables_disabled_message()}"
             )
 
-    def test_public_conversation_denied(self, env):
+    def test_public_conversation_proposes_a_public_project_table(self, env):
+        # create_table is a public-safe action request: a public
+        # conversation proposes a public table of its own project, and the
+        # card shows the mode.
         caller = convo(env, project=env.public_project, public=True)
-        assert refusal(caller, params(target="project")) == f"denied: {DENY_SCHEMA_PUBLIC}"
-        assert refusal(caller, params()) == f"denied: {DENY_SCHEMA_PUBLIC}"
+        out = propose(caller, params(target="project"))
+        assert (out["table_mode"], out["project_title"]) == ("public", "Open")
+        assert not has_key_anywhere(out)
+
+    def test_public_conversation_cannot_create_a_user_table(self, env):
+        # User tables are always private, so target "user" (the default)
+        # is refused there with a hint at target "project".
+        caller = convo(env, project=env.public_project, public=True)
+        msg = refusal(caller, params())
+        assert msg.startswith("invalid_args: User tables are always private")
+        assert "target 'project'" in msg
+        assert refusal(caller, params(target="user")) == msg
 
     def test_slack_denied(self, env):
         assert refusal(convo(env), params(), is_slack_origin=True) == (
@@ -294,12 +309,22 @@ class TestPrecard:
         assert (out["target"], out["project_title"]) == ("user", None)
 
     def test_mode_mismatch_is_fail_closed(self, env, monkeypatch):
-        # Unreachable through the deny check (public conversations are
-        # refused first); force it by making the deny check pass.
+        # Unreachable in practice (a conversation's mode is its project's);
+        # force a disagreement by making the context claim to be private
+        # while the project is public, and the reverse.
         import chat.action_request_types.table_precard as table_precard
 
-        monkeypatch.setattr(table_precard, "create_table_deny_reason", lambda **_k: None)
+        async def private(*_a, **_k):
+            return False
+
+        async def public(*_a, **_k):
+            return True
+
+        monkeypatch.setattr(table_precard, "project_is_public", private)
         caller = convo(env, project=env.public_project, public=True)
+        assert refusal(caller, params(target="project")).startswith("mode_mismatch: ")
+        monkeypatch.setattr(table_precard, "project_is_public", public)
+        caller = convo(env, project=env.private_project)
         assert refusal(caller, params(target="project")).startswith("mode_mismatch: ")
 
     def test_unknown_type_rejected(self, env):
@@ -423,11 +448,23 @@ class TestExecute:
         assert str(exc.value) == f"tables_disabled: {tables_disabled_message()}"
         assert all_tables(env) == []
 
-    def test_public_context_refused_at_approve(self, env):
+    def test_public_project_table_from_its_public_conversation(self, env):
+        caller = convo(env, project=env.public_project, public=True)
+        result = execute(propose(caller, params(target="project")), caller, request_id=43)
+        assert (result["mode"], result["scope"], result["project_id"]) == (
+            "public", "project", env.public_project,
+        )
+        table = _run(env.store.get_table(result["table_id"]))
+        assert (table["mode"], table["owner_id"]) == ("public", uid(env, "alice"))
+        assert table["last_write_source"] == "action_request:43"
+
+    def test_user_table_from_public_conversation_refused_at_approve(self, env):
+        # The service's own taint check: a user table is private, and a
+        # public context never creates a private table.
         caller = convo(env, project=env.public_project, public=True)
         with pytest.raises(RuntimeError) as exc:
-            execute(handler().validate_params(params(target="project")), caller)
-        assert str(exc.value) == f"denied: {DENY_SCHEMA_PUBLIC}"
+            execute(handler().validate_params(params()), caller)
+        assert str(exc.value).startswith("mode_mismatch: ")
         assert all_tables(env) == []
 
     def test_project_gone_at_approve(self, env):
@@ -574,7 +611,6 @@ class TestPreviewAndLabels:
             "agent_task",
             "agent_task_parallel",
             "agent_task_parallel_template",
-            "create_action_request",
             "send_slack_reply_and_get_response",
             "return_to_caller",
             "return_final_response",
@@ -613,7 +649,7 @@ def _arm(caller, p):
 
     ctx, _events = _make_ctx(
         user=caller.user, conversation_id=caller.conversation_id,
-        project_id=caller.project_id,
+        project_id=caller.project_id, is_public=caller.is_public,
     )
     call = _call("create_action_request", {
         "request_type": "create_table", "params": p, "reasoning": "a table",
@@ -665,6 +701,41 @@ class TestEndToEnd:
         assert resolved["summary_snippet"] == "Inventory (3 columns)"
         table = _run(ar_env.store.get_table(resolved["result"]["table_id"]))
         assert table["project_id"] == ar_env.private_project
+        assert table["last_write_source"] == f"action_request:{request_id}"
+
+    def test_public_card_then_approve(self, ar_env):
+        # A public conversation: the arm admits create_table (a public-safe
+        # type), the card shows mode "public", and Approve creates a public
+        # table of the project with the conversation's own context.
+        from chat.action_request_routes import ResolveRequestBody, resolve_user_action_request
+        from chat.gemini_api.turn_tools import SuspendForActionRequest
+        from db import conversation_store
+
+        caller = convo(ar_env, project=ar_env.public_project, public=True)
+        _run(conversation_store.create_conversation(
+            user_id=caller.user["id"], conversation_id=caller.conversation_id,
+            created_at=datetime.now(timezone.utc), project_id=caller.project_id,
+        ))
+        assert json.loads(_arm(caller, params())) == {"error": (
+            "Invalid parameters: invalid_args: User tables are always private and "
+            "cannot be created from a public-project conversation; use target "
+            "'project' to create a public table of this project."
+        )}
+        with pytest.raises(SuspendForActionRequest) as suspended:
+            _arm(caller, params(target="project"))
+        request_id = suspended.value.request_id
+
+        row = _run(ar_env.action_request_store.get_action_request(caller.user["id"], request_id))
+        assert row["request_type"] == "create_table" and row["status"] == "open"
+        assert (row["params"]["table_mode"], row["params"]["project_title"]) == ("public", "Open")
+        assert all_tables(ar_env) == []
+
+        resolved = _run(resolve_user_action_request(
+            request_id, ResolveRequestBody(action="execute"), _Req(), caller.user,
+        ))
+        assert resolved["status"] == "executed"
+        table = _run(ar_env.store.get_table(resolved["result"]["table_id"]))
+        assert (table["mode"], table["project_id"]) == ("public", ar_env.public_project)
         assert table["last_write_source"] == f"action_request:{request_id}"
 
     def test_approve_collision_keeps_request_open(self, ar_env):
