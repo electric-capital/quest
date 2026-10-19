@@ -1966,12 +1966,18 @@ async def admin_quick_setup_inference(
         write_inference_credentials,
     )
 
-    kind = INSTANCE_KINDS.get(body.kind)
-    if kind is None:
+    # Resolve the request's kind to the registry's own key object: the
+    # instance id (and so the credential file name) derives from the kind
+    # name, and taking it from INSTANCE_KINDS rather than the request body
+    # keeps request data out of the path (``inference_credentials_path``
+    # format-checks every id on top of that).
+    kind_name = next((name for name in INSTANCE_KINDS if name == body.kind), None)
+    if kind_name is None:
         raise HTTPException(
             status_code=400,
             detail={"error": "unknown_kind", "message": f"Unknown inference provider kind: {body.kind}"},
         )
+    kind = INSTANCE_KINDS[kind_name]
     api_key = (body.api_key or "").strip()
     base_url = normalize_base_url(body.base_url) if body.base_url else None
     api_type = body.api_type or DEFAULT_LOCAL_API_TYPE
@@ -1996,13 +2002,13 @@ async def admin_quick_setup_inference(
     instance = next(
         (
             inst for inst in list_instances()
-            if inst["kind"] == body.kind
+            if inst["kind"] == kind_name
             and not any(m.startswith(f"{inst['id']}:") for m in available)
         ),
         None,
     )
     if instance is None:
-        instance = {"id": new_instance_id(body.kind), "kind": body.kind, "label": "", "models": []}
+        instance = {"id": new_instance_id(kind_name), "kind": kind_name, "label": "", "models": []}
     if kind["endpoint"]:
         instance["base_url"] = base_url
         instance["api_type"] = api_type
@@ -2051,7 +2057,7 @@ async def admin_quick_setup_inference(
 
     logger.info(
         "[admin] %s quick-set-up inference instance %s (%s): added %s, check %s",
-        user["email"], instance["id"], body.kind, added,
+        user["email"], instance["id"], kind_name, added,
         "n/a" if check is None else ("ok" if check["ok"] else check["error"]),
     )
     return {
