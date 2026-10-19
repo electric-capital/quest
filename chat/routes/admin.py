@@ -982,7 +982,7 @@ def _feature_availability(feature: str) -> tuple[bool, Optional[str]]:
 
     Most gates are pure switches and are always available. A gate whose
     feature depends on server configuration (voice input needs a Gemini
-    Vertex model) reports False with a human reason while that
+    Vertex model or a local speech model) reports False with a human reason while that
     configuration is missing; the PUT endpoint then refuses to enable it
     and the Settings toggle shows the reason. Turning a gate OFF is always
     allowed.
@@ -990,9 +990,9 @@ def _feature_availability(feature: str) -> tuple[bool, Optional[str]]:
     from config.feature_gates import FEATURE_VOICE_INPUT
 
     if feature == FEATURE_VOICE_INPUT:
-        from chat.transcription import transcription_availability
+        from chat.transcription import voice_input_availability
 
-        return transcription_availability()
+        return voice_input_availability()
     return True, None
 
 

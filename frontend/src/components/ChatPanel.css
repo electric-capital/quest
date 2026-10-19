@@ -1312,6 +1312,14 @@
 .composer-mic-level i:nth-child(3) { --bar-floor: 0.5; --bar-span: 0.25; }
 .composer-mic-level i:nth-child(4) { --bar-floor: 0.75; --bar-span: 0.25; }
 
+/* Live dictation drives the textarea (read-only meanwhile): a faint tint and
+   the recording colour on the caret say "this text is arriving, not typed". */
+.composer-input.dictating {
+  caret-color: #ff6b6b;
+  background-color: rgba(255, 107, 107, 0.06);
+  border-radius: 6px;
+}
+
 /* Elapsed time beside the mic while recording. */
 .composer-mic-timer {
   font-size: 0.75rem;

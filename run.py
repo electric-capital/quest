@@ -131,6 +131,29 @@ LEGACY_VERTEX_CREDENTIALS_FILENAME = "vertex-service-account.json"
 SERVICE_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
 
 
+def local_asr_configured(project_root: Path) -> bool:
+    """Whether server_config.json (or QUEST_LOCAL_ASR_MODEL) names a local speech model.
+
+    Mirrors ``local_asr_config()`` in chat/live_transcription.py: the
+    speech packages (pyproject "asr" extra) are installed only then.
+    """
+    env_override = os.environ.get("QUEST_LOCAL_ASR_MODEL")
+    if env_override is not None:
+        return bool(env_override.strip())
+    config_file = project_root / "server_config.json"
+    if not config_file.exists():
+        return False
+    try:
+        with open(config_file) as f:
+            config = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return False
+    section = config.get("local_asr")
+    if not isinstance(section, dict):
+        return False
+    return bool(str(section.get("model") or "").strip())
+
+
 def get_data_dir(project_root: Path) -> Path:
     """Resolve the data directory (QUEST_DATA_DIR env, server_config.json, default).
 
@@ -827,10 +850,17 @@ def main() -> None:
     print("+ Frontend build complete")
     print()
 
-    # Step 2: Ensure backend dependencies are installed
+    # Step 2: Ensure backend dependencies are installed. The optional
+    # speech packages (pyproject "asr" extra: torch + qwen-asr, a couple
+    # of GB) come along only when server_config.json names a local_asr
+    # model, so every other deployment stays lean.
     print("[2/6] Checking backend dependencies...")
+    sync_command = ["uv", "sync"]
+    if local_asr_configured(project_root):
+        sync_command += ["--extra", "asr"]
+        print("  (local_asr.model is set: including the speech packages)")
     subprocess.run(
-        ["uv", "sync"],
+        sync_command,
         cwd=project_root,
         check=True,
     )

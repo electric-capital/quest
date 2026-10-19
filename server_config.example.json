@@ -37,6 +37,15 @@
   },
   "_gemini_vertex": "GCP project/region for Gemini models (all served via Vertex AI). Falls back to anthropic.vertex_project_id when unset. Env overrides: GEMINI_VERTEX_PROJECT_ID / GEMINI_VERTEX_REGION.",
 
+  "local_asr": {
+    "model": "Qwen/Qwen3-ASR-1.7B",
+    "device": "cpu",
+    "dtype": "bfloat16",
+    "threads": 0,
+    "preload": true
+  },
+  "_local_asr": "Local speech recognition for the composer's live dictation (docs/architecture/voice-input.md). model: a Hugging Face repo id or local directory of a Qwen3-ASR checkpoint; absent or empty = live dictation off (the microphone then records clips for Gemini). device: torch device ('cpu', 'cuda:0'); dtype: torch dtype name; threads: CPU threads for decoding (0 = torch default); preload: load the weights at startup (default true) instead of on the first dictation. Needs the speech packages: `uv sync --extra asr` (run.py does this when model is set). Env override for model: QUEST_LOCAL_ASR_MODEL.",
+
   "telegram_app_info": {
     "api_id": 123456,
     "api_hash": "0123456789abcdef0123456789abcdef"

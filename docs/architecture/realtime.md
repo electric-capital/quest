@@ -2,7 +2,7 @@
 
 ## Overview
 
-A single persistent WebSocket per browser session carries every realtime signal from the backend to the web UI: subscribe / unsubscribe / catchup / resync against any conversation the user owns, the `send_message` and `stop` control plane, durable per-conversation events (`message_appended` with monotonic `seq`), transient streaming events (text deltas, sub-agent updates), and per-user globals (open-request count badge, conversation list mutations, wait-handle resolutions). The per-turn `WS /app/api/conversations/{id}/message` endpoint that previously serviced one socket per turn was deleted; it lives on only as the historical name for what is now `WS /app/api/stream`.
+A single persistent WebSocket per browser session carries every realtime signal from the backend to the web UI: subscribe / unsubscribe / catchup / resync against any conversation the user owns, the `send_message` and `stop` control plane, durable per-conversation events (`message_appended` with monotonic `seq`), transient streaming events (text deltas, sub-agent updates), and per-user globals (open-request count badge, conversation list mutations, wait-handle resolutions).
 
 This is the channel that lets resumed runs (memory accept, action-request approve, slack debounce flush) push their continuation to a viewing tab without a reload, lets a Slack-driven conversation stream live in the web UI, lets a second tab observe a turn driven from the first, and lets the open-request badge update without polling.
 
@@ -10,6 +10,7 @@ This is the channel that lets resumed runs (memory accept, action-request approv
 
 ### Backend (`chat/realtime/`)
 
+- `chat/realtime/ws_auth.py` -- `authenticate_websocket()`: on-open auth (session cookie, then `?api_key=`, then login admission), shared with the live-dictation socket ([voice-input.md](voice-input.md#socket-protocol)).
 - `chat/realtime/socket.py` -- the `WS /app/api/stream` endpoint (`stream_endpoint`). Spawns a reader / writer / heartbeat / subscription-sweep coroutine quartet per connection (`_reader_loop`, `_writer_loop`, `_heartbeat_loop`, `_subscription_sweep_loop`).
   - Owns `_handle_subscribe`, `_handle_unsubscribe`, `_handle_send_message`, `_handle_stop`, plus the per-connection subscription deadline map (used for TTL-based eviction; see [Subscription Protocol](#subscription-protocol)), the per-conversation send registry (`_active_send_runs`), and the run task body (`_run_send_message`).
   - The timing constants (the heartbeat's `PING_INTERVAL_SECONDS` / `PONG_DEADLINE_SECONDS`, `AUTH_REVALIDATE_INTERVAL_SECONDS`, the subscription `SUBSCRIPTION_TTL_SECONDS` / `SUBSCRIPTION_SWEEP_INTERVAL_SECONDS`) and the custom `CLOSE_*` WebSocket close codes (one per close cause: auth failure, heartbeat timeout, queue overflow, internal error) are at the top of the file.

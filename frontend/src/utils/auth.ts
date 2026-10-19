@@ -28,6 +28,9 @@ export async function checkSession(): Promise<{
   // null = default (prototype).
   color_theme?: string | null;
   enabled_features?: string[];
+  // Whether the composer's voice input runs as live dictation on the
+  // server's local speech model (true) or records clips for Gemini (false).
+  voice_input_live?: boolean;
   // Whether the account has an email/password sign-in password.
   has_password?: boolean;
 } | null> {

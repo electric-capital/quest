@@ -67,6 +67,15 @@ export const endpoints = {
   transcribe: () => `${API_BASE_URL}/transcribe`,
 
   /**
+   * Composer live dictation: WebSocket taking 16 kHz PCM16 frames and
+   * returning partial / final transcript events (local speech model)
+   */
+  transcribeLive: (language?: string | null) => {
+    const base = `${getWebSocketUrl()}${API_BASE_URL}/transcribe/live`;
+    return language ? `${base}?language=${encodeURIComponent(language)}` : base;
+  },
+
+  /**
    * Inference API keys (Settings > Inference API)
    */
   inferenceApiKeys: () => `${API_BASE_URL}/inference-api-keys`,

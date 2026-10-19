@@ -44,7 +44,7 @@
 | [slack-pending-request-notifier.md](architecture/slack-pending-request-notifier.md) | Background daemon that DMs users on Slack about open action requests, with per-user settings |
 | [slack-socket-mode.md](architecture/slack-socket-mode.md) | Slack-driven conversations over Socket Mode: DM reply tool, thread mapping, user resolution, read-only web view |
 | [user-subagents.md](architecture/user-subagents.md) | Cross-user subagents: double approval, read-only run in the target's account, return card, gating |
-| [voice-input.md](architecture/voice-input.md) | Dictated prompts: composer mic recording, server-side Gemini transcription, failure reports, feature gate |
+| [voice-input.md](architecture/voice-input.md) | Dictated prompts: live dictation on a local Qwen3-ASR model, clip transcription on Gemini, failure reports, feature gate |
 | [wait-handles.md](architecture/wait-handles.md) | DB-backed wait handles for tools that block on user input: kinds, suspend sentinels, restart-safe resume |
 
 ## API

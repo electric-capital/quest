@@ -5,7 +5,10 @@
  * (idle -> starting -> recording -> idle) and hands the finished clip to
  * the caller as a Blob; the caller (Composer.tsx) uploads it to
  * ``POST /transcribe`` and drops the transcript into the textarea. The
- * hook never touches the network itself.
+ * hook never touches the network itself. This is the clip mode of voice
+ * input; the live mode (hooks/useLiveDictation.ts) streams the microphone
+ * instead and reuses the microphone-opening and diagnostics pieces
+ * exported from here (``openMicrophone``, ``RunTrace``, ...).
  *
  * Browser reality this accounts for:
  * - Capture needs a secure context (https or localhost); on a plain-http
@@ -153,14 +156,14 @@ function extensionFor(mimeType: string): string {
  * ``instanceof DOMException`` guard saw no name on iOS Safari and the
  * by-id -> bare fallback never ran (the exact failure seen on an iPhone).
  */
-function errorName(error: unknown): string {
+export function errorName(error: unknown): string {
   if (!error || typeof error !== 'object') return '';
   const name = (error as { name?: unknown }).name;
   return typeof name === 'string' ? name : '';
 }
 
 /** Human message for a getUserMedia / MediaRecorder failure. */
-function describeCaptureError(error: unknown): string {
+export function describeCaptureError(error: unknown): string {
   const name = errorName(error);
   if (name === 'NotAllowedError' || name === 'SecurityError') {
     return 'Microphone access was denied. Allow the microphone for this site and try again.';
@@ -175,7 +178,7 @@ function describeCaptureError(error: unknown): string {
 }
 
 /** One run's trace: environment snapshot at start plus a relative-time log. */
-class RunTrace {
+export class RunTrace {
   readonly environment: [string, string][];
   readonly timeline: string[] = [];
   private readonly startedAt = Date.now();
@@ -206,7 +209,7 @@ class RunTrace {
 }
 
 /** Short description of a capture track for the trace. */
-function describeTrack(track: MediaStreamTrack): string {
+export function describeTrack(track: MediaStreamTrack): string {
   let settings = '';
   try {
     const s = track.getSettings();
@@ -223,10 +226,10 @@ function describeTrack(track: MediaStreamTrack): string {
  * docstring for why), falling back to a bare request where that id does
  * not exist. Permission errors propagate from the first attempt.
  */
-async function openMicrophone(trace: RunTrace): Promise<MediaStream> {
+export async function openMicrophone(trace: RunTrace, extra: MediaTrackConstraints = {}): Promise<MediaStream> {
   trace.log('getUserMedia default device by id');
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: 'default' } } });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { ...extra, deviceId: { exact: 'default' } } });
     trace.log('getUserMedia ok');
     return stream;
   } catch (error) {
@@ -235,7 +238,7 @@ async function openMicrophone(trace: RunTrace): Promise<MediaStream> {
     if (name !== 'OverconstrainedError' && name !== 'NotFoundError') throw error;
     trace.log('getUserMedia bare {audio: true}');
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: Object.keys(extra).length > 0 ? extra : true });
       trace.log('getUserMedia ok');
       return stream;
     } catch (fallbackError) {

@@ -11,7 +11,7 @@ Quest development environment setup on a local machine. The application is a Fas
 - `scripts/seed_local.py` -- Seeds a fresh local-mode database with canned accounts (`admin@quest.local`, `alice@quest.local`, `bob@quest.local`, plus the high-volume `heidi@quest.local` for testing the paged sidebar) and demo data; run automatically by `run.py --local` on a fresh throwaway data dir
 - `server_credentials.json` -- Legacy consolidated server credentials (Google OAuth, Slack, GitHub, CoinGecko). Loaded by `_load_server_credentials()` in `auth/config.py`. Google OAuth, Slack, GitHub, Twitter/X, and CoinGecko are now primarily managed in the admin-only Settings > Service Credentials section (see [Service Credentials](../architecture/service-credentials.md)); this file remains a read fallback. See `server_credentials.example.json` for structure
 - `config/paths.py` -- Centralized data-directory path constants; honors the `QUEST_DATA_DIR` env var (highest precedence, set by `run.py --local`) then the optional `data_dir` from `server_config.json` (see [Data Paths](../architecture/data-paths.md))
-- `server_config.json` -- Optional server configuration (default model, Anthropic Vertex AI, Gemini Vertex AI, admin emails, optional `data_dir` override, optional `app_base_url` public URL for app-generated links + OAuth callbacks, optional `oauth_hostname` override for OAuth callback URLs). See `server_config.example.json` for the documented schema. Loaded via `load_server_config()` in `config/server_config.py` (and `config/paths.py` for `data_dir`)
+- `server_config.json` -- Optional server configuration (default model, Anthropic Vertex AI, Gemini Vertex AI, local speech model for live dictation, admin emails, optional `data_dir` override, optional `app_base_url` public URL for app-generated links + OAuth callbacks, optional `oauth_hostname` override for OAuth callback URLs). See `server_config.example.json` for the documented schema. Loaded via `load_server_config()` in `config/server_config.py` (and `config/paths.py` for `data_dir`)
 - `pyproject.toml` -- Python dependencies managed by `uv`
 - `frontend/package.json` -- Frontend dependencies managed by `npm`
 - `logging_config.json` -- Unified log format config, passed to uvicorn via `--log-config`
@@ -61,6 +61,7 @@ data/
 | `QUEST_ENCRYPTION_KEY_FILE` | `<data_dir>/encryption_key.json` | Overrides the key file location (used by the test suite) |
 | `GEMINI_VERTEX_PROJECT_ID` | From `server_config.json` (or `anthropic.vertex_project_id` fallback) | Google Cloud project id for Gemini models (all served via Vertex AI) |
 | `GEMINI_VERTEX_REGION` | `global` | Vertex location for Gemini. Gemini 3.x requires the `global` endpoint -- regional endpoints return 404 |
+| `QUEST_LOCAL_ASR_MODEL` | From `server_config.json` `local_asr.model` | Local speech model for live dictation (repo id or path; empty disables it). See [Local Speech Model](#local-speech-model-live-dictation) |
 | `PORT` | 8000 | Backend server port |
 
 Configuration priority: environment variables > `server_config.json` > built-in defaults.
@@ -82,6 +83,16 @@ Uses Google Cloud Application Default Credentials (ADC). If `vertex_project_id` 
 ### Gemini Vertex AI
 
 All Gemini models are served via Vertex AI and use Google Cloud Application Default Credentials (ADC) -- there is no Gemini API key. Add a `gemini_vertex` section to `server_config.json` with `vertex_project_id` and optionally `vertex_region` (default: `global` -- Gemini 3.x is only served on the global endpoint). If `vertex_project_id` is omitted it falls back to `anthropic.vertex_project_id`; the region is **not** inherited (Anthropic's `us-east5` is not a Gemini location). Env overrides: `GEMINI_VERTEX_PROJECT_ID`, `GEMINI_VERTEX_REGION`. See [LLM Provider Abstraction -- Gemini Vertex AI Configuration](../architecture/llm-providers.md#gemini-vertex-ai-configuration) for details.
+
+### Local Speech Model (Live Dictation)
+
+The composer's voice input transcribes live, as the user talks, when the server runs a local [Qwen3-ASR](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) model ([Voice Input -- Live Dictation](../architecture/voice-input.md#live-dictation)). Add a `local_asr` section to `server_config.json` with `model` (a Hugging Face repo id such as `Qwen/Qwen3-ASR-1.7B`, or a local directory) and optionally `device` (default `cpu`), `dtype` (`bfloat16`), `threads` (0 = torch's default) and `preload` (true: load the weights at startup). `QUEST_LOCAL_ASR_MODEL` overrides `model` from the environment, so a local run can try it without touching the file:
+
+```bash
+QUEST_LOCAL_ASR_MODEL=Qwen/Qwen3-ASR-1.7B python3 run.py --local
+```
+
+The speech packages are the `asr` extra (`uv sync --extra asr`: `qwen-asr` plus a CPU build of `torch`, a couple of GB); `run.py` adds the extra by itself whenever a model is configured. The weights (about 4 GB for the 1.7B checkpoint) are fetched into the Hugging Face cache on first load, or pre-downloaded with `uv run hf download Qwen/Qwen3-ASR-1.7B` for a machine without internet access. Without a model, voice input falls back to recording clips for a Gemini Vertex model. The browser needs a secure context for the microphone (`localhost` or HTTPS), as for clip mode.
 
 ### Shared Dev Config (`dev-config.json`) in Local Mode
 

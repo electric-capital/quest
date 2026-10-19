@@ -190,6 +190,7 @@ async def get_current_user_info(user: dict = Depends(get_current_user_cookie_or_
     Returns:
         Dictionary with email, name, google_services_connected, and has_any_service_connected flags
     """
+    from chat.live_transcription import live_transcription_availability
     from config.feature_gates import enabled_features
     from config.plugins import connectionless_plugin_ids
     from api.instructions import PSEUDO_SERVICE_KEYS, get_user_connected_services
@@ -248,6 +249,11 @@ async def get_current_user_info(user: dict = Depends(get_current_user_cookie_or_
         # from the composer Flags popover and the New Project modal's
         # public checkbox when the gate is closed for this user.
         "enabled_features": enabled_features(user["email"]),
+        # Whether the composer's voice input runs as live dictation on a
+        # local speech model (docs/architecture/voice-input.md); False means
+        # the clip mode on Gemini. Only meaningful while voice_input is in
+        # enabled_features.
+        "voice_input_live": live_transcription_availability()[0],
         # Whether the account has an email/password sign-in password (the
         # Settings > Password section then asks for the current one).
         "has_password": bool(user.get("password_fp")),
