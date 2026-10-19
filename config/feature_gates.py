@@ -66,14 +66,16 @@ FEATURE_PUBLIC_PROJECT_ROUTINES = "public_project_routines"
 FEATURE_GUIDES = "guides"
 
 # Voice input (see docs/architecture/voice-input.md): a microphone button in
-# the chat composer records a short clip in the browser and POSTs it to
-# ``/app/api/transcribe``, which transcribes it server-side with a Gemini
-# model on Vertex AI and hands the text back for the user to edit and send.
-# Nothing leaves the deployment's own Vertex project. The admin endpoint
-# refuses to turn the gate on while no Gemini Vertex model is configured
-# (chat/transcription.py ``transcription_availability()``), and the
-# transcribe route re-checks availability per request. Access can be
-# restricted to specific users (PER_USER_ACCESS_FEATURES).
+# the chat composer. With a local speech model configured (server_config
+# ``local_asr``) it streams the microphone to ``WS /app/api/transcribe/live``
+# and the text appears in the composer while the user talks; otherwise it
+# records a short clip and POSTs it to ``/app/api/transcribe``, transcribed
+# by a Gemini model on Vertex AI. Either way the text lands in the composer
+# for the user to edit and send, and nothing leaves the deployment. The
+# admin endpoint refuses to turn the gate on while neither mode can run
+# (chat/transcription.py ``voice_input_availability()``), and each route
+# re-checks its own availability per request. Access can be restricted to
+# specific users (PER_USER_ACCESS_FEATURES).
 FEATURE_VOICE_INPUT = "voice_input"
 
 # Quest Docs (see docs/architecture/quest-docs.md): user- and project-owned
@@ -165,13 +167,15 @@ FEATURE_LABELS: dict[str, dict[str, str]] = {
     FEATURE_VOICE_INPUT: {
         "label": "Voice input",
         "description": (
-            "Adds a microphone button to the chat composer. Recordings are "
-            "transcribed server-side by a Gemini model on this server's "
-            "Vertex AI project (audio never goes to a third-party speech "
-            "service and is not stored) and the text is placed in the "
-            "composer for the user to edit before sending. Requires a "
-            "configured Gemini Vertex model. Access can be granted to all "
-            "users or only to specific users."
+            "Adds a microphone button to the chat composer. With a local "
+            "speech model configured on this server, speech is transcribed "
+            "live as the user talks; otherwise recordings are transcribed "
+            "by a Gemini model on this server's Vertex AI project. Audio "
+            "never goes to a third-party speech service and is not stored; "
+            "the text is placed in the composer for the user to edit before "
+            "sending. Requires a local speech model or a configured Gemini "
+            "Vertex model. Access can be granted to all users or only to "
+            "specific users."
         ),
     },
     FEATURE_DOCS: {

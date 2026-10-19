@@ -77,6 +77,21 @@ def load_server_config() -> dict:
             # still need a regional location.
             "vertex_region": "global",
         },
+        # Local speech recognition for the composer's live dictation
+        # (chat/live_transcription.py): a Qwen3-ASR checkpoint run in this
+        # process on CPU or GPU. ``model`` is a Hugging Face repo id or a
+        # local directory; empty = live dictation unavailable (the clip
+        # mode on Gemini still works). ``device`` is a torch device string,
+        # ``dtype`` a torch dtype name, ``threads`` the CPU thread count
+        # (0 = torch's default) and ``preload`` whether the weights load at
+        # startup instead of on the first session.
+        "local_asr": {
+            "model": "",
+            "device": "cpu",
+            "dtype": "bfloat16",
+            "threads": 0,
+            "preload": True,
+        },
     }
 
     if SERVER_CONFIG_FILE.exists():
@@ -89,6 +104,8 @@ def load_server_config() -> dict:
                 config["anthropic"].update(user_config["anthropic"])
             if "gemini_vertex" in user_config:
                 config["gemini_vertex"].update(user_config["gemini_vertex"])
+            if isinstance(user_config.get("local_asr"), dict):
+                config["local_asr"].update(user_config["local_asr"])
             # Preserve top-level keys like admin_emails
             config["admin_emails"] = user_config.get(
                 "admin_emails", default_admin_emails
@@ -128,6 +145,11 @@ def load_server_config() -> dict:
     env_gv_region = os.getenv("GEMINI_VERTEX_REGION")
     if env_gv_region:
         config["gemini_vertex"]["vertex_region"] = env_gv_region
+
+    # Local ASR env var override (repo id or path; empty string disables)
+    env_local_asr = os.getenv("QUEST_LOCAL_ASR_MODEL")
+    if env_local_asr is not None:
+        config["local_asr"]["model"] = env_local_asr
 
     # Fallback: if no gemini_vertex project id is configured, reuse the
     # Anthropic Vertex project id (region intentionally not inherited --

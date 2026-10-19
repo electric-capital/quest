@@ -36,6 +36,17 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.optional-dependencies]
+# Live dictation on a local Qwen3-ASR model (chat/live_transcription.py).
+# Installed with `uv sync --extra asr`; run.py does so by itself when
+# server_config.json sets local_asr.model. torch resolves from the CPU wheel
+# index below on Linux (the default PyPI wheel drags in several GB of CUDA
+# libraries); a GPU deployment points the source at the matching CUDA index.
+asr = [
+    "qwen-asr>=0.0.6",
+    "torch>=2.4",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -55,6 +66,16 @@ dev = [
 
 [tool.uv]
 exclude-newer = "1 week"
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+]
 
 [tool.pytest.ini_options]
 # Core tests plus every in-tree plugin's own tests/ directory; the

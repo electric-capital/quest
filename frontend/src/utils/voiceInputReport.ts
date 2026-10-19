@@ -19,13 +19,17 @@ export type VoiceInputStage =
   | 'open_microphone'
   | 'create_recorder'
   | 'recording'
-  | 'transcribe';
+  | 'transcribe'
+  | 'connect_live'
+  | 'live_dictation';
 
 export const VOICE_INPUT_STAGE_LABELS: Record<VoiceInputStage, string> = {
   open_microphone: 'opening the microphone',
   create_recorder: 'creating the recorder',
   recording: 'recording',
   transcribe: 'transcribing the clip',
+  connect_live: 'connecting to live dictation',
+  live_dictation: 'dictating live',
 };
 
 /** What the recorder knew about the clip when it stopped (or failed). */

@@ -166,6 +166,15 @@ async def lifespan(app: FastAPI):
     # per-service credential store (data/service_credentials/*.json).
     # Idempotent: services that already have a per-service file are skipped,
     # so credentials saved through the admin UI are never overwritten.
+    # Load the live-dictation speech model in the background when one is
+    # configured with preload (chat/live_transcription.py); the first
+    # dictation otherwise waits for the load.
+    from chat.live_transcription import preload_if_configured
+    try:
+        preload_if_configured()
+    except Exception:
+        logger.exception("Local ASR preload could not be scheduled; continuing")
+
     from config.service_credentials import migrate_legacy_credentials
     try:
         migrate_legacy_credentials()

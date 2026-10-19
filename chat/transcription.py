@@ -186,6 +186,23 @@ def transcription_availability() -> tuple[bool, str | None]:
     )
 
 
+def voice_input_availability() -> tuple[bool, str | None]:
+    """Whether the ``voice_input`` gate can be turned on: ``(available, reason)``.
+
+    Either mode of the feature makes it available: the clip mode on a
+    Gemini Vertex model (:func:`transcription_availability`) or live
+    dictation on a local model (``chat/live_transcription.py``). The reason
+    lists what each mode is missing when neither can run.
+    """
+    from chat.live_transcription import live_transcription_availability
+
+    clip_ok, clip_reason = transcription_availability()
+    live_ok, live_reason = live_transcription_availability()
+    if clip_ok or live_ok:
+        return True, None
+    return False, f"{clip_reason} Or, for live dictation: {live_reason}"
+
+
 def transcription_model() -> str | None:
     """The model id transcription will use right now, or None.
 

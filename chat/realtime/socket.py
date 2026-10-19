@@ -6,7 +6,8 @@ unsubscribe / heartbeat plumbing; ``send_message`` / ``stop`` are stubbed to
 return a structured "not yet implemented" error so the wire format is
 locked in before Phase 3 turns them on.
 
-Auth model (mirrors ``chat/routes/websocket.py``):
+Auth model (``chat/realtime/ws_auth.py``, shared with the live-dictation
+socket):
 
 * On open, try the signed session cookie first, then the ``?api_key=`` query
   param. Either yields a ``user`` dict or we close with code 4401.
@@ -37,10 +38,10 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from auth.config import COOKIE_NAME
 from auth.session import get_user_from_cookie
-from db.user_store import get_user_by_api_key, get_user_by_id
+from db.user_store import get_user_by_id
 
-from chat.auth import check_user_allowed
 from chat.realtime.bus import SubscriberQueue, bus
+from chat.realtime.ws_auth import authenticate_websocket
 from chat.realtime.replay_buffer import replay_buffer
 from chat._flush_helper import FLUSH_EVENT_TYPES, make_flush_callback
 from chat.gemini_api import (
@@ -172,7 +173,7 @@ async def stream_endpoint(websocket: WebSocket, api_key: Optional[str] = None) -
     """
     await websocket.accept()
 
-    user = await _authenticate(websocket, api_key)
+    user = await authenticate_websocket(websocket, api_key)
     if user is None:
         try:
             await websocket.close(code=CLOSE_AUTH_FAILED)
@@ -213,36 +214,6 @@ async def stream_endpoint(websocket: WebSocket, api_key: Optional[str] = None) -
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
-
-
-async def _authenticate(
-    websocket: WebSocket, api_key: Optional[str],
-) -> Optional[dict]:
-    """Return the authenticated user dict, or ``None`` to refuse the socket."""
-    user: Optional[dict] = None
-
-    signed_cookie = websocket.cookies.get(COOKIE_NAME)
-    if signed_cookie:
-        try:
-            user = await get_user_from_cookie(signed_cookie)
-        except Exception:
-            logger.exception("[realtime] cookie auth raised")
-            user = None
-
-    if user is None and api_key:
-        try:
-            user = await get_user_by_api_key(api_key)
-        except Exception:
-            logger.exception("[realtime] api_key auth raised")
-            user = None
-
-    if user is None:
-        return None
-
-    if not check_user_allowed(user.get("email", "")):
-        return None
-
-    return user
 
 
 async def _revalidate_auth(conn: _Connection) -> bool:

@@ -121,7 +121,7 @@ Archive a conversation (soft-delete). Archived conversations are excluded from l
 
 ### Unarchive Conversation
 
-Restore a previously archived conversation.
+Restore an archived conversation.
 
 **Endpoint**: `PUT /app/api/conversations/{conversation_id}/unarchive`
 
@@ -324,7 +324,7 @@ On the **first** message of a conversation only (`last_message_seq == 0`), a lea
 
 ### Stop
 
-`{op: "stop", conversation_id}` cancels any in-flight run for the conversation and unconditionally calls `cancel_pending_wait_handles_for_conversation()` so a stop click on a sentinel-suspended run (`SuspendForWaitHandles` / `SuspendForSlackReply` / `SuspendForActionRequest`) still flips dangling rows to `cancelled`. The cancel-time tail edit (`_save_interrupted_sdk_history`), session removal, and final flush mirror the historical per-turn handler verbatim.
+`{op: "stop", conversation_id}` cancels any in-flight run for the conversation and unconditionally calls `cancel_pending_wait_handles_for_conversation()` so a stop click on a sentinel-suspended run (`SuspendForWaitHandles` / `SuspendForSlackReply` / `SuspendForActionRequest`) still flips dangling rows to `cancelled`. It then runs the cancel-time tail edit (`_save_interrupted_sdk_history`), session removal and flush.
 
 The server replies `{type: "stop_acknowledged", conversation_id}` so the UI can clear its "thinking" indicator immediately. Regular socket disconnects (page refresh, network blips) do NOT cancel in-progress work; only explicit `stop` ops do.
 
@@ -346,7 +346,7 @@ Defined in the model loop in `chat/gemini_api/conversation.py`, the realtime pub
 - Per-user globals:
   - **`request_count_changed`** (`counts: {all, open, executed, denied, stopped}`),
   - **`conversation_list_changed`** (`conversation_id`, `action: "created" | "archived" | "unarchived" | "renamed" | "model_changed"`),
-  - **`file_list_changed`** (`conversation_id`, `project_id`, `scope: "project" | "conversation"`; emitted from each workspace-mutating tool handler and REST route (the copy routes also on a 500 `copy_failed`, since a failed copy may have written part of the destination) so file browsers can silent-refresh mid-turn; project-scoped writes fan out across sibling-conversation tabs),
+  - **`file_list_changed`** (`conversation_id`, `project_id`, `scope: "project" | "conversation"`; emitted by every workspace-mutating tool handler and REST route (the copy routes also on a 500 `copy_failed`, since a failed copy may have written part of the destination) so file browsers silent-refresh; project-scoped writes reach sibling-conversation tabs),
   - **`wait_handle_resolved`** (`conversation_id`, `handle_id`, `kind`, `status`, optional `request_id`, optional `response`),
   - **`routine_list_changed`** (`project_id`; emitted when a `create_routine`/`edit_routine` action request executes so the sidebar refreshes its cached per-project routine list),
   - **`doc_list_changed`** (no payload) and **`doc_changed`** (`doc_id`, `updated_at`; null when the doc's existence or the receiver's access changed): Quest Docs list/viewer refresh signals sent to the doc's audience (owner + share recipients, every connected user for a doc shared with everyone); see [Quest Docs API](quest-docs-api.md#realtime-events).
@@ -362,6 +362,8 @@ Durable messages are saved to `chat_history.json` at the flush-event boundary by
 ### WebSocket Close Codes
 
 Custom 4xxx codes from `chat/realtime/socket.py`: 4401 (auth failed / revoked), 4408 (heartbeat timeout), 4503 (per-user queue overflow), 4500 (internal). On 4401 the client probes `GET /app/api/me`: success retries the socket, failure goes to the unauth flow.
+
+`WS /app/api/transcribe/live` (live dictation: PCM in, transcript events out) is documented in [Voice Input](../architecture/voice-input.md#socket-protocol)
 
 ---
 

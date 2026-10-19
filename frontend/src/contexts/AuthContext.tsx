@@ -34,6 +34,10 @@ export interface AuthContextValue {
   // from GET /app/api/me). Feature-gated composer flags are hidden when their
   // feature is absent from this list.
   enabledFeatures: string[];
+  // Whether voice input runs as live dictation (voice_input_live from GET
+  // /app/api/me): the server has a local speech model, so the composer
+  // streams the microphone instead of recording clips.
+  voiceInputLive: boolean;
   // Re-fetch enabled_features from GET /me (called after an admin flips a
   // gate in Settings > Features so their own composer reflects it without a
   // reload; other sessions pick it up on their next load).
@@ -66,6 +70,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [userName, setUserName] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [enabledFeatures, setEnabledFeatures] = useState<string[]>([]);
+  const [voiceInputLive, setVoiceInputLive] = useState(false);
   const [hasPassword, setHasPassword] = useState(false);
   const [googleServicesConnected, setGoogleServicesConnected] = useState(true); // Default true to avoid flash
   const [hasAnyServiceConnected, setHasAnyServiceConnected] = useState(true); // Default true to avoid flash
@@ -89,6 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setHasAnyServiceConnected(userInfo.has_any_service_connected);
         setIsAdmin(userInfo.is_admin);
         setEnabledFeatures(userInfo.enabled_features ?? []);
+        setVoiceInputLive(userInfo.voice_input_live === true);
         setHasPassword(userInfo.has_password === true);
         setIsImpersonating(userInfo.is_impersonating);
         setImpersonatorEmail(userInfo.impersonator_email);
@@ -127,6 +133,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const userInfo = await checkSession();
     if (userInfo) {
       setEnabledFeatures(userInfo.enabled_features ?? []);
+      setVoiceInputLive(userInfo.voice_input_live === true);
     }
   }, []);
 
@@ -138,6 +145,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     userName,
     isAdmin,
     enabledFeatures,
+    voiceInputLive,
     refreshEnabledFeatures,
     hasPassword,
     setHasPassword,
@@ -155,6 +163,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     userName,
     isAdmin,
     enabledFeatures,
+    voiceInputLive,
     refreshEnabledFeatures,
     hasPassword,
     googleServicesConnected,

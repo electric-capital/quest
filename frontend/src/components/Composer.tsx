@@ -42,6 +42,7 @@ import { useConversationSkills } from '../contexts/ConversationSkillsContext';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { isVoiceInputSupported, useVoiceRecorder } from '../hooks/useVoiceRecorder';
 import type { VoiceRecording } from '../hooks/useVoiceRecorder';
+import { isLiveDictationSupported, joinTranscript, useLiveDictation } from '../hooks/useLiveDictation';
 import { describeError, formatVoiceInputReport } from '../utils/voiceInputReport';
 import type { VoiceInputDiagnostics } from '../utils/voiceInputReport';
 import type { ComposerAttachmentRef } from '../api/types';
@@ -288,9 +289,11 @@ export function Composer({
     setNotice(text ? { text, report } : null);
   }, []);
   const [isUploadingAttachments, setIsUploadingAttachments] = useState(false);
-  // Voice input: true from the moment a recording finishes until the
-  // transcript request resolves (the mic button shows a spinner meanwhile).
-  const [isTranscribing, setIsTranscribing] = useState(false);
+  // Voice input (clip mode): true from the moment a recording finishes until
+  // the transcript request resolves (the mic button shows a spinner
+  // meanwhile). `isTranscribing` below also covers live dictation's
+  // finishing state.
+  const [isTranscribingClip, setIsTranscribingClip] = useState(false);
   // Voice input: armed when Send (button or Enter) is pressed mid-recording.
   // The recording is stopped, transcribed, appended to the draft, and the
   // draft is sent as soon as the transcript has landed (see the effect
@@ -343,7 +346,7 @@ export function Composer({
   // maxUploadBytes: the admin-set workspace upload cap (Settings > Limits),
   // so oversize files are rejected client-side before the upload.
   const { availableModelIds, maxUploadBytes } = useAppConfig();
-  const { enabledFeatures } = useAuth();
+  const { enabledFeatures, voiceInputLive } = useAuth();
 
   // Models whose backend credentials are configured server-side. null means
   // the config fetch hasn't resolved yet -- treat as "all available".
@@ -415,7 +418,7 @@ export function Composer({
   }, [isMobile]);
 
   const handleRecordingComplete = useCallback(async (recording: VoiceRecording) => {
-    setIsTranscribing(true);
+    setIsTranscribingClip(true);
     try {
       const result = await transcribeAudio(recording.blob, recording.filename);
       const text = result.text.trim();
@@ -457,7 +460,7 @@ export function Composer({
         },
       }));
     } finally {
-      setIsTranscribing(false);
+      setIsTranscribingClip(false);
     }
   }, [isMobile, resizeInput, armSendAfterTranscription, setPasteNotice]);
 
@@ -477,19 +480,92 @@ export function Composer({
     onRecordingComplete: handleRecordingComplete,
     onError: handleRecordingError,
   });
-  const isRecording = recorderStatus !== 'idle';
+
+  // ----------------------------------------------------------------
+  // Live dictation (microphone streamed to the server's local speech model;
+  // the transcript updates the textarea while the user talks)
+  // ----------------------------------------------------------------
+
+  // The draft as it was when dictation started; the live transcript is
+  // appended after it. The textarea is read-only meanwhile, so the base
+  // cannot drift under the transcript.
+  const dictationBaseRef = useRef('');
+
+  const handleDictationFinished = useCallback((text: string) => {
+    setInputValue(joinTranscript(dictationBaseRef.current, text));
+    requestAnimationFrame(() => {
+      resizeInput();
+      if (!isMobile) inputRef.current?.focus();
+    });
+  }, [isMobile, resizeInput]);
+
+  const handleDictationError = useCallback((message: string, diagnostics: VoiceInputDiagnostics) => {
+    armSendAfterTranscription(false);
+    // The textarea keeps whatever was committed before the failure.
+    setPasteNotice(message, formatVoiceInputReport(diagnostics));
+  }, [armSendAfterTranscription, setPasteNotice]);
+
+  const {
+    status: liveStatus,
+    isLoadingModel,
+    committedText: liveCommittedText,
+    partialText: livePartialText,
+    inputLevel: liveLevel,
+    elapsedSeconds: liveSeconds,
+    start: startLive,
+    stop: stopLive,
+    cancel: cancelLive,
+  } = useLiveDictation({
+    onFinished: handleDictationFinished,
+    onError: handleDictationError,
+  });
+  const isLiveDictating = liveStatus === 'listening' || liveStatus === 'finishing';
+
+  // Mirror the live transcript into the textarea as it arrives.
+  useEffect(() => {
+    if (!isLiveDictating) return;
+    setInputValue(joinTranscript(dictationBaseRef.current, liveCommittedText, livePartialText));
+    requestAnimationFrame(resizeInput);
+  }, [isLiveDictating, liveCommittedText, livePartialText, resizeInput]);
+
+  // Live mode when the server has a local speech model and this browser can
+  // stream audio; the clip recorder otherwise.
+  const liveMode = voiceInputLive && isLiveDictationSupported();
+  const isRecording = liveMode
+    ? liveStatus === 'connecting' || liveStatus === 'listening'
+    : recorderStatus !== 'idle';
+  const isTranscribing = isTranscribingClip || liveStatus === 'finishing';
+  // Unified mic-button state across the two modes.
+  const micState: 'idle' | 'starting' | 'recording' | 'transcribing' = isTranscribing
+    ? 'transcribing'
+    : liveMode
+      ? (liveStatus === 'connecting' ? 'starting' : liveStatus === 'listening' ? 'recording' : 'idle')
+      : (recorderStatus === 'starting' ? 'starting' : recorderStatus === 'recording' ? 'recording' : 'idle');
+  const micLevel = liveMode ? liveLevel : recordingLevel;
+  const micSeconds = liveMode ? liveSeconds : recordingSeconds;
 
   // The button appears only when an admin has enabled the feature for this
-  // user AND the browser can capture audio here (secure context + MediaRecorder).
-  const voiceInputEnabled = enabledFeatures.includes('voice_input') && isVoiceInputSupported();
+  // user AND the browser can capture audio here (secure context plus
+  // MediaRecorder for clips, or Web Audio + WebSocket for live dictation).
+  const voiceInputEnabled = enabledFeatures.includes('voice_input')
+    && (liveMode || isVoiceInputSupported());
 
   const handleMicClick = useCallback(() => {
+    if (liveMode) {
+      if (liveStatus === 'listening') {
+        stopLive();
+      } else if (liveStatus === 'idle') {
+        dictationBaseRef.current = inputValue.replace(/\s+$/, '');
+        void startLive();
+      }
+      return;
+    }
     if (recorderStatus === 'recording') {
       stopRecording();
     } else if (recorderStatus === 'idle') {
       void startRecording();
     }
-  }, [recorderStatus, startRecording, stopRecording]);
+  }, [liveMode, liveStatus, startLive, stopLive, inputValue, recorderStatus, startRecording, stopRecording]);
 
   // Drop an in-progress recording when the composer locks or the
   // conversation switches: the clip belonged to the previous context.
@@ -497,19 +573,29 @@ export function Composer({
     if (inputDisabled) {
       sendAfterTranscriptionRef.current = false;
       cancelRecording();
+      cancelLive();
     }
-  }, [inputDisabled, cancelRecording]);
+  }, [inputDisabled, cancelRecording, cancelLive]);
   useEffect(() => {
     sendAfterTranscriptionRef.current = false;
     cancelRecording();
-  }, [conversationId, cancelRecording]);
+    cancelLive();
+  }, [conversationId, cancelRecording, cancelLive]);
 
-  if (recorderStatus === 'starting') {
-    composerPlaceholder = 'Starting the microphone… one moment before you speak.';
-  } else if (recorderStatus === 'recording') {
-    composerPlaceholder = 'Listening… click the microphone to stop, or Send to transcribe and send.';
-  } else if (isTranscribing) {
-    composerPlaceholder = sendAfterTranscription ? 'Transcribing, then sending…' : 'Transcribing…';
+  if (micState === 'starting') {
+    composerPlaceholder = liveMode
+      ? (isLoadingModel
+        ? 'Loading the speech model on the server… one moment.'
+        : 'Connecting the microphone… one moment before you speak.')
+      : 'Starting the microphone… one moment before you speak.';
+  } else if (micState === 'recording') {
+    composerPlaceholder = liveMode
+      ? 'Listening… your words appear here as you speak. Click the microphone to stop, or Send.'
+      : 'Listening… click the microphone to stop, or Send to transcribe and send.';
+  } else if (micState === 'transcribing') {
+    composerPlaceholder = liveMode
+      ? (sendAfterTranscription ? 'Finishing the transcript, then sending…' : 'Finishing the transcript…')
+      : (sendAfterTranscription ? 'Transcribing, then sending…' : 'Transcribing…');
   }
 
   // Auto-focus the textarea when streaming ends (so the user can type
@@ -561,10 +647,12 @@ export function Composer({
     ) return;
 
     // Send pressed mid-dictation: stop the recording now and send once the
-    // transcript has been appended to the draft (effect below).
+    // transcript has been appended to the draft (effect below). Live mode
+    // still connecting has nothing to transcribe: the stop is a cancel and
+    // the draft goes as it is.
     if (isRecording) {
       armSendAfterTranscription(true);
-      stopRecording();
+      if (liveMode) stopLive(); else stopRecording();
       return;
     }
     if (isTranscribing) return;
@@ -672,7 +760,7 @@ export function Composer({
       .finally(() => {
         setIsUploadingAttachments(false);
       });
-  }, [inputValue, pendingAttachments, pendingFiles, isStreaming, isUploadingAttachments, hasPendingWait, expensiveResumeBlocked, isRecording, isTranscribing, stopRecording, armSendAfterTranscription, onSend, onAfterSend, selectedModel, selectedThinkingEffort, skipSendLocks, deferImageUpload, conversationId, isProviderLocked, lockConversationProvider, queuedSkills, markSkillsAsLoaded, isFirstMessage, selectedFlags, setPasteNotice]);
+  }, [inputValue, pendingAttachments, pendingFiles, isStreaming, isUploadingAttachments, hasPendingWait, expensiveResumeBlocked, isRecording, isTranscribing, liveMode, stopLive, stopRecording, armSendAfterTranscription, onSend, onAfterSend, selectedModel, selectedThinkingEffort, skipSendLocks, deferImageUpload, conversationId, isProviderLocked, lockConversationProvider, queuedSkills, markSkillsAsLoaded, isFirstMessage, selectedFlags, setPasteNotice]);
 
   // Complete a Send that was pressed mid-dictation. Runs once the recorder
   // is idle and the transcript request has resolved; by then the transcript
@@ -1239,42 +1327,44 @@ export function Composer({
             type="button"
             className={
               'composer-icon-btn composer-mic'
-              + (recorderStatus === 'recording' ? ' recording' : '')
-              + (recorderStatus === 'starting' ? ' starting' : '')
+              + (micState === 'recording' ? ' recording' : '')
+              + (micState === 'starting' ? ' starting' : '')
             }
             onClick={handleMicClick}
-            disabled={inputDisabled || isTranscribing || recorderStatus === 'starting'}
-            aria-pressed={recorderStatus === 'recording'}
+            disabled={inputDisabled || micState === 'transcribing' || micState === 'starting'}
+            aria-pressed={micState === 'recording'}
             title={
-              isTranscribing
-                ? 'Transcribing…'
-                : recorderStatus === 'starting'
-                  ? 'Starting the microphone…'
-                  : recorderStatus === 'recording'
-                    ? 'Stop recording'
-                    : 'Dictate a message (transcribed on this server)'
+              micState === 'transcribing'
+                ? (liveMode ? 'Finishing the transcript…' : 'Transcribing…')
+                : micState === 'starting'
+                  ? (liveMode ? 'Connecting…' : 'Starting the microphone…')
+                  : micState === 'recording'
+                    ? (liveMode ? 'Stop dictating' : 'Stop recording')
+                    : liveMode
+                      ? 'Dictate a message (transcribed live on this server)'
+                      : 'Dictate a message (transcribed on this server)'
             }
-            aria-label={recorderStatus === 'recording' ? 'Stop recording' : 'Dictate a message'}
+            aria-label={micState === 'recording' ? (liveMode ? 'Stop dictating' : 'Stop recording') : 'Dictate a message'}
           >
-            {isTranscribing ? (
+            {micState === 'transcribing' ? (
               <LoaderCircle size={18} className="composer-mic-spinner" />
-            ) : recorderStatus === 'recording' ? (
+            ) : micState === 'recording' ? (
               <Square size={14} fill="currentColor" />
             ) : (
               <Mic size={18} />
             )}
           </button>
-          {recorderStatus === 'recording' && (
+          {micState === 'recording' && (
             <>
               <span
                 className="composer-mic-level"
                 aria-hidden="true"
-                style={{ '--mic-level': recordingLevel } as React.CSSProperties}
+                style={{ '--mic-level': micLevel } as React.CSSProperties}
               >
                 <i /><i /><i /><i />
               </span>
               <span className="composer-mic-timer" aria-live="polite">
-                {formatRecordingTime(recordingSeconds)}
+                {formatRecordingTime(micSeconds)}
               </span>
             </>
           )}
@@ -1385,13 +1475,16 @@ export function Composer({
           {queuedFilesRow}
           <textarea
             ref={inputRef}
-            className="message-input composer-input"
+            className={'message-input composer-input' + (isLiveDictating ? ' dictating' : '')}
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             onPaste={inputDisabled ? undefined : handlePaste}
             placeholder={composerPlaceholder}
             disabled={inputDisabled}
+            // Live dictation drives the value; typing would be overwritten
+            // by the next transcript update. Enter still sends.
+            readOnly={isLiveDictating}
             rows={1}
           />
           {expanded && (
