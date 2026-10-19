@@ -6,7 +6,8 @@ from a bare Debian machine to a running instance. It covers three things in orde
 1. [Host dependencies](#1-host-dependencies-debian) -- OS packages and tools the app needs
 2. [Google OAuth setup](#2-google-oauth-setup) -- optional: Google sign-in and the Google services
    connectors (a deployment can use email + password sign-in instead)
-3. [Vertex AI setup](#3-vertex-ai-setup) -- so the app can call Claude and Gemini models
+3. [Vertex AI setup](#3-vertex-ai-setup) -- optional: run Claude and Gemini on Google Cloud. A
+   plain Anthropic, OpenAI or Gemini API key works without it (section 4)
 
 For day-to-day development workflow see [docs/setup/development.md](docs/setup/development.md);
 for production hardening (systemd, reverse proxy, backups) see
@@ -159,9 +160,15 @@ listed in `server_config.json` (both set by the wizard).
 
 ## 3. Vertex AI setup
 
-All LLM traffic -- both Claude and Gemini models -- runs on **Google Cloud Vertex AI**,
-authenticated with Application Default Credentials (ADC). There is no Anthropic or Gemini API
-key. You need a GCP project with Vertex AI enabled and a service account key.
+This section is **optional**. The built-in Claude and Gemini model registry runs on **Google
+Cloud Vertex AI**, authenticated with Application Default Credentials (ADC), and needs a GCP
+project with Vertex AI enabled and a service account key. Without Vertex, the first admin to
+sign in gets a "Connect a model" card in place of the composer: paste an Anthropic, OpenAI or
+Gemini API key (or an OpenRouter / Fireworks / NEAR AI / TrustedRouter key, or a self-hosted
+server URL) and Quest adds that provider's models for everyone. Admins add or change providers
+later in Settings > Inference Providers (see
+[docs/architecture/inference-providers.md](docs/architecture/inference-providers.md)). You can
+skip to [section 4](#4-run-it) and connect a key there.
 
 ### 3.1 In Google Cloud Console
 

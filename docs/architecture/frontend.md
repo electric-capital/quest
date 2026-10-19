@@ -132,7 +132,9 @@ The browser authenticates only with the session cookie (`COOKIE_NAME` in `auth/c
 
 ## Composer Component
 
-`frontend/src/components/Composer.tsx` is the one message composer, rendered by `ChatPanel` for a live conversation and by `HomeComposer` before one exists. Its header comment covers what it owns and the desktop / phone split; `ComposerProps` is how the host controls sending. Two props are cross-file contracts: `HomeComposer` passes `setDraftModelForConversation` as `onModelChange`, so a home-screen pick never PATCHes a conversation that does not exist, and sets `skipSendLocks` (see [Provider Locking](#provider-locking)).
+`frontend/src/components/Composer.tsx` is the one message composer, rendered by `ChatPanel` for a live conversation and by `HomeComposer` before one exists. Its header comment covers what it owns and the desktop / phone split; `ComposerProps` controls sending. Two props are cross-file contracts: `HomeComposer` passes `setDraftModelForConversation` as `onModelChange`, so a home-screen pick never PATCHes a conversation that does not exist, and sets `skipSendLocks` (see [Provider Locking](#provider-locking)).
+
+**No model available** (`availableModelIds` empty): an admin gets `ModelSetupCard.tsx` in place of the composer (the first-run card, see [Inference Providers -- Frontend](inference-providers.md#frontend)); a successful connect calls `refreshAppConfig()`. Everyone else keeps the disabled composer with its notice.
 
 The composer is styled by `ChatPanel.css`, its phone rules in the one `@media (max-width: ...)` block at the end of that file. The model trigger is the only shrinkable item in the controls row, so a long model name ellipsizes and Send never leaves the bubble; a new control must stay non-shrinking.
 
@@ -140,7 +142,7 @@ The composer is styled by `ChatPanel.css`, its phone rules in the one `@media (m
 
 The Flags popover is described in [Conversation Flags -- Composer UI](conversation-flags.md#composer-ui-out-of-band-selection), the skill picker in [Skill Library](skill-library.md).
 
-**Context indicator.** `ContextIndicator.tsx` (header comment: the fixed-footprint ring) shows how much of the context window the conversation uses, from the `context_tokens` / `max_context_tokens` of the newest `stats` row: `compute_total_context_tokens()` in `chat/llm/base.py` counts occupancy per provider, and the maximum is the model's registry `max_input_tokens`. `useConversation` feeds them to `conversationStore.setContextUsage()` whenever messages load or a tail fetch lands; without a maximum the ring falls back to `maxInputTokens` in `frontend/src/constants/models.ts`. Clicking it opens `SystemPromptModal.tsx`, which fetches the conversation's saved system prompt (`GET /app/api/conversations/{id}/system-prompt`).
+**Context indicator.** `ContextIndicator.tsx` (header comment) shows how much of the context window the conversation uses, from the `context_tokens` / `max_context_tokens` of the newest `stats` row (`compute_total_context_tokens()` in `chat/llm/base.py`), fed through `conversationStore.setContextUsage()` by `useConversation`; without a maximum it falls back to `maxInputTokens` in `frontend/src/constants/models.ts`. Clicking it opens `SystemPromptModal.tsx` (`GET /app/api/conversations/{id}/system-prompt`).
 
 ### Model Selector
 

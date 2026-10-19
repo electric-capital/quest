@@ -779,13 +779,20 @@ def test_admin_list_shape(admin_routes, health_store):
     _run(health_store.record("claude-opus-4-8", False, "not enabled"))
     result = _run(admin_routes.admin_list_inference_providers(user=ADMIN_USER))
     assert "sk-or-secret" not in json.dumps(result)
-    assert result["kinds"] == [
-        {"kind": "openrouter", "label": "OpenRouter", "endpoint": False, "catalog": "openrouter"},
-        {"kind": "fireworks", "label": "Fireworks AI", "endpoint": False, "catalog": "fireworks"},
-        {"kind": "nearai", "label": "NEAR AI", "endpoint": False, "catalog": "nearai"},
-        {"kind": "trustedrouter", "label": "TrustedRouter", "endpoint": False, "catalog": "trustedrouter"},
-        {"kind": "local", "label": "Self-hosted", "endpoint": True, "catalog": "server"},
+    assert [(k["kind"], k["label"], k["endpoint"], k["catalog"]) for k in result["kinds"]] == [
+        ("anthropic", "Anthropic", False, "anthropic"),
+        ("openai", "OpenAI", False, "openai"),
+        ("gemini", "Google Gemini", False, "gemini"),
+        ("openrouter", "OpenRouter", False, "openrouter"),
+        ("fireworks", "Fireworks AI", False, "fireworks"),
+        ("nearai", "NEAR AI", False, "nearai"),
+        ("trustedrouter", "TrustedRouter", False, "trustedrouter"),
+        ("local", "Self-hosted", True, "server"),
     ]
+    # The first-run setup card needs the key placeholder and whether a key is needed
+    by_kind = {k["kind"]: k for k in result["kinds"]}
+    assert by_kind["anthropic"]["hint"] == "sk-ant-..." and by_kind["anthropic"]["key_required"] is True
+    assert by_kind["local"]["key_required"] is False
     assert [t["id"] for t in result["api_types"]] == ["openai", "ollama"]
 
     vertex = result["vertex"]

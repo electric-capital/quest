@@ -20,7 +20,8 @@
 | [realtime.md](architecture/realtime.md) | Persistent multiplexed WebSocket: subscribe and catch-up, send and stop, durable and transient events, per-user globals |
 | [guides.md](architecture/guides.md) | Deprecated guides (system prompt presets): snapshot mechanism, feature gate, conversion to skills |
 | [llm-providers.md](architecture/llm-providers.md) | LLM provider layer: Vertex Gemini and Claude, OpenAI-compatible instances, model registry, streaming, refusal fallbacks |
-| [inference-providers.md](architecture/inference-providers.md) | Admin Inference Providers panel: Vertex AI models, admin-added provider instances and their catalogs, model health checks |
+| [inference-providers.md](architecture/inference-providers.md) | Admin Inference Providers panel: Vertex AI models, admin-added provider instances, first-run quick setup, model health checks |
+| [inference-catalogs.md](architecture/inference-catalogs.md) | Provider model catalogs: the cached router and vendor model lists, self-hosted discovery, quick-setup model suggestions |
 | [model-selection.md](architecture/model-selection.md) | Admin Model Selection table: composer menu slots and descriptors, private and public allow flags enforced per turn |
 | [logging.md](architecture/logging.md) | Unified logging configuration: format, levels, user identification convention |
 | [oauth-popup.md](architecture/oauth-popup.md) | OAuth popup window flow for connector buttons in Settings, using postMessage |

@@ -63,7 +63,7 @@ Provider objects are keyed by `(provider, instance_id)`: `get_provider_instance(
 
 ### GeminiProvider
 
-`GeminiProvider` in `chat/llm/gemini_provider.py` wraps the `google-genai` SDK in Vertex mode (the only Gemini transport; the developer-endpoint `"genapi"` transport was removed):
+`GeminiProvider` in `chat/llm/gemini_provider.py` wraps the `google-genai` SDK in Vertex mode for the registry's Gemini models; the subclass `GeminiApiProvider(instance_id)` serves a `gemini` provider instance ([Inference Providers](inference-providers.md)) over the Developer API with `genai.Client(api_key=...)` -- distinct model ids, so the two backends never mix in one conversation (thought signatures are not portable). Wire id and output cap come from the resolved `ModelSpec`:
 
 - **Authentication**: Google Cloud Application Default Credentials (ADC) -- no API key. Project ID and region come from the `gemini_vertex` section of `server_config.json` (see [Gemini Vertex AI Configuration](#gemini-vertex-ai-configuration) below)
 - **Client cache**: One cached `genai.Client` (`_client`). Chat sessions hold the client's httpx connection pool, so the cache persists across turns. `_get_client()` lazily constructs `genai.Client(vertexai=True, project=..., location=...)`. `reset_cached_clients()` drops the cache when an admin saves new inference credentials (via `reset_provider_client_caches()` in `chat/llm/config.py`)
@@ -80,13 +80,13 @@ Provider objects are keyed by `(provider, instance_id)`: `get_provider_instance(
 
 ### AnthropicProvider
 
-`AnthropicProvider` in `chat/llm/anthropic_provider.py` wraps the `anthropic[vertex]` SDK:
+`AnthropicProvider` in `chat/llm/anthropic_provider.py` wraps the `anthropic[vertex]` SDK for the registry's Claude models; the subclass `AnthropicApiProvider(instance_id)` serves an `anthropic` provider instance ([Inference Providers](inference-providers.md)) over Anthropic's API with one `AsyncAnthropic` client from the instance's key (no region, no fallback chain). Model specifics on the send path come from the resolved `ModelSpec`:
 
 - **Authentication**: Uses Google Cloud Application Default Credentials (ADC) via `AsyncAnthropicVertex` -- no API key needed
 - **Configuration**: Loads `vertex_project_id` from the `anthropic` section of `server_config.json`. The region is resolved per model by `_resolve_region(model)` -- a per-model `vertex_region` override in `MODEL_REGISTRY` wins, otherwise the `anthropic.vertex_region` config default (see [Configuration](#anthropic-vertex-ai-configuration) and [Per-Model Vertex Region](#per-model-vertex-region) below)
 - **Client cache**: One `AsyncAnthropicVertex` client per (region, refusal-fallback chain), cached in a dict (`_clients`). `_get_client(region, fallback_chain)` lazily constructs a client for the resolved region; the same `vertex_project_id` is used for every region. Clients built for a non-empty fallback chain carry the SDK's `BetaRefusalFallbackMiddleware` (see **Refusal fallbacks** below); the health-check path uses the plain, middleware-free client
 - **Session type**: Returns an `AnthropicSession` dataclass (stateless container holding messages, system prompt, tool definitions, and model name). Anthropic's API is stateless -- there is no persistent chat object
-- **Max output tokens**: Dynamically looked up from `MODEL_REGISTRY` via `max_output_tokens` at each API call (the fallback for an entry without one is the literal in `send_message_stream()`, duplicated in `_build_fallback_entries()` for fallback models), so each Anthropic model gets its own output ceiling
+- **Max output tokens**: The resolved spec's `max_output_tokens` at each API call (fallback literal in `send_message_stream()` / `_build_fallback_entries()`)
 - **Streaming**: Processes `content_block_start`, `content_block_delta`, `content_block_stop`, `message_start`, and `message_delta` events; tracks the in-progress block via an explicit `current_block_type` and dispatches the stop event on it. Accumulates tool input JSON across delta events and yields a `StreamEvent` on `content_block_stop`. On `CancelledError`, flushes any in-progress text block and appends accumulated content blocks to `session.messages` before re-raising, so that `save_history()` can capture the partial assistant response
 - **Adaptive thinking**: The level is the session's `thinking_effort` (the user's pick, see [Thinking effort](#thinking-effort)) or else the model's registry `thinking_effort`. A level makes every request carry `thinking: {"type": "adaptive"}` plus `output_config: {"effort": <level>}`; no level -- or the explicit `none` -- sends no `thinking` param, which disables thinking on Opus 4.7/4.8 but runs adaptive thinking at the model's default effort on Opus 5 (thinking on by default).
   - Which models pin an explicit effort, at which level, which levels they offer, and why (the newest Claude models reject `thinking: disabled`; some also reject sampling params and assistant prefill, none of which the provider sends) is recorded as comments on the registry entries in `chat/llm/config.py` -- read those rather than this doc.
@@ -123,7 +123,7 @@ Provider objects are keyed by `(provider, instance_id)`: `get_provider_instance(
 
 ### OpenRouterProvider
 
-`OpenRouterProvider` in `chat/llm/openrouter_provider.py` wraps the `openai` SDK pointed at an OpenAI-compatible chat-completions API -- the kind's fixed `upstream_url` in `INSTANCE_KINDS` (`config/inference_providers.py`) for the key-only kinds, or `<base_url>/v1` of a self-hosted server for `local` instances with the `openai` API type:
+`OpenRouterProvider` in `chat/llm/openrouter_provider.py` wraps the `openai` SDK pointed at an OpenAI-compatible chat-completions API -- the kind's fixed `upstream_url` in `INSTANCE_KINDS` (`config/inference_providers.py`) for the key-only kinds, or `<base_url>/v1` of a self-hosted server for `local` instances with the `openai` API type. An `openai` instance (`_kind`, recorded with the client) gets OpenAI's request shape: `max_completion_tokens` for the cap and the thinking level as `reasoning_effort` (see `OPENAI_KIND`):
 
 - **Authentication / endpoint**: One provider object per configured instance (`OpenRouterProvider(instance_id)`). `_endpoint()` resolves where requests go: a fixed-upstream instance needs its API key from the inference-credential store (`effective_api_key(instance_id)` in `config/inference_providers.py`, editable in Settings > Inference Providers), sent as a bearer token to the kind's `upstream_url`; only the OpenRouter kind gets the OpenRouter attribution headers (`_OPENROUTER_HEADERS`) + accounting opt-in (the other fixed upstreams get a plain request -- they include usage in the final streamed chunk by themselves -- except that NEAR AI requests carry the `x-no-aliasing: true` default header, so the gateway never substitutes another model for the requested one); a self-hosted instance needs its `base_url` from the instance config, sends the stored key as a bearer token only when one exists (a placeholder otherwise, since the SDK insists on a non-empty key and servers without `--api-key` ignore it) and gets a plain request (no OpenRouter-only `extra_body`, which some servers reject). `_get_client()` raises a descriptive `ValueError` when the instance has no key / no URL; `reset_cached_clients()` drops the cached `AsyncOpenAI` client so a newly saved key takes effect without a restart. The wire model id is the qualified id with its `<instance>:` prefix stripped (`split_model_id`); `max_tokens` comes from the instance model's catalog snapshot via `resolve_model()`
 - **Session type**: An `OpenRouterSession` dataclass (stateless container, same pattern as `AnthropicSession`) holding OpenAI-format chat messages and the picked `thinking_effort`. The system prompt is NOT stored in the history -- it is prepended as a `role="system"` message at the API-call boundary
@@ -135,9 +135,9 @@ Provider objects are keyed by `(provider, instance_id)`: `get_provider_instance(
 - **File upload**: Not supported -- `upload_file()` always returns `None` and the tool-handler fallback paths cover the messaging. `get_attach_limit_for_model()` resolves OpenRouter models to the smallest cap
 - **Compaction**: Not supported for OpenRouter histories -- `_CUT_VALIDATORS` / `_WALKERS` in `chat/compaction.py` have no `"openrouter"` entry, so compaction reports nothing to compact
 
-`check_model_access()` issues the health check's minimal 1-token completion, except on a `nearai` instance, where it is a lookup in the cached public NEAR AI catalog instead (see [Inference Providers -- Model health](inference-providers.md#model-health-checks-server-global)).
+`check_model_access()` issues the health check's minimal 1-token completion (16 on an `openai` instance), except on a `nearai` instance, where it is a lookup in the cached public NEAR AI catalog instead (see [Inference Providers -- Model health](inference-providers.md#model-health-checks-server-global)).
 
-Tests: `tests/test_openrouter_provider.py`; the self-hosted endpoint resolution in `tests/test_local_inference.py`, the Fireworks one in `tests/test_fireworks_inference.py`, the NEAR AI one (incl. the no-aliasing header and the catalog-lookup health check) in `tests/test_nearai_inference.py`.
+Tests: `tests/test_openrouter_provider.py`; the self-hosted endpoint resolution in `tests/test_local_inference.py`, the Fireworks one in `tests/test_fireworks_inference.py`, the NEAR AI one in `tests/test_nearai_inference.py`, the OpenAI request shape and the API-key subclasses in `tests/test_direct_api_inference.py`.
 
 ### OllamaProvider
 
@@ -242,10 +242,10 @@ The newer Claude entries carry `"vertex_region": "global"` because Vertex AI ser
 ## Design Decisions
 
 **Why a provider abstraction instead of direct SDK calls?**
-The conversation loop, sub-agent execution, and tool dispatch logic are complex. Without an abstraction, adding a new provider would require duplicating or heavily modifying these components. The `LLMProvider` interface isolates provider-specific concerns (session creation, streaming format, tool result formatting) behind a stable contract.
+Without an abstraction, adding a provider would mean duplicating or heavily modifying the conversation loop, sub-agent execution and tool dispatch. The `LLMProvider` interface isolates provider-specific concerns (session creation, streaming format, tool result formatting) behind a stable contract.
 
 **Why JSON Schema for tool definitions?**
-JSON Schema is the de facto standard for describing function signatures across LLM providers. Gemini uses a proprietary `types.Schema` format, while Anthropic uses JSON Schema directly. Maintaining a single canonical definition and converting at the boundary avoids drift between provider-specific copies.
+JSON Schema is the de facto standard for function signatures across LLM providers (Gemini's proprietary `types.Schema` is converted at the boundary); one canonical definition avoids drift between provider-specific copies.
 
 **Why Vertex AI for Anthropic instead of the direct Anthropic API?**
 The deployment environment already has Google Cloud infrastructure and credentials. Using Vertex AI avoids managing a separate Anthropic API key and allows billing to be consolidated through Google Cloud.

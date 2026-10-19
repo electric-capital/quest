@@ -284,10 +284,93 @@ _STATIC_PRICING: dict[str, dict[str, dict]] = {
     "anthropic": _ANTHROPIC_PRICING,
 }
 
+# Cache-read rate assumed for a Gemini API instance model whose pricing
+# snapshot has no ``cache_read`` (the Gemini list rates read cache at a
+# tenth of the input rate).
+_GEMINI_DEFAULT_CACHE_READ_MULT = 0.10
+
+
+def _vendor_registry_entry(provider: str, wire_id: str) -> Optional[dict]:
+    """The static-table entry of the Vertex registry model a direct-API
+    wire id names (``claude-sonnet-5-20260801`` -> ``claude-sonnet-5``)."""
+    from chat.llm.config import registry_entry_for_wire_id
+
+    match = registry_entry_for_wire_id(provider, wire_id)
+    if match is None:
+        return None
+    return _STATIC_PRICING.get(provider, {}).get(match[0])
+
+
+def fireworks_priced_wire_ids() -> list[str]:
+    """The Fireworks wire ids the static table prices, in table order (the
+    first-run quick setup offers these for a new Fireworks instance)."""
+    return list(_FIREWORKS_PRICING)
+
+
+def static_pricing_snapshot(provider: str, registry_id: str) -> Optional[dict]:
+    """Today's list rates of a Vertex registry model as an instance pricing
+    snapshot (``{prompt, completion, cache_read}`` $/1M tokens), or None.
+
+    The direct-API catalogs (``chat/llm/anthropic_catalog.py``,
+    ``chat/llm/gemini_catalog.py``) stamp this on the models an
+    ``anthropic`` / ``gemini`` instance adds, so their rows are priced like
+    the Vertex rows of the same model. Anthropic's cache-read rate is the
+    input rate times the entry's read multiplier; Gemini publishes it.
+    """
+    entry = _STATIC_PRICING.get(provider, {}).get(registry_id)
+    if entry is None:
+        return None
+    rates = rate_set_at(entry, None)
+    snapshot = {"prompt": float(rates["input"]), "completion": float(rates["output"])}
+    if provider == "anthropic":
+        snapshot["cache_read"] = rates["input"] * rates.get("cache_read_mult", _ANTHROPIC_CACHE_READ_MULT)
+    elif rates.get("cache_read") is not None:
+        snapshot["cache_read"] = float(rates["cache_read"])
+    return snapshot
+
+
+def _vendor_instance_entry(provider: str, model: str, at: Optional[datetime]) -> Optional[dict]:
+    """Rate set in force at ``at`` for a Gemini / Anthropic row whose model
+    is an ``<instance>:<wire_id>`` id of a direct-API instance kind: the
+    instance's pricing snapshot (current or the retired one covering ``at``,
+    ``instance_model_pricing``), else the static table entry of the registry
+    model the wire id names. None for Vertex (bare) ids and unknown models.
+
+    A snapshot carries ``{prompt, completion, cache_read?}``; it is turned
+    into the provider's native rate-set shape -- Anthropic bills cache reads
+    through a multiplier on the input rate, Gemini through a flat rate.
+    """
+    from config.inference_providers import instance_model_pricing, split_model_id
+
+    instance_id, wire_id = split_model_id(model)
+    if instance_id is None:
+        return None
+    snapshot = instance_model_pricing(wire_id, at=at)
+    if snapshot is None:
+        static = _vendor_registry_entry(provider, wire_id)
+        return rate_set_at(static, at) if static is not None else None
+    entry = {"input": snapshot["prompt"], "output": snapshot["completion"]}
+    cache_read = snapshot.get("cache_read")
+    if provider == "anthropic":
+        if cache_read is not None and snapshot["prompt"] > 0:
+            entry["cache_read_mult"] = cache_read / snapshot["prompt"]
+    else:
+        entry["cache_read"] = (
+            cache_read if cache_read is not None
+            else snapshot["prompt"] * _GEMINI_DEFAULT_CACHE_READ_MULT
+        )
+    return entry
+
 
 def long_context_threshold(provider: str, model: str) -> int:
     """Per-call context size above which ``model``'s long-context rates apply."""
     entry = _STATIC_PRICING.get(provider, {}).get(model)
+    if entry is None and provider in _STATIC_PRICING:
+        from config.inference_providers import split_model_id
+
+        instance_id, wire_id = split_model_id(model)
+        if instance_id is not None:
+            entry = _vendor_registry_entry(provider, wire_id)
     if entry is None:
         return LONG_CONTEXT_THRESHOLD
     return _rate_sets(entry)[0].get("long_context_threshold", LONG_CONTEXT_THRESHOLD)
@@ -356,7 +439,11 @@ def estimate_cost_usd(
 
     Args:
         provider: "gemini", "anthropic", or "openrouter".
-        model: Model id as recorded in the llm_calls_* rows (registry id).
+        model: Model id as recorded in the llm_calls_* rows: a registry id
+            for Vertex rows, a qualified ``<instance>:<wire_id>`` for rows
+            of an instance (incl. the direct-API ``anthropic`` / ``gemini``
+            kinds, priced from their snapshot or the registry model they
+            name -- see :func:`_vendor_instance_entry`).
         metrics: Native usage fields for one call or a same-tier,
             same-period sum.
         long_context: Whether these calls exceeded the model's
@@ -374,8 +461,13 @@ def estimate_cost_usd(
     if provider == "gemini":
         entry = _GEMINI_PRICING.get(model)
         if entry is None:
-            return None
-        rates = _rates_for(rate_set_at(entry, at), long_context)
+            # A Gemini API instance model (``gemini:<wire_id>``)
+            rate_set = _vendor_instance_entry(provider, model, at)
+            if rate_set is None:
+                return None
+        else:
+            rate_set = rate_set_at(entry, at)
+        rates = _rates_for(rate_set, long_context)
         cached = tokens("cached_content_token_count")
         # prompt_token_count includes the cached portion; bill the remainder
         # (and tool-use prompt tokens) at the input rate.
@@ -391,8 +483,12 @@ def estimate_cost_usd(
     if provider == "anthropic":
         entry = _ANTHROPIC_PRICING.get(model)
         if entry is None:
-            return None
-        rate_set = rate_set_at(entry, at)
+            # A Claude API instance model (``anthropic:<wire_id>``)
+            rate_set = _vendor_instance_entry(provider, model, at)
+            if rate_set is None:
+                return None
+        else:
+            rate_set = rate_set_at(entry, at)
         rates = _rates_for(rate_set, long_context)
         creation = tokens("cache_creation_input_tokens")
         creation_5m = tokens("cache_creation_5m_input_tokens")

@@ -1443,15 +1443,19 @@ async def admin_list_inference_providers(
         "vertex": _vertex_status(),
         "instances": [_instance_status(inst) for inst in list_instances()],
         # ``catalog`` tells the card where its "Add model" typeahead looks:
-        # the shared OpenRouter list, the instance's own (key-fetched)
-        # Fireworks catalog, NEAR AI's or TrustedRouter's public list, or the self-hosted
-        # server itself.
+        # the shared OpenRouter list, the instance's own key-fetched vendor
+        # catalog (Anthropic, OpenAI, Gemini, Fireworks), NEAR AI's or
+        # TrustedRouter's public list, or the self-hosted server itself.
+        # ``hint`` / ``key_required`` also feed the composer's first-run
+        # model setup card (ModelSetupCard.tsx), which offers these kinds.
         "kinds": [
             {
                 "kind": kind,
                 "label": spec["label"],
                 "endpoint": spec["endpoint"],
                 "catalog": spec["catalog"],
+                "hint": spec["hint"],
+                "key_required": spec["key_required"],
             }
             for kind, spec in INSTANCE_KINDS.items()
         ],
@@ -1762,48 +1766,28 @@ async def admin_update_inference_instance(
 async def _catalog_snapshots(instance: dict, wire_ids: list[str]) -> dict[str, dict]:
     """Catalog metadata for ``wire_ids`` (defaults per unlisted id).
 
-    OpenRouter, Fireworks, NEAR AI and TrustedRouter instances use their cached catalog
-    (no refresh) so a save never blocks on the network beyond the first fetch;
-    self-hosted instances ask their server (a short live request). An
-    unreachable catalog/server just means custom-id defaults -- for a
-    self-hosted instance the zero pricing and, on Ollama, the default
-    context.
+    Cached catalogs (OpenRouter, Fireworks, NEAR AI, TrustedRouter and the
+    direct-API vendor lists) are served without a refresh so a save never
+    blocks on the network beyond the first fetch; self-hosted instances ask
+    their server (a short live request). An unreachable catalog/server just
+    means custom-id defaults -- for a self-hosted instance the zero pricing
+    and, on Ollama, the default context. Dispatch:
+    ``chat.llm.model_setup.fetch_instance_catalog``.
     """
     if not wire_ids:
         return {}
-    import asyncio
-
+    from chat.llm.model_setup import fetch_instance_catalog
     from chat.llm.openrouter_catalog import catalog_snapshot
-    from config.inference_providers import INSTANCE_KINDS, effective_api_key
+    from config.inference_providers import INSTANCE_KINDS
 
-    source = INSTANCE_KINDS[instance["kind"]]["catalog"]
-    if source == "server":
-        from chat.llm.local_catalog import default_snapshot, discover_models
+    catalog = await fetch_instance_catalog(instance)
+    if INSTANCE_KINDS[instance["kind"]]["catalog"] == "server":
+        from chat.llm.local_catalog import default_snapshot
 
-        listed = (await discover_models(instance))["models"] if instance.get("base_url") else []
         return {
-            wire_id: catalog_snapshot(listed, wire_id) or default_snapshot(instance)
+            wire_id: catalog_snapshot(catalog["models"], wire_id) or default_snapshot(instance)
             for wire_id in wire_ids
         }
-
-    if source == "fireworks":
-        from chat.llm.fireworks_catalog import get_catalog as get_fireworks_catalog
-
-        catalog = await asyncio.to_thread(
-            get_fireworks_catalog, effective_api_key(instance["id"])[0]
-        )
-    elif source == "nearai":
-        from chat.llm.nearai_catalog import get_catalog as get_nearai_catalog
-
-        catalog = await asyncio.to_thread(get_nearai_catalog)
-    elif source == "trustedrouter":
-        from chat.llm.trustedrouter_catalog import get_catalog as get_trustedrouter_catalog
-
-        catalog = await asyncio.to_thread(get_trustedrouter_catalog)
-    else:
-        from chat.llm.openrouter_catalog import get_catalog
-
-        catalog = await asyncio.to_thread(get_catalog)
     return {
         wire_id: catalog_snapshot(catalog["models"], wire_id) or {}
         for wire_id in wire_ids
@@ -1826,52 +1810,27 @@ async def admin_instance_catalog(
       local box serves changes whenever a model is loaded or pulled.
       ``error`` is set (and ``models`` empty) when the server cannot be
       reached; an instance with no base URL yet answers the same way.
-    - Fireworks instances: the serverless catalog fetched with the
-      instance's stored key (cached 24h, ``refresh=true`` re-fetches);
-      a missing or rejected key sets ``error`` with the stale cache -- or
-      an empty list -- so custom-id entry still works.
-    - NEAR AI instances: NEAR AI Cloud's public model list (cached 24h,
-      ``refresh=true`` re-fetches), served whether or not a key is saved
-      yet; a failed fetch sets ``error`` with the stale cache or an
-      empty list. Each row carries its ``tee`` label (enclave / proxy).
-    - TrustedRouter instances: TrustedRouter's public model list, served
-      the same way as NEAR AI's (cached 24h, keyless, stale on failure).
+    - Fireworks, Anthropic, OpenAI and Gemini instances: the vendor's
+      model list fetched with the instance's stored key (cached 24h,
+      ``refresh=true`` re-fetches); a missing or rejected key sets
+      ``error`` with the stale cache -- or an empty list -- so custom-id
+      entry still works.
+    - NEAR AI and TrustedRouter instances: the router's public model list
+      (cached 24h, ``refresh=true`` re-fetches), served whether or not a
+      key is saved yet; a failed fetch sets ``error`` with the stale cache
+      or an empty list. NEAR AI rows carry their ``tee`` label.
 
     400 for kinds whose typeahead is the shared OpenRouter catalog
-    (``GET /admin/inference-providers/openrouter/catalog``).
+    (``GET /admin/inference-providers/openrouter/catalog``). Dispatch:
+    ``chat.llm.model_setup.fetch_instance_catalog``.
     """
     _require_admin(user)
-    import asyncio
-
+    from chat.llm.model_setup import fetch_instance_catalog
     from chat.llm.openrouter_catalog import search_catalog
-    from config.inference_providers import INSTANCE_KINDS, effective_api_key
+    from config.inference_providers import INSTANCE_KINDS
 
     instance = _instance_or_404(instance_id)
-    source = INSTANCE_KINDS[instance["kind"]]["catalog"]
-    limit = max(1, min(limit, 100))
-    if source in ("nearai", "trustedrouter"):
-        if source == "nearai":
-            from chat.llm.nearai_catalog import get_catalog as get_public_catalog
-        else:
-            from chat.llm.trustedrouter_catalog import get_catalog as get_public_catalog
-
-        catalog = await asyncio.to_thread(get_public_catalog, refresh)
-        return {
-            "models": search_catalog(catalog["models"], q, limit),
-            "error": catalog["error"],
-        }
-    if source == "fireworks":
-        from chat.llm.fireworks_catalog import get_catalog as get_fireworks_catalog
-
-        api_key = effective_api_key(instance_id)[0]
-        if not api_key:
-            return {"models": [], "error": "No API key saved yet."}
-        catalog = await asyncio.to_thread(get_fireworks_catalog, api_key, refresh)
-        return {
-            "models": search_catalog(catalog["models"], q, limit),
-            "error": catalog["error"],
-        }
-    if source != "server":
+    if INSTANCE_KINDS[instance["kind"]]["catalog"] == "openrouter":
         raise HTTPException(
             status_code=400,
             detail={
@@ -1879,11 +1838,8 @@ async def admin_instance_catalog(
                 "message": "This instance kind uses the shared OpenRouter catalog.",
             },
         )
-    from chat.llm.local_catalog import discover_models
-
-    if not instance.get("base_url"):
-        return {"models": [], "error": "No server URL configured yet."}
-    result = await discover_models(instance)
+    limit = max(1, min(limit, 100))
+    result = await fetch_instance_catalog(instance, refresh)
     return {
         "models": search_catalog(result["models"], q, limit),
         "error": result["error"],
@@ -1947,6 +1903,162 @@ async def admin_openrouter_catalog(
         "fetched_at": catalog["fetched_at"],
         "stale": catalog["stale"],
         "error": catalog["error"],
+    }
+
+
+class QuickSetupRequest(BaseModel):
+    kind: str
+    # Key-holding kinds
+    api_key: Optional[str] = None
+    # Self-hosted kind
+    base_url: Optional[str] = None
+    api_type: Optional[str] = None
+
+
+@router.post("/admin/inference-providers/quick-setup")
+async def admin_quick_setup_inference(
+    body: QuickSetupRequest,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Connect a provider from one credential and make its models usable --
+    the composer's first-run model setup card (shown to admins while no
+    model is available).
+
+    In one step: an instance of ``kind`` is created -- or an existing
+    instance of the kind that serves no available model yet is reused, so
+    a retry after a rejected key never piles up empty instances -- the API
+    key (or server URL + API type) is stored, the kind's catalog is fetched
+    fresh with it, and the quick-setup suggestions
+    (``chat.llm.model_setup.suggested_models``: the models Quest has real
+    metadata for) are added. The first suggestion is added alone and
+    health-checked live first; only when it passes are the rest added
+    (rechecked in the background), so a bad key leaves the instance
+    connected but empty rather than flashing unchecked models into the
+    picker. Unlike models added from Settings, these start **allowed in
+    private conversations**: the admin is connecting the deployment's
+    first model for exactly that.
+
+    Returns ``{instance, added, check, catalog_error}``: the instance card
+    payload, the qualified ids added, the first model's health verdict
+    (None when the kind had nothing to suggest -- the card then sends the
+    admin to Settings to pick models) and the catalog fetch error, if any.
+    """
+    _require_admin(user)
+    from chat.llm.config import (
+        drop_provider_instance,
+        get_available_models,
+        get_configured_models,
+        reset_provider_client_caches,
+    )
+    from chat.llm.health import get_model_health_store, schedule_model_rechecks
+    from chat.llm.model_setup import fetch_instance_catalog, suggested_models
+    from chat.llm.openrouter_catalog import catalog_snapshot
+    from config.inference_providers import (
+        DEFAULT_LOCAL_API_TYPE,
+        INSTANCE_KINDS,
+        LOCAL_API_TYPES,
+        list_instances,
+        new_instance_id,
+        normalize_base_url,
+        qualify_model_id,
+        read_inference_credentials,
+        upsert_instance,
+        write_inference_credentials,
+    )
+
+    kind = INSTANCE_KINDS.get(body.kind)
+    if kind is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "unknown_kind", "message": f"Unknown inference provider kind: {body.kind}"},
+        )
+    api_key = (body.api_key or "").strip()
+    base_url = normalize_base_url(body.base_url) if body.base_url else None
+    api_type = body.api_type or DEFAULT_LOCAL_API_TYPE
+    if kind["endpoint"]:
+        if base_url is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_params", "message": "base_url must be an http:// or https:// server URL."},
+            )
+        if api_type not in LOCAL_API_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_params", "message": f"Unknown api_type: {api_type} (one of {sorted(LOCAL_API_TYPES)})."},
+            )
+    elif not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_params", "message": f"An API key is required for {kind['label']}."},
+        )
+
+    available = set(get_available_models())
+    instance = next(
+        (
+            inst for inst in list_instances()
+            if inst["kind"] == body.kind
+            and not any(m.startswith(f"{inst['id']}:") for m in available)
+        ),
+        None,
+    )
+    if instance is None:
+        instance = {"id": new_instance_id(body.kind), "kind": body.kind, "label": "", "models": []}
+    if kind["endpoint"]:
+        instance["base_url"] = base_url
+        instance["api_type"] = api_type
+    instance = upsert_instance(instance)
+    if api_key:
+        stored = dict(read_inference_credentials(instance["id"]) or {})
+        stored["api_key"] = api_key
+        write_inference_credentials(instance["id"], stored)
+    reset_provider_client_caches()
+    drop_provider_instance(kind["provider"], instance["id"])
+
+    catalog = await fetch_instance_catalog(instance, refresh=True)
+    existing = {m["id"] for m in instance["models"]}
+    suggested = [w for w in suggested_models(instance, catalog["models"]) if w not in existing]
+    added: list[str] = []
+    check = None
+
+    def _entry(wire_id: str) -> dict:
+        return {"id": wire_id, "enabled": True, **(catalog_snapshot(catalog["models"], wire_id) or {})}
+
+    if suggested:
+        probe = suggested[0]
+        instance["models"].append(_entry(probe))
+        instance = upsert_instance(instance)
+        probe_id = qualify_model_id(instance["id"], probe)
+        check = await get_model_health_store().run_check(probe_id)
+        if check["ok"]:
+            added.append(probe_id)
+            for wire_id in suggested[1:]:
+                instance["models"].append(_entry(wire_id))
+                added.append(qualify_model_id(instance["id"], wire_id))
+            instance = upsert_instance(instance)
+            prefix = f"{instance['id']}:"
+            schedule_model_rechecks([
+                m for m in get_configured_models() if m.startswith(prefix) and m != probe_id
+            ])
+        else:
+            instance["models"] = [m for m in instance["models"] if m["id"] != probe]
+            instance = upsert_instance(instance)
+            await get_model_health_store().forget([probe_id])
+    elif instance["models"]:
+        # Nothing new to suggest but the reused instance already lists
+        # models: recheck them under the new credential.
+        prefix = f"{instance['id']}:"
+        schedule_model_rechecks([m for m in get_configured_models() if m.startswith(prefix)])
+
+    logger.info(
+        "[admin] %s quick-set-up inference instance %s (%s): added %s, check %s",
+        user["email"], instance["id"], body.kind, added,
+        "n/a" if check is None else ("ok" if check["ok"] else check["error"]),
+    )
+    return {
+        "instance": _instance_status(instance),
+        "added": added,
+        "check": check,
+        "catalog_error": catalog["error"],
     }
 
 

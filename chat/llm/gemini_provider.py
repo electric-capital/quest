@@ -1,13 +1,19 @@
 """Gemini provider implementation using the google-genai SDK.
 
 Wraps the existing Gemini SDK integration to conform to the LLMProvider
-interface. All Gemini models run on the Vertex AI backend (google-genai in
-Vertex mode, ``vertexai=True``, ADC + project/region). The developer-API
-(``genapi``) transport was removed: thought signatures are not portable
-across the Vertex / AI Studio border, so mixing backends within one
-conversation history produced signature-validation errors on model switch.
-File uploads use inline ``Part.from_bytes`` because the developer-API
-``files.upload`` endpoint is not available on Vertex.
+interface. The Gemini models of the Vertex registry (``MODEL_REGISTRY`` in
+chat/llm/config.py) run on the Vertex AI backend (:class:`GeminiProvider`:
+google-genai in Vertex mode, ``vertexai=True``, ADC + project/region). The
+models of a ``gemini`` provider instance (Settings > Inference Providers,
+``INSTANCE_KINDS`` in config/inference_providers.py) run on the Gemini
+Developer API with the instance's AI Studio key (:class:`GeminiApiProvider`,
+one object per instance) -- the same code path over a
+``genai.Client(api_key=...)``. The two backends are never mixed within one
+conversation: a Vertex model and a Developer API model are distinct model
+ids, and thought signatures are not portable across that border, so a
+mid-conversation switch between them (like any Gemini model switch) starts
+a fresh session. File uploads use inline ``Part.from_bytes`` because the
+developer-API ``files.upload`` endpoint is not available on Vertex.
 """
 
 import json
@@ -97,17 +103,20 @@ _GEMINI_VERTEX_INLINE_MAX_SIZE = GEMINI_VERTEX_MAX_ATTACH_BYTES
 
 
 def _model_vertex_id(model: str) -> str:
-    """Return the Vertex publisher id for ``model``, falling back to the key."""
-    from chat.llm.config import MODEL_REGISTRY
-    entry = MODEL_REGISTRY.get(model, {})
-    return entry.get("vertex_model_id", model)
+    """Return the wire id sent in the API request: the Vertex publisher id
+    of a registry model, the wire id of an instance model (``gemini:<id>``),
+    the string itself when unknown."""
+    from chat.llm.config import resolve_model
+    spec = resolve_model(model)
+    return spec.wire_id if spec else model
 
 
 def _model_max_output_tokens(model: str, default: int = 8192) -> int:
-    """Return ``max_output_tokens`` from MODEL_REGISTRY with a fallback."""
-    from chat.llm.config import MODEL_REGISTRY
-    entry = MODEL_REGISTRY.get(model, {})
-    return entry.get("max_output_tokens", default)
+    """Return the model's output cap (registry entry or instance snapshot)
+    with a fallback."""
+    from chat.llm.config import resolve_model
+    spec = resolve_model(model)
+    return spec.max_output_tokens if spec else default
 
 
 def _parse_transcription_response(raw: str | None) -> str:
@@ -586,3 +595,41 @@ class GeminiProvider(LLMProvider):
         end with a function_response part (see format_tool_results).
         """
         formatted_results.insert(0, types.Part.from_text(text=warning_text))
+
+
+class GeminiApiProvider(GeminiProvider):
+    """:class:`GeminiProvider` over the Gemini Developer API for the models
+    of one ``gemini`` provider instance.
+
+    The instance's AI Studio key (``effective_api_key`` in
+    config/inference_providers.py, saved in Settings > Inference Providers)
+    builds a ``genai.Client(api_key=...)`` instead of the Vertex client;
+    sessions, streaming, thinking levels, tool results and inline
+    attachments are the parent's code path unchanged.
+    """
+
+    def __init__(self, instance_id: str):
+        super().__init__()
+        self.instance_id = instance_id
+
+    def _get_client(self) -> genai.Client:
+        """Return the cached Developer API client, creating it on first use.
+
+        Raises:
+            ValueError: descriptive "not configured" message when the
+                instance has no stored key.
+        """
+        if self._client is not None:
+            return self._client
+        from config.inference_providers import effective_api_key
+
+        api_key, _source = effective_api_key(self.instance_id)
+        if not api_key:
+            raise ValueError(
+                f"Gemini API key not configured for instance "
+                f"'{self.instance_id}'. Add it in Settings > Inference "
+                "Providers (admin only)."
+            )
+        self._client = genai.Client(api_key=api_key)
+        return self._client
+

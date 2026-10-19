@@ -2438,9 +2438,18 @@ export interface InferenceApiType {
 }
 
 // Where a kind's "Add model" typeahead looks: the shared OpenRouter
-// catalog, the instance's own key-fetched Fireworks catalog, NEAR AI's or
-// TrustedRouter's public model list, or the self-hosted server's live model list
-export type InferenceCatalogSource = 'openrouter' | 'fireworks' | 'nearai' | 'trustedrouter' | 'server';
+// catalog, the instance's own key-fetched vendor catalog (Anthropic,
+// OpenAI, Gemini, Fireworks), NEAR AI's or TrustedRouter's public model
+// list, or the self-hosted server's live model list
+export type InferenceCatalogSource =
+  | 'openrouter' | 'fireworks' | 'nearai' | 'trustedrouter'
+  | 'anthropic' | 'openai' | 'gemini' | 'server';
+
+// Catalogs read with the instance's own key (the typeahead waits for a
+// saved key)
+export const KEY_FETCHED_CATALOGS: ReadonlySet<InferenceCatalogSource> = new Set([
+  'fireworks', 'anthropic', 'openai', 'gemini',
+]);
 
 export interface InferenceInstanceKind {
   kind: string;
@@ -2448,6 +2457,32 @@ export interface InferenceInstanceKind {
   // Carries its own base URL + API type (self-hosted server)
   endpoint: boolean;
   catalog: InferenceCatalogSource;
+  // API-key input placeholder ("sk-ant-...")
+  hint: string;
+  // false for self-hosted servers, whose key is optional
+  key_required: boolean;
+}
+
+// POST /admin/inference-providers/quick-setup -- the composer's first-run
+// model setup card: connect a provider from one credential
+export interface InferenceQuickSetupRequest {
+  kind: string;
+  api_key?: string;
+  // Self-hosted kind only
+  base_url?: string;
+  api_type?: string;
+}
+
+export interface InferenceQuickSetupResult {
+  instance: InferenceInstanceStatus;
+  // Qualified ids of the models added (empty when the key was rejected or
+  // the kind has nothing to suggest)
+  added: string[];
+  // Live health verdict of the first suggested model; null when nothing
+  // was suggested
+  check: InferenceModelTestResult | null;
+  // The catalog fetch error, if any (a rejected key shows up here too)
+  catalog_error: string | null;
 }
 
 export interface InferenceProvidersListResponse {

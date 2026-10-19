@@ -199,6 +199,7 @@ def test_openrouter_provider_endpoint_for_nearai_instance():
         # NEAR AI never substitutes another model for the requested one
         "headers": {"x-no-aliasing": "true"},
         "openrouter": False,
+        "kind": "nearai",
     }
     # The client is built on the NEAR AI URL with the no-aliasing header as
     # a default header (so it rides on every request), and the
@@ -676,7 +677,10 @@ def test_admin_create_and_list_nearai_instance(admin):
     listing = _run(admin.admin_list_inference_providers(user=ADMIN_USER))
     assert [i["id"] for i in listing["instances"]] == ["nearai"]
     kinds = {k["kind"]: k for k in listing["kinds"]}
-    assert kinds["nearai"] == {"kind": "nearai", "label": "NEAR AI", "endpoint": False, "catalog": "nearai"}
+    assert kinds["nearai"] == {
+        "kind": "nearai", "label": "NEAR AI", "endpoint": False, "catalog": "nearai",
+        "hint": "sk-...", "key_required": True,
+    }
 
 
 def test_admin_update_nearai_rejects_endpoint_fields_and_requires_key(admin):

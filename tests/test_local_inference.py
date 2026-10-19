@@ -156,7 +156,7 @@ def test_openrouter_provider_endpoint_for_local_instance():
     endpoint = provider._endpoint()
     assert endpoint == {
         "base_url": "http://box:8080/v1", "api_key": "no-key",
-        "headers": None, "openrouter": False,
+        "headers": None, "openrouter": False, "kind": "local",
     }
     ip.write_inference_credentials("local", {"api_key": "secret"})
     assert provider._endpoint()["api_key"] == "secret"

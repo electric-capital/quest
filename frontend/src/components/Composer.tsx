@@ -58,6 +58,7 @@ import { getVisibleFlags, getFlagLabel } from '../constants/flags';
 import { getFileIconInfo } from '../utils/fileIcons';
 import { ContextIndicator } from './ContextIndicator';
 import { ModelSelector } from './ModelSelector';
+import { ModelSetupCard } from './ModelSetupCard';
 import { SkillSelectorModal } from './SkillSelectorModal';
 import { SystemPromptModal } from './SystemPromptModal';
 import { NoticeDetailsModal } from './NoticeDetailsModal';
@@ -342,8 +343,8 @@ export function Composer({
   } = useConversationSkills();
   // maxUploadBytes: the admin-set workspace upload cap (Settings > Limits),
   // so oversize files are rejected client-side before the upload.
-  const { availableModelIds, maxUploadBytes } = useAppConfig();
-  const { enabledFeatures } = useAuth();
+  const { availableModelIds, maxUploadBytes, refreshAppConfig } = useAppConfig();
+  const { enabledFeatures, isAdmin } = useAuth();
 
   // Models whose backend credentials are configured server-side. null means
   // the config fetch hasn't resolved yet -- treat as "all available".
@@ -1327,9 +1328,9 @@ export function Composer({
       {noModelsAvailable && (
         <span
           className="composer-no-models"
-          title="No LLM credentials configured -- sending is disabled. Configure a Vertex AI project in server_config.json (anthropic / gemini_vertex vertex_project_id)."
+          title="No LLM is configured yet, so sending is disabled. An admin can connect one from this screen or in Settings > Inference Providers."
         >
-          ⚠ No LLM credentials
+          ⚠ No model yet — ask an admin
         </span>
       )}
       {flagsLabel}
@@ -1359,6 +1360,19 @@ export function Composer({
       )}
     </>
   );
+
+  // First-run: no model is available and this user can fix that. The admin
+  // sees the setup card where the composer would be (ModelSetupCard.tsx);
+  // once a provider is connected the app config re-fetch brings the
+  // available models in and the real composer renders again. Non-admins
+  // keep the disabled composer with its "no model yet" notice above.
+  if (noModelsAvailable && isAdmin) {
+    return (
+      <div className="input-area composer composer-setup">
+        <ModelSetupCard onConnected={refreshAppConfig} />
+      </div>
+    );
+  }
 
   return (
     <>

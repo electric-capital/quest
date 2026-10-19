@@ -232,6 +232,7 @@ def test_openrouter_provider_endpoint_for_fireworks_instance():
         "api_key": "fw_secret",
         "headers": None,
         "openrouter": False,
+        "kind": "fireworks",
     }
     # The client is built on the Fireworks URL and the OpenRouter-only
     # request extras are switched off
@@ -491,7 +492,10 @@ def test_admin_create_and_list_fireworks_instance(admin):
     listing = _run(admin.admin_list_inference_providers(user=ADMIN_USER))
     assert [i["id"] for i in listing["instances"]] == ["fireworks"]
     kinds = {k["kind"]: k for k in listing["kinds"]}
-    assert kinds["fireworks"] == {"kind": "fireworks", "label": "Fireworks AI", "endpoint": False, "catalog": "fireworks"}
+    assert kinds["fireworks"] == {
+        "kind": "fireworks", "label": "Fireworks AI", "endpoint": False, "catalog": "fireworks",
+        "hint": "fw_...", "key_required": True,
+    }
 
 
 def test_admin_update_fireworks_rejects_endpoint_fields_and_requires_key(admin):

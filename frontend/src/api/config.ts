@@ -232,6 +232,7 @@ export const endpoints = {
   adminOpenRouterCatalog: () => `${API_BASE_URL}/admin/inference-providers/openrouter/catalog`,
 
   adminInferenceModelTest: () => `${API_BASE_URL}/admin/inference-providers/test-model`,
+  adminInferenceQuickSetup: () => `${API_BASE_URL}/admin/inference-providers/quick-setup`,
 
   adminModelSelection: () => `${API_BASE_URL}/admin/model-selection`,
 

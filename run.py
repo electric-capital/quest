@@ -91,7 +91,9 @@ LOCAL_RUNS_KEEP = 5
 #                           up pre-configured in every local instance. The
 #                           id picks the kind: "openrouter" is the legacy
 #                           instance seeded with the historical curated
-#                           models, "fireworks" (or "fireworks-2", ...) a
+#                           models, "anthropic" / "openai" / "gemini" (or
+#                           "anthropic-2", ...) a direct vendor-API
+#                           instance, "fireworks" (or "fireworks-2", ...) a
 #                           Fireworks AI instance, "nearai" (or
 #                           "nearai-2", ...) a NEAR AI instance,
 #                           "trustedrouter" (or "trustedrouter-2", ...) a

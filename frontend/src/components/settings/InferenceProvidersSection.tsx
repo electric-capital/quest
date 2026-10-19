@@ -21,6 +21,7 @@ import type {
   VertexProviderStatus,
   VertexSectionInfo,
 } from '../../api/types';
+import { KEY_FETCHED_CATALOGS } from '../../api/types';
 import { CredentialCard, SaveActions } from './ServiceCredentialsSection';
 import { CredentialField, secretPlaceholder } from './SchemaForm';
 import type { SaveStatus } from './ServiceCredentialsSection';
@@ -768,6 +769,15 @@ function addModelCopy(
           : 'Save the API key first',
         emptyHint: 'Type to search the catalog',
       };
+    case 'anthropic':
+    case 'openai':
+    case 'gemini':
+      return {
+        placeholder: configured
+          ? `Add a model — search the ${catalog === 'anthropic' ? 'Anthropic' : catalog === 'openai' ? 'OpenAI' : 'Gemini'} model list or type a model id`
+          : 'Save the API key first',
+        emptyHint: 'Type to search the model list',
+      };
     case 'nearai':
       return {
         placeholder: 'Add a model — search the NEAR AI catalog or type a model id',
@@ -967,10 +977,12 @@ function InstanceCard({
   const existing = new Set(status.models.map((m) => m.wire_id));
   const dirty = !!apiKey.trim() || labelDirty || baseUrlDirty || apiTypeDirty;
   // The shared OpenRouter catalog needs no credentials and neither does
-  // NEAR AI's or TrustedRouter's public list; a self-hosted server's or Fireworks' catalog is
-  // read with the instance's own URL / key, so it waits for that to be saved.
+  // NEAR AI's or TrustedRouter's public list; a self-hosted server's list and
+  // the key-fetched vendor catalogs (Anthropic, OpenAI, Gemini, Fireworks)
+  // are read with the instance's own URL / key, so they wait for that to be
+  // saved.
   const ownCatalog = catalog !== 'openrouter';
-  const catalogNeedsConfig = catalog === 'server' || catalog === 'fireworks';
+  const catalogNeedsConfig = catalog === 'server' || KEY_FETCHED_CATALOGS.has(catalog);
   const addModel = addModelCopy(catalog, status.configured);
   const modelsNote = endpoint
     ? 'Self-hosted models are priced at $0. Rename a model or set its context window below each row' +
@@ -989,7 +1001,18 @@ function InstanceCard({
         : catalog === 'trustedrouter'
           ? 'TrustedRouter model ids are <vendor>/<model> slugs such as deepseek/deepseek-v4-flash-0731, ' +
             'plus routes such as trustedrouter/auto; the catalog lists the chat models with their current prices.'
-          : undefined;
+          : catalog === 'anthropic'
+            ? 'Claude API model ids are aliases such as claude-sonnet-5 or dated snapshots such as ' +
+              'claude-haiku-4-5-20251001. Limits, prices and thinking levels come from the matching ' +
+              'Vertex registry entry; a model the registry does not know yet gets conservative defaults and no price.'
+            : catalog === 'openai'
+              ? 'OpenAI model ids are families such as gpt-5 or gpt-4.1-mini (dated snapshots work too). ' +
+                'Limits and prices come from a hand-maintained table of known families; other chat models ' +
+                'are listed with defaults and no price.'
+              : catalog === 'gemini'
+                ? 'Gemini API model ids are names such as gemini-3.8-flash. The API publishes each model\u2019s ' +
+                  'token limits; prices and thinking levels come from the matching Vertex registry entry.'
+                : undefined;
 
   return (
     <CredentialCard
@@ -1118,7 +1141,9 @@ function InstanceCard({
  * label, a write-only API key and a model list fed by the OpenRouter
  * catalog typeahead, a Fireworks AI configuration (same shape, its model
  * list fed by the Fireworks serverless catalog fetched with the saved
- * key), a NEAR AI configuration (same shape, fed by NEAR AI Cloud's public
+ * key), an Anthropic / OpenAI / Google Gemini configuration (same shape,
+ * fed by the vendor's own model list fetched with the saved key), a NEAR AI
+ * configuration (same shape, fed by NEAR AI Cloud's public
  * priced model list), or a self-hosted server with a label, server URL, API type
  * (OpenAI-compatible / Ollama), optional key and a model list fed by what
  * the server reports, with inline name / context editing per model.

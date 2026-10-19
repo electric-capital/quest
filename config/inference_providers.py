@@ -16,7 +16,11 @@ Providers:
 
 - **Provider instances** (zero or more): each is one configuration of a
   provider kind (:data:`INSTANCE_KINDS`) with an admin-chosen label and its
-  own admin-chosen model list. ``openrouter`` instances hold an API key and
+  own admin-chosen model list. ``anthropic``, ``openai`` and ``gemini``
+  instances hold the vendor's own API key and pick models from the
+  key-fetched vendor model list (``chat/llm/anthropic_catalog.py``,
+  ``chat/llm/openai_catalog.py``, ``chat/llm/gemini_catalog.py``);
+  ``openrouter`` instances hold an API key and
   pick models from the OpenRouter catalog (or a typed custom id);
   ``fireworks`` instances hold a Fireworks AI API key and pick models from
   Fireworks' serverless catalog (``chat/llm/fireworks_catalog.py``, fetched
@@ -108,19 +112,79 @@ logger = logging.getLogger(__name__)
 # own key (chat/llm/fireworks_catalog.py), ``nearai`` = NEAR AI Cloud's
 # public model list (chat/llm/nearai_catalog.py, no key needed),
 # ``trustedrouter`` = TrustedRouter's public model list
-# (chat/llm/trustedrouter_catalog.py, no key needed), ``server``
-# = live discovery against the instance's server (chat/llm/local_catalog.py).
+# (chat/llm/trustedrouter_catalog.py, no key needed), ``anthropic`` /
+# ``openai`` / ``gemini`` = the vendor's own model list fetched with the
+# instance's key (chat/llm/anthropic_catalog.py, openai_catalog.py,
+# gemini_catalog.py), ``server`` = live discovery against the instance's
+# server (chat/llm/local_catalog.py).
 #
-# Every kind runs on the ``openrouter`` LLMProvider family -- the OpenAI
-# chat-completions message format, history shape and analytics table
-# (``llm_calls_openrouter``) -- because Fireworks, NEAR AI and every
+# The ``anthropic`` and ``gemini`` kinds are the vendors' own APIs reached
+# with a plain API key -- the same ``AnthropicProvider`` / ``GeminiProvider``
+# code paths (message format, history shape, ``llm_calls_anthropic`` /
+# ``llm_calls_gemini`` analytics tables) as the Vertex-served registry
+# models, through an API-key client instead of the Vertex one
+# (``AnthropicApiProvider`` / ``GeminiApiProvider``). Every other kind runs
+# on the ``openrouter`` LLMProvider family -- the OpenAI chat-completions
+# message format, history shape and analytics table
+# (``llm_calls_openrouter``) -- because OpenAI, Fireworks, NEAR AI and every
 # self-hosted server speak that protocol (llama.cpp, vLLM, LM Studio,
 # LocalAI, Ollama's ``/v1`` shim...). The transport differs per instance: fixed upstreams and
 # the ``openai`` API type go through the openai SDK with the kind's or the
 # instance's base URL, the ``ollama`` API type through Ollama's native
 # ``/api/chat`` (chat/llm/ollama_provider.py) so the per-request context
 # window can be set. ``backend`` tells the kinds apart on analytics rows.
+#
+# Dict order is display order: the "Add ... configuration" buttons in
+# Settings and the provider list of the first-run model setup card.
 INSTANCE_KINDS: dict[str, dict] = {
+    # Anthropic's own API (https://api.anthropic.com): a Claude API key from
+    # console.anthropic.com, sent as ``x-api-key``. Wire ids are the API's
+    # model ids / aliases (``claude-sonnet-5``, ``claude-haiku-4-5-20251001``);
+    # the catalog (chat/llm/anthropic_catalog.py) is the key-fetched
+    # ``GET /v1/models`` list, enriched with the limits, pricing and
+    # thinking levels of the matching MODEL_REGISTRY entry.
+    "anthropic": {
+        "label": "Anthropic",
+        "hint": "sk-ant-...",
+        "provider": "anthropic",
+        "backend": "anthropic",
+        "key_required": True,
+        "endpoint": False,
+        "upstream_url": "https://api.anthropic.com",
+        "catalog": "anthropic",
+    },
+    # OpenAI's own API (https://api.openai.com/v1): an API key from
+    # platform.openai.com, sent as a bearer token. Wire ids are OpenAI model
+    # ids (``gpt-5``, ``gpt-4.1-mini``, ``o4-mini``); the catalog
+    # (chat/llm/openai_catalog.py) is the key-fetched ``GET /v1/models`` list
+    # reduced to chat models and enriched from a hand-maintained table.
+    "openai": {
+        "label": "OpenAI",
+        "hint": "sk-...",
+        "provider": "openrouter",
+        "backend": "openai",
+        "key_required": True,
+        "endpoint": False,
+        "upstream_url": "https://api.openai.com/v1",
+        "catalog": "openai",
+    },
+    # The Gemini Developer API (https://generativelanguage.googleapis.com):
+    # a Gemini API key from Google AI Studio, sent as ``x-goog-api-key``.
+    # Wire ids are the API's model names without the ``models/`` prefix
+    # (``gemini-3.8-flash``); the catalog (chat/llm/gemini_catalog.py) is
+    # the key-fetched ``GET /v1beta/models`` list, which publishes real
+    # token limits, enriched with the matching registry entry's pricing and
+    # thinking levels.
+    "gemini": {
+        "label": "Google Gemini",
+        "hint": "AIza...",
+        "provider": "gemini",
+        "backend": "gemini",
+        "key_required": True,
+        "endpoint": False,
+        "upstream_url": "https://generativelanguage.googleapis.com",
+        "catalog": "gemini",
+    },
     "openrouter": {
         "label": "OpenRouter",
         "hint": "sk-or-v1-...",

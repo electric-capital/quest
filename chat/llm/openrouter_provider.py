@@ -126,6 +126,14 @@ _OPENROUTER_HEADERS = {"X-Title": "Quest"}
 # it rides on every request of the instance.
 NEARAI_KIND = "nearai"
 _NEARAI_HEADERS = {"x-no-aliasing": "true"}
+# OpenAI's own API differs from the other OpenAI-compatible upstreams in two
+# request fields: its reasoning models reject ``max_tokens`` (the cap goes
+# in ``max_completion_tokens``, accepted by every current OpenAI model) and
+# a thinking level is the top-level ``reasoning_effort`` rather than
+# OpenRouter's ``reasoning`` object. The health check also asks for a few
+# tokens instead of one -- the reasoning models need room to answer.
+OPENAI_KIND = "openai"
+_OPENAI_CHECK_MAX_TOKENS = 16
 
 
 @dataclass
@@ -159,13 +167,15 @@ class OpenRouterProvider(LLMProvider):
         self.instance_id = instance_id or LEGACY_OPENROUTER_INSTANCE_ID
         self._client = None
         # Set alongside the client: whether OpenRouter-only request
-        # extensions (usage accounting opt-in) apply to this endpoint.
+        # extensions (usage accounting opt-in) apply to this endpoint, and
+        # the instance's kind (OpenAI's own API has its own request shape).
         self._is_openrouter = True
+        self._kind: str | None = None
 
     def _endpoint(self) -> dict:
         """Resolve where this instance's requests go.
 
-        Returns ``{"base_url", "api_key", "headers", "openrouter"}``.
+        Returns ``{"base_url", "api_key", "headers", "openrouter", "kind"}``.
         Fixed-upstream kinds (OpenRouter, Fireworks, NEAR AI, TrustedRouter) send requests to the
         kind's ``upstream_url`` and need their stored key; a self-hosted
         instance needs its base URL and uses the stored key only when one
@@ -201,6 +211,7 @@ class OpenRouterProvider(LLMProvider):
                 "api_key": api_key or "no-key",
                 "headers": None,
                 "openrouter": False,
+                "kind": instance["kind"],
             }
         # An instance with no config entry (legacy single key, or the entry
         # not yet synthesized) is the OpenRouter kind.
@@ -223,6 +234,7 @@ class OpenRouterProvider(LLMProvider):
             "api_key": api_key,
             "headers": headers,
             "openrouter": is_openrouter,
+            "kind": kind_name,
         }
 
     def _instance_kind(self) -> str | None:
@@ -246,6 +258,7 @@ class OpenRouterProvider(LLMProvider):
 
         endpoint = self._endpoint()
         self._is_openrouter = endpoint["openrouter"]
+        self._kind = endpoint["kind"]
         self._client = AsyncOpenAI(
             base_url=endpoint["base_url"],
             api_key=endpoint["api_key"],
@@ -282,10 +295,14 @@ class OpenRouterProvider(LLMProvider):
             await self._check_nearai_catalog(model)
             return
         client = self._get_client()
+        cap = (
+            {"max_completion_tokens": _OPENAI_CHECK_MAX_TOKENS}
+            if self._kind == OPENAI_KIND else {"max_tokens": 1}
+        )
         await client.chat.completions.create(
             model=self._get_openrouter_model_id(model),
-            max_tokens=1,
             messages=[{"role": "user", "content": "ok"}],
+            **cap,
         )
 
     async def _check_nearai_catalog(self, model: str) -> None:
@@ -398,9 +415,15 @@ class OpenRouterProvider(LLMProvider):
             # Self-hosted servers get a plain request (some reject unknown
             # top-level fields).
             extra_body["usage"] = {"include": True}
-        reasoning = self._reasoning_param(session.thinking_effort)
-        if reasoning is not None:
-            extra_body["reasoning"] = reasoning
+        if self._kind == OPENAI_KIND:
+            # OpenAI's own request shape (see OPENAI_KIND).
+            api_kwargs["max_completion_tokens"] = api_kwargs.pop("max_tokens")
+            if session.thinking_effort and session.thinking_effort != "none":
+                api_kwargs["reasoning_effort"] = session.thinking_effort
+        else:
+            reasoning = self._reasoning_param(session.thinking_effort)
+            if reasoning is not None:
+                extra_body["reasoning"] = reasoning
         if extra_body:
             api_kwargs["extra_body"] = extra_body
         if session.tools:

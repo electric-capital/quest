@@ -1,7 +1,16 @@
 """Anthropic provider implementation using the anthropic[vertex] SDK.
 
-Uses AnthropicVertex client for Claude models on Google Cloud Vertex AI.
-Authentication is via Application Default Credentials (ADC) -- no API key needed.
+:class:`AnthropicProvider` uses the AnthropicVertex client for the Claude
+models of the Vertex registry (``MODEL_REGISTRY`` in chat/llm/config.py);
+authentication is via Application Default Credentials (ADC), no API key
+needed. :class:`AnthropicApiProvider` is the same provider over Anthropic's
+own API for the models of an ``anthropic`` provider instance (Settings >
+Inference Providers, ``INSTANCE_KINDS`` in config/inference_providers.py):
+one object per instance, an ``AsyncAnthropic`` client built from the
+instance's stored key, no Vertex region and no refusal-fallback chain.
+Everything model-specific -- the wire id, the output cap, the thinking
+default -- comes from the resolved ``ModelSpec``, which both the registry
+and instance models provide.
 """
 
 import asyncio
@@ -133,6 +142,12 @@ class AnthropicProvider(LLMProvider):
     def __init__(self):
         self._clients = {}
 
+    def reset_cached_clients(self) -> None:
+        """Drop the cached SDK clients so the next request rebuilds them
+        (an admin saved new inference credentials). In-flight requests keep
+        their client reference and finish on the old one."""
+        self._clients = {}
+
     def _resolve_region(self, model: str) -> str:
         """Resolve the Vertex region for a model.
 
@@ -159,9 +174,10 @@ class AnthropicProvider(LLMProvider):
         entries are skipped with a warning rather than breaking the send
         path. Empty tuple when the model has no fallbacks configured.
         """
-        from chat.llm.config import MODEL_REGISTRY
+        from chat.llm.config import MODEL_REGISTRY, resolve_model
 
-        chain = MODEL_REGISTRY.get(model, {}).get("refusal_fallback_models") or []
+        spec = resolve_model(model)
+        chain = spec.refusal_fallback_models if spec else ()
         valid = []
         for fallback in chain:
             fb_entry = MODEL_REGISTRY.get(fallback)
@@ -275,14 +291,16 @@ class AnthropicProvider(LLMProvider):
         return client
 
     def _get_vertex_model_id(self, model: str) -> str:
-        """Resolve the Vertex AI model ID for a given model string.
+        """Resolve the wire model id sent in the API request.
 
-        Maps our internal model ID (e.g. 'claude-haiku-4.5') to the
-        Vertex AI model ID (e.g. 'claude-haiku-4-5@20251001').
+        Maps a registry id (e.g. 'claude-haiku-4.5') to its Vertex AI model
+        id (e.g. 'claude-haiku-4-5'), and an instance model's qualified id
+        ('anthropic:claude-sonnet-5') to its wire id -- both via the
+        resolved ``ModelSpec``; an unknown id passes through.
         """
-        from chat.llm.config import MODEL_REGISTRY
-        entry = MODEL_REGISTRY.get(model, {})
-        return entry.get("vertex_model_id", model)
+        from chat.llm.config import resolve_model
+        spec = resolve_model(model)
+        return spec.wire_id if spec else model
 
     async def check_model_access(self, model: str) -> None:
         """Issue a minimal message call to verify the model actually works.
@@ -450,9 +468,9 @@ class AnthropicProvider(LLMProvider):
                 # Unexpected content type -- pass through unchanged.
                 cached_messages.append(msg)
 
-        from chat.llm.config import MODEL_REGISTRY
-        entry = MODEL_REGISTRY.get(session.model, {})
-        max_tokens = entry.get("max_output_tokens", 8192)
+        from chat.llm.config import resolve_model
+        spec = resolve_model(session.model)
+        max_tokens = spec.max_output_tokens if spec else 8192
 
         api_kwargs = {
             "model": vertex_model,
@@ -472,7 +490,7 @@ class AnthropicProvider(LLMProvider):
         # empty text -- they are still accumulated below because the API
         # requires them to be echoed back verbatim (with their signature)
         # on later turns.
-        effort = session.thinking_effort or entry.get("thinking_effort")
+        effort = session.thinking_effort or (spec.thinking_effort if spec else None)
         if effort and effort != "none":
             api_kwargs["thinking"] = {"type": "adaptive"}
             api_kwargs["output_config"] = {"effort": effort}
@@ -752,11 +770,9 @@ class AnthropicProvider(LLMProvider):
             # too). Any partial replayable output was persisted above; the
             # conversation loop turns this into a durable error message
             # instead of the silent empty turn a refusal used to produce.
-            from chat.llm.config import MODEL_REGISTRY
+            from chat.llm.config import get_model_display_name
 
-            display_name = MODEL_REGISTRY.get(session.model, {}).get(
-                "display_name", session.model,
-            )
+            display_name = get_model_display_name(session.model)
             raise AnthropicStreamRefusal(
                 display_name,
                 category=refusal.get("category"),
@@ -1126,3 +1142,53 @@ class AnthropicProvider(LLMProvider):
     def inject_turn_warning(self, formatted_results: Any, warning_text: str) -> None:
         """Append a text warning block to Anthropic formatted tool results."""
         formatted_results.append({"type": "text", "text": warning_text})
+
+
+class AnthropicApiProvider(AnthropicProvider):
+    """:class:`AnthropicProvider` over Anthropic's own API for the models of
+    one ``anthropic`` provider instance.
+
+    The instance's key (``effective_api_key`` in
+    config/inference_providers.py, saved in Settings > Inference Providers)
+    builds a plain ``AsyncAnthropic`` client; the kind's ``upstream_url`` is
+    the API base. Instance models have no Vertex region and no
+    ``refusal_fallback_models`` (their spec carries an empty chain), so the
+    client never carries the refusal-fallback middleware and the single
+    cached client serves every request. Everything else -- sessions,
+    streaming, prompt caching, thinking, tool results, attachments -- is
+    the parent's code path unchanged.
+    """
+
+    def __init__(self, instance_id: str):
+        super().__init__()
+        self.instance_id = instance_id
+
+    def _get_client(self, region: str, fallback_chain: tuple[str, ...] = ()):
+        """Return the cached ``AsyncAnthropic`` client for this instance's
+        key. ``region`` and ``fallback_chain`` (Vertex concerns) are ignored.
+
+        Raises:
+            ValueError: descriptive "not configured" message when the
+                instance has no stored key.
+        """
+        cache_key = ("api", ())
+        if cache_key in self._clients:
+            return self._clients[cache_key]
+
+        from anthropic import AsyncAnthropic
+        from config.inference_providers import INSTANCE_KINDS, effective_api_key
+
+        api_key, _source = effective_api_key(self.instance_id)
+        if not api_key:
+            raise ValueError(
+                f"Anthropic API key not configured for instance "
+                f"'{self.instance_id}'. Add it in Settings > Inference "
+                "Providers (admin only)."
+            )
+        client = AsyncAnthropic(
+            api_key=api_key,
+            base_url=INSTANCE_KINDS["anthropic"]["upstream_url"],
+        )
+        self._clients[cache_key] = client
+        return client
+

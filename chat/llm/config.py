@@ -515,6 +515,63 @@ def _instance_spec(instance: dict, model: dict | None, wire_id: str) -> ModelSpe
     )
 
 
+def _strip_model_date_suffix(model_id: str) -> str:
+    """``claude-haiku-4-5-20251001`` -> ``claude-haiku-4-5``; a Vertex
+    ``claude-haiku-4-5@20251001`` -> ``claude-haiku-4-5``; others unchanged."""
+    base = model_id.partition("@")[0]
+    head, sep, tail = base.rpartition("-")
+    if sep and len(tail) == 8 and tail.isdigit():
+        return head
+    return base
+
+
+def registry_entry_for_wire_id(provider: str, wire_id: str) -> tuple[str, dict] | None:
+    """The ``(registry id, entry)`` of ``provider`` whose Vertex model id
+    names the same model as a vendor-API ``wire_id``, or None.
+
+    The direct-API instance kinds (``anthropic`` / ``gemini`` in
+    ``INSTANCE_KINDS``) serve the same models as the Vertex registry under
+    the vendor's own ids -- ``claude-sonnet-5`` or the dated
+    ``claude-sonnet-5-20260801`` on the Claude API, ``gemini-3.8-flash`` on
+    the Gemini API -- so their catalogs and the cost reports borrow the
+    registry entry's limits, thinking levels and list prices. Matches the
+    registry key or the entry's ``vertex_model_id`` with any ``@date`` /
+    ``-YYYYMMDD`` suffix dropped on both sides; a wire id no entry covers
+    (a brand-new model) is simply unknown to the registry.
+    """
+    wanted = _strip_model_date_suffix(wire_id.strip())
+    if not wanted:
+        return None
+    for registry_id, entry in MODEL_REGISTRY.items():
+        if entry.get("provider") != provider:
+            continue
+        candidates = {registry_id, _strip_model_date_suffix(entry.get("vertex_model_id", registry_id))}
+        if wanted in candidates:
+            return registry_id, entry
+    return None
+
+
+def reasoning_from_registry_entry(entry: dict) -> dict | None:
+    """The OpenRouter-shaped ``reasoning`` object (what instance model
+    snapshots carry, see :func:`thinking_efforts_from_reasoning`) that
+    reproduces a registry entry's thinking levels: its ``thinking_efforts``
+    minus ``none`` as ``supported_efforts``, ``mandatory`` unless ``none``
+    is offered, and ``thinking_effort`` as the default. None for an entry
+    without a thinking sublevel."""
+    levels = normalize_thinking_efforts(entry.get("thinking_efforts"))
+    if not levels:
+        return None
+    reasoning: dict = {
+        "supported_efforts": [level for level in levels if level != "none"],
+        "mandatory": "none" not in levels,
+    }
+    default = entry.get("thinking_effort")
+    if isinstance(default, str) and default in levels:
+        reasoning["default_effort"] = default
+        reasoning["default_enabled"] = default != "none"
+    return reasoning
+
+
 def resolve_model(model_id: str) -> ModelSpec | None:
     """Resolve any stored model id to its spec; None when unknown.
 
@@ -581,11 +638,13 @@ def get_provider_for_model(model_id: str) -> str:
 def get_backend_for_model(model_id: str) -> str | None:
     """Return the SDK transport backend label for cost analytics.
 
-    Vertex-served models (all Gemini and Anthropic models) resolve to
-    ``"vertex"``; instance-served models to their kind's backend label
-    (``"openrouter"``, ``"fireworks"``, ``"nearai"``, ``"trustedrouter"``, ``"local"``). Historical analytics rows recorded under ``"genapi"``
-    keep that label in the DB. ``None`` for unknown models so callers can
-    record without raising.
+    Vertex-served models (the registry's Gemini and Anthropic models)
+    resolve to ``"vertex"``; instance-served models to their kind's backend
+    label (``"anthropic"`` / ``"gemini"`` for the vendors' own APIs,
+    ``"openai"``, ``"openrouter"``, ``"fireworks"``, ``"nearai"``,
+    ``"trustedrouter"``, ``"local"``). Historical analytics rows recorded
+    under ``"genapi"`` keep that label in the DB. ``None`` for unknown
+    models so callers can record without raising.
     """
     spec = resolve_model(model_id)
     return spec.backend if spec else None
@@ -741,9 +800,14 @@ _provider_instances: dict[tuple[str, str | None], Any] = {}
 def get_provider_instance(provider_name: str, instance_id: str | None = None) -> "LLMProvider":
     """Return the LLMProvider singleton for ``(provider_name, instance_id)``.
 
-    Vertex providers (``gemini``, ``anthropic``) have a single instance and
-    ignore ``instance_id``. Instance-backed providers (``openrouter``) get
-    one object per configured instance, each reading its own key/endpoint;
+    The Vertex providers (``gemini``, ``anthropic`` with ``instance_id=None``)
+    are single objects serving the registry models over ADC. With an
+    ``instance_id`` the same provider names select the direct-API variants
+    for the models of an ``anthropic`` / ``gemini`` provider instance
+    (``AnthropicApiProvider`` / ``GeminiApiProvider``, one object per
+    instance, each reading its own API key). Instance-backed
+    OpenAI-compatible providers (``openrouter``) get one object per
+    configured instance, each reading its own key/endpoint;
     ``instance_id=None`` selects the legacy ``openrouter`` instance so
     callers that only know the provider name keep working. A self-hosted
     instance whose API type is ``ollama`` gets the native-transport
@@ -756,9 +820,7 @@ def get_provider_instance(provider_name: str, instance_id: str | None = None) ->
     """
     from config.inference_providers import LEGACY_OPENROUTER_INSTANCE_ID, get_instance
 
-    if provider_name in ("gemini", "anthropic"):
-        instance_id = None
-    elif provider_name == "openrouter" and instance_id is None:
+    if provider_name == "openrouter" and instance_id is None:
         instance_id = LEGACY_OPENROUTER_INSTANCE_ID
 
     key = (provider_name, instance_id)
@@ -766,11 +828,19 @@ def get_provider_instance(provider_name: str, instance_id: str | None = None) ->
         return _provider_instances[key]
 
     if provider_name == "gemini":
-        from chat.llm.gemini_provider import GeminiProvider
-        instance = GeminiProvider()
+        if instance_id is None:
+            from chat.llm.gemini_provider import GeminiProvider
+            instance = GeminiProvider()
+        else:
+            from chat.llm.gemini_provider import GeminiApiProvider
+            instance = GeminiApiProvider(instance_id)
     elif provider_name == "anthropic":
-        from chat.llm.anthropic_provider import AnthropicProvider
-        instance = AnthropicProvider()
+        if instance_id is None:
+            from chat.llm.anthropic_provider import AnthropicProvider
+            instance = AnthropicProvider()
+        else:
+            from chat.llm.anthropic_provider import AnthropicApiProvider
+            instance = AnthropicApiProvider(instance_id)
     elif provider_name == "openrouter":
         configured = get_instance(instance_id)
         if configured is not None and configured.get("api_type") == "ollama":

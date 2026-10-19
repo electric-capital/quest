@@ -202,6 +202,7 @@ def test_openrouter_provider_endpoint_for_trustedrouter_instance():
         "api_key": "sk-tr-test",
         "headers": None,
         "openrouter": False,
+        "kind": "trustedrouter",
     }
     # The client is built on the TrustedRouter URL and the OpenRouter-only
     # request extras are switched off
@@ -427,7 +428,10 @@ def test_admin_create_and_list_trustedrouter_instance(admin):
     listing = _run(admin.admin_list_inference_providers(user=ADMIN_USER))
     assert [i["id"] for i in listing["instances"]] == ["trustedrouter"]
     kinds = {k["kind"]: k for k in listing["kinds"]}
-    assert kinds["trustedrouter"] == {"kind": "trustedrouter", "label": "TrustedRouter", "endpoint": False, "catalog": "trustedrouter"}
+    assert kinds["trustedrouter"] == {
+        "kind": "trustedrouter", "label": "TrustedRouter", "endpoint": False, "catalog": "trustedrouter",
+        "hint": "sk-tr-v1-...", "key_required": True,
+    }
 
 
 def test_admin_update_trustedrouter_rejects_endpoint_fields_and_requires_key(admin):

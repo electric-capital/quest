@@ -86,6 +86,8 @@ import type {
   InferenceInstanceCreate,
   InferenceInstanceStatus,
   InferenceInstanceUpdate,
+  InferenceQuickSetupRequest,
+  InferenceQuickSetupResult,
   InstanceCatalogResponse,
   OpenRouterCatalogResponse,
   VertexModelsUpdate,
@@ -1195,6 +1197,12 @@ export function updateInferenceInstance(
 
 export function deleteInferenceInstance(instanceId: string): Promise<{ success: boolean }> {
   return apiDelete(endpoints.adminInferenceInstance(instanceId));
+}
+
+export function quickSetupInferenceProvider(
+  body: InferenceQuickSetupRequest,
+): Promise<InferenceQuickSetupResult> {
+  return apiPost(endpoints.adminInferenceQuickSetup(), { body });
 }
 
 export function fetchModelSelection(): Promise<ModelSelectionListResponse> {
