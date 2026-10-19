@@ -47,6 +47,9 @@ export function SearchModal({ isOpen, onClose, onNavigate }: SearchModalProps) {
   const [error, setError] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
+  // Routine runs are hidden by default: a daily routine would otherwise
+  // repeat the same hit once per run and bury the user's own chats.
+  const [includeRoutines, setIncludeRoutines] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -61,12 +64,13 @@ export function SearchModal({ isOpen, onClose, onNavigate }: SearchModalProps) {
       setError(null);
       setHasSearched(false);
       setHighlightedIndex(-1);
+      setIncludeRoutines(false);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [isOpen]);
 
   // Debounced search
-  const performSearch = useCallback(async (searchQuery: string) => {
+  const performSearch = useCallback(async (searchQuery: string, withRoutines: boolean) => {
     if (searchQuery.length < 2) {
       setResults([]);
       setTotalMatches(0);
@@ -79,7 +83,7 @@ export function SearchModal({ isOpen, onClose, onNavigate }: SearchModalProps) {
     setError(null);
 
     try {
-      const response = await searchConversations(searchQuery);
+      const response = await searchConversations(searchQuery, { includeRoutines: withRoutines });
       setResults(response.results);
       setTotalMatches(response.total_matches);
       setHasSearched(true);
@@ -104,9 +108,20 @@ export function SearchModal({ isOpen, onClose, onNavigate }: SearchModalProps) {
 
     // Debounce the search call
     debounceRef.current = setTimeout(() => {
-      performSearch(value.trim());
+      performSearch(value.trim(), includeRoutines);
     }, 300);
-  }, [performSearch]);
+  }, [performSearch, includeRoutines]);
+
+  // Toggling the routines filter re-runs the current query right away.
+  const handleIncludeRoutinesChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const checked = e.target.checked;
+    setIncludeRoutines(checked);
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    performSearch(query.trim(), checked);
+  }, [performSearch, query]);
 
   // Cleanup debounce timer on unmount
   useEffect(() => {
@@ -181,6 +196,18 @@ export function SearchModal({ isOpen, onClose, onNavigate }: SearchModalProps) {
         />
       </div>
 
+      {/* Filters */}
+      <div className="search-modal-options">
+        <label className="search-modal-option" title="Also search conversations created by routines">
+          <input
+            type="checkbox"
+            checked={includeRoutines}
+            onChange={handleIncludeRoutinesChange}
+          />
+          Include routine runs
+        </label>
+      </div>
+
       {/* Results */}
       <div className="search-modal-results" ref={resultsRef}>
         {loading && (
@@ -208,8 +235,11 @@ export function SearchModal({ isOpen, onClose, onNavigate }: SearchModalProps) {
               >
                 <div className="search-result-title">
                   <span>{result.conversation_title}</span>
+                  {result.routine_id && (
+                    <span className="search-result-badge">routine</span>
+                  )}
                   {result.archived && (
-                    <span className="search-result-archived-badge">archived</span>
+                    <span className="search-result-badge">archived</span>
                   )}
                 </div>
                 <div

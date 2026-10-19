@@ -63,7 +63,7 @@ All conversation REST endpoints are defined in `chat/routes/conversations.py`. S
 - **PATCH `/app/api/conversations/{id}/model`** -- Update the LLM model for a conversation (`update_conversation_model_endpoint()`). Uses `set_conversation_model()` in `db/conversation_store.py` (always overwrites).
 - **GET `/app/api/conversations/{id}/loaded-skills`** -- Get manually loaded skill IDs (`get_conversation_loaded_skills()`). Reads from `data/chats/{id}/loaded_skills.json`.
 - **GET `/app/api/conversations/{id}/system-prompt`** -- Get the saved system prompt (`get_conversation_system_prompt()`). Reads from `data/chats/{id}/system_prompt.txt`.
-- **GET `/app/api/search`** -- Search across all conversation messages (`search_endpoint()`). File-based scanning via `ChatStorage.search_conversations()` in `chat/storage.py`.
+- **GET `/app/api/search`** -- Search conversation messages (`search_conversations()`), routine runs opt-in. File-based scanning via `ChatStorage.search_conversations()`.
 - **POST `/app/api/conversations/{id}/composer-attachments`** -- Persist images pasted into the chat composer ahead of the `send_message` WS frame (`upload_composer_attachments()` in `chat/file_routes.py`). See [Composer Attachments](#composer-attachments).
 
 ### Conversation Creation Side Effects
@@ -245,32 +245,19 @@ Retrieve the saved system prompt for a conversation. The system prompt is persis
 
 ### Search Conversations
 
-Search across all conversation messages for the authenticated user, returning highlighted snippets.
-
-**Endpoint**: `GET /app/api/search`
-
-**Authentication**: Required (session cookie or Bearer token)
+**Endpoint**: `GET /app/api/search` (session cookie or Bearer token). Case-insensitive substring search over the user's messages, archived conversations included.
 
 **Query Parameters**:
-- `q` (required, string): Search query. Case-insensitive matching against message content.
+- `q` (required, string, min 2 chars)
+- `include_routines` (optional, boolean, default `false`): also search routine-created conversations (`routine_id` set). Off by default so a scheduled routine does not repeat the same hit once per run.
 
-**Response**: `200 OK`
+**Response** (`SearchResponse` in `frontend/src/api/types.ts`):
+- `results`: `SearchResult` objects, one per matching message, max 3 per conversation and 50 overall: `conversation_id`, `conversation_title`, `project_id`, `message_index`, `message_role`, `timestamp`, `snippet` (HTML-escaped, query wrapped in `<mark>`), `archived`, `routine_id`
+- `total_matches`: matching messages across all searched conversations
 
-**Response type**: `SearchResponse` in `frontend/src/api/types.ts`
+**Implementation**: `search_conversations()` in `chat/routes/conversations.py` delegates to `ChatStorage.search_conversations()` in `chat/storage.py`, which scans `chat_history.json` files.
 
-**Response fields**:
-- `results`: Array of `SearchResult` objects, each containing:
-  - `conversation_id`: UUID of the matching conversation
-  - `conversation_title`: Display title of the conversation
-  - `matches`: Array of matching snippets (max 3 per conversation), each with highlighted query terms
-
-**Limits**:
-- Maximum 3 matching snippets per conversation
-- Maximum 50 total results across all conversations
-
-**Implementation**: `search_endpoint()` in `chat/routes/conversations.py`. Delegates to `ChatStorage.search_conversations()` in `chat/storage.py`, which performs file-based scanning of `chat_history.json` files with case-insensitive matching.
-
-**Frontend Usage**: The `SearchModal` component (`frontend/src/components/SearchModal.tsx`) calls `searchConversations(query)` in `frontend/src/api/client.ts` with debounced typeahead input. Results display with highlighted snippets and keyboard navigation. Clicking a result navigates to the conversation and scrolls to the matching message via `scrollToMessageIndex` in `NavigationContext`.
+**Frontend Usage**: `SearchModal` (`frontend/src/components/SearchModal.tsx`) calls `searchConversations(query, { includeRoutines })` from `frontend/src/api/client.ts` with debounced input. An "Include routine runs" checkbox (off each time the modal opens) re-runs the query with routine runs, which show a "routine" badge. Clicking a result navigates to the conversation and scrolls to the message via `scrollToMessageIndex` in `NavigationContext`.
 ---
 
 ### Composer Attachments

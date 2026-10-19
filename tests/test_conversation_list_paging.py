@@ -4,8 +4,9 @@ Covers ``db.conversation_store.list_conversations_meta``'s keyword-only
 additions behind the paged sidebar list (GET /conversations):
 
 1. Server-side filters: ``exclude_projects``, ``include_slack=False``,
-   ``include_inference=False`` -- including the NULL-origin subtlety (legacy
-   web rows have ``origin IS NULL`` and must survive origin filters).
+   ``include_inference=False``, ``include_routines=False`` -- including the
+   NULL-origin subtlety (legacy web rows have ``origin IS NULL`` and must
+   survive origin filters).
 2. Keyset pagination: ``limit`` + ``before=(last_message_at, id)`` walks the
    full list in ``(last_message_at DESC, id DESC)`` order without overlap
    or gaps, and stays stable when newer rows are prepended mid-walk.
@@ -36,12 +37,13 @@ BASE_TS = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def _make_conversation(store, user_id=1, *, hours_ago=0, project_id=None,
-                       origin=None, archived=False):
+                       origin=None, archived=False, routine_id=None):
     """Insert one conversation row; returns its id."""
     conv_id = str(uuid.uuid4())
     ts = BASE_TS - timedelta(hours=hours_ago)
     _run(store.create_conversation(
         user_id, conv_id, ts, project_id=project_id, origin=origin,
+        routine_id=routine_id,
     ))
     if archived:
         _run(store.archive_conversation(user_id, conv_id))
@@ -99,6 +101,40 @@ def test_filters_drop_projects_and_origins_but_keep_null_origin(_isolated_db):
     # NULL-origin legacy rows and user_subagent rows must survive the
     # origin filters; only slack/inference/project rows drop.
     assert [c["id"] for c in filtered] == [legacy_web, web, subagent]
+
+
+def _make_routine(models_mod, store, user_id, project_id):
+    routine_id = str(uuid.uuid4())
+
+    async def _do():
+        async with store.AsyncSessionLocal() as db:
+            db.add(models_mod.Routine(
+                id=routine_id, project_id=project_id, user_id=user_id,
+                name="R", prompt="do the thing",
+            ))
+            await db.commit()
+    _run(_do())
+    return routine_id
+
+
+def test_routine_rows_dropped_when_excluded(_isolated_db):
+    store, models_mod = _isolated_db
+    _make_user(models_mod, store, 1, "a@example.com")
+    project_id = _make_project(models_mod, store, 1)
+    routine_id = _make_routine(models_mod, store, 1, project_id)
+
+    chat = _make_conversation(store, hours_ago=1)
+    run = _make_conversation(
+        store, hours_ago=2, project_id=project_id, routine_id=routine_id,
+    )
+    in_project = _make_conversation(store, hours_ago=3, project_id=project_id)
+
+    everything = _run(store.list_conversations_meta(1))
+    assert [c["id"] for c in everything] == [chat, run, in_project]
+    assert [c["routine_id"] for c in everything] == [None, routine_id, None]
+
+    no_runs = _run(store.list_conversations_meta(1, include_routines=False))
+    assert [c["id"] for c in no_runs] == [chat, in_project]
 
 
 def test_archived_rows_hidden_unless_included(_isolated_db):

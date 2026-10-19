@@ -704,6 +704,8 @@ export interface SearchResult {
   snippet: string;
   timestamp: string;
   archived?: boolean;
+  /** Set when a routine created the conversation (only present with include_routines). */
+  routine_id?: string | null;
 }
 
 export interface SearchResponse {

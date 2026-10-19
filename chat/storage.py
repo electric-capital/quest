@@ -1601,6 +1601,7 @@ class ChatStorage:
         query: str,
         max_results: int = 50,
         max_per_conversation: int = 3,
+        include_routines: bool = False,
     ) -> Dict:
         """Search across all conversations for a user by substring match.
 
@@ -1612,6 +1613,10 @@ class ChatStorage:
             query: Search query string (minimum 2 characters).
             max_results: Maximum total results to return.
             max_per_conversation: Maximum matches per conversation.
+            include_routines: Whether to scan conversations a routine
+                created (``routine_id`` set). Off by default so a routine
+                that runs daily does not fill the results with
+                near-identical hits.
 
         Returns:
             Dict with 'results', 'total_matches', and 'query' keys.
@@ -1620,7 +1625,9 @@ class ChatStorage:
         from db.conversation_store import list_conversations_meta
 
         query_lower = query.lower()
-        meta_rows = await list_conversations_meta(user_id, include_archived=True)
+        meta_rows = await list_conversations_meta(
+            user_id, include_archived=True, include_routines=include_routines,
+        )
 
         all_results = []
         total_matches = 0
@@ -1715,6 +1722,7 @@ class ChatStorage:
                         "snippet": highlighted,
                         "timestamp": msg.get("timestamp", meta.get("last_message_at", "")),
                         "archived": meta.get("archived", False),
+                        "routine_id": meta.get("routine_id"),
                     })
 
             # Early exit if we have enough results

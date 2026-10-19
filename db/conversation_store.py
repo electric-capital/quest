@@ -140,6 +140,7 @@ async def list_conversations_meta(
     exclude_projects: bool = False,
     include_slack: bool = True,
     include_inference: bool = True,
+    include_routines: bool = True,
     limit: Optional[int] = None,
     before: Optional[tuple[datetime, str]] = None,
 ) -> list[dict]:
@@ -156,6 +157,9 @@ async def list_conversations_meta(
             (project_id set) -- the top-level sidebar never renders them.
         include_slack: If False, drop origin="slack" rows.
         include_inference: If False, drop origin="inference_api" rows.
+        include_routines: If False, drop conversations a routine created
+            (``routine_id`` set). Runs whose routine was since deleted
+            have ``routine_id`` nulled and are kept.
         limit: Optional row cap (already-validated by the caller).
         before: Optional keyset cursor as ``(last_message_at, id)`` -- return
             only rows strictly older than this pair under the
@@ -184,6 +188,8 @@ async def list_conversations_meta(
                     Conversation.origin != "inference_api",
                 )
             )
+        if not include_routines:
+            stmt = stmt.where(Conversation.routine_id.is_(None))
         if before is not None:
             before_ts, before_id = before
             stmt = stmt.where(

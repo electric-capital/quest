@@ -99,6 +99,27 @@
   color: rgba(255, 255, 255, 0.35);
 }
 
+/* Filter row under the input */
+.search-modal-options {
+  padding: 0 1.5rem 0.75rem;
+  flex-shrink: 0;
+}
+
+.search-modal-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  user-select: none;
+}
+
+.search-modal-option input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 /* Results area */
 .search-modal-results {
   flex: 1;
@@ -171,7 +192,7 @@
   gap: 0.5rem;
 }
 
-.search-result-archived-badge {
+.search-result-badge {
   font-size: 0.6875rem;
   font-weight: 500;
   color: rgba(255, 255, 255, 0.4);
@@ -299,7 +320,11 @@
     color: #1a1a1a;
   }
 
-  .search-result-archived-badge {
+  .search-modal-option {
+    color: rgba(0, 0, 0, 0.6);
+  }
+
+  .search-result-badge {
     color: rgba(0, 0, 0, 0.4);
     background-color: rgba(0, 0, 0, 0.06);
   }

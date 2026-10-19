@@ -1234,8 +1234,18 @@ export function searchInstanceCatalog(
 
 // Search API function
 
-export function searchConversations(query: string): Promise<SearchResponse> {
-  return apiGet(endpoints.search(), { query: { q: query } });
+/**
+ * Search the user's conversations. Routine-created conversations are left
+ * out unless `includeRoutines` is set, since a scheduled routine produces
+ * many near-identical conversations that would otherwise crowd the results.
+ */
+export function searchConversations(
+  query: string,
+  options: { includeRoutines?: boolean } = {},
+): Promise<SearchResponse> {
+  return apiGet(endpoints.search(), {
+    query: { q: query, include_routines: options.includeRoutines ? true : undefined },
+  });
 }
 
 /**

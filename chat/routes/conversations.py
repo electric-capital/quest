@@ -50,19 +50,26 @@ def _publish_list_changed(user_id: int, conversation_id: str, action: str) -> No
 @router.get("/search")
 async def search_conversations(
     q: str = Query(..., min_length=2),
+    include_routines: bool = False,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
     """Search across all conversation messages for the authenticated user.
 
     Args:
         q: Search query string (minimum 2 characters).
+        include_routines: Whether to search conversations created by
+            routines. Off by default: a scheduled routine produces many
+            near-identical conversations that would otherwise crowd out
+            the user's own chats.
         user: Authenticated user dictionary.
 
     Returns:
         Dictionary with results list, total_matches count, and query string.
     """
     user_id = user["id"]
-    results = await ChatStorage.search_conversations(user_id, q)
+    results = await ChatStorage.search_conversations(
+        user_id, q, include_routines=include_routines,
+    )
     return results
 
 
