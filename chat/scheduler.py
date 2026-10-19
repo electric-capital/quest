@@ -20,12 +20,9 @@ Restart resilience (the server is restarted routinely):
   its conversation, and anchored runs are retried once in a new
   conversation while still within grace.
 
-Routines in public projects run only while the admin
-``public_project_routines`` feature gate is open for their owner (see
-``_public_routine_gated``): while it is closed their schedules are skipped
-without creating a conversation or a ledger row. Schedules of routines in
-an archived project are paused the same way until the project is
-unarchived (``_schedule_paused_reason``).
+Schedules of routines in an archived project are paused until the project
+is unarchived (``_schedule_paused_reason``): skipped without creating a
+conversation or a ledger row.
 """
 
 import asyncio
@@ -138,41 +135,22 @@ async def _recover_interrupted_runs() -> None:
                 )
 
 
-def _public_routine_gated(routine: dict) -> bool:
-    """Whether this routine must not run: public project, gate closed.
-
-    A routine in a public project runs unattended in the internet-enabled
-    sandbox, which an admin has to opt into (Settings > Features); the
-    check is per owner, like every other use of the gate.
-    """
-    if not routine.get("project_public"):
-        return False
-    from config.feature_gates import public_project_routines_enabled_for
-
-    return not public_project_routines_enabled_for(routine.get("user_email") or "")
-
-
 def _schedule_paused_reason(routine: dict) -> str | None:
     """Why this routine's schedules must not fire right now, or None.
 
-    Two pauses share one skip path: the public-project routines gate (see
-    ``_public_routine_gated``) and an archived project, whose routines stay
-    defined but sleep until the project is unarchived.
+    An archived project's routines stay defined but sleep until the project
+    is unarchived. (Kept as a reason string so further pause causes can
+    share ``_skip_paused_schedule``.)
     """
     if routine.get("project_archived"):
         return "its project is archived"
-    if _public_routine_gated(routine):
-        return (
-            "routines in public projects are disabled for "
-            f"{routine.get('user_email')}"
-        )
     return None
 
 
 async def _skip_paused_schedule(
     schedule: dict, routine: dict, now: datetime, reason: str
 ) -> None:
-    """Pass over a due occurrence of a paused (gated or archived) routine.
+    """Pass over a due occurrence of a paused (archived-project) routine.
 
     An anchored schedule's ``next_due_at`` is moved past the occurrence, so
     lifting the pause resumes at the next regular occurrence instead of

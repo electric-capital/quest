@@ -6,8 +6,9 @@ the pre-card check injects a default -- Sonnet 5, then Gemini 3.7 Flash, by
 availability -- and the approval card labels it "(default)"), an optional
 ``schedule`` spec (the same full-replacement shape ``edit_routine`` takes),
 and optional ``skill_ids`` to auto-load. Strictly project-scoped -- rejected
-same-turn outside project conversations, in public projects (which cannot
-have routines), and on a per-project name collision by
+same-turn outside project conversations, in public projects (whose
+routines are managed from the UI only -- the routine request types are not
+public-safe), and on a per-project name collision by
 ``routine_precard_check`` in
 :mod:`chat.action_request_types.routine_precard`, with the project/name
 guards re-run at execute time.
@@ -151,7 +152,9 @@ class CreateRoutineHandler(ActionRequestHandler):
         if not project:
             raise RuntimeError("Project not found.")
         if project.get("public"):
-            raise RuntimeError("Public projects cannot have routines.")
+            raise RuntimeError(
+                "Routines in public projects are managed from the UI."
+            )
 
         # Re-verify skill access up front (the pre-card check is only the
         # same-turn fast path) so a failure can't leave a half-configured

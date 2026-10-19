@@ -1062,8 +1062,7 @@ def get_public_project_system_prompt(
     public subset, and an explicit Boundaries block so the model can explain
     the restrictions instead of flailing against them.
 
-    ``is_routine`` marks a routine run (scheduled or one-click, only possible
-    while the ``public_project_routines`` feature gate is open): as in
+    ``is_routine`` marks a routine run (scheduled or one-click): as in
     get_system_prompt(), the conversation is already named after its routine,
     so the first-reply naming instruction and its tool are left out.
 

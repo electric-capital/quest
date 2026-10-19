@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 
 from db.engine import AsyncSessionLocal
 from db.models import (
-    Project, Routine, RoutineSchedule, RoutineScheduleRun, User,
+    Project, Routine, RoutineSchedule, RoutineScheduleRun,
 )
 from db import schedule_timing
 
@@ -249,19 +249,14 @@ async def list_enabled_schedules() -> list[dict]:
     """List all enabled schedules (used by the scheduler daemon).
 
     Returns schedules joined with routine data (routine name, prompt, guide_id,
-    project_id, plus the project's public / archived flags and the owner's
-    email for the public-project routines gate and the archived-project
+    project_id, plus the project's archived flag for the archived-project
     pause) so the scheduler has everything it needs to execute runs.
     """
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            select(
-                RoutineSchedule, Routine, Project.public, Project.archived,
-                User.email,
-            )
+            select(RoutineSchedule, Routine, Project.archived)
             .join(Routine, RoutineSchedule.routine_id == Routine.id)
             .outerjoin(Project, Routine.project_id == Project.id)
-            .outerjoin(User, Routine.user_id == User.id)
             .where(RoutineSchedule.is_enabled == True)
         )
         rows = result.all()
@@ -271,11 +266,9 @@ async def list_enabled_schedules() -> list[dict]:
                 # Raw column (the public ``next_due_at`` fills in a computed
                 # value when NULL); the scheduler initializes NULL rows.
                 "next_due_at_stored": _iso(schedule_timing.as_utc(sched.next_due_at)),
-                "routine": _routine_summary(
-                    routine, project_public, user_email, project_archived,
-                ),
+                "routine": _routine_summary(routine, project_archived),
             }
-            for sched, routine, project_public, project_archived, user_email in rows
+            for sched, routine, project_archived in rows
         ]
 
 
@@ -453,14 +446,10 @@ async def list_interrupted_runs() -> list[dict]:
     """Interrupted runs that still have attempts left, with schedule + routine."""
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            select(
-                RoutineScheduleRun, RoutineSchedule, Routine,
-                Project.public, Project.archived, User.email,
-            )
+            select(RoutineScheduleRun, RoutineSchedule, Routine, Project.archived)
             .join(RoutineSchedule, RoutineScheduleRun.schedule_id == RoutineSchedule.id)
             .join(Routine, RoutineSchedule.routine_id == Routine.id)
             .outerjoin(Project, Routine.project_id == Project.id)
-            .outerjoin(User, Routine.user_id == User.id)
             .where(
                 RoutineScheduleRun.status == "interrupted",
                 RoutineScheduleRun.attempt < MAX_RUN_ATTEMPTS,
@@ -472,13 +461,10 @@ async def list_interrupted_runs() -> list[dict]:
                 **_run_to_dict(run),
                 "schedule": {
                     **_schedule_to_dict(schedule),
-                    "routine": _routine_summary(
-                        routine, project_public, user_email, project_archived,
-                    ),
+                    "routine": _routine_summary(routine, project_archived),
                 },
             }
-            for run, schedule, routine, project_public, project_archived, user_email
-            in result.all()
+            for run, schedule, routine, project_archived in result.all()
         ]
 
 
@@ -634,16 +620,12 @@ def _run_to_dict(run: RoutineScheduleRun) -> dict:
 
 def _routine_summary(
     routine: Routine,
-    project_public: bool = False,
-    user_email: Optional[str] = None,
     project_archived: bool = False,
 ) -> dict:
     """Extract the routine fields needed by the scheduler.
 
-    ``project_public`` / ``user_email`` come from the joined project and
-    owner rows: the scheduler skips schedules of public-project routines
-    while that feature is gated off for the owner. ``project_archived``
-    likewise pauses every schedule of an archived project.
+    ``project_archived`` comes from the joined project row: the scheduler
+    pauses every schedule of an archived project.
     """
     return {
         "id": routine.id,
@@ -653,7 +635,5 @@ def _routine_summary(
         "prompt": routine.prompt,
         "guide_id": routine.guide_id,
         "model": routine.model,
-        "project_public": bool(project_public),
         "project_archived": bool(project_archived),
-        "user_email": user_email,
     }

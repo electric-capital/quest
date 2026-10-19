@@ -715,22 +715,6 @@ async def run_conversation_turn(
         # the tool tier, the dispatch allowlist, and the loop arms below.
         is_public = bool(project_data and project_data.get("public"))
 
-        # Server-global gate: a routine run (scheduled or one-click -- both
-        # carry the conversation's routine_id) in a public project needs the
-        # public_project_routines gate (the run executes unattended in the
-        # internet-enabled sandbox). The scheduler and the run-start
-        # endpoint already refuse while it is closed; this is the backstop
-        # for every path into a routine conversation. Raising here surfaces
-        # a durable error message instead of silently running.
-        if is_public and routine_id:
-            from config.feature_gates import public_project_routines_enabled_for
-            if not public_project_routines_enabled_for(user["email"]):
-                raise RuntimeError(
-                    "Routines in public projects are disabled for your "
-                    "account or server-wide. An admin can grant access in "
-                    "Settings > Features."
-                )
-
         # Admin Model Selection usage rules (config/model_selection.py):
         # a model can be unticked for private and/or public conversations.
         # The composer already hides disallowed models, so this only fires

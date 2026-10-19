@@ -39,7 +39,6 @@ function tableRow(id: string, day: number): TableListRow {
 }
 
 interface PanelProps {
-  showRoutines: boolean;
   showDocs: boolean;
   showTables?: boolean;
   tables?: TableListRow[];
@@ -49,7 +48,7 @@ interface PanelProps {
   tablesHeaderActive?: boolean;
 }
 
-function renderPanel({ showRoutines, showDocs, ...tableProps }: PanelProps) {
+function renderPanel({ showDocs, ...tableProps }: PanelProps) {
   const noop = vi.fn();
   return render(
     <ProjectPanel
@@ -57,7 +56,6 @@ function renderPanel({ showRoutines, showDocs, ...tableProps }: PanelProps) {
       conversations={[]}
       loading={false}
       routines={[]}
-      showRoutines={showRoutines}
       showArchived={false}
       onShowArchivedChange={noop}
       showSlack={false}
@@ -93,7 +91,7 @@ describe('ProjectPanel', () => {
   });
 
   it('orders Routines, then Docs, then Tables, then the Conversations header', () => {
-    const { container } = renderPanel({ showRoutines: true, showDocs: true, showTables: true });
+    const { container } = renderPanel({ showDocs: true, showTables: true });
 
     const routines = container.querySelector('.routines-section');
     const docs = container.querySelector('.docs-section:not(.tables-section)');
@@ -112,9 +110,9 @@ describe('ProjectPanel', () => {
     ).toEqual(['Routines', 'Docs', 'Tables', 'Conversations']);
   });
 
-  it('leaves out the Routines, Docs and Tables blocks when their flags are off', () => {
-    const { container } = renderPanel({ showRoutines: false, showDocs: false, showTables: false });
-    expect(container.querySelector('.routines-section')).toBeNull();
+  it('always shows Routines; leaves out the Docs and Tables blocks when their flags are off', () => {
+    const { container } = renderPanel({ showDocs: false, showTables: false });
+    expect(container.querySelector('.routines-section')).not.toBeNull();
     expect(container.querySelector('.docs-section')).toBeNull();
     expect(container.querySelector('.tables-section')).toBeNull();
     expect(screen.getByText('Conversations')).toBeTruthy();
@@ -124,7 +122,6 @@ describe('ProjectPanel', () => {
     const onOpenTable = vi.fn();
     const onOpenAllTables = vi.fn();
     const { container } = renderPanel({
-      showRoutines: false,
       showDocs: false,
       showTables: true,
       tables: [tableRow('t1', 1), tableRow('t2', 2)],

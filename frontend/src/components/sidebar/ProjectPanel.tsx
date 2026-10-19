@@ -35,9 +35,6 @@ interface ProjectPanelProps {
   conversations: Conversation[];
   loading: boolean;
   routines: Routine[];
-  // Routines are hidden for public projects unless the
-  // public_project_routines feature gate is open for this user.
-  showRoutines: boolean;
   showArchived: boolean;
   onShowArchivedChange: (checked: boolean) => void;
   showSlack: boolean;
@@ -98,7 +95,6 @@ export function ProjectPanel({
   conversations,
   loading,
   routines,
-  showRoutines,
   showArchived,
   onShowArchivedChange,
   showSlack,
@@ -185,15 +181,13 @@ export function ProjectPanel({
           <div className="project-loading">Loading...</div>
         ) : (
           <>
-            {showRoutines && (
-              <RoutinesSection
-                routines={routines}
-                running={busy}
-                onNewRoutine={onNewRoutine}
-                onOpenSettings={onRoutineSettings}
-                onRun={onRunRoutine}
-              />
-            )}
+            <RoutinesSection
+              routines={routines}
+              running={busy}
+              onNewRoutine={onNewRoutine}
+              onOpenSettings={onRoutineSettings}
+              onRun={onRunRoutine}
+            />
 
             {showDocs && (
               <DocsSection

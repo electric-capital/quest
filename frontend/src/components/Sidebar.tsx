@@ -57,10 +57,6 @@ import { ConversationsSection } from './sidebar/ConversationsSection';
 import { ProjectPanel } from './sidebar/ProjectPanel';
 import './Sidebar.css';
 
-// Server-global feature gate key for routines in public projects
-// (config/feature_gates.py FEATURE_PUBLIC_PROJECT_ROUTINES).
-const PUBLIC_PROJECT_ROUTINES_FEATURE = 'public_project_routines';
-
 interface SidebarProps {
   activeConversationId: string | null;
   // opts.implicit marks selections that are side effects of drilling in/out of
@@ -107,10 +103,6 @@ export const Sidebar = React.memo(function Sidebar({
   const { setModelForConversation } = useConversationModels();
   const { setLoadedSkillsForConversation } = useConversationSkills();
 
-  // Public projects get routines only while an admin has the
-  // public_project_routines feature gate open for this user (the routine
-  // API and the scheduler enforce the same gate).
-  const publicRoutinesEnabled = enabledFeatures.includes(PUBLIC_PROJECT_ROUTINES_FEATURE);
   const drilledProject = projects.find((p) => p.id === drilledProjectId) ?? null;
   // The routine modals trim themselves for a public project (public model
   // list, no skill auto-loads or guide override).
@@ -583,7 +575,6 @@ export const Sidebar = React.memo(function Sidebar({
                 conversations={projectConversations.byProject[drilledProject.id] || []}
                 loading={Boolean(projectConversations.loadingByProject[drilledProject.id])}
                 routines={projectRoutines.byProject[drilledProject.id] || []}
-                showRoutines={!drilledProject.public || publicRoutinesEnabled}
                 showArchived={showArchivedProject}
                 onShowArchivedChange={setShowArchivedProject}
                 showSlack={showSlackProject}

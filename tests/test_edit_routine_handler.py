@@ -687,7 +687,7 @@ def test_create_precard_rejects_public_project(_isolated_db):
     user_id = _make_user(stores["models"])
     user = {"id": user_id, "email": "x@example.com"}
     project = _run(stores["project_store"].create_project(user_id, "Pub", public=True))
-    with pytest.raises(ValueError, match="Public projects"):
+    with pytest.raises(ValueError, match="managed from the UI"):
         _run(routine_precard_check(
             "create_routine", {"name": "n", "prompt": "p"}, user, project["id"],
         ))
@@ -749,7 +749,7 @@ def test_create_execute_rejects_public_project(_isolated_db):
     user_id = _make_user(stores["models"])
     user = {"id": user_id, "email": "x@example.com"}
     project = _run(stores["project_store"].create_project(user_id, "Pub", public=True))
-    with pytest.raises(RuntimeError, match="Public projects"):
+    with pytest.raises(RuntimeError, match="managed from the UI"):
         _run(CreateRoutineHandler().execute(
             {"name": "n", "prompt": "p"}, user, project_id=project["id"],
         ))

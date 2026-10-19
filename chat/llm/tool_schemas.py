@@ -3625,8 +3625,7 @@ PUBLIC_TOOLS: list[ToolSpec] = [
     t for t in BASE_TOOLS if t["name"] in _PUBLIC_BASE_TOOL_NAMES
 ] + [_PUBLIC_CREATE_ACTION_REQUEST]
 
-# Routine runs inside a public project (only while the
-# public_project_routines gate is open): the public subset plus the
+# Routine runs inside a public project: the public subset plus the
 # completion marker. routine_completed reads nothing and writes nothing, so
 # it is the one loop-handled arm NOT in _PUBLIC_BLOCKED_LOOP_TOOLS.
 PUBLIC_ROUTINE_TOOLS: list[ToolSpec] = PUBLIC_TOOLS + [_ROUTINE_COMPLETED]

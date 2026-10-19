@@ -8,7 +8,7 @@ self-correct. It performs:
 
 - **Project-scoping pre-check:** both types require a project conversation;
   ``create_routine`` additionally verifies the project exists for the user
-  and is not public (public projects cannot have routines), while
+  and is not public (routines there are managed from the UI only), while
   ``edit_routine`` verifies the routine exists and belongs to the
   conversation's project.
 - **Name-collision pre-check:** per-project unique routine names, for
@@ -72,7 +72,7 @@ async def _create_precard(params: dict, user: dict, project_id: str) -> None:
     if not project:
         raise ValueError("Project not found.")
     if project.get("public"):
-        raise ValueError("Public projects cannot have routines.")
+        raise ValueError("Routines in public projects are managed from the UI.")
 
     existing = await routine_store.list_routines(project_id)
     if any(r["name"] == params["name"] for r in existing):

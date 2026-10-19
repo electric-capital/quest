@@ -13,10 +13,7 @@ from pydantic import BaseModel
 
 from chat.auth import get_current_user_cookie_or_apikey_checked
 from chat.routine_costs import get_routine_cost_report
-from config.feature_gates import (
-    guides_enabled_for,
-    public_project_routines_enabled_for,
-)
+from config.feature_gates import guides_enabled_for
 from db.project_store import get_project
 from db.routine_store import (
     StaleRoutineError,
@@ -59,42 +56,12 @@ def _require_guides_enabled(user: dict) -> None:
         )
 
 
-def project_routines_allowed(project: dict, user: dict) -> bool:
-    """Whether this project may have (and run) routines for this user.
-
-    Private projects always can. A public project can only while the admin
-    ``public_project_routines`` feature gate is open for the user: its
-    routines run in the internet-enabled sandbox, scheduled ones unattended.
-    """
-    return not project.get("public") or public_project_routines_enabled_for(
-        user["email"]
-    )
-
-
-def require_project_routines_allowed(project: dict, user: dict) -> None:
-    """400 ``public_project_routines_disabled`` unless routines are allowed.
-
-    The routine and schedule rows are untouched while the gate is closed
-    and become reachable again once access is restored.
-    """
-    if not project_routines_allowed(project, user):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "public_project_routines_disabled",
-                "message": (
-                    "Routines in public projects are disabled for your "
-                    "account or server-wide"
-                ),
-            },
-        )
-
-
 async def get_routine_project(user: dict, project_id: str) -> dict:
-    """The user's project for a routine/schedule endpoint, or an HTTP error.
+    """The user's project for a routine/schedule endpoint, or a 404.
 
-    404 when the project does not exist (or is not the user's), 400 when it
-    is a public project whose routines are gated off for this user.
+    Public and private projects alike may have routines; the project's
+    ``public`` flag only trims what a routine there can carry (no skill
+    auto-loads, public-allowed models).
     """
     project = await get_project(user["id"], project_id)
     if not project:
@@ -102,7 +69,6 @@ async def get_routine_project(user: dict, project_id: str) -> dict:
             status_code=404,
             detail={"error": "not_found", "message": "Project not found"},
         )
-    require_project_routines_allowed(project, user)
     return project
 
 
@@ -145,11 +111,6 @@ async def list_project_routines(
             status_code=404,
             detail={"error": "not_found", "message": "Project not found"},
         )
-    # Routines of a public project are hidden while the gate is closed for
-    # this user (the rows are kept and come back when access is restored).
-    if not project_routines_allowed(project, user):
-        return {"routines": []}
-
     routines = await list_routines_with_schedules(project_id)
     return {"routines": routines}
 
