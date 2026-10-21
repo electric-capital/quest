@@ -2,7 +2,7 @@
 
 ## Overview
 
-Feature gates are **server-global, admin-controlled on/off switches for optional features**. Every gated feature is off by default; an admin turns it on for the whole instance from the desktop-only **Settings > Features** section. Gated features: `user_subagents` (cross-user subagents, [user-subagents.md](user-subagents.md)), `guides` (the deprecated legacy Guides feature kept alive for installs still migrating to skills, [guides.md](guides.md)), `voice_input` (dictated prompts transcribed server-side on Vertex, [voice-input.md](voice-input.md)), `docs` (Quest Docs, [quest-docs.md](quest-docs.md)), and `tables` (Quest Tables, [quest-tables.md](quest-tables.md)).
+Feature gates are **server-global, admin-controlled on/off switches for optional features**. Every gated feature is off by default; an admin turns it on for the whole instance from the desktop-only **Settings > Features** section. Gated features: `user_subagents` (cross-user subagents, [user-subagents.md](user-subagents.md)), `guides` (the deprecated legacy Guides feature kept alive for installs still migrating to skills, [guides.md](guides.md)), `voice_input` (dictated prompts transcribed server-side on Vertex, [voice-input.md](voice-input.md)), `docs` (Quest Docs, [quest-docs.md](quest-docs.md)), `tables` (Quest Tables, [quest-tables.md](quest-tables.md)), and `browser` (the headless browser for public projects, [public-browser.md](public-browser.md)).
 
 Features in `PER_USER_ACCESS_FEATURES` (`config/feature_gates.py`) additionally support **per-user access**: an enabled gate can be open to all users or restricted to an `allowed_users` email list (case-insensitive). For a user outside the list the gate behaves exactly as if it were closed, at every enforcement point. `user_subagents` deliberately stays all-or-nothing — a run involves two users (caller and target) and a per-user list would be ambiguous about which side it restricts.
 
@@ -29,7 +29,7 @@ For features that ride on a per-conversation flag ([conversation-flags.md](conve
 1. Define a `FEATURE_*` constant in `config/feature_gates.py`, add it to `KNOWN_FEATURES` and `FEATURE_LABELS`. The admin endpoints and Settings UI pick it up automatically.
 2. Consume `is_feature_enabled(FEATURE_*)` wherever the feature activates server-side (off must be fully inert).
 3. If the feature rides on a conversation flag, name the feature key the same as the flag — `filter_gated_flags()` and the FE `feature` link then work without changes beyond `constants/flags.ts` gaining `feature: '<key>'` on the flag entry.
-4. If the feature depends on server configuration the admin might not have (a credential, a provider), add a branch to `_feature_availability()` in `chat/routes/admin.py` returning `(False, reason)` while it is missing. The PUT then refuses to enable the gate and the Settings toggle explains why; `config/feature_gates.py` itself stays stdlib-only and knows nothing about availability.
+4. If the feature depends on server configuration the admin might not have (a credential, a provider, a container image), add a branch to `_feature_availability()` in `chat/routes/admin.py` returning `(False, reason)` while it is missing. The PUT then refuses to enable the gate and the Settings toggle explains why; `config/feature_gates.py` itself stays stdlib-only and knows nothing about availability.
 
 ## Enforcement Layers (voice input)
 
@@ -90,3 +90,7 @@ Nothing is deleted: table rows and files survive, and restoring access brings th
 - Gate state is read fresh from disk on each check (tiny file, no cache); toggles take effect for the next turn/proposal without a restart.
 - Non-admin sessions learn the gate state only via `enabled_features` on `GET /me`, refreshed on session check — other users' composers pick up a toggle on their next load.
 - The `system:user_subagents` system skill stays listed regardless of the gate (the `SystemSkill.requires` mechanism only understands connected services); loading it while the gate is closed just leads to the same-turn rejection above. Quest Docs and Quest Tables work around the same limitation with connected-services pseudo-keys (`docs`, `tables`, see above), so their skills and tools do disappear with the gate.
+
+## Enforcement Layers (browser)
+
+`browser` gates the `browser_*` tools of public projects ([public-browser.md](public-browser.md)) and supports per-user access. The gate can only be turned on while podman and the sidecar image are present (`browser_availability()` in `chat/browser_sessions.py` behind `_feature_availability()`; turning it off always works). While closed for a user, every handler returns `browser_disabled` before any container work, and `run_conversation_turn` passes `browser_enabled_for(email)` to the public prompt so the tools and the Browser paragraph are left out. The tools stay in the public dispatch allowlist regardless (the handler is the gate), and no private conversation ever sees them: the connected-services pseudo-key `browser` is always False there. Closing the gate does not stop sessions already running; they end on idle, `browser_close`, archive or shutdown.

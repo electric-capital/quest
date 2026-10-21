@@ -862,16 +862,20 @@ async def run_conversation_turn(
             from chat.gemini_api.system_prompt import (
                 get_public_project_system_prompt,
             )
-            from config.feature_gates import docs_enabled_for, tables_enabled_for
+            from config.feature_gates import (
+                browser_enabled_for, docs_enabled_for, tables_enabled_for,
+            )
             system_prompt = get_public_project_system_prompt(
                 user_name=user.get("name", ""),
                 user_email=user["email"],
                 project_guide=resolved_project_guide,
                 is_routine=bool(routine_id),
                 # The public prompt has no connected-services gating, so
-                # the Quest Docs and Quest Tables gates are passed explicitly.
+                # the Quest Docs, Quest Tables and browser gates are
+                # passed explicitly.
                 docs_enabled=docs_enabled_for(user["email"]),
                 tables_enabled=tables_enabled_for(user["email"]),
+                browser_enabled=browser_enabled_for(user["email"]),
                 legacy_shared_workspace=legacy_shared_workspace,
                 converted_from_standalone=converted_from_standalone,
             )

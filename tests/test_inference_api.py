@@ -369,6 +369,13 @@ _CORE_READ_OR_WORKSPACE_TOOLS = {
     "telegram_list_contacts",
     "list_docs", "search_docs", "read_doc",  # Quest Docs reads
     "list_tables", "get_table", "query_rows",  # Quest Tables reads
+    # Browser tools: public projects only, and an inference run is never
+    # public, so every handler refuses them there (browser_unavailable)
+    # before the mutating classification would matter.
+    "browser_navigate", "browser_snapshot", "browser_click", "browser_type",
+    "browser_select", "browser_press", "browser_hover", "browser_scroll",
+    "browser_back", "browser_wait", "browser_screenshot", "browser_evaluate",
+    "browser_close",
 }
 _CORE_MUTATING_TOOLS = {
     "archive_gmail_message", "modify_gmail_labels",

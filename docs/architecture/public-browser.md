@@ -1,0 +1,57 @@
+# Browser for Public Projects
+
+This document describes the **browser** a conversation in a [public project](public-projects.md) can drive through the `browser_*` tools: one long-lived headless Chromium container per conversation, with the public sandbox's network posture and nothing else. It covers the container and its agent, the host-side session manager, the tools and how they are gated, the prompt, and what is persisted.
+
+## Why a sidecar, not a script
+
+The public sandbox (`run_script` / `run_python`) is an ephemeral container per call, so a browser started in a script dies with it: every step would pay a Chromium start and lose the page. The browser is therefore a separate **sidecar**: a container that outlives tool calls, holding tabs, cookies and logins for the conversation. The container *is* the session. It starts on the first browser tool call, every later call of that conversation talks to the same one, and it is stopped after `BROWSER_IDLE_SECONDS` without a call, by `browser_close`, when the conversation is archived, or at server shutdown. One browser per conversation, never shared across a project: two agents would fight over the same tabs.
+
+## The container
+
+Image `quest-browser-sidecar-<mode>` (`Dockerfile.browser-sidecar`; name from `get_browser_sidecar_image()` in `chat/gemini_api/constants.py`): `python:3.12-slim`, Playwright with its Chromium build, and `browser-sidecar-agent.py` as the command. It reuses the public sandbox's entrypoint, `script-runner-entry-public.sh`, so the network rules and the privilege drop are the same as in [Public Projects -- Public sandbox profile](public-projects.md#public-sandbox-profile-two-separate-images): slirp4netns with host loopback unmapped and IPv6 off, DNS pinned to the slirp resolver, iptables REJECTs for every private, link-local and CGNAT range, then `setpriv` down to the host uid with all capabilities cleared. No `QUEST_API_KEY` or `QUEST_PORT` is injected. `run.py` builds and warms the image at startup like the two sandbox images (rebuild triggers on the Dockerfile, the entrypoint or the agent script).
+
+Chromium runs with `--no-sandbox`: the entrypoint cleared the capability bounding set and set no-new-privs, so Chromium's own setuid and namespace sandboxes cannot start. The rootless container is the boundary, as it is for scripts. The no-symlink seccomp profile applies unchanged. Limits are `BROWSER_CONTAINER_MEMORY` / `_CPUS` / `_SHM` in `chat/browser_sessions.py` (2 GB, 2 CPUs, a 256 MB `/dev/shm`): far above the script sandbox's, because Chromium needs them.
+
+**The agent** (`browser-sidecar-agent.py`) owns one browser context and the active page, and serves a tiny JSON-over-HTTP protocol on a **Unix socket** at `/browser-state/agent.sock`: `GET /health` and `POST /<action>` with a JSON body. Every action but `health`, `screenshot` and `evaluate` answers with the page state after it settled (`url`, `title`, `snapshot`), so the model sees the resulting page without a second call. The snapshot is Playwright's AI-mode accessibility snapshot: an indented outline of roles, names and text where interactive elements carry `[ref=e12]` markers, and `aria-ref=e12` is the locator the click / type / select / hover actions use (refs are re-numbered on every navigation; inside an iframe they carry a frame prefix). A new tab opened by a click becomes the active page; dialogs are accepted and reported with the next state; `navigate` accepts only http(s) and refuses literal private addresses outright (a hostname resolving to one is rejected by the container's rules at connect time). The server is deliberately single-threaded: Playwright's sync API is thread-bound and one conversation drives one browser one step at a time. Snapshots and `evaluate` results are capped (`SNAPSHOT_MAX_CHARS`, `EVALUATE_MAX_CHARS`) because they go straight into the model's context.
+
+## Transport and mounts
+
+The host never publishes a TCP port. The agent's socket lives in the conversation's **browser state directory**, `<conversation dir>/browser/` (`browser_state_dir()`), bind-mounted into the container as `/browser-state`; the host connects through `httpx`'s Unix-socket transport. So the host reaches the container, and the container has no path to the host, no different from a script container. The state directory sits *beside* the workspace, not inside it, because it also holds `storage_state.json`: the saved cookies are credentials for whatever the browser logged into, and the file tools and file browser must not list them.
+
+The sidecar mounts **neither workspace**. Screenshots come back over the socket as PNG bytes and the `browser_screenshot` handler writes them into the conversation workspace itself (under `screenshots/` unless a path is given), which keeps the sidecar off the workspace's private SELinux label and lets the host decide where files land. Downloads are not supported (`accept_downloads` is off); a file the model wants is fetched from the sandbox instead.
+
+## The session manager
+
+`chat/browser_sessions.py` holds the per-process table of live sessions (`BrowserSessionManager`, module singleton `browser_sessions`), keyed by conversation id:
+
+- `call(conversation_id, user_id, action, params)` is the one entry point the tool handlers use: it acquires the session (starting a container when the conversation has none), runs the action under the session's lock (calls of one session are serialised), bumps `last_used` and returns the agent's JSON. An agent that cannot be reached (OOM-killed, crashed) raises `BrowserError` and **drops the session**, so the next call starts a fresh container instead of failing forever; an action the agent ran but that failed is an ordinary `{"error": ...}` result relayed to the model.
+- **Starting** (`_start`): `podman run -d --rm --name quest-browser-<instance>-<conversation id> --label quest.browser.instance=<instance> ...` (`build_browser_podman_cmd()`, unit-tested in `tests/test_browser_sessions.py`), after removing any leftover of that name and stale socket, then polling `/health` until `BROWSER_START_TIMEOUT`, failing fast when the container exits early (its last log lines go into the error). The instance key is the server's main port, so side-by-side checkouts on one podman store never touch each other's containers.
+- **Caps**: `BROWSER_MAX_PER_USER` (default 2) and `BROWSER_MAX_TOTAL` (default 8) concurrent containers; a cap is a `BrowserError` the model sees, telling it to wait for the idle reap or use `browser_close`. These matter here and not for scripts because a Chromium container holds its memory for as long as it lives.
+- **Stopping**: `stop()` (`podman stop -t 5`; the agent handles SIGTERM, being PID 1), called by `browser_close`, by the archive endpoint in `chat/routes/conversations.py`, by `stop_all()` at shutdown, and by the **reaper** (`reaper_loop()`, started in the quest.py lifespan) for sessions idle past `BROWSER_IDLE_SECONDS` (default 10 minutes) that are not mid-call. At boot the lifespan runs `remove_stale_containers()`, which removes every container carrying this instance's label from a previous server process.
+- Every default is overridable through `QUEST_BROWSER_IDLE_SECONDS`, `QUEST_BROWSER_MAX_PER_USER` and `QUEST_BROWSER_MAX_TOTAL`.
+
+Containers die with the server process (`--rm`), and the session table is process-local, so a restart invalidates every session by construction; the stale sweep only tidies podman's view.
+
+## What persists
+
+Nothing of the browser profile is written to disk except **storage state**: after every state-changing action the agent saves cookies, local storage and session storage to `/browser-state/storage_state.json` (Playwright's `storage_state`), and a new container restores it on start. Logins therefore survive the idle reap, `browser_close`, archive/unarchive and server restarts; open tabs, scroll positions and in-page state do not. A corrupt state file is logged and ignored (the browser starts clean). The file is deleted with the conversation directory and nowhere else.
+
+## Tools, gating and enforcement
+
+The thirteen `browser_*` tools are registry specs in `chat/llm/tool_schemas.py` (navigate, snapshot, click, type, select, press, hover, scroll, back, wait, screenshot, evaluate, close), each one agent action, with handlers in `chat/gemini_api/tool_handlers/browser.py`. They are the only **public-only** tools: `PUBLIC_ONLY_TOOL_CALL_TOOLS` is a third prompt tier beside core and skill-documented (`spec["public_only"]`, stamped by `_stamp_prompt_tiers()`), listed in `PUBLIC_TOOL_CALL_ALLOWLIST` and offered by no regular prompt. Their specs carry `requires_service: "browser"`, a connected-services pseudo-key (`PSEUDO_SERVICE_KEYS` in `api/instructions.py`, reserved against plugin ids) that `get_user_connected_services()` always sets False, so the private prompt builders never advertise them.
+
+The feature is behind the `browser` gate ([Feature Gates](feature-gates.md)), per-user capable, which the admin can only turn on while podman and the image are present (`browser_availability()` behind `_feature_availability()` in `chat/routes/admin.py`). Enforcement, in order, in every handler before any container work:
+
+1. a non-public conversation gets `browser_unavailable` (the tools exist for the public sandbox's egress; a private conversation has no internet to browse), and the public dispatch allowlist is what admits them in a public one;
+2. a user for whom the gate is closed gets `browser_disabled`;
+3. then the call goes to the session manager, whose caps and start failures come back as `browser_error`.
+
+`browser_screenshot` is the one handler returning an inline part: it writes the PNG into the workspace, publishes `file_list_changed`, and attaches the image through the provider's `upload_file` / `make_file_part` like `get_workspace_file` does (a provider without inline images gets the path only).
+
+## Prompt
+
+`get_public_project_system_prompt(browser_enabled=...)` takes the gate as a third explicit switch beside `docs_enabled` and `tables_enabled` (the public prompt has no connected-services map): while False the tools are excluded from the Dynamic Tools section and no paragraph appears; while True the tools are documented in full and the `_PUBLIC_BROWSER_SECTION` paragraph follows the Boundaries block. The paragraph stands in for a skill (public prompts carry none): when to prefer the browser over `run_python` + `requests` (JavaScript, logins, multi-step flows), how refs work, that screenshots land in the workspace, that sessions end on idle, and that the model must not type secrets the user did not give it into a website and must say so before signing in anywhere.
+
+## Testing
+
+`tests/test_browser_sessions.py`: the podman argv profile, the manager against a fake container (start on first call, reuse, caps, drop on an unreachable agent, stop, idle reaping), `_start` against a stubbed `podman run`, availability and the stale sweep. `tests/test_browser_tools.py`: refusals, argument relay per tool, error relaying, the screenshot write and inline part, dispatch in both modes, the gate and the pseudo-key. `tests/test_public_projects.py` and `tests/test_prompt_tool_tiers.py` pin the prompt and the public-only tier. The agent itself is exercised only against a real image (it needs Chromium).

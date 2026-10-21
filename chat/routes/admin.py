@@ -987,12 +987,16 @@ def _feature_availability(feature: str) -> tuple[bool, Optional[str]]:
     and the Settings toggle shows the reason. Turning a gate OFF is always
     allowed.
     """
-    from config.feature_gates import FEATURE_VOICE_INPUT
+    from config.feature_gates import FEATURE_BROWSER, FEATURE_VOICE_INPUT
 
     if feature == FEATURE_VOICE_INPUT:
         from chat.transcription import transcription_availability
 
         return transcription_availability()
+    if feature == FEATURE_BROWSER:
+        from chat.browser_sessions import browser_availability
+
+        return browser_availability()
     return True, None
 
 

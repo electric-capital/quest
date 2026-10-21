@@ -75,6 +75,7 @@ from chat.gemini_api.tool_handlers import (
     _handle_append_to_doc,
     _handle_add_doc_image,
 )
+from chat.gemini_api.tool_handlers import browser as _browser
 from chat.gemini_api.tool_handlers.tables import (
     _handle_delete_rows,
     _handle_get_table,
@@ -738,6 +739,22 @@ TOOL_CALL_HANDLERS: dict[str, ToolHandler] = {
     "update_rows": _tool_update_rows,
     "upsert_rows": _tool_upsert_rows,
     "delete_rows": _tool_delete_rows,
+    # Browser tools (public projects only; chat/browser_sessions.py). The
+    # handlers take the ToolContext directly: they refuse non-public
+    # conversations and apply the ``browser`` gate themselves.
+    "browser_navigate": _browser.handle_browser_navigate,
+    "browser_snapshot": _browser.handle_browser_snapshot,
+    "browser_click": _browser.handle_browser_click,
+    "browser_type": _browser.handle_browser_type,
+    "browser_select": _browser.handle_browser_select,
+    "browser_press": _browser.handle_browser_press,
+    "browser_hover": _browser.handle_browser_hover,
+    "browser_scroll": _browser.handle_browser_scroll,
+    "browser_back": _browser.handle_browser_back,
+    "browser_wait": _browser.handle_browser_wait,
+    "browser_screenshot": _browser.handle_browser_screenshot,
+    "browser_evaluate": _browser.handle_browser_evaluate,
+    "browser_close": _browser.handle_browser_close,
 }
 
 # Tools the model calls by their own (top-level) name. Anything not in this

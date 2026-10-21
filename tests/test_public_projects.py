@@ -301,6 +301,11 @@ def _table_tools() -> set[str]:
     return set(_table_tool_names())
 
 
+def _browser_tools() -> set[str]:
+    from chat.gemini_api.system_prompt import _browser_tool_names
+    return set(_browser_tool_names())
+
+
 class TestPublicSystemPrompt:
     def _prompt(self, **kw):
         from chat.gemini_api.system_prompt import get_public_project_system_prompt
@@ -360,10 +365,10 @@ class TestPublicSystemPrompt:
         assert 'create_action_request(request_type="write_doc"' in p
 
     def test_keeps_identity_project_guide_and_public_tools(self):
-        # docs_enabled / tables_enabled: every allowlisted tool, the doc and
-        # table tools included, is documented (those are gated on the Quest
-        # Docs and Quest Tables gates).
-        p = self._prompt(docs_enabled=True, tables_enabled=True)
+        # docs_enabled / tables_enabled / browser_enabled: every allowlisted
+        # tool, the doc, table and browser tools included, is documented
+        # (those are gated on the Quest Docs, Quest Tables and browser gates).
+        p = self._prompt(docs_enabled=True, tables_enabled=True, browser_enabled=True)
         assert "Ada" in p and "ada@example.com" in p
         assert "Track BTC prices." in p
         for name in sorted(PUBLIC_TOOL_CALL_ALLOWLIST):
@@ -378,7 +383,9 @@ class TestPublicSystemPrompt:
         for name in _DOC_TOOLS:
             assert name not in p, name
         assert "Quest Docs" not in p
-        for name in sorted(PUBLIC_TOOL_CALL_ALLOWLIST - set(_DOC_TOOLS) - _table_tools()):
+        for name in sorted(
+            PUBLIC_TOOL_CALL_ALLOWLIST - set(_DOC_TOOLS) - _table_tools() - _browser_tools()
+        ):
             assert name in p, name
 
     def test_doc_tools_shown_when_docs_gate_open(self):
@@ -416,6 +423,25 @@ class TestPublicSystemPrompt:
         for name in sorted(_table_tools()):
             assert name not in closed, name
             assert f"- **{name}**" in shown, name
+
+    def test_browser_tools_follow_the_browser_gate(self):
+        # Hidden by default (gate closed), listed in full with the Browser
+        # paragraph when open; the other gates do not affect them.
+        closed = self._prompt(docs_enabled=True, tables_enabled=True)
+        shown = self._prompt(browser_enabled=True)
+        assert {"browser_navigate", "browser_click", "browser_screenshot"} <= _browser_tools()
+        assert _browser_tools() <= PUBLIC_TOOL_CALL_ALLOWLIST
+        for name in sorted(_browser_tools()):
+            assert name not in closed, name
+            assert f"- **{name}**" in shown, name
+        assert "**Browser:**" not in closed
+        boundaries = shown.index("**Boundaries (this is a public project):**")
+        browser = shown.index("**Browser:**")
+        assert boundaries < browser < shown.index("**Conversation naming")
+        paragraph = shown[browser:shown.index("**Conversation naming")]
+        assert "public internet only" in paragraph
+        assert "browser_navigate" in paragraph
+        assert "tell the user before signing in" in paragraph
 
     def test_routine_run_with_docs_enabled(self):
         # is_routine and docs_enabled compose: naming tool out, docs in.

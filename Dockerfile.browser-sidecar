@@ -1,0 +1,32 @@
+# Browser sidecar image for public projects: one long-lived container per
+# public conversation that holds a headless Chromium driven through
+# Playwright. The conversation's browser tools (chat/browser_sessions.py)
+# talk to the agent inside (browser-sidecar-agent.py) over a Unix socket in
+# the mounted /browser-state directory -- no TCP port is published, so the
+# host reaches the container and the container has no path to the host.
+#
+# Network posture is the public script-runner's: open internet, every
+# private / link-local destination REJECTed, host loopback unmapped, no
+# credential injected. The same entrypoint installs those rules and drops
+# privileges before the agent starts.
+FROM python:3.12-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends iptables ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Playwright + Chromium (and its shared-library dependencies). The browser
+# binaries go to a world-readable directory so the unprivileged run user
+# (setpriv'd to the host uid) can execute them.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN pip install --no-cache-dir playwright==1.64.0 && \
+    playwright install --with-deps chromium && \
+    rm -rf /var/lib/apt/lists/* && \
+    chmod -R a+rX /opt/ms-playwright
+
+COPY browser-sidecar-agent.py /opt/quest-browser/agent.py
+COPY script-runner-entry-public.sh /usr/local/bin/script-runner-entry-public.sh
+RUN chmod +x /usr/local/bin/script-runner-entry-public.sh && chmod -R a+rX /opt/quest-browser
+
+ENTRYPOINT ["/usr/local/bin/script-runner-entry-public.sh"]
+CMD ["python3", "-u", "/opt/quest-browser/agent.py"]

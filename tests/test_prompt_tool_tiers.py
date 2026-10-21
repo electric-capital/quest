@@ -19,6 +19,7 @@ from chat.llm.tool_schemas import (
     CORE_TOOL_CALL_TOOLS,
     PROJECT_HIDDEN_WORKSPACE_TOOLS,
     PROJECT_ONLY_TOOL_CALL_TOOLS,
+    PUBLIC_ONLY_TOOL_CALL_TOOLS,
     PUBLIC_TOOL_CALL_ALLOWLIST,
     TOOL_CALL_REGISTRY,
     format_tool_call_doc,
@@ -42,8 +43,20 @@ GMAIL_TOOLS = {
 class TestRegistryTiers:
     def test_every_tool_has_exactly_one_tier(self):
         for name, spec in TOOL_CALL_REGISTRY.items():
-            assert bool(spec.get("core")) != bool(spec.get("skill")), name
+            tiers = [
+                bool(spec.get("core")), bool(spec.get("skill")),
+                bool(spec.get("public_only")),
+            ]
+            assert tiers.count(True) == 1, name
             assert (name in CORE_TOOL_CALL_TOOLS) is bool(spec.get("core")), name
+            assert (name in PUBLIC_ONLY_TOOL_CALL_TOOLS) is bool(spec.get("public_only")), name
+
+    def test_public_only_roster(self):
+        # The browser tools, and nothing else: offered by the public prompt
+        # alone (gated on the browser feature), never by a regular prompt.
+        assert PUBLIC_ONLY_TOOL_CALL_TOOLS
+        assert all(name.startswith("browser_") for name in PUBLIC_ONLY_TOOL_CALL_TOOLS)
+        assert PUBLIC_ONLY_TOOL_CALL_TOOLS <= PUBLIC_TOOL_CALL_ALLOWLIST
 
     def test_every_documenting_skill_exists(self):
         for name, spec in TOOL_CALL_REGISTRY.items():
@@ -132,6 +145,8 @@ class TestPrompts:
                 assert not tool_offered(prompt, name), name
             elif spec.get("core"):
                 assert core_bullet(name) in prompt, name
+            elif spec.get("public_only"):
+                assert not tool_offered(prompt, name), name
             else:
                 assert core_bullet(name) not in prompt, name
                 assert named_under_skill(prompt, spec["skill"], name), name
@@ -143,7 +158,9 @@ class TestPrompts:
         assert core_bullet("get_gmail_messages") not in prompt
 
     def test_public_prompt_inlines_every_offered_tool(self):
-        prompt = get_public_project_system_prompt(docs_enabled=True, tables_enabled=True)
+        prompt = get_public_project_system_prompt(
+            docs_enabled=True, tables_enabled=True, browser_enabled=True,
+        )
         for name in PUBLIC_TOOL_CALL_ALLOWLIST - PROJECT_HIDDEN_WORKSPACE_TOOLS:
             if name not in TOOL_CALL_REGISTRY:
                 continue  # a plugin tool, present only when its plugin is loaded

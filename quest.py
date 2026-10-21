@@ -282,6 +282,20 @@ async def lifespan(app: FastAPI):
     from chat.realtime.replay_buffer import eviction_loop
     eviction_task = asyncio.create_task(eviction_loop())
 
+    # Public-project browser sessions (chat/browser_sessions.py): remove
+    # sidecar containers a previous process of this instance left behind
+    # (they would hold stale sockets and the per-user cap), then start the
+    # idle reaper. Best-effort: without podman the feature is simply
+    # unavailable.
+    from chat.browser_sessions import browser_sessions, remove_stale_containers
+    try:
+        stale = await asyncio.to_thread(remove_stale_containers)
+        if stale:
+            logger.info("Removed %d stale browser sidecar container(s)", stale)
+    except Exception:
+        logger.exception("Stale browser container sweep failed; continuing")
+    browser_reaper_task = asyncio.create_task(browser_sessions.reaper_loop())
+
     # Start the loopback-only sandbox tool API server: the sole surface
     # run_script/run_python containers can reach (their QUEST_PORT points
     # here, and their iptables rules block every other host port). Guarded
@@ -314,6 +328,19 @@ async def lifespan(app: FastAPI):
     shutdown_waiter = asyncio.create_task(_wait_for_shutdown_event())
 
     yield
+
+    # Shutdown: stop every browser sidecar (containers die with the
+    # server anyway, but a clean stop lets the agent save its storage
+    # state) and the reaper.
+    browser_reaper_task.cancel()
+    try:
+        await browser_reaper_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await browser_sessions.stop_all()
+    except Exception:
+        logger.exception("Stopping browser sessions failed; continuing")
 
     # Shutdown: stop the sandbox tool API server
     if sandbox_server is not None:

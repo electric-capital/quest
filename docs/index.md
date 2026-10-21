@@ -29,6 +29,7 @@
 | [project-db.md](architecture/project-db.md) | Per-project SQLite database behind the project_db_query tool: limits, ATTACH blocking, table browser |
 | [projects.md](architecture/projects.md) | Projects: conversation and project workspaces, instructions, skills, conversion from a chat, archiving, Project Access (doc and table sources) |
 | [public-projects.md](architecture/public-projects.md) | Public projects: internet-enabled sandbox with internal resources cut off, enforcement layers, public prompt and image |
+| [public-browser.md](architecture/public-browser.md) | Browser for public projects: one headless Chromium container per conversation, agent protocol, session manager and reaping, browser tools and gate |
 | [quest-docs.md](architecture/quest-docs.md) | Quest Docs (in-app markdown docs): storage, access rule, sharing, editing, history, model tools, approvals, frontend |
 | [quest-tables.md](architecture/quest-tables.md) | Quest Tables (in-app typed tables): metadata, columns, table.db, change log and restore, access, service layer, events, prompting, gate |
 | [quest-tables-frontend.md](architecture/quest-tables-frontend.md) | Quest Tables UI: routes and gate, sidebar blocks, All Tables, viewer and grid, filters, schema editor, History drawer, card previews, phone layouts |

@@ -150,6 +150,10 @@ _SCRIPT_RUNNER_IMAGE_BASE = "quest-script-runner"  # Podman image base name
 # opens internet egress but blocks RFC1918 / link-local destinations and
 # never runs the loopback proxy bridge.
 _PUBLIC_SCRIPT_RUNNER_IMAGE_BASE = "quest-script-runner-public"
+# The browser sidecar for public-project conversations (one long-lived
+# headless Chromium container per conversation, chat/browser_sessions.py):
+# the public profile's network posture, built from Dockerfile.browser-sidecar.
+_BROWSER_SIDECAR_IMAGE_BASE = "quest-browser-sidecar"
 
 
 def get_script_runner_image() -> str:
@@ -170,6 +174,17 @@ def get_public_script_runner_image() -> str:
     """
     from config import environment
     return f"{_PUBLIC_SCRIPT_RUNNER_IMAGE_BASE}-{environment.image_suffix()}"
+
+
+def get_browser_sidecar_image() -> str:
+    """Return the public-project browser sidecar image name.
+
+    Returns ``quest-browser-sidecar-<mode>``; built from
+    ``Dockerfile.browser-sidecar``.
+    """
+    from config import environment
+    return f"{_BROWSER_SIDECAR_IMAGE_BASE}-{environment.image_suffix()}"
+
 
 SCRIPT_RUNNER_TIMEOUT = 60  # Default execution timeout in seconds
 SCRIPT_RUNNER_MAX_TIMEOUT = 150  # Maximum allowed timeout (2.5 minutes)

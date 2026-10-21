@@ -881,9 +881,10 @@ def main() -> None:
 
     def validate_script_runner_image() -> None:
         # Script runner images (Podman) -- optional, only if Dockerfile
-        # exists. Two separate images: the restricted default sandbox and
-        # the internet-enabled public-project sandbox, each with its own
-        # Dockerfile + entrypoint so their tooling can diverge.
+        # exists. Three separate images: the restricted default sandbox,
+        # the internet-enabled public-project sandbox (each with its own
+        # Dockerfile + entrypoint so their tooling can diverge) and the
+        # public-project browser sidecar.
         images = [
             (
                 f"quest-script-runner-{quest_env}",
@@ -894,6 +895,13 @@ def main() -> None:
                 f"quest-script-runner-public-{quest_env}",
                 "Dockerfile.script-runner-public",
                 ["script-runner-entry-public.sh", "script-runner-soffice.sh"],
+            ),
+            # The public-project browser sidecar (chat/browser_sessions.py):
+            # headless Chromium behind the public entrypoint's network rules.
+            (
+                f"quest-browser-sidecar-{quest_env}",
+                "Dockerfile.browser-sidecar",
+                ["script-runner-entry-public.sh", "browser-sidecar-agent.py"],
             ),
         ]
         for image_name, dockerfile, entry_sources in images:

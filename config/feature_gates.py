@@ -92,6 +92,18 @@ FEATURE_DOCS = "docs"
 # (PER_USER_ACCESS_FEATURES).
 FEATURE_TABLES = "tables"
 
+# Browser for public projects (see docs/architecture/public-browser.md):
+# conversations in public projects get the browser_* tools, which drive a
+# headless Chromium in a long-lived container per conversation with the
+# public sandbox's network posture (internet only, no internal access, no
+# credential). Needs podman and the quest-browser-sidecar image (built by
+# run.py at startup); the admin endpoint refuses to turn the gate on while
+# either is missing (chat/browser_sessions.py ``browser_availability()``).
+# Closed for a user = the tools are hidden from the public prompt and
+# refuse with ``browser_disabled``. Access can be restricted to specific
+# users (PER_USER_ACCESS_FEATURES).
+FEATURE_BROWSER = "browser"
+
 # All admin-gateable features. Extend this tuple (and FEATURE_LABELS) when a
 # new optional feature gets a gate. Every feature is off until an admin
 # enables it.
@@ -101,6 +113,7 @@ KNOWN_FEATURES = (
     FEATURE_VOICE_INPUT,
     FEATURE_DOCS,
     FEATURE_TABLES,
+    FEATURE_BROWSER,
 )
 
 # Features whose gate can be narrowed to specific users via
@@ -112,6 +125,7 @@ PER_USER_ACCESS_FEATURES = frozenset({
     FEATURE_VOICE_INPUT,
     FEATURE_DOCS,
     FEATURE_TABLES,
+    FEATURE_BROWSER,
 })
 
 # Human text for the admin Settings > Features section, keyed by feature.
@@ -170,6 +184,19 @@ FEATURE_LABELS: dict[str, dict[str, str]] = {
             "off hides the tools and the Tables API; nothing is deleted."
         ),
     },
+    FEATURE_BROWSER: {
+        "label": "Browser in public projects",
+        "description": (
+            "Gives conversations in public projects a real headless web "
+            "browser (browser_* tools): one Chromium container per "
+            "conversation that keeps its tabs and logins between tool "
+            "calls, with the public sandbox's network rules (public "
+            "internet only, no internal access, no credentials) and "
+            "stopped after a few minutes of inactivity. Requires podman and "
+            "the browser container image. Access can be granted to all "
+            "users or only to specific users."
+        ),
+    },
 }
 
 
@@ -191,6 +218,16 @@ def tables_enabled_for(user_email: str) -> bool:
     requests, the connected-services prompt gating).
     """
     return is_feature_enabled_for_user(FEATURE_TABLES, user_email)
+
+
+def browser_enabled_for(user_email: str) -> bool:
+    """Whether the public-project browser is on for this user.
+
+    Convenience wrapper over :func:`is_feature_enabled_for_user` for the
+    browser enforcement points (the browser tool handlers and the public
+    prompt).
+    """
+    return is_feature_enabled_for_user(FEATURE_BROWSER, user_email)
 
 
 def guides_enabled_for(user_email: str) -> bool:

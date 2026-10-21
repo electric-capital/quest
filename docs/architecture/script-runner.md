@@ -118,7 +118,7 @@ Every `run_script`/`run_python` call pays a full container create + teardown, so
 
 ## Auto-Build
 
-Both Podman images (restricted + public) are automatically built (or rebuilt) at startup in `run.py` using `--network=host`. Image names include an environment suffix (e.g., `quest-script-runner-dev`, `quest-script-runner-public-prod`). A rebuild triggers when the image's Dockerfile **or** its entrypoint script is newer than the built image (`should_rebuild_podman_image()` with `extra_sources`), so no manual build steps are needed.
+All three Podman images (restricted, public, and the public-project browser sidecar of [Browser for Public Projects](public-browser.md)) are automatically built (or rebuilt) at startup in `run.py` using `--network=host`. Image names include an environment suffix (e.g., `quest-script-runner-dev`, `quest-script-runner-public-prod`). A rebuild triggers when the image's Dockerfile **or** one of its listed sources (entrypoint, wrapper or agent script) is newer than the built image (`should_rebuild_podman_image()` with `extra_sources`), so no manual build steps are needed.
 
 ## Design Decisions
 

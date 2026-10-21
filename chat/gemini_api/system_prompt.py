@@ -25,6 +25,7 @@ from chat.llm.tool_schemas import (
     tool_is_advertised,
 )
 from chat.system_skills import build_system_skills_enumeration
+from chat.browser_sessions import BROWSER_SERVICE_KEY
 
 
 def _doc_tool_names() -> frozenset[str]:
@@ -33,6 +34,16 @@ def _doc_tool_names() -> frozenset[str]:
     return frozenset(
         name for name, spec in TOOL_CALL_REGISTRY.items()
         if spec.get("requires_service") == DOCS_SERVICE_KEY
+    )
+
+
+def _browser_tool_names() -> frozenset[str]:
+    """The browser tools: the registry specs gated on the ``browser``
+    pseudo-key (``requires_service == BROWSER_SERVICE_KEY``); public
+    projects only (``PUBLIC_ONLY_TOOL_CALL_TOOLS``)."""
+    return frozenset(
+        name for name, spec in TOOL_CALL_REGISTRY.items()
+        if spec.get("requires_service") == BROWSER_SERVICE_KEY
     )
 
 
@@ -73,6 +84,14 @@ def _table_write_tool_names() -> frozenset[str]:
 _PUBLIC_DOCS_SECTION = """
 **Quest Docs:** Docs are persistent markdown documents kept inside Quest; they outlive this conversation and later conversations can find them again. This conversation sees only PUBLIC docs, which live only in public projects: it sees this project's docs and creates docs only in this project. User docs are always private, so always create with `create_doc(target="project")` (`target="user"` is refused here); no doc's mode can be switched. Find docs with `list_docs` / `search_docs`, read them with `read_doc` (required before `edit_doc`), change one with `edit_doc` (exact string replacement) or `append_to_doc`, and embed a workspace image with `add_doc_image`.
 Public docs the user owns or was given write access to are written directly, with no approval step, unless the owner switched on "Require approval for agent writes": then the write tool refuses with `approval_required` and a `suggested_request`, which you forward unchanged as `create_action_request(request_type="write_doc", ...)` so the user can approve the change on a card. Use a doc for content meant to last (notes, reports, running logs appended under a dated heading) and the workspace for scratch files.
+"""
+
+
+# Public-project prompt paragraph shown while the browser is enabled for
+# the user (the ``browser`` feature gate); stands in for a skill, since the
+# public prompt carries none. Must not name internal-only tools or skills.
+_PUBLIC_BROWSER_SECTION = """
+**Browser:** This conversation has its own real web browser (headless Chromium) through the `browser_*` tools, separate from the sandbox: it runs JavaScript, keeps cookies and logins between calls, and follows the same network rules as the sandbox (public internet only, nothing internal). Prefer it over `run_python` + `requests` for pages that need JavaScript, a login, or several steps (search, click through results, fill a form); keep using the sandbox for plain downloads and APIs. Start with `browser_navigate`; every browser step returns the page's url, title and an accessibility snapshot, an outline of the page whose `[ref=e12]` markers name the elements `browser_click`, `browser_type`, `browser_select` and `browser_hover` act on (references change after every navigation, so take them from the latest result). `browser_screenshot` saves a PNG to this conversation's workspace and shows it to you; use it when visuals matter and embed it for the user with a markdown image. `browser_evaluate` runs JavaScript in the page to extract data the snapshot shows poorly. The browser session ends after a few minutes without browser calls (logins are kept) or with `browser_close`. Never type a secret the user did not give you in this conversation into a website, and tell the user before signing in anywhere.
 """
 
 
@@ -1044,6 +1063,7 @@ def get_public_project_system_prompt(
     is_routine: bool = False,
     docs_enabled: bool = False,
     tables_enabled: bool = False,
+    browser_enabled: bool = False,
     legacy_shared_workspace: bool = False,
     converted_from_standalone: bool = False,
 ) -> str:
@@ -1080,6 +1100,13 @@ def get_public_project_system_prompt(
     tools are excluded from the Dynamic Tools section and the "Quest
     Tables" paragraph is omitted; while True both are present (the
     paragraph stands in for the ``system:tables`` skill).
+
+    ``browser_enabled`` is the same switch for the browser gate
+    (``config.feature_gates.browser_enabled_for``): while False the
+    ``browser_*`` tools are excluded and the "Browser" paragraph is
+    omitted; while True both are present. The browser tools exist for
+    public projects only (``PUBLIC_ONLY_TOOL_CALL_TOOLS``), so no other
+    prompt builder has such a switch.
 
     A public-project conversation is always a project conversation, so the
     "Two file spaces" paragraph (conversation workspace at ``/workspace``,
@@ -1140,12 +1167,15 @@ def get_public_project_system_prompt(
         public_exclude |= _doc_tool_names()
     if not tables_enabled:
         public_exclude |= _table_tool_names()
+    if not browser_enabled:
+        public_exclude |= _browser_tool_names()
     # No skill tools here, so every offered tool is documented in full.
     dynamic_tools_section = _build_dynamic_tools_section(
         exclude=public_exclude, core_only=False,
     )
     docs_section = _PUBLIC_DOCS_SECTION if docs_enabled else ""
     tables_section = _PUBLIC_TABLES_SECTION if tables_enabled else ""
+    browser_section = _PUBLIC_BROWSER_SECTION if browser_enabled else ""
 
     if is_routine:
         naming_section = _ROUTINE_NAMING_SECTION
@@ -1198,7 +1228,7 @@ You have four tools available:
 - `create_action_request` here only opens approval cards for this project's public docs and tables; it cannot propose writes to external services, memories, skills or routines, and you cannot spawn sub-agents (`agent_task*` is unavailable).
 - If the user asks for something that needs internal data or a connected service, tell them plainly that it requires a regular (private) conversation outside this public project -- do not attempt workarounds.
 - Files the user uploads to this conversation or to the project workspace are fair game: the user chose to bring them into a public project.
-{docs_section}{tables_section}
+{browser_section}{docs_section}{tables_section}
 {naming_section}
 
 **Example usage:**

@@ -12,6 +12,7 @@ Tool tiers:
 
 import copy
 
+from chat.browser_sessions import BROWSER_SERVICE_KEY
 from chat.docs.constants import DOCS_SERVICE_KEY
 from chat.tables.constants import (
     TABLE_FILTER_IN_MAX_VALUES,
@@ -181,6 +182,17 @@ _TABLE_WRITE_APPROVAL = (
     "create_action_request. Any other error explains why the table cannot "
     "be written here."
 )
+
+
+def _browser_intent(example: str) -> dict:
+    """The intent_message property of a browser tool spec."""
+    return {
+        "type": "string",
+        "description": (
+            "A brief, user-friendly summary of this browser step (max 50 "
+            f"characters). Example: '{example}'."
+        ),
+    }
 
 
 def _table_intent(example: str) -> dict:
@@ -2410,6 +2422,325 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "required": ["table_id"],
         },
     },
+    # ----------------------------------------------------------------
+    # Browser tools (public projects only): drive the conversation's own
+    # headless browser, a long-lived container per public conversation
+    # (chat/browser_sessions.py, docs/architecture/public-browser.md).
+    # Every action but screenshot / evaluate / close returns the page
+    # state after it settled: url, title and an accessibility snapshot
+    # whose [ref=eNN] markers are the element references the other tools
+    # take. Gated on the ``browser`` feature (requires_service pseudo-key)
+    # and refused outside public projects by the handlers.
+    # ----------------------------------------------------------------
+    "browser_navigate": {
+        "name": "browser_navigate",
+        "requires_service": BROWSER_SERVICE_KEY,
+        "description": (
+            "Open a URL in this conversation's browser (a real headless "
+            "Chromium that keeps its tabs, cookies and logins between "
+            "calls). Returns the page's url, title and an accessibility "
+            "snapshot: an indented outline of the page's roles, names and "
+            "text, where interactive elements carry a reference like "
+            "[ref=e12] that browser_click, browser_type and the other "
+            "tools take as `ref`. Only http(s) URLs on the public "
+            "internet; private addresses are unreachable. Use it instead "
+            "of run_python for sites that need JavaScript, logins, or "
+            "clicking through pages."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to open (https:// is assumed when no scheme is given).",
+                },
+                "intent_message": _browser_intent("Open the pricing page"),
+            },
+            "required": ["url"],
+        },
+    },
+    "browser_snapshot": {
+        "name": "browser_snapshot",
+        "requires_service": BROWSER_SERVICE_KEY,
+        "description": (
+            "The current page's url, title and accessibility snapshot "
+            "(see browser_navigate), without changing anything. Use it "
+            "after the page changed on its own (a timer, a redirect, "
+            "content that loaded late) or to refresh element references."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "intent_message": _browser_intent("Re-read the page"),
+            },
+            "required": [],
+        },
+    },
+    "browser_click": {
+        "name": "browser_click",
+        "requires_service": BROWSER_SERVICE_KEY,
+        "description": (
+            "Click an element of the current page by its snapshot "
+            "reference. Waits for any navigation it triggers, then "
+            "returns the new page state. A link that opens a new tab is "
+            "followed. References change after every navigation: take "
+            "them from the latest result."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ref": {
+                    "type": "string",
+                    "description": "The element reference from the latest snapshot, e.g. 'e12'.",
+                },
+                "double": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Double-click instead of a single click.",
+                },
+                "intent_message": _browser_intent("Click 'Sign in'"),
+            },
+            "required": ["ref"],
+        },
+    },
+    "browser_type": {
+        "name": "browser_type",
+        "requires_service": BROWSER_SERVICE_KEY,
+        "description": (
+            "Type into a text field, textarea, search box or editable "
+            "area given by its snapshot reference. Replaces the field's "
+            "current value unless `append` is set. With `submit`, "
+            "presses Enter afterwards (submits most forms and search "
+            "boxes). Returns the page state afterwards."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ref": {
+                    "type": "string",
+                    "description": "The field's reference from the latest snapshot, e.g. 'e23'.",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "The text to type.",
+                },
+                "submit": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Press Enter after typing.",
+                },
+                "append": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Add to the field's current value, key by key, instead of replacing it.",
+                },
+                "intent_message": _browser_intent("Search for 'quarterly report'"),
+            },
+            "required": ["ref", "text"],
+        },
+    },
+    "browser_select": {
+        "name": "browser_select",
+        "requires_service": BROWSER_SERVICE_KEY,
+        "description": (
+            "Choose options in a <select> drop-down given by its snapshot "
+            "reference, by option value or visible label. Returns the "
+            "page state afterwards."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ref": {
+                    "type": "string",
+                    "description": "The drop-down's reference from the latest snapshot.",
+                },
+                "values": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The option values or labels to select (one for a single-choice drop-down).",
+                },
+                "intent_message": _browser_intent("Pick the 'Monthly' plan"),
+            },
+            "required": ["ref", "values"],
+        },
+    },
+    "browser_press": {
+        "name": "browser_press",
+        "requires_service": BROWSER_SERVICE_KEY,
+        "description": (
+            "Press a keyboard key on the current page: 'Enter', 'Tab', "
+            "'Escape', 'ArrowDown', 'PageDown', or a combination like "
+            "'Control+a'. Returns the page state afterwards."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "The key or combination to press.",
+                },
+                "intent_message": _browser_intent("Press Escape to close the dialog"),
+            },
+            "required": ["key"],
+        },
+    },
+    "browser_hover": {
+        "name": "browser_hover",
+        "requires_service": BROWSER_SERVICE_KEY,
+        "description": (
+            "Move the mouse over an element given by its snapshot "
+            "reference (opens hover menus and tooltips). Returns the "
+            "page state afterwards."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ref": {
+                    "type": "string",
+                    "description": "The element reference from the latest snapshot.",
+                },
+                "intent_message": _browser_intent("Open the Products menu"),
+            },
+            "required": ["ref"],
+        },
+    },
+    "browser_scroll": {
+        "name": "browser_scroll",
+        "requires_service": BROWSER_SERVICE_KEY,
+        "description": (
+            "Scroll the page by a number of pixels (positive = down), or "
+            "scroll an element given by `ref` into view. Mostly needed for "
+            "pages that load more content as you scroll; the snapshot "
+            "already covers the whole page, not just the visible part."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "integer",
+                    "default": 600,
+                    "description": "Pixels to scroll vertically; negative scrolls up.",
+                },
+                "ref": {
+                    "type": "string",
+                    "description": "Scroll this element into view instead of scrolling by amount.",
+                },
+                "intent_message": _browser_intent("Scroll down for more results"),
+            },
+            "required": [],
+        },
+    },
+    "browser_back": {
+        "name": "browser_back",
+        "requires_service": BROWSER_SERVICE_KEY,
+        "description": "Go back one page in the browser history. Returns the page state afterwards.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "intent_message": _browser_intent("Go back to the results"),
+            },
+            "required": [],
+        },
+    },
+    "browser_wait": {
+        "name": "browser_wait",
+        "requires_service": BROWSER_SERVICE_KEY,
+        "description": (
+            "Wait for the page to catch up: for a given text to appear, "
+            "for a number of seconds (at most 15), or, with no arguments, "
+            "until network activity stops. Then returns the page state. "
+            "Use it when a snapshot shows a loading state."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "Wait until this text is visible on the page.",
+                },
+                "seconds": {
+                    "type": "number",
+                    "description": "Wait this many seconds (max 15).",
+                },
+                "intent_message": _browser_intent("Wait for the results to load"),
+            },
+            "required": [],
+        },
+    },
+    "browser_screenshot": {
+        "name": "browser_screenshot",
+        "requires_service": BROWSER_SERVICE_KEY,
+        "description": (
+            "Take a PNG screenshot of the current page, save it in this "
+            "conversation's workspace and return it so you can look at "
+            "it. Use it when layout or visuals matter (charts, maps, "
+            "images, a page the snapshot does not explain); the snapshot "
+            "is cheaper for reading text and finding elements. Show the "
+            "user the screenshot by referencing the returned path as a "
+            "markdown image."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Workspace-relative file name for the PNG "
+                        "(default: screenshots/<page title>-<n>.png)."
+                    ),
+                },
+                "full_page": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Capture the whole scrollable page instead of the visible area.",
+                },
+                "intent_message": _browser_intent("Screenshot the dashboard"),
+            },
+            "required": [],
+        },
+    },
+    "browser_evaluate": {
+        "name": "browser_evaluate",
+        "requires_service": BROWSER_SERVICE_KEY,
+        "description": (
+            "Run a JavaScript expression in the current page and return "
+            "its JSON-serialisable result (at most 20 KB). For extracting "
+            "structured data from a page (table rows, links, attributes) "
+            "that the snapshot does not show well, e.g. "
+            "`[...document.querySelectorAll('table tr')].map(r => r.innerText)`. "
+            "Does not return a new snapshot; call browser_snapshot if the "
+            "expression changed the page."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "The JavaScript expression (or an arrow function body returning a value).",
+                },
+                "intent_message": _browser_intent("Extract the price table"),
+            },
+            "required": ["expression"],
+        },
+    },
+    "browser_close": {
+        "name": "browser_close",
+        "requires_service": BROWSER_SERVICE_KEY,
+        "description": (
+            "End this conversation's browser session and free its "
+            "resources. Logins (cookies) are kept and restored by the "
+            "next browser call; open tabs are not. Sessions also end on "
+            "their own after a few minutes without browser calls, so "
+            "this is only needed to free capacity early."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "intent_message": _browser_intent("Close the browser"),
+            },
+            "required": [],
+        },
+    },
 }
 
 
@@ -3661,6 +3992,11 @@ PUBLIC_ROUTINE_TOOLS: list[ToolSpec] = PUBLIC_TOOLS + [_ROUTINE_COMPLETED]
 # memories of the conversation's own (public) project, every suggestion
 # waits for the user's accept, and a public project's memories are never
 # visible anywhere else. The user's personal memories stay unreachable.
+# The browser tools (``browser_*``, the names gated on the ``browser``
+# pseudo-key) are allowed: they drive the conversation's own internet-only
+# browser container (chat/browser_sessions.py), which has the public
+# sandbox's network posture and no credential, and they exist for public
+# projects alone -- their handlers refuse every other conversation.
 # Everything else in TOOL_CALL_REGISTRY reads internal data (connectors,
 # personal memories, authed APIs) and is hard-rejected at dispatch time.
 PUBLIC_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
@@ -3695,6 +4031,10 @@ PUBLIC_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     "update_rows",
     "upsert_rows",
     "delete_rows",
+    *(
+        name for name, spec in TOOL_CALL_REGISTRY.items()
+        if spec.get("requires_service") == BROWSER_SERVICE_KEY
+    ),
 })
 
 
@@ -3767,6 +4107,18 @@ _SKILL_DOCUMENTED_TOOLS: dict[str, str] = {
 }
 
 
+# Tools offered only by the public-project prompt (spec["public_only"]):
+# no regular prompt documents them -- they are neither core nor
+# skill-documented -- and their handlers refuse every non-public call. The
+# browser tools: a public conversation's own internet-enabled browser
+# (chat/browser_sessions.py), pointless without the public sandbox's
+# egress. Gated on the ``browser`` feature through requires_service.
+PUBLIC_ONLY_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
+    name for name, spec in TOOL_CALL_REGISTRY.items()
+    if spec.get("requires_service") == BROWSER_SERVICE_KEY
+})
+
+
 def _stamp_prompt_tiers() -> None:
     """Mark every built-in registry spec ``core`` or give it its ``skill``.
 
@@ -3776,15 +4128,21 @@ def _stamp_prompt_tiers() -> None:
     overlap = CORE_TOOL_CALL_TOOLS & _SKILL_DOCUMENTED_TOOLS.keys()
     if overlap:
         raise RuntimeError(f"tool_call tools both core and skill-documented: {sorted(overlap)}")
+    overlap = PUBLIC_ONLY_TOOL_CALL_TOOLS & (CORE_TOOL_CALL_TOOLS | _SKILL_DOCUMENTED_TOOLS.keys())
+    if overlap:
+        raise RuntimeError(f"public-only tool_call tools with another tier: {sorted(overlap)}")
     for name, spec in TOOL_CALL_REGISTRY.items():
         if name in CORE_TOOL_CALL_TOOLS:
             spec["core"] = True
         elif name in _SKILL_DOCUMENTED_TOOLS:
             spec["skill"] = _SKILL_DOCUMENTED_TOOLS[name]
+        elif name in PUBLIC_ONLY_TOOL_CALL_TOOLS:
+            spec["public_only"] = True
         else:
             raise RuntimeError(
                 f"tool_call tool {name!r} has no prompt tier: add it to "
-                "CORE_TOOL_CALL_TOOLS or _SKILL_DOCUMENTED_TOOLS"
+                "CORE_TOOL_CALL_TOOLS, _SKILL_DOCUMENTED_TOOLS or make it "
+                "public-only (PUBLIC_ONLY_TOOL_CALL_TOOLS)"
             )
     unknown = (CORE_TOOL_CALL_TOOLS | _SKILL_DOCUMENTED_TOOLS.keys()) - TOOL_CALL_REGISTRY.keys()
     if unknown:

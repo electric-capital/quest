@@ -17,9 +17,12 @@ from api.slides import get_instructions as slides_instructions
 from api.tasks import get_instructions as tasks_instructions
 from api.airtable import get_instructions as airtable_instructions
 from api.ramp import get_instructions as ramp_instructions
+from chat.browser_sessions import BROWSER_SERVICE_KEY
 from chat.docs.constants import DOCS_SERVICE_KEY
 from chat.tables.constants import TABLES_SERVICE_KEY
-from config.feature_gates import docs_enabled_for, tables_enabled_for
+from config.feature_gates import (
+    browser_enabled_for, docs_enabled_for, tables_enabled_for,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +31,9 @@ logger = logging.getLogger(__name__)
 # (``SystemSkill.requires``) like a connected service does, but nothing is
 # "connected" -- so aggregates such as GET /me's has_any_service_connected
 # must skip them.
-PSEUDO_SERVICE_KEYS = frozenset({DOCS_SERVICE_KEY, TABLES_SERVICE_KEY})
+PSEUDO_SERVICE_KEYS = frozenset({
+    DOCS_SERVICE_KEY, TABLES_SERVICE_KEY, BROWSER_SERVICE_KEY,
+})
 
 
 def get_user_connected_services(user: dict) -> dict[str, bool]:
@@ -104,6 +109,11 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
     email = user.get("email") or ""
     services[DOCS_SERVICE_KEY] = docs_enabled_for(email)
     services[TABLES_SERVICE_KEY] = tables_enabled_for(email)
+    # The browser tools exist for public projects only; their specs are
+    # gated on this key so the regular prompts, which never carry a
+    # public conversation, never advertise them. The public prompt takes
+    # the gate directly (get_public_project_system_prompt browser_enabled).
+    services[BROWSER_SERVICE_KEY] = False
     return services
 
 

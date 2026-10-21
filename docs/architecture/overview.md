@@ -56,6 +56,7 @@ This doc is the map: where each piece lives, how a turn moves through them, and 
 | `db/`, `alembic/` | SQLAlchemy models, async stores, migrations | [Database](database.md) |
 | `frontend/src/` | SPA: contexts, conversation store, WebSocket services, components | [Frontend](frontend.md) |
 | `Dockerfile.script-runner*`, `script-runner-*` | Sandbox images and entrypoints | [Script Runner](script-runner.md), [Public Projects](public-projects.md) |
+| `chat/browser_sessions.py`, `chat/gemini_api/tool_handlers/browser.py`, `Dockerfile.browser-sidecar`, `browser-sidecar-agent.py` | Headless browser containers for public conversations and their tools | [Browser for Public Projects](public-browser.md) |
 | `scripts/` | Production bootstrap wizard, local seeding, release tagging | [Production](../setup/production.md), [Run Modes](run-modes.md), [Development Workflows](../setup/development-workflows.md) |
 | `logging_config.json`, `chat/logging_config.py` | Unified logging and the `user=<email>` convention | [Logging](logging.md) |
 
@@ -97,7 +98,7 @@ Exactly one sign-in method is active, Google OAuth or email/password (`login_met
 - **Secrets at rest**: per-user secret columns and the credential store files are encrypted under a password-wrapped data key; the uncovered files are listed in [Encryption at Rest](encryption-at-rest.md).
 - **Paths**: canonical-id and containment checks inside the resolvers ([Data Paths](data-paths.md)).
 - **Code execution**: only in rootless Podman containers with a no-symlink seccomp profile; the restricted image has no egress and reaches only the sandbox tool API ([Script Runner](script-runner.md)).
-- **Public projects**: an internet-enabled sandbox, cut off from skills, memories, connectors and every other internal resource ([Public Projects](public-projects.md)).
+- **Public projects**: an internet-enabled sandbox, cut off from skills, memories, connectors and every other internal resource ([Public Projects](public-projects.md)); optionally a headless browser container per conversation under the same network rules ([Browser for Public Projects](public-browser.md)).
 - **Quest Docs and Tables**: one access procedure, `resolve_core()` in `chat/artifact_access.py`, behind `resolve_doc_access()` and `resolve_table_access()` ([Quest Docs](quest-docs.md), [Quest Tables](quest-tables.md#access)).
 
 ## Run Modes and Serving

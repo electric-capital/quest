@@ -560,6 +560,17 @@ async def archive_conversation_endpoint(
             detail={"error": "not_found", "message": "Conversation not found"},
         )
     _publish_list_changed(user["id"], conversation_id, "archived")
+    # An archived conversation has no reason to keep a browser container
+    # alive (public projects, chat/browser_sessions.py); its logins stay
+    # saved for an unarchive.
+    from chat.browser_sessions import browser_sessions
+    try:
+        await browser_sessions.stop(conversation_id, reason="archived")
+    except Exception:
+        logger.warning(
+            "Stopping the browser session of archived conversation %s failed",
+            conversation_id, exc_info=True,
+        )
     return result
 
 
