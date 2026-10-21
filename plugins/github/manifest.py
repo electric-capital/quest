@@ -79,6 +79,21 @@ _GITHUB_SERVICE = {
             r"^/repos/[^/]+/[^/]+$",                                 # get a repo
             r"^/repos/[^/]+/[^/]+/branches$",                        # list branches
             r"^/repos/[^/]+/[^/]+/stargazers$",                      # list users who starred a repo
+            # --- Insights (the repo's Insights tab, read-only) ---
+            r"^/repos/[^/]+/[^/]+/contributors$",                    # contributors with commit counts
+            r"^/repos/[^/]+/[^/]+/languages$",                       # bytes of code per language
+            r"^/repos/[^/]+/[^/]+/forks$",                           # list forks
+            r"^/repos/[^/]+/[^/]+/community/profile$",               # community health (README, LICENSE, CoC, ...)
+            r"^/repos/[^/]+/[^/]+/stats/contributors$",              # weekly adds/deletes/commits per contributor
+            r"^/repos/[^/]+/[^/]+/stats/commit_activity$",           # commits per week for the last year
+            r"^/repos/[^/]+/[^/]+/stats/code_frequency$",            # weekly additions/deletions
+            r"^/repos/[^/]+/[^/]+/stats/participation$",             # weekly commits: everyone vs owner
+            r"^/repos/[^/]+/[^/]+/stats/punch_card$",                # commits by weekday and hour
+            r"^/repos/[^/]+/[^/]+/traffic/views$",                   # page views, last 14 days (push access)
+            r"^/repos/[^/]+/[^/]+/traffic/clones$",                  # clones, last 14 days (push access)
+            r"^/repos/[^/]+/[^/]+/traffic/popular/referrers$",       # top referrers (push access)
+            r"^/repos/[^/]+/[^/]+/traffic/popular/paths$",           # top content paths (push access)
+            r"^/repos/[^/]+/[^/]+/dependency-graph/sbom$",           # SPDX SBOM of the dependency graph
             r"^/repos/[^/]+/[^/]+/issues$",                          # list issues
             r"^/repos/[^/]+/[^/]+/issues/\d+$",                      # get a single issue
             r"^/repos/[^/]+/[^/]+/issues/\d+/comments$",             # list issue comments
@@ -137,13 +152,16 @@ def get_plugin() -> QuestPlugin:
                 id="system:github",
                 name="GitHub",
                 description=(
-                    "Read repos/issues/PRs/commits/Actions via authed_get; "
-                    "job logs; run workflows, comment, close/reopen issues."
+                    "Read repos/issues/PRs/commits/Actions/Insights via "
+                    "authed_get; job logs; run workflows, comment, "
+                    "close/reopen issues."
                 ),
                 when_to_load=(
                     "Load when the user asks about GitHub repos, issues, "
-                    "PRs, commits, or CI runs, or wants to run a workflow, "
-                    "comment on an issue/PR, or close/reopen an issue."
+                    "PRs, commits, CI runs, or repository insights such as "
+                    "contributors, commit activity, traffic or code "
+                    "frequency, or wants to run a workflow, comment on an "
+                    "issue/PR, or close/reopen an issue."
                 ),
                 requires="github",
                 content_builder=_github_skill_content,

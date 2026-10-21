@@ -1,6 +1,6 @@
 # GitHub API Documentation
 
-This document describes how Quest accesses GitHub: reading repositories, issues, pull requests, commits, file contents, stargazers, search, and Actions (workflow runs, jobs, and job logs), plus three approval-gated writes (running a workflow, commenting on an issue or pull request, closing / reopening an issue).
+This document describes how Quest accesses GitHub: reading repositories, issues, pull requests, commits, file contents, stargazers, search, Actions (workflow runs, jobs, and job logs) and repository insights (contributors, commit and code-frequency statistics, traffic, community profile, languages, forks, SBOM), plus three approval-gated writes (running a workflow, commenting on an issue or pull request, closing / reopening an issue).
 
 ## Overview
 
@@ -16,7 +16,7 @@ Writes are action requests (see [Action Requests](../../../docs/architecture/act
 
 | File | Description |
 |------|-------------|
-| `plugins/github/manifest.py` | The `QuestPlugin` manifest: credential schema (OAuth app client id/secret), oauth-kind `user_connection`, the `api.github.com` service entry (`allowed_endpoints` regex list covering core repo paths plus Actions runs/jobs/workflows, `default_headers`), the `system:github` skill, the `github_get_job_log` tool, and the three action-request handlers |
+| `plugins/github/manifest.py` | The `QuestPlugin` manifest: credential schema (OAuth app client id/secret), oauth-kind `user_connection`, the `api.github.com` service entry (`allowed_endpoints` regex list covering core repo paths, Actions runs/jobs/workflows and the Insights reads, `default_headers`), the `system:github` skill, the `github_get_job_log` tool, and the three action-request handlers |
 | `plugins/github/upstream.py` | `GITHUB_SCOPES`, `load_github_client_config()` (store + legacy fallback), token-blob construction and the refreshing credential loader (`get_github_token()`), Bearer injector for the service entry, `connected`/`needs_reauth` hooks over the stored `oauth_blob`, and `github_request()` / `github_error_message()` -- the direct REST helper the action-request handlers use |
 | `plugins/github/handlers.py` | The action-request handlers (`GitHubTriggerWorkflowHandler`, `GitHubCommentOnIssueHandler`, `GitHubSetIssueStateHandler`) with their param validation, proposal-time GitHub reads, card previews and execute calls |
 | `plugins/github/oauth.py` | OAuth flow router (`/auth/github`, `/auth/github/callback`, `/auth/github/disconnect`), mounted by `mount_plugin_oauth_routers()` in quest.py |
@@ -43,7 +43,16 @@ The GitHub service entry sets `requires_user: True` (per-user OAuth credentials)
 
 GitHub reads use `authed_get` with the GitHub REST API at `api.github.com`. The plugin's service entry (registered into `_SERVICE_REGISTRY` at load) defines the allowed endpoint patterns via regex validation -- requests to non-matching paths are rejected.
 
-The allow-list covers core repository reads (repos, issues, pull requests, commits, contents, stargazers, search, org repo lists) and read-only GitHub Actions endpoints (workflow runs, individual runs, jobs for a run, jobs for a re-run attempt, single jobs with their step array, workflow definitions, and runs filtered by workflow).
+The allow-list covers core repository reads (repos, issues, pull requests, commits, contents, stargazers, search, org repo lists), read-only GitHub Actions endpoints (workflow runs, individual runs, jobs for a run, jobs for a re-run attempt, single jobs with their step array, workflow definitions, and runs filtered by workflow), and the reads behind a repository's Insights tab (see below).
+
+### Repository Insights
+
+The Insights paths are plain GETs on the same entry: `/contributors`, `/languages`, `/forks`, `/community/profile`, the five `/stats/*` endpoints (`contributors`, `commit_activity`, `code_frequency`, `participation`, `punch_card`), the four `/traffic/*` endpoints (`views`, `clones`, `popular/referrers`, `popular/paths`) and `/dependency-graph/sbom`. Two GitHub behaviours shape how they are surfaced:
+
+- **Statistics are computed on demand.** The first request for a repo's `/stats/*` data answers `202 Accepted` with an empty body while GitHub runs a background job. `_make_authed_request()` turns any 202 on a GET into a structured error (`status_code: 202`, `pending: true`, a message to retry in a few seconds) instead of handing the model an empty body that looks like a repo with no activity; the skill tells the model to repeat the call. Streamed downloads are exempt, since their body is already on disk. The rule is generic to `authed_get`, not GitHub-specific ([Authenticated External API Requests](../../../docs/architecture/gemini-api.md#authenticated-external-api-requests-authed_get)).
+- **Traffic needs push access.** GitHub serves `/traffic/*` only to collaborators with push permission and returns 403 otherwise; the 403 passes through as the usual upstream error and the skill explains what it means. Nothing is checked in Quest, since the token's own permissions decide.
+
+`stats/contributors` and `stats/code_frequency` return one row per week of the repository's life, so the skill steers the model to `output_file` plus `run_python` for them, and `/dependency-graph/sbom` likewise.
 
 See `plugins/github/manifest.py` for the full allowed endpoint list and `plugins/github/instructions.md` for the LLM-facing documentation (base URL, key paths, common query parameters, and example invocations).
 
@@ -120,6 +129,7 @@ The following GitHub capabilities are deliberately not exposed:
 - **Writes beyond the three action request types:** No issue/PR creation or editing (titles, bodies, labels, assignees, milestones), no closing or merging pull requests, no review comments, no commits or pushes, no workflow re-runs, cancellations, or deletions.
 - **Run-level zip log downloads:** The `/repos/{owner}/{repo}/actions/runs/{run_id}/logs` path is allow-listed defensively in case it is ever needed, but no dedicated tool exists to fetch and unpack the multi-job zip archive. Use `github_get_job_log` for individual jobs.
 - **Actions write/admin surfaces:** No artifacts, secrets, variables, self-hosted runners, caches, or billing/usage endpoints.
+- **Insights without a REST endpoint:** The Network graph and the dependents list are not available via the REST API; Dependabot alerts and the Code scanning / security views are deliberately not allow-listed.
 
 ## Design Decisions
 

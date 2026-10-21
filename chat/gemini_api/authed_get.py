@@ -1146,6 +1146,26 @@ async def _make_authed_request(
             }
         })
 
+    # A 202 on a GET means "accepted, result not ready": GitHub answers the
+    # repository statistics endpoints this way (with an empty body) while a
+    # background job computes them. The body would reach the model as "{}"
+    # or "" and look like an empty result; name the situation instead so the
+    # model retries. Streamed downloads keep their response (the body, if
+    # any, is already on disk).
+    if response.status_code == 202 and method == "GET" and download_to is None:
+        return json.dumps({
+            "error": {
+                "status_code": 202,
+                "service": service["name"],
+                "pending": True,
+                "message": (
+                    f"{service['name']} accepted the request but has not "
+                    "finished computing the result yet. Retry the same "
+                    "request in a few seconds."
+                ),
+            }
+        })
+
     if raw_response:
         return response
 

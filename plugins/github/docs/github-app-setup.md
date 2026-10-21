@@ -2,7 +2,7 @@
 
 ## Overview
 
-Quest integrates with GitHub using the OAuth web flow. Each user connects individually via OAuth to obtain an access token for read API operations (repos, issues, pull requests, commits, search, file contents, stargazers) and the three approval-gated writes (run a workflow, comment on an issue or pull request, close / reopen an issue -- see [GitHub API](github-api.md#write-operations-action-requests)).
+Quest integrates with GitHub using the OAuth web flow. Each user connects individually via OAuth to obtain an access token for read API operations (repos, issues, pull requests, commits, search, file contents, stargazers, repository insights) and the three approval-gated writes (run a workflow, comment on an issue or pull request, close / reopen an issue -- see [GitHub API](github-api.md#write-operations-action-requests)).
 
 The admin may register either a classic **OAuth App** or a **GitHub App**; both use the same authorize/callback URLs. OAuth App tokens never expire. GitHub App user tokens expire after 8 hours (unless "Expire user authorization tokens" is turned off in the app's settings), and Quest refreshes them automatically with the accompanying refresh token -- see Token Architecture.
 

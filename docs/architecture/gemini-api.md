@@ -121,7 +121,7 @@ A run-fatal exception must reach the user durably, not just as a transient WS ev
 
 ## Authenticated External API Requests (`authed_get`)
 
-`authed_get` (`handle_authed_get()` in `chat/gemini_api/authed_get.py`) makes an HTTPS GET to an external API with the user's credential injected server-side; the model supplies only the URL and optional allow-listed headers. `_find_service()` matches the host -- path-prefix-scoped entries first, then the plain host -- against `_SERVICE_REGISTRY`; the entry's `load_credentials` and `inject_auth` supply and attach the credential (entries with `requires_user: True` get the user dict), and `retry_on_401` entries refresh and retry once. `_make_authed_request()` does this shared work for both verbs, followed by the size gate ([Large Response Protection](#large-response-protection)).
+`authed_get` (`handle_authed_get()` in `chat/gemini_api/authed_get.py`) makes an HTTPS GET to an external API with the user's credential injected server-side; the model supplies only the URL and optional allow-listed headers. `_find_service()` matches the host -- path-prefix-scoped entries first, then the plain host -- against `_SERVICE_REGISTRY`; the entry's `load_credentials` and `inject_auth` supply and attach the credential (entries with `requires_user: True` get the user dict), and `retry_on_401` entries refresh and retry once. `_make_authed_request()` does this shared work for both verbs, followed by the size gate ([Large Response Protection](#large-response-protection)). A GET answered `202 Accepted` (result still computing) returns a structured `error` with `pending: true` ([GitHub -- Repository Insights](../../plugins/github/docs/github-api.md#repository-insights)).
 
 The optional `connection` argument selects one of the user's connections to a multi-connection service; its rules and error codes are in [User Connections -- Tool Dispatch](user-connections.md#tool-dispatch).
 
@@ -149,7 +149,7 @@ Caller headers (the tools' `headers` argument or the sandbox proxy bodies' `head
 
 **Why inject credentials server-side?** Putting keys in the model's context (tool descriptions, history, responses) would leak them into logs, cached sessions and user-visible output.
 
-**Why a hostname registry with optional path prefixes?** Hostname matching is unambiguous for most APIs; path prefixes (e.g. `www.googleapis.com/calendar/v3`) split shared hosts. A URL-pattern registry was unnecessary for the APIs in use.
+**Why a hostname registry with optional path prefixes?** Hostname matching is unambiguous for most APIs; path prefixes (e.g. `www.googleapis.com/calendar/v3`) split shared hosts.
 
 ### Proxy Endpoint (`POST /api/authed-get`)
 
@@ -163,7 +163,7 @@ Sandbox scripts reach the same handler through `POST /api/authed-get` (`authed_g
 
 `POST /api/tool-call` (`script_tool_call_endpoint()` in `chat/gemini_api/script_tool_call.py`) lets sandbox code call an allow-listed subset of the dynamic tools with the meta tool's `{tool_name, arguments}` shape. It validates `tool_name` against `SCRIPT_TOOL_CALL_ALLOWLIST` (400 with the list otherwise) and runs the shared `_dispatch_tool_call()` with `conversation_id=None` and `is_script=True`, so coercion, errors and notices match agent calls; non-JSON results return as `text/plain`.
 
-The list is explicit, so registry tools stay script-invisible until added: the Gmail Simple and Quest-label tools, the memory reads, the Quest Docs and Quest Tables reads (`run_kind="script"`: no project docs or tables, read-only -- [Quest Docs -- Script Bridge](quest-docs.md#script-bridge)) and each plugin manifest's `script_tool_allowlist` via `extend_script_allowlist()` (the only script path to the Slack and Telegram tools, which have no HTTP routes). Arguments naming workspace files (e.g. `send_slack_dm_to_self`'s `files`) fail over the bridge, which has no conversation. Excluded on purpose: `wait_for_handles` (raises loop sentinels), conversation- or project-scoped tools (`set_conversation_name`, `project_db_query`, `get_response_content`, the workspace-download tools), file tools (scripts have the mounts; `get_workspace_file` returns provider parts), and `authed_get` / `authed_post` (their routes handle binary bodies).
+The list is explicit, so registry tools stay script-invisible until added: the Gmail Simple and Quest-label tools, the memory reads, the Quest Docs and Quest Tables reads (`run_kind="script"`: no project docs or tables, read-only -- [Quest Docs -- Script Bridge](quest-docs.md#script-bridge)) and each plugin manifest's `script_tool_allowlist` via `extend_script_allowlist()` (the only script path to the Slack and Telegram tools, which have no HTTP routes). Arguments naming workspace files (e.g. `send_slack_dm_to_self`'s `files`) fail over the bridge: it has no conversation. Excluded on purpose: `wait_for_handles` (raises loop sentinels), conversation- or project-scoped tools (`set_conversation_name`, `project_db_query`, `get_response_content`, the workspace-download tools), file tools (scripts have the mounts; `get_workspace_file` returns provider parts), and `authed_get` / `authed_post` (their routes handle binary bodies).
 
 Auth matches `/api/authed-get`, and the route is in `_BLOCKED_PROXY_PATHS` so the model uses `tool_call` instead. The `system:workspace` skill documents it for scripts.
 
@@ -175,9 +175,9 @@ Auth matches `/api/authed-get`, and the route is in `_BLOCKED_PROXY_PATHS` so th
 
 **Why a size gate?** Full listings (Gmail threads, Drive files, Airtable dumps) burn context; refusing by default pushes the model toward `fields`, filters and paging before it opts in.
 
-**Why chunked blobs and `output_file` both?** Blobs serve a model that still wants to read the body itself, a page at a time; `output_file` serves the common case where the body goes to `run_python` / `run_script` / `get_workspace_file`, skipping staging and chunk round trips. Bodies land under hidden `.responses/` because users rarely want them in the file browser, and collide rather than overwrite so a later turn can rely on an earlier saved body.
+**Why chunked blobs and `output_file` both?** Blobs serve a model that wants to read the body itself, a page at a time; `output_file` serves the common case where the body goes to `run_python` / `run_script` / `get_workspace_file`, skipping chunk round trips. Bodies land under hidden `.responses/` because users rarely want them in the file browser, and collide rather than overwrite so a later turn can rely on an earlier saved body.
 
-**Why character offsets?** Byte offsets could split multi-byte UTF-8 characters; the cost is reading the whole blob per chunk (see the NOTE in `_handle_get_response_content()`).
+**Why character offsets?** Byte offsets could split multi-byte UTF-8 characters; the cost is reading the whole blob per chunk.
 
 ## System Prompt
 

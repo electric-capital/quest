@@ -16,6 +16,20 @@ Access the GitHub REST API using `authed_get` with the full GitHub API URL. Auth
 | `/repos/{owner}/{repo}` | Get a single repository |
 | `/repos/{owner}/{repo}/branches` | List branches |
 | `/repos/{owner}/{repo}/stargazers` | List users who have starred the repo (send `Accept: application/vnd.github.star+json` to also get `starred_at`) |
+| `/repos/{owner}/{repo}/contributors` | Contributors ordered by commit count (`contributions` per user) |
+| `/repos/{owner}/{repo}/languages` | Bytes of code per language |
+| `/repos/{owner}/{repo}/forks` | List forks (`sort=newest|oldest|stargazers|watchers`) |
+| `/repos/{owner}/{repo}/community/profile` | Community health: `health_percentage` and which of README, LICENSE, CODE_OF_CONDUCT, CONTRIBUTING, issue/PR templates exist |
+| `/repos/{owner}/{repo}/stats/contributors` | Per-contributor totals and weekly additions / deletions / commits (Insights > Contributors) |
+| `/repos/{owner}/{repo}/stats/commit_activity` | Commits per week for the last year, with a per-day breakdown (Insights > Commits) |
+| `/repos/{owner}/{repo}/stats/code_frequency` | Weekly `[week, additions, deletions]` for the repo's life (Insights > Code frequency) |
+| `/repos/{owner}/{repo}/stats/participation` | Last 52 weeks of commit counts, `all` vs `owner` |
+| `/repos/{owner}/{repo}/stats/punch_card` | Commit counts by weekday and hour |
+| `/repos/{owner}/{repo}/traffic/views` | Page views for the last 14 days, daily or weekly (`per=day|week`); needs push access |
+| `/repos/{owner}/{repo}/traffic/clones` | Clones for the last 14 days (`per=day|week`); needs push access |
+| `/repos/{owner}/{repo}/traffic/popular/referrers` | Top 10 referring sites over the last 14 days; needs push access |
+| `/repos/{owner}/{repo}/traffic/popular/paths` | Top 10 most-viewed paths over the last 14 days; needs push access |
+| `/repos/{owner}/{repo}/dependency-graph/sbom` | The dependency graph as an SPDX SBOM (large: use `output_file`) |
 | `/repos/{owner}/{repo}/issues` | List issues (also returns PRs) |
 | `/repos/{owner}/{repo}/issues/{issue_number}` | Get a single issue |
 | `/repos/{owner}/{repo}/issues/{issue_number}/comments` | List issue comments |
@@ -49,6 +63,8 @@ Access the GitHub REST API using `authed_get` with the full GitHub API URL. Auth
 - `sha` / `path` / `author` / `committer`: Commit listing filters
 - `ref`: Branch, tag, or commit SHA for `contents` (defaults to the default branch)
 - `type`: Repository type filter (`all`, `owner`, `public`, `private`, `member` for user repos; `all`, `public`, `private`, `forks`, `sources`, `member` for org repos)
+- `anon`: `true` to include anonymous contributors on `/contributors`
+- `per`: `day` or `week` buckets for `/traffic/views` and `/traffic/clones`
 - `q`: Search query (required for `search/*` endpoints; supports GitHub search qualifiers like `repo:`, `language:`, `state:`)
 - Actions runs filters: `branch`, `event`, `status` (e.g. `failure`, `success`, `in_progress`), `actor`, `created`, `head_sha`, `workflow_id`
 - Actions jobs filter: `filter=latest|all` (defaults to `latest` on `/actions/runs/{run_id}/jobs`)
@@ -118,6 +134,41 @@ tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/sear
 
 # Search code
 tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/search/code?q=def+main+repo:owner/repo"})
+
+# --- Repository insights ---
+
+# Top contributors by commit count (first page = top 30)
+tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/contributors?per_page=30"})
+
+# Language breakdown in bytes
+tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/languages"})
+
+# Community health checklist
+tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/community/profile"})
+
+# Commits per week for the last year (52 entries of {week, total, days[7]})
+tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/stats/commit_activity"})
+
+# Weekly additions and deletions over the repo's life -- one row per week, so save it and aggregate
+tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/stats/code_frequency", "output_file": "code-frequency.json"})
+
+# Per-contributor weekly adds/deletes/commits (one entry per contributor, each with up to a full history of weeks)
+tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/stats/contributors", "output_file": "contributor-stats.json"})
+
+# Last 52 weeks of commit counts, everyone vs the owner
+tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/stats/participation"})
+
+# Commits by weekday and hour ([day 0-6, hour 0-23, commits] triples)
+tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/stats/punch_card"})
+
+# Traffic (push access required): views and clones per day, top referrers and paths
+tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/traffic/views?per=day"})
+tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/traffic/clones?per=week"})
+tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/traffic/popular/referrers"})
+tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/traffic/popular/paths"})
+
+# Newest forks
+tool_call(tool_name="authed_get", arguments={"url": "https://api.github.com/repos/owner/repo/forks?sort=newest&per_page=20"})
 
 # --- GitHub Actions (CI/CD) ---
 
@@ -210,6 +261,7 @@ create_action_request(request_type="github_set_issue_state", params={"owner": "o
 - Pagination: maximum `per_page=100`; GitHub silently caps larger values.
 - Stargazers are listed oldest star first, each with a full user object (~1 KB), so any page with more than a couple of users exceeds the inline size limit: pass `output_file` and pull out `login` (and `starred_at`) with `run_python`. The repo's `stargazers_count` (from `/repos/{owner}/{repo}`) tells you how many pages to fetch.
 - Search queries support GitHub's search syntax (qualifiers like `repo:`, `language:`, `state:`, `author:`, `is:pr`, `is:issue`).
+- Repository insights: the `/stats/*` endpoints are computed by GitHub on demand. The first request for a repo (or the first after a while) can come back as a `status_code: 202` error with `"pending": true` and no data -- wait a few seconds and repeat the same call; large repos may need two or three tries. `stats/contributors` and `stats/code_frequency` carry one row per week of the repo's life, so pass `output_file` and aggregate with `run_python`. `/stats/contributors` lists at most the top 100 contributors; `/contributors` paginates through all of them. Traffic endpoints (`/traffic/*`) only cover the last 14 days and need push access to the repository: a 403 means the user is not a collaborator, not that GitHub is unavailable. The `/repos/{owner}/{repo}` object itself carries the headline counts (`stargazers_count`, `forks_count`, `subscribers_count`, `open_issues_count`, `size`), so start there for a quick overview.
 - For repositories inside organizations that require third-party OAuth app approval, the org admin must approve the Quest OAuth app before its repos are accessible.
 - GitHub Actions: listing workflows/runs/jobs and reading per-job logs is supported, and a workflow can be run via the `github_trigger_workflow` action request; re-running, canceling runs and deleting logs are intentionally NOT exposed. Run-level zip log downloads (`/actions/runs/{run_id}/logs`) are also intentionally not surfaced in this iteration -- use per-job logs via `github_get_job_log` instead.
 - GitHub Actions endpoints use the same OAuth scope as the rest of the GitHub integration (`repo`); no extra permission is needed.

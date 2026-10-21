@@ -187,6 +187,33 @@ class TestGitHubRegistryEntry:
         for path in expected_allowed:
             assert matches(path), f"expected Actions path to be allowed: {path}"
 
+    def test_github_allowed_endpoints_cover_insights_paths(self):
+        """The reads behind a repo's Insights tab are in the allow-list."""
+        entry = _SERVICE_REGISTRY["api.github.com"]
+        compiled = entry["_allowed_endpoints"]
+
+        def matches(path: str) -> bool:
+            return any(pat.match(path) for pat in compiled)
+
+        expected_allowed = [
+            "/repos/owner/repo/contributors",
+            "/repos/owner/repo/languages",
+            "/repos/owner/repo/forks",
+            "/repos/owner/repo/community/profile",
+            "/repos/owner/repo/stats/contributors",
+            "/repos/owner/repo/stats/commit_activity",
+            "/repos/owner/repo/stats/code_frequency",
+            "/repos/owner/repo/stats/participation",
+            "/repos/owner/repo/stats/punch_card",
+            "/repos/owner/repo/traffic/views",
+            "/repos/owner/repo/traffic/clones",
+            "/repos/owner/repo/traffic/popular/referrers",
+            "/repos/owner/repo/traffic/popular/paths",
+            "/repos/owner/repo/dependency-graph/sbom",
+        ]
+        for path in expected_allowed:
+            assert matches(path), f"expected Insights path to be allowed: {path}"
+
     def test_github_allowed_endpoints_reject_unknown_paths(self):
         entry = _SERVICE_REGISTRY["api.github.com"]
         compiled = entry["_allowed_endpoints"]
@@ -209,6 +236,15 @@ class TestGitHubRegistryEntry:
             "/repos/owner/repo/actions/secrets",             # secrets not allow-listed
             "/repos/owner/repo/actions/runners",             # runners not allow-listed
             "/repos/owner/repo/actions/caches",              # caches not allow-listed
+            # --- Insights negative cases ---
+            "/repos/owner/repo/stats",                       # no bare stats root
+            "/repos/owner/repo/stats/other",                 # only the five named reports
+            "/repos/owner/repo/traffic",                     # no bare traffic root
+            "/repos/owner/repo/traffic/popular",             # only referrers / paths
+            "/repos/owner/repo/community",                   # only /community/profile
+            "/repos/owner/repo/dependabot/alerts",           # security views not exposed
+            "/repos/owner/repo/code-scanning/alerts",        # security views not exposed
+            "/repos/owner/repo/dependency-graph/snapshots",  # SBOM only (snapshots is a write)
         ]
         for path in denied:
             assert not matches(path), f"path should not be allowed: {path}"
@@ -336,3 +372,49 @@ class TestMakeAuthedRequestGitHub:
         assert len(calls) == 2
         assert calls[0][0].endswith("/contents")
         assert calls[1][0].endswith("/contents/src/deep/file.py")
+
+    def test_stats_202_becomes_pending_error(self):
+        """GitHub answers /stats/* with 202 + empty body while computing.
+
+        The model must get a retry instruction, not an empty body that
+        reads as a repo with no activity.
+        """
+        calls: list = []
+        with _mock_httpx_client(calls, status_code=202, body={}):
+            result = _run(_make_authed_request(
+                "https://api.github.com/repos/owner/repo/stats/commit_activity",
+                user=USER_WITH_GITHUB,
+            ))
+
+        parsed = json.loads(result)
+        err = parsed["error"]
+        assert err["status_code"] == 202
+        assert err["pending"] is True
+        assert err["service"] == "GitHub"
+        assert "Retry" in err["message"]
+        assert len(calls) == 1
+
+    def test_stats_200_passes_body_through(self):
+        calls: list = []
+        weeks = [{"week": 1760000000, "total": 3, "days": [0, 1, 0, 2, 0, 0, 0]}]
+        with _mock_httpx_client(calls, body=weeks):
+            result = _run(_make_authed_request(
+                "https://api.github.com/repos/owner/repo/stats/commit_activity",
+                user=USER_WITH_GITHUB,
+            ))
+
+        assert json.loads(result) == weeks
+
+    def test_traffic_403_passes_through_as_upstream_error(self):
+        """Traffic needs push access; GitHub's 403 reaches the model as-is."""
+        calls: list = []
+        body = {"message": "Must have push access to repository"}
+        with _mock_httpx_client(calls, status_code=403, body=body):
+            result = _run(_make_authed_request(
+                "https://api.github.com/repos/owner/repo/traffic/views",
+                user=USER_WITH_GITHUB,
+            ))
+
+        err = json.loads(result)["error"]
+        assert err["status_code"] == 403
+        assert err["response"] == body
