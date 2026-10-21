@@ -40,7 +40,7 @@ def _doc_tool_names() -> frozenset[str]:
 def _browser_tool_names() -> frozenset[str]:
     """The browser tools: the registry specs gated on the ``browser``
     pseudo-key (``requires_service == BROWSER_SERVICE_KEY``); public
-    projects only (``PUBLIC_ONLY_TOOL_CALL_TOOLS``)."""
+    projects only, documented by the ``system:browser`` skill."""
     return frozenset(
         name for name, spec in TOOL_CALL_REGISTRY.items()
         if spec.get("requires_service") == BROWSER_SERVICE_KEY
@@ -84,14 +84,6 @@ def _table_write_tool_names() -> frozenset[str]:
 _PUBLIC_DOCS_SECTION = """
 **Quest Docs:** Docs are persistent markdown documents kept inside Quest; they outlive this conversation and later conversations can find them again. This conversation sees only PUBLIC docs, which live only in public projects: it sees this project's docs and creates docs only in this project. User docs are always private, so always create with `create_doc(target="project")` (`target="user"` is refused here); no doc's mode can be switched. Find docs with `list_docs` / `search_docs`, read them with `read_doc` (required before `edit_doc`), change one with `edit_doc` (exact string replacement) or `append_to_doc`, and embed a workspace image with `add_doc_image`.
 Public docs the user owns or was given write access to are written directly, with no approval step, unless the owner switched on "Require approval for agent writes": then the write tool refuses with `approval_required` and a `suggested_request`, which you forward unchanged as `create_action_request(request_type="write_doc", ...)` so the user can approve the change on a card. Use a doc for content meant to last (notes, reports, running logs appended under a dated heading) and the workspace for scratch files.
-"""
-
-
-# Public-project prompt paragraph shown while the browser is enabled for
-# the user (the ``browser`` feature gate); stands in for a skill, since the
-# public prompt carries none. Must not name internal-only tools or skills.
-_PUBLIC_BROWSER_SECTION = """
-**Browser:** This conversation has its own real web browser (headless Chromium) through the `browser_*` tools, separate from the sandbox: it runs JavaScript, keeps cookies and logins between calls, and follows the same network rules as the sandbox (public internet only, nothing internal). Prefer it over `run_python` + `requests` for pages that need JavaScript, a login, or several steps (search, click through results, fill a form); keep using the sandbox for plain downloads and APIs. Start with `browser_navigate`; every browser step returns the page's url, title and an accessibility snapshot, an outline of the page whose `[ref=e12]` markers name the elements `browser_click`, `browser_type`, `browser_select` and `browser_hover` act on (references change after every navigation, so take them from the latest result). `browser_screenshot` saves a PNG to this conversation's workspace and shows it to you; use it when visuals matter and embed it for the user with a markdown image. `browser_evaluate` runs JavaScript in the page to extract data the snapshot shows poorly. The browser session ends after a few minutes without browser calls (logins are kept) or with `browser_close`. Never type a secret the user did not give you in this conversation into a website, and tell the user before signing in anywhere.
 """
 
 
@@ -1102,11 +1094,14 @@ def get_public_project_system_prompt(
     paragraph stands in for the ``system:tables`` skill).
 
     ``browser_enabled`` is the same switch for the browser gate
-    (``config.feature_gates.browser_enabled_for``): while False the
-    ``browser_*`` tools are excluded and the "Browser" paragraph is
-    omitted; while True both are present. The browser tools exist for
-    public projects only (``PUBLIC_ONLY_TOOL_CALL_TOOLS``), so no other
-    prompt builder has such a switch.
+    (``config.feature_gates.browser_enabled_for``). The browser tools are
+    never inlined: they are documented by the ``system:browser`` skill,
+    one of the public system skills (``PUBLIC_SYSTEM_SKILLS``). While
+    True the prompt carries a System Skills block naming that skill and
+    its tools plus the ``load_skills`` tool; while False (or with every
+    public skill gated off) neither appears and the prompt is the
+    four-tool one. The browser exists for public projects only, so no
+    other prompt builder has such a switch.
 
     A public-project conversation is always a project conversation, so the
     "Two file spaces" paragraph (conversation workspace at ``/workspace``,
@@ -1115,7 +1110,7 @@ def get_public_project_system_prompt(
     conversation's notice flags) add their notes as in get_system_prompt().
     """
     from chat.llm.tool_schemas import (
-        TOOL_CALL_REGISTRY, PUBLIC_TOOL_CALL_ALLOWLIST,
+        TOOL_CALL_REGISTRY, PUBLIC_TOOL_CALL_ALLOWLIST, PUBLIC_SYSTEM_SKILLS,
     )
 
     identity_line = ""
@@ -1167,15 +1162,39 @@ def get_public_project_system_prompt(
         public_exclude |= _doc_tool_names()
     if not tables_enabled:
         public_exclude |= _table_tool_names()
-    if not browser_enabled:
-        public_exclude |= _browser_tool_names()
-    # No skill tools here, so every offered tool is documented in full.
+    # The browser tools are skill-documented (system:browser): named on
+    # the public System Skills block below, never inlined here.
+    public_exclude |= _browser_tool_names()
+    # Every inlined tool is documented in full (the public prompt has no
+    # core tier); the skill-documented ones are the public system skills'.
     dynamic_tools_section = _build_dynamic_tools_section(
         exclude=public_exclude, core_only=False,
     )
     docs_section = _PUBLIC_DOCS_SECTION if docs_enabled else ""
     tables_section = _PUBLIC_TABLES_SECTION if tables_enabled else ""
-    browser_section = _PUBLIC_BROWSER_SECTION if browser_enabled else ""
+
+    # Public system skills (PUBLIC_SYSTEM_SKILLS, gated like any other
+    # skill through the public connected-services map): the one place a
+    # public prompt names a skill. Empty while every public skill is
+    # gated off, and then load_skills is left out of the tool list too.
+    public_services = {BROWSER_SERVICE_KEY: browser_enabled}
+    skills_exclude = set(public_exclude) - _browser_tool_names() if browser_enabled else set(public_exclude)
+    public_skills_block = build_system_skills_enumeration(
+        public_services, has_project=True, exclude_tools=skills_exclude,
+        include_only=PUBLIC_SYSTEM_SKILLS,
+    )
+    if public_skills_block:
+        tools_intro = "You have five tools available:"
+        load_skills_line = (
+            "\n5. **load_skills(skill_ids)** -- Load one or more of the built-in "
+            "system skills listed in the 'System Skills' section below; they "
+            "are the only skills in a public project (no user skills). Load a "
+            "skill before calling the tools its line names."
+        )
+        public_skills_block = "\n" + public_skills_block + "\n"
+    else:
+        tools_intro = "You have four tools available:"
+        load_skills_line = ""
 
     if is_routine:
         naming_section = _ROUTINE_NAMING_SECTION
@@ -1207,15 +1226,15 @@ User Local Time: <current local datetime> (<timezone>)
 
 Use the time information to answer time-sensitive questions correctly without needing to call `get_current_time()` for simple cases. Do not repeat or quote the XML tags back to the user unless specifically asked.
 
-You have four tools available:
+{tools_intro}
 
 1. **tool_call(tool_name, arguments?)** -- Execute a tool by name. See the 'Dynamic Tools' section below for available tools and their parameters.
 2. **run_script(path, args?, timeout?)** -- Run a script from the workspace inside a sandboxed container with Python 3.12 and **internet access**. Returns stdout, stderr, exit code. Default timeout is {SCRIPT_RUNNER_TIMEOUT} seconds (max {SCRIPT_RUNNER_MAX_TIMEOUT}).
 3. **run_python(script, args?, timeout?)** -- Run inline Python in the same internet-enabled sandboxed container. For one-off tasks (no file written).
-4. **create_action_request(request_type, params, reasoning)** -- Propose a change to one of this project's docs or tables that needs the user's approval (the only request types here are `write_doc`, `create_table`, `change_table_schema` and `write_table_rows`; the docs and tables paragraphs below, present while each feature is enabled, say when to use each). The card shows Approve / Revise / Stop buttons and nothing is written until the user approves. This call BLOCKS until they resolve it; the return value carries the verdict (`executed`, `denied` with optional revise `feedback`, or `stopped`, which halts the conversation until the user's next message) so you continue on the same turn. Several independent requests may be issued in one response, each on its own card.
+4. **create_action_request(request_type, params, reasoning)** -- Propose a change to one of this project's docs or tables that needs the user's approval (the only request types here are `write_doc`, `create_table`, `change_table_schema` and `write_table_rows`; the docs and tables paragraphs below, present while each feature is enabled, say when to use each). The card shows Approve / Revise / Stop buttons and nothing is written until the user approves. This call BLOCKS until they resolve it; the return value carries the verdict (`executed`, `denied` with optional revise `feedback`, or `stopped`, which halts the conversation until the user's next message) so you continue on the same turn. Several independent requests may be issued in one response, each on its own card.{load_skills_line}
 
 {dynamic_tools_section}
-
+{public_skills_block}
 **The sandbox (run_script / run_python):**
 - Has open internet access: fetch public URLs and APIs with `requests` / `httpx` / `curl` / `wget`. Pre-installed Python packages include requests, httpx, beautifulsoup4, lxml, openpyxl, python-docx, matplotlib, seaborn, and pypdf.
 - Private network destinations (LAN addresses, cloud metadata) are blocked; only the public internet is reachable.
@@ -1228,7 +1247,7 @@ You have four tools available:
 - `create_action_request` here only opens approval cards for this project's public docs and tables; it cannot propose writes to external services, memories, skills or routines, and you cannot spawn sub-agents (`agent_task*` is unavailable).
 - If the user asks for something that needs internal data or a connected service, tell them plainly that it requires a regular (private) conversation outside this public project -- do not attempt workarounds.
 - Files the user uploads to this conversation or to the project workspace are fair game: the user chose to bring them into a public project.
-{browser_section}{docs_section}{tables_section}
+{docs_section}{tables_section}
 {naming_section}
 
 **Example usage:**

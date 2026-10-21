@@ -128,9 +128,9 @@ The first three tools are the discover-and-load path (they include the `system:*
 | `list_my_skills` | Categorized listing of the user's DB skills with per-skill autoload status (no content, no `system:*`) | `_handle_list_my_skills()` in `chat/gemini_api/tool_handlers/skills.py` | `list_accessible_skills()` + `list_project_skills()` in `db/skill_store.py` | JSON |
 | `get_skill` | Full detail for one DB skill by id (content, settings, owner-only share roster) | `_handle_get_skill()` in `chat/gemini_api/tool_handlers/skills.py` | `get_skill()` / `get_project_skill()` / `list_skill_shares()` in `db/skill_store.py` | JSON |
 
-**Discovery-then-load pattern:** `list_skills` and `search_skills` intentionally omit skill content to keep responses compact. The agent uses these to identify relevant skills, then calls `load_skills` with specific IDs to fetch the full content. This avoids transferring potentially large skill content (up to 64KB each) when only browsing.
+**Discovery-then-load pattern:** `list_skills` and `search_skills` omit skill content (up to 64KB each); the agent identifies skills with them, then fetches the content of specific ids with `load_skills`.
 
-**Access control:** All five tools respect the same visibility rules as the REST API -- agents can only see skills they have access to (own, public, explicitly shared, or scoped to the conversation's project). Inaccessible or nonexistent skill IDs passed to `load_skills` are silently skipped; `get_skill` returns an error envelope for an inaccessible id.
+**Access control:** All five tools apply the REST API's visibility rules (own, public, explicitly shared, or scoped to the conversation's project). Inaccessible or nonexistent ids passed to `load_skills` are silently skipped; `get_skill` returns an error envelope for an inaccessible id.
 
 **Dispatch:** The tools are routed via `_dispatch_tool_call()` in `chat/gemini_api/tool_dispatch.py`, alongside the other base tools. Each handler imports its DB function lazily to avoid circular imports.
 
@@ -193,6 +193,10 @@ The model-facing parameter spec lives in the `system:skill_management` system sk
 ## System Skills
 
 System skills are hardcoded (non-DB) skills that carry per-backend API documentation. They used to live inline in the system prompt on every turn; moving them into loadable skills shrinks the always-present prompt and lets the model pull in only the backend(s) it needs.
+
+### Public Projects
+
+A [public project](../architecture/public-projects.md) conversation has no user, shared or project skills and no discovery tools; its `load_skills` admits only `PUBLIC_SYSTEM_SKILLS` (`chat/llm/tool_schemas.py`), core-owned system skills naming public tools alone, built with no proxy URL or API key. See [Browser for Public Projects](public-browser.md#public-system-skills-and-the-prompt).
 
 ### Identifier Scheme
 

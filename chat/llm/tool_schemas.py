@@ -2429,8 +2429,9 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
     # Every action but screenshot / evaluate / close returns the page
     # state after it settled: url, title and an accessibility snapshot
     # whose [ref=eNN] markers are the element references the other tools
-    # take. Gated on the ``browser`` feature (requires_service pseudo-key)
-    # and refused outside public projects by the handlers.
+    # take. Documented by the system:browser skill (_SKILL_DOCUMENTED_TOOLS),
+    # gated on the ``browser`` feature (requires_service pseudo-key) and
+    # refused outside public projects by the handlers.
     # ----------------------------------------------------------------
     "browser_navigate": {
         "name": "browser_navigate",
@@ -3842,8 +3843,21 @@ PROJECT_HIDDEN_WORKSPACE_TOOLS: frozenset[str] = frozenset({
 # convenience; the enforced boundary is the allowlist check in
 # chat/gemini_api/tool_dispatch.py plus the loop-arm rejects in
 # chat/gemini_api/conversation.py and the request-type check in the
-# create_action_request arm (chat/gemini_api/turn_tools.py).
+# create_action_request arm (chat/gemini_api/turn_tools.py). The fifth
+# public tool is the public load_skills below (_PUBLIC_LOAD_SKILLS).
 _PUBLIC_BASE_TOOL_NAMES = {"tool_call", "run_script", "run_python"}
+
+# The system skills a public-project conversation may load: code-owned
+# catalog entries (chat/system_skills/catalog.py) whose content names only
+# tools in PUBLIC_TOOL_CALL_ALLOWLIST and embeds no credential. User,
+# shared, project and every other system skill stay out of reach (skill
+# bodies are internal data; the connector skills document internal
+# services). The public prompt enumerates these, filtered by their gates,
+# and the public load_skills arm (chat/gemini_api/tool_handlers/skills.py
+# _handle_public_load_skills) refuses every other id. Core-owned.
+PUBLIC_SYSTEM_SKILLS: frozenset[str] = frozenset({
+    "system:browser",
+})
 
 # The action request types a public-project conversation may propose: the
 # Quest Docs and Quest Tables cards. Each one writes an in-app artifact that
@@ -3952,9 +3966,40 @@ _PUBLIC_CREATE_ACTION_REQUEST: ToolSpec = {
     },
 }
 
+# The public load_skills: the base tool's shape with a description that
+# names only the public system skills (no user skills, no search tools
+# here). The public dispatch arm enforces the PUBLIC_SYSTEM_SKILLS set.
+_PUBLIC_LOAD_SKILLS: ToolSpec = {
+    "name": "load_skills",
+    "description": (
+        "Load the full content of one or more built-in system skills by "
+        "id (`system:...`). The only skills available in this conversation "
+        "are the ones listed in the 'System Skills' section of the system "
+        "prompt; there are no user skills here. Load a skill before calling "
+        "the tools its line names: its content ends with a \"Tool "
+        "reference\" giving their parameters. Returns a markdown document "
+        "with one block per loaded skill."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "skill_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "The `system:*` ids to load, from the System Skills section.",
+            },
+            "intent_message": {
+                "type": "string",
+                "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Load the browser skill'.",
+            },
+        },
+        "required": ["skill_ids"],
+    },
+}
+
 PUBLIC_TOOLS: list[ToolSpec] = [
     t for t in BASE_TOOLS if t["name"] in _PUBLIC_BASE_TOOL_NAMES
-] + [_PUBLIC_CREATE_ACTION_REQUEST]
+] + [_PUBLIC_CREATE_ACTION_REQUEST, _PUBLIC_LOAD_SKILLS]
 
 # Routine runs inside a public project: the public subset plus the
 # completion marker. routine_completed reads nothing and writes nothing, so
@@ -3996,7 +4041,8 @@ PUBLIC_ROUTINE_TOOLS: list[ToolSpec] = PUBLIC_TOOLS + [_ROUTINE_COMPLETED]
 # pseudo-key) are allowed: they drive the conversation's own internet-only
 # browser container (chat/browser_sessions.py), which has the public
 # sandbox's network posture and no credential, and they exist for public
-# projects alone -- their handlers refuse every other conversation.
+# projects alone -- their handlers refuse every other conversation. They
+# are documented by system:browser (PUBLIC_SYSTEM_SKILLS), not inlined.
 # Everything else in TOOL_CALL_REGISTRY reads internal data (connectors,
 # personal memories, authed APIs) and is hard-rejected at dispatch time.
 PUBLIC_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
@@ -4104,19 +4150,16 @@ _SKILL_DOCUMENTED_TOOLS: dict[str, str] = {
     "update_rows": "system:tables",
     "upsert_rows": "system:tables",
     "delete_rows": "system:tables",
+    # The browser tools (public projects only): documented by
+    # system:browser, one of PUBLIC_SYSTEM_SKILLS, which the public prompt
+    # enumerates and public load_skills admits. Their specs are gated on
+    # the ``browser`` pseudo-key, always False in a private conversation,
+    # so no regular prompt names the skill or its tools.
+    **{
+        name: "system:browser" for name, spec in TOOL_CALL_REGISTRY.items()
+        if spec.get("requires_service") == BROWSER_SERVICE_KEY
+    },
 }
-
-
-# Tools offered only by the public-project prompt (spec["public_only"]):
-# no regular prompt documents them -- they are neither core nor
-# skill-documented -- and their handlers refuse every non-public call. The
-# browser tools: a public conversation's own internet-enabled browser
-# (chat/browser_sessions.py), pointless without the public sandbox's
-# egress. Gated on the ``browser`` feature through requires_service.
-PUBLIC_ONLY_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
-    name for name, spec in TOOL_CALL_REGISTRY.items()
-    if spec.get("requires_service") == BROWSER_SERVICE_KEY
-})
 
 
 def _stamp_prompt_tiers() -> None:
@@ -4128,21 +4171,15 @@ def _stamp_prompt_tiers() -> None:
     overlap = CORE_TOOL_CALL_TOOLS & _SKILL_DOCUMENTED_TOOLS.keys()
     if overlap:
         raise RuntimeError(f"tool_call tools both core and skill-documented: {sorted(overlap)}")
-    overlap = PUBLIC_ONLY_TOOL_CALL_TOOLS & (CORE_TOOL_CALL_TOOLS | _SKILL_DOCUMENTED_TOOLS.keys())
-    if overlap:
-        raise RuntimeError(f"public-only tool_call tools with another tier: {sorted(overlap)}")
     for name, spec in TOOL_CALL_REGISTRY.items():
         if name in CORE_TOOL_CALL_TOOLS:
             spec["core"] = True
         elif name in _SKILL_DOCUMENTED_TOOLS:
             spec["skill"] = _SKILL_DOCUMENTED_TOOLS[name]
-        elif name in PUBLIC_ONLY_TOOL_CALL_TOOLS:
-            spec["public_only"] = True
         else:
             raise RuntimeError(
                 f"tool_call tool {name!r} has no prompt tier: add it to "
-                "CORE_TOOL_CALL_TOOLS, _SKILL_DOCUMENTED_TOOLS or make it "
-                "public-only (PUBLIC_ONLY_TOOL_CALL_TOOLS)"
+                "CORE_TOOL_CALL_TOOLS or _SKILL_DOCUMENTED_TOOLS"
             )
     unknown = (CORE_TOOL_CALL_TOOLS | _SKILL_DOCUMENTED_TOOLS.keys()) - TOOL_CALL_REGISTRY.keys()
     if unknown:

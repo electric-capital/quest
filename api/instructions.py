@@ -117,6 +117,21 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
     return services
 
 
+def get_public_connected_services(user: dict) -> dict[str, bool]:
+    """The connected-services map of a PUBLIC-project conversation: no
+    connector is ever connected there, only the feature-gate pseudo-keys
+    are set. It gates the public system skills (``PUBLIC_SYSTEM_SKILLS``
+    in ``chat/llm/tool_schemas.py``) in the public prompt's enumeration
+    and in the public ``load_skills`` arm; the public prompt's tool
+    sections take the same gates as explicit flags."""
+    email = user.get("email") or ""
+    return {
+        DOCS_SERVICE_KEY: docs_enabled_for(email),
+        TABLES_SERVICE_KEY: tables_enabled_for(email),
+        BROWSER_SERVICE_KEY: browser_enabled_for(email),
+    }
+
+
 def _preamble_instructions(base_url: str, api_key: str, connected_services: dict[str, bool] | None = None) -> str:
     """Preamble section: proxy intro, auth, and API version list."""
     include_all = connected_services is None

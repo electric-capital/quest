@@ -526,6 +526,13 @@ async def _tool_search_skills(ctx: ToolContext, args: dict) -> str:
 
 
 async def _tool_load_skills(ctx: ToolContext, args: dict) -> str:
+    if getattr(ctx, "is_public", False):
+        # Public projects: the PUBLIC_SYSTEM_SKILLS roster only, built
+        # without the proxy URL or the user's API key.
+        from chat.gemini_api.tool_handlers.skills import _handle_public_load_skills
+        return await _handle_public_load_skills(
+            ctx.user, ctx.conversation_id, args.get("skill_ids", []),
+        )
     from chat.gemini_api.constants import get_proxy_base_url
     return await _handle_load_skills(
         ctx.user["id"], args.get("skill_ids", []),
@@ -940,6 +947,12 @@ async def _dispatch_tool_call(
         return json.dumps({"error": f"Tool '{label}' failed: {exc}"}), []
 
 
+# The direct (non-tool_call) tools a public conversation may dispatch
+# besides the allowlisted dynamic tools: the two sandbox runners and
+# load_skills, whose public arm admits PUBLIC_SYSTEM_SKILLS alone.
+_PUBLIC_DIRECT_TOOLS = frozenset({"run_script", "run_python", "load_skills"})
+
+
 async def _dispatch_tool_call_inner(
     app,
     provider,
@@ -1003,7 +1016,7 @@ async def _dispatch_tool_call_inner(
                         f"conversations. Available dynamic tools: {available}."
                     ),
                 }), []
-        elif tool_name not in ("run_script", "run_python") and \
+        elif tool_name not in _PUBLIC_DIRECT_TOOLS and \
                 tool_name not in PUBLIC_TOOL_CALL_ALLOWLIST:
             return json.dumps({
                 "error": (

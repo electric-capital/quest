@@ -63,6 +63,15 @@ REAPER_INTERVAL_SECONDS = 30
 # ``browser`` feature gate, never a connector.
 BROWSER_SERVICE_KEY = "browser"
 
+
+def browser_disabled_message() -> str:
+    """The one gate-closed text, used by the tool handlers and the system
+    skill loader."""
+    return (
+        "The browser is not enabled for you on this server (Settings > "
+        "Features > Browser in public projects)."
+    )
+
 STATE_SUBDIR = "browser"
 SOCKET_NAME = "agent.sock"
 # Podman label marking this server instance's sidecars, so the boot-time

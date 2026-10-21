@@ -308,6 +308,43 @@ async def _handle_load_skills(
         return json.dumps({"error": f"Failed to load skills: {e}"})
 
 
+async def _handle_public_load_skills(
+    user: dict, conversation_id: str | None, skill_ids: list[str],
+) -> str:
+    """``load_skills`` in a PUBLIC-project conversation.
+
+    Admits only ``PUBLIC_SYSTEM_SKILLS`` (core-owned, code-only catalog
+    entries whose content names public tools alone); every other id --
+    user, shared and project skills, and every other system skill -- is
+    refused before any lookup, with the public roster in the error. The
+    admitted skills are built with the public connected-services map (so
+    a closed feature gate reports its own message) and WITHOUT the proxy
+    base URL or the user's API key, which never reach a public prompt.
+    """
+    from api.instructions import get_public_connected_services
+    from chat.llm.tool_schemas import PUBLIC_SYSTEM_SKILLS
+
+    if not isinstance(skill_ids, list) or not skill_ids:
+        return json.dumps({"error": "Please provide at least one skill ID to load."})
+    refused = [sid for sid in skill_ids if sid not in PUBLIC_SYSTEM_SKILLS]
+    if refused:
+        return json.dumps({
+            "error": (
+                f"Skill(s) {', '.join(repr(s) for s in refused)} are not "
+                "available in public-project conversations: only the "
+                "built-in system skills listed in the System Skills section "
+                "can be loaded here."
+            ),
+            "available_skills": sorted(PUBLIC_SYSTEM_SKILLS),
+        })
+    return await _handle_load_skills(
+        user["id"], skill_ids,
+        connected_services=get_public_connected_services(user),
+        has_project=True, base_url="", api_key="",
+        conversation_id=conversation_id, user=user,
+    )
+
+
 async def _build_autoload_resolver(user_id: int, project_id: str | None = None):
     """Build a per-call resolver mapping a skill id to its autoload tiers.
 

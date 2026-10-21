@@ -7,6 +7,7 @@ use; the catalog itself is treated as private state.
 import inspect
 from typing import Callable, Optional
 
+from chat.browser_sessions import BROWSER_SERVICE_KEY, browser_disabled_message
 from chat.docs.constants import DOCS_SERVICE_KEY, docs_disabled_message
 from chat.tables.constants import TABLES_SERVICE_KEY, tables_disabled_message
 from chat.llm.tool_schemas import (
@@ -181,6 +182,8 @@ def load_system_skills(
                 error = docs_disabled_message()
             elif skill.requires == TABLES_SERVICE_KEY:
                 error = tables_disabled_message()
+            elif skill.requires == BROWSER_SERVICE_KEY:
+                error = browser_disabled_message()
             else:
                 error = (
                     f"{skill.name} is not connected. Connect it in "
@@ -235,6 +238,7 @@ def build_system_skills_enumeration(
     connected_services: Optional[dict[str, bool]] = None,
     has_project: bool = False,
     exclude_tools: Optional[set[str]] = None,
+    include_only: Optional[frozenset[str]] = None,
 ) -> str:
     """Build the compact "System Skills" block for the system prompt.
 
@@ -245,9 +249,13 @@ def build_system_skills_enumeration(
     prompt's Dynamic Tools section can document the core tools alone;
     ``exclude_tools`` is the prompt's excluded-tool set (the ``exclude``
     its builder passes to ``_build_dynamic_tools_section``), so a tool
-    hidden from the prompt is not named here either.
+    hidden from the prompt is not named here either. ``include_only``
+    restricts the block to those skill ids (the public prompt passes
+    ``PUBLIC_SYSTEM_SKILLS``); the gates still apply.
     """
     visible = list_system_skills(connected_services, has_project)
+    if include_only is not None:
+        visible = [skill for skill in visible if skill.id in include_only]
     if not visible:
         return ""
 

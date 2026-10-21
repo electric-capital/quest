@@ -147,10 +147,20 @@ class TestBuildScriptPodmanCmd:
 
 
 class TestPublicToolTier:
-    def test_public_tools_are_the_four_expected(self):
+    def test_public_tools_are_the_five_expected(self):
         assert [t["name"] for t in PUBLIC_TOOLS] == [
             "tool_call", "run_script", "run_python", "create_action_request",
+            "load_skills",
         ]
+
+    def test_public_load_skills_names_only_system_skills(self):
+        # The public load_skills is its own spec: no user skills, no
+        # search tools, just the System Skills section's ids.
+        spec = next(t for t in PUBLIC_TOOLS if t["name"] == "load_skills")
+        assert "system" in spec["description"].lower()
+        assert "no user skills" in spec["description"]
+        for term in ("UUID", "list_skills", "search_skills"):
+            assert term not in spec["description"], term
 
     def test_public_create_action_request_offers_only_artifact_cards(self):
         # The public create_action_request has its own fixed enum (the
@@ -213,10 +223,25 @@ class TestPublicDispatchRejects:
 
     def test_blocked_direct_tool_rejected(self):
         for name in ("curl_proxy_get", "authed_get", "load_gmail_attachment",
-                     "load_skills", "memory_search"):
+                     "list_skills", "search_skills", "memory_search"):
             result, _ = self._dispatch(name, {})
             parsed = json.loads(result)
             assert "not available in public-project" in parsed["error"], name
+
+    def test_load_skills_admits_only_public_system_skills(self):
+        # load_skills passes the gate but its public arm refuses every id
+        # outside PUBLIC_SYSTEM_SKILLS -- user skill UUIDs and the other
+        # system skills alike -- before any lookup.
+        from chat.llm.tool_schemas import PUBLIC_SYSTEM_SKILLS
+        for ids in (["system:gmail"], ["system:quest_docs"],
+                    ["00000000-0000-0000-0000-000000000000"],
+                    ["system:browser", "system:slack"]):
+            result, _ = self._dispatch("load_skills", {"skill_ids": ids})
+            parsed = json.loads(result)
+            assert "not available in public-project" in parsed["error"], ids
+            assert parsed["available_skills"] == sorted(PUBLIC_SYSTEM_SKILLS)
+        result, _ = self._dispatch("load_skills", {"skill_ids": []})
+        assert "at least one" in json.loads(result)["error"]
 
     def test_allowed_dynamic_tool_passes_gate(self):
         # get_current_time has no external dependencies, so the full
@@ -424,24 +449,32 @@ class TestPublicSystemPrompt:
             assert name not in closed, name
             assert f"- **{name}**" in shown, name
 
-    def test_browser_tools_follow_the_browser_gate(self):
-        # Hidden by default (gate closed), listed in full with the Browser
-        # paragraph when open; the other gates do not affect them.
+    def test_browser_skill_follows_the_browser_gate(self):
+        # Gate closed (default): the four-tool prompt, no skill machinery,
+        # no browser tool named anywhere. Gate open: a fifth tool
+        # (load_skills) and a System Skills block naming system:browser
+        # and its tools, which are never inlined as bullets; the Boundaries
+        # block and the other gates are unchanged.
         closed = self._prompt(docs_enabled=True, tables_enabled=True)
         shown = self._prompt(browser_enabled=True)
         assert {"browser_navigate", "browser_click", "browser_screenshot"} <= _browser_tools()
         assert _browser_tools() <= PUBLIC_TOOL_CALL_ALLOWLIST
+        assert "You have four tools available:" in closed
+        assert "load_skills" not in closed and "System Skills" not in closed
         for name in sorted(_browser_tools()):
             assert name not in closed, name
-            assert f"- **{name}**" in shown, name
-        assert "**Browser:**" not in closed
-        boundaries = shown.index("**Boundaries (this is a public project):**")
-        browser = shown.index("**Browser:**")
-        assert boundaries < browser < shown.index("**Conversation naming")
-        paragraph = shown[browser:shown.index("**Conversation naming")]
-        assert "public internet only" in paragraph
-        assert "browser_navigate" in paragraph
-        assert "tell the user before signing in" in paragraph
+            assert f"- **{name}**" not in shown, name
+            assert f"`{name}`" in shown, name
+        assert "You have five tools available:" in shown
+        assert "5. **load_skills(skill_ids)**" in shown
+        assert "no user skills" in shown
+        block = shown[shown.index("**System Skills"):shown.index("**The sandbox")]
+        assert "- `system:browser` --" in block
+        assert "Load before any browser_* call" in block
+        # Only the public roster is enumerated, whatever else the catalog holds.
+        assert "system:gmail" not in shown and "system:quest_docs" not in shown
+        assert block.count("- `system:") == 1
+        assert "**Boundaries (this is a public project):**" in shown
 
     def test_routine_run_with_docs_enabled(self):
         # is_routine and docs_enabled compose: naming tool out, docs in.

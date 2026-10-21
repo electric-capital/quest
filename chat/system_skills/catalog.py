@@ -24,6 +24,7 @@ from api import (
     tasks as tasks_api,
 )
 from api.gmail import get_instructions as gmail_get_instructions
+from chat.browser_sessions import BROWSER_SERVICE_KEY
 from chat.docs import access as doc_access
 from chat.tables import access as table_access
 from chat.docs.constants import (
@@ -1497,6 +1498,72 @@ def validate_system_skill_definition(skill: SystemSkill) -> None:
         )
 
 
+def _browser_content(_base_url: str, _api_key: str) -> str:
+    return """## Browser (browser_* tools)
+
+This conversation has its own real web browser: a headless Chromium that
+keeps its tabs, cookies and logins between tool calls, separate from the
+script sandbox. It follows the same network rules as the sandbox: the
+public internet only, nothing internal, no credentials of any kind.
+
+### When to use it
+
+- Pages that need JavaScript to render, a login, or several steps
+  (search, click through results, fill and submit a form).
+- Reading a page the way a person sees it, or checking how something
+  looks (then `browser_screenshot`).
+- Keep using `run_python` with `requests` / `httpx` for plain downloads,
+  JSON APIs and bulk fetching: it is faster and cheaper than a browser.
+
+### How it works
+
+- Start with `browser_navigate`. Every browser step returns the page
+  state after it settled: `url`, `title` and `snapshot`, an indented
+  outline of the page's roles, names and text. Interactive elements
+  carry a reference like `[ref=e12]`; that string is the `ref` argument
+  of `browser_click`, `browser_type`, `browser_select`, `browser_hover`
+  and `browser_scroll`. References are renumbered on every navigation
+  (inside a frame they look like `f1e12`): always take them from the
+  latest result.
+- `browser_type` replaces the field's value; pass `submit: true` to
+  press Enter afterwards (search boxes, most forms). `browser_press`
+  sends a key to the page (`Escape` closes most dialogs).
+- The snapshot covers the whole page, not just the visible part, so
+  scrolling is only needed for pages that load more as you scroll.
+  A snapshot cut at its size limit says so; use `browser_evaluate`
+  (a JavaScript expression run in the page, returning JSON) to extract
+  specific content such as table rows or link lists.
+- `browser_wait` waits for text to appear, for a few seconds, or for
+  network activity to stop, when a snapshot shows a loading state.
+- `browser_screenshot` saves a PNG into this conversation's workspace
+  (under `screenshots/` unless you give a path) and attaches it so you
+  can look at it; show it to the user with a markdown image of the
+  returned path. Prefer the snapshot for reading text and finding
+  elements; screenshots cost far more context.
+- A link that opens a new tab is followed automatically; `browser_back`
+  goes back in history. Alerts and confirm dialogs are accepted and
+  reported with the next page state.
+
+### Sessions
+
+- The browser session lives as long as you keep using it and ends after
+  a few minutes without browser calls, or with `browser_close`. Logins
+  (cookies) are kept and restored by the next browser call; open tabs
+  and page state are not, so start again with `browser_navigate`.
+- There is a limit on concurrent browser sessions per user; if a call
+  reports that the capacity is in use, wait or close another session.
+
+### Rules
+
+- Never type a secret the user did not give you in this conversation
+  into a website, and tell the user before signing in anywhere.
+- Do not try to reach private or internal addresses; only the public
+  internet is routable, and such a navigation is refused.
+- Do not use the browser to circumvent a site's access controls or
+  rate limits, and stop when a site asks you to prove you are human.
+"""
+
+
 def _register(skill: SystemSkill) -> None:
     validate_system_skill_definition(skill)
     if skill.id in CATALOG:
@@ -1705,6 +1772,15 @@ _register(SystemSkill(
     requires=None,
     requires_project=True,
     content_builder=_routines_content,
+))
+
+_register(SystemSkill(
+    id="system:browser",
+    name="Browser",
+    description="Drive this conversation's headless browser (browser_* tools): navigate, read snapshots, click, type, screenshot.",
+    when_to_load="Load before any browser_* call; for sites needing JavaScript, a login, or clicking through pages.",
+    requires=BROWSER_SERVICE_KEY,
+    content_builder=_browser_content,
 ))
 
 _register(SystemSkill(

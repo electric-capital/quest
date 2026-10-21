@@ -15,7 +15,9 @@ import logging
 import re
 from typing import Any
 
-from chat.browser_sessions import BrowserError, browser_sessions
+from chat.browser_sessions import (
+    BrowserError, browser_disabled_message, browser_sessions,
+)
 from chat.gemini_api.tool_handlers._common import (
     conversation_workspace_dir,
     _publish_file_list_changed,
@@ -25,13 +27,6 @@ logger = logging.getLogger(__name__)
 
 SCREENSHOT_DIR = "screenshots"
 _SCREENSHOT_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-def browser_disabled_message() -> str:
-    return (
-        "The browser is not enabled for you on this server (Settings > "
-        "Features > Browser in public projects)."
-    )
 
 
 def _gate(ctx) -> str | None:

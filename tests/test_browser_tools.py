@@ -248,11 +248,11 @@ class TestDispatch:
 
     def test_browser_tools_in_public_allowlist_and_registry(self):
         from chat.llm.tool_schemas import (
-            PUBLIC_ONLY_TOOL_CALL_TOOLS, PUBLIC_TOOL_CALL_ALLOWLIST, TOOL_CALL_REGISTRY,
+            PUBLIC_TOOL_CALL_ALLOWLIST, TOOL_CALL_REGISTRY, tools_for_skill,
         )
         from chat.gemini_api.tool_dispatch import TOOL_CALL_HANDLERS
         names = {n for n in TOOL_CALL_REGISTRY if n.startswith("browser_")}
-        assert names == PUBLIC_ONLY_TOOL_CALL_TOOLS
+        assert names == set(tools_for_skill("system:browser"))
         assert names <= PUBLIC_TOOL_CALL_ALLOWLIST
         assert names <= set(TOOL_CALL_HANDLERS)
         assert names == {
@@ -264,8 +264,64 @@ class TestDispatch:
         for name in names:
             spec = TOOL_CALL_REGISTRY[name]
             assert spec["requires_service"] == "browser"
-            assert spec.get("public_only") is True
+            assert spec.get("skill") == "system:browser"
             assert "intent_message" in spec["parameters"]["properties"]
+
+
+class TestPublicSkill:
+    """``system:browser`` through the public load_skills arm."""
+
+    def _load(self, ids, is_public=True, email="ada@example.com"):
+        from chat.gemini_api.tool_dispatch import _tool_load_skills
+        user = {"id": 7, "email": email, "api_key": "sk-secret-key"}
+        ctx = ToolContext(
+            app=None, provider=FakeProvider(), user=user,
+            conversation_id="conv-1", timezone="UTC", project_id="proj-1",
+            is_public=is_public,
+        )
+        return _run(_tool_load_skills(ctx, {"skill_ids": ids}))
+
+    def test_loads_guidance_and_tool_reference_without_secrets(self, gates_file):
+        _open_gate()
+        out = self._load(["system:browser"])
+        assert out.startswith("# Loaded skills")
+        assert "Loaded 1 skill(s). 0 error(s)." in out
+        assert "## Tool reference" in out
+        for name in ("browser_navigate", "browser_click", "browser_screenshot", "browser_close"):
+            assert f"- **{name}**" in out, name
+        assert "tell the user before signing in" in out
+        # No proxy URL and no API key reach a public skill body.
+        assert "sk-secret-key" not in out
+        assert "localhost" not in out and "Authorization" not in out
+
+    def test_gate_closed_is_a_load_error(self, gates_file):
+        out = self._load(["system:browser"])
+        assert "Loaded 0 skill(s). 1 error(s)." in out
+        assert "Settings > Features" in out
+
+    def test_gate_closed_for_this_user(self, gates_file):
+        fg.set_feature_enabled(fg.FEATURE_BROWSER, True)
+        fg.set_feature_allowed_users(fg.FEATURE_BROWSER, ["other@example.com"])
+        assert "1 error(s)" in self._load(["system:browser"])
+        assert "Loaded 1 skill(s)" in self._load(["system:browser"], email="other@example.com")
+
+    def test_other_ids_refused_before_lookup(self, gates_file):
+        _open_gate()
+        out = json.loads(self._load(["system:gmail", "system:browser"]))
+        assert "not available in public-project" in out["error"]
+        assert out["available_skills"] == ["system:browser"]
+
+    def test_private_conversation_never_sees_the_skill(self, gates_file):
+        # Regular prompts gate the skill on the browser pseudo-key, which
+        # the connected-services map always sets False.
+        _open_gate()
+        from chat.system_skills import list_system_skills
+        from api.instructions import get_user_connected_services
+        services = get_user_connected_services({"email": "ada@example.com"})
+        assert "system:browser" not in {s.id for s in list_system_skills(services, True)}
+        # And the private load_skills reports the gate rather than loading.
+        out = self._load(["system:browser"], is_public=False)
+        assert "Loaded 0 skill(s). 1 error(s)." in out
 
 
 class TestFeatureGate:

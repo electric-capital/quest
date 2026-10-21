@@ -19,7 +19,7 @@ from chat.llm.tool_schemas import (
     CORE_TOOL_CALL_TOOLS,
     PROJECT_HIDDEN_WORKSPACE_TOOLS,
     PROJECT_ONLY_TOOL_CALL_TOOLS,
-    PUBLIC_ONLY_TOOL_CALL_TOOLS,
+    PUBLIC_SYSTEM_SKILLS,
     PUBLIC_TOOL_CALL_ALLOWLIST,
     TOOL_CALL_REGISTRY,
     format_tool_call_doc,
@@ -43,20 +43,19 @@ GMAIL_TOOLS = {
 class TestRegistryTiers:
     def test_every_tool_has_exactly_one_tier(self):
         for name, spec in TOOL_CALL_REGISTRY.items():
-            tiers = [
-                bool(spec.get("core")), bool(spec.get("skill")),
-                bool(spec.get("public_only")),
-            ]
-            assert tiers.count(True) == 1, name
+            assert bool(spec.get("core")) != bool(spec.get("skill")), name
             assert (name in CORE_TOOL_CALL_TOOLS) is bool(spec.get("core")), name
-            assert (name in PUBLIC_ONLY_TOOL_CALL_TOOLS) is bool(spec.get("public_only")), name
 
-    def test_public_only_roster(self):
-        # The browser tools, and nothing else: offered by the public prompt
-        # alone (gated on the browser feature), never by a regular prompt.
-        assert PUBLIC_ONLY_TOOL_CALL_TOOLS
-        assert all(name.startswith("browser_") for name in PUBLIC_ONLY_TOOL_CALL_TOOLS)
-        assert PUBLIC_ONLY_TOOL_CALL_TOOLS <= PUBLIC_TOOL_CALL_ALLOWLIST
+    def test_public_system_skills_document_public_tools_only(self):
+        # A public system skill's tools are all in the public allowlist;
+        # the browser tools are documented by exactly that skill.
+        assert PUBLIC_SYSTEM_SKILLS == {"system:browser"}
+        for skill_id in PUBLIC_SYSTEM_SKILLS:
+            assert skill_id in CATALOG
+            assert set(tools_for_skill(skill_id)) <= PUBLIC_TOOL_CALL_ALLOWLIST
+        assert set(tools_for_skill("system:browser")) == {
+            n for n in TOOL_CALL_REGISTRY if n.startswith("browser_")
+        }
 
     def test_every_documenting_skill_exists(self):
         for name, spec in TOOL_CALL_REGISTRY.items():
@@ -145,8 +144,6 @@ class TestPrompts:
                 assert not tool_offered(prompt, name), name
             elif spec.get("core"):
                 assert core_bullet(name) in prompt, name
-            elif spec.get("public_only"):
-                assert not tool_offered(prompt, name), name
             else:
                 assert core_bullet(name) not in prompt, name
                 assert named_under_skill(prompt, spec["skill"], name), name
@@ -164,8 +161,24 @@ class TestPrompts:
         for name in PUBLIC_TOOL_CALL_ALLOWLIST - PROJECT_HIDDEN_WORKSPACE_TOOLS:
             if name not in TOOL_CALL_REGISTRY:
                 continue  # a plugin tool, present only when its plugin is loaded
-            assert core_bullet(name) in prompt, name
+            spec = TOOL_CALL_REGISTRY[name]
+            if spec.get("skill") in PUBLIC_SYSTEM_SKILLS:
+                # Named on the public System Skills block, never inlined.
+                assert core_bullet(name) not in prompt, name
+                assert named_under_skill(prompt, spec["skill"], name), name
+            else:
+                assert core_bullet(name) in prompt, name
+        # The regular skill machinery stays out: only the public roster.
+        for skill_id in CATALOG:
+            assert (f"`{skill_id}`" in prompt) is (skill_id in PUBLIC_SYSTEM_SKILLS), skill_id
+
+    def test_public_prompt_without_public_skills_has_no_skill_machinery(self):
+        prompt = get_public_project_system_prompt(docs_enabled=True, tables_enabled=True)
         assert "load_skills" not in prompt
+        assert "System Skills" not in prompt
+        assert "system:" not in prompt
+        for name in tools_for_skill("system:browser"):
+            assert not tool_offered(prompt, name), name
 
     def test_fully_connected_prompt_stays_compact(self):
         # The point of the tiers: the always-on prompt no longer grows with
