@@ -55,7 +55,9 @@ CONTEXT_CELLS = 2
 MAX_RANGE_ROWS = 200
 MAX_RANGE_COLS = 52
 MAX_RANGE_CELLS = 1000
-MAX_CELL_CHARS = 5000
+# Google Sheets' own per-cell ceiling; the card clips long cells with an
+# ellipsis, so there is no reason to be stricter than the API.
+MAX_CELL_CHARS = 50_000
 
 # `spreadsheet_title`, `sheet_gid`, and `context_grid` are injected by
 # validate_against_upstream() after the model-supplied params validate;
@@ -245,8 +247,8 @@ def _validate_grid(
                 )
             elif isinstance(cell, str) and len(cell) > MAX_CELL_CHARS:
                 raise ValueError(
-                    f"{name}[{r}][{c}] exceeds the {MAX_CELL_CHARS}-"
-                    "character cell limit."
+                    f"{name}[{r}][{c}] exceeds the {MAX_CELL_CHARS:,}-"
+                    "character cell limit (the Google Sheets maximum)."
                 )
             cells.append(cell)
         validated.append(cells)

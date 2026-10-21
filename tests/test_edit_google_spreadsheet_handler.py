@@ -223,6 +223,31 @@ def test_validate_params_rejects_row_count_mismatch():
         handler.validate_params(_params(values=[["only", "one"]]))
 
 
+def test_validate_params_allows_cells_up_to_the_sheets_maximum():
+    # Google Sheets accepts up to 50,000 characters per cell; a user hit the
+    # old 5,000-character cap writing long text, so the handler must accept
+    # the full Sheets range. current_values go through the same check, so
+    # a cell that already holds long text must also be claimable.
+    from chat.action_request_types.edit_google_spreadsheet import MAX_CELL_CHARS
+
+    assert MAX_CELL_CHARS == 50_000
+    handler = _handler()
+    long_text = "x" * MAX_CELL_CHARS
+    out = handler.validate_params(
+        _params(values=[[long_text, 1], ["Q4", 2]],
+                current_values=[[long_text, ""], ["Q4", ""]])
+    )
+    assert out["values"][0][0] == long_text
+
+
+def test_validate_params_rejects_cell_over_the_sheets_maximum():
+    from chat.action_request_types.edit_google_spreadsheet import MAX_CELL_CHARS
+
+    handler = _handler()
+    with pytest.raises(ValueError, match=r"values\[0\]\[0\] exceeds the 50,000-character cell limit"):
+        handler.validate_params(_params(values=[["x" * (MAX_CELL_CHARS + 1), 1], ["Q4", 2]]))
+
+
 def test_validate_params_rejects_col_count_mismatch():
     handler = _handler()
     with pytest.raises(ValueError, match=r"current_values\[0\] has 3 cell"):

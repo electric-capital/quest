@@ -56,7 +56,7 @@ Params are:
 - `spreadsheet_id`,
 - `tab`,
 - `range` (bounded A1 rectangle, no sheet prefix; max 200 rows x 52 cols, 1000 cells),
-- `values` (2d replacement array matching the range dimensions exactly), and
+- `values` (2d replacement array matching the range dimensions exactly; a string cell may hold up to 50,000 characters, the Sheets per-cell maximum), and
 - `current_values` (the values the model just read from the range; the skill directs a `valueRenderOption=FORMULA` read because **formula cells must be claimed by their formula text, not their computed value**).
 
 The handler verifies `current_values` against the live sheet at proposal time (same-turn rejection with a per-cell diff, before any card/row is written) and again at Approve time, so the model can never overwrite cells -- or formulas -- it has not read, and a sheet that changed while the card sat open is not clobbered. The diff table shows formula cells by their old/new formulas and drops context rows/cols that are entirely blank. Approved writes go to `PUT /v4/spreadsheets/{id}/values/{range}?valueInputOption=USER_ENTERED`. See [Action Requests Architecture](../architecture/action-requests.md) for the full parameter, validation, and preview specification.
