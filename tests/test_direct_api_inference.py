@@ -690,8 +690,12 @@ def test_suggested_models_per_kind():
     legacy = [m["id"] for m in ip._LEGACY_OPENROUTER_MODELS]
     router_models = [{"id": legacy[0], "capabilities": ["tools"]}, {"id": "other/model"}]
     assert suggested_models(_instance("openrouter"), router_models) == [legacy[0]]
-    assert suggested_models(_instance("nearai"), router_models) == [legacy[0]]
+    assert suggested_models(_instance("trustedrouter"), router_models) == [legacy[0]]
     assert suggested_models(_instance("trustedrouter"), []) == []
+    # NEAR AI does not list the legacy OpenRouter ids; it has its own pair.
+    assert suggested_models(_instance("nearai"), router_models) == []
+    near_models = [{"id": "Qwen/Qwen3.8-27B"}, {"id": "z-ai/glm-5.3-flash"}, {"id": "other/model"}]
+    assert suggested_models(_instance("nearai"), near_models) == ["z-ai/glm-5.3-flash", "Qwen/Qwen3.8-27B"]
     from db.llm_pricing import fireworks_priced_wire_ids
     priced = fireworks_priced_wire_ids()[0]
     fw_models = [{"id": priced, "capabilities": ["tools"]}, {"id": "accounts/fireworks/models/other", "capabilities": ["tools"]}]

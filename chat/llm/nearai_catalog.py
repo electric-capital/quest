@@ -53,6 +53,11 @@ custom-id entry.
 The NEAR AI health check (``OpenRouterProvider.check_model_access``) is a
 lookup in this catalog rather than a billed completion, so the cache is
 also what the startup sweep consults.
+
+:func:`suggested_wire_ids` is what the first-run setup card adds when a
+NEAR AI key is connected: the curated :data:`SUGGESTED_WIRE_IDS` (cheap,
+tool-capable open-weight models NEAR runs on its own TEE fleet) that the
+catalog currently lists, in that order.
 """
 
 import json
@@ -77,6 +82,14 @@ MODEL_LIST_PAGE_SIZE = 100
 MODEL_LIST_MAX_PAGES = 20
 CATALOG_TTL_SECONDS = 24 * 60 * 60
 FETCH_TIMEOUT_SECONDS = 15
+
+# The first-run quick setup's picks for a new NEAR AI instance, in the
+# order they are added (the first one is health-checked live before the
+# rest go in): cheap, tool-capable open-weight models the public list
+# names with exactly these ids (NEAR AI ids are case-sensitive and not all
+# lower-case). Checked against https://cloud-api.near.ai/v1/models on
+# 2026-10-21.
+SUGGESTED_WIRE_IDS = ("z-ai/glm-5.3-flash", "Qwen/Qwen3.8-27B")
 
 TEE_ENCLAVE, TEE_PROXY = TEE_LABELS
 # NEAR's ``providerType`` for models served on its own TEE fleet
@@ -356,3 +369,12 @@ def get_catalog(refresh: bool = False) -> dict:
     except OSError:
         logger.warning("Failed to write NEAR AI catalog cache", exc_info=True)
     return {**cache, "stale": False, "error": None}
+
+
+def suggested_wire_ids(models: list[dict]) -> list[str]:
+    """The ids the first-run setup card adds for a new NEAR AI instance:
+    :data:`SUGGESTED_WIRE_IDS` in order, skipping any the catalog no longer
+    lists (``[]`` when none is listed, which leaves the key connected but
+    the instance empty)."""
+    listed = {m["id"] for m in models}
+    return [wire_id for wire_id in SUGGESTED_WIRE_IDS if wire_id in listed]

@@ -666,6 +666,17 @@ def admin(monkeypatch, tmp_path):
     return admin_routes
 
 
+def test_suggested_wire_ids_are_the_curated_pair_in_order():
+    """The quick setup adds GLM 5.3 Flash then Qwen3.8 27B when NEAR AI
+    lists them (exact, case-sensitive ids), skipping any it does not."""
+    assert na.SUGGESTED_WIRE_IDS == ("z-ai/glm-5.3-flash", "Qwen/Qwen3.8-27B")
+    listed = [{"id": "qwen/qwen3.8-27b"}, {"id": "Qwen/Qwen3.8-27B"}, {"id": "z-ai/glm-5.3-flash"}]
+    assert na.suggested_wire_ids(listed) == ["z-ai/glm-5.3-flash", "Qwen/Qwen3.8-27B"]
+    assert na.suggested_wire_ids([{"id": "Qwen/Qwen3.8-27B"}]) == ["Qwen/Qwen3.8-27B"]
+    assert na.suggested_wire_ids([{"id": "qwen/qwen3.8-27b"}]) == []
+    assert na.suggested_wire_ids([]) == []
+
+
 def test_admin_create_and_list_nearai_instance(admin):
     created = _run(admin.admin_create_inference_instance(
         admin.InstanceCreate(kind="nearai", label="Team NEAR"), user=ADMIN_USER,

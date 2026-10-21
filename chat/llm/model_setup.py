@@ -10,11 +10,11 @@ on the kind's ``catalog`` source (``INSTANCE_KINDS`` in
 config/inference_providers.py) through :func:`fetch_instance_catalog`.
 
 :func:`suggested_models` is the quick setup's pick: the models Quest has
-real metadata for -- the registry-matched Claude / Gemini models and the
-known OpenAI families for the direct-API kinds (each catalog module's
-``suggested_wire_ids``), the curated legacy ids for the OpenRouter-shaped
-routers, the statically priced serverless models for Fireworks, and every
-model a self-hosted server reports. A kind with nothing to suggest leaves
+real metadata for -- the registry-matched Claude / Gemini models, the
+known OpenAI families and NEAR AI's curated open-weight pair (each catalog
+module's ``suggested_wire_ids``), the curated legacy ids for the other
+OpenRouter-shaped routers, the statically priced serverless models for
+Fireworks, and every model a self-hosted server reports. A kind with nothing to suggest leaves
 the instance connected but empty, and the card sends the admin to Settings
 to pick models.
 """
@@ -27,10 +27,13 @@ from config.inference_providers import INSTANCE_KINDS, effective_api_key
 # ``get_catalog(api_key, refresh=False)`` and (except Fireworks) a
 # ``suggested_wire_ids(models)`` for the quick setup.
 KEY_FETCHED_SOURCES = ("fireworks", "anthropic", "gemini", "openai")
-# Public, keyless lists -- ``get_catalog(refresh=False)``.
+# Public, keyless lists -- ``get_catalog(refresh=False)``; the NEAR AI one
+# also exposes ``suggested_wire_ids(models)``.
 PUBLIC_SOURCES = ("nearai", "trustedrouter")
+# Sources whose catalog module picks the quick setup's models itself.
+_CURATED_SOURCES = ("anthropic", "gemini", "openai", "nearai")
 
-# Suggestions for the OpenRouter-shaped routers (OpenRouter, NEAR AI,
+# Suggestions for the remaining OpenRouter-shaped routers (OpenRouter,
 # TrustedRouter): the curated ids the legacy OpenRouter configuration
 # served, when the router lists them.
 _ROUTER_SUGGESTIONS_LIMIT = 4
@@ -96,7 +99,7 @@ def suggested_models(instance: dict, models: list[dict]) -> list[str]:
     source = INSTANCE_KINDS[instance["kind"]]["catalog"]
     if source == "server":
         return [m["id"] for m in models]
-    if source in ("anthropic", "gemini", "openai"):
+    if source in _CURATED_SOURCES:
         return catalog_module(source).suggested_wire_ids(models)
     listed = {m["id"]: m for m in models}
     if source == "fireworks":
