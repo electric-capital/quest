@@ -13,7 +13,7 @@ import {
   fetchConversationTail,
   ApiClientError,
 } from '../api/client';
-import type { MessageContent, SubAgentToolCallInfo, SubAgentFinishedInfo, ToolResultMessage, SubAgentToolUseMessage, SubAgentToolResultMessage, StatsMessage, ComposerAttachmentRef, ActionRequestMessage as ActionRequestMessageType, PendingWaitInfo, ExpensiveResumeInfo, SubagentRunInfo } from '../api/types';
+import type { MessageContent, SubAgentToolCallInfo, SubAgentFinishedInfo, ToolResultMessage, SubAgentToolUseMessage, SubAgentToolResultMessage, StatsMessage, ComposerAttachmentRef, ActionRequestMessage as ActionRequestMessageType, ConnectRequestMessage as ConnectRequestMessageType, PendingWaitInfo, ExpensiveResumeInfo, SubagentRunInfo } from '../api/types';
 
 /**
  * Reconstruct the subAgentToolCalls map from persisted tool_result messages.
@@ -87,10 +87,11 @@ function hydrateSubAgentToolCalls(conversationId: string, messages: MessageConte
 }
 
 /**
- * Lock the composer for any open ``action_request`` message that surfaces
- * via the tail-fetch path mid-turn. ``wait_handle_id`` is set when the
- * action request was created with a corresponding ``tool_wait_handles``
- * row -- the only situation where the agent is actually blocked.
+ * Lock the composer for any open ``action_request`` or ``connect_request``
+ * card that surfaces via the tail-fetch path mid-turn. ``wait_handle_id``
+ * is set when the card was created with a corresponding
+ * ``tool_wait_handles`` row -- the only situation where the agent is
+ * actually blocked.
  *
  * The resolved-event path clears entries by handle id, so this seeds the
  * store with rows the GET payload may not have included (e.g. the wait
@@ -99,16 +100,25 @@ function hydrateSubAgentToolCalls(conversationId: string, messages: MessageConte
 function deriveActionRequestPendingWaits(messages: MessageContent[]): PendingWaitInfo[] {
   const out: PendingWaitInfo[] = [];
   for (const m of messages) {
-    if (m.type !== 'action_request') continue;
-    const ar = m as ActionRequestMessageType;
-    if (ar.status !== 'open') continue;
-    if (!ar.wait_handle_id) continue;
-    out.push({
-      id: ar.wait_handle_id,
-      kind: 'action_request',
-      correlation_id: ar.request_id != null ? String(ar.request_id) : null,
-      created_at: ar.timestamp ?? null,
-    });
+    if (m.type === 'action_request') {
+      const ar = m as ActionRequestMessageType;
+      if (ar.status !== 'open' || !ar.wait_handle_id) continue;
+      out.push({
+        id: ar.wait_handle_id,
+        kind: 'action_request',
+        correlation_id: ar.request_id != null ? String(ar.request_id) : null,
+        created_at: ar.timestamp ?? null,
+      });
+    } else if (m.type === 'connect_request') {
+      const cr = m as ConnectRequestMessageType;
+      if (cr.status !== 'open' || !cr.wait_handle_id) continue;
+      out.push({
+        id: cr.wait_handle_id,
+        kind: 'service_connection',
+        correlation_id: null,
+        created_at: cr.timestamp ?? null,
+      });
+    }
   }
   return out;
 }

@@ -171,6 +171,7 @@ export const endpoints = {
 
   waitHandle: (id: string) => `${API_BASE_URL}/wait-handles/${id}`,
   waitHandleResolve: (id: string) => `${API_BASE_URL}/wait-handles/${id}/resolve`,
+  connectRequestResolve: (handleId: string) => `${API_BASE_URL}/connect-requests/${handleId}/resolve`,
 
   conversationLoadedSkills: (conversationId: string) => `${API_BASE_URL}/conversations/${conversationId}/loaded-skills`,
   conversationSystemPrompt: (conversationId: string) => `${API_BASE_URL}/conversations/${conversationId}/system-prompt`,

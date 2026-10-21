@@ -30,6 +30,9 @@ FLUSH_EVENT_TYPES: frozenset[str] = frozenset({
     "tool_use",
     "tool_result",
     "action_request",
+    # The inline connect card (request_service_connection); rewritten in
+    # place on resolve like action_request.
+    "connect_request",
     "stats",
     # A run-fatal error is appended as a durable structured message by the
     # top-level handler in run_conversation_turn; flushing on it persists the

@@ -360,6 +360,31 @@ export interface ActionRequestMessage {
   feedback?: string | null;
 }
 
+/** Card outcome: `connected` once the server verified the credential,
+ *  `declined` on Not now, `cancelled` when the conversation was stopped
+ *  (or the wait timed out) with the card still open. */
+export type ConnectRequestStatus = 'open' | 'connected' | 'declined' | 'cancelled';
+
+/** Inline "Connect <service>" card opened by the model's
+ *  request_service_connection tool (chat/connect_requests.py); the agent is
+ *  suspended on the `wait_handle_id` row while `status` is `open`. */
+export interface ConnectRequestMessage {
+  type: 'connect_request';
+  wait_handle_id: string;
+  status: ConnectRequestStatus;
+  service: string;
+  label: string;
+  description?: string;
+  kind: 'oauth' | 'api_key' | 'form';
+  /** The OAuth popup URL (oauth kind only); other kinds use the Settings add flow. */
+  connect_url?: string;
+  /** Connected but the stored grant is missing scopes: the card re-authorizes. */
+  needs_reauth?: boolean;
+  /** The model's one-line reason, shown verbatim. */
+  reason: string;
+  timestamp: string;
+}
+
 export interface ActionRequest {
   id: number;
   user_id: number;
@@ -446,8 +471,8 @@ export interface SubAgentToolCallInfo {
 
 // Union type for all message content types
 export type MessageContent = Message | ToolUseMessage | ToolResultMessage | StatsMessage
-  | ErrorMessage | InterruptedMessage | ActionRequestMessage | CompactionMessage
-  | ModelFallbackMessage | RoutineNudgeMessage;
+  | ErrorMessage | InterruptedMessage | ActionRequestMessage | ConnectRequestMessage
+  | CompactionMessage | ModelFallbackMessage | RoutineNudgeMessage;
 
 /** Server verdict that resuming this conversation is expensive (long-idle,
  *  long-context, costly model). Mirrors the dict built by
@@ -541,7 +566,7 @@ export interface CreateConversationResponse {
 export interface StreamEvent {
   // Type can be various values from the backend
   type?: 'text' | 'tool_use' | 'tool_result' | 'message' | 'init' | 'result'
-       | 'stats' | 'action_request'
+       | 'stats' | 'action_request' | 'connect_request'
        | 'sub_agent_tool_use' | 'sub_agent_tool_result' | 'sub_agent_finished'
        | 'conversation_updated';
   content?: string;

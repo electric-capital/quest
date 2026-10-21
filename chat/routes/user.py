@@ -436,16 +436,22 @@ async def update_settings(
     }
 
 
-@router.get("/connectors")
-async def get_connectors(user: dict = Depends(get_current_user_cookie_or_apikey_checked)):
-    """List the current user's Data Connections rows.
+def build_connector_rows(user: dict) -> list[dict]:
+    """The user's Data Connections rows, one per supported service.
 
-    Returns a LIST of row objects the frontend renders generically (no
-    per-service JSX): ``kind`` is "oauth" (Connect/Reconnect popup via
-    ``connect_url``) or "api_key" (key entry POSTing ``{key_field: <key>}``
-    to ``key_url``, disconnect via ``disconnect_url``). ``available: false``
-    hides a row entirely (e.g. a plugin without its server-side base
-    URL, Ramp without admin OAuth client credentials).
+    This is the single source of truth for what a user can connect: the
+    ``GET /connectors`` route returns it verbatim, the system prompt's
+    "Connectable services" paragraph and the ``request_service_connection``
+    tool (chat/connect_requests.py) read the same rows, so the inline
+    connect card and the Settings picker can never disagree about which
+    services an admin has configured.
+
+    ``kind`` is "oauth" (Connect/Reconnect popup via ``connect_url``),
+    "api_key" (key entry POSTing ``{key_field: <key>}`` to ``key_url``,
+    disconnect via ``disconnect_url``) or "form" (multi-connection
+    schema form). ``available: false`` hides a row entirely (e.g. a
+    plugin without its server-side base URL, Ramp without admin OAuth
+    client credentials).
     """
     from auth.config import (
         GOOGLE_SERVICE_SCOPES,
@@ -609,7 +615,14 @@ async def get_connectors(user: dict = Depends(get_current_user_cookie_or_apikey_
             plugin_row.update(multi_connection_fields(plugin, user))
         connectors.append(plugin_row)
 
-    return {"connectors": connectors}
+    return connectors
+
+
+@router.get("/connectors")
+async def get_connectors(user: dict = Depends(get_current_user_cookie_or_apikey_checked)):
+    """List the current user's Data Connections rows (see
+    :func:`build_connector_rows`); the frontend renders them generically."""
+    return {"connectors": build_connector_rows(user)}
 
 
 @router.post("/logout")

@@ -1,0 +1,238 @@
+/* Inline connect card (request_service_connection). Visually a sibling of
+   the action-request card: same frame, accent ring while open, one-line
+   collapsed row once resolved. */
+
+.connect-request-message {
+  display: flex;
+  gap: 0.75rem;
+  background-color: #1a1a2e;
+  border: 1px solid #3a3a6a;
+  border-radius: 8px;
+  margin: 0.5rem 0;
+  padding: 1rem;
+  animation: fadeIn 0.3s ease-in;
+}
+
+.connect-request-message.pending {
+  border-color: var(--accent);
+  box-shadow: 0 0 8px rgb(var(--accent-rgb) / 0.15);
+}
+
+.connect-request-message.collapsed {
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+}
+
+.connect-request-message.connected {
+  border-color: rgba(80, 200, 120, 0.4);
+  opacity: 0.85;
+}
+
+.connect-request-message.declined,
+.connect-request-message.cancelled {
+  border-color: rgba(255, 255, 255, 0.15);
+  opacity: 0.7;
+}
+
+.connect-request-icon {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background-color: rgba(255, 255, 255, 0.06);
+  padding: 4px;
+  flex-shrink: 0;
+}
+
+.connect-request-message.collapsed .connect-request-icon {
+  width: 28px;
+  height: 28px;
+  padding: 2px;
+}
+
+.connect-request-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.connect-request-body {
+  flex-grow: 1;
+  min-width: 0;
+}
+
+.connect-request-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #e0e0e0;
+  margin-bottom: 0.35rem;
+}
+
+.connect-request-reason {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.75);
+  line-height: 1.4;
+  margin-bottom: 0.35rem;
+}
+
+.connect-request-description,
+.connect-request-hint {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 0.5rem;
+}
+
+.connect-request-notice {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.7);
+  background-color: rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  margin: 0.25rem 0 0.6rem;
+}
+
+.connect-request-notice a {
+  color: var(--accent);
+}
+
+.connect-request-error {
+  color: #ff6464;
+  font-size: 0.85rem;
+  margin-bottom: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  background-color: rgba(255, 100, 100, 0.1);
+  border-radius: 6px;
+  border: 1px solid rgba(255, 100, 100, 0.2);
+}
+
+.connect-request-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.25rem;
+}
+
+.connect-request-btn {
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.connect-request-btn.connect {
+  background-color: var(--accent);
+  color: white;
+}
+
+.connect-request-btn.connect:hover:not(:disabled) {
+  filter: brightness(0.9);
+}
+
+.connect-request-btn.check {
+  background-color: rgba(255, 255, 255, 0.12);
+  color: #e0e0e0;
+}
+
+.connect-request-btn.decline {
+  background-color: transparent;
+  border-color: rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.connect-request-btn.check:hover:not(:disabled),
+.connect-request-btn.decline:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+.connect-request-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.connect-request-outcome {
+  font-size: 0.85rem;
+  color: #e0e0e0;
+}
+
+.connect-request-outcome-status {
+  font-weight: 600;
+}
+
+.connect-request-message.connected .connect-request-outcome-status {
+  color: #50c878;
+}
+
+.connect-request-message.declined .connect-request-outcome-status,
+.connect-request-message.cancelled .connect-request-outcome-status {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+@media (prefers-color-scheme: light) {
+  .connect-request-message {
+    background-color: #f0f0f8;
+    border-color: #d0d0e0;
+  }
+
+  .connect-request-message.pending {
+    border-color: var(--accent);
+    box-shadow: 0 0 8px rgb(var(--accent-rgb) / 0.1);
+  }
+
+  .connect-request-message.declined,
+  .connect-request-message.cancelled {
+    border-color: rgba(0, 0, 0, 0.12);
+  }
+
+  .connect-request-icon {
+    background-color: rgba(0, 0, 0, 0.05);
+  }
+
+  .connect-request-title,
+  .connect-request-outcome {
+    color: #333333;
+  }
+
+  .connect-request-reason {
+    color: rgba(0, 0, 0, 0.7);
+  }
+
+  .connect-request-description,
+  .connect-request-hint {
+    color: rgba(0, 0, 0, 0.5);
+  }
+
+  .connect-request-notice {
+    color: rgba(0, 0, 0, 0.7);
+    background-color: rgba(0, 0, 0, 0.05);
+  }
+
+  .connect-request-error {
+    color: #cc3333;
+    background-color: rgba(255, 100, 100, 0.08);
+    border-color: rgba(255, 100, 100, 0.25);
+  }
+
+  .connect-request-btn.check {
+    background-color: rgba(0, 0, 0, 0.08);
+    color: #333333;
+  }
+
+  .connect-request-btn.decline {
+    border-color: rgba(0, 0, 0, 0.25);
+    color: rgba(0, 0, 0, 0.75);
+  }
+
+  .connect-request-btn.check:hover:not(:disabled),
+  .connect-request-btn.decline:hover:not(:disabled) {
+    background-color: rgba(0, 0, 0, 0.12);
+  }
+
+  .connect-request-message.declined .connect-request-outcome-status,
+  .connect-request-message.cancelled .connect-request-outcome-status {
+    color: rgba(0, 0, 0, 0.5);
+  }
+}

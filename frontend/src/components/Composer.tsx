@@ -388,6 +388,8 @@ export function Composer({
     composerPlaceholder = pendingWaitCount > 1
       ? `Approve, revise, or stop the ${pendingWaitCount} pending requests to continue.`
       : "Approve, revise, or stop the pending request to continue.";
+  } else if (hasPendingWait && pendingWaitKind === 'service_connection') {
+    composerPlaceholder = "Connect the service above, or choose Not now, to continue.";
   } else if (hasPendingWait && pendingWaitKind === 'user_subagent') {
     composerPlaceholder = "Waiting for the subagent to return its response...";
   } else if (hasPendingWait) {

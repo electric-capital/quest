@@ -504,6 +504,7 @@ from chat.skill_routes import router as skill_router
 from chat.project_skill_routes import router as project_skill_router
 from chat.project_db_routes import router as project_db_router
 from chat.wait_handle_routes import router as wait_handle_router
+from chat.connect_request_routes import router as connect_request_router
 from chat.docs.routes import router as docs_router
 from chat.docs.share_routes import router as docs_share_router
 from chat.docs.edit_routes import router as docs_edit_router
@@ -527,6 +528,7 @@ app.include_router(skill_router)
 app.include_router(project_skill_router)
 app.include_router(project_db_router)
 app.include_router(wait_handle_router)
+app.include_router(connect_request_router)
 app.include_router(docs_router)
 app.include_router(docs_share_router)
 app.include_router(docs_edit_router)

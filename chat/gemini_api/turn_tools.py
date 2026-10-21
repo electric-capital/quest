@@ -55,6 +55,11 @@ logger = logging.getLogger(__name__)
 # ``tool_call`` router tool instead of having its own top-level schema.
 WAIT_FOR_HANDLES_KEY = "tool_call:wait_for_handles"
 
+# request_service_connection rides on tool_call too (chat/connect_requests.py):
+# the inline "Connect <service>" card that blocks on a service_connection
+# wait handle.
+REQUEST_SERVICE_CONNECTION_KEY = "tool_call:request_service_connection"
+
 # routine_completed HAS its own top-level schema, but weaker models routed
 # it through ``tool_call(tool_name="routine_completed")`` anyway in live
 # runs (the prompt teaches that form for every dynamic tool). Both spellings
@@ -80,6 +85,7 @@ _PUBLIC_BLOCKED_LOOP_TOOLS = frozenset({
     "return_to_caller",
     "return_final_response",
     WAIT_FOR_HANDLES_KEY,
+    REQUEST_SERVICE_CONNECTION_KEY,
 })
 
 
@@ -191,6 +197,29 @@ class SuspendForActionRequest(Exception):
         self.request_id = request_id
 
 
+class SuspendForServiceConnection(Exception):
+    """Raised by the ``request_service_connection`` arm when the conversation
+    must suspend until the user connects the service or declines on the
+    inline connect card.
+
+    Mirrors :class:`SuspendForActionRequest`: the dispatch loop records it
+    per call (siblings in the same batch keep running), unwinds without a
+    ``tool_result``, and the resume bucket closes the dangling tool_use
+    with the ``service_connection`` wait-handle row's ``response``.
+    """
+
+    def __init__(self, handle_id: str, tool_id: str, service: str) -> None:
+        super().__init__(
+            f"request_service_connection suspended "
+            f"(tool_id={tool_id}, handle_id={handle_id}, service={service})"
+        )
+        self.handle_id = handle_id
+        self.tool_id = tool_id
+        self.service = service
+        # Same logging-only role as SuspendForActionRequest.sibling_handle_ids.
+        self.sibling_handle_ids: list[str] = []
+
+
 class FinishInferenceResponse(Exception):
     """Raised by the ``return_final_response`` arm when a one-shot
     inference API run (origin="inference_api") has delivered its final
@@ -259,6 +288,8 @@ def registry_key_for(tool_name: str, args: dict[str, Any]) -> str:
         inner = args.get("tool_name")
         if inner == "wait_for_handles":
             return WAIT_FOR_HANDLES_KEY
+        if inner == "request_service_connection":
+            return REQUEST_SERVICE_CONNECTION_KEY
         if inner == ROUTINE_COMPLETED_KEY:
             return ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY
     return tool_name
@@ -270,9 +301,7 @@ def public_blocked_result(key: str) -> str:
     PUBLIC_TOOLS never advertises these tools, but prompt/schema trimming
     is not a security boundary -- this reject is.
     """
-    blocked_name = (
-        "wait_for_handles" if key == WAIT_FOR_HANDLES_KEY else key
-    )
+    blocked_name = key.removeprefix("tool_call:")
     return json.dumps({
         "error": (
             f"'{blocked_name}' is not available in "
@@ -1281,6 +1310,78 @@ async def _handle_create_action_request(
     )
 
 
+async def _handle_request_service_connection(
+    ctx: RunContext, call: ToolCall, turn: TurnState,
+) -> str:
+    """Open an inline connect card and suspend (``request_service_connection``).
+
+    See chat/connect_requests.py. The card lives in the web app, so every
+    run kind without a watching web user is refused up front (the same
+    reasoning as ``create_action_request``); a routine run is refused too,
+    because a scheduled run would sit suspended until someone opened the
+    conversation.
+    """
+    from chat import connect_requests
+
+    if ctx.is_slack_origin:
+        return json.dumps({
+            "error": (
+                "request_service_connection is not available in "
+                "Slack-driven conversations: the connect card lives in the "
+                "Quest web app. Tell the user which service to connect in "
+                "Settings > Data Connections instead."
+            ),
+        })
+    if ctx.is_user_subagent or ctx.is_inference_api:
+        return json.dumps({
+            "error": (
+                "request_service_connection is not available in this run: "
+                "there is no user watching to connect a service. Report "
+                "what you could not do in your response instead."
+            ),
+        })
+    if ctx.routine_id:
+        return json.dumps({
+            "error": (
+                "request_service_connection is not available in routine "
+                "runs. Say which service the routine needs and that the user "
+                "can connect it in Settings > Data Connections."
+            ),
+        })
+
+    inner_args = call.args.get("arguments", {}) or {}
+    if not isinstance(inner_args, dict):
+        inner_args = {}
+    service = str(inner_args.get("service") or "").strip().lower()
+    reason = str(inner_args.get("reason") or "")
+
+    row, error = connect_requests.find_connect_target(ctx.user, service)
+    if error is not None:
+        return json.dumps(error)
+    assert row is not None
+
+    fields = connect_requests.card_fields(row, reason)
+    # Provider-native id, like create_action_request: the resume bucket
+    # matches rows against the dangling tool_use's own id.
+    tool_id = call.raw_tool_id or call.tool_id
+    handle = await tool_wait_handle_store.create_handle(
+        user_id=ctx.user["id"],
+        conversation_id=ctx.conversation_id,
+        kind=connect_requests.HANDLE_KIND,
+        tool_id=tool_id,
+        payload=dict(fields),
+    )
+    await _emit_durable(ctx, {
+        "type": connect_requests.MESSAGE_TYPE,
+        "wait_handle_id": handle["id"],
+        "status": "open",
+        **fields,
+    })
+    raise SuspendForServiceConnection(
+        handle_id=handle["id"], tool_id=tool_id, service=fields["service"],
+    )
+
+
 async def _handle_wait_for_handles(
     ctx: RunContext, call: ToolCall, turn: TurnState,
 ) -> str:
@@ -1313,4 +1414,5 @@ TURN_TOOL_HANDLERS: dict[str, TurnToolHandler] = {
     ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY: _handle_routine_completed,
     "create_action_request": _handle_create_action_request,
     WAIT_FOR_HANDLES_KEY: _handle_wait_for_handles,
+    REQUEST_SERVICE_CONNECTION_KEY: _handle_request_service_connection,
 }

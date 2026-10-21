@@ -8,6 +8,7 @@
 | [admin-system-monitor.md](architecture/admin-system-monitor.md) | Admin System Reports dashboard: conversations, costs, users, models, docs, tables, memories, guides and total-usage sections, cost estimation |
 | [auth.md](architecture/auth.md) | Sign-in (Google OAuth or email/password), sessions and cookies, OAuth state, Google service scopes, login admission |
 | [conversation-flags.md](architecture/conversation-flags.md) | Per-conversation opt-in flags set at conversation start: composer popover, magic first line, registry, gating |
+| [connect-requests.md](architecture/connect-requests.md) | Inline connect card for admin-configured services the user has not connected: prompt paragraph, blocking tool, verified resolve |
 | [data-paths.md](architecture/data-paths.md) | Data directory layout, the id-to-path resolvers for conversations, projects and docs, and ownership guards for routes |
 | [encryption-at-rest.md](architecture/encryption-at-rest.md) | Encryption of stored secrets: password-wrapped data key, encrypted columns and credential files, startup unlock |
 | [expensive-resume.md](architecture/expensive-resume.md) | Warning before resuming a long-idle, long-context conversation: rules, cost estimate, send gate, warning card |

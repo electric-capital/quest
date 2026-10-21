@@ -125,6 +125,7 @@ def _conversation_has_dangling_wait(conversation_id: str) -> bool:
     * ``wait_for_handles`` (web confirm-action / generic wait flow)
     * ``send_slack_reply_and_get_response`` (Slack-driven thread suspend)
     * ``create_action_request`` (web action-request Approve / Revise / Stop)
+    * ``request_service_connection`` (web inline connect card)
 
     Returns False if the file is missing, the provider is unknown, or the
     check raises -- the caller treats False as "no resume needed."
@@ -138,7 +139,9 @@ def _conversation_has_dangling_wait(conversation_id: str) -> bool:
             "return_to_caller",
         ):
             return True
-        if name == "tool_call" and (args or {}).get("tool_name") == "wait_for_handles":
+        if name == "tool_call" and (args or {}).get("tool_name") in (
+            "wait_for_handles", "request_service_connection",
+        ):
             return True
     return False
 
@@ -162,7 +165,9 @@ def _conversation_has_dangling_slack_reply(conversation_id: str) -> bool:
 # specific tool_use has nothing to be closed with yet. ``wait_for_handles``
 # is deliberately absent: its rows belong to other tools and its contract
 # is "return when ANY resolves."
-_ONE_ROW_PER_TOOL_USE_KINDS = frozenset({"action_request", "slack_reply"})
+_ONE_ROW_PER_TOOL_USE_KINDS = frozenset({
+    "action_request", "slack_reply", "service_connection",
+})
 
 
 async def _unresolved_blocking_handle_ids(

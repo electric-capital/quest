@@ -604,6 +604,7 @@ class TestPreviewAndLabels:
     def test_public_blocked_loop_tools_unchanged(self):
         from chat.gemini_api.turn_tools import (
             _PUBLIC_BLOCKED_LOOP_TOOLS,
+            REQUEST_SERVICE_CONNECTION_KEY,
             WAIT_FOR_HANDLES_KEY,
         )
 
@@ -615,6 +616,7 @@ class TestPreviewAndLabels:
             "return_to_caller",
             "return_final_response",
             WAIT_FOR_HANDLES_KEY,
+            REQUEST_SERVICE_CONNECTION_KEY,
         })
 
 

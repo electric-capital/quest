@@ -1067,6 +1067,61 @@ class ChatStorage:
         )
 
     @staticmethod
+    def update_connect_request_message(
+        conversation_id: str,
+        wait_handle_id: str,
+        status: str,
+    ) -> None:
+        """Update the persisted ``connect_request`` card entry in place.
+
+        The connect-request resolve endpoint writes the outcome
+        (``connected`` / ``declined``) into the card keyed by its
+        ``wait_handle_id`` so a reload shows the same collapsed state the
+        live UI shows. Best-effort like
+        :meth:`update_action_request_message`.
+        """
+        ChatStorage._rewrite_message_in_place(
+            conversation_id,
+            lambda msg: (
+                msg.get("type") == "connect_request"
+                and msg.get("wait_handle_id") == wait_handle_id
+            ),
+            {"status": status},
+        )
+
+    @staticmethod
+    def _rewrite_message_in_place(
+        conversation_id: str,
+        matches,
+        fields: Dict,
+    ) -> None:
+        """Merge *fields* into the first chat-history entry *matches*
+        accepts. Silent no-op on a missing file or entry; holds the
+        conversation's file lock."""
+        chat_file = ChatStorage._get_chat_history_file(conversation_id)
+        with _transcript_file_lock(conversation_id):
+            if not chat_file.exists():
+                return
+            try:
+                with open(chat_file, "r") as f:
+                    chat_data = json.load(f)
+            except Exception:
+                return
+            changed = False
+            for msg in chat_data.get("messages") or []:
+                if isinstance(msg, dict) and matches(msg):
+                    msg.update(fields)
+                    changed = True
+                    break
+            if not changed:
+                return
+            try:
+                write_json_atomic(chat_file, chat_data)
+            except Exception:
+                # Best-effort: a failed disk write must not break the resolve.
+                pass
+
+    @staticmethod
     def update_action_request_message(
         conversation_id: str,
         request_id: int,
@@ -1083,41 +1138,19 @@ class ChatStorage:
         a missing file or missing entry is a silent no-op. Holds the
         conversation's file lock (see the module docstring).
         """
-        chat_file = ChatStorage._get_chat_history_file(conversation_id)
-        with _transcript_file_lock(conversation_id):
-            if not chat_file.exists():
-                return
-
-            try:
-                with open(chat_file, "r") as f:
-                    chat_data = json.load(f)
-            except Exception:
-                return
-
-            messages = chat_data.get("messages") or []
-            changed = False
-            for msg in messages:
-                if (
-                    isinstance(msg, dict)
-                    and msg.get("type") == "action_request"
-                    and msg.get("request_id") == request_id
-                ):
-                    msg["status"] = status
-                    if result is not None:
-                        msg["result"] = result
-                    if feedback is not None:
-                        msg["feedback"] = feedback
-                    changed = True
-                    break
-
-            if not changed:
-                return
-
-            try:
-                write_json_atomic(chat_file, chat_data)
-            except Exception:
-                # Best-effort: a failed disk write must not break the resolve.
-                pass
+        fields: Dict = {"status": status}
+        if result is not None:
+            fields["result"] = result
+        if feedback is not None:
+            fields["feedback"] = feedback
+        ChatStorage._rewrite_message_in_place(
+            conversation_id,
+            lambda msg: (
+                msg.get("type") == "action_request"
+                and msg.get("request_id") == request_id
+            ),
+            fields,
+        )
 
     @staticmethod
     def set_guide_snapshot(

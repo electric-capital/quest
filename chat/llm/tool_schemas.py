@@ -546,6 +546,64 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "required": ["content"],
         },
     },
+    "request_service_connection": {
+        "name": "request_service_connection",
+        "description": (
+            "Offer the user an inline card to connect (or re-authorize) a "
+            "service the admin has configured but this user has not "
+            "connected yet -- e.g. they ask you to search their email while "
+            "Google Services is not connected. The card shows your `reason` "
+            "with Connect and Not now buttons; the 'Connectable services' "
+            "paragraph of the system prompt lists the service ids you may "
+            "pass (an unknown or already-connected service returns an "
+            "error instead of a card). "
+            "\n\n"
+            "This call BLOCKS until the user acts. It returns "
+            "`{status: \"connected\", service}` once the connection is "
+            "verified server-side -- the service's tools and `system:<id>` "
+            "skill are available from then on, so load the skill and carry "
+            "on with the user's original request without asking again -- or "
+            "`{status: \"declined\", service}` when the user chose Not now: "
+            "continue without the service, say briefly what you could not "
+            "do, and do not offer the card again in this conversation unless "
+            "the user brings it up. `status: \"cancelled\"` means the user "
+            "stopped the conversation while the card was open. "
+            "\n\n"
+            "Top-level only: not available to sub-agents, Slack-driven runs, "
+            "routine runs, inference API runs or public projects."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "service": {
+                    "type": "string",
+                    "description": (
+                        "Service id from the Connectable services list, e.g. "
+                        "`google_services` or `slack`."
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "One sentence shown on the card saying what "
+                        "connecting enables for the user's current request, "
+                        "e.g. 'To search your inbox for the Acme invoice'. "
+                        "Sentence case, no trailing period, under 160 "
+                        "characters (longer values are clipped)."
+                    ),
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "Brief user-facing description of what you are "
+                        "about to do (e.g. 'Asking you to connect Google "
+                        "Services')."
+                    ),
+                },
+            },
+            "required": ["service", "reason"],
+        },
+    },
     "wait_for_handles": {
         "name": "wait_for_handles",
         "description": (
@@ -3714,6 +3772,7 @@ PUBLIC_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
 # no skill tools and inline everything they offer instead.
 CORE_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
     "authed_get",
+    "request_service_connection",
     "get_response_content",
     "memory_search",
     "memory_list",

@@ -15,6 +15,7 @@ from chat.gemini_api.constants import MAX_AGENT_TASKS_PER_TURN
 from chat.gemini_api.run_context import RunContext
 from chat.gemini_api.turn_tools import (
     _PUBLIC_BLOCKED_LOOP_TOOLS,
+    REQUEST_SERVICE_CONNECTION_KEY,
     ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY,
     TURN_TOOL_HANDLERS,
     WAIT_FOR_HANDLES_KEY,
@@ -106,6 +107,7 @@ class TestRegistryRouting:
             ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY,
             "create_action_request",
             WAIT_FOR_HANDLES_KEY,
+            REQUEST_SERVICE_CONNECTION_KEY,
         }
 
     def test_plain_names_key_to_themselves(self):
@@ -118,6 +120,14 @@ class TestRegistryRouting:
             "tool_call", {"tool_name": "wait_for_handles", "arguments": {}},
         )
         assert key == WAIT_FOR_HANDLES_KEY
+        assert key in TURN_TOOL_HANDLERS
+
+    def test_request_service_connection_rides_on_tool_call(self):
+        key = registry_key_for(
+            "tool_call",
+            {"tool_name": "request_service_connection", "arguments": {}},
+        )
+        assert key == REQUEST_SERVICE_CONNECTION_KEY
         assert key in TURN_TOOL_HANDLERS
 
     def test_other_tool_call_tools_fall_through(self):
@@ -154,6 +164,8 @@ class TestRegistryRouting:
         assert "'wait_for_handles'" in payload["error"]
         payload = json.loads(public_blocked_result("agent_task"))
         assert "'agent_task'" in payload["error"]
+        payload = json.loads(public_blocked_result(REQUEST_SERVICE_CONNECTION_KEY))
+        assert "'request_service_connection'" in payload["error"]
 
 
 # ---------------------------------------------------------------------------

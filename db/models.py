@@ -109,6 +109,11 @@ class ToolWaitHandleKind(StrEnum):
     # correlation_kind / correlation_id are populated at create time
     # (request_id is known up front).
     ACTION_REQUEST = "action_request"
+    # Inline "Connect <service>" card opened by the request_service_connection
+    # tool (chat/connect_requests.py); payload carries (service, label, kind,
+    # reason), response carries {"status": "connected"|"declined", ...}
+    # written by the connect-request resolve endpoint.
+    SERVICE_CONNECTION = "service_connection"
     # Cross-user subagent run: created on the caller's side when an approved
     # run_user_subagent action request launches a subagent conversation in the
     # target user's account. The caller's model blocks on it via

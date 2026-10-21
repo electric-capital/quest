@@ -376,6 +376,19 @@ async def _tool_wait_for_handles_stub(ctx: ToolContext, args: dict) -> str:
     })
 
 
+async def _tool_request_service_connection_stub(ctx: ToolContext, args: dict) -> str:
+    # Like wait_for_handles: the top-level loop intercepts this arm before
+    # dispatch; reaching here means a sub-agent (or another run kind with
+    # no inline card) called it.
+    return json.dumps({
+        "error": (
+            "request_service_connection is only available to the top-level "
+            "agent. Report which service is missing in your response so the "
+            "parent can offer the connect card."
+        ),
+    })
+
+
 async def _tool_download_drive_file(ctx: ToolContext, args: dict) -> str:
     return await _handle_download_drive_file(
         ctx.user, ctx.conversation_id, args.get("file_id", ""),
@@ -703,6 +716,7 @@ TOOL_CALL_HANDLERS: dict[str, ToolHandler] = {
     "project_memory_list": _tool_project_memory_list,
     "suggest_project_memory": _tool_suggest_project_memory,
     "wait_for_handles": _tool_wait_for_handles_stub,
+    "request_service_connection": _tool_request_service_connection_stub,
     "download_drive_file": _tool_download_drive_file,
     "google_export_doc": _tool_google_export_doc,
     "google_export_sheet": _tool_google_export_sheet,

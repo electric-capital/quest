@@ -74,7 +74,7 @@ type GroupedMessage =
 
 /**
  * Groups consecutive tool_use messages into collapsible units.
- * Non-tool messages (text, error, stats, interrupted, action_request) break the group.
+ * Non-tool messages (text, error, stats, interrupted, action_request, connect_request) break the group.
  * tool_result messages are skipped (they are paired with their tool_use via findToolResultById).
  */
 function groupConsecutiveToolCalls(messages: MessageContent[]): GroupedMessage[] {
@@ -699,11 +699,11 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       // Regular streaming message
       const msg = entry.message;
 
-      // Handle action_request messages
-      if (msg.type === 'action_request') {
+      // Handle action_request / connect_request cards
+      if (msg.type === 'action_request' || msg.type === 'connect_request') {
         return (
           <MessageContentRenderer
-            key={`streaming-action-request-${entry.index}`}
+            key={`streaming-${msg.type}-${entry.index}`}
             message={msg}
             conversationId={conversationId}
           />

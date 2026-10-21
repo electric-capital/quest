@@ -402,12 +402,13 @@ All memory endpoints are defined in `chat/memory_routes.py` with data access in 
 
 ## Wait Handle Endpoints
 
-All wait-handle endpoints are defined in `chat/wait_handle_routes.py` with data access in `db/tool_wait_handle_store.py`. See [Wait Handles Architecture](../architecture/wait-handles.md) for the full mechanism, including the suspend sentinels, headless resume, and the atomic accept-and-resolve path on `POST /app/api/memories`.
+Wait-handle endpoints live in `chat/wait_handle_routes.py` with data access in `db/tool_wait_handle_store.py`. See [Wait Handles Architecture](../architecture/wait-handles.md) for the suspend sentinels and headless resume.
 
 - **GET `/app/api/wait-handles/{handle_id}`** -- Fetch a wait-handle row scoped to the authenticated user (`get_wait_handle()`). Returns 404 if not found or owned by someone else.
 - **POST `/app/api/wait-handles/{handle_id}/resolve`** -- Resolve a pending wait handle (`resolve_wait_handle()`). Body shape is `ResolveWaitHandleRequest` in `chat/wait_handle_routes.py` (`status` in `{accepted, rejected, cancelled}`, optional `response`, `correlation_kind`, `correlation_id`, `feedback`). First-writer wins via the `status == PENDING` precondition in `tool_wait_handle_store.resolve_handle()`.
-  - After the DB write, always calls `wait_resume.maybe_kick_resume()` to close the dangling `wait_for_handles` tool_use and stream the model's continuation into `chat_history.json`. The kick is dedupe-safe via `_active_resumes` and gated on the on-disk transcript still ending on a dangling wait, so it is a no-op when there is nothing to resume.
+  - After the DB write, always calls `wait_resume.maybe_kick_resume()` (dedupe-safe, a no-op when the transcript no longer ends on a dangling wait).
   - Errors: 404 (missing), 400 (already resolved), 409 (race lost).
+- **POST `/app/api/connect-requests/{handle_id}/resolve`** -- Resolve an inline connect card (`chat/connect_request_routes.py`). Body `{"action": "check" | "decline"}`: `check` accepts only once the server sees the service connected, else `{"resolved": false}` with the handle still pending; `decline` rejects. See [Service Connect Requests](../architecture/connect-requests.md).
 
 ---
 

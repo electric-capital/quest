@@ -9,9 +9,10 @@ import { formatTimestamp, formatNumber } from '../utils/formatters';
 import { getModelDisplayName } from '../constants/models';
 import { API_BASE_URL } from '../api/config';
 import { conversationSource, fileDownloadUrl, projectSource } from '../api/fileApi';
-import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, StatsMessage as StatsMessageType, ErrorMessage as ErrorMessageType, InterruptedMessage as InterruptedMessageType, ActionRequestMessage as ActionRequestMessageType, CompactionMessage as CompactionMessageType, ModelFallbackMessage as ModelFallbackMessageType, RoutineNudgeMessage as RoutineNudgeMessageType, ComposerAttachmentRef } from '../api/types';
+import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, StatsMessage as StatsMessageType, ErrorMessage as ErrorMessageType, InterruptedMessage as InterruptedMessageType, ActionRequestMessage as ActionRequestMessageType, ConnectRequestMessage as ConnectRequestMessageType, CompactionMessage as CompactionMessageType, ModelFallbackMessage as ModelFallbackMessageType, RoutineNudgeMessage as RoutineNudgeMessageType, ComposerAttachmentRef } from '../api/types';
 import { ToolUseMessage } from './ToolUseMessage';
 import { ActionRequestMessage } from './ActionRequestMessage';
+import { ConnectRequestMessage } from './ConnectRequestMessage';
 import { webSocketManager } from '../services/WebSocketManager';
 import './Message.css';
 
@@ -407,6 +408,11 @@ export const MessageContentRenderer = React.memo(function MessageContentRenderer
         conversationId={conversationId || ''}
       />
     );
+  }
+
+  // Inline connect card (request_service_connection)
+  if (message.type === 'connect_request') {
+    return <ConnectRequestMessage message={message as ConnectRequestMessageType} />;
   }
 
   // Handle tool_use messages

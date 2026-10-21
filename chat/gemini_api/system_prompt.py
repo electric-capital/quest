@@ -473,6 +473,7 @@ def get_system_prompt(
     legacy_shared_workspace: bool = False,
     converted_from_standalone: bool = False,
     connected_accounts: str = "",
+    connectable_services: str = "",
     memories_content: str = "",
 ) -> str:
     """Build the system prompt with tool instructions and skill enumeration.
@@ -518,6 +519,11 @@ def get_system_prompt(
         connected_accounts: Pre-rendered "Connected accounts" paragraph
             (config.user_connections.build_connected_accounts_paragraph);
             empty -> nothing is added, so the prompt is unchanged.
+        connectable_services: Pre-rendered "Connectable services" paragraph
+            (chat.connect_requests.build_connectable_services_paragraph):
+            admin-configured services this user has not connected, with
+            the instruction to offer the inline connect card. Empty when
+            nothing is connectable or the run kind has no card.
         memories_content: Pre-rendered entries of the user's saved memories
             (chat.memory_prompt.build_memories_content). Wrapped in the
             "Saved Memories" section; empty -> no section, so the prompt
@@ -636,6 +642,8 @@ Facts the user has saved about themselves and how they want you to work, newest 
         # currently see was create_action_request, which is now gated.
         top_level_exclude.add("wait_for_handles")
         top_level_exclude.add("create_action_request")
+        # The inline connect card is a web-app card too.
+        top_level_exclude.add("request_service_connection")
     if is_routine:
         # Routine conversations already carry the routine's name; the model
         # has nothing to name. A routine run is a canned task, not a
@@ -727,7 +735,7 @@ You have thirteen tools available:
 
 {dynamic_tools_section}
 
-{system_skills_block}{_connected_accounts_block(connected_accounts)}
+{system_skills_block}{_connected_accounts_block(connected_accounts)}{_connected_accounts_block(connectable_services)}
 
 **Important rules:**
 - All API URLs used with `curl_proxy_get`/`curl_proxy_post` must start with `{base_url}/api/`.
@@ -877,7 +885,10 @@ def get_user_subagent_system_prompt(
     # The run is a standalone conversation in the target's account, so the
     # project-only tools never apply.
     user_subagent_exclude = (
-        {"wait_for_handles", "set_conversation_name", "suggest_memory"}
+        {
+            "wait_for_handles", "request_service_connection",
+            "set_conversation_name", "suggest_memory",
+        }
         | PROJECT_ONLY_TOOL_CALL_TOOLS
         | _doc_write_tool_names()
         | _table_write_tool_names()
@@ -982,7 +993,10 @@ def get_inference_api_system_prompt(
     # must not change anything. That covers the Quest Docs writes too.
     # Inference runs are standalone conversations: no project-only tools.
     inference_exclude = (
-        {"wait_for_handles", "set_conversation_name", "suggest_memory"}
+        {
+            "wait_for_handles", "request_service_connection",
+            "set_conversation_name", "suggest_memory",
+        }
         | PROJECT_ONLY_TOOL_CALL_TOOLS
         | mutating_tool_call_tools()
     )
@@ -1352,8 +1366,8 @@ def get_sub_agent_system_prompt(
     # top-level agent writes docs"), so the doc and table write tools are
     # hidden too.
     sub_agent_exclude = {
-        "wait_for_handles", "set_conversation_name", "suggest_memory",
-        "suggest_project_memory",
+        "wait_for_handles", "request_service_connection",
+        "set_conversation_name", "suggest_memory", "suggest_project_memory",
     }
     sub_agent_exclude |= _doc_write_tool_names() | _table_write_tool_names()
     if has_project:

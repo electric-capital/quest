@@ -359,6 +359,9 @@ _CORE_READ_OR_WORKSPACE_TOOLS = {
     "list_gmail_quest_labels", "get_gmail_messages", "list_gmail_labels",
     "get_gmail_message_urls",
     "set_conversation_name",  # the run's own row
+    # Opens an inline connect card at the top level only; the arm refuses
+    # inference runs before any write.
+    "request_service_connection",
     "project_db_query",
     # Scheme-qualified file tools: project conversations only, never offered
     # to (standalone) inference runs; proj:// is refused without a project

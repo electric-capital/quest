@@ -15,6 +15,7 @@ import {
   ApiClientError,
 } from './request';
 import type {
+  WaitHandle,
   ConnectionResponse,
   ConnectionRow,
   CreateConnectionBody,
@@ -964,6 +965,27 @@ export function resolveActionRequest(
     body.feedback = trimmed;
   }
   return apiPost(endpoints.actionRequestResolve(requestId), { body });
+}
+
+/** Outcome of resolving an inline connect card. `resolved: false` means a
+ *  `check` found the service still unconnected and the card stays open. */
+export interface ConnectRequestResolveResponse {
+  resolved: boolean;
+  status: 'connected' | 'declined' | 'not_connected';
+  service: string;
+  handle?: WaitHandle;
+}
+
+/**
+ * Resolve an inline connect card (POST /app/api/connect-requests/{id}/resolve).
+ * `check` asks the server to verify the service is now connected (the
+ * client never asserts it); `decline` is the card's Not now.
+ */
+export function resolveConnectRequest(
+  handleId: string,
+  action: 'check' | 'decline',
+): Promise<ConnectRequestResolveResponse> {
+  return apiPost(endpoints.connectRequestResolve(handleId), { body: { action } });
 }
 
 export function fetchActionRequestsEnriched(
