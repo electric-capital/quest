@@ -1,6 +1,6 @@
 """Tests for inline service connect requests (chat/connect_requests.py).
 
-Covers the tool spec, the row resolution and prompt paragraph, the
+Covers the tool specs, the row resolution and the list tool, the
 ``request_service_connection`` dispatch arm (origin guards, the wait
 handle + card it writes, the suspend sentinel), the resolve endpoint
 (verify-and-accept vs decline), the resume gates and the card rewrite.
@@ -75,6 +75,12 @@ def test_tool_spec_is_core_and_requires_service_and_reason():
     assert "request_service_connection" in CORE_TOOL_CALL_TOOLS
     assert set(spec["parameters"]["required"]) == {"service", "reason"}
     assert "BLOCKS" in spec["description"]
+    assert "list_service_connections" in spec["description"]
+
+    listing = TOOL_CALL_REGISTRY["list_service_connections"]
+    assert listing["core"] is True
+    assert listing["parameters"]["required"] == []
+    assert "request_service_connection" in listing["description"]
 
 
 # ---------------------------------------------------------------------------
@@ -125,47 +131,77 @@ def test_card_fields_carry_popup_url_only_for_oauth(rows):
     assert fields["needs_reauth"] is True
 
 
-def test_paragraph_lists_connectable_services_and_the_tool(rows):
-    text = connect_requests.build_connectable_services_paragraph({})
-    assert text.startswith("**Connectable services**")
-    assert "Google Services (`google_services`: Gmail, Calendar" in text
-    assert "Airtable (`airtable`)" in text
-    assert "GitHub (`github`) -- connected but needs re-authorization" in text
-    assert "Slack" not in text and "Ramp" not in text
-    assert 'request_service_connection' in text
+def test_list_service_connections_splits_connected_and_connectable(rows):
+    result = connect_requests.list_service_connections({})
+    assert [e["service"] for e in result["connected"]] == ["slack"]
+    assert [e["service"] for e in result["connectable"]] == [
+        "google_services", "airtable", "github",
+    ]
+    by_id = {e["service"]: e for e in result["connectable"]}
+    assert by_id["google_services"]["label"] == "Google Services"
+    assert by_id["google_services"]["description"].startswith("Gmail, Calendar")
+    assert by_id["google_services"]["state"] == "connectable"
+    assert by_id["airtable"]["kind"] == "api_key"
+    assert by_id["github"]["state"] == "needs_reauth"
+    # Unavailable rows are invisible; no credential fields leak.
+    assert "ramp" not in by_id
+    for entry in result["connected"] + result["connectable"]:
+        assert set(entry) == {"service", "label", "description", "kind", "state"}
+    assert "request_service_connection" in result["note"]
 
 
-def test_paragraph_empty_when_nothing_connectable(rows):
+def test_list_service_connections_empty_lists_when_nothing_connectable(rows):
     rows[:] = [dict(SLACK_CONNECTED), dict(RAMP_UNAVAILABLE)]
-    assert connect_requests.build_connectable_services_paragraph({}) == ""
+    result = connect_requests.list_service_connections({})
+    assert result["connectable"] == []
+    assert [e["service"] for e in result["connected"]] == ["slack"]
 
 
-def test_paragraph_swallows_row_failures(monkeypatch):
+def test_list_service_connections_reports_row_failures(monkeypatch):
     import chat.routes.user as user_routes
 
     def _boom(user):
         raise RuntimeError("no plugins")
 
     monkeypatch.setattr(user_routes, "build_connector_rows", _boom)
-    assert connect_requests.build_connectable_services_paragraph({}) == ""
+    assert "error" in connect_requests.list_service_connections({})
 
 
-def test_system_prompt_renders_paragraph_only_at_top_level():
+def test_list_tool_dispatch_is_top_level_only(rows):
+    from chat.gemini_api.tool_dispatch import ToolContext, _tool_list_service_connections
+
+    def ctx(**kw):
+        return ToolContext(app=None, provider=None, user={"id": "u1"},
+                           conversation_id="c1", timezone="UTC", **kw)
+
+    out = json.loads(_run(_tool_list_service_connections(ctx(), {})))
+    assert [e["service"] for e in out["connectable"]] == [
+        "google_services", "airtable", "github",
+    ]
+    for kw in ({"is_sub_agent": True}, {"is_user_subagent": True},
+               {"is_inference_api": True}, {"is_script": True}):
+        out = json.loads(_run(_tool_list_service_connections(ctx(**kw), {})))
+        assert "error" in out
+
+
+def test_system_prompt_offers_both_tools_only_at_top_level():
     from chat.gemini_api.system_prompt import (
         get_sub_agent_system_prompt,
         get_system_prompt,
     )
 
-    para = "**Connectable services** PARA"
-    top = get_system_prompt("k", connected_services={}, connectable_services=para)
-    assert para in top
-    assert "request_service_connection" in top
+    top = get_system_prompt("k", connected_services={})
+    assert "**list_service_connections**" in top
+    assert "**request_service_connection**" in top
+    assert "Connectable services" not in top
 
     slack = get_system_prompt("k", connected_services={}, is_slack=True)
     assert "`request_service_connection`" not in slack
+    assert "`list_service_connections`" not in slack
 
     sub = get_sub_agent_system_prompt("agent", "k", connected_services={})
     assert "`request_service_connection`" not in sub
+    assert "`list_service_connections`" not in sub
 
 
 def test_skill_loader_not_connected_error_names_the_tool():

@@ -354,6 +354,7 @@ _CORE_READ_OR_WORKSPACE_TOOLS = {
     # (and inference runs have no project anyway).
     "project_memory_search", "project_memory_list", "suggest_project_memory",
     "wait_for_handles",
+    "list_service_connections",  # read-only view of the Settings rows
     "download_drive_file", "google_export_doc",  # external read -> workspace
     "google_export_sheet", "google_export_slides",
     "list_gmail_quest_labels", "get_gmail_messages", "list_gmail_labels",

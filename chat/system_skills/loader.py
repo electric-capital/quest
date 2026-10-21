@@ -183,8 +183,8 @@ def load_system_skills(
                 error = tables_disabled_message()
             else:
                 error = (
-                    f"{skill.name} is not connected. If the system prompt "
-                    "lists it under Connectable services, call "
+                    f"{skill.name} is not connected. If "
+                    "`list_service_connections` lists it as connectable, call "
                     "`tool_call(tool_name=\"request_service_connection\", "
                     f"arguments={{\"service\": \"{skill.requires}\", "
                     "\"reason\": \"...\"}})` to show the user an inline "

@@ -376,6 +376,22 @@ async def _tool_wait_for_handles_stub(ctx: ToolContext, args: dict) -> str:
     })
 
 
+async def _tool_list_service_connections(ctx: ToolContext, args: dict) -> str:
+    # Read-only view of the Settings connector rows (chat/connect_requests.py).
+    # Offered by the same prompts as request_service_connection; a run kind
+    # that cannot show the card has nothing to do with the answer.
+    if ctx.is_sub_agent or ctx.is_user_subagent or ctx.is_inference_api or ctx.is_script:
+        return json.dumps({
+            "error": (
+                "list_service_connections is only available to the top-level "
+                "agent. Report which service you were missing in your "
+                "response instead."
+            ),
+        })
+    from chat.connect_requests import list_service_connections
+    return json.dumps(list_service_connections(ctx.user))
+
+
 async def _tool_request_service_connection_stub(ctx: ToolContext, args: dict) -> str:
     # Like wait_for_handles: the top-level loop intercepts this arm before
     # dispatch; reaching here means a sub-agent (or another run kind with
@@ -716,6 +732,7 @@ TOOL_CALL_HANDLERS: dict[str, ToolHandler] = {
     "project_memory_list": _tool_project_memory_list,
     "suggest_project_memory": _tool_suggest_project_memory,
     "wait_for_handles": _tool_wait_for_handles_stub,
+    "list_service_connections": _tool_list_service_connections,
     "request_service_connection": _tool_request_service_connection_stub,
     "download_drive_file": _tool_download_drive_file,
     "google_export_doc": _tool_google_export_doc,

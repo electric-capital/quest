@@ -2,7 +2,7 @@
 
 ## Overview
 
-A connect request is the inline "Connect Google Services" card the model opens when a user asks for something that needs a service they have not connected yet, but which the admin has configured. The user asks for an email search while Google Services is unconnected; instead of pointing at Settings, the model calls the `request_service_connection` tool, the card appears in the conversation with the model's one-line reason and **Connect** / **Not now** buttons, and the turn suspends. Connect runs the same flow Settings > Data Connections would run (the OAuth popup, or the Settings add flow for key and form services); once the server verifies the credential the model resumes with `status: "connected"` and carries on with the original request. Not now resumes it with `status: "declined"`.
+A connect request is the inline "Connect Google Services" card the model opens when a user asks for something that needs a service they have not connected yet, but which the admin has configured. The user asks for an email search while Google Services is unconnected; instead of pointing at Settings, the model checks `list_service_connections`, calls the `request_service_connection` tool, the card appears in the conversation with the model's one-line reason and **Connect** / **Not now** buttons, and the turn suspends. Connect runs the same flow Settings > Data Connections would run (the OAuth popup, or the Settings add flow for key and form services); once the server verifies the credential the model resumes with `status: "connected"` and carries on with the original request. Not now resumes it with `status: "declined"`.
 
 The mechanism is a fourth [wait handle](wait-handles.md) kind, `service_connection`, with its own card message, resolve endpoint and resume-bucket arm. It never touches the `action_requests` table: a connect request is not a proposed write, so it has no Requests-pane row, no Slack pending-request notification and no Approve / Revise semantics.
 
@@ -10,14 +10,15 @@ The mechanism is a fourth [wait handle](wait-handles.md) kind, `service_connecti
 
 | File | Description |
 |------|-------------|
-| `chat/connect_requests.py` | Names (`TOOL_NAME`, `MESSAGE_TYPE`, `HANDLE_KIND`), row resolution (`connectable_rows`, `find_row`, `find_connect_target`, `row_is_connected`), `card_fields`, `build_connectable_services_paragraph` |
+| `chat/connect_requests.py` | Names (`TOOL_NAME`, `MESSAGE_TYPE`, `HANDLE_KIND`), row resolution (`connectable_rows`, `find_row`, `find_connect_target`, `row_is_connected`), `card_fields`, `list_service_connections` |
 | `chat/routes/user.py` | `build_connector_rows(user)`: the Settings row list, shared with `GET /connectors` |
-| `chat/llm/tool_schemas.py` | The `request_service_connection` registry spec (core tool, rides on `tool_call`) |
+| `chat/llm/tool_schemas.py` | The `list_service_connections` and `request_service_connection` registry specs (core tools, ride on `tool_call`) |
 | `chat/gemini_api/turn_tools.py` | `REQUEST_SERVICE_CONNECTION_KEY`, `SuspendForServiceConnection`, `_handle_request_service_connection` |
-| `chat/gemini_api/conversation.py` | Per-call catch in the dispatch batch, top-level catch, the `service_connection` resume-bucket arm, the prompt paragraph gate |
+| `chat/gemini_api/conversation.py` | Per-call catch in the dispatch batch, top-level catch, the `service_connection` resume-bucket arm |
 | `chat/connect_request_routes.py` | `POST /app/api/connect-requests/{handle_id}/resolve` |
 | `chat/storage.py` | `update_connect_request_message` (card rewrite on resolve) |
-| `chat/gemini_api/system_prompt.py` | `connectable_services` argument of `get_system_prompt`; the tool is excluded from every other prompt |
+| `chat/gemini_api/tool_dispatch.py` | `_tool_list_service_connections`; the sub-agent stub for the connect tool |
+| `chat/gemini_api/system_prompt.py` | Both tools are excluded from every prompt but the top-level web prompt |
 | `chat/system_skills/loader.py` | The not-connected skill error names the tool |
 | `frontend/src/components/ConnectRequestMessage.tsx` | The card |
 | `frontend/src/api/client.ts` | `resolveConnectRequest` |
@@ -25,9 +26,9 @@ The mechanism is a fourth [wait handle](wait-handles.md) kind, `service_connecti
 
 ## What the Model Sees
 
-`build_connectable_services_paragraph(user)` renders a **Connectable services** paragraph after the Connected accounts paragraph of the top-level prompt. It lists every available connector row that is not connected, or is connected but `needs_reauth`, as `Label (\`id\`: description)`, and tells the model to call the tool rather than send the user to Settings. The paragraph is empty, and the prompt unchanged, when nothing is connectable. `run_conversation_turn` builds it only for a web, non-routine, non-public top-level run; the sub-agent, cross-user subagent, inference and Slack prompts never list the tool, and `tool_dispatch.py` answers a sub-agent call with an error.
+The prompt itself only names what is connected: the proxy intro line lists the connected core services and the system-skills enumeration lists `system:<id>` skills whose `requires` service is connected ([Gemini API](gemini-api.md)). Nothing in the prompt enumerates what the user could connect; that is a tool call, so a fully-connected user's prompt carries no list and a connect made mid-conversation is visible on the next call without a prompt rebuild.
 
-The rows are `build_connector_rows(user)`, the list `GET /connectors` returns, so the paragraph, the tool and the Settings picker always agree on what an admin has configured: a row with `available: false` (no server-side credentials) is invisible to the model too.
+`list_service_connections()` is a core, read-only `tool_call` tool that returns `{"connected": [...], "connectable": [...], "note"}` from `list_service_connections(user)` in `chat/connect_requests.py`. Each entry carries `service`, `label`, `description`, `kind` and `state` (`connected`, `needs_reauth` or `connectable`); a `connectable` entry's `service` is the id the connect tool takes. The rows are `build_connector_rows(user)`, the list `GET /connectors` returns, so the two tools and the Settings picker always agree on what an admin has configured: a row with `available: false` (no server-side credentials) is absent from both lists, and the note tells the model such a service does not exist on this instance. The tool's description tells the model to call it when a request needs a service the prompt does not list as connected. `_tool_list_service_connections` answers sub-agent, cross-user subagent, inference and script calls with an error, and the tool is listed only by the top-level web prompt, next to the connect tool.
 
 A `load_skills` call for a skill whose `requires` service is unconnected returns an error that spells out the tool call with the right service id, so a model that reaches for the skill first still finds the card.
 
@@ -62,4 +63,4 @@ A resolved card collapses to `Connected: <label>` / `Not now: <label>` / `Cancel
 
 **Why does the server verify instead of trusting the popup's success message?** The `postMessage` is a same-origin cue, not evidence; a closed popup tells the card nothing. Re-reading the credential row server-side is the only way to be sure, and it costs one query.
 
-**Why list connectable services in the prompt?** Without it the model only learns a service is missing when a tool errors, and the Settings gating that hides unconnected skills and tools would leave it believing the service does not exist. The paragraph is the connectable complement of the Connected accounts paragraph and reuses the Settings rows, so it is empty whenever Settings would show nothing to add.
+**Why a list tool rather than a prompt paragraph?** The Settings gating that hides unconnected skills and tools would otherwise leave the model believing an unconnected service does not exist, so it needs some view of what the admin configured. A paragraph would cost every turn of every conversation for a list that matters only when a request misses a service, and would go stale the moment the card connects one. A tool is paid for only when it is needed and is always current. The Connected accounts paragraph stays in the prompt because the `connection` argument of every tool call depends on it.

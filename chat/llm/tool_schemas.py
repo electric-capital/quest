@@ -546,6 +546,34 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "required": ["content"],
         },
     },
+    "list_service_connections": {
+        "name": "list_service_connections",
+        "description": (
+            "List this user's service connections: `connected` (ready to "
+            "use) and `connectable` (configured by the admin for this Quest "
+            "instance but not yet connected by this user, or connected but "
+            "needing re-authorization), each with the `service` id, label, "
+            "description and kind. Call it when the user's request needs a "
+            "service that your instructions do not list as connected (an "
+            "email search while no mail service is connected, a Slack or "
+            "GitHub question): a service under `connectable` can be offered "
+            "through `request_service_connection`; one absent from both "
+            "lists does not exist on this instance. Read-only, no arguments."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "Brief user-facing description of what you are "
+                        "about to do (e.g. 'Checking connected services')."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
     "request_service_connection": {
         "name": "request_service_connection",
         "description": (
@@ -553,10 +581,10 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "service the admin has configured but this user has not "
             "connected yet -- e.g. they ask you to search their email while "
             "Google Services is not connected. The card shows your `reason` "
-            "with Connect and Not now buttons; the 'Connectable services' "
-            "paragraph of the system prompt lists the service ids you may "
-            "pass (an unknown or already-connected service returns an "
-            "error instead of a card). "
+            "with Connect and Not now buttons; `list_service_connections` "
+            "returns the service ids you may pass under `connectable` (an "
+            "unknown or already-connected service returns an error instead "
+            "of a card). "
             "\n\n"
             "This call BLOCKS until the user acts. It returns "
             "`{status: \"connected\", service}` once the connection is "
@@ -578,8 +606,9 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                 "service": {
                     "type": "string",
                     "description": (
-                        "Service id from the Connectable services list, e.g. "
-                        "`google_services` or `slack`."
+                        "Service id from the `connectable` list of "
+                        "`list_service_connections`, e.g. `google_services` "
+                        "or `slack`."
                     ),
                 },
                 "reason": {
@@ -3772,6 +3801,7 @@ PUBLIC_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
 # no skill tools and inline everything they offer instead.
 CORE_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
     "authed_get",
+    "list_service_connections",
     "request_service_connection",
     "get_response_content",
     "memory_search",

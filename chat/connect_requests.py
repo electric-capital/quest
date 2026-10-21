@@ -2,16 +2,17 @@
 
 When a user asks for something that needs a service they have not
 connected yet (an email search while Google Services is unconnected), the
-top-level model calls the ``request_service_connection`` tool instead of
-telling the user to visit Settings. The tool opens a ``connect_request``
+top-level model learns what the admin has configured from the
+``list_service_connections`` tool and calls ``request_service_connection``
+instead of telling the user to visit Settings. The tool opens a ``connect_request``
 card in the conversation and blocks on a ``service_connection`` wait
 handle until the user connects the service (verified server-side by the
 resolve endpoint in ``chat/connect_request_routes.py``) or declines.
 
 The rows come from ``build_connector_rows`` in ``chat/routes/user.py`` --
 the same rows the Settings > Data Connections picker renders -- so the
-prompt paragraph, the tool and the card can never disagree with Settings
-about which services an admin has configured.
+``list_service_connections`` tool, the connect tool and the card can never
+disagree with Settings about which services an admin has configured.
 """
 
 from __future__ import annotations
@@ -141,44 +142,38 @@ def card_fields(row: dict, reason: str) -> dict:
     return fields
 
 
-def _service_line(row: dict) -> str:
-    label = row.get("label") or row["service"]
-    line = f"{label} (`{row['service']}`"
-    if row.get("description"):
-        line += f": {row['description']}"
-    line += ")"
-    if _row_state(row) == "needs_reauth":
-        line += " -- connected but needs re-authorization"
-    return line
+def _entry(row: dict) -> dict:
+    return {
+        "service": row["service"],
+        "label": row.get("label") or row["service"],
+        "description": row.get("description") or "",
+        "kind": row.get("kind") or "oauth",
+        "state": _row_state(row),
+    }
 
 
-def build_connectable_services_paragraph(user: dict) -> str:
-    """The "**Connectable services**" prompt paragraph, or ``""``.
+def list_service_connections(user: dict) -> dict:
+    """The ``list_service_connections`` tool result.
 
-    Lists the admin-configured services this user has not connected (or
-    must re-authorize) and tells the model to offer the inline Connect
-    card through ``request_service_connection`` instead of pointing at
-    Settings. Empty when nothing is connectable, so a fully-connected
-    user's prompt is unchanged.
+    ``connected`` holds the available rows this user has connected (ready
+    to use); ``connectable`` the admin-configured rows that are not
+    connected or need re-authorization, each with the ``service`` id that
+    ``request_service_connection`` takes. Services the admin never
+    configured are absent from both lists, so the model cannot offer
+    them. Built on demand, so the prompt of a fully-connected user never
+    changes and a connect made mid-conversation shows up on the next call.
     """
     try:
-        rows = connectable_rows(user)
+        rows = connector_rows(user)
     except Exception:
-        logger.exception("Connectable services paragraph failed; omitting it")
-        return ""
-    if not rows:
-        return ""
-    lines = "; ".join(_service_line(row) for row in rows)
-    return (
-        "**Connectable services** (configured by the admin, not yet "
-        f"connected by this user): {lines}. When the user's request needs "
-        "one of these, do not say it is unavailable and do not send them "
-        "to Settings: call `tool_call(tool_name=\"request_service_connection\", "
-        "arguments={\"service\": \"<id>\", \"reason\": \"...\"})`. It shows an "
-        "inline Connect card and blocks until the user connects "
-        "(`status: \"connected\"` -- the service's tools and system skill "
-        "are available from then on, so load the skill and carry on with "
-        "the original request) or declines (`status: \"declined\"` -- "
-        "continue without the service and do not ask again in this "
-        "conversation unless the user brings it up)."
+        logger.exception("list_service_connections failed")
+        return {"error": "Could not read the service connections; try again."}
+    connected = [_entry(r) for r in rows if _row_state(r) == "connected"]
+    connectable = [_entry(r) for r in rows if _row_state(r) != "connected"]
+    note = (
+        "Only services listed here exist on this Quest instance. To use a "
+        "connectable one, call request_service_connection with its "
+        "service id instead of sending the user to Settings; a service "
+        "absent from both lists is not available here."
     )
+    return {"connected": connected, "connectable": connectable, "note": note}

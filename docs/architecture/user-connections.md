@@ -199,7 +199,7 @@ What a multi-connection plugin must satisfy; the loader enforces items 1, 3 and 
 
 **Why accounts, not row ids, in tool calls?** The model must be able to name a connection the user described in words, and ids would leak a Settings-UI detail into transcripts. Account uniqueness per (user, service) makes the account a stable key.
 
-**Why no `list_connections` tool?** The prompt paragraph enumerates the choices and the `connection_not_found` error lists the current accounts, which covers connections added mid-conversation without another tool.
+**Why no tool listing a service's accounts?** The prompt paragraph enumerates the choices and the `connection_not_found` error lists the current accounts, which covers connections added mid-conversation without another tool. `list_service_connections` ([Connect Requests](connect-requests.md)) lists services, not the accounts within one.
 
 **Why only list services with two or more connections?** With one connection there is nothing to choose; omitting the paragraph keeps existing users' prompts byte-identical.
 

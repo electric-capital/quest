@@ -830,16 +830,6 @@ async def run_conversation_turn(
             "" if is_public else build_connected_accounts_paragraph(user)
         )
         is_slack_origin = origin == "slack"
-        # The inline connect card only exists for a web user watching a
-        # top-level, non-routine run (see _handle_request_service_connection
-        # in turn_tools.py), so only that prompt lists connectable services.
-        connectable_services = ""
-        if not (
-            is_public or is_user_subagent or is_inference_api
-            or is_slack_origin or routine_id
-        ):
-            from chat.connect_requests import build_connectable_services_paragraph
-            connectable_services = build_connectable_services_paragraph(user)
         if is_user_subagent:
             from chat.gemini_api.system_prompt import get_user_subagent_system_prompt
             system_prompt = get_user_subagent_system_prompt(
@@ -904,7 +894,6 @@ async def run_conversation_turn(
                 legacy_shared_workspace=legacy_shared_workspace,
                 converted_from_standalone=converted_from_standalone,
                 connected_accounts=connected_accounts,
-                connectable_services=connectable_services,
                 memories_content=memories_content,
             )
         ChatStorage.set_system_prompt(conversation_id, system_prompt)
