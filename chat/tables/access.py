@@ -29,8 +29,9 @@ user_subagent and script runs)::
     |                   |                |                   | schema Appr.   | write: rows Free |           |
     |                   |                |                   |                |   schema Appr.   |           |
 
-(*) except ``script``: scripts see user tables only (never a project
-table), and public tables are always project tables, so Hidden.
+(*) scripts included: a sandbox script carries the project and mode of the
+conversation that launched it, so it has that conversation's reach (public
+containers have no tool bridge, so no script reads a public table today).
 
 As for docs (rule 2), the owner's standalone conversations see the tables
 of all of the owner's projects read-only ("Read" in both verdicts, with
@@ -86,9 +87,11 @@ refuses ``target="user"`` there). A hidden table and a missing id
 produce the same text: :func:`not_found_message`, built on
 ``chat.tables.constants.table_not_found_message``.
 
-Callers pass ``is_public=False`` and ``project_id=None`` for the ``ui`` and
-``script`` run kinds, and the empty default ``doc_source_project_ids`` for
-everything but a private project conversation.
+Callers pass ``is_public=False`` and ``project_id=None`` for the ``ui`` run
+kind; a ``script`` caller carries the ``project_id`` and ``is_public`` of the
+conversation that launched it (from its sandbox lease). Everything but a
+private project conversation (a script launched from one included) passes
+the empty default ``doc_source_project_ids``.
 """
 
 from __future__ import annotations

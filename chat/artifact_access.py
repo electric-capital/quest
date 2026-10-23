@@ -176,10 +176,11 @@ def resolve_core(
     # cases, else hidden: the owner's own project artifacts (any project,
     # any mode) from the owner's standalone conversations, and the public
     # artifacts of a listed source from a private project's conversations.
-    # Public conversations stay confined to their own project; scripts (no
-    # conversation) see no project artifact.
+    # Public conversations stay confined to their own project. A sandbox
+    # script carries the project and mode of the conversation that ran it,
+    # so it reaches exactly what that conversation reaches (read-only below).
     if item_project_id is not None and run_kind != "ui" and project_id != item_project_id:
-        if is_public or run_kind == "script":
+        if is_public:
             return _HIDDEN
         if project_id is None:
             if not is_owner:

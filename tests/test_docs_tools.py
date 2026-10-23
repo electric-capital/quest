@@ -473,27 +473,49 @@ class TestTiers:
             script_tool_call_endpoint,
         )
 
+        from chat.sandbox_tokens import SandboxLease
+
         user_doc = seed_doc(docs_env, title="Mine", content="script readable\n")
         project_doc = seed_doc(docs_env, title="Proj", project_id=docs_env.private_project)
         alice = docs_env.users["alice"]
 
-        def call(tool, arguments):
+        def lease_for(project_id):
+            return SandboxLease(user_id=alice["id"], conversation_id="c", expires_at=1e12,
+                                project_id=project_id)
+
+        def call(tool, arguments, lease=None):
             return _run(script_tool_call_endpoint(
                 ScriptToolCallRequest(tool_name=tool, arguments=arguments),
-                user=alice, lease=None,
+                user=alice, lease=lease,
             ))
 
+        # A container launched from a conversation of the doc's project
+        # (its lease carries the project) reads the project doc, read-only.
+        in_project = lease_for(docs_env.private_project)
+        read = call("read_doc", {"doc_id": project_doc["id"]}, lease=in_project)
+        payload = json.loads(read.body)
+        assert payload["writable"] == "denied" and payload["write_note"] == DENY_SCRIPT
+        listed = json.loads(call("list_docs", {}, lease=in_project).body)
+        assert {d["id"] for d in listed["docs"]} == {user_doc["id"], project_doc["id"]}
+        # From another project's conversation the doc is hidden.
+        elsewhere = lease_for(docs_env.other_project)
+        hidden = json.loads(call("read_doc", {"doc_id": project_doc["id"]}, lease=elsewhere).body)
+        assert hidden == {"error": doc_not_found_message(project_doc["id"])}
+        assert [d["id"] for d in json.loads(call("list_docs", {}, lease=elsewhere).body)["docs"]] == [
+            user_doc["id"]
+        ]
+        # Without a lease (tests only) the bridge behaves like a standalone
+        # conversation: user docs plus the owner's project docs, read-only.
         read = call("read_doc", {"doc_id": user_doc["id"]})
         payload = json.loads(read.body)
         assert payload["content"] == "script readable\n"
         assert payload["writable"] == "denied" and payload["write_note"] == DENY_SCRIPT
-        hidden = json.loads(call("read_doc", {"doc_id": project_doc["id"]}).body)
-        assert hidden == {"error": doc_not_found_message(project_doc["id"])}
         listed = json.loads(call("list_docs", {}).body)
-        assert [d["id"] for d in listed["docs"]] == [user_doc["id"]]
+        assert {d["id"] for d in listed["docs"]} == {user_doc["id"], project_doc["id"]}
         assert json.loads(call("search_docs", {"query": "readable"}).body)["results"]
         for tool in sorted(WRITE_TOOLS):
             assert call(tool, {}).status_code == 400
+            assert call(tool, {}, lease=in_project).status_code == 400
 
     def test_script_dispatch_denies_writes(self, docs_env):
         doc = seed_doc(docs_env)

@@ -185,7 +185,9 @@ class ToolContext:
     # requests, so an approval-gated doc write is refused there.
     is_slack: bool = False
     # Sandbox script calling through the POST /api/tool-call bridge
-    # (chat/gemini_api/script_tool_call.py): no conversation context.
+    # (chat/gemini_api/script_tool_call.py): conversation_id is None, while
+    # project_id / is_public are the launching conversation's (from the
+    # sandbox lease), so the artifact access rule scopes the script like it.
     is_script: bool = False
 
     @property
@@ -628,20 +630,15 @@ async def _tool_run_python(ctx: ToolContext, args: dict) -> str:
 def _doc_caller(ctx: ToolContext):
     """The Quest Docs service caller for this dispatch context.
 
-    Sandbox scripts have no conversation context: no project (so project
-    docs stay hidden from them) and never public (the public sandbox has no
-    tool bridge).
+    A sandbox script dispatches with ``conversation_id=None`` (no
+    read-before-edit record of its own) and the project and public flag of
+    the conversation that launched it, taken from its sandbox lease by the
+    script tool-call bridge, so it reads what that conversation reads.
     """
     from chat.docs.service import Caller
-    run_kind = ctx.run_kind
-    if run_kind == "script":
-        return Caller(
-            user=ctx.user, conversation_id=None, project_id=None,
-            is_public=False, run_kind=run_kind,
-        )
     return Caller(
         user=ctx.user, conversation_id=ctx.conversation_id,
-        project_id=ctx.project_id, is_public=ctx.is_public, run_kind=run_kind,
+        project_id=ctx.project_id, is_public=ctx.is_public, run_kind=ctx.run_kind,
     )
 
 
@@ -676,20 +673,14 @@ async def _tool_add_doc_image(ctx: ToolContext, args: dict) -> str:
 def _table_caller(ctx: ToolContext):
     """The Quest Tables service caller for this dispatch context.
 
-    As for docs: sandbox scripts have no conversation context, so no
-    project (project tables stay hidden from them) and never public (the
-    public sandbox has no tool bridge).
+    As for docs: a sandbox script carries the project and public flag of
+    the conversation that launched it (from its sandbox lease), with no
+    conversation id of its own.
     """
     from chat.tables.service import Caller
-    run_kind = ctx.run_kind
-    if run_kind == "script":
-        return Caller(
-            user=ctx.user, conversation_id=None, project_id=None,
-            is_public=False, run_kind=run_kind,
-        )
     return Caller(
         user=ctx.user, conversation_id=ctx.conversation_id,
-        project_id=ctx.project_id, is_public=ctx.is_public, run_kind=run_kind,
+        project_id=ctx.project_id, is_public=ctx.is_public, run_kind=ctx.run_kind,
     )
 
 

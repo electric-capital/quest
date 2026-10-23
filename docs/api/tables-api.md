@@ -88,7 +88,7 @@ Every error is `{"error": <code>, "message": <text>}` plus the refusal's structu
 
 - **Prompt**: every spec has `requires_service: "tables"`, so the tools leave the prompt while the [feature gate](../architecture/feature-gates.md#enforcement-layers-quest-tables) is closed. All seven are documented by the `system:tables` skill (`_SKILL_DOCUMENTED_TOOLS`), whose guide precedes the tool reference the loader appends ([Prompting](../architecture/quest-tables.md#prompting)).
 - **Public conversations**: all seven are in `PUBLIC_TOOL_CALL_ALLOWLIST`. The access rule hides every private table there; a public table's rows are `free` or `denied`, or `approval` under the owner's switch, and its schema is always `approval`. The three table cards are the action requests a public conversation can open ([Public Projects -- Action requests](../architecture/public-projects.md#action-requests)).
-- **Script bridge**: the three reads only (`SCRIPT_TOOL_CALL_ALLOWLIST`), with a caller that has no project, so scripts see user tables only ([Service Layer](../architecture/quest-tables.md#service-layer)).
+- **Script bridge**: the three reads only (`SCRIPT_TOOL_CALL_ALLOWLIST`), scoped by the sandbox lease to what the launching conversation reads, project tables included ([Service Layer](../architecture/quest-tables.md#service-layer)).
 - **Read-only tiers**: sub-agent and cross-user subagent prompts leave out `_table_write_tool_names()` (`chat/gemini_api/system_prompt.py`); the access rule denies the writes there anyway.
 - **Inference API runs**: the `mutating` row writes are refused at dispatch and on the run's sandbox lease ([Inference API](inference-api.md)).
 

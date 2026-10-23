@@ -172,7 +172,9 @@ def make_caller(env, who="alice", *, project=None, public=False,
     if cid is not None:
         (env.dirs["chats"] / cid).mkdir(parents=True, exist_ok=True)
     if run_kind == "script":
-        cid, project, public = None, None, False
+        # A script has no conversation of its own but keeps the launching
+        # conversation's project and mode (its sandbox lease).
+        cid = None
     return Caller(
         user=env.users[who], conversation_id=cid, project_id=project,
         is_public=public, run_kind=run_kind,
@@ -1054,9 +1056,20 @@ class TestTaintAndVisibility:
         with pytest.raises(DocError) as exc:
             _run(svc().read_doc(alice, bobs["id"]))
         assert str(exc.value) == doc_not_found_message(bobs["id"])
-        # Scripts still see user docs only.
+        # A script reads what the conversation that launched it reads:
+        # from a standalone conversation the same reach, read-only ...
         script = make_caller(docs_env, run_kind="script")
-        assert _ids(_run(svc().list_docs(script))) == [user_doc["id"]]
+        assert set(_ids(_run(svc().list_docs(script)))) == project_ids | {user_doc["id"]}
+        read = _run(svc().read_doc(script, private["id"]))
+        assert (read["writable"], read["write_note"]) == ("denied", DENY_SCRIPT)
+        # ... and from a project conversation that project's view.
+        in_project = make_caller(docs_env, project=docs_env.private_project)
+        script_in_project = make_caller(docs_env, run_kind="script",
+                                        project=docs_env.private_project)
+        assert _ids(_run(svc().list_docs(script_in_project))) == _ids(
+            _run(svc().list_docs(in_project)))
+        assert private["id"] in _ids(_run(svc().list_docs(script_in_project)))
+        assert other["id"] not in _ids(_run(svc().list_docs(script_in_project)))
 
 
 # ---------------------------------------------------------------------------
@@ -1147,8 +1160,9 @@ class TestDocSources:
         assert str(exc.value) == doc_not_found_message(pub["id"])
 
     def test_no_access_without_a_source(self, docs_env):
-        """Standalone chats, other private projects, scripts and other
-        public projects never reach the doc."""
+        """Other private projects (and scripts launched from them) and other
+        public projects never reach the doc through the source; a script
+        launched from the sourcing project reads it like that project."""
         import db.project_store as project_store
         alice = docs_env.users["alice"]["id"]
         other_public = _run(project_store.create_project(alice, "Open too", public=True))["id"]
@@ -1159,7 +1173,7 @@ class TestDocSources:
         give_doc_source(docs_env, docs_env.private_project, docs_env.public_project)
         for caller in (
             make_caller(docs_env, project=docs_env.other_project),
-            make_caller(docs_env, run_kind="script"),
+            make_caller(docs_env, run_kind="script", project=docs_env.other_project),
             make_caller(docs_env, project=other_public, public=True),
             make_caller(docs_env, who="bob"),
         ):
@@ -1168,6 +1182,10 @@ class TestDocSources:
             with pytest.raises(DocError) as exc:
                 _run(svc().read_doc(caller, pub["id"]))
             assert str(exc.value) == doc_not_found_message(pub["id"])
+        script = make_caller(docs_env, run_kind="script", project=docs_env.private_project)
+        assert _ids(_run(svc().list_docs(script, scope="public"))) == [pub["id"]]
+        read = _run(svc().read_doc(script, pub["id"]))
+        assert (read["writable"], read["write_note"]) == ("denied", DENY_SCRIPT)
         # The owner's standalone chat reads it by ownership (scope
         # ``project``), not through sources (scope ``public`` is empty).
         standalone = make_caller(docs_env)
@@ -1250,11 +1268,22 @@ class TestRunKinds:
             assert str(exc.value) == READ_ONLY_DENIALS[run_kind]
         assert body(doc["id"]) == "text\n"
 
-    def test_script_never_sees_project_docs(self, docs_env):
-        seed_doc(docs_env, title="Proj", project_id=docs_env.private_project)
+    def test_script_sees_what_its_conversation_sees(self, docs_env):
+        """A script keeps the launching conversation's project: from another
+        project's conversation a project doc is hidden, from the doc's own
+        project it is readable (never writable), and a user doc is readable
+        from both."""
+        proj = seed_doc(docs_env, title="Proj", project_id=docs_env.private_project)
         user_doc = seed_doc(docs_env, title="Mine")
-        caller = make_caller(docs_env, run_kind="script")
-        assert [d["id"] for d in _run(svc().list_docs(caller))] == [user_doc["id"]]
+        elsewhere = make_caller(docs_env, run_kind="script", project=docs_env.other_project)
+        assert _ids(_run(svc().list_docs(elsewhere))) == [user_doc["id"]]
+        inside = make_caller(docs_env, run_kind="script", project=docs_env.private_project)
+        assert set(_ids(_run(svc().list_docs(inside)))) == {proj["id"], user_doc["id"]}
+        read = _run(svc().read_doc(inside, proj["id"]))
+        assert (read["writable"], read["write_note"]) == ("denied", DENY_SCRIPT)
+        with pytest.raises(DocError) as exc:
+            _run(svc().append_to_doc(inside, proj["id"], "x"))
+        assert str(exc.value) == DENY_SCRIPT
 
     def test_slack_owner_unshared_free(self, docs_env):
         doc = seed_doc(docs_env, content="s\n")

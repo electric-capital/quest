@@ -193,8 +193,9 @@ class Caller:
     """Who is asking, from which kind of run.
 
     ``run_kind`` is one of ``chat.docs.access.RUN_KINDS``. Sandbox scripts
-    (``"script"``) have no conversation: ``conversation_id=None``,
-    ``project_id=None``, ``is_public=False``.
+    (``"script"``) have no conversation of their own
+    (``conversation_id=None``: no read-before-edit record) but carry the
+    ``project_id`` and ``is_public`` of the conversation that ran them.
     """
 
     user: dict
@@ -235,11 +236,12 @@ def _access(
 
 def _has_doc_sources(caller: Caller) -> bool:
     """Whether this caller can have doc sources at all: a conversation of
-    a private project (not a script, not the UI, never public)."""
+    a private project (not the UI, never public; a script launched from
+    such a conversation carries its project and counts)."""
     return bool(
         caller.project_id
         and not caller.is_public
-        and caller.run_kind not in ("script", "ui")
+        and caller.run_kind != "ui"
     )
 
 
@@ -256,11 +258,12 @@ async def _doc_sources(caller: Caller) -> frozenset[str]:
 def _reaches_own_projects(caller: Caller) -> bool:
     """Whether this caller is a standalone conversation, which reads the
     docs of all of the user's own projects (access rule 2): no project,
-    not public, not a script and not the UI."""
+    not public and not the UI (a script launched from a standalone
+    conversation carries no project and counts)."""
     return bool(
         caller.project_id is None
         and not caller.is_public
-        and caller.run_kind not in ("script", "ui")
+        and caller.run_kind != "ui"
     )
 
 

@@ -139,11 +139,11 @@ COLUMNS = {
     "owner_sub_agent": (OWNER, False, "sub_agent", PROJECT),
     "owner_inference_api": (OWNER, False, "inference_api", PROJECT),
     "owner_user_subagent": (OWNER, False, "user_subagent", PROJECT),
-    "owner_script": (OWNER, False, "script", None),
+    "owner_script": (OWNER, False, "script", PROJECT),
     "recipient_sub_agent": (RECIPIENT, False, "sub_agent", PROJECT),
     "recipient_inference_api": (RECIPIENT, False, "inference_api", PROJECT),
     "recipient_user_subagent": (RECIPIENT, False, "user_subagent", PROJECT),
-    "recipient_script": (RECIPIENT, False, "script", None),
+    "recipient_script": (RECIPIENT, False, "script", PROJECT),
     "owner_slack": (OWNER, False, "slack", PROJECT),
     "recipient_slack": (RECIPIENT, False, "slack", PROJECT),
     "ui_owner": (OWNER, False, "ui", None),
@@ -156,8 +156,6 @@ READ_ONLY_COLUMNS = {
     "owner_user_subagent": RO(DENY_USER_SUBAGENT),
     "owner_script": RO(DENY_SCRIPT),
 }
-# Scripts see user tables only; public tables are project tables.
-PUBLIC_READ_ONLY_COLUMNS = {**READ_ONLY_COLUMNS, "owner_script": H}
 
 # A share recipient (read or write share alike) in a read-only run kind.
 RECIPIENT_READ_ONLY_COLUMNS = {
@@ -165,12 +163,6 @@ RECIPIENT_READ_ONLY_COLUMNS = {
     "recipient_inference_api": RO(DENY_INFERENCE_API),
     "recipient_user_subagent": RO(DENY_USER_SUBAGENT),
     "recipient_script": RO(DENY_SCRIPT),
-}
-RECIPIENT_PUBLIC_READ_ONLY_COLUMNS = {
-    "recipient_sub_agent": RO(DENY_SUB_AGENT),
-    "recipient_inference_api": RO(DENY_INFERENCE_API),
-    "recipient_user_subagent": RO(DENY_USER_SUBAGENT),
-    "recipient_script": H,
 }
 # No share: the recipient has no relationship at all.
 RECIPIENT_READ_ONLY_HIDDEN = {
@@ -255,7 +247,7 @@ EXPECTED = {
         "recipient_public": H,
         "stranger_public": H,
         "stranger_private": H,
-        **PUBLIC_READ_ONLY_COLUMNS,
+        **READ_ONLY_COLUMNS,
         **RECIPIENT_READ_ONLY_HIDDEN,
         "owner_slack": RO(DENY_PUBLIC_TABLE_FROM_PRIVATE),
         "recipient_slack": H,
@@ -269,8 +261,8 @@ EXPECTED = {
         "recipient_public": RO(DENY_READ_ONLY_SHARE),
         "stranger_public": H,
         "stranger_private": H,
-        **PUBLIC_READ_ONLY_COLUMNS,
-        **RECIPIENT_PUBLIC_READ_ONLY_COLUMNS,
+        **READ_ONLY_COLUMNS,
+        **RECIPIENT_READ_ONLY_COLUMNS,
         "owner_slack": RO(DENY_PUBLIC_TABLE_FROM_PRIVATE),
         "recipient_slack": RO(DENY_PUBLIC_TABLE_FROM_PRIVATE),
         "ui_owner": UI_OWNER,
@@ -283,8 +275,8 @@ EXPECTED = {
         "recipient_public": FREE_PUB,
         "stranger_public": H,
         "stranger_private": H,
-        **PUBLIC_READ_ONLY_COLUMNS,
-        **RECIPIENT_PUBLIC_READ_ONLY_COLUMNS,
+        **READ_ONLY_COLUMNS,
+        **RECIPIENT_READ_ONLY_COLUMNS,
         "owner_slack": RO(DENY_PUBLIC_TABLE_FROM_PRIVATE),
         "recipient_slack": RO(DENY_PUBLIC_TABLE_FROM_PRIVATE),
         "ui_owner": UI_OWNER,
@@ -297,8 +289,8 @@ EXPECTED = {
         "recipient_public": FREE_PUB,
         "stranger_public": FREE_PUB,
         "stranger_private": RO(DENY_PUBLIC_TABLE_FROM_PRIVATE),
-        **PUBLIC_READ_ONLY_COLUMNS,
-        **RECIPIENT_PUBLIC_READ_ONLY_COLUMNS,
+        **READ_ONLY_COLUMNS,
+        **RECIPIENT_READ_ONLY_COLUMNS,
         "owner_slack": RO(DENY_PUBLIC_TABLE_FROM_PRIVATE),
         "recipient_slack": RO(DENY_PUBLIC_TABLE_FROM_PRIVATE),
         "ui_owner": UI_OWNER,
@@ -351,14 +343,11 @@ def test_rows_verdict_matches_the_docs_rule(row, column):
 @pytest.mark.parametrize("run_kind", RUN_KINDS)
 def test_every_run_kind_on_owner_private_table(run_kind):
     table = _table("private", project_id=PROJECT)
-    project_id = None if run_kind in ("script", "ui") else PROJECT
+    project_id = None if run_kind == "ui" else PROJECT
     access = resolve_table_access(
         table, user_id=OWNER, is_public=False, project_id=project_id, run_kind=run_kind,
     )
-    if run_kind == "script":
-        # Scripts never see a project table.
-        assert access == HIDDEN
-    elif run_kind in READ_ONLY_RUN_KINDS:
+    if run_kind in READ_ONLY_RUN_KINDS:
         assert access == READ_ONLY_COLUMNS[f"owner_{run_kind}"]
     elif run_kind == "slack":
         assert access == FREE_SLACK
@@ -374,26 +363,36 @@ def test_read_only_run_kinds_in_public_context(run_kind, row):
     """Read-only kinds read public tables of their project and never see
     private ones (every user table included)."""
     table = TABLE_ROWS[row]
-    project_id = None if run_kind == "script" else PROJECT
     access = resolve_table_access(
-        table, user_id=OWNER, is_public=True, project_id=project_id, run_kind=run_kind,
+        table, user_id=OWNER, is_public=True, project_id=PROJECT, run_kind=run_kind,
     )
     if table["project_id"] is None or table["mode"] == "private":
         assert access == HIDDEN
     else:
-        assert access == PUBLIC_READ_ONLY_COLUMNS[f"owner_{run_kind}"]
+        assert access == READ_ONLY_COLUMNS[f"owner_{run_kind}"]
 
 
-def test_script_reads_user_tables_only():
-    assert resolve_table_access(
-        _table("private"), user_id=OWNER, is_public=False, project_id=None,
-        run_kind="script",
-    ) == RO(DENY_SCRIPT)
+def test_script_reaches_what_its_conversation_reaches():
+    """A script carries the project of the conversation that launched it
+    (its sandbox lease) and reads what that conversation reads, read-only:
+    user tables everywhere, the project's tables inside the project, the
+    owner's project tables from a standalone conversation, a sourced public
+    table from the sourcing project, nothing from another project."""
+    def access(table, project_id, sources=()):
+        return resolve_table_access(
+            table, user_id=OWNER, is_public=False, project_id=project_id,
+            run_kind="script", doc_source_project_ids=sources,
+        )
+    assert access(_table("private"), None) == RO(DENY_SCRIPT)
+    assert access(_table("private"), PROJECT) == RO(DENY_SCRIPT)
     for mode in TABLE_MODES:
-        assert resolve_table_access(
-            _table(mode, project_id=PROJECT), user_id=OWNER, is_public=False,
-            project_id=None, run_kind="script", doc_source_project_ids={PROJECT},
-        ) == HIDDEN
+        table = _table(mode, project_id=PROJECT)
+        assert access(table, PROJECT) == RO(DENY_SCRIPT)
+        assert access(table, None) == RO(DENY_SCRIPT)
+        assert access(table, OTHER_PROJECT) == HIDDEN
+    public = _table("public", project_id=PROJECT)
+    assert access(public, OTHER_PROJECT, sources={PROJECT}) == RO(DENY_SCRIPT)
+    assert access(_table("private", project_id=PROJECT), OTHER_PROJECT, sources={PROJECT}) == HIDDEN
 
 
 # ---------------------------------------------------------------------------
@@ -509,13 +508,13 @@ def _access(table, *, user_id=OWNER, is_public=False, project_id=None,
 
 def test_project_table_outside_its_project():
     """Docs rule 2: other projects never see it; from a standalone
-    conversation the owner reads it (both verdicts denied), a recipient
-    sees nothing, scripts see no project table."""
+    conversation the owner reads it (both verdicts denied; a script launched
+    from one included), a recipient sees nothing."""
     table = _table("private", [(RECIPIENT, "write")], project_id=PROJECT)
     assert _access(table, project_id=PROJECT) == AR_AR
     read_only_reason = {
         "sub_agent": DENY_SUB_AGENT, "inference_api": DENY_INFERENCE_API,
-        "user_subagent": DENY_USER_SUBAGENT,
+        "user_subagent": DENY_USER_SUBAGENT, "script": DENY_SCRIPT,
     }
     for run_kind in [k for k in RUN_KINDS if k != "ui"]:
         for user_id in (OWNER, RECIPIENT):
@@ -523,10 +522,7 @@ def test_project_table_outside_its_project():
                            run_kind=run_kind) == HIDDEN
         assert _access(table, user_id=RECIPIENT, project_id=None,
                        run_kind=run_kind) == HIDDEN
-        if run_kind == "script":
-            expected = HIDDEN
-        else:
-            expected = RO(read_only_reason.get(run_kind, DENY_OUTSIDE_PROJECT))
+        expected = RO(read_only_reason.get(run_kind, DENY_OUTSIDE_PROJECT))
         assert _access(table, user_id=OWNER, project_id=None, run_kind=run_kind) == expected
 
 
@@ -652,7 +648,7 @@ def test_invariants_hold_everywhere(run_kind):
         # only for the owner from a standalone conversation or through a
         # source naming a public table's project.
         if table_project_id is not None and run_kind != "ui" and project_id != table_project_id:
-            assert not is_public and run_kind != "script"
+            assert not is_public
             assert (project_id is None and user_id == OWNER) or (
                 effective_mode == "public" and project_id is not None
                 and table_project_id in sources

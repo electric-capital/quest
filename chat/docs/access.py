@@ -23,8 +23,10 @@ inference_api, user_subagent and script runs)::
     | Public, shared        | Read     | Read         | Free   | read: Read  | Read (*)  |
     |                       |          |              |        | write: Free |           |
 
-(*) except ``script``: scripts never see project docs (rule 2), and public
-docs are always project docs, so a script sees every public doc as Hidden.
+(*) scripts included: a sandbox script carries the project and mode of the
+conversation that launched it, so it has that conversation's reach. (Public
+containers have no tool bridge, so no script reads a public doc today; the
+rule needs no special case for it.)
 
 A user doc (``project_id`` None) is always private: the "Public" rows only
 ever describe docs of a public project, and every "Public owner / Public
@@ -68,8 +70,9 @@ Rules layered on the matrix, applied in this order:
      can be read there. Standalone conversations have no doc sources.
 
    Other projects' conversations see Hidden, public conversations stay
-   confined to their own project's docs, and sandbox scripts (no
-   conversation context) see no project doc at all.
+   confined to their own project's docs, and a sandbox script reaches what
+   the conversation that launched it reaches (it carries that
+   conversation's project and mode; ``chat/sandbox_tokens.py``).
 3. A public conversation never learns of a private doc (Hidden, even for
    the owner and even with a write share).
 4. Read-only run kinds (sub-agents, inference-API runs, cross-user subagent
@@ -97,10 +100,12 @@ verdict on a public doc, and a conversation only creates docs in its own
 mode -- :func:`creation_mode` for project docs, while user docs (always
 private) cannot be created from a public conversation at all.
 
-Callers pass ``is_public=False`` and ``project_id=None`` for the ``ui`` and
-``script`` run kinds (neither runs inside a conversation), and the empty
-default ``doc_source_project_ids`` for everything but a private project
-conversation (the doc service loads the project's sources).
+Callers pass ``is_public=False`` and ``project_id=None`` for the ``ui`` run
+kind; a ``script`` caller carries the ``project_id`` and ``is_public`` of the
+conversation that launched it (from its sandbox lease) and no conversation
+id. Everything but a private project conversation (a script launched from
+one included) passes the empty default ``doc_source_project_ids``; the doc
+service loads the project's sources.
 
 The procedure itself lives in ``chat/artifact_access.py`` (shared with the
 Quest Tables resolver, ``chat/tables/access.py``, whose matrix is the same

@@ -329,9 +329,10 @@ class Caller:
     """Who is asking, from which kind of run.
 
     ``run_kind`` is one of ``chat.tables.access.RUN_KINDS`` (incl. ``"ui"``).
-    Sandbox scripts and the UI have no conversation context:
-    ``project_id=None``, ``is_public=False`` (scripts and the UI also pass
-    ``conversation_id=None``).
+    The UI has no conversation context (``conversation_id=None``,
+    ``project_id=None``, ``is_public=False``). Sandbox scripts pass
+    ``conversation_id=None`` too but carry the ``project_id`` and
+    ``is_public`` of the conversation that ran them.
     """
 
     user: dict
@@ -360,11 +361,12 @@ def require_enabled(caller: Caller) -> None:
 
 
 def _has_doc_sources(caller: Caller) -> bool:
-    """Only a conversation of a private project has doc sources."""
+    """Only a conversation of a private project has doc sources (a script
+    launched from one carries its project and counts)."""
     return bool(
         caller.project_id
         and not caller.is_public
-        and caller.run_kind not in ("script", "ui")
+        and caller.run_kind != "ui"
     )
 
 
@@ -381,11 +383,12 @@ async def _doc_sources(caller: Caller) -> frozenset[str]:
 def _reaches_own_projects(caller: Caller) -> bool:
     """Whether this caller is a standalone conversation, which reads the
     tables of all of the user's own projects (docs access rule 2): no
-    project, not public, not a script and not the UI."""
+    project, not public and not the UI (a script launched from a standalone
+    conversation carries no project and counts)."""
     return bool(
         caller.project_id is None
         and not caller.is_public
-        and caller.run_kind not in ("script", "ui")
+        and caller.run_kind != "ui"
     )
 
 

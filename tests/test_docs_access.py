@@ -103,8 +103,9 @@ DOC_ROWS = {
 
 # column -> (user_id, is_public, run_kind, project_id). Conversation runs
 # are conversations of PROJECT (a public conversation is always one in a
-# public project; user docs are visible from any project); script and ui
-# carry no conversation context (project_id=None), as their callers pass.
+# public project; user docs are visible from any project); a script carries
+# the project of the conversation that launched it (here PROJECT); ui
+# carries no conversation context (project_id=None), as its callers pass.
 COLUMNS = {
     "owner_private": (OWNER, False, "top_level", PROJECT),
     "recipient_private": (RECIPIENT, False, "top_level", PROJECT),
@@ -114,7 +115,7 @@ COLUMNS = {
     "owner_sub_agent": (OWNER, False, "sub_agent", PROJECT),
     "owner_inference_api": (OWNER, False, "inference_api", PROJECT),
     "owner_user_subagent": (OWNER, False, "user_subagent", PROJECT),
-    "owner_script": (OWNER, False, "script", None),
+    "owner_script": (OWNER, False, "script", PROJECT),
     "owner_slack": (OWNER, False, "slack", PROJECT),
     "recipient_slack": (RECIPIENT, False, "slack", PROJECT),
     "ui_owner": (OWNER, False, "ui", None),
@@ -127,10 +128,6 @@ READ_ONLY_COLUMNS = {
     "owner_user_subagent": RO(DENY_USER_SUBAGENT),
     "owner_script": RO(DENY_SCRIPT),
 }
-
-# Public docs are project docs, and sandbox scripts (no conversation
-# context) never see a project doc (rule 2).
-PUBLIC_DOC_READ_ONLY_COLUMNS = {**READ_ONLY_COLUMNS, "owner_script": H}
 
 EXPECTED = {
     "private_unshared": {
@@ -188,7 +185,7 @@ EXPECTED = {
         "owner_public": FREE,
         "recipient_public": H,
         "stranger_private": H,
-        **PUBLIC_DOC_READ_ONLY_COLUMNS,
+        **READ_ONLY_COLUMNS,
         "owner_slack": RO(DENY_PUBLIC_DOC_FROM_PRIVATE),
         "recipient_slack": H,
         "ui_owner": FREE,
@@ -200,7 +197,7 @@ EXPECTED = {
         "owner_public": FREE,
         "recipient_public": RO(DENY_READ_ONLY_SHARE),
         "stranger_private": H,
-        **PUBLIC_DOC_READ_ONLY_COLUMNS,
+        **READ_ONLY_COLUMNS,
         "owner_slack": RO(DENY_PUBLIC_DOC_FROM_PRIVATE),
         "recipient_slack": RO(DENY_PUBLIC_DOC_FROM_PRIVATE),
         "ui_owner": FREE,
@@ -212,7 +209,7 @@ EXPECTED = {
         "owner_public": FREE,
         "recipient_public": FREE,
         "stranger_private": H,
-        **PUBLIC_DOC_READ_ONLY_COLUMNS,
+        **READ_ONLY_COLUMNS,
         "owner_slack": RO(DENY_PUBLIC_DOC_FROM_PRIVATE),
         "recipient_slack": RO(DENY_PUBLIC_DOC_FROM_PRIVATE),
         "ui_owner": FREE,
@@ -268,14 +265,13 @@ def test_read_only_run_kinds_in_public_context(run_kind, row):
     """Read-only kinds read public (project) docs of their project and still
     never see private ones -- every user doc included."""
     doc = DOC_ROWS[row]
-    project_id = None if run_kind == "script" else PROJECT
     access = resolve_doc_access(
-        doc, user_id=OWNER, is_public=True, project_id=project_id, run_kind=run_kind
+        doc, user_id=OWNER, is_public=True, project_id=PROJECT, run_kind=run_kind
     )
     if doc["project_id"] is None or doc["mode"] == "private":
         assert access == HIDDEN
     else:
-        assert access == PUBLIC_DOC_READ_ONLY_COLUMNS[f"owner_{run_kind}"]
+        assert access == READ_ONLY_COLUMNS[f"owner_{run_kind}"]
 
 
 # ---------------------------------------------------------------------------
@@ -339,11 +335,10 @@ def test_project_doc_outside_project_for_every_conversation_kind(run_kind):
             _access(doc, user_id=user_id, project_id=OTHER_PROJECT, run_kind=run_kind)
             == HIDDEN
         )
-    # Standalone: the owner reads it (read-only kinds with their own
-    # reason), a recipient sees nothing, scripts see no project doc.
-    if run_kind == "script":
-        expected = HIDDEN
-    elif run_kind in READ_ONLY_RUN_KINDS:
+    # Standalone: the owner reads it (read-only kinds, a script launched
+    # from a standalone conversation included, with their own reason), a
+    # recipient sees nothing.
+    if run_kind in READ_ONLY_RUN_KINDS:
         expected = READ_ONLY_COLUMNS[f"owner_{run_kind}"]
     else:
         expected = RO(DENY_OUTSIDE_PROJECT)
@@ -351,10 +346,20 @@ def test_project_doc_outside_project_for_every_conversation_kind(run_kind):
     assert _access(doc, user_id=RECIPIENT, project_id=None, run_kind=run_kind) == HIDDEN
 
 
-def test_script_never_sees_project_docs():
-    """Scripts carry no conversation context (project_id=None)."""
-    doc = _doc("private", project_id=PROJECT)
-    assert _access(doc, project_id=None, run_kind="script") == HIDDEN
+def test_script_reaches_what_its_conversation_reaches():
+    """A script carries the project of the conversation that launched it
+    (its sandbox lease): inside the project it reads the project's docs,
+    from a standalone conversation it reads the owner's project docs, from
+    another project it sees nothing -- always read-only."""
+    doc = _doc("private", [(RECIPIENT, "write")], project_id=PROJECT)
+    assert _access(doc, project_id=PROJECT, run_kind="script") == RO(DENY_SCRIPT)
+    assert _access(doc, user_id=RECIPIENT, project_id=PROJECT, run_kind="script") == RO(
+        DENY_SCRIPT
+    )
+    assert _access(doc, project_id=None, run_kind="script") == RO(DENY_SCRIPT)
+    assert _access(doc, user_id=RECIPIENT, project_id=None, run_kind="script") == HIDDEN
+    for user_id in (OWNER, RECIPIENT):
+        assert _access(doc, user_id=user_id, project_id=OTHER_PROJECT, run_kind="script") == HIDDEN
 
 
 def test_read_only_kinds_read_project_docs_inside_the_project():
@@ -443,10 +448,12 @@ def test_public_doc_hidden_without_the_source():
     )
 
 
-def test_public_doc_hidden_from_scripts_and_other_public_projects_even_with_source():
+def test_public_doc_reaches_scripts_through_sources_and_hides_from_other_public_projects():
     doc = _doc("public", [(RECIPIENT, "write")], project_id=PROJECT)
-    # Scripts carry no conversation context and see no project doc.
-    assert _source_access(doc, project_id=None, run_kind="script") == HIDDEN
+    # A script launched from the sourcing private project reads it like
+    # that project's conversations do; without the source it is hidden.
+    assert _source_access(doc, run_kind="script") == RO(DENY_SCRIPT)
+    assert _source_access(doc, run_kind="script", sources=frozenset()) == HIDDEN
     # A public conversation stays confined to its own project's docs.
     for user_id in (OWNER, RECIPIENT):
         assert _source_access(doc, user_id=user_id, is_public=True) == HIDDEN
@@ -540,7 +547,8 @@ def test_taint_and_invisibility_hold_everywhere(run_kind):
         # most read-only, and visible only to its owner from a standalone
         # conversation or, when public, from a private project whose
         # sources name the doc's project; a public conversation sees only
-        # its own project's docs and scripts no project doc at all.
+        # its own project's docs (a script has its launching conversation's
+        # reach).
         related = user_id == OWNER or effective_share(doc, user_id) is not None
         if doc_project_id is not None and run_kind != "ui" and project_id != doc_project_id:
             from_standalone = project_id is None and user_id == OWNER
@@ -550,12 +558,11 @@ def test_taint_and_invisibility_hold_everywhere(run_kind):
                 and doc_project_id in sources
             )
             assert access.visible == (
-                related and not is_public and run_kind != "script"
-                and (from_standalone or via_source)
+                related and not is_public and (from_standalone or via_source)
             )
             if access.visible:
                 assert access.write == "denied"
-        elif effective_mode == "public" and related and run_kind not in ("script", "ui"):
+        elif effective_mode == "public" and related and run_kind != "ui":
             assert access.visible
         # Read-only kinds never write.
         if run_kind in READ_ONLY_RUN_KINDS:

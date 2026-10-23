@@ -79,3 +79,38 @@ def test_restricted_lease_rejects_mutating_tool_before_dispatch():
     assert "read-only" in json.loads(blocked.body)["error"]
     assert allowed.status_code == 200
     assert dispatch.await_count == 1
+
+
+def test_lease_context_scopes_dispatch_like_the_launching_conversation():
+    """The bridge hands dispatch the project and public flag recorded on
+    the container's lease (and no conversation id), so the Quest Docs /
+    Tables access rule scopes a script like the conversation that ran it;
+    without a lease it dispatches as a standalone private caller."""
+    from chat.gemini_api.script_tool_call import (
+        ScriptToolCallRequest,
+        script_tool_call_endpoint,
+    )
+    from chat.sandbox_tokens import SandboxLease
+
+    lease = SandboxLease(
+        user_id=1, conversation_id="c", expires_at=1e12, project_id="proj-1",
+    )
+    dispatch = AsyncMock(return_value=('{"docs": []}', []))
+    with patch("chat.gemini_api.tool_dispatch._dispatch_tool_call", dispatch):
+        _run(script_tool_call_endpoint(
+            ScriptToolCallRequest(tool_name="list_docs", arguments={}),
+            user=_USER, lease=lease,
+        ))
+        _run(script_tool_call_endpoint(
+            ScriptToolCallRequest(tool_name="list_docs", arguments={}),
+            user=_USER, lease=None,
+        ))
+
+    with_lease, without = (call.kwargs for call in dispatch.await_args_list)
+    assert with_lease["is_script"] is True
+    assert with_lease["conversation_id"] is None
+    assert with_lease["project_id"] == "proj-1"
+    assert with_lease["is_public"] is False
+    assert without["is_script"] is True
+    assert without["project_id"] is None
+    assert without["is_public"] is False

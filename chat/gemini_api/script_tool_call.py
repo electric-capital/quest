@@ -66,18 +66,18 @@ SCRIPT_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     # Memory reads (user-scoped)
     "memory_search",
     "memory_list",
-    # Quest Docs reads. Scripts run with run_kind="script" (is_script below):
-    # no conversation context, so only user docs are visible (the access
-    # rule shows scripts no project doc), and every doc write is refused by
+    # Quest Docs reads. Scripts run with run_kind="script" (is_script below)
+    # and the project / public flag of the conversation that launched the
+    # container (from its sandbox lease), so the access rule shows a script
+    # exactly the docs that conversation sees; every doc write is refused by
     # the access rule -- the write tools are not listed.
     "list_docs",
     "search_docs",
     "read_doc",
-    # Quest Tables reads, on the same terms as the doc reads: run_kind=
-    # "script" with no project and is_public=False (tool_dispatch
-    # _table_caller), so resolve_table_access shows only the user's own and
-    # shared user tables (always private), never project tables, and denies
-    # every row write -- the write tools are not listed.
+    # Quest Tables reads, on the same terms as the doc reads: the launching
+    # conversation's reach (tool_dispatch _table_caller), read-only --
+    # resolve_table_access denies every row write, and the write tools are
+    # not listed.
     "list_tables",
     "get_table",
     "query_rows",
@@ -118,6 +118,13 @@ async def script_tool_call_endpoint(
     JSON tool results are returned as JSON; non-JSON results (e.g. the
     ``get_gmail_messages`` markdown document) are returned as text/plain.
 
+    The lease carries the launching conversation's project and public
+    flag, which are passed to dispatch so the Quest Docs / Tables access
+    rule scopes the script like that conversation (a script in a project
+    conversation reads the project's docs and tables, read-only). The
+    conversation id itself is not passed: a script has no conversation of
+    its own to attribute reads to (``doc_reads.json`` stays untouched).
+
     A container launched from an inference API run holds a lease with
     ``block_mutating_tools`` set: the mutating dynamic tools are refused
     here exactly as the run's own tool dispatch refuses them.
@@ -138,8 +145,11 @@ async def script_tool_call_endpoint(
         )
 
     # isinstance: direct (non-FastAPI) callers in tests leave the Depends
-    # marker in place; only a real lease can carry the restriction.
-    if isinstance(lease, SandboxLease) and lease.block_mutating_tools:
+    # marker in place; only a real lease can carry the restriction or the
+    # launching conversation's context.
+    if not isinstance(lease, SandboxLease):
+        lease = None
+    if lease is not None and lease.block_mutating_tools:
         from chat.llm.tool_schemas import mutating_tool_call_tools
         if body.tool_name in mutating_tool_call_tools():
             return JSONResponse(
@@ -163,6 +173,8 @@ async def script_tool_call_endpoint(
         timezone="UTC",
         tool_name="tool_call",
         args={"tool_name": body.tool_name, "arguments": dict(body.arguments)},
+        project_id=lease.project_id if lease is not None else None,
+        is_public=lease.is_public if lease is not None else False,
         is_script=True,
     )
     if extra_parts:

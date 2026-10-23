@@ -17,7 +17,7 @@ Covers:
    sample_rows, the key never appearing in any output.
 5. query_rows: filter / sort / paging / total, JSON-string arguments,
    count_only, FilterError payloads, the response byte cap.
-6. The sandbox script bridge: user tables only, read-only.
+6. The sandbox script bridge: the launching conversation's reach, read-only.
 7. Gate closed: tables_disabled before any DB work.
 """
 
@@ -539,48 +539,83 @@ class TestQueryRows:
 
 
 class TestScripts:
-    def test_dispatch_drops_project_context(self, world):
+    def test_dispatch_keeps_the_launching_conversation_context(self, world):
+        """A script dispatches with the project of the conversation that
+        launched it (its sandbox lease) and reads what that conversation
+        reads, read-only."""
+        from db import project_store
+
         t = world.t
-        # Even if a project id reached dispatch, a script sees user tables only.
-        listed = _dispatch(world, "list_tables", {}, cid=None, is_script=True,
-                           project_id=world.private_project)
-        assert _ids(listed) == {t["user"]["id"], t["bob"]["id"]}
+        kw = {"cid": None, "is_script": True, "project_id": world.private_project}
+        listed = _dispatch(world, "list_tables", {}, **kw)
+        assert _ids(listed) == {t["user"]["id"], t["bob"]["id"], t["private"]["id"]}
         for row in listed["tables"]:
             assert row["writable"] == "denied" and row["write_note"] == DENY_SCRIPT
-        assert _dispatch(world, "list_tables", {"scope": "project"}, cid=None,
-                         is_script=True, project_id=world.private_project)["tables"] == []
-        hidden = _dispatch(world, "get_table", {"table_id": t["private"]["id"]},
-                           cid=None, is_script=True, project_id=world.private_project)
+        assert _ids(_dispatch(world, "list_tables", {"scope": "project"}, **kw)) == {
+            t["private"]["id"]
+        }
+        got = _dispatch(world, "get_table", {"table_id": t["private"]["id"]}, **kw)
+        assert (got["writable"], got["write_note"]) == ("denied", DENY_SCRIPT)
+        assert (got["schema_change"], got["schema_note"]) == ("denied", DENY_SCRIPT)
+        rows = _dispatch(world, "query_rows", {"table_id": t["private"]["id"]}, **kw)
+        assert "rows" in rows and "error" not in rows
+        # The public project's table is not a source of this project: hidden.
+        hidden = _dispatch(world, "get_table", {"table_id": t["public"]["id"]}, **kw)
         assert hidden["error"] == "table_not_found"
+        # Another project's script never sees it either.
+        elsewhere = _run(project_store.create_project(world.users["alice"]["id"], "Elsewhere"))
+        hidden = _dispatch(world, "get_table", {"table_id": t["private"]["id"]},
+                           cid=None, is_script=True, project_id=elsewhere["id"])
+        assert hidden["error"] == "table_not_found"
+        # A standalone conversation's script reaches the owner's project
+        # tables read-only, as that conversation does.
+        standalone = _dispatch(world, "list_tables", {}, cid=None, is_script=True)
+        assert _ids(standalone) == {
+            t["user"]["id"], t["bob"]["id"], t["private"]["id"], t["public"]["id"],
+        }
+        got = _dispatch(world, "get_table", {"table_id": t["private"]["id"]},
+                        cid=None, is_script=True)
+        assert (got["writable"], got["write_note"]) == ("denied", DENY_SCRIPT)
 
     def test_script_bridge(self, world):
         from chat.gemini_api.script_tool_call import (
             ScriptToolCallRequest,
             script_tool_call_endpoint,
         )
+        from chat.sandbox_tokens import SandboxLease
 
         t = world.t
         alice = world.users["alice"]
 
-        def call(tool, arguments):
+        def call(tool, arguments, lease=None):
             return _run(script_tool_call_endpoint(
                 ScriptToolCallRequest(tool_name=tool, arguments=arguments),
-                user=alice, lease=None,
+                user=alice, lease=lease,
             ))
 
-        listed = json.loads(call("list_tables", {}).body)
-        assert _ids(listed) == {t["user"]["id"], t["bob"]["id"]}
-        got = json.loads(call("get_table", {"table_id": t["user"]["id"]}).body)
+        # The lease of a container launched from the private project's
+        # conversation scopes the bridge to that project.
+        lease = SandboxLease(user_id=alice["id"], conversation_id="c", expires_at=1e12,
+                             project_id=world.private_project)
+        listed = json.loads(call("list_tables", {}, lease=lease).body)
+        assert _ids(listed) == {t["user"]["id"], t["bob"]["id"], t["private"]["id"]}
+        got = json.loads(call("get_table", {"table_id": t["private"]["id"]}, lease=lease).body)
+        assert got["writable"] == "denied" and got["write_note"] == DENY_SCRIPT
+        got = json.loads(call("get_table", {"table_id": t["user"]["id"]}, lease=lease).body)
         assert got["writable"] == "denied" and got["write_note"] == DENY_SCRIPT
         assert len(got["sample_rows"]) == 5
-        rows = json.loads(call("query_rows", {"table_id": t["user"]["id"], "limit": 3}).body)
-        assert rows["total"] == 7 and len(rows["rows"]) == 3
-        for key in ("private", "public"):
-            hidden = json.loads(call("get_table", {"table_id": t[key]["id"]}).body)
-            assert hidden == {
-                "error": "table_not_found",
-                "message": table_not_found_message(t[key]["id"]),
-            }
+        hidden = json.loads(call("get_table", {"table_id": t["public"]["id"]}, lease=lease).body)
+        assert hidden == {
+            "error": "table_not_found",
+            "message": table_not_found_message(t["public"]["id"]),
+        }
+        # Without a lease (tests only): a standalone conversation's reach.
+        listed = json.loads(call("list_tables", {}).body)
+        assert _ids(listed) == {
+            t["user"]["id"], t["bob"]["id"], t["private"]["id"], t["public"]["id"],
+        }
+        for row in listed["tables"]:
+            assert row["writable"] == "denied" and row["write_note"] == DENY_SCRIPT
 
 
 # ---------------------------------------------------------------------------

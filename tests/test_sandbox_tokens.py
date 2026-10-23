@@ -68,6 +68,22 @@ class TestTokenStore:
 
         revoke_sandbox_token(tok)
         assert resolve_sandbox_token(tok) is None
+
+    def test_lease_carries_the_launching_conversation_context(self, _clock):
+        """project_id / is_public default off and round-trip: the script
+        tool-call bridge scopes Quest Docs / Tables reads by them."""
+        lease = resolve_sandbox_token(issue_sandbox_token(7, ttl_seconds=60))
+        assert (lease.project_id, lease.is_public) == (None, False)
+        tok = issue_sandbox_token(
+            7, ttl_seconds=60, conversation_id="conv-1", project_id="proj-1", is_public=True,
+        )
+        lease = resolve_sandbox_token(tok)
+        assert (lease.conversation_id, lease.project_id, lease.is_public) == (
+            "conv-1", "proj-1", True,
+        )
+        with sandbox_token_lease(7, ttl_seconds=60, project_id="proj-2") as tok2:
+            assert resolve_sandbox_token(tok2).project_id == "proj-2"
+            assert resolve_sandbox_token(tok2).is_public is False
         assert active_lease_count() == 0
         # Revoking again is a no-op.
         revoke_sandbox_token(tok)

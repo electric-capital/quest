@@ -688,11 +688,14 @@ per-run profile.
   `archive_gmail_message`, `list_gmail_quest_labels`, `modify_gmail_labels`),
   the Telegram reads (`telegram_get_me`, `telegram_list_dialogs`,
   `telegram_get_messages`, `telegram_list_contacts`), the memory reads
-  (`memory_search`, `memory_list`), and -- when Quest Docs is enabled -- the
-  doc reads (`list_docs`, `search_docs`, `read_doc`). JSON results come
-  back as JSON; markdown results (e.g. `get_gmail_messages`) come back as
-  plain text. A non-allow-listed tool_name returns a 400 listing what is
-  available. Example:
+  (`memory_search`, `memory_list`), and -- when Quest Docs / Quest Tables
+  are enabled -- the doc reads (`list_docs`, `search_docs`, `read_doc`) and
+  the table reads (`list_tables`, `get_table`, `query_rows`). A script
+  sees the docs and tables this conversation sees, its project's included,
+  read-only: the agent writes them with the doc and table tools. JSON
+  results come back as JSON; markdown results (e.g. `get_gmail_messages`)
+  come back as plain text. A non-allow-listed tool_name returns a 400
+  listing what is available. Example:
   `requests.post(f"{{base_url}}/api/tool-call", headers=auth_headers, json={{"tool_name": "search_slack_messages", "arguments": {{"query": "deploy failed"}}}})`
 
 ### Charts and large output
@@ -1254,7 +1257,8 @@ the Quest UI (Tables).
 - Sub-agents, cross-user subagent runs and inference API runs only read
   tables; a sub-agent returns rows to the top-level agent, which writes.
 - Sandbox scripts can call `list_tables`, `get_table` and `query_rows`
-  through the sandbox tool API (user tables only), never the writes.
+  through the sandbox tool API, never the writes. A script sees the tables
+  this conversation sees (its project's included), read-only.
 """
 
 
@@ -1472,8 +1476,9 @@ the user, which defeats an unattended routine.
 
 `run_script` / `run_python` code can call `list_docs`, `search_docs` and
 `read_doc` through the sandbox tool API (`/api/tool-call`, see
-`system:workspace`). Scripts are read-only and have no conversation context,
-so they never see project docs; the agent writes docs with the doc tools.
+`system:workspace`). A script sees the docs this conversation sees (its
+project's included) and is read-only; the agent writes docs with the doc
+tools.
 """
 
 

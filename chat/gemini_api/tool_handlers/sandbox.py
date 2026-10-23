@@ -314,6 +314,8 @@ async def _handle_run_script(
             user_id,
             ttl_seconds=clamped_timeout + TOKEN_GRACE_SECONDS,
             conversation_id=conversation_id,
+            project_id=project_id,
+            is_public=public,
             block_mutating_tools=block_mutating_tools,
         ) as sandbox_token:
             # Build the Podman command (see _build_script_podman_cmd for
@@ -440,6 +442,8 @@ async def _handle_run_python(
             user_id,
             ttl_seconds=clamped_timeout + TOKEN_GRACE_SECONDS,
             conversation_id=conversation_id,
+            project_id=project_id,
+            is_public=public,
             block_mutating_tools=block_mutating_tools,
         ) as sandbox_token:
             # Build the Podman command (identical flags to
