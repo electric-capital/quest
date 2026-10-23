@@ -26,7 +26,7 @@ dependencies = [
     "markdown>=3.5",
     "sqlitedict>=2.1.0",
     "slack-sdk>=3.41.0",
-    "aiohttp>=3.13.5",
+    "aiohttp>=3.14.4",
     "openai>=3.0.0",
     # Encryption at rest (config/encryption.py): AES-256-GCM + Argon2id
     "cryptography>=42.0.0",
@@ -35,6 +35,10 @@ dependencies = [
     # (plugins/github/handlers.py)
     "pyyaml>=6.0",
     "duckdb>=1.3,<2",
+    # Not imported directly: pinned so the CA bundle httpx and requests verify
+    # every outbound TLS connection against cannot regress below the release
+    # that dropped the compromised emSign root (GHSA-6q48-6c7w-9gw2)
+    "certifi>=2026.10.19",
 ]
 
 [build-system]
@@ -49,13 +53,17 @@ dev = [
     "honcho>=2.0.0",
     # Test-only: builds image fixtures with metadata and independently
     # decodes chat/image_sanitizer.py output (the sanitizer itself is stdlib)
-    "pillow>=12.3.0",
+    "pillow>=13.0.0",
     "pytest>=8.0.0",
     "pytest-xdist>=3.8.0",
 ]
 
 [tool.uv]
 exclude-newer = "1 week"
+# Per-package exceptions to the one-week quarantine above, for security fixes
+# that cannot wait for it. Each entry lets that package resolve to releases
+# uploaded before the given date; delete it once the fix is a week old.
+exclude-newer-package = { certifi = "2026-10-24", pillow = "2026-10-24" }
 
 [tool.pytest.ini_options]
 # Core tests plus every in-tree plugin's own tests/ directory; the

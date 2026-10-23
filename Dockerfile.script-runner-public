@@ -4,6 +4,16 @@
 # the restricted one toward internal-data processing.
 FROM python:3.12-slim
 
+# Bump this date to make every deployment rebuild the image from fresh layers
+# the next time run.py starts: a newer python:3.12-slim base (run.py pulls it
+# before a rebuild), current Debian packages and current pip packages, e.g.
+# after a security fix in the base image, ca-certificates or certifi. run.py
+# rebuilds when this file changes, but podman would otherwise reuse every
+# cached layer because no instruction below changed; a changed ARG value
+# used in the LABEL invalidates the cache from here down.
+ARG QUEST_IMAGE_REVISION=2026-10-23
+LABEL org.quest.image-revision=${QUEST_IMAGE_REVISION}
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl wget jq bash iptables zip unzip ca-certificates && \
     rm -rf /var/lib/apt/lists/*

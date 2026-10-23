@@ -335,6 +335,52 @@ def podman_image_tags(image_id: str) -> list:
     ]
 
 
+def dockerfile_base_images(dockerfile: Path) -> list:
+    """Return the registry images a Dockerfile's ``FROM`` lines pull.
+
+    Build-stage references (``FROM <stage>`` naming an earlier ``AS <stage>``)
+    and ``scratch`` are left out; ``--platform`` and ``AS`` are stripped.
+    """
+    stages = set()
+    images = []
+    for line in dockerfile.read_text().splitlines():
+        parts = line.split()
+        if len(parts) < 2 or parts[0].upper() != "FROM":
+            continue
+        parts = [p for p in parts[1:] if not p.startswith("--")]
+        image = parts[0]
+        if len(parts) >= 3 and parts[1].upper() == "AS":
+            stages.add(parts[2])
+        if image == "scratch" or image in stages or image in images:
+            continue
+        images.append(image)
+    return images
+
+
+def pull_base_images(project_root: Path, dockerfile_name: str) -> None:
+    """Best-effort ``podman pull`` of a Dockerfile's base images before a build.
+
+    ``podman build`` only pulls a base image that is missing locally, so a
+    rebuild otherwise keeps whatever ``python:3.12-slim`` the host fetched
+    the first time (``--pull=newer`` does not reliably refresh it either), and
+    the security updates in a newer base never reach the sandboxes. A failed
+    pull (offline or air-gapped host, registry outage) is reported and the
+    build goes ahead with the local image.
+    """
+    for image in dockerfile_base_images(project_root / dockerfile_name):
+        print(f"  Pulling base image '{image}'...")
+        result = subprocess.run(
+            ["podman", "pull", "-q", image],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip().splitlines()
+            print(f"! Could not pull '{image}' ({detail[-1] if detail else 'unknown error'});")
+            print("  building with the local copy")
+
+
 def remove_superseded_podman_image(image_name: str, old_image_id: Optional[str]) -> bool:
     """Delete the image a rebuild of ``image_name`` just replaced.
 
@@ -909,6 +955,7 @@ def main() -> None:
                 continue
             if not podman_image_exists(image_name):
                 print(f"  Building Podman image '{image_name}'...")
+                pull_base_images(project_root, dockerfile)
                 subprocess.run(
                     ["podman", "build", "--network=host", "-t", image_name, "-f", dockerfile, "."],
                     cwd=project_root,
@@ -921,6 +968,7 @@ def main() -> None:
                     print(f"! {dockerfile} sources have been modified since image was built")
                     print(f"  Rebuilding Podman image '{image_name}'...")
                     old_image_id = get_podman_image_id(image_name)
+                    pull_base_images(project_root, dockerfile)
                     subprocess.run(
                         ["podman", "build", "--network=host", "-t", image_name, "-f", dockerfile, "."],
                         cwd=project_root,
