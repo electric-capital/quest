@@ -71,6 +71,8 @@ import type {
   AdminDocsReportResponse,
   AdminTablesReportResponse,
   AdminMemoriesReportResponse,
+  AdminToolCallsReportResponse,
+  AdminSkillsReportResponse,
   AdminUsageReport,
   AdminSignInStatus,
   FeatureGate,
@@ -1089,6 +1091,24 @@ export function fetchAdminMemoriesReport(
   end?: string,
 ): Promise<AdminMemoriesReportResponse> {
   return apiGet(endpoints.adminMemoriesReport(), {
+    query: { start: start || undefined, end: end || undefined },
+  });
+}
+
+export function fetchAdminToolCallsReport(
+  start?: string,
+  end?: string,
+): Promise<AdminToolCallsReportResponse> {
+  return apiGet(endpoints.adminToolCallsReport(), {
+    query: { start: start || undefined, end: end || undefined },
+  });
+}
+
+export function fetchAdminSkillsReport(
+  start?: string,
+  end?: string,
+): Promise<AdminSkillsReportResponse> {
+  return apiGet(endpoints.adminSkillsReport(), {
     query: { start: start || undefined, end: end || undefined },
   });
 }

@@ -19,6 +19,8 @@ import { GuidesReportTable } from '../components/GuidesReportTable';
 import { DocsReportTable } from '../components/DocsReportTable';
 import { TablesReportTable } from '../components/TablesReportTable';
 import { MemoriesReportTable } from '../components/MemoriesReportTable';
+import { SkillsReportTable } from '../components/SkillsReportTable';
+import { ToolCallsReportTable } from '../components/ToolCallsReportTable';
 import { AdminOpsMenu } from '../components/AdminOpsMenu';
 import './AdminSystemReportsPage.css';
 
@@ -62,6 +64,16 @@ const SECTIONS = [
     key: 'memories',
     label: 'Memories',
     component: MemoriesReportTable,
+  },
+  {
+    key: 'skills',
+    label: 'Skills',
+    component: SkillsReportTable,
+  },
+  {
+    key: 'tools',
+    label: 'Tool Calls',
+    component: ToolCallsReportTable,
   },
   {
     key: 'guides',

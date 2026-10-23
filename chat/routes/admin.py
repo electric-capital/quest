@@ -37,6 +37,7 @@ from db.project_memory_suggestion_store import (
 from db.project_store import list_all_project_guides
 from db.table_store import list_all_table_rows
 from db.routine_store import get_routine_labels
+from db.skill_store import list_skill_labels
 from db.user_store import get_user_by_id, list_all_users, list_user_signup_dates
 from chat.feature_usage_report import (
     build_docs_report,
@@ -44,6 +45,11 @@ from chat.feature_usage_report import (
     build_tables_report,
 )
 from chat.usage_report import build_usage_report
+from chat.tool_usage_report import (
+    build_skills_report,
+    build_tool_calls_report,
+    collect_transcript_usage,
+)
 
 from chat.routes import router
 
@@ -840,6 +846,81 @@ async def admin_memories_report(
         memory_rows, suggestion_rows, project_memory_rows, project_suggestion_rows,
         users, start_date, end_date,
     )
+
+
+async def _transcript_usage_records(
+    start_date: Optional[date], end_date: Optional[date]
+) -> list[dict]:
+    """Scan the transcripts that can overlap the range (shared by the Tool
+    Calls and Skills reports).
+
+    Walks and parses chat_history.json for every surviving conversation
+    whose created_at / last_message_at bounds overlap the window, plus
+    its skill_reads.json -- seconds to tens of seconds on a busy install,
+    so it runs in a worker thread like the user report's active-days scan.
+    """
+    conv_rows = await list_conversation_activity_rows()
+    return await asyncio.to_thread(
+        collect_transcript_usage,
+        conv_rows, start_date, end_date,
+        ChatStorage.scan_transcript_tool_usage, ChatStorage.get_skill_read_ids,
+    )
+
+
+@router.get("/admin/system-monitor/tool-calls-report")
+async def admin_tool_calls_report(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Return per-tool call counts for a date range.
+
+    One row per tool the model called inside the range (``tool_use``
+    messages of the top-level transcripts, keyed on the UTC day of the
+    message timestamp; a call routed through the ``tool_call`` meta-tool
+    counts under the tool it routed to): calls, the routine-conversation
+    share, distinct conversations and owners, newest call. Sub-agent and
+    sandbox-script tool calls are not persisted as transcript messages
+    and are not counted. Row shape and sort order are on
+    ``build_tool_calls_report`` in chat/tool_usage_report.py.
+    """
+    _require_admin(user)
+    start_date, end_date, _, _ = _resolve_range_window(start, end)
+    records = await _transcript_usage_records(start_date, end_date)
+    return build_tool_calls_report(records)
+
+
+@router.get("/admin/system-monitor/skills-report")
+async def admin_skills_report(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Return per-skill usage for a date range.
+
+    One row per skill that was in the model's context in a conversation
+    the user wrote to inside the range (any tier: user / project / routine
+    auto-loads, composer loads, ``load_skills`` / ``get_skill``), from the
+    conversations' skill_reads.json, plus the explicit ``load_skills`` /
+    ``get_skill`` calls inside the range (``load_count``). Names come from
+    the ``skills`` table (any owner) and the system skill catalog; an id
+    with neither is reported as deleted. Skill content is never returned.
+    Row shape and sort order are on ``build_skills_report`` in
+    chat/tool_usage_report.py.
+    """
+    _require_admin(user)
+    start_date, end_date, _, _ = _resolve_range_window(start, end)
+    records = await _transcript_usage_records(start_date, end_date)
+    seen_ids = {sid for rec in records for sid in rec["skill_ids"]}
+    seen_ids.update(
+        sid for rec in records for call in rec["tool_calls"] for sid in call["skill_ids"]
+    )
+    labels = await list_skill_labels(sorted(seen_ids))
+    from chat.system_skills.loader import list_system_skills
+    for skill in list_system_skills(connected_services=None, has_project=True):
+        if skill.id in seen_ids:
+            labels[skill.id] = {"name": skill.name}
+    return build_skills_report(records, labels)
 
 
 # ---------------------------------------------------------------------------

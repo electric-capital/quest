@@ -5,7 +5,7 @@
 |------|---------|
 | [overview.md](architecture/overview.md) | System map: code map of the top-level directories with their owning docs, request lifecycles, storage, cross-cutting decisions |
 | [admin-impersonation.md](architecture/admin-impersonation.md) | Admin impersonation of another user: session cookie field, endpoints, UI state while impersonating |
-| [admin-system-monitor.md](architecture/admin-system-monitor.md) | Admin System Reports dashboard: conversations, costs, users, models, docs, tables, memories, guides and total-usage sections, cost estimation |
+| [admin-system-monitor.md](architecture/admin-system-monitor.md) | Admin System Reports dashboard: usage, cost, user, model, docs, tables, memories, skills, tool-call and guide sections, cost estimation |
 | [auth.md](architecture/auth.md) | Sign-in (Google OAuth or email/password), sessions and cookies, OAuth state, Google service scopes, login admission |
 | [conversation-flags.md](architecture/conversation-flags.md) | Per-conversation opt-in flags set at conversation start: composer popover, magic first line, registry, gating |
 | [connect-requests.md](architecture/connect-requests.md) | Inline connect card for admin-configured services the user has not connected: list tool, blocking connect tool, verified resolve |
@@ -56,7 +56,7 @@
 |------|---------|
 | [chat-api.md](api/chat-api.md) | Conversation REST endpoints, the persistent WebSocket protocol, and the Data Connections endpoints |
 | [api-client-usage.md](api/api-client-usage.md) | Frontend TypeScript API client: request helpers, types, error handling |
-| [admin-system-monitor-api.md](api/admin-system-monitor-api.md) | Admin System Reports endpoints: conversation, user, model, docs, tables, memories, guide and usage reports, cost conventions |
+| [admin-system-monitor-api.md](api/admin-system-monitor-api.md) | Admin System Reports endpoints: conversation, user, model, docs, tables, memories, skills, tool-calls, guide and usage reports, cost conventions |
 | [airtable-api.md](api/airtable-api.md) | Airtable read access via authed_get with a personal access token |
 | [calendar-api.md](api/calendar-api.md) | Google Calendar reads via authed_get and the create and edit event action requests |
 | [docs-api.md](api/docs-api.md) | Google Docs reads via authed_get and Drive, plus exporting a Doc into the workspace |

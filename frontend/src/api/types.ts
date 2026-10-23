@@ -2220,6 +2220,67 @@ export interface AdminMemoriesReportResponse {
   total_users: number;
 }
 
+// System Reports "Tool Calls" section: one row per tool the model called in
+// the selected range (tool_use messages of the top-level transcripts; a call
+// through the tool_call meta-tool counts under the tool it routed to).
+export interface AdminToolCallsReportRow {
+  tool: string;
+  // Issued through the tool_call meta-tool rather than by its own name.
+  dynamic: boolean;
+  call_count: number;
+  // Calls made in routine-created conversations.
+  routine_call_count: number;
+  conversation_count: number;
+  // Distinct conversation owners.
+  user_count: number;
+  // Newest in-range call (ISO, Z-suffixed).
+  last_called_at: string | null;
+}
+
+export interface AdminToolCallsReportResponse {
+  tools: AdminToolCallsReportRow[];
+  call_count: number;
+  // Conversations with at least one in-range call.
+  conversation_count: number;
+  // Transcripts read for the range.
+  scanned_conversations: number;
+}
+
+// System Reports "Skills" section: one row per skill that was in the model's
+// context in a conversation written to in the selected range, or that the
+// model loaded in it.
+export type AdminSkillReportKind =
+  | 'system'
+  | 'private'
+  | 'shared'
+  | 'public'
+  | 'project'
+  | 'deleted';
+
+export interface AdminSkillsReportRow {
+  skill_id: string;
+  name: string;
+  kind: AdminSkillReportKind;
+  // Creator identity for DB skills; null for system and deleted skills.
+  owner_email: string | null;
+  owner_name: string | null;
+  project_id: string | null;
+  conversation_count: number;
+  routine_conversation_count: number;
+  user_count: number;
+  // Explicit load_skills / get_skill calls naming the skill in range.
+  load_count: number;
+  // Newest last_message_at among the counted conversations (ISO, naive UTC).
+  last_used_at: string | null;
+}
+
+export interface AdminSkillsReportResponse {
+  skills: AdminSkillsReportRow[];
+  // Active conversations with any skill in context.
+  conversation_count: number;
+  scanned_conversations: number;
+}
+
 // Admin feature gates (server-global on/off switches for optional features;
 // every feature is off by default)
 export interface FeatureGate {

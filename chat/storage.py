@@ -845,6 +845,87 @@ class ChatStorage:
         }
 
     @staticmethod
+    def scan_transcript_tool_usage(
+        conversation_id: str,
+        start_day: Optional[str] = None,
+        end_day: Optional[str] = None,
+    ) -> Optional[dict]:
+        """The model's tool calls in a conversation, clipped to a day window.
+
+        Reads chat_history.json once and returns ``{"tool_calls": [...],
+        "active": bool}`` for the admin Tool Calls and Skills reports:
+
+        - ``tool_calls`` -- one entry per ``tool_use`` message whose
+          timestamp day falls inside the inclusive ``[start_day, end_day]``
+          ISO-date window: ``{"tool", "dynamic", "timestamp", "skill_ids"}``.
+          A call routed through the ``tool_call`` meta-tool is unwrapped to
+          the inner tool name (``dynamic=True``); every other call keeps its
+          top-level name. ``skill_ids`` is the list of skill ids a
+          ``load_skills`` / ``get_skill`` call asked for (empty otherwise).
+          Only the top-level transcript is read: sub-agent and sandbox-
+          script tool calls are not persisted as ``tool_use`` messages.
+        - ``active`` -- whether the user sent at least one message inside
+          the window (the "conversation was used in range" signal the
+          Skills report keys its per-conversation skill reads on).
+
+        Missing or unreadable history yields ``None``.
+        """
+        chat_file = ChatStorage._get_chat_history_file(conversation_id)
+        try:
+            with open(chat_file, "r") as f:
+                chat_data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return None
+
+        def in_window(ts) -> bool:
+            if not isinstance(ts, str) or len(ts) < 10:
+                return False
+            day = ts[:10]
+            if start_day is not None and day < start_day:
+                return False
+            if end_day is not None and day > end_day:
+                return False
+            return True
+
+        tool_calls: list[dict] = []
+        active = False
+        for msg in chat_data.get("messages") or []:
+            if not isinstance(msg, dict) or not in_window(msg.get("timestamp")):
+                continue
+            if msg.get("role") == "user" and msg.get("type") != "tool_result":
+                active = True
+            if msg.get("type") != "tool_use":
+                continue
+            name = msg.get("tool_name")
+            if not isinstance(name, str) or not name:
+                continue
+            args = msg.get("tool_input")
+            dynamic = False
+            if name == "tool_call" and isinstance(args, dict):
+                inner = args.get("tool_name")
+                if isinstance(inner, str) and inner:
+                    name = inner
+                    dynamic = True
+                    args = args.get("arguments")
+            skill_ids: list[str] = []
+            if isinstance(args, dict):
+                if name == "load_skills":
+                    raw = args.get("skill_ids")
+                    if isinstance(raw, list):
+                        skill_ids = [sid for sid in raw if isinstance(sid, str) and sid]
+                elif name == "get_skill":
+                    raw = args.get("skill_id")
+                    if isinstance(raw, str) and raw:
+                        skill_ids = [raw]
+            tool_calls.append({
+                "tool": name,
+                "dynamic": dynamic,
+                "timestamp": msg["timestamp"],
+                "skill_ids": skill_ids,
+            })
+        return {"tool_calls": tool_calls, "active": active}
+
+    @staticmethod
     def _read_seq_high_water(conversation_id: str) -> int:
         """Compute the highest ``seq`` already on disk for a conversation.
 
