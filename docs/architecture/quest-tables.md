@@ -232,7 +232,7 @@ A project delete (`delete_user_project()` in `chat/project_routes.py`) collects 
 
 - **`system:tables`** (`_tables_content` in `chat/system_skills/catalog.py`) is the model's guide to the tools, verdicts, paging, upserts, the `write_table_rows` handoff and the two cards, ahead of the tool reference the loader appends. It requires the `tables` pseudo-key.
 - **Public prompt**: `_PUBLIC_TABLES_SECTION` stands in for the skill while `tables_enabled`; it covers the tools and the three table cards, with `create_table` and `change_table_schema` examples, and may not name internal-only tools or skills.
-- **Project database**: while `_tables_open()`, the "Project Database" paragraph of the standard and sub-agent prompts gets a note marking `project_db_query` as legacy and pointing new records at tables (`_PROJECT_DB_TABLES_NOTE`, `_SUB_AGENT_PROJECT_DB_TABLES_NOTE`, the read-only variant).
+- **Project database**: while `_tables_open()`, the "Project Database" paragraph of the standard and sub-agent prompts ([legacy projects only](project-db.md#deprecation-gate)) gets a note marking `project_db_query` as legacy and pointing new records at tables (`_PROJECT_DB_TABLES_NOTE`, `_SUB_AGENT_PROJECT_DB_TABLES_NOTE`, the read-only variant).
 - No table titles are injected into any prompt; discovery is `list_tables` only.
 
 ## Feature Gate

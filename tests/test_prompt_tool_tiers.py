@@ -157,6 +157,7 @@ class TestPrompts:
     def test_public_prompt_inlines_every_offered_tool(self):
         prompt = get_public_project_system_prompt(
             docs_enabled=True, tables_enabled=True, browser_enabled=True,
+            project_db_enabled=True,
         )
         for name in PUBLIC_TOOL_CALL_ALLOWLIST - PROJECT_HIDDEN_WORKSPACE_TOOLS:
             if name not in TOOL_CALL_REGISTRY:

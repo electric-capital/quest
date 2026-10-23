@@ -25,6 +25,7 @@ from api import (
 )
 from api.gmail import get_instructions as gmail_get_instructions
 from chat.browser_sessions import BROWSER_SERVICE_KEY
+from chat.project_db import PROJECT_DB_SERVICE_KEY
 from chat.docs import access as doc_access
 from chat.tables import access as table_access
 from chat.docs.constants import (
@@ -908,25 +909,27 @@ write should return the proposed action (the `request_type`, full
 def _project_db_content(_base_url: str, _api_key: str) -> str:
     return """## Project Database (project_db_query)
 
-When a conversation belongs to a project, the project has a dedicated
-SQLite database that persists across every conversation in that project.
-Use `tool_call(tool_name="project_db_query", arguments={"query": "..."})`
+This project has a legacy SQLite database that persists across every
+conversation in the project. The database is deprecated: it stays
+available only because this project already holds tables in it. Use
+`tool_call(tool_name="project_db_query", arguments={"query": "..."})`
 to talk to it.
 
 ### When to use it
 
-- The user asks you to track or store structured data ("track the
-  candidates we're interviewing", "save these expenses", "log every
-  newsletter signup").
-- The user asks for a summary that requires aggregating or filtering
-  prior records.
 - A previous conversation in the same project created tables that this
-  conversation needs to read or update.
+  conversation needs to read, update or summarise.
+- The user asks for a summary that requires aggregating or filtering
+  records already stored there.
+
+Do not start new datasets here: new structured records belong in Quest
+Tables (`system:tables`). Add tables to this database only when the user
+explicitly asks for data to go next to what is already stored in it.
 
 ### Schema
 
-Create tables yourself when needed. Choose schemas that match the user's
-data, not the user's exact wording. Prefer:
+When you do add to the schema, choose shapes that match the user's data,
+not the user's exact wording. Prefer:
 
 - `id INTEGER PRIMARY KEY AUTOINCREMENT` for synthetic ids.
 - `created_at TEXT DEFAULT CURRENT_TIMESTAMP` and `updated_at TEXT` for
@@ -950,8 +953,8 @@ data, not the user's exact wording. Prefer:
 
 ### Patterns
 
-- When the user describes new data to track, design the schema first
-  (one or two `CREATE TABLE` statements), then insert.
+- Start by listing what is there (`SELECT name FROM sqlite_master WHERE
+  type='table'`) and reading the relevant tables.
 - When updating existing data, do a `SELECT` first to confirm what's
   there before issuing an `UPDATE`.
 - When asked for "everything we have on X", read all relevant tables
@@ -1786,9 +1789,9 @@ _register(SystemSkill(
 _register(SystemSkill(
     id="system:project_db",
     name="Project DB",
-    description="project_db_query usage, schema/limits, when to create tables.",
-    when_to_load="Load when the user wants to track or query structured project-scoped data.",
-    requires=None,
+    description="project_db_query usage and limits for the legacy project database's existing tables.",
+    when_to_load="Load when the user wants to read or update data already stored in the project database.",
+    requires=PROJECT_DB_SERVICE_KEY,
     requires_project=True,
     content_builder=_project_db_content,
 ))

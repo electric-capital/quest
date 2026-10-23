@@ -393,7 +393,12 @@ class TestPublicSystemPrompt:
         # docs_enabled / tables_enabled / browser_enabled: every allowlisted
         # tool, the doc, table and browser tools included, is documented
         # (those are gated on the Quest Docs, Quest Tables and browser gates).
-        p = self._prompt(docs_enabled=True, tables_enabled=True, browser_enabled=True)
+        # project_db_enabled: the legacy project database is offered only
+        # to a project that already holds tables in it.
+        p = self._prompt(
+            docs_enabled=True, tables_enabled=True, browser_enabled=True,
+            project_db_enabled=True,
+        )
         assert "Ada" in p and "ada@example.com" in p
         assert "Track BTC prices." in p
         for name in sorted(PUBLIC_TOOL_CALL_ALLOWLIST):
@@ -410,6 +415,7 @@ class TestPublicSystemPrompt:
         assert "Quest Docs" not in p
         for name in sorted(
             PUBLIC_TOOL_CALL_ALLOWLIST - set(_DOC_TOOLS) - _table_tools() - _browser_tools()
+            - {"project_db_query"}  # gated on project_db_enabled, default off
         ):
             assert name in p, name
 

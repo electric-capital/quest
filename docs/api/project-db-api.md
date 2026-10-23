@@ -4,7 +4,7 @@ This document describes the REST API endpoints for browsing and managing project
 
 ## Overview
 
-The Project DB API provides endpoints for listing tables, fetching table data, and deleting tables from a project's SQLite database. These endpoints power the ProjectTables browser in the frontend right panel. The project database itself is created and managed by the LLM via the `project_db_query` tool -- see [Project Database Architecture](../architecture/project-db.md) for details on the tool and database lifecycle.
+The Project DB API provides endpoints for listing tables, fetching table data, and deleting tables from a project's SQLite database. These endpoints power the ProjectTables browser in the frontend right panel. The project database itself is managed by the LLM via the `project_db_query` tool -- see [Project Database Architecture](../architecture/project-db.md) for details on the tool, the database lifecycle and the deprecation gate. The endpoints are not gated: they only list, read and drop tables, and the frontend uses the list to decide whether a project still shows its Tables card.
 
 **Endpoint prefix:** `/app/api/projects/{project_id}/tables`
 

@@ -189,8 +189,11 @@ async def _run_sub_agent(
     if custom_prompt is None:
         custom_prompt = user.get("settings", {}).get("custom_system_prompt", "")
     from api.instructions import get_user_connected_services
+    from chat.project_db import with_project_db_service
     from config.user_connections import build_connected_accounts_paragraph
-    connected_services = get_user_connected_services(user)
+    connected_services = with_project_db_service(
+        get_user_connected_services(user), project_id,
+    )
     # The sub-agent shares the parent's conversation: its prompt carries the
     # parent's workspace notice flags (resolved once by run_conversation_turn
     # and threaded down via RunContext). Project conversations only.

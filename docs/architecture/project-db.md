@@ -1,25 +1,31 @@
 # Project Database Architecture
 
-This document describes the per-project SQLite database feature, which gives the LLM a dedicated database for storing and querying structured data within a project.
+This document describes the per-project SQLite database, a deprecated feature that gave the LLM a dedicated database for storing and querying structured data within a project. Its successor is [Quest Tables](quest-tables.md).
 
 ## Overview
 
-Each project can have a dedicated SQLite database that persists across all conversations in the project. The LLM accesses it via the `project_db_query` dynamic tool, which accepts arbitrary SQL queries. The database is created lazily on first use and lives at `data/projects/{project_id}/project.db`, alongside (but separate from) the project workspace directory. The tool is only available in project conversations -- standalone conversations do not have access.
+A project's database persists across all conversations in the project. The LLM accesses it via the `project_db_query` dynamic tool, which accepts arbitrary SQL queries. The database lives at `data/projects/{project_id}/project.db`, alongside (but separate from) the project workspace directory. The tool is only available in project conversations -- standalone conversations do not have access.
+
+The feature is retired for every project that does not already hold data in it (see [Deprecation Gate](#deprecation-gate)): such a project has no `project_db_query` tool, no `system:project_db` skill, no "Project Database" prompt paragraph and no Tables card, and the handler refuses, so no project can start a new database. A project whose database already holds a table keeps the whole feature, new tables in that database included.
 
 ## Key Files
 
 | File | Role |
 |------|------|
-| `chat/llm/tool_schemas.py` | `project_db_query` entry in `TOOL_CALL_REGISTRY` (tool name, description, parameter schema) |
+| `chat/project_db.py` | The deprecation gate: `project_has_legacy_db()`, the `project_db` connected-services pseudo-key (`PROJECT_DB_SERVICE_KEY`), `with_project_db_service()` and the retirement message |
+| `chat/llm/tool_schemas.py` | `project_db_query` entry in `TOOL_CALL_REGISTRY` (tool name, description, parameter schema), gated with `requires_service: PROJECT_DB_SERVICE_KEY` |
 | `chat/gemini_api/tool_handlers/project_db.py` | `_handle_project_db_query()` entry point and `_execute_project_db_query()` implementation using `aiosqlite` |
 | `chat/gemini_api/tool_dispatch.py` | Dispatch routing for `project_db_query` in both direct and `tool_call` meta tool paths |
-| `chat/gemini_api/system_prompt.py` | Conditional injection of "Project Database" section and `project_db_query` tool visibility based on `has_project` flag |
-| `chat/gemini_api/conversation.py` | Passes `has_project=bool(project_id)` to the system prompt builder |
-| `chat/gemini_api/sub_agent.py` | Passes `has_project=bool(project_id)` to the sub-agent system prompt builder |
+| `chat/gemini_api/system_prompt.py` | Conditional injection of the "Project Database" paragraph (`_PROJECT_DB_PARAGRAPH`, `_project_db_open()`) and `project_db_query` tool visibility based on `has_project` and the `project_db` pseudo-key; the public prompt's `project_db_enabled` flag |
+| `chat/gemini_api/conversation.py` | Passes `has_project=bool(project_id)` and a connected-services map carrying the `project_db` key (`with_project_db_service`) to the system prompt builder; `project_db_enabled` to the public one |
+| `chat/gemini_api/sub_agent.py` | The same for the sub-agent system prompt builder |
+| `chat/gemini_api/tool_dispatch.py` | `_get_connected_services(ctx)` adds the `project_db` key for the skill tools (`list_skills`, `search_skills`, `load_skills`) |
+| `chat/system_skills/catalog.py` | The `system:project_db` skill, gated on the project (`requires_project`) and on the `project_db` key (`requires`) |
 | `config/paths.py` | Defines `PROJECTS_DIR` (defaults to `data/projects/`); re-exported by `chat/storage.py` for backward compatibility |
 | `chat/project_db_routes.py` | REST API endpoints for browsing and managing project database tables (`list_project_tables`, `get_project_table_data`, `delete_project_table`) |
-| `frontend/src/components/RightPanel.tsx` | Splits the right panel between FileBrowser (top) and ProjectTables (bottom) with a draggable divider |
-| `frontend/src/components/ProjectTables.tsx` | Lists tables in the project database, auto-refreshes on WebSocket events |
+| `frontend/src/hooks/useLegacyProjectTables.ts` | Fetches the project's table list for the right panel (on project change and at the end of each turn); the panel shows the Tables card only while the list is non-empty |
+| `frontend/src/components/RightPanel.tsx` | Adds the Tables card (`ProjectTables`) below the file cards, with draggable dividers, for a project with legacy tables |
+| `frontend/src/components/ProjectTables.tsx` | The Tables card: renders the list from `useLegacyProjectTables`, opens the viewer, deletes tables |
 | `frontend/src/components/TableViewerModal.tsx` | Modal (via `createPortal`) for viewing table data with sticky headers, pagination, server-side column sorting, NULL styling, and cell truncation |
 | `frontend/src/api/projectDbApi.ts` | API client with `fetchProjectTables()`, `fetchTableData()`, and `deleteProjectTable()` |
 
@@ -52,7 +58,27 @@ The tool is only visible and available in project conversations. This is control
 
 2. **Handler guard**: `_handle_project_db_query()` in `chat/gemini_api/tool_handlers/project_db.py` returns a JSON error if `project_id` is `None`, preventing execution even if the LLM somehow invokes the tool in a standalone conversation.
 
-The `has_project` flag is set to `bool(project_id)` in both `conversation.py` (for top-level agents) and `sub_agent.py` (for sub-agents). When `has_project` is `True`, the system prompt also includes a "Project Database" paragraph instructing the LLM on how to use the tool; while Quest Tables is offered, it adds a note that marks the database as legacy and points new records at tables ([Quest Tables -- Prompting](quest-tables.md#prompting)).
+The `has_project` flag is set to `bool(project_id)` in both `conversation.py` (for top-level agents) and `sub_agent.py` (for sub-agents). When `has_project` is `True` and the project passes the [deprecation gate](#deprecation-gate), the system prompt also includes a "Project Database" paragraph (`_PROJECT_DB_PARAGRAPH`) telling the LLM the database already holds tables and how to query them; while Quest Tables is offered, it adds a note that marks the database as legacy and points new records at tables ([Quest Tables -- Prompting](quest-tables.md#prompting)).
+
+## Deprecation Gate
+
+The project database is deprecated in favour of Quest Tables, and the first step of retiring it is that no project can start using it. The rule, in `chat/project_db.py`:
+
+- `project_has_legacy_db(project_id)` is true when the project's `project.db` exists and holds at least one user table (a `sqlite_master` lookup over a read-only connection). A missing file, an empty database (a file created lazily by a query that never made a table) or a database whose tables were all dropped is false; a file that exists but cannot be read counts as legacy data, so a transient SQLite error never hides a project's existing tables. The check never creates the file.
+- `PROJECT_DB_SERVICE_KEY` (`"project_db"`) is a connected-services pseudo-key (`PSEUDO_SERVICE_KEYS` in `api/instructions.py`, like the `docs`, `tables` and `browser` keys). The user-level maps (`get_user_connected_services`, `get_public_connected_services`) set it to false; the conversation-aware callers -- `run_conversation_turn`, `_run_sub_agent` and `_get_connected_services()` in `chat/gemini_api/tool_dispatch.py` -- overwrite it per project with `with_project_db_service(services, project_id)`.
+
+Every surface follows the key:
+
+| Surface | Gate |
+|---------|------|
+| `project_db_query` tool | `requires_service: PROJECT_DB_SERVICE_KEY` on its registry spec, so `tool_is_advertised()` leaves it out of the Dynamic Tools section; `_handle_project_db_query()` also refuses with `project_db_retired_message()` before touching the file, so a hallucinated or replayed call cannot create a database |
+| `system:project_db` skill | `requires=PROJECT_DB_SERVICE_KEY` besides `requires_project`; `load_skills` returns the retirement message for a project without legacy tables |
+| Prompt paragraph | `_project_db_open(connected_services)` in the standard and sub-agent prompts (a `None` map, the unknown caller context, shows everything, as `_tables_open()` does); the public prompt takes the gate as the explicit `project_db_enabled` flag and also drops the tool from its inlined list |
+| Tables card | The right panel fetches the table list (`useLegacyProjectTables`) and renders the `ProjectTables` card only while the list is non-empty, or when the list failed to load so the error shows |
+
+The REST endpoints in `chat/project_db_routes.py` stay ungated: they only list, read and drop tables, and a project without a database already answers an empty list or 404.
+
+**Why gate on the data rather than on a per-project flag or a feature gate?** The data is the truth: a project with tables must keep working, a project without them must not start, and both follow automatically from the file -- there is nothing to migrate, back-fill or administer, and dropping the last table retires the feature for that project on its own. Checking a project's database is one read-only `sqlite_master` lookup per prompt build.
 
 ## Query Execution Flow
 
@@ -80,14 +106,14 @@ The `has_project` flag is set to `bool(project_id)` in both `conversation.py` (f
 - **Single statement**: Only one SQL statement per call is supported (enforced by `aiosqlite.execute()` behavior)
 - **ATTACH blocked**: A SQLite authorizer on every connection denies `SQLITE_ATTACH` at statement-compile time, so `ATTACH` is rejected however it is written (leading comments, whitespace, case); a `startswith("ATTACH")` check remains only as a fast path with the same error message
 - **Project-only**: Returns an error JSON if invoked without a `project_id` (standalone conversations)
-- **Lazy creation**: The database file and parent directory are created on first tool invocation, not when the project is created
+- **Legacy projects only**: Returns the retirement error JSON when the project holds no tables in its database ([Deprecation Gate](#deprecation-gate)), so the database file is never created
 - **Cleanup**: The database is deleted when the project is deleted, via the existing `shutil.rmtree` on the project directory
 
 ## Table Browser
 
-The project database has a browser UI that lets users inspect and manage table contents from the frontend. When a conversation belongs to a project, the right panel splits into FileBrowser (top) and ProjectTables (bottom) via `frontend/src/components/RightPanel.tsx`. The split position is persisted to `localStorage` per project (key: `quest_project_tables_split_{projectId}`).
+The project database has a browser UI that lets users inspect and manage table contents from the frontend. For a project with legacy tables, the right panel (`frontend/src/components/RightPanel.tsx`) adds a Tables card (`ProjectTables`) below the file cards, with draggable dividers; the shares are persisted to `localStorage` per project (`quest_project_tables_split_{pid}` for Project Files + Tables, `quest_project_panel_split3_{pid}` for all three cards). A project without legacy tables has no card, and its two file cards persist their split under `quest_project_files_split_{pid}`, derived from the three-card shares until dragged.
 
-The ProjectTables component (`frontend/src/components/ProjectTables.tsx`) lists all user-created tables and auto-refreshes on the `WebSocketManager.onStreamComplete` callback (`send_message_finished`) at end-of-turn. The companion `onToolResult` subscription was always dead -- no backend caller drove it -- and was dropped when the file browser migrated to `file_list_changed`. A dedicated project-DB mutation event is a future refinement; for now the project DB table list refreshes once per turn rather than mid-turn.
+The table list is fetched by `useLegacyProjectTables` (`frontend/src/hooks/useLegacyProjectTables.ts`), which the panel uses both to decide whether the card exists and to feed it: it loads when the project changes and refreshes on the `WebSocketManager.onStreamComplete` callback (`send_message_finished`) at end-of-turn, so a card whose last table was dropped during a turn disappears when the turn ends. The companion `onToolResult` subscription was always dead -- no backend caller drove it -- and was dropped when the file browser migrated to `file_list_changed`. A dedicated project-DB mutation event is a future refinement; for now the project DB table list refreshes once per turn rather than mid-turn.
 
 Clicking a table opens a `TableViewerModal` (`frontend/src/components/TableViewerModal.tsx`) rendered via `createPortal` to `document.body`, showing columns, rows with pagination, NULL styling, and cell truncation with tooltips for long values. Column headers are clickable and cycle through none -> asc -> desc -> none; sort changes reset the pagination offset and re-query the server with `sort_by`/`sort_dir`, with the active column marked by an arrow indicator.
 
@@ -97,7 +123,7 @@ Each table entry has a meatball menu (three-dot icon) that appears on hover and 
 
 The backend endpoints are in `chat/project_db_routes.py` -- see [Project DB API](../api/project-db-api.md) for endpoint details. The API client is in `frontend/src/api/projectDbApi.ts` (`fetchProjectTables()`, `fetchTableData()`, `deleteProjectTable()`) with endpoint URL builders in `frontend/src/api/config.ts` (`projectTables`, `projectTableData`). TypeScript types (`ProjectTable`, `ProjectTablesResponse`, `TableDataResponse`) are in `frontend/src/api/types.ts`.
 
-When no project is associated with the conversation, `RightPanel` renders only the FileBrowser at full height. The `App.tsx` component passes both `conversationId` and `projectId` to `RightPanel`, which replaced the previous direct `<FileBrowser>` usage.
+When no project is associated with the conversation, `RightPanel` renders only the FileBrowser at full height. The `App.tsx` component passes both `conversationId` and `projectId` to `RightPanel`.
 
 ## Design Decisions
 

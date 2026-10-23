@@ -19,6 +19,7 @@ from api.airtable import get_instructions as airtable_instructions
 from api.ramp import get_instructions as ramp_instructions
 from chat.browser_sessions import BROWSER_SERVICE_KEY
 from chat.docs.constants import DOCS_SERVICE_KEY
+from chat.project_db import PROJECT_DB_SERVICE_KEY
 from chat.tables.constants import TABLES_SERVICE_KEY
 from config.feature_gates import (
     browser_enabled_for, docs_enabled_for, tables_enabled_for,
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 # "connected" -- so aggregates such as GET /me's has_any_service_connected
 # must skip them.
 PSEUDO_SERVICE_KEYS = frozenset({
-    DOCS_SERVICE_KEY, TABLES_SERVICE_KEY, BROWSER_SERVICE_KEY,
+    DOCS_SERVICE_KEY, TABLES_SERVICE_KEY, BROWSER_SERVICE_KEY, PROJECT_DB_SERVICE_KEY,
 })
 
 
@@ -114,6 +115,10 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
     # public conversation, never advertise them. The public prompt takes
     # the gate directly (get_public_project_system_prompt browser_enabled).
     services[BROWSER_SERVICE_KEY] = False
+    # The legacy project database is per project, not per user: the
+    # conversation-aware callers overwrite this with
+    # ``chat.project_db.with_project_db_service`` (project_has_legacy_db).
+    services[PROJECT_DB_SERVICE_KEY] = False
     return services
 
 
@@ -129,6 +134,7 @@ def get_public_connected_services(user: dict) -> dict[str, bool]:
         DOCS_SERVICE_KEY: docs_enabled_for(email),
         TABLES_SERVICE_KEY: tables_enabled_for(email),
         BROWSER_SERVICE_KEY: browser_enabled_for(email),
+        PROJECT_DB_SERVICE_KEY: False,
     }
 
 

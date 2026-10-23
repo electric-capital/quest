@@ -1,68 +1,28 @@
 /**
- * Project Tables panel component for browsing tables in a project's SQLite database
+ * The Tables card of the right panel: the tables of a project's legacy
+ * project database, each opening in a TableViewerModal, with a Delete
+ * action. The list itself is owned by the host (useLegacyProjectTables),
+ * which also decides whether this card is shown at all: the project
+ * database is deprecated and a project without tables in it has no card.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { errorMessage } from '../utils/errorMessage';
-import { fetchProjectTables, deleteProjectTable } from '../api/projectDbApi';
-import { webSocketManager } from '../services/WebSocketManager';
+import { deleteProjectTable } from '../api/projectDbApi';
 import { TableViewerModal } from './TableViewerModal';
-import type { ProjectTable } from '../api/types';
+import type { LegacyProjectTablesState } from '../hooks/useLegacyProjectTables';
 import './ProjectTables.css';
 
 interface ProjectTablesProps {
-  projectId: string | null;
+  projectId: string;
+  /** The list state from `useLegacyProjectTables(projectId)`. */
+  state: LegacyProjectTablesState;
 }
 
-export function ProjectTables({ projectId }: ProjectTablesProps) {
-  const [tables, setTables] = useState<ProjectTable[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export function ProjectTables({ projectId, state }: ProjectTablesProps) {
+  const { tables, loading, error, reload: loadTables, setError } = state;
   const [viewerTable, setViewerTable] = useState<string | null>(null);
   const [openMenuTableName, setOpenMenuTableName] = useState<string | null>(null);
-
-  const loadTables = useCallback(async (silent = false) => {
-    if (!projectId) return;
-
-    if (!silent) {
-      setLoading(true);
-    }
-    setError(null);
-
-    try {
-      const data = await fetchProjectTables(projectId);
-      setTables(data.tables);
-    } catch (err) {
-      setError(errorMessage(err, 'Failed to load tables'));
-    } finally {
-      if (!silent) {
-        setLoading(false);
-      }
-    }
-  }, [projectId]);
-
-  // Load tables on mount and when projectId changes
-  useEffect(() => {
-    if (projectId) {
-      loadTables();
-    } else {
-      setTables([]);
-    }
-  }, [projectId, loadTables]);
-
-  // Auto-refresh when the assistant turn ends. The companion ``onToolResult``
-  // hook was always dead (no BE caller invoked ``publishToolResult``) and was
-  // dropped along with the file-browser migration to ``file_list_changed``;
-  // a dedicated project-DB event is tracked separately.
-  useEffect(() => {
-    if (!projectId) return;
-    const unsubStream = webSocketManager.onStreamComplete(() => {
-      loadTables(true);
-    });
-    return () => {
-      unsubStream();
-    };
-  }, [projectId, loadTables]);
 
   // Close meatball menu on click outside
   useEffect(() => {
@@ -71,10 +31,6 @@ export function ProjectTables({ projectId }: ProjectTablesProps) {
     document.addEventListener('click', handleClickOutside);
     return () => document.removeEventListener('click', handleClickOutside);
   }, [openMenuTableName]);
-
-  if (!projectId) {
-    return null;
-  }
 
   return (
     <div className="project-tables">
@@ -169,7 +125,7 @@ export function ProjectTables({ projectId }: ProjectTablesProps) {
         )}
       </div>
 
-      {projectId && viewerTable && (
+      {viewerTable && (
         <TableViewerModal
           isOpen={!!viewerTable}
           projectId={projectId}

@@ -26,6 +26,7 @@ from chat.llm.tool_schemas import (
 )
 from chat.system_skills import build_system_skills_enumeration
 from chat.browser_sessions import BROWSER_SERVICE_KEY
+from chat.project_db import PROJECT_DB_SERVICE_KEY
 
 
 def _doc_tool_names() -> frozenset[str]:
@@ -103,6 +104,25 @@ def _tables_open(connected_services: dict[str, bool] | None) -> bool:
     caller context shows everything, as ``tool_is_advertised`` does)."""
     return connected_services is None or bool(connected_services.get(TABLES_SERVICE_KEY))
 
+
+def _project_db_open(connected_services: dict[str, bool] | None) -> bool:
+    """Whether a project prompt built for *connected_services* offers the
+    legacy project database: the ``project_db`` pseudo-key is truthy (the
+    project already holds tables in it, ``chat.project_db``), or the map is
+    ``None`` (unknown caller context shows everything)."""
+    return connected_services is None or bool(connected_services.get(PROJECT_DB_SERVICE_KEY))
+
+
+# The "Project Database" paragraph of a project prompt: only while the
+# legacy database is open for the project (_project_db_open); a project
+# without tables in it has no paragraph, tool or skill for it.
+_PROJECT_DB_PARAGRAPH = (
+    "\n\n**Project Database:** This project has a legacy SQLite database that persists "
+    "across all conversations in the project and already holds tables. Use "
+    '`tool_call(tool_name="project_db_query", arguments={"query": "..."})` '
+    "to read, update and query them. For full usage details, load the "
+    "`system:project_db` system skill.\n"
+)
 
 # One sentence appended to the "Project Database" paragraph of the standard
 # and sub-agent prompts while Quest Tables is offered (never while gated).
@@ -593,17 +613,13 @@ Facts the user has saved about themselves and how they want you to work, newest 
 
     # Build the project guide section if provided
     project_section = ""
-    project_db_section = ""
+    project_extras = ""
     if has_project:
-        project_db_section = (
-            "\n\n**Project Database:** This project has a dedicated SQLite database that persists "
-            "across all conversations in the project. Use "
-            '`tool_call(tool_name="project_db_query", arguments={"query": "..."})` '
-            "to create tables, store data, and query it. For full usage details, load the "
-            "`system:project_db` system skill.\n"
-        ) + (
-            _PROJECT_DB_TABLES_NOTE if _tables_open(connected_services) else ""
-        ) + _project_files_section(
+        if _project_db_open(connected_services):
+            project_extras = _PROJECT_DB_PARAGRAPH + (
+                _PROJECT_DB_TABLES_NOTE if _tables_open(connected_services) else ""
+            )
+        project_extras += _project_files_section(
             legacy_shared_workspace, converted_from_standalone,
         ) + _project_memories_section(can_suggest=not is_routine)
     if project_guide and project_guide.strip():
@@ -611,16 +627,16 @@ Facts the user has saved about themselves and how they want you to work, newest 
 
 ## Project-Specific Instructions
 
-{project_guide.strip()}{project_db_section}
+{project_guide.strip()}{project_extras}
 
 ---
 
 """
-    elif project_db_section:
+    elif project_extras:
         project_section = f"""
 
 ## Project-Specific Instructions
-{project_db_section}
+{project_extras}
 
 ---
 
@@ -1067,6 +1083,7 @@ def get_public_project_system_prompt(
     docs_enabled: bool = False,
     tables_enabled: bool = False,
     browser_enabled: bool = False,
+    project_db_enabled: bool = False,
     legacy_shared_workspace: bool = False,
     converted_from_standalone: bool = False,
 ) -> str:
@@ -1131,11 +1148,16 @@ def get_public_project_system_prompt(
         else:
             identity_line = f"\nYou are an AI agent helping {user_email}.\n"
 
-    project_db_section = (
-        "\n\n**Project Database:** This project has a dedicated SQLite database that persists "
-        "across all conversations in the project. Use "
-        '`tool_call(tool_name="project_db_query", arguments={"query": "..."})` '
-        "to create tables, store data, and query it.\n"
+    # The legacy project database (project_db_enabled: the project already
+    # holds tables in it, chat.project_db) has no skill in a public project,
+    # so its paragraph stands alone.
+    project_extras = (
+        (
+            "\n\n**Project Database:** This project has a legacy SQLite database that persists "
+            "across all conversations in the project and already holds tables. Use "
+            '`tool_call(tool_name="project_db_query", arguments={"query": "..."})` '
+            "to read, update and query them.\n"
+        ) if project_db_enabled else ""
     ) + _project_files_section(
         legacy_shared_workspace, converted_from_standalone,
     ) + _project_memories_section(can_suggest=not is_routine, personal_memories=False)
@@ -1144,7 +1166,7 @@ def get_public_project_system_prompt(
 
 ## Project-Specific Instructions
 
-{project_guide.strip()}{project_db_section}
+{project_guide.strip()}{project_extras}
 
 ---
 
@@ -1153,7 +1175,7 @@ def get_public_project_system_prompt(
         project_section = f"""
 
 ## Project-Specific Instructions
-{project_db_section}
+{project_extras}
 
 ---
 
@@ -1173,6 +1195,8 @@ def get_public_project_system_prompt(
         public_exclude |= _doc_tool_names()
     if not tables_enabled:
         public_exclude |= _table_tool_names()
+    if not project_db_enabled:
+        public_exclude.add("project_db_query")
     # The browser tools are skill-documented (system:browser): named on
     # the public System Skills block below, never inlined here.
     public_exclude |= _browser_tool_names()
@@ -1373,17 +1397,13 @@ def get_sub_agent_system_prompt(
 
     # Build the project guide section if provided
     project_section = ""
-    project_db_section = ""
+    project_extras = ""
     if has_project:
-        project_db_section = (
-            "\n\n**Project Database:** This project has a dedicated SQLite database that persists "
-            "across all conversations in the project. Use "
-            '`tool_call(tool_name="project_db_query", arguments={"query": "..."})` '
-            "to create tables, store data, and query it. Load `system:project_db` for the full "
-            "usage reference.\n"
-        ) + (
-            _SUB_AGENT_PROJECT_DB_TABLES_NOTE if _tables_open(connected_services) else ""
-        ) + _project_files_section(
+        if _project_db_open(connected_services):
+            project_extras = _PROJECT_DB_PARAGRAPH + (
+                _SUB_AGENT_PROJECT_DB_TABLES_NOTE if _tables_open(connected_services) else ""
+            )
+        project_extras += _project_files_section(
             legacy_shared_workspace, converted_from_standalone,
         ) + _project_memories_section(can_suggest=False)
     if project_guide and project_guide.strip():
@@ -1391,16 +1411,16 @@ def get_sub_agent_system_prompt(
 
 ## Project-Specific Instructions
 
-{project_guide.strip()}{project_db_section}
+{project_guide.strip()}{project_extras}
 
 ---
 
 """
-    elif project_db_section:
+    elif project_extras:
         project_section = f"""
 
 ## Project-Specific Instructions
-{project_db_section}
+{project_extras}
 
 ---
 

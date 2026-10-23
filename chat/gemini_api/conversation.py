@@ -823,8 +823,11 @@ async def run_conversation_turn(
             memories_content = await load_memories_content(user["id"])
 
         from api.instructions import get_user_connected_services
+        from chat.project_db import project_has_legacy_db, with_project_db_service
         from config.user_connections import build_connected_accounts_paragraph
-        connected_services = get_user_connected_services(user)
+        connected_services = with_project_db_service(
+            get_user_connected_services(user), project_id,
+        )
         # Never rendered into the public-project prompt (spec 11.5).
         connected_accounts = (
             "" if is_public else build_connected_accounts_paragraph(user)
@@ -878,6 +881,7 @@ async def run_conversation_turn(
                 docs_enabled=docs_enabled_for(user["email"]),
                 tables_enabled=tables_enabled_for(user["email"]),
                 browser_enabled=browser_enabled_for(user["email"]),
+                project_db_enabled=project_has_legacy_db(project_id),
                 legacy_shared_workspace=legacy_shared_workspace,
                 converted_from_standalone=converted_from_standalone,
             )

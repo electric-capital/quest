@@ -8,6 +8,7 @@ import inspect
 from typing import Callable, Optional
 
 from chat.browser_sessions import BROWSER_SERVICE_KEY, browser_disabled_message
+from chat.project_db import PROJECT_DB_SERVICE_KEY, project_db_retired_message
 from chat.docs.constants import DOCS_SERVICE_KEY, docs_disabled_message
 from chat.tables.constants import TABLES_SERVICE_KEY, tables_disabled_message
 from chat.llm.tool_schemas import (
@@ -184,6 +185,8 @@ def load_system_skills(
                 error = tables_disabled_message()
             elif skill.requires == BROWSER_SERVICE_KEY:
                 error = browser_disabled_message()
+            elif skill.requires == PROJECT_DB_SERVICE_KEY:
+                error = project_db_retired_message()
             else:
                 error = (
                     f"{skill.name} is not connected. If "

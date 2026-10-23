@@ -14,7 +14,7 @@ A project can be created as a **public project**: an immutable creation-time mod
 
 Standalone conversations (not in a project) continue to work exactly as before: each has its own workspace at `data/chats/{conversation_id}/workspace/`.
 
-Projects also have a dedicated per-project SQLite database that the LLM can use to store and query structured data across conversations. See [Project Database Architecture](project-db.md) for the full documentation.
+Projects that already hold data in the deprecated per-project SQLite database keep it for querying across conversations; no other project gets one. See [Project Database Architecture](project-db.md) for the full documentation, including the deprecation gate.
 
 ## Project Model
 
@@ -79,7 +79,7 @@ A **private** project can be given read access to the [Quest Docs](quest-docs.md
 data/
 ├── projects/
 │   └── {project_id}/
-│       ├── project.db              # Per-project SQLite database (created lazily, see project-db.md)
+│       ├── project.db              # Deprecated per-project SQLite database (legacy projects only, see project-db.md)
 │       └── workspace/
 │           └── workspace/          # Project workspace shared by all project conversations (proj://, /project)
 ├── chats/
@@ -136,7 +136,7 @@ The persistent-WS `send_message` handler in `chat/realtime/socket.py` detects pr
 
 1. After validating conversation ownership, the handler reads `project_id` from the conversation metadata (`meta.get("project_id")`)
 2. The `project_id` is passed through to `run_conversation_turn()` via `_run_send_message`
-3. Every tool call receives the `project_id` via `_dispatch_tool_call()`. The file tools resolve `chat://` paths (and the `*_workspace_file` tools) to the conversation workspace and `proj://` paths to the project workspace; `project_id` also selects the project tool set (the scheme-qualified file tools and `project_db_query` offered, the `*_workspace_file` tools hidden) and the `/project` sandbox mount. The file tools are dispatched through the `tool_call` meta tool pattern (see [Gemini API Integration](gemini-api.md#meta-tool-pattern-tool_call))
+3. Every tool call receives the `project_id` via `_dispatch_tool_call()`. The file tools resolve `chat://` paths (and the `*_workspace_file` tools) to the conversation workspace and `proj://` paths to the project workspace; `project_id` also selects the project tool set (the scheme-qualified file tools offered, and `project_db_query` for a project with legacy database tables; the `*_workspace_file` tools hidden) and the `/project` sandbox mount. The file tools are dispatched through the `tool_call` meta tool pattern (see [Gemini API Integration](gemini-api.md#meta-tool-pattern-tool_call))
 
 No project-specific protocol changes are needed -- conversations in a project use the same `WS /app/api/stream` endpoint as standalone conversations.
 

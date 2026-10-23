@@ -1,19 +1,27 @@
 // RightPanel card set per screen (standalone / project conversation / drilled
-// home / nothing), the Copy / Move row actions between Chat Files and Project
-// Files (useWorkspaceCopy) incl. the 409 overwrite prompt and the notices,
-// and the persisted vertical split.
+// home / nothing), the Tables card gated on the project holding legacy
+// project-database tables, the Copy / Move row actions between Chat Files
+// and Project Files (useWorkspaceCopy) incl. the 409 overwrite prompt and
+// the notices, and the persisted vertical split.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { FileEntry } from '../api/types';
+import type { ReactElement } from 'react';
+import type { FileEntry, ProjectTable } from '../api/types';
 import type { FileSource } from '../api/fileApi';
 import type { FileBrowserNotice, FileRowAction, FileRowContext } from './FileBrowser';
+import type { LegacyProjectTablesState } from '../hooks/useLegacyProjectTables';
 import {
-  RightPanel, getSplit3StorageKey, getSplitStorageKey, moveSplitBoundary, normalizeShares,
+  RightPanel, getFilesSplitStorageKey, getSplit3StorageKey, getSplitStorageKey,
+  moveSplitBoundary, normalizeShares,
 } from './RightPanel';
 
 const mocks = vi.hoisted(() => ({
   copyFileToProject: vi.fn(),
   copyFileFromProject: vi.fn(),
+  fetchProjectTables: vi.fn(),
+  /** The legacy project-database tables the list endpoint answers with. */
+  tables: [] as ProjectTable[],
+  streamComplete: new Set<() => void>(),
   drilledProjectId: null as string | null,
   showHidden: false,
 }));
@@ -45,11 +53,40 @@ vi.mock('../contexts/ProjectsContext', () => ({
   useProjects: () => ({ drilledProjectId: mocks.drilledProjectId }),
 }));
 
+vi.mock('../api/projectDbApi', () => ({
+  fetchProjectTables: (projectId: string) => mocks.fetchProjectTables(projectId),
+}));
+
+vi.mock('../services/WebSocketManager', () => ({
+  webSocketManager: {
+    onStreamComplete: (cb: () => void) => {
+      mocks.streamComplete.add(cb);
+      return () => mocks.streamComplete.delete(cb);
+    },
+  },
+}));
+
 vi.mock('./ProjectTables', () => ({
-  ProjectTables: ({ projectId }: { projectId: string }) => (
-    <div data-testid="tables">tables:{projectId}</div>
+  ProjectTables: ({ projectId, state }: { projectId: string; state: LegacyProjectTablesState }) => (
+    <div data-testid="tables" data-error={state.error ?? ''}>
+      tables:{projectId}:{state.tables.map((t) => t.name).join(',')}
+    </div>
   ),
 }));
+
+/** Render and wait for the Tables card (the table list is fetched). */
+async function renderWithTables(ui: ReactElement) {
+  const result = render(ui);
+  await screen.findByTestId('tables');
+  return result;
+}
+
+/** End an assistant turn: the table list reloads. */
+async function completeStream() {
+  await act(async () => {
+    mocks.streamComplete.forEach((cb) => cb());
+  });
+}
 
 const fileRow = (name: string, type: 'file' | 'folder' = 'file'): FileEntry => ({
   name, type, size: type === 'file' ? 10 : null, lastModified: '2026-10-01T00:00:00Z',
@@ -103,6 +140,10 @@ beforeEach(() => {
   mocks.showHidden = false;
   mocks.copyFileToProject.mockReset();
   mocks.copyFileFromProject.mockReset();
+  // By default the project holds a legacy table, so the Tables card shows.
+  mocks.tables = [{ name: 'tasks' }];
+  mocks.fetchProjectTables.mockReset().mockImplementation(async () => ({ tables: mocks.tables }));
+  mocks.streamComplete.clear();
   localStorage.clear();
 });
 
@@ -127,24 +168,31 @@ describe('card set', () => {
     expect(cardTitles()).toEqual(['Chat Files']);
   });
 
-  it('project conversation: Chat Files, Project Files and Tables with two dividers', () => {
-    render(<RightPanel conversationId="c1" projectId="p1" />);
+  it('project conversation: Chat Files, Project Files and Tables with two dividers', async () => {
+    await renderWithTables(<RightPanel conversationId="c1" projectId="p1" />);
     expect(cardTitles()).toEqual(['Chat Files', 'Project Files']);
     expect(screen.getByTestId('card-Chat Files').dataset.source).toBe('conversation:c1');
     expect(screen.getByTestId('card-Project Files').dataset.source).toBe('project:p1');
-    expect(screen.getByTestId('tables').textContent).toBe('tables:p1');
+    expect(screen.getByTestId('tables').textContent).toBe('tables:p1:tasks');
     expect(screen.getByTestId('right-panel-divider-0')).toBeTruthy();
     expect(screen.getByTestId('right-panel-divider-1')).toBeTruthy();
+    expect(mocks.fetchProjectTables).toHaveBeenCalledWith('p1');
   });
 
-  it('drilled home composer: Project Files and Tables over the project routes', () => {
+  it('drilled home composer: Project Files and Tables over the project routes', async () => {
     mocks.drilledProjectId = 'p2';
-    render(<RightPanel conversationId={null} projectId={null} />);
+    await renderWithTables(<RightPanel conversationId={null} projectId={null} />);
     expect(cardTitles()).toEqual(['Project Files']);
     expect(screen.getByTestId('card-Project Files').dataset.source).toBe('project:p2');
-    expect(screen.getByTestId('tables').textContent).toBe('tables:p2');
+    expect(screen.getByTestId('tables').textContent).toBe('tables:p2:tasks');
     expect(screen.getByTestId('right-panel-divider-0')).toBeTruthy();
     expect(screen.queryByTestId('right-panel-divider-1')).toBeNull();
+  });
+
+  it('standalone conversation never fetches a table list', async () => {
+    render(<RightPanel conversationId="c1" projectId={null} />);
+    await act(async () => {});
+    expect(mocks.fetchProjectTables).not.toHaveBeenCalled();
   });
 
   it('nothing on screen: the empty FileBrowser', () => {
@@ -356,35 +404,87 @@ describe('Copy / Move edge cases', () => {
   });
 });
 
+describe('Tables card follows the legacy project database', () => {
+  it('project conversation without legacy tables: the two file cards only', async () => {
+    mocks.tables = [];
+    render(<RightPanel conversationId="c1" projectId="p1" />);
+    await waitFor(() => expect(mocks.fetchProjectTables).toHaveBeenCalledWith('p1'));
+    await act(async () => {});
+    expect(cardTitles()).toEqual(['Chat Files', 'Project Files']);
+    expect(screen.queryByTestId('tables')).toBeNull();
+    expect(screen.getByTestId('right-panel-divider-0')).toBeTruthy();
+    expect(screen.queryByTestId('right-panel-divider-1')).toBeNull();
+  });
+
+  it('drilled home without legacy tables: Project Files alone', async () => {
+    mocks.tables = [];
+    mocks.drilledProjectId = 'p2';
+    render(<RightPanel conversationId={null} projectId={null} />);
+    await waitFor(() => expect(mocks.fetchProjectTables).toHaveBeenCalledWith('p2'));
+    await act(async () => {});
+    expect(cardTitles()).toEqual(['Project Files']);
+    expect(screen.queryByTestId('tables')).toBeNull();
+    expect(screen.queryByTestId('right-panel-divider-0')).toBeNull();
+  });
+
+  it('the card goes away once the last table is gone at the end of a turn', async () => {
+    await renderWithTables(<RightPanel conversationId="c1" projectId="p1" />);
+    mocks.tables = [];
+    await completeStream();
+    await waitFor(() => expect(screen.queryByTestId('tables')).toBeNull());
+    expect(cardTitles()).toEqual(['Chat Files', 'Project Files']);
+  });
+
+  it('a failed list still shows the card so the error is visible', async () => {
+    mocks.fetchProjectTables.mockRejectedValue(new Error('db locked'));
+    render(<RightPanel conversationId="c1" projectId="p1" />);
+    const card = await screen.findByTestId('tables');
+    expect(card.dataset.error).toBe('db locked');
+    expect(card.textContent).toBe('tables:p1:');
+  });
+
+  it('a project switch never shows the previous project\'s tables', async () => {
+    const { rerender } = await renderWithTables(<RightPanel conversationId="c1" projectId="p1" />);
+    let release: (value: { tables: ProjectTable[] }) => void = () => {};
+    mocks.fetchProjectTables.mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+    rerender(<RightPanel conversationId="c2" projectId="p2" />);
+    expect(screen.queryByTestId('tables')).toBeNull();
+    await act(async () => { release({ tables: [{ name: 'notes' }] }); });
+    expect(screen.getByTestId('tables').textContent).toBe('tables:p2:notes');
+  });
+});
+
 describe('vertical split', () => {
   const flexGrow = (key: string) => screen.getByTestId(`right-panel-card-${key}`).style.flexGrow;
 
-  it('reads a stored three-card split back', () => {
+  it('reads a stored three-card split back', async () => {
     localStorage.setItem(getSplit3StorageKey('p1'), JSON.stringify([20, 50]));
-    render(<RightPanel conversationId="c1" projectId="p1" />);
+    await renderWithTables(<RightPanel conversationId="c1" projectId="p1" />);
     expect(flexGrow('chat')).toBe('20');
     expect(flexGrow('project')).toBe('50');
     expect(flexGrow('tables')).toBe('30');
   });
 
-  it('derives the three-card split from a legacy two-card value', () => {
+  it('derives the three-card split from a legacy two-card value', async () => {
     localStorage.setItem(getSplitStorageKey('p1'), '70');
-    render(<RightPanel conversationId="c1" projectId="p1" />);
+    await renderWithTables(<RightPanel conversationId="c1" projectId="p1" />);
     expect(flexGrow('chat')).toBe('35');
     expect(flexGrow('project')).toBe('35');
     expect(flexGrow('tables')).toBe('30');
   });
 
-  it('reads the two-card key on the drilled home screen', () => {
+  it('reads the two-card key on the drilled home screen', async () => {
     mocks.drilledProjectId = 'p1';
     localStorage.setItem(getSplitStorageKey('p1'), '25');
-    render(<RightPanel conversationId={null} projectId={null} />);
+    await renderWithTables(<RightPanel conversationId={null} projectId={null} />);
     expect(flexGrow('project')).toBe('25');
     expect(flexGrow('tables')).toBe('75');
   });
 
-  it('dragging the second divider persists the three-card split', () => {
-    render(<RightPanel conversationId="c1" projectId="p1" />);
+  it('dragging the second divider persists the three-card split', async () => {
+    await renderWithTables(<RightPanel conversationId="c1" projectId="p1" />);
     const panel = screen.getByTestId('right-panel-card-chat').parentElement!;
     vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(
       { top: 0, height: 1000, left: 0, right: 280, bottom: 1000, width: 280, x: 0, y: 0, toJSON: () => ({}) },
@@ -405,8 +505,8 @@ describe('vertical split', () => {
     expect(moveSplitBoundary([10, 5, 85], 0, 50, 8)).toEqual([7.5, 7.5, 85]);
   });
 
-  it('a click without movement saves nothing', () => {
-    render(<RightPanel conversationId="c1" projectId="p1" />);
+  it('a click without movement saves nothing', async () => {
+    await renderWithTables(<RightPanel conversationId="c1" projectId="p1" />);
     const panel = screen.getByTestId('right-panel-card-chat').parentElement!;
     vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(
       { top: 0, height: 1000, left: 0, right: 280, bottom: 1000, width: 280, x: 0, y: 0, toJSON: () => ({}) },
@@ -423,27 +523,27 @@ describe('vertical split', () => {
     ['strings', '["30", "30"]'],
     ['negative', '[-10, 50]'],
     ['sum over 100', '[80, 40]'],
-  ])('a malformed or out-of-range three-card split (%s) falls back to the defaults', (_label, raw) => {
+  ])('a malformed or out-of-range three-card split (%s) falls back to the defaults', async (_label, raw) => {
     localStorage.setItem(getSplit3StorageKey('p1'), raw);
-    render(<RightPanel conversationId="c1" projectId="p1" />);
+    await renderWithTables(<RightPanel conversationId="c1" projectId="p1" />);
     expect(flexGrow('chat')).toBe('40');
     expect(flexGrow('project')).toBe('35');
     expect(flexGrow('tables')).toBe('25');
   });
 
-  it('a stored near-zero share is lifted to the minimum', () => {
+  it('a stored near-zero share is lifted to the minimum', async () => {
     localStorage.setItem(getSplit3StorageKey('p1'), JSON.stringify([0.5, 49.5]));
-    render(<RightPanel conversationId="c1" projectId="p1" />);
+    await renderWithTables(<RightPanel conversationId="c1" projectId="p1" />);
     expect(Number(flexGrow('chat'))).toBeCloseTo(5);
     const total = ['chat', 'project', 'tables'].reduce((acc, k) => acc + Number(flexGrow(k)), 0);
     expect(total).toBeCloseTo(100);
   });
 
-  it('switching from drilled home (2 cards) to a project conversation (3 cards) loads the right key', () => {
+  it('switching from drilled home (2 cards) to a project conversation (3 cards) loads the right key', async () => {
     mocks.drilledProjectId = 'p1';
     localStorage.setItem(getSplitStorageKey('p1'), '25');
     localStorage.setItem(getSplit3StorageKey('p1'), JSON.stringify([20, 50]));
-    const { rerender } = render(<RightPanel conversationId={null} projectId={null} />);
+    const { rerender } = await renderWithTables(<RightPanel conversationId={null} projectId={null} />);
     expect(flexGrow('project')).toBe('25');
     rerender(<RightPanel conversationId="c1" projectId="p1" />);
     expect(flexGrow('chat')).toBe('20');
@@ -451,14 +551,47 @@ describe('vertical split', () => {
     expect(flexGrow('tables')).toBe('30');
   });
 
-  it('a project change reloads the shares', () => {
+  it('a project change reloads the shares', async () => {
     localStorage.setItem(getSplit3StorageKey('p1'), JSON.stringify([20, 50]));
     localStorage.setItem(getSplit3StorageKey('p2'), JSON.stringify([60, 20]));
-    const { rerender } = render(<RightPanel conversationId="c1" projectId="p1" />);
+    const { rerender } = await renderWithTables(<RightPanel conversationId="c1" projectId="p1" />);
     expect(flexGrow('chat')).toBe('20');
     rerender(<RightPanel conversationId="c2" projectId="p2" />);
+    await screen.findByTestId('right-panel-card-tables');
     expect(flexGrow('chat')).toBe('60');
     expect(flexGrow('tables')).toBe('20');
+  });
+
+  it('two file cards without Tables: stored key, else derived from the three-card shares', async () => {
+    mocks.tables = [];
+    localStorage.setItem(getSplit3StorageKey('p1'), JSON.stringify([20, 60]));
+    render(<RightPanel conversationId="c1" projectId="p1" />);
+    await act(async () => {});
+    expect(flexGrow('chat')).toBe('25');
+    expect(flexGrow('project')).toBe('75');
+    cleanup();
+    localStorage.setItem(getFilesSplitStorageKey('p1'), '40');
+    render(<RightPanel conversationId="c1" projectId="p1" />);
+    await act(async () => {});
+    expect(flexGrow('chat')).toBe('40');
+    expect(flexGrow('project')).toBe('60');
+  });
+
+  it('dragging the divider between the two file cards persists their own key', async () => {
+    mocks.tables = [];
+    render(<RightPanel conversationId="c1" projectId="p1" />);
+    await act(async () => {});
+    const panel = screen.getByTestId('right-panel-card-chat').parentElement!;
+    vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(
+      { top: 0, height: 1000, left: 0, right: 280, bottom: 1000, width: 280, x: 0, y: 0, toJSON: () => ({}) },
+    );
+    const divider = screen.getByTestId('right-panel-divider-0');
+    fireEvent.pointerDown(divider, { clientY: 500, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(divider, { clientY: 700, pointerId: 1 });
+    fireEvent.pointerUp(divider, { clientY: 700, pointerId: 1 });
+    expect(localStorage.getItem(getFilesSplitStorageKey('p1'))).toBe('70');
+    expect(localStorage.getItem(getSplit3StorageKey('p1'))).toBeNull();
+    expect(flexGrow('chat')).toBe('70');
   });
 
   it('normalizeShares rejects garbage and impossible floors', () => {

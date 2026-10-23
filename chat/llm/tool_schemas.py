@@ -13,6 +13,7 @@ Tool tiers:
 import copy
 
 from chat.browser_sessions import BROWSER_SERVICE_KEY
+from chat.project_db import PROJECT_DB_SERVICE_KEY
 from chat.docs.constants import DOCS_SERVICE_KEY
 from chat.tables.constants import (
     TABLE_FILTER_IN_MAX_VALUES,
@@ -1311,14 +1312,19 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "required": ["name"],
         },
     },
+    # requires_service=PROJECT_DB_SERVICE_KEY: the legacy project database is
+    # retired for projects without tables in it (chat/project_db.py), so the
+    # tool is left out of their prompts (the handler also refuses there).
     "project_db_query": {
         "name": "project_db_query",
+        "requires_service": PROJECT_DB_SERVICE_KEY,
         "description": (
-            "Execute a SQL query against the project's dedicated SQLite database. "
+            "Execute a SQL query against the project's legacy SQLite database. "
             "This database is private to the project and persists across all conversations "
-            "in the project. Use it to store structured data, create tables, insert/update/"
-            "delete rows, and run SELECT queries. The database is initially empty -- create "
-            "tables as needed. Only available in project conversations. "
+            "in the project. Use it to read, update and query the tables already stored "
+            "there (SELECT, INSERT, UPDATE, DELETE); keep new structured records in Quest "
+            "Tables instead. Only available in project conversations whose database "
+            "already holds tables. "
             "Only one SQL statement per call is supported; make multiple calls for multiple "
             "statements."
         ),

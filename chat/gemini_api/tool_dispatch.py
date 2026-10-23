@@ -94,10 +94,15 @@ logger = logging.getLogger(__name__)
 _large_tool_logger = logging.getLogger("large_tool_results")
 
 
-def _get_connected_services(user: dict[str, Any]) -> dict[str, bool]:
-    """Compute the user's connected-services map (used for system skill gating)."""
+def _get_connected_services(ctx: "ToolContext") -> dict[str, bool]:
+    """The conversation's connected-services map (used for system skill
+    gating): the user's connectors plus the per-project legacy project
+    database pseudo-key."""
     from api.instructions import get_user_connected_services
-    return get_user_connected_services(user)
+    from chat.project_db import with_project_db_service
+    return with_project_db_service(
+        get_user_connected_services(ctx.user), ctx.project_id,
+    )
 
 
 def _log_large_tool_result(
@@ -541,7 +546,7 @@ async def _tool_load_gmail_attachment(ctx: ToolContext, args: dict) -> tuple[str
 async def _tool_list_skills(ctx: ToolContext, args: dict) -> str:
     return await _handle_list_skills(
         ctx.user["id"],
-        connected_services=_get_connected_services(ctx.user),
+        connected_services=_get_connected_services(ctx),
         has_project=bool(ctx.project_id),
     )
 
@@ -549,7 +554,7 @@ async def _tool_list_skills(ctx: ToolContext, args: dict) -> str:
 async def _tool_search_skills(ctx: ToolContext, args: dict) -> str:
     return await _handle_search_skills(
         ctx.user["id"], args.get("keyword", ""),
-        connected_services=_get_connected_services(ctx.user),
+        connected_services=_get_connected_services(ctx),
         has_project=bool(ctx.project_id),
     )
 
@@ -565,7 +570,7 @@ async def _tool_load_skills(ctx: ToolContext, args: dict) -> str:
     from chat.gemini_api.constants import get_proxy_base_url
     return await _handle_load_skills(
         ctx.user["id"], args.get("skill_ids", []),
-        connected_services=_get_connected_services(ctx.user),
+        connected_services=_get_connected_services(ctx),
         has_project=bool(ctx.project_id),
         base_url=get_proxy_base_url(),
         api_key=ctx.user.get("api_key", ""),

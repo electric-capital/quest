@@ -31,6 +31,8 @@ ALL_CONNECTED = {
     "ramp": True,
     # The _example plugin's skill gate (see the example_plugin fixture).
     "example": True,
+    # The legacy project database pseudo-key: the project holds tables.
+    "project_db": True,
 }
 
 NONE_CONNECTED = {k: False for k in ALL_CONNECTED}
@@ -105,10 +107,14 @@ def test_list_system_skills_with_no_services_only_shows_cross_cutting():
     assert "system:slack" not in visible_ids
 
 
-def test_list_system_skills_project_db_only_when_in_project():
-    in_project = {s.id for s in list_system_skills(NONE_CONNECTED, has_project=True)}
-    assert "system:project_db" in in_project
-    out_of_project = {s.id for s in list_system_skills(NONE_CONNECTED, has_project=False)}
+def test_list_system_skills_project_db_only_for_legacy_projects():
+    # Both gates: a project conversation AND the project_db pseudo-key (the
+    # project already holds tables in its legacy database).
+    legacy = {s.id for s in list_system_skills(ALL_CONNECTED, has_project=True)}
+    assert "system:project_db" in legacy
+    no_tables = {s.id for s in list_system_skills(NONE_CONNECTED, has_project=True)}
+    assert "system:project_db" not in no_tables
+    out_of_project = {s.id for s in list_system_skills(ALL_CONNECTED, has_project=False)}
     assert "system:project_db" not in out_of_project
 
 
@@ -179,6 +185,15 @@ def test_load_system_skills_project_db_requires_project_flag():
     )
     assert len(results) == 1
     assert "content" in results[0]
+
+    # In a project without legacy tables the skill is retired.
+    from chat.project_db import project_db_retired_message
+    results = load_system_skills(
+        ["system:project_db"], NONE_CONNECTED, BASE_URL, API_KEY,
+        has_project=True,
+    )
+    assert len(results) == 1
+    assert results[0]["error"] == project_db_retired_message()
 
 
 def test_federal_register_skill_is_ungated_and_loadable():

@@ -24,6 +24,7 @@ from unittest.mock import patch
 import pytest
 
 import config.feature_gates as fg
+from chat.project_db import PROJECT_DB_SERVICE_KEY
 from chat.tables.constants import (
     TABLE_WRITE_MAX_ROWS,
     TABLES_SERVICE_KEY,
@@ -41,8 +42,10 @@ REQUEST_TYPES = ("create_table", "change_table_schema", "write_table_rows")
 
 BASE_URL = "http://localhost:8000"
 API_KEY = "test-api-key"
-OPEN = {TABLES_SERVICE_KEY: True}
-CLOSED = {TABLES_SERVICE_KEY: False}
+# A project that still holds legacy project-database tables, so the
+# "Project Database" paragraph (and its legacy note) is rendered.
+OPEN = {TABLES_SERVICE_KEY: True, PROJECT_DB_SERVICE_KEY: True}
+CLOSED = {TABLES_SERVICE_KEY: False, PROJECT_DB_SERVICE_KEY: True}
 DB_NOTE = "The project database is legacy"
 
 
@@ -289,16 +292,18 @@ class TestPromptGating:
         from api.instructions import get_user_connected_services
         from chat.gemini_api.system_prompt import get_system_prompt
         user = {"email": "u@example.com"}
+        # A project holding legacy tables, so the note has a paragraph to
+        # follow (the per-project key the conversation callers set).
+        services = get_user_connected_services(user) | {PROJECT_DB_SERVICE_KEY: True}
         closed = get_system_prompt(
-            API_KEY, connected_services=get_user_connected_services(user),
-            has_project=True,
+            API_KEY, connected_services=services, has_project=True,
         )
         assert "system:tables" not in closed
         assert not any(tool_offered(closed, n) for n in TABLE_TOOLS)
         fg.set_feature_enabled(fg.FEATURE_TABLES, True)
+        services = get_user_connected_services(user) | {PROJECT_DB_SERVICE_KEY: True}
         opened = get_system_prompt(
-            API_KEY, connected_services=get_user_connected_services(user),
-            has_project=True,
+            API_KEY, connected_services=services, has_project=True,
         )
         assert all(_offered(opened, n) for n in TABLE_TOOLS)
         assert DB_NOTE in opened

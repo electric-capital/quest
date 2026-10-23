@@ -7,6 +7,7 @@ from pathlib import Path
 
 import aiosqlite
 
+from chat.project_db import project_db_retired_message, project_has_legacy_db
 from chat.storage import ChatStorage
 
 
@@ -144,8 +145,10 @@ async def _execute_project_db_query(db_path: Path, query: str) -> str:
 async def _handle_project_db_query(project_id: str | None, query: str) -> str:
     """Execute a SQL query against a project's dedicated SQLite database.
 
-    The database file lives at data/projects/{project_id}/project.db and is
-    created lazily on first access. Only available for project conversations.
+    The database file lives at data/projects/{project_id}/project.db. The
+    feature is retired: only a project whose database already holds a table
+    (``project_has_legacy_db``) may query it; every other project gets the
+    retirement error, so no project can start a new database.
 
     Args:
         project_id: The project UUID. None for standalone conversations.
@@ -162,12 +165,13 @@ async def _handle_project_db_query(project_id: str | None, query: str) -> str:
             )
         })
 
+    if not project_has_legacy_db(project_id):
+        return json.dumps({"error": project_db_retired_message()})
+
     if not query or not query.strip():
         return json.dumps({"error": "Query cannot be empty."})
 
-    # Build the DB file path and ensure the parent directory exists
     db_path = ChatStorage.get_project_db_path(project_id)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Execute the query using native async SQLite
     result = await _execute_project_db_query(db_path, query)

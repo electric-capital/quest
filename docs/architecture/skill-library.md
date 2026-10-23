@@ -237,7 +237,7 @@ Current catalog (registered in order):
 | `system:quest_docs` | `docs` (pseudo-key: the per-user Quest Docs feature gate) | Quest Docs tools (list / search / read / create / edit / append / add image), modes and write verdicts, read-before-edit, the `approval_required` -> `write_doc` action-request handoff, images, paging, the routine append pattern, and the script bridge. Not `system:docs` (that is Google Docs). See [Quest Docs](quest-docs.md#prompting) |
 | `system:tables` | `tables` (pseudo-key: the Quest Tables gate) | Quest Tables tools, write verdicts, paging and upsert syncs, the `approval_required` -> `write_table_rows` handoff and the `create_table` / `change_table_schema` cards. See [Quest Tables -- Prompting](quest-tables.md#prompting) |
 | `system:routines` | — (requires project) | Project-routine inspection (`list_routines`) plus the `create_routine` / `edit_routine` action-request specs (name / full-replacement prompt / model / schedule / skill auto-loads); content built from a string in `catalog.py`. See [Routines Architecture -- Agent Tools](routines.md#agent-tools) |
-| `system:project_db` | — (requires project) | `project_db_query` usage, schema/limits, when to create tables |
+| `system:project_db` | `project_db` key + project | `project_db_query` for the legacy project database ([gate](project-db.md#deprecation-gate)) |
 
 ### Visibility Gating
 

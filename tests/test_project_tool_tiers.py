@@ -250,10 +250,20 @@ class TestPublicPrompt:
     def test_offered(self, is_routine):
         p = get_public_project_system_prompt(
             user_email="ada@example.com", is_routine=is_routine,
+            project_db_enabled=True,
         )
         _assert_offered(p, True)
         for name in WORKSPACE_TOOLS:
             assert f'tool_name="{name}"' not in p, name
+
+    def test_project_db_query_follows_the_legacy_gate(self):
+        # The file tools are project-only; project_db_query also needs the
+        # project to hold legacy tables (project_db_enabled).
+        p = get_public_project_system_prompt(user_email="ada@example.com")
+        for name in FILE_TOOLS:
+            assert _listed(p, name), name
+        assert not _listed(p, "project_db_query")
+        assert "**Project Database:**" not in p
 
 
 class TestStandaloneRunKinds:
@@ -306,6 +316,9 @@ def test_run_sub_agent_passes_project(level, project_id):
         "chat.gemini_api.sub_agent.record_api_call", new=AsyncMock()
     ), patch(
         "api.instructions.get_user_connected_services", return_value={}
+    ), patch(
+        # The project holds legacy project-database tables.
+        "chat.project_db.project_has_legacy_db", return_value=True
     ), patch(
         "chat.gemini_api.sub_agent.compute_new_input_tokens", return_value=0
     ), patch(

@@ -6,14 +6,21 @@
  *
  * Card set, by what is on screen:
  * - project conversation: Chat Files (the conversation's own workspace),
- *   Project Files (the project's shared workspace) and Tables, with Copy /
- *   Move row actions between the two file cards (useWorkspaceCopy);
+ *   Project Files (the project's shared workspace) and, for a project that
+ *   still holds legacy project-database tables, Tables, with Copy / Move
+ *   row actions between the two file cards (useWorkspaceCopy);
  * - standalone conversation: Chat Files alone, full height;
  * - no conversation inside a project (the home composer while the Sidebar
  *   is drilled into one -- the URL is "/", so the project comes from the
- *   context ``drilledProjectId``): Project Files and Tables, served by the
- *   project routes; there is no chat yet, so no Chat Files card;
+ *   context ``drilledProjectId``): Project Files and, again only with
+ *   legacy tables, Tables, served by the project routes; there is no chat
+ *   yet, so no Chat Files card;
  * - nothing: the FileBrowser's empty state.
+ *
+ * The Tables card follows the deprecation of the project database: the
+ * table list (useLegacyProjectTables) is fetched here, and the card exists
+ * only while the list is non-empty (or failed to load, so the error shows),
+ * matching the backend, which offers the database to such projects only.
  *
  * Vertical split: every card is a flex item weighted by its share of the
  * column (percentages summing to 100), so the fixed-height gaps never push
@@ -23,13 +30,16 @@
  * three-card layout uses ``quest_project_panel_split3_<pid>`` (JSON
  * ``[chat, project]`` percentages, Tables takes the rest) and, until the
  * user drags it, derives its shares from the two-card key so an existing
- * Tables height carries over.
+ * Tables height carries over. The two file cards without Tables use
+ * ``quest_project_files_split_<pid>`` (Chat Files' percentage), derived
+ * from the three-card shares until dragged.
  */
 
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { FileBrowser } from './FileBrowser';
 import { conversationSource, projectSource } from '../api/fileApi';
 import { ProjectTables } from './ProjectTables';
+import { useLegacyProjectTables } from '../hooks/useLegacyProjectTables';
 import { DocConfirmDialog } from './docs/DocConfirmDialog';
 import { useProjects } from '../contexts/ProjectsContext';
 import { overwritePromptText, useWorkspaceCopy } from '../hooks/useWorkspaceCopy';
@@ -39,6 +49,8 @@ const MIN_PANEL_HEIGHT = 80; // px minimum for each section
 const DEFAULT_SPLIT_PERCENT = 60;
 /** Default three-card shares: Chat Files, Project Files (Tables = the rest). */
 const DEFAULT_SPLIT3: readonly [number, number] = [40, 35];
+/** Default Chat Files share of the two file cards (no Tables card). */
+const DEFAULT_FILES_SPLIT_PERCENT = 50;
 
 // Horizontal width of the right panel. The current/default width (280px) is the floor;
 // the user can only widen the panel. Persisted browser-wide (not per-project/conversation).
@@ -61,7 +73,16 @@ export function getSplit3StorageKey(projectId: string): string {
   return `quest_project_panel_split3_${projectId}`;
 }
 
-export type Layout = 'single' | 'two' | 'three';
+/** Two file cards (Chat Files, Project Files) key: Chat Files' percentage. */
+export function getFilesSplitStorageKey(projectId: string): string {
+  return `quest_project_files_split_${projectId}`;
+}
+
+/**
+ * The card set: `single` is one card, `two` Project Files + Tables, `files`
+ * Chat Files + Project Files, `three` all of them.
+ */
+export type Layout = 'single' | 'two' | 'files' | 'three';
 
 function readStorage(key: string): string | null {
   try {
@@ -79,11 +100,15 @@ function writeStorage(key: string, value: string): void {
   }
 }
 
-function readTwoCardSplit(projectId: string): number | null {
-  const stored = readStorage(getSplitStorageKey(projectId));
+function readPercent(key: string): number | null {
+  const stored = readStorage(key);
   if (!stored) return null;
   const parsed = parseFloat(stored);
   return Number.isFinite(parsed) && parsed >= 10 && parsed <= 90 ? parsed : null;
+}
+
+function readTwoCardSplit(projectId: string): number | null {
+  return readPercent(getSplitStorageKey(projectId));
 }
 
 /**
@@ -113,6 +138,7 @@ export function normalizeShares(raw: number[], minShare = MIN_SHARE_PERCENT): nu
 
 function defaultSizes(layout: Layout): number[] {
   if (layout === 'two') return [DEFAULT_SPLIT_PERCENT, 100 - DEFAULT_SPLIT_PERCENT];
+  if (layout === 'files') return [DEFAULT_FILES_SPLIT_PERCENT, 100 - DEFAULT_FILES_SPLIT_PERCENT];
   if (layout === 'three') return [DEFAULT_SPLIT3[0], DEFAULT_SPLIT3[1], 100 - DEFAULT_SPLIT3[0] - DEFAULT_SPLIT3[1]];
   return [100];
 }
@@ -139,6 +165,13 @@ export function loadSizes(layout: Layout, projectId: string | null): number[] {
     return two !== null ? [two, 100 - two] : defaultSizes('two');
   }
   const three = readSplit3(projectId);
+  if (layout === 'files') {
+    const files = readPercent(getFilesSplitStorageKey(projectId));
+    if (files !== null) return [files, 100 - files];
+    // Until dragged, keep the proportion the two file cards had with Tables.
+    if (three) return normalizeShares([three[0], three[1]], MIN_SHARE_PERCENT) ?? defaultSizes('files');
+    return defaultSizes('files');
+  }
   if (three) return three;
   if (two !== null) {
     // The old two-card split put Tables at `100 - two`; keep that and share
@@ -151,6 +184,8 @@ export function loadSizes(layout: Layout, projectId: string | null): number[] {
 function saveSizes(layout: Layout, projectId: string, sizes: number[]): void {
   if (layout === 'two') {
     writeStorage(getSplitStorageKey(projectId), String(sizes[0]));
+  } else if (layout === 'files') {
+    writeStorage(getFilesSplitStorageKey(projectId), String(sizes[0]));
   } else if (layout === 'three') {
     writeStorage(getSplit3StorageKey(projectId), JSON.stringify([sizes[0], sizes[1]]));
   }
@@ -211,7 +246,16 @@ export function RightPanel({ conversationId, projectId: urlProjectId }: RightPan
   // one -- the home composer -- the drilled project is what the user sees.
   const projectId = conversationId ? urlProjectId : (urlProjectId ?? drilledProjectId);
 
-  const layout: Layout = !projectId ? 'single' : conversationId ? 'three' : 'two';
+  // The legacy project database: its Tables card exists only for a project
+  // that still holds tables in it (or whose list failed, to show the error).
+  const legacyTables = useLegacyProjectTables(projectId);
+  const showTables = legacyTables.tables.length > 0 || legacyTables.error !== null;
+
+  const layout: Layout = !projectId
+    ? 'single'
+    : conversationId
+      ? (showTables ? 'three' : 'files')
+      : (showTables ? 'two' : 'single');
 
   const chatSource = useMemo(
     () => (conversationId ? conversationSource(conversationId) : null),
@@ -404,7 +448,12 @@ export function RightPanel({ conversationId, projectId: urlProjectId }: RightPan
         />
       ),
     });
-    cards.push({ key: 'tables', node: <ProjectTables projectId={projectId} /> });
+    if (showTables) {
+      cards.push({
+        key: 'tables',
+        node: <ProjectTables projectId={projectId} state={legacyTables} />,
+      });
+    }
   }
 
   const prompt = copy.overwritePrompt;

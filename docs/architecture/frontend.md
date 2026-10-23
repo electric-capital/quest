@@ -109,7 +109,7 @@ A `/chats/<id>` URL for a project conversation is rewritten to `/projects/<pid>/
 
 `AppContent` (`frontend/src/App.tsx`) renders, in order of precedence: a loading screen during the session check, `SignInScreen` when unauthenticated, `MobileShell` below `MOBILE_BREAKPOINT_PX`, else the desktop row of `Sidebar`, a main pane and `SettingsModal`. The main pane is `RequestsView` while `showRequestsView` is set, else a Quest Docs or Quest Tables view on a `/docs` or `/tables` route (no right panel), else `ChatPanel` (or `HomeComposer` with no conversation) beside `RightPanel`. `MobileShell` (see its header comment) arranges the same components in a top bar and drawers. `document.title` is `appName`, which differs in local mode.
 
-**Why components subscribe to their own realtime events.** The sidebar list hooks follow `onStreamComplete` and `conversation_list_changed`, `FileBrowser` follows `file_list_changed`, `ProjectTables` follows `onStreamComplete`. A refresh counter in a shared context would re-render every consumer whenever any run finished and flicker the UI; direct subscriptions re-render only the subscriber, which refreshes stale-while-revalidate.
+**Why components subscribe to their own realtime events.** The sidebar list hooks follow `onStreamComplete` and `conversation_list_changed`, `FileBrowser` follows `file_list_changed`, `useLegacyProjectTables` follows `onStreamComplete`. A refresh counter in a shared context would re-render every consumer whenever any run finished and flicker the UI; direct subscriptions re-render only the subscriber, which refreshes stale-while-revalidate.
 
 **Admin menu.** `AdminOpsMenu.tsx` shows for admins and during impersonation, inline in the sidebar's `UserInfoBar.tsx` or floating on the System Reports page (no sidebar there). It offers a two-step server shutdown (`POST /app/api/admin/shutdown`) and the impersonation picker; see [Admin Impersonation](admin-impersonation.md).
 
@@ -213,7 +213,7 @@ The right panel shows the file spaces of what is on screen as floating cards, pl
 
 | On screen | Cards |
 |-----------|-------|
-| Project conversation | **Chat Files** (`FileBrowser` over the conversation's own workspace, `/conversations/{cid}/files...`), **Project Files** (`FileBrowser` over the project's shared workspace, `/projects/{pid}/files...`), **Tables** (`ProjectTables`) |
+| Project conversation | **Chat Files** (`FileBrowser` over the conversation's own workspace, `/conversations/{cid}/files...`), **Project Files** (`FileBrowser` over the project's shared workspace, `/projects/{pid}/files...`), **Tables** (`ProjectTables`, [legacy](project-db.md#deprecation-gate)) |
 | Standalone conversation | **Chat Files** alone |
 | Home composer while the Sidebar is drilled into a project (URL `/`) | **Project Files** and **Tables** |
 | Nothing | The `FileBrowser` empty state |
@@ -258,7 +258,7 @@ Which names warn, and how severely, is `getDownloadWarning()` in `frontend/src/u
 
 `RightPanel.tsx` (header comment: card sets, split shares and their per-project localStorage keys) separates cards with pointer-captured drag handles, so touch drags work in the phone drawer. Its width is resizable from the left edge, persisted browser-wide under `WIDTH_STORAGE_KEY`, read on mount only and re-clamped when the window shrinks; `MIN_PANEL_WIDTH` is both default and floor.
 
-`ProjectTables.tsx` lists the project database's tables and `TableViewerModal.tsx` pages through one (`api/projectDbApi.ts`, see [Project DB](project-db.md)). The list refreshes at the end of each turn on `webSocketManager.onStreamComplete`, because there is no project-database mutation event to refresh on mid-turn.
+`ProjectTables.tsx` lists the project database's tables and `TableViewerModal.tsx` pages through one (`api/projectDbApi.ts`). `RightPanel` fetches the list (`useLegacyProjectTables`), shows the card only while it is non-empty ([gate](project-db.md#deprecation-gate)) and refreshes it when each turn ends (`webSocketManager.onStreamComplete`).
 
 ## Styling and Theming
 

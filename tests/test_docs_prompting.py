@@ -87,8 +87,10 @@ class TestConnectedServicesDocsKey:
     def test_pseudo_key_constant(self):
         from api.instructions import PSEUDO_SERVICE_KEYS
         from chat.browser_sessions import BROWSER_SERVICE_KEY
+        from chat.project_db import PROJECT_DB_SERVICE_KEY
         assert PSEUDO_SERVICE_KEYS == frozenset({
             DOCS_SERVICE_KEY, TABLES_SERVICE_KEY, BROWSER_SERVICE_KEY,
+            PROJECT_DB_SERVICE_KEY,
         })
         assert DOCS_SERVICE_KEY == "docs"
         assert TABLES_SERVICE_KEY == "tables"
