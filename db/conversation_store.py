@@ -624,6 +624,7 @@ async def list_conversation_activity_rows() -> list[dict]:
             select(
                 Conversation.id,
                 Conversation.user_id,
+                Conversation.project_id,
                 Conversation.routine_id,
                 Conversation.created_at,
                 Conversation.last_message_at,
@@ -633,11 +634,12 @@ async def list_conversation_activity_rows() -> list[dict]:
             {
                 "id": conv_id,
                 "user_id": user_id,
+                "project_id": project_id,
                 "routine_id": routine_id,
                 "created_at": created_at,
                 "last_message_at": last_message_at,
             }
-            for conv_id, user_id, routine_id, created_at, last_message_at
+            for conv_id, user_id, project_id, routine_id, created_at, last_message_at
             in result.all()
         ]
 

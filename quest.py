@@ -251,6 +251,25 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("auto_title backfill failed; continuing")
 
+    # Open the DuckDB analytics store (append-only event ledgers; see
+    # docs/architecture/analytics.md): applies its pending migrations and
+    # starts the ledger writer thread, then kicks off the one-shot history
+    # imports in the background. This process is the file's only opener.
+    # Guarded: a failed open degrades to "ledgers not recorded" (every
+    # record_* call drops its row) rather than preventing boot.
+    from analytics import store as analytics_store
+    from analytics.ledger import Ledger, set_ledger
+    analytics_ledger = None
+    try:
+        await asyncio.to_thread(analytics_store.open_store)
+        analytics_ledger = Ledger(analytics_store.get_store())
+        analytics_ledger.start()
+        set_ledger(analytics_ledger)
+    except Exception:
+        logger.exception("Analytics store failed to open; ledgers will not be recorded")
+    from analytics.backfill import run_skill_reads_backfill
+    analytics_backfill_task = asyncio.create_task(run_skill_reads_backfill())
+
     # Remove any symlinks from the conversation/project data trees. The
     # sandbox seccomp profile bans creating new ones (see
     # chat/gemini_api/sandbox_seccomp.py); this sweep clears any planted
@@ -406,6 +425,21 @@ async def lifespan(app: FastAPI):
     # on_shutdown hook. Never raises.
     from config.plugins import shutdown_plugins
     await shutdown_plugins()
+
+    # Shutdown: stop the analytics ledger writer (final flush) and close the
+    # DuckDB file (the close checkpoints its WAL).
+    analytics_backfill_task.cancel()
+    try:
+        await analytics_backfill_task
+    except asyncio.CancelledError:
+        pass
+    if analytics_ledger is not None:
+        set_ledger(None)
+        await asyncio.to_thread(analytics_ledger.stop)
+    try:
+        await asyncio.to_thread(analytics_store.close_store)
+    except Exception:
+        logger.exception("Closing the analytics store failed; continuing")
 
 # Swagger UI / ReDoc live at /api-docs and /api-redoc instead of FastAPI's
 # default /docs and /redoc: /docs and /docs/<id> are the SPA's Quest Docs

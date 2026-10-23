@@ -31,10 +31,14 @@ from chat.action_request_types._param_validation import reject_unknown_params
 logger = logging.getLogger(__name__)
 
 
-def _mark_created_skill_read(conversation_id: str | None, skill_id: str) -> None:
+def _mark_created_skill_read(
+    conversation_id: str | None, user_id: int, skill_id: str,
+    project_id: str | None = None,
+) -> None:
     """Best-effort: the model authored the new skill's full content, so it
     counts as read for the edit_skill content-edit gate (parallel to
-    write_workspace_file licensing edit_workspace_file)."""
+    write_workspace_file licensing edit_workspace_file), and as a
+    ``create_skill`` load in the skill_loads ledger."""
     if not conversation_id:
         return
     try:
@@ -46,6 +50,11 @@ def _mark_created_skill_read(conversation_id: str | None, skill_id: str) -> None
             "(conversation_id=%s, skill_id=%s)",
             conversation_id, skill_id, exc_info=True,
         )
+    from analytics.ledger import record_skill_load
+    record_skill_load(
+        conversation_id=conversation_id, user_id=user_id, skill_ids=[skill_id],
+        source="create_skill", project_id=project_id,
+    )
 
 
 _ALLOWED_PARAMS = frozenset(
@@ -251,7 +260,7 @@ class CreateSkillHandler(ActionRequestHandler):
             except ValueError as e:
                 raise RuntimeError(str(e))
 
-            _mark_created_skill_read(conversation_id, skill["id"])
+            _mark_created_skill_read(conversation_id, user["id"], skill["id"], project_id)
             return {
                 "success": True,
                 "skill_id": skill["id"],
@@ -287,7 +296,7 @@ class CreateSkillHandler(ActionRequestHandler):
             if resolved_ids:
                 await skill_store.add_skill_shares(skill["id"], resolved_ids)
 
-        _mark_created_skill_read(conversation_id, skill["id"])
+        _mark_created_skill_read(conversation_id, user["id"], skill["id"])
         return {
             "success": True,
             "skill_id": skill["id"],

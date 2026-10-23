@@ -1114,3 +1114,44 @@ async def _get_creator_info(db, creator_id: Optional[int]) -> tuple[Optional[str
     if not user:
         return None, None
     return user.name or "", user.email
+
+
+# ---------------------------------------------------------------------------
+# Admin lookups (no access filtering)
+# ---------------------------------------------------------------------------
+
+
+async def list_skill_labels(skill_ids: list[str]) -> dict[str, dict]:
+    """Return ``{skill_id: label}`` for the given DB skill ids, any owner.
+
+    Admin System Reports companion (the Skills section names the skills the
+    ledger references, whoever created them): ``label`` is ``{id, name,
+    visibility, project_id, creator_id, creator_email, creator_name}`` --
+    never the content. Ids with no row (deleted skills, ``system:*`` ids)
+    are absent from the result.
+    """
+    ids = [sid for sid in set(skill_ids) if sid and not sid.startswith("system:")]
+    if not ids:
+        return {}
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(
+                Skill.id, Skill.name, Skill.visibility, Skill.project_id,
+                Skill.creator_id, User.email, User.name,
+            )
+            .outerjoin(User, Skill.creator_id == User.id)
+            .where(Skill.id.in_(ids))
+        )
+        return {
+            skill_id: {
+                "id": skill_id,
+                "name": name,
+                "visibility": visibility,
+                "project_id": project_id,
+                "creator_id": creator_id,
+                "creator_email": creator_email,
+                "creator_name": creator_name,
+            }
+            for skill_id, name, visibility, project_id, creator_id, creator_email, creator_name
+            in result.all()
+        }

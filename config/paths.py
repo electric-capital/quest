@@ -61,6 +61,9 @@ def _resolve_data_dir() -> Path:
 DATA_DIR: Path = _resolve_data_dir()
 
 DATABASE_PATH: Path = DATA_DIR / "quest.db"
+# The DuckDB analytics store (append-only event ledgers); see
+# docs/architecture/analytics.md.
+ANALYTICS_DB_PATH: Path = DATA_DIR / "analytics.duckdb"
 CHATS_DIR: Path = DATA_DIR / "chats"
 PROJECTS_DIR: Path = DATA_DIR / "projects"
 DOCS_DIR: Path = DATA_DIR / "docs"

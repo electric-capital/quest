@@ -4,25 +4,37 @@
 import json
 import logging
 
+from analytics.ledger import record_skill_load
 from chat.storage import ChatStorage
 
 logger = logging.getLogger(__name__)
 
 
-def _mark_skills_read(conversation_id: str | None, skill_ids: list[str]) -> None:
+def _mark_skills_read(
+    conversation_id: str | None, user_id: int, skill_ids: list[str], source: str,
+) -> None:
     """Best-effort: record that the model has seen these skills' full
-    content in this conversation (loaded or read), licensing later
-    edit_skill content edits. Failures never break the read."""
+    content in this conversation (loaded or read). DB skill ids go to the
+    skill_reads.json sidecar, licensing later edit_skill content edits;
+    every id (``system:*`` included) goes to the skill_loads ledger under
+    ``source``. Failures never break the read."""
     if not conversation_id or not skill_ids:
         return
     try:
-        ChatStorage.add_skill_read_ids(conversation_id, skill_ids)
+        from chat.system_skills import is_system_skill_id
+        db_ids = [sid for sid in skill_ids if not is_system_skill_id(sid)]
+        if db_ids:
+            ChatStorage.add_skill_read_ids(conversation_id, db_ids)
     except Exception:
         logger.debug(
             "[tool_handlers] failed to record skill read "
             "(conversation_id=%s, skill_ids=%s)",
             conversation_id, skill_ids, exc_info=True,
         )
+    record_skill_load(
+        conversation_id=conversation_id, user_id=user_id,
+        skill_ids=skill_ids, source=source,
+    )
 
 
 
@@ -291,7 +303,12 @@ async def _handle_load_skills(
         ) if system_ids else []
 
         db_results = await get_accessible_skills_by_ids(user_id, db_ids) if db_ids else []
-        _mark_skills_read(conversation_id, [s["id"] for s in db_results])
+        _mark_skills_read(
+            conversation_id, user_id,
+            [s["id"] for s in db_results]
+            + [s["id"] for s in system_results if "error" not in s and s.get("id")],
+            "tool_load_skills",
+        )
 
         skills_payload: list[dict] = list(system_results)
         skills_payload.extend(
@@ -532,7 +549,7 @@ async def _handle_get_skill(
             ]
 
         autoload_for = await _build_autoload_resolver(user_id, project_id)
-        _mark_skills_read(conversation_id, [skill["id"]])
+        _mark_skills_read(conversation_id, user_id, [skill["id"]], "tool_get_skill")
 
         return json.dumps({
             "skill": {

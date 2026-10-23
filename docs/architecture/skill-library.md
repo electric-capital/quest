@@ -140,7 +140,7 @@ For `list_my_skills` / `get_skill`, the dispatch passes the conversation's `proj
 
 ### Skill Inspection Tools
 
-`list_my_skills` and `get_skill` (in `chat/gemini_api/tool_handlers/skills.py`) are read-only inspection tools over the user's DB-backed skills. Unlike the discover-and-load trio, they exclude `system:*` skills and exist so the agent can report on and reason about how the user's skill setup is configured. They are the read half of the "help users create and manage skills" capability; the write half is the `create_skill` / `edit_skill` action requests (see [Creating and Editing Skills via Action Requests](#creating-and-editing-skills-via-action-requests) below). The model is steered to read with `get_skill` before proposing an `edit_skill`.
+`list_my_skills` and `get_skill` (in `chat/gemini_api/tool_handlers/skills.py`) are read-only inspection tools over the user's DB-backed skills. Unlike the discover-and-load trio, they exclude `system:*` skills and exist so the agent can reason about how the user's skill setup is configured. They are the read half of the "help users create and manage skills" capability; the write half is the `create_skill` / `edit_skill` action requests (see [Creating and Editing Skills via Action Requests](#creating-and-editing-skills-via-action-requests) below). The model is steered to read with `get_skill` before proposing an `edit_skill`.
 
 **`list_my_skills`** returns a categorized listing. By default it includes own (user-authored) + directly-shared + public + (when the conversation is in a project) current-project skills; four optional boolean filters (`exclude_own`, `exclude_shared`, `exclude_public`, `exclude_project`, all default false) narrow the categories.
 
@@ -150,11 +150,11 @@ The handler merges `list_accessible_skills(user_id)` with `list_project_skills(p
 
 The owner-only `shares` roster is fetched via `list_skill_shares` **only when the caller is the owner** (non-owners and project skills get `shares: null`); this gating matters because `list_skill_shares` itself has no built-in access check. Project skills (no creator) report `is_owner: false`, `shares: null`.
 
-Both `load_skills` (its DB results) and `get_skill` record the fetched skill ids into the per-conversation `skill_reads.json` sidecar (`ChatStorage.add_skill_read_ids`), which licenses `edit_skill` content edits -- see [Creating and Editing Skills via Action Requests](#creating-and-editing-skills-via-action-requests) below.
+Both `load_skills` (its DB results) and `get_skill` record the fetched ids into the per-conversation `skill_reads.json` sidecar (`ChatStorage.add_skill_read_ids`), which licenses `edit_skill` content edits (below), and into the `skill_loads` ledger of the [Analytics Store](analytics.md#skill_loads).
 
 **Autoload metadata:** Both tools attach an inline `autoload` block per skill -- `{user: bool, project: bool, routines: [routine_name, ...]}` -- indicating which autoload tiers load the skill. It is computed by `_build_autoload_resolver(user_id, project_id)` in `chat/gemini_api/tool_handlers/skills.py`, which precomputes the three membership sets once per call (via `list_user_autoloaded_skill_ids` / `list_project_autoloaded_skill_ids` / `list_routine_autoloaded_skill_ids` in `db/skill_store.py`).
 
-Because `routine_id` is not threaded through tool dispatch, the routine tier is enumerated across *all* of the project's routines by name (via `list_routines` in `db/routine_store.py`). See [Auto-load tiers](#routineskillautoload-model) above and [Routines Architecture](routines.md).
+Because `routine_id` is not threaded through tool dispatch, the routine tier is enumerated across *all* of the project's routines by name (`list_routines` in `db/routine_store.py`); see [Auto-load tiers](#routineskillautoload-model) and [Routines Architecture](routines.md).
 
 ### load_skills Response Format
 
@@ -180,7 +180,7 @@ The full per-type parameter semantics, ownership / visibility / sharing rules, t
 
 - **Targets**: `create_skill` targets a user-level skill (default) or a project skill (`target="project"`, gated on owning the conversation's project). `edit_skill` infers the target from the looked-up skill's `project_id`.
 - **Content edits are a search-and-replace**: `edit_skill` takes an `old_string` / `new_string` pair (+ optional `replace_all`) mirroring `edit_workspace_file`, never a full-body `content` overwrite.
-  - They are gated on the conversation having loaded or read the skill -- tracked in the per-conversation `skill_reads.json` sidecar (`ChatStorage.get_skill_read_ids` / `add_skill_read_ids` in `chat/storage.py`), populated by system-prompt auto-loads, composer-loaded skills, `load_skills`, `get_skill`, and `create_skill`.
+  - They are gated on the conversation having loaded or read the skill -- the per-conversation `skill_reads.json` sidecar (`ChatStorage.get_skill_read_ids` / `add_skill_read_ids` in `chat/storage.py`), written by system-prompt auto-loads, composer loads, `load_skills`, `get_skill` and `create_skill`; the same sites feed the `skill_loads` ledger, which gates nothing.
   - The replacement is applied against the current content at both proposal time (which also injects the `content_diff` the approval card renders as a collapsible line diff) and Approve time (TOCTOU close).
   - Shared logic in `chat/action_request_types/_skill_content_edit.py`; details in [Action Requests](action-requests.md).
 - **Sharing mutation**: user skills accept `share_emails` on create and `add_share_emails` / `remove_share_emails` on edit (only while `shared`); the route-layer email->id resolution pattern (unknown / self silently skipped) is reused at execute time. Moving visibility away from `shared` wipes the roster via `clear_skill_shares()` in `db/skill_store.py`.

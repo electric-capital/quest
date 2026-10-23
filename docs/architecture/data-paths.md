@@ -32,6 +32,7 @@ The data directory defaults to `PROJECT_ROOT / "data"` but can be overridden by 
 | `PROJECT_ROOT` | Repository checkout directory | Base for resolving relative paths |
 | `DATA_DIR` | `PROJECT_ROOT / "data"` | Root of all persistent application data |
 | `DATABASE_PATH` | `DATA_DIR / "quest.db"` | SQLite database file |
+| `ANALYTICS_DB_PATH` | `DATA_DIR / "analytics.duckdb"` | DuckDB analytics store ([Analytics Store](analytics.md)) |
 | `CHATS_DIR` | `DATA_DIR / "chats"` | Per-conversation directories |
 | `PROJECTS_DIR` | `DATA_DIR / "projects"` | Per-project directories (project workspace, `project.db`) |
 | `DOCS_DIR` | `DATA_DIR / "docs"` | Per-doc directories (`doc.md`, `assets/`, `revisions/`; see [Quest Docs](quest-docs.md)) |

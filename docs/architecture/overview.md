@@ -22,7 +22,7 @@ This doc is the map: where each piece lives, how a turn moves through them, and 
       ├──► action request ──► approval card ──► wait handle ──► resume
       └──► Podman script runner ──► sandbox tool API (loopback port)
       ▼
- Storage (data dir): SQLite · per-conversation JSON + workspace ·
+ Storage (data dir): SQLite · DuckDB ledgers · per-conversation JSON + workspace ·
                      per-project workspace + project DB · Quest Docs
 ```
 
@@ -54,6 +54,7 @@ This doc is the map: where each piece lives, how a turn moves through them, and 
 | `api/` | Instruction text for the core connectors (Google services, Airtable, Ramp and others), the Gmail endpoint functions, and `get_user_connected_services()` | the service docs in `docs/api/`, e.g. [Gmail API](../api/gmail-api.md) |
 | `plugins/` | Filesystem-discovered integrations | [Plugins](plugins.md) and each plugin's own `docs/` |
 | `db/`, `alembic/` | SQLAlchemy models, async stores, migrations | [Database](database.md) |
+| `analytics/` | DuckDB event ledgers: store, writer thread, SQL migrations, backfills, report queries | [Analytics Store](analytics.md) |
 | `frontend/src/` | SPA: contexts, conversation store, WebSocket services, components | [Frontend](frontend.md) |
 | `Dockerfile.script-runner*`, `script-runner-*` | Sandbox images and entrypoints | [Script Runner](script-runner.md), [Public Projects](public-projects.md) |
 | `chat/browser_sessions.py`, `chat/gemini_api/tool_handlers/browser.py`, `Dockerfile.browser-sidecar`, `browser-sidecar-agent.py` | Headless browser containers for public conversations and their tools | [Browser for Public Projects](public-browser.md) |
@@ -87,6 +88,7 @@ Exactly one sign-in method is active, Google OAuth or email/password (`login_met
 ## Storage and Isolation
 
 - **SQLite** (`db/engine.py`, `db/models.py`, Alembic migrations run by `run.py`) holds all relational state: users and their credentials, conversation metadata, projects, routines, action requests and the other models in `db/models.py`. See [Database](database.md).
+- **DuckDB** (`analytics/store.py`, migrations applied at open) holds the append-only event ledgers the admin reports aggregate, apart from the transactional state so their writes and scans never touch `quest.db`. See [Analytics Store](analytics.md).
 - **Per-conversation files** under `chats/<conversation_id>/`: the `chat_history.json` transcript, the SDK history and the conversation workspace. Ownership lives in the `conversations` table, not in the directory layout.
 - **Workspaces**: every conversation has its own conversation workspace; each project adds a shared project workspace that tools and the UI reach only on purpose (`proj://` paths, the `/project` sandbox mount, the Project Files card, the copy routes). See [Projects -- Workspace Resolution](projects.md#workspace-resolution).
 - **Paths** come only from the `ChatStorage` resolvers in `chat/storage.py`, under a data directory that `config/paths.py` lets a deployment relocate. See [Data Paths](data-paths.md).

@@ -37,6 +37,7 @@ from db.project_memory_suggestion_store import (
 from db.project_store import list_all_project_guides
 from db.table_store import list_all_table_rows
 from db.routine_store import get_routine_labels
+from db.skill_store import list_skill_labels
 from db.user_store import get_user_by_id, list_all_users, list_user_signup_dates
 from chat.feature_usage_report import (
     build_docs_report,
@@ -44,6 +45,9 @@ from chat.feature_usage_report import (
     build_tables_report,
 )
 from chat.usage_report import build_usage_report
+from analytics.backfill import SKILL_READS_BACKFILL
+from analytics.reports import build_skills_report, query_backfill, query_skill_usage
+from analytics.store import get_store as get_analytics_store
 
 from chat.routes import router
 
@@ -839,6 +843,63 @@ async def admin_memories_report(
         build_memories_report,
         memory_rows, suggestion_rows, project_memory_rows, project_suggestion_rows,
         users, start_date, end_date,
+    )
+
+
+@router.get("/admin/system-monitor/skills-report")
+async def admin_skills_report(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Return per-skill usage for a date range, from the ``skill_loads`` ledger.
+
+    One row per skill whose body was put in front of the model inside the
+    range (any path: user / project / routine auto-loads and subagent-run
+    skills, composer loads, ``load_skills`` / ``get_skill``,
+    ``create_skill``, plus the pre-ledger rows the ``skill_reads.json``
+    backfill imported): distinct conversations (with the routine share),
+    distinct users, loads split by source family, newest load. Names and
+    kinds come from the ``skills`` table (any owner) and the system skill
+    catalog; an id with neither is reported as deleted. Skill content is
+    never returned. ``backfill`` carries the sidecar import's status (null
+    until it has run). 503 while the analytics store is not open. Row
+    shape and sort order are on ``build_skills_report`` in
+    analytics/reports.py.
+    """
+    _require_admin(user)
+    _, _, start_dt, end_dt = _resolve_range_window(start, end)
+    store = get_analytics_store()
+    if store is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "analytics_unavailable",
+                "message": "The analytics store is not open.",
+            }
+        )
+
+    def _query():
+        with store.cursor() as cur:
+            return (
+                query_skill_usage(cur, start_dt, end_dt),
+                query_backfill(cur, SKILL_READS_BACKFILL),
+            )
+
+    usage_rows, backfill = await asyncio.to_thread(_query)
+    seen_ids = {row["skill_id"] for row in usage_rows}
+    labels = await list_skill_labels(sorted(seen_ids))
+    from chat.system_skills.loader import list_system_skills
+    system_names = {
+        skill.id: skill.name
+        for skill in list_system_skills(connected_services=None, has_project=True)
+        if skill.id in seen_ids
+    }
+    routine_conversations = {
+        conv["id"] for conv in await list_conversation_activity_rows() if conv["routine_id"]
+    }
+    return build_skills_report(
+        usage_rows, labels, system_names, routine_conversations, backfill,
     )
 
 

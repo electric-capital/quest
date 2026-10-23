@@ -738,8 +738,11 @@ async def run_conversation_turn(
         # personal autoloads must not shape a run they are not driving.
         resolved_skills_content = ""
         from db.skill_store import get_user_autoloaded_skills
+        from analytics.ledger import record_skill_load
         skill_parts = []
         included_skill_ids = set()
+        # (source, skill ids) per tier, for the skill_loads ledger.
+        tier_loads: list[tuple[str, list[str]]] = []
         if is_public:
             # Public conversations get NO skills of any tier: skill bodies
             # are internal data that must not reach an internet-enabled
@@ -753,21 +756,26 @@ async def run_conversation_turn(
                 for skill in run_skills:
                     skill_parts.append(f"### {skill['name']}\n{skill['content']}")
                     included_skill_ids.add(skill["id"])
+                tier_loads.append(("subagent_run", [s["id"] for s in run_skills]))
         else:
             autoloaded_skills = await get_user_autoloaded_skills(user["id"])
             if autoloaded_skills:
                 for skill in autoloaded_skills:
                     skill_parts.append(f"### {skill['name']}\n{skill['content']}")
                     included_skill_ids.add(skill["id"])
+                tier_loads.append(("autoload_user", [s["id"] for s in autoloaded_skills]))
 
         # Resolve project auto-loaded skills (deduplicated against user auto-loads)
         if project_id and not is_public:
             from db.skill_store import get_project_autoloaded_skills
             project_autoloaded = await get_project_autoloaded_skills(project_id)
+            project_new: list[str] = []
             for skill in project_autoloaded:
                 if skill["id"] not in included_skill_ids:
                     skill_parts.append(f"### {skill['name']}\n{skill['content']}")
                     included_skill_ids.add(skill["id"])
+                    project_new.append(skill["id"])
+            tier_loads.append(("autoload_project", project_new))
 
         # Resolve routine auto-loaded skills (deduplicated against user + project auto-loads)
         if routine_id and not is_public:
@@ -775,10 +783,13 @@ async def run_conversation_turn(
             routine_autoloaded = await get_routine_autoloaded_skills(
                 routine_id, user["id"], project_id,
             )
+            routine_new: list[str] = []
             for skill in routine_autoloaded:
                 if skill["id"] not in included_skill_ids:
                     skill_parts.append(f"### {skill['name']}\n{skill['content']}")
                     included_skill_ids.add(skill["id"])
+                    routine_new.append(skill["id"])
+            tier_loads.append(("autoload_routine", routine_new))
 
         if skill_parts:
             resolved_skills_content = "\n\n".join(skill_parts)
@@ -788,6 +799,14 @@ async def run_conversation_turn(
         if included_skill_ids:
             ChatStorage.add_skill_read_ids(
                 conversation_id, sorted(included_skill_ids)
+            )
+        # One skill_loads row per skill per tier per system-prompt build
+        # (best-effort; see analytics/ledger.py).
+        for tier_source, tier_ids in tier_loads:
+            record_skill_load(
+                conversation_id=conversation_id, user_id=user["id"],
+                skill_ids=tier_ids, source=tier_source,
+                project_id=project_id, routine_id=routine_id,
             )
 
         # Resolve conversation-loaded skills (manually loaded via the Skill button)
@@ -802,6 +821,11 @@ async def run_conversation_turn(
                 loaded_skills_content = "\n\n".join(loaded_skill_parts)
                 ChatStorage.add_skill_read_ids(
                     conversation_id, [s["id"] for s in loaded_skills]
+                )
+                record_skill_load(
+                    conversation_id=conversation_id, user_id=user["id"],
+                    skill_ids=[s["id"] for s in loaded_skills], source="composer",
+                    project_id=project_id, routine_id=routine_id,
                 )
 
         # Project conversations only: legacy-workspace detection plus the

@@ -2220,6 +2220,54 @@ export interface AdminMemoriesReportResponse {
   total_users: number;
 }
 
+// System Reports "Skills" section: one row per skill whose body was put in
+// front of the model in the selected range (skill_loads ledger).
+export type AdminSkillReportKind =
+  | 'system'
+  | 'private'
+  | 'shared'
+  | 'public'
+  | 'project'
+  | 'deleted';
+
+export interface AdminSkillsReportRow {
+  skill_id: string;
+  name: string;
+  kind: AdminSkillReportKind;
+  // Creator identity for DB skills; null for system and deleted skills.
+  owner_email: string | null;
+  owner_name: string | null;
+  project_id: string | null;
+  // Distinct conversations with a load in range, and the routine-created share.
+  conversation_count: number;
+  routine_conversation_count: number;
+  // Distinct users those loads belong to.
+  user_count: number;
+  // Loads in range (one per skill per load event), split by source family.
+  load_count: number;
+  autoload_count: number;
+  composer_count: number;
+  model_load_count: number;
+  // Rows imported from pre-ledger skill_reads.json sidecars (source unknown).
+  backfill_count: number;
+  // Newest load in range (ISO, naive UTC).
+  last_used_at: string | null;
+}
+
+export interface AdminSkillsReportBackfill {
+  completed_at: string;
+  row_count: number;
+}
+
+export interface AdminSkillsReportResponse {
+  skills: AdminSkillsReportRow[];
+  // Distinct conversations with any skill load in range.
+  conversation_count: number;
+  load_count: number;
+  // Status of the skill_reads.json import; null until it has run.
+  backfill: AdminSkillsReportBackfill | null;
+}
+
 // Admin feature gates (server-global on/off switches for optional features;
 // every feature is off by default)
 export interface FeatureGate {
