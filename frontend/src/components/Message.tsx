@@ -170,6 +170,10 @@ export function CopyableTable({ children, ...props }: React.HTMLAttributes<HTMLT
  * `<assetBase>/<name>`, every other relative src is a missing ref, and
  * `conversationId` is ignored. Link hrefs of the `assets/<name>` form
  * resolve the same way (other hrefs are untouched).
+ *
+ * Outside a doc, a relative link href is a workspace path too: its href
+ * becomes the files/download URL of the same space as images, and a plain
+ * click hands the path to `onOpenFile` (the host's in-app viewer) when set.
  */
 export interface MarkdownWorkspaceContextValue {
   conversationId?: string;
@@ -180,7 +184,8 @@ export interface MarkdownWorkspaceContextValue {
    */
   projectId?: string;
   assetBase?: string;
-  onOpenImage?: (workspacePath: string, filename: string) => void;
+  /** Open a workspace file in the host's viewer: inline images on click, relative links on a plain click. */
+  onOpenFile?: (workspacePath: string, filename: string) => void;
 }
 
 export const MarkdownWorkspaceContext = React.createContext<MarkdownWorkspaceContextValue>({});
@@ -230,7 +235,7 @@ function docAssetUrl(path: string, assetBase: string): string | null {
  * (the same user-initiated exposure ordinary markdown links already have).
  */
 function MarkdownImage({ src, alt }: React.ImgHTMLAttributes<HTMLImageElement>) {
-  const { conversationId, projectId, assetBase, onOpenImage } = React.useContext(MarkdownWorkspaceContext);
+  const { conversationId, projectId, assetBase, onOpenFile } = React.useContext(MarkdownWorkspaceContext);
   // Track the failing URL rather than a boolean: during streaming an image
   // ref can render with a truncated src that 404s, then re-render complete.
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
@@ -266,13 +271,13 @@ function MarkdownImage({ src, alt }: React.ImgHTMLAttributes<HTMLImageElement>) 
   }
 
   const img = <img src={url} alt={alt || ''} loading="lazy" onError={() => setFailedSrc(url)} />;
-  if (!onOpenImage) return img;
+  if (!onOpenFile) return img;
   const filename = path.split('/').pop() || path;
   return (
     <button
       type="button"
       className="markdown-image-button"
-      onClick={() => onOpenImage(path, filename)}
+      onClick={() => onOpenFile(path, filename)}
       title={`Open ${filename}`}
     >
       {img}
@@ -285,15 +290,43 @@ function MarkdownImage({ src, alt }: React.ImgHTMLAttributes<HTMLImageElement>) 
  * (`assetBase` set) a relative `assets/<name>` href -- e.g. a link to an
  * attached image or file -- resolves to the doc's asset route by the same
  * rule as images; every other href is left as written.
+ *
+ * Outside a doc, a relative href (`[note](note.txt)`, `[r](reports/q3.pdf)`)
+ * is a workspace path, resolved like image srcs: the href becomes the
+ * cookie-authed files/download URL so copy-link and modifier-clicks still
+ * work, and a plain click opens the file through `onOpenFile` instead of a
+ * new tab when the host provides it. Absolute URLs and `#anchors` are left
+ * alone.
  */
 function MarkdownLink({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
-  const { assetBase } = React.useContext(MarkdownWorkspaceContext);
+  const { conversationId, projectId, assetBase, onOpenFile } = React.useContext(MarkdownWorkspaceContext);
   let resolved = href;
-  if (assetBase && typeof href === 'string' && href && !EXTERNAL_SRC_RE.test(href)) {
-    resolved = docAssetUrl(normalizeMarkdownPath(href), assetBase) ?? href;
+  let onClick: React.MouseEventHandler<HTMLAnchorElement> | undefined;
+  if (typeof href === 'string' && href && !EXTERNAL_SRC_RE.test(href) && !href.startsWith('#')) {
+    const path = normalizeMarkdownPath(href);
+    if (assetBase) {
+      resolved = docAssetUrl(path, assetBase) ?? href;
+    } else {
+      const source = conversationId
+        ? conversationSource(conversationId)
+        : projectId
+          ? projectSource(projectId)
+          : null;
+      if (source && path) {
+        resolved = fileDownloadUrl(source, path);
+        if (onOpenFile) {
+          onClick = (e) => {
+            // Modifier / middle clicks keep the browser's own new-tab behaviour.
+            if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+            e.preventDefault();
+            onOpenFile(path, path.split('/').pop() || path);
+          };
+        }
+      }
+    }
   }
   return (
-    <a {...props} href={resolved} target="_blank" rel="noopener noreferrer">
+    <a {...props} href={resolved} onClick={onClick} target="_blank" rel="noopener noreferrer">
       {children}
     </a>
   );

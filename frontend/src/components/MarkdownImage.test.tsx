@@ -2,7 +2,8 @@
 // Quest Doc asset resolution through MarkdownWorkspaceContext.assetBase, and
 // the unchanged conversation-workspace behaviour without it.
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { vi } from 'vitest';
 import ReactMarkdown from 'react-markdown';
 import { API_BASE_URL } from '../api/config';
 import {
@@ -121,8 +122,10 @@ describe('MarkdownImage', () => {
 });
 
 // The shared `a` renderer (MarkdownLink): inside a doc, `assets/<name>`
-// hrefs resolve to the asset route by the image rule; everything else is
-// left alone, and every link opens in a new tab.
+// hrefs resolve to the asset route by the image rule and everything else is
+// left alone; outside a doc a relative href is a workspace path, resolved to
+// the files/download URL and opened through `onOpenFile` on a plain click.
+// Every link opens in a new tab.
 describe('MarkdownLink', () => {
   afterEach(() => {
     cleanup();
@@ -150,10 +153,47 @@ describe('MarkdownLink', () => {
     expect(file.getAttribute('rel')).toBe('noopener noreferrer');
   });
 
-  it('leaves assets/<name> hrefs alone outside a doc', () => {
-    renderMarkdown('[file](assets/chart.png)', { conversationId: 'c1' });
-    const link = screen.getByRole('link', { name: 'file' });
-    expect(link.getAttribute('href')).toBe('assets/chart.png');
-    expect(link.getAttribute('target')).toBe('_blank');
+  it('resolves relative hrefs against the conversation files route outside a doc', () => {
+    renderMarkdown(
+      '[file](assets/chart.png) [note](./note.txt) [sp](reports/q3%20final.pdf) [ext](https://x/y) [anchor](#top)',
+      { conversationId: 'c1' },
+    );
+    const href = (name: string) => screen.getByRole('link', { name }).getAttribute('href');
+    const download = (path: string) =>
+      `${API_BASE_URL}/conversations/c1/files/download?path=${encodeURIComponent(path)}`;
+    expect(href('file')).toBe(download('assets/chart.png'));
+    expect(href('note')).toBe(download('note.txt'));
+    expect(href('sp')).toBe(download('reports/q3 final.pdf'));
+    expect(href('ext')).toBe('https://x/y');
+    expect(href('anchor')).toBe('#top');
+    expect(screen.getByRole('link', { name: 'file' }).getAttribute('target')).toBe('_blank');
+  });
+
+  it('resolves relative hrefs against the project files route when only projectId is set', () => {
+    renderMarkdown('[r](out/report.md)', { projectId: 'p1' });
+    expect(screen.getByRole('link', { name: 'r' }).getAttribute('href')).toBe(
+      `${API_BASE_URL}/projects/p1/files/download?path=${encodeURIComponent('out/report.md')}`,
+    );
+  });
+
+  it('leaves relative hrefs as written with no workspace to resolve against', () => {
+    renderMarkdown('[n](note.txt)', {});
+    expect(screen.getByRole('link', { name: 'n' }).getAttribute('href')).toBe('note.txt');
+  });
+
+  it('opens a workspace link through onOpenFile on a plain click only', () => {
+    const onOpenFile = vi.fn();
+    renderMarkdown('[note](sub/note.txt) [ext](https://x/y)', { conversationId: 'c1', onOpenFile });
+    const note = screen.getByRole('link', { name: 'note' });
+
+    const plain = fireEvent.click(note);
+    expect(plain).toBe(false); // default prevented: no new tab
+    expect(onOpenFile).toHaveBeenCalledWith('sub/note.txt', 'note.txt');
+
+    onOpenFile.mockClear();
+    expect(fireEvent.click(note, { ctrlKey: true })).toBe(true);
+    expect(fireEvent.click(note, { metaKey: true })).toBe(true);
+    expect(fireEvent.click(screen.getByRole('link', { name: 'ext' }))).toBe(true);
+    expect(onOpenFile).not.toHaveBeenCalled();
   });
 });

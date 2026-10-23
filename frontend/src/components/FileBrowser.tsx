@@ -28,7 +28,8 @@ const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.web
 const PDF_EXTENSIONS = new Set(['.pdf']);
 const CSV_EXTENSIONS = new Set(['.csv']);
 
-function isViewableFile(name: string): boolean {
+/** Whether FileViewerModal has a view for this file (text, image, PDF or CSV); anything else is download-only. */
+export function isViewableFile(name: string): boolean {
   const dotIndex = name.lastIndexOf('.');
   const ext = dotIndex >= 0 ? name.substring(dotIndex).toLowerCase() : '';
   return TEXT_EXTENSIONS.has(ext) || IMAGE_EXTENSIONS.has(ext) || PDF_EXTENSIONS.has(ext) || CSV_EXTENSIONS.has(ext);

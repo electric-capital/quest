@@ -26,6 +26,7 @@ import { MemorySuggestions } from './MemorySuggestions';
 import { ConversationHeader } from './ConversationHeader';
 import { LazyFileViewerModal } from './LazyFileViewerModal';
 import { uploadFiles } from '../api/fileApi';
+import { isCsvFile, isImageFile, isJsonFile, isPdfFile, isViewableFile } from './FileBrowser';
 import { useWorkspaceDownload } from '../hooks/useWorkspaceDownload';
 import { buildSlackThreadUrl } from '../utils/slackLinks';
 import { seedNewConversation } from '../utils/newConversation';
@@ -124,7 +125,11 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   const [wasNearBottom, setWasNearBottom] = useState(true);
   // Workspace file open in the viewer modal: composer attachments and inline
   // markdown images share it, so only the two fields the modal needs are kept.
-  const [attachmentViewer, setAttachmentViewer] = useState<{ workspace_path: string; filename: string } | null>(null);
+  // A workspace file open in the in-app viewer: a composer attachment, an
+  // inline markdown image, or a relative markdown link in an assistant reply.
+  // `isImage` is pinned for composer attachments, whose display name (the
+  // pasted file's original name) may carry no extension to sniff.
+  const [attachmentViewer, setAttachmentViewer] = useState<{ workspace_path: string; filename: string; isImage?: boolean } | null>(null);
   // Queued files uploading ahead of a send (see handleComposerSend): the
   // composer has already cleared its chips, so this strip above it is the
   // only sign a large upload is still running.
@@ -604,18 +609,28 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   }, [scrollToBottom]);
 
   const handleOpenAttachment = useCallback((att: ComposerAttachmentRef) => {
-    setAttachmentViewer({ workspace_path: att.workspace_path, filename: att.filename });
+    setAttachmentViewer({ workspace_path: att.workspace_path, filename: att.filename, isImage: true });
   }, []);
 
-  const handleOpenMarkdownImage = useCallback((workspacePath: string, filename: string) => {
-    setAttachmentViewer({ workspace_path: workspacePath, filename });
-  }, []);
+  // Files the model references in a reply (inline images, `[name](path)`
+  // links) open in the viewer when it has a view for the type; anything
+  // else goes through the regular download flow with its warning dialog.
+  const handleOpenMarkdownFile = useCallback((workspacePath: string, filename: string) => {
+    if (isViewableFile(filename)) {
+      setAttachmentViewer({ workspace_path: workspacePath, filename });
+    } else {
+      void downloadWorkspaceFile(conversationId, workspacePath).catch(() => {
+        // Swallow; the link stays clickable and the user can retry.
+      });
+    }
+  }, [conversationId, downloadWorkspaceFile]);
 
   // Lets the shared markdown renderer resolve `![alt](path.png)` image refs
-  // against this conversation's workspace (see MarkdownImage in Message.tsx).
+  // and `[name](path)` links against this conversation's workspace (see
+  // MarkdownImage / MarkdownLink in Message.tsx).
   const markdownWorkspaceCtx = useMemo(
-    () => ({ conversationId, onOpenImage: handleOpenMarkdownImage }),
-    [conversationId, handleOpenMarkdownImage]
+    () => ({ conversationId, onOpenFile: handleOpenMarkdownFile }),
+    [conversationId, handleOpenMarkdownFile]
   );
 
   const handleCloseAttachmentViewer = useCallback(() => {
@@ -907,7 +922,10 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
           conversationId={conversationId}
           filePath={attachmentViewer.workspace_path}
           fileName={attachmentViewer.filename}
-          isImage
+          isImage={attachmentViewer.isImage ?? isImageFile(attachmentViewer.filename)}
+          isJson={isJsonFile(attachmentViewer.filename)}
+          isPdf={isPdfFile(attachmentViewer.filename)}
+          isCsv={isCsvFile(attachmentViewer.filename)}
           onClose={handleCloseAttachmentViewer}
           onDownload={handleDownloadAttachment}
         />
