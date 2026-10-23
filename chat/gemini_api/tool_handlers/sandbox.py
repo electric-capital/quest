@@ -64,8 +64,8 @@ def _build_script_podman_cmd(
       sandbox tool API, authenticated via the injected QUEST_API_KEY -- a
       per-run ephemeral token from chat/sandbox_tokens.py, never the
       user's long-lived ``users.api_key``.
-    - **Public:** ``quest-script-runner-public`` image (separate Dockerfile
-      and entrypoint). slirp4netns WITHOUT ``outbound_addr`` restores
+    - **Public:** ``quest-script-runner-public`` image (its own build
+      target and entrypoint on the shared base stage). slirp4netns WITHOUT ``outbound_addr`` restores
       internet + DNS (pinned to the slirp resolver at 10.0.2.3 with no
       search domains, so the host's resolv.conf never leaks in);
       ``allow_host_loopback=false`` keeps the host
@@ -194,13 +194,12 @@ def _publish_mount_changes(
 def _script_runner_image_error(public: bool) -> str:
     """Build the image-not-found error JSON for the active profile."""
     image = get_public_script_runner_image() if public else get_script_runner_image()
-    dockerfile = (
-        "Dockerfile.script-runner-public" if public else "Dockerfile.script-runner"
-    )
+    target = "public" if public else "restricted"
     return json.dumps({
         "error": (
             f"Script runner image '{image}' not found. "
-            f"Build it with: podman build -t {image} -f {dockerfile} ."
+            f"Build it with: podman build --target {target} -t {image} "
+            f"-f Dockerfile.script-runner ."
         )
     })
 

@@ -82,9 +82,9 @@ grep "^$(whoami):" /etc/subuid /etc/subgid || \
 podman run --rm docker.io/library/alpine echo ok
 ```
 
-On first launch, `run.py` builds the script-runner image from `Dockerfile.script-runner`, which
+On first launch, `run.py` builds the sandbox images from `Dockerfile.script-runner`, which
 pulls `python:3.12-slim` from Docker Hub -- the machine needs outbound network access at build
-time. The image is rebuilt automatically whenever the Dockerfile changes.
+time. The images are rebuilt automatically whenever the Dockerfile changes.
 
 ### Clone and pre-flight
 

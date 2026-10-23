@@ -46,19 +46,19 @@ A public conversation opens exactly four action request types, `PUBLIC_ACTION_RE
 
 The public `create_action_request` tool spec names no internal service or skill (its enum is the fixed list), and the public prompt documents it as the fourth tool with the artifact types only; `tests/test_public_projects.py` pins the enum, the arm's rejects and the prompt wording.
 
-## Public sandbox profile (two separate images)
+## Public sandbox profile (two images, one Dockerfile)
 
-There are two podman images, each with its own Dockerfile + entrypoint, so the tooling inside can be customized independently (see [Script Runner Architecture](script-runner.md)):
+There are two podman images, the `restricted` and `public` targets of the multi-stage `Dockerfile.script-runner`: a shared `base` stage (tools, pip packages, LibreOffice) built once, and a thin stage per image with its own packages and entrypoint, so the tooling inside can still be customized independently (see [Script Runner Architecture](script-runner.md)):
 
 | | Restricted (default) | Public |
 |---|---|---|
-| Image | `quest-script-runner-<mode>` (`Dockerfile.script-runner` + `script-runner-entry.sh`) | `quest-script-runner-public-<mode>` (`Dockerfile.script-runner-public` + `script-runner-entry-public.sh`) |
+| Image | `quest-script-runner-<mode>` (`--target restricted` + `script-runner-entry.sh`) | `quest-script-runner-public-<mode>` (`--target public` + `script-runner-entry-public.sh`) |
 | Network | `slirp4netns:allow_host_loopback=true,outbound_addr=127.0.0.1,enable_ipv6=false` — no egress, no DNS; host reachable at 10.0.2.2 for the socat proxy bridge | `slirp4netns:allow_host_loopback=false,enable_ipv6=false` — internet + DNS work (`--dns=10.0.2.3 --dns-search=.` pins the slirp resolver so the host's resolv.conf never leaks in); host loopback unmapped |
 | IPv6 | disabled in both: `enable_ipv6=false` on the slirp network + `--sysctl net.ipv6.conf.all.disable_ipv6=1` (no IPv6 stack in the container netns) + a fail-closed `ip6tables -A OUTPUT -j REJECT` in the entrypoint. Every other row here is IPv4-only, and slirp's default IPv6 stack (ULA address, default route, host loopback at `fd00::2`) bypassed all of it | same |
 | Credentials | `QUEST_API_KEY` (ephemeral per-run sandbox token, `chat/sandbox_tokens.py`) + `QUEST_PORT` injected | **neither injected** — the load-bearing change: even if a network hole existed, the container has no credential for any internal API |
 | iptables (entrypoint, before `setpriv` privilege drop) | allow only 10.0.2.2:proxy-port, reject other host access; fails closed without `iptables`/`ip6tables` | allow DNS to 10.0.2.3, then REJECT RFC1918 (10/8, 172.16/12, 192.168/16), link-local 169.254/16 (cloud metadata service!), and CGNAT 100.64/10 |
 
-Both images get the same two mounts in a public-project conversation: the conversation workspace at `/workspace` and the project workspace at `/project`, both read-write (see [Script Runner Architecture](script-runner.md)). The argv builder is shared and unit-tested: `_build_script_podman_cmd(..., public=..., project_dir=...)` in `chat/gemini_api/tool_handlers/sandbox.py`; image names in `chat/gemini_api/constants.py` (`get_public_script_runner_image()`). Both images are auto-built/rebuilt at startup by `run.py` (rebuild triggers on Dockerfile **or** entrypoint mtime).
+Both images get the same two mounts in a public-project conversation: the conversation workspace at `/workspace` and the project workspace at `/project`, both read-write (see [Script Runner Architecture](script-runner.md)). The argv builder is shared and unit-tested: `_build_script_podman_cmd(..., public=..., project_dir=...)` in `chat/gemini_api/tool_handlers/sandbox.py`; image names in `chat/gemini_api/constants.py` (`get_public_script_runner_image()`). Both images are auto-built/rebuilt at startup by `run.py` (rebuild triggers on the shared Dockerfile **or** the image's entrypoint mtime).
 
 The `/api/tool-call` script bridge (`chat/gemini_api/script_tool_call.py`) is moot in public containers: it requires the sandbox token that public containers never receive.
 

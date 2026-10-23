@@ -381,6 +381,54 @@ def pull_base_images(project_root: Path, dockerfile_name: str) -> None:
             print("  building with the local copy")
 
 
+def sandbox_image_builds(quest_env: str) -> list:
+    """The container images run.py builds, as ``(image_name, dockerfile,
+    target, extra_sources)`` tuples.
+
+    The two sandbox images are two targets of one multi-stage Dockerfile:
+    the ``base`` stage (Debian tools, pip packages, headless LibreOffice with
+    fonts, warm caches -- nearly all of the ~1 GB) is built once and its
+    layers are shared, so the second image is a few seconds of thin layers
+    on top. ``target`` is None for a single-stage Dockerfile. ``extra_sources``
+    are the files the target COPYs; a change to any of them, or to the
+    Dockerfile, triggers a rebuild (``should_rebuild_podman_image``).
+    """
+    return [
+        # The restricted default sandbox: socat bridge to the Quest API, no
+        # internet.
+        (
+            f"quest-script-runner-{quest_env}",
+            "Dockerfile.script-runner",
+            "restricted",
+            ["script-runner-entry.sh", "script-runner-soffice.sh"],
+        ),
+        # The internet-enabled public-project sandbox.
+        (
+            f"quest-script-runner-public-{quest_env}",
+            "Dockerfile.script-runner",
+            "public",
+            ["script-runner-entry-public.sh", "script-runner-soffice.sh"],
+        ),
+        # The public-project browser sidecar (chat/browser_sessions.py):
+        # headless Chromium behind the public entrypoint's network rules.
+        # Its own single-stage Dockerfile: it needs Chromium, not LibreOffice.
+        (
+            f"quest-browser-sidecar-{quest_env}",
+            "Dockerfile.browser-sidecar",
+            None,
+            ["script-runner-entry-public.sh", "browser-sidecar-agent.py"],
+        ),
+    ]
+
+
+def podman_build_command(image_name: str, dockerfile: str, target: Optional[str]) -> list:
+    """The ``podman build`` argv for one entry of ``sandbox_image_builds``."""
+    cmd = ["podman", "build", "--network=host"]
+    if target:
+        cmd += ["--target", target]
+    return cmd + ["-t", image_name, "-f", dockerfile, "."]
+
+
 def remove_superseded_podman_image(image_name: str, old_image_id: Optional[str]) -> bool:
     """Delete the image a rebuild of ``image_name`` just replaced.
 
@@ -919,48 +967,21 @@ def main() -> None:
         print("+ Local demo data seeded")
     print()
 
-    # Step 5: Validate the script-runner Podman image. In local mode a
-    # missing/broken container runtime is non-fatal: the corresponding
+    # Step 5: Validate the container images (sandbox_image_builds). In local
+    # mode a missing/broken container runtime is non-fatal: the corresponding
     # tools are simply unavailable at runtime.
     print("[5/6] Validating container images...")
     quest_env = os.environ["QUEST_ENV"]  # Already set above
 
     def validate_script_runner_image() -> None:
-        # Script runner images (Podman) -- optional, only if Dockerfile
-        # exists. Three separate images: the restricted default sandbox,
-        # the internet-enabled public-project sandbox (each with its own
-        # Dockerfile + entrypoint so their tooling can diverge) and the
-        # public-project browser sidecar.
-        images = [
-            (
-                f"quest-script-runner-{quest_env}",
-                "Dockerfile.script-runner",
-                ["script-runner-entry.sh", "script-runner-soffice.sh"],
-            ),
-            (
-                f"quest-script-runner-public-{quest_env}",
-                "Dockerfile.script-runner-public",
-                ["script-runner-entry-public.sh", "script-runner-soffice.sh"],
-            ),
-            # The public-project browser sidecar (chat/browser_sessions.py):
-            # headless Chromium behind the public entrypoint's network rules.
-            (
-                f"quest-browser-sidecar-{quest_env}",
-                "Dockerfile.browser-sidecar",
-                ["script-runner-entry-public.sh", "browser-sidecar-agent.py"],
-            ),
-        ]
-        for image_name, dockerfile, entry_sources in images:
+        for image_name, dockerfile, target, entry_sources in sandbox_image_builds(quest_env):
             if not (project_root / dockerfile).exists():
                 continue
+            build_cmd = podman_build_command(image_name, dockerfile, target)
             if not podman_image_exists(image_name):
                 print(f"  Building Podman image '{image_name}'...")
                 pull_base_images(project_root, dockerfile)
-                subprocess.run(
-                    ["podman", "build", "--network=host", "-t", image_name, "-f", dockerfile, "."],
-                    cwd=project_root,
-                    check=True,
-                )
+                subprocess.run(build_cmd, cwd=project_root, check=True)
                 print(f"+ Podman image '{image_name}' built successfully")
             else:
                 print(f"+ Podman image '{image_name}' found")
@@ -969,11 +990,7 @@ def main() -> None:
                     print(f"  Rebuilding Podman image '{image_name}'...")
                     old_image_id = get_podman_image_id(image_name)
                     pull_base_images(project_root, dockerfile)
-                    subprocess.run(
-                        ["podman", "build", "--network=host", "-t", image_name, "-f", dockerfile, "."],
-                        cwd=project_root,
-                        check=True,
-                    )
+                    subprocess.run(build_cmd, cwd=project_root, check=True)
                     print(f"+ Podman image '{image_name}' rebuilt successfully")
                     if remove_superseded_podman_image(image_name, old_image_id):
                         print(f"+ Removed the previous '{image_name}' build ({old_image_id[:12]})")

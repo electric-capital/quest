@@ -1,6 +1,23 @@
-FROM python:3.12-slim
+# Sandbox images for the script runner. One multi-stage Dockerfile, two build
+# targets, two images:
+#
+#   podman build --target restricted -t quest-script-runner-<mode> -f Dockerfile.script-runner .
+#   podman build --target public -t quest-script-runner-public-<mode> -f Dockerfile.script-runner .
+#
+# The `base` stage holds everything the two sandboxes have in common (the
+# Debian tools, the pip packages, headless LibreOffice with fonts, the warm
+# caches). The `restricted` and `public` stages add what differs: the
+# restricted sandbox gets socat for the proxy bridge to the Quest API, the
+# public one gets the internet-workload packages (fetching, scraping, API
+# clients) -- each with its own entrypoint. Keep the stages separate rather
+# than a mode switch so the tooling in each can still diverge; keep the
+# shared part in `base` so podman builds it once: the two images share the
+# base layers (~850 MB, nearly all LibreOffice + fonts + pip), so the second
+# build is a few seconds of thin layers and the id-mapped layer copy that
+# run.py warms after a build is paid once for the shared part.
+FROM python:3.12-slim AS base
 
-# Bump this date to make every deployment rebuild the image from fresh layers
+# Bump this date to make every deployment rebuild the images from fresh layers
 # the next time run.py starts: a newer python:3.12-slim base (run.py pulls it
 # before a rebuild), current Debian packages and current pip packages, e.g.
 # after a security fix in the base image, ca-certificates or certifi. run.py
@@ -11,7 +28,7 @@ ARG QUEST_IMAGE_REVISION=2026-10-23
 LABEL org.quest.image-revision=${QUEST_IMAGE_REVISION}
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl jq bash socat iptables zip unzip ca-certificates && \
+    apt-get install -y --no-install-recommends curl wget jq bash iptables zip unzip ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir requests openpyxl python-docx matplotlib seaborn pypdf PyPDFForm
@@ -64,13 +81,44 @@ ENV MPLBACKEND=Agg
 ENV MPLCONFIGDIR=/opt/matplotlib
 RUN python3 -c "import matplotlib.pyplot" && chmod -R a+rwX /opt/matplotlib
 
+WORKDIR /workspace
+
+
+# ---------------------------------------------------------------------------
+# Restricted sandbox (default): internal-data processing, no internet.
+# ---------------------------------------------------------------------------
+FROM base AS restricted
+
+# socat for the entrypoint's proxy bridge (the public sandbox has no bridge
+# and does not get it).
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends socat && \
+    rm -rf /var/lib/apt/lists/*
+
 # Entrypoint script that starts a socat forwarder so scripts can reach
 # the host API proxy at localhost:8000 (forwarded to 10.0.2.2:8000 via
 # slirp4netns), then execs the user's command.
 COPY script-runner-entry.sh /usr/local/bin/script-runner-entry.sh
 RUN chmod +x /usr/local/bin/script-runner-entry.sh
 
-WORKDIR /workspace
-
 ENTRYPOINT ["/usr/local/bin/script-runner-entry.sh"]
+# Setting ENTRYPOINT resets the CMD inherited from `base`; restate it.
+CMD ["python3"]
+
+
+# ---------------------------------------------------------------------------
+# Public-project sandbox: internet workloads (fetching, scraping, API clients).
+# ---------------------------------------------------------------------------
+FROM base AS public
+
+RUN pip install --no-cache-dir httpx beautifulsoup4 lxml
+
+# Entrypoint script that opens internet egress while REJECTing all private /
+# link-local destinations (LAN, cloud metadata service), then drops
+# privileges. No socat proxy bridge: public containers have no path -- and
+# no credential -- to the Quest API.
+COPY script-runner-entry-public.sh /usr/local/bin/script-runner-entry-public.sh
+RUN chmod +x /usr/local/bin/script-runner-entry-public.sh
+
+ENTRYPOINT ["/usr/local/bin/script-runner-entry-public.sh"]
 CMD ["python3"]

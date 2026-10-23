@@ -32,11 +32,7 @@ def test_base_images_skip_stages_and_scratch(tmp_path):
 
 def test_shipped_dockerfiles_pull_the_python_base():
     root = run.Path(__file__).resolve().parent.parent
-    for name in (
-        "Dockerfile.script-runner",
-        "Dockerfile.script-runner-public",
-        "Dockerfile.browser-sidecar",
-    ):
+    for name in ("Dockerfile.script-runner", "Dockerfile.browser-sidecar"):
         assert run.dockerfile_base_images(root / name) == ["python:3.12-slim"], name
 
 

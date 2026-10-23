@@ -144,11 +144,12 @@ def get_sub_agent_turn_limits(model: str) -> tuple[int, int]:
 
 _SCRIPT_RUNNER_IMAGE_BASE = "quest-script-runner"  # Podman image base name
 
-# Public-project sandbox image: a SEPARATE image (own Dockerfile + own
-# entrypoint) rather than a mode switch on the restricted image, so the
-# tooling inside each can diverge independently. The public entrypoint
-# opens internet egress but blocks RFC1918 / link-local destinations and
-# never runs the loopback proxy bridge.
+# Public-project sandbox image: a SEPARATE image (its own build target of
+# Dockerfile.script-runner on the shared base stage, with its own entrypoint)
+# rather than a mode switch on the restricted image, so the tooling inside
+# each can diverge independently. The public entrypoint opens internet
+# egress but blocks RFC1918 / link-local destinations and never runs the
+# loopback proxy bridge.
 _PUBLIC_SCRIPT_RUNNER_IMAGE_BASE = "quest-script-runner-public"
 # The browser sidecar for public-project conversations (one long-lived
 # headless Chromium container per conversation, chat/browser_sessions.py):
@@ -169,8 +170,8 @@ def get_script_runner_image() -> str:
 def get_public_script_runner_image() -> str:
     """Return the internet-enabled public-project sandbox image name.
 
-    Returns ``quest-script-runner-public-<mode>``; built from
-    ``Dockerfile.script-runner-public``.
+    Returns ``quest-script-runner-public-<mode>``; the ``public`` target of
+    ``Dockerfile.script-runner``.
     """
     from config import environment
     return f"{_PUBLIC_SCRIPT_RUNNER_IMAGE_BASE}-{environment.image_suffix()}"

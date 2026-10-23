@@ -1,13 +1,14 @@
-"""Headless LibreOffice in the sandbox images: the Dockerfiles install it
-with the fonts, the ``soffice`` wrapper is shipped and tracked as a rebuild
-source, and every model-facing instruction that talks about document
-conversion points at it (never at a python-docx-built PDF)."""
+"""Headless LibreOffice in the sandbox images: the Dockerfile's shared
+``base`` stage installs it with the fonts, the ``soffice`` wrapper is shipped
+and tracked as a rebuild source, and every model-facing instruction that
+talks about document conversion points at it (never at a python-docx-built
+PDF)."""
 
 import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DOCKERFILES = ("Dockerfile.script-runner", "Dockerfile.script-runner-public")
+DOCKERFILES = ("Dockerfile.script-runner",)
 SOFFICE_CMD = "soffice --headless --convert-to pdf --outdir /workspace"
 
 
@@ -30,6 +31,15 @@ class TestImage:
         for name in DOCKERFILES:
             text = (ROOT / name).read_text()
             assert text.index("fc-cache -f") < text.index("MPLCONFIGDIR=/opt/matplotlib"), name
+
+    def test_libreoffice_is_in_the_shared_base_stage(self):
+        # Both sandbox images must get LibreOffice from the one `base` stage
+        # (built once, layers shared), not from a per-target install.
+        text = (ROOT / "Dockerfile.script-runner").read_text()
+        base_end = text.index("FROM base AS")
+        assert text.count("libreoffice-writer-nogui") == 1
+        assert text.index("libreoffice-writer-nogui") < base_end
+        assert text.index("COPY script-runner-soffice.sh") < base_end
 
     def test_wrapper_script(self):
         wrapper = ROOT / "script-runner-soffice.sh"
