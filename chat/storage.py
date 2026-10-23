@@ -1391,6 +1391,60 @@ class ChatStorage:
         return ChatStorage._get_conversation_dir(conversation_id) / "skill_reads.json"
 
     @staticmethod
+    def list_transcript_tool_calls(conversation_id: str) -> list[dict]:
+        """Every tool call a conversation's transcript records, for the
+        ``tool_calls`` ledger backfill (analytics/backfill.py).
+
+        Reads chat_history.json once. One entry per top-level ``tool_use``
+        message (``call_type = "top_level"``) and one per
+        ``sub_agent_tool_use`` event persisted on an ``agent_task*``
+        ``tool_result`` under ``sub_agent_tool_calls`` (``call_type =
+        "sub_agent"``, with the agent name, the parent tool id and the
+        level -- 2 when the event carries ``nested_parent_id``). Entries
+        keep the provider-visible ``tool_name`` and ``tool_input`` so the
+        caller can resolve the effective name; ``timestamp`` is the
+        message's own (sub-agent events have none and take their parent
+        result's), or None. A missing or unreadable file yields ``[]``.
+        """
+        chat_file = ChatStorage._get_chat_history_file(conversation_id)
+        try:
+            with open(chat_file, "r") as f:
+                chat_data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return []
+        calls: list[dict] = []
+        for msg in (chat_data.get("messages") if isinstance(chat_data, dict) else None) or []:
+            if not isinstance(msg, dict):
+                continue
+            ts = msg.get("timestamp") if isinstance(msg.get("timestamp"), str) else None
+            if msg.get("type") == "tool_use":
+                name = msg.get("tool_name")
+                if isinstance(name, str) and name:
+                    calls.append({
+                        "call_type": "top_level", "tool_name": name,
+                        "tool_input": msg.get("tool_input"), "tool_id": msg.get("tool_id"),
+                        "timestamp": ts, "agent_name": None, "sub_agent_level": None,
+                        "parent_tool_id": None,
+                    })
+                continue
+            if msg.get("type") != "tool_result":
+                continue
+            for event in msg.get("sub_agent_tool_calls") or []:
+                if not isinstance(event, dict) or event.get("type") != "sub_agent_tool_use":
+                    continue
+                name = event.get("tool_name")
+                if not isinstance(name, str) or not name:
+                    continue
+                calls.append({
+                    "call_type": "sub_agent", "tool_name": name,
+                    "tool_input": event.get("tool_input"), "tool_id": event.get("tool_id"),
+                    "timestamp": ts, "agent_name": event.get("agent_name"),
+                    "sub_agent_level": 2 if event.get("nested_parent_id") else 1,
+                    "parent_tool_id": event.get("parent_tool_id"),
+                })
+        return calls
+
+    @staticmethod
     def get_skill_read_ids(conversation_id: str) -> list[str]:
         """Read the list of skill IDs whose content the model has seen.
 

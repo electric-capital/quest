@@ -1,5 +1,5 @@
-/* System Reports "Docs" / "Tables" / "Memories" / "Skills" sections:
-   feature-usage tables with a date-range selector, sharing one frame
+/* System Reports "Docs" / "Tables" / "Memories" / "Skills" / "Tool Calls"
+   sections: feature-usage tables with a date-range selector, sharing one frame
    (FeatureUsageReport.tsx). Mirrors UsersReportTable.css so the report
    sections read as one dashboard. */
 
@@ -227,6 +227,11 @@
 /* The Skills table leads with a wide name column carrying a kind badge. */
 .feature-report .col-owner.col-w32 {
   width: 32%;
+}
+
+.feature-report .name-cell-code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.75rem;
 }
 
 .feature-report .kind-badge {

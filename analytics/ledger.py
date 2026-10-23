@@ -47,6 +47,41 @@ SKILL_LOADS_COLUMNS = (
     "project_id", "routine_id",
 )
 
+# Who issued a tool call (the ``call_type`` column of ``tool_calls``).
+TOOL_CALL_TYPES = (
+    "top_level",    # the conversation's own model turn (ApiCallType.TOP_LEVEL)
+    "sub_agent",    # a sub-agent spawned by agent_task* (ApiCallType.SUB_AGENT)
+    "script",       # sandbox code calling POST /api/tool-call on the sandbox tool API
+)
+
+# How the row got into the ledger (the ``source`` column of ``tool_calls``).
+TOOL_CALL_SOURCES = (
+    "live",         # recorded by the loop as the call was dispatched
+    "backfill",     # imported from a pre-ledger chat_history.json transcript
+)
+
+TOOL_CALLS_COLUMNS = (
+    "created_at", "conversation_id", "user_id", "tool_name", "dynamic",
+    "call_type", "source", "tool_id", "agent_name", "sub_agent_level",
+    "parent_tool_id", "project_id", "routine_id",
+)
+
+
+def effective_tool_name(tool_name: str, args: Optional[dict]) -> tuple[str, bool]:
+    """``(name, dynamic)`` for a tool call as the ledger records it.
+
+    A call through the ``tool_call`` meta-tool is recorded under the inner
+    ``tool_name`` it routed to with ``dynamic = True``; a ``tool_call``
+    whose arguments name no inner tool stays ``tool_call`` (the dispatch
+    rejects it, but the attempt is still a call). Every other tool keeps
+    its own name.
+    """
+    if tool_name == "tool_call" and isinstance(args, dict):
+        inner = args.get("tool_name")
+        if isinstance(inner, str) and inner:
+            return inner, True
+    return tool_name, False
+
 
 class Ledger:
     """Queue rows for the writer thread; see the module docstring."""
@@ -98,6 +133,39 @@ class Ledger:
         ]
         self._enqueue("skill_loads", SKILL_LOADS_COLUMNS, rows)
         return len(rows)
+
+    def record_tool_call(
+        self,
+        *,
+        user_id: int,
+        tool_name: str,
+        dynamic: bool,
+        call_type: str,
+        conversation_id: Optional[str] = None,
+        source: str = "live",
+        tool_id: Optional[str] = None,
+        agent_name: Optional[str] = None,
+        sub_agent_level: Optional[int] = None,
+        parent_tool_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+        routine_id: Optional[str] = None,
+        created_at: Optional[datetime] = None,
+    ) -> None:
+        """Queue one ``tool_calls`` row (``tool_name`` is the effective
+        name; see :func:`effective_tool_name`)."""
+        if call_type not in TOOL_CALL_TYPES:
+            raise ValueError(f"unknown tool call type: {call_type!r}")
+        if source not in TOOL_CALL_SOURCES:
+            raise ValueError(f"unknown tool call source: {source!r}")
+        if not tool_name or user_id is None:
+            raise ValueError("tool call needs a tool_name and a user_id")
+        row = (
+            created_at or utcnow(), conversation_id, int(user_id), tool_name,
+            bool(dynamic), call_type, source, tool_id, agent_name,
+            int(sub_agent_level) if sub_agent_level is not None else None,
+            parent_tool_id, project_id, routine_id,
+        )
+        self._enqueue("tool_calls", TOOL_CALLS_COLUMNS, [row])
 
     def _enqueue(self, table: str, columns: tuple[str, ...], rows: list[tuple]) -> None:
         with self._lock:
@@ -246,4 +314,46 @@ def record_skill_load(
         logger.warning(
             "failed to record skill load (conversation_id=%s, source=%s)",
             conversation_id, source, exc_info=True,
+        )
+
+
+def record_tool_call(
+    *,
+    user_id: Optional[int],
+    tool_name: str,
+    args: Optional[dict],
+    call_type: str,
+    conversation_id: Optional[str] = None,
+    tool_id: Optional[str] = None,
+    agent_name: Optional[str] = None,
+    sub_agent_level: Optional[int] = None,
+    parent_tool_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    routine_id: Optional[str] = None,
+) -> None:
+    """Best-effort ``tool_calls`` write through the process-wide ledger.
+
+    Takes the provider-visible ``tool_name`` and the call's ``args`` and
+    resolves the effective name itself (``effective_tool_name``), so every
+    recording site makes the same one-line call. Drops the row (debug log)
+    when no ledger is installed; logs a warning on a bad call -- analytics
+    loss must never break the turn that hit it.
+    """
+    ledger = _current
+    if ledger is None or user_id is None or not tool_name:
+        if ledger is None and tool_name:
+            logger.debug("analytics ledger not installed; tool call not recorded")
+        return
+    name, dynamic = effective_tool_name(tool_name, args)
+    try:
+        ledger.record_tool_call(
+            user_id=user_id, tool_name=name, dynamic=dynamic, call_type=call_type,
+            conversation_id=conversation_id, tool_id=tool_id, agent_name=agent_name,
+            sub_agent_level=sub_agent_level, parent_tool_id=parent_tool_id,
+            project_id=project_id, routine_id=routine_id,
+        )
+    except Exception:
+        logger.warning(
+            "failed to record tool call (conversation_id=%s, tool=%s, call_type=%s)",
+            conversation_id, name, call_type, exc_info=True,
         )

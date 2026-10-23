@@ -69,6 +69,38 @@ def query_skill_usage(
     return [dict(zip(keys, row)) for row in rows]
 
 
+def query_tool_calls(
+    cur, start_dt: Optional[datetime] = None, end_dt: Optional[datetime] = None,
+) -> list[dict]:
+    """One row per (tool, conversation, user) with calls in the half-open
+    ``[start_dt, end_dt)`` window: the call count and its splits by caller
+    (``sub_agent`` / ``script``), by routing (``dynamic``) and by provenance
+    (``backfill``), the routine id any row carried, and the newest call.
+    ``conversation_id`` is None for script calls whose lease had none."""
+    where, params = _window_clause(start_dt, end_dt)
+    rows = cur.execute(
+        f"""
+        SELECT tool_name, conversation_id, user_id,
+               COUNT(*) AS call_count,
+               COUNT(*) FILTER (WHERE call_type = 'sub_agent') AS sub_agent_count,
+               COUNT(*) FILTER (WHERE call_type = 'script') AS script_count,
+               COUNT(*) FILTER (WHERE dynamic) AS dynamic_count,
+               COUNT(*) FILTER (WHERE source = 'backfill') AS backfill_count,
+               MAX(routine_id) AS routine_id,
+               MAX(created_at) AS last_called_at
+        FROM tool_calls{where}
+        GROUP BY tool_name, conversation_id, user_id
+        """,
+        params,
+    ).fetchall()
+    keys = (
+        "tool_name", "conversation_id", "user_id", "call_count", "sub_agent_count",
+        "script_count", "dynamic_count", "backfill_count", "routine_id",
+        "last_called_at",
+    )
+    return [dict(zip(keys, row)) for row in rows]
+
+
 def query_backfill(cur, name: str) -> Optional[dict]:
     """``{"completed_at", "row_count"}`` of a finished backfill, else None."""
     row = cur.execute(
@@ -163,5 +195,74 @@ def build_skills_report(
         "skills": skills,
         "conversation_count": len(all_conversations),
         "load_count": sum(r["load_count"] for r in skills),
+        "backfill": backfill,
+    }
+
+
+def build_tool_calls_report(
+    usage_rows: Iterable[dict],
+    routine_conversations: set[str],
+    backfill: Optional[dict] = None,
+) -> dict:
+    """Fold the per-(tool, conversation, user) rows into one row per tool.
+
+    ``routine_conversations`` is the set of conversation ids a routine
+    created (from ``quest.db``; a row's own ``routine_id`` also counts, so a
+    deleted routine conversation keeps its attribution).
+
+    Row: ``tool``, ``call_count`` with its ``dynamic_count`` (issued through
+    the ``tool_call`` meta-tool), ``routine_call_count`` (calls in
+    routine-created conversations), ``sub_agent_call_count``,
+    ``script_call_count`` and ``backfill_count`` splits,
+    ``conversation_count`` and ``user_count`` (distinct), ``last_called_at``
+    (naive-UTC ISO). Sorted by calls, then conversations, then name.
+    """
+    per_tool: dict[str, dict] = {}
+    all_conversations: set[str] = set()
+    for row in usage_rows:
+        entry = per_tool.setdefault(row["tool_name"], {
+            "conversations": set(), "users": set(), "call_count": 0,
+            "dynamic_count": 0, "routine_call_count": 0, "sub_agent_call_count": 0,
+            "script_call_count": 0, "backfill_count": 0, "last_called_at": None,
+        })
+        conv = row.get("conversation_id")
+        calls = int(row.get("call_count") or 0)
+        if conv:
+            entry["conversations"].add(conv)
+            all_conversations.add(conv)
+            if row.get("routine_id") or conv in routine_conversations:
+                entry["routine_call_count"] += calls
+        entry["users"].add(row["user_id"])
+        entry["call_count"] += calls
+        entry["dynamic_count"] += int(row.get("dynamic_count") or 0)
+        entry["sub_agent_call_count"] += int(row.get("sub_agent_count") or 0)
+        entry["script_call_count"] += int(row.get("script_count") or 0)
+        entry["backfill_count"] += int(row.get("backfill_count") or 0)
+        last = row.get("last_called_at")
+        if last is not None and (entry["last_called_at"] is None or last > entry["last_called_at"]):
+            entry["last_called_at"] = last
+
+    tools = [
+        {
+            "tool": name,
+            "call_count": entry["call_count"],
+            "dynamic_count": entry["dynamic_count"],
+            "routine_call_count": entry["routine_call_count"],
+            "sub_agent_call_count": entry["sub_agent_call_count"],
+            "script_call_count": entry["script_call_count"],
+            "backfill_count": entry["backfill_count"],
+            "conversation_count": len(entry["conversations"]),
+            "user_count": len(entry["users"]),
+            "last_called_at": (
+                entry["last_called_at"].isoformat() if entry["last_called_at"] else None
+            ),
+        }
+        for name, entry in per_tool.items()
+    ]
+    tools.sort(key=lambda r: (-r["call_count"], -r["conversation_count"], r["tool"].lower()))
+    return {
+        "tools": tools,
+        "call_count": sum(r["call_count"] for r in tools),
+        "conversation_count": len(all_conversations),
         "backfill": backfill,
     }

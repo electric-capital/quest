@@ -130,6 +130,7 @@ async def script_tool_call_endpoint(
     here exactly as the run's own tool dispatch refuses them.
     """
     from chat.gemini_api.tool_dispatch import _dispatch_tool_call
+    from analytics.ledger import record_tool_call
 
     if body.tool_name not in SCRIPT_TOOL_CALL_ALLOWLIST:
         return JSONResponse(
@@ -162,6 +163,15 @@ async def script_tool_call_endpoint(
                     ),
                 },
             )
+
+    # One tool_calls ledger row per bridged call, attributed to the launching
+    # conversation when the lease knows it (best-effort; analytics/ledger.py).
+    record_tool_call(
+        user_id=user.get("id"), tool_name="tool_call",
+        args={"tool_name": body.tool_name}, call_type="script",
+        conversation_id=lease.conversation_id if lease is not None else None,
+        project_id=lease.project_id if lease is not None else None,
+    )
 
     # dict(...) copy: the dispatch chain pops intent_message from the inner
     # arguments in place.

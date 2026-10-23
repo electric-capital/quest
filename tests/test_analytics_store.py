@@ -8,7 +8,7 @@ import duckdb
 import pytest
 
 from analytics import store as store_mod
-from analytics.ledger import SKILL_LOADS_COLUMNS
+from analytics.ledger import SKILL_LOADS_COLUMNS, TOOL_CALLS_COLUMNS
 from analytics.store import (
     MIGRATIONS_DIR,
     AnalyticsStore,
@@ -43,6 +43,18 @@ def test_skill_loads_schema_matches_what_the_ledger_writes():
     assert tuple(name for name, _ in columns) == SKILL_LOADS_COLUMNS
     types = dict(columns)
     assert types["created_at"] == "TIMESTAMP"
+    assert types["user_id"] == "INTEGER"
+    store.close()
+
+
+def test_tool_calls_schema_matches_what_the_ledger_writes():
+    store = AnalyticsStore(":memory:").open()
+    with store.cursor() as cur:
+        columns = table_columns(cur, "tool_calls")
+    assert tuple(name for name, _ in columns) == TOOL_CALLS_COLUMNS
+    types = dict(columns)
+    assert types["created_at"] == "TIMESTAMP"
+    assert types["dynamic"] == "BOOLEAN"
     assert types["user_id"] == "INTEGER"
     store.close()
 

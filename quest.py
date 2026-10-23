@@ -267,8 +267,8 @@ async def lifespan(app: FastAPI):
         set_ledger(analytics_ledger)
     except Exception:
         logger.exception("Analytics store failed to open; ledgers will not be recorded")
-    from analytics.backfill import run_skill_reads_backfill
-    analytics_backfill_task = asyncio.create_task(run_skill_reads_backfill())
+    from analytics.backfill import run_backfills
+    analytics_backfill_task = asyncio.create_task(run_backfills())
 
     # Remove any symlinks from the conversation/project data trees. The
     # sandbox seccomp profile bans creating new ones (see

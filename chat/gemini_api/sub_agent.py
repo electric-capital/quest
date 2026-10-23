@@ -12,6 +12,7 @@ import uuid
 from typing import Any, Callable, Awaitable
 
 from db.llm_call_store import record_api_call
+from analytics.ledger import record_tool_call
 from db.models import ApiCallType
 from chat.gemini_api.constants import (
     SUB_AGENT_CONTEXT_WARNING_THRESHOLD,
@@ -318,6 +319,18 @@ async def _run_sub_agent(
 
             # Extract intent_message before dispatch (it's not a tool parameter)
             intent_message = args.pop("intent_message", "")
+
+            # One tool_calls ledger row per call, before the branches below
+            # so malformed, finishing, nested-spawn and dispatched calls all
+            # count (best-effort; see analytics/ledger.py). No routine_id
+            # here: the report attributes routines from the conversation row.
+            record_tool_call(
+                user_id=user["id"], tool_name=fc_event.tool_name, args=args,
+                call_type="sub_agent", conversation_id=conversation_id,
+                tool_id=fc_event.tool_id, agent_name=agent_name,
+                sub_agent_level=level, parent_tool_id=parent_tool_id,
+                project_id=project_id,
+            )
 
             if fc_event.tool_args_error:
                 # Malformed arguments from the model: nothing to dispatch

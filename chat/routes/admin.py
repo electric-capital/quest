@@ -45,8 +45,14 @@ from chat.feature_usage_report import (
     build_tables_report,
 )
 from chat.usage_report import build_usage_report
-from analytics.backfill import SKILL_READS_BACKFILL
-from analytics.reports import build_skills_report, query_backfill, query_skill_usage
+from analytics.backfill import SKILL_READS_BACKFILL, TOOL_CALLS_BACKFILL
+from analytics.reports import (
+    build_skills_report,
+    build_tool_calls_report,
+    query_backfill,
+    query_skill_usage,
+    query_tool_calls,
+)
 from analytics.store import get_store as get_analytics_store
 
 from chat.routes import router
@@ -869,15 +875,7 @@ async def admin_skills_report(
     """
     _require_admin(user)
     _, _, start_dt, end_dt = _resolve_range_window(start, end)
-    store = get_analytics_store()
-    if store is None:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "analytics_unavailable",
-                "message": "The analytics store is not open.",
-            }
-        )
+    store = _analytics_store_or_503()
 
     def _query():
         with store.cursor() as cur:
@@ -901,6 +899,56 @@ async def admin_skills_report(
     return build_skills_report(
         usage_rows, labels, system_names, routine_conversations, backfill,
     )
+
+
+def _analytics_store_or_503():
+    store = get_analytics_store()
+    if store is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "analytics_unavailable",
+                "message": "The analytics store is not open.",
+            }
+        )
+    return store
+
+
+@router.get("/admin/system-monitor/tool-calls-report")
+async def admin_tool_calls_report(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Return per-tool call counts for a date range, from the ``tool_calls``
+    ledger.
+
+    One row per effective tool (a call through the ``tool_call`` meta-tool
+    counts under the tool it routed to) with at least one call inside the
+    range: calls with their routine, sub-agent, script, dynamic and
+    imported splits, distinct conversations and users, newest call. Names
+    and counts only -- arguments and outputs are never stored, let alone
+    returned. ``backfill`` carries the transcript import's status (null
+    until it has run). 503 while the analytics store is not open. Row shape
+    and sort order are on ``build_tool_calls_report`` in
+    analytics/reports.py.
+    """
+    _require_admin(user)
+    _, _, start_dt, end_dt = _resolve_range_window(start, end)
+    store = _analytics_store_or_503()
+
+    def _query():
+        with store.cursor() as cur:
+            return (
+                query_tool_calls(cur, start_dt, end_dt),
+                query_backfill(cur, TOOL_CALLS_BACKFILL),
+            )
+
+    usage_rows, backfill = await asyncio.to_thread(_query)
+    routine_conversations = {
+        conv["id"] for conv in await list_conversation_activity_rows() if conv["routine_id"]
+    }
+    return build_tool_calls_report(usage_rows, routine_conversations, backfill)
 
 
 # ---------------------------------------------------------------------------

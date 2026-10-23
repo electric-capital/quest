@@ -2,7 +2,7 @@
 
 ## Overview
 
-Every piece of structured user data -- accounts and their secrets, memories, guides, projects, routines and schedules, conversation metadata, action requests, skills and their shares/auto-loads, wait handles, Quest Doc and Quest Table metadata and LLM call analytics -- is stored in a SQLite database at `data/quest.db`, managed by SQLAlchemy ORM with Alembic for schema migrations. The set of tables is the set of `Base` subclasses in `db/models.py` (one ORM class per table, columns, indexes and FK actions declared there); the `db/` package provides the engine configuration, those models, and one `*_store.py` data access module per concern. Append-only event ledgers (skill loads) live outside it, in the DuckDB [Analytics Store](analytics.md).
+Every piece of structured user data -- accounts and their secrets, memories, guides, projects, routines and schedules, conversation metadata, action requests, skills and their shares/auto-loads, wait handles, Quest Doc and Quest Table metadata and LLM call analytics -- is stored in a SQLite database at `data/quest.db`, managed by SQLAlchemy ORM with Alembic for schema migrations. The set of tables is the set of `Base` subclasses in `db/models.py` (one ORM class per table, columns, indexes and FK actions declared there); the `db/` package provides the engine configuration, those models, and one `*_store.py` data access module per concern. Append-only event ledgers (skill loads, tool calls) live outside it, in the DuckDB [Analytics Store](analytics.md).
 
 Chat message history remains in JSON files (`data/chats/{conversation_id}/chat_history.json`). Conversation ownership, timing metadata, custom names and model selection live in the `conversations` table.
 

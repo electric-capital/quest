@@ -1,6 +1,6 @@
 # Admin System Reports
 
-Admin-only operator dashboard at `/admin/system-reports` (titled "System Reports"; the pre-rename `/admin/system-monitor` URL redirects, and the API prefix keeps the historical `system-monitor` name). A left-hand nav switches between report sections; ships with "Latest Conversations", "Total Usage", "Cost Analysis", "Users", "Models", "Docs", "Tables", "Memories", "Skills", and "Guides".
+Admin-only operator dashboard at `/admin/system-reports` (titled "System Reports"; the pre-rename `/admin/system-monitor` URL redirects, and the API prefix keeps the historical `system-monitor` name). A left-hand nav switches between report sections; ships with "Latest Conversations", "Total Usage", "Cost Analysis", "Users", "Models", "Docs", "Tables", "Memories", "Skills", "Tool Calls", and "Guides".
 
 ## Overview
 
@@ -11,7 +11,7 @@ Admin gating is enforced on the backend via the inline `is_admin(user["email"])`
 ## Key Files
 
 **Backend:**
-- `chat/routes/admin.py` -- `admin_latest_active_conversations`, `admin_usage_report`, `admin_most_expensive_conversations`, `admin_user_report`, `admin_model_report`, `admin_docs_report`, `admin_tables_report`, `admin_memories_report`, `admin_skills_report`, and `admin_guides_report` handlers (admin check, limit clamping, date-range parsing via the shared `_resolve_range_window`, title resolution) sharing the `_admin_conversation_view` row assembler
+- `chat/routes/admin.py` -- `admin_latest_active_conversations`, `admin_usage_report`, `admin_most_expensive_conversations`, `admin_user_report`, `admin_model_report`, `admin_docs_report`, `admin_tables_report`, `admin_memories_report`, `admin_skills_report`, `admin_tool_calls_report`, and `admin_guides_report` handlers (admin check, limit clamping, date-range parsing via the shared `_resolve_range_window`, title resolution) sharing the `_admin_conversation_view` row assembler
 - `chat/usage_report.py` -- `build_usage_report()`, the pure fold of per-day usage buckets into the Total Usage response (rolling windows with their previous periods, lifetime total, daily / weekly / monthly series; metric definitions in the module docstring)
 - `chat/feature_usage_report.py` -- `build_docs_report()`, `build_tables_report()` and `build_memories_report()`, the pure per-user folds behind the Docs, Tables and Memories sections (row shapes and the range semantics in the module docstring)
 - `db/conversation_store.py` -- `list_latest_active_conversations()` (joins `Conversation` to `User`, orders by `last_message_at DESC`) and the batch companion `get_conversations_with_users()`, sharing `_admin_conversation_row`; plus `list_conversation_activity_rows()`, the narrow all-conversation owner/routine/activity projection behind the user and Total Usage reports
@@ -20,7 +20,7 @@ Admin gating is enforced on the backend via the inline `is_admin(user["email"])`
 - `db/llm_pricing.py` -- per-model USD list-price tables and `estimate_cost_usd()` (cache read/write rates incl. the Anthropic 5m/1h TTL split; long-context tiers: Gemini Pro >200K, Claude Haiku 5.5 >100K via a per-entry `long_context_threshold`; date-ranged rate sets, so a call is priced at the rate in force on its `created_at` -- the convention for recording a price change is in the module docstring), consulted only for calls without a provider-reported amount
 - `db/doc_store.py` / `db/table_store.py` -- `list_all_doc_rows()` / `list_all_table_rows()`, the narrow all-rows metadata projections (owner, project, mode, cached sizes, last write source, share count, timestamps; never a title or body) behind the Docs and Tables sections
 - `db/memory_store.py`, `db/memory_suggestion_store.py`, `db/project_memory_store.py`, `db/project_memory_suggestion_store.py` -- `list_all_memory_rows()`, `list_all_suggestion_rows()` (both stores) and `list_all_project_memory_rows()` (joined to the project owner), the text-free projections behind the Memories section
-- `analytics/reports.py` -- `query_skill_usage()` (the grouped `skill_loads` query, run on an [Analytics Store](analytics.md) cursor in a worker thread) and the pure `build_skills_report()` fold behind the Skills section; `db/skill_store.py` -- `list_skill_labels()`, the any-owner name / kind / creator lookup for the skill ids a report names (never the content)
+- `analytics/reports.py` -- `query_skill_usage()` / `query_tool_calls()` (the grouped `skill_loads` / `tool_calls` queries, run on an [Analytics Store](analytics.md) cursor in a worker thread) and the pure `build_skills_report()` / `build_tool_calls_report()` folds behind the Skills and Tool Calls sections; `db/skill_store.py` -- `list_skill_labels()`, the any-owner name / kind / creator lookup for the skill ids a report names (never the content)
 - `db/guide_store.py` / `db/project_store.py` -- `list_all_guides()` (every user guide joined to its owner plus a per-guide routine reference count) and `list_all_project_guides()` (projects with non-empty `projects.guide` instructions) behind the guides report
 - `chat/storage.py` -- `ChatStorage.count_user_message_active_days()` (distinct UTC days with user messages, from chat_history.json) and the range-clipped day-set variant `user_message_active_days()`
 
@@ -33,16 +33,16 @@ Admin gating is enforced on the backend via the inline `is_admin(user["email"])`
 - `frontend/src/components/ModelsReportTable.tsx` / `.css` -- "Models" section (date-range selector + per-model cost/audience table, fetch-on-demand)
 - `frontend/src/components/FeatureUsageReport.tsx` / `.css` -- the shared frame (header with summary, date range and refresh; loading / empty / error states), the `useRangedAdminReport` fetch hook and the cell helpers of the three feature-usage sections
 - `frontend/src/components/DocsReportTable.tsx`, `TablesReportTable.tsx`, `MemoriesReportTable.tsx` -- the "Docs", "Tables" and "Memories" sections (per-user tables on the shared frame)
-- `frontend/src/components/SkillsReportTable.tsx` -- the "Skills" section (per-skill table on the shared frame)
+- `frontend/src/components/SkillsReportTable.tsx`, `ToolCallsReportTable.tsx` -- the "Skills" and "Tool Calls" sections (per-skill and per-tool tables on the shared frame)
 - `frontend/src/components/GuidesReportTable.tsx` / `.css` -- "Guides" section (deprecation tracker: every user guide and project guide with owner, fetch-on-demand, client-side "Hide empty" toggle)
 - `frontend/src/components/ReportDateRange.tsx` / `.css` -- shared date-range picker (presets + custom start/end, `resolveRange` date math) used by Cost Analysis, Users and Models
 - `frontend/src/components/ConversationUsageCell.tsx` / `.css` -- shared per-model token-usage breakdown cell (native-field row format + exact-numbers tooltip), used by both tables
 - `frontend/src/components/AdminOpsMenu.tsx` -- "System Reports" menu item (admin-only, hidden during impersonation; sibling to "Impersonate user" and the shutdown button)
 - `frontend/src/App.tsx` -- `AdminSystemReportsRoute` at `/admin/system-reports`, plus a legacy `/admin/system-monitor` redirect
 - `quest.py` -- `serve_spa_admin` SPA catch-all for `/admin/{rest:path}` so direct browser loads serve `index.html` instead of 404 (safe because all admin API routes live under `/app/api/admin/...`; see [Frontend -- Backend SPA Support](frontend.md#backend-spa-support))
-- `frontend/src/api/client.ts` -- `fetchLatestActiveConversations()`, `fetchAdminUsageReport()`, `fetchMostExpensiveConversations()`, `fetchAdminUserReport()`, `fetchAdminModelReport()`, `fetchAdminDocsReport()`, `fetchAdminTablesReport()`, `fetchAdminMemoriesReport()`, `fetchAdminSkillsReport()`, `fetchAdminGuidesReport()`
-- `frontend/src/api/config.ts` -- `adminLatestActiveConversations`, `adminUsageReport`, `adminMostExpensiveConversations`, `adminUserReport`, `adminModelReport`, `adminDocsReport`, `adminTablesReport`, `adminMemoriesReport`, `adminSkillsReport`, `adminGuidesReport` URL builders
-- `frontend/src/api/types.ts` -- `AdminActiveConversation`, `AdminConversationModelUsage`, `AdminConversationUsageTotal`, `AdminUsageReport` / `AdminUsageWindow` / `AdminUsageBucket`, `AdminUserReportRow`, `AdminModelReportRow`, `AdminDocsReportRow`, `AdminTablesReportRow`, `AdminMemoriesReportRow`, `AdminSkillsReportRow`, `AdminGuideReportRow`, response types
+- `frontend/src/api/client.ts` -- `fetchLatestActiveConversations()`, `fetchAdminUsageReport()`, `fetchMostExpensiveConversations()`, `fetchAdminUserReport()`, `fetchAdminModelReport()`, `fetchAdminDocsReport()`, `fetchAdminTablesReport()`, `fetchAdminMemoriesReport()`, `fetchAdminSkillsReport()`, `fetchAdminToolCallsReport()`, `fetchAdminGuidesReport()`
+- `frontend/src/api/config.ts` -- `adminLatestActiveConversations`, `adminUsageReport`, `adminMostExpensiveConversations`, `adminUserReport`, `adminModelReport`, `adminDocsReport`, `adminTablesReport`, `adminMemoriesReport`, `adminSkillsReport`, `adminToolCallsReport`, `adminGuidesReport` URL builders
+- `frontend/src/api/types.ts` -- `AdminActiveConversation`, `AdminConversationModelUsage`, `AdminConversationUsageTotal`, `AdminUsageReport` / `AdminUsageWindow` / `AdminUsageBucket`, `AdminUserReportRow`, `AdminModelReportRow`, `AdminDocsReportRow`, `AdminTablesReportRow`, `AdminMemoriesReportRow`, `AdminSkillsReportRow`, `AdminToolCallsReportRow`, `AdminGuideReportRow`, response types
 - `frontend/src/utils/formatters.ts` -- `formatRelativeTimestamp` shared by the tables' last-active columns, `formatCompactNumber` ("12.3K" / "4M") for the Total Usage cells and chart axes, `formatBytes` for the Docs section's size column
 
 See [Admin System Reports API](../api/admin-system-monitor-api.md) for the endpoint contracts.
@@ -152,6 +152,12 @@ Three feature-adoption reports answering "who uses this, and how much": one row 
 
 Columns (`AdminSkillsReportRow`): **Skill** (kind badge, name, creator), **Conversations** (distinct conversations with a load in range), **Routine convos** (of those, routine-created: by the `conversations` row, or by the `routine_id` the ledger row carried, so a deleted routine conversation keeps its attribution), **Users** (distinct), **Loads** (every load event in range, split in the sub-line into auto-loads, composer loads, model calls and rows the `skill_reads.json` backfill imported) and **Last used**. Loads are events, not conversations: an auto-loaded skill counts once per turn, so the load figure is a weight of how often the body was in context, while the conversation figure is the adoption count. The header summary carries the backfill status; until the import has run, history before the ledger existed is simply absent.
 
+## Tool Calls Section
+
+"Which tools does the model call, how often, by whom", answered from the `tool_calls` ledger of the [Analytics Store](analytics.md#tool_calls): one row per effective tool called in the selected range (a `tool_call` meta-tool call counts under the tool it routed to), on the shared frame. `query_tool_calls()` groups per tool, conversation and user; `build_tool_calls_report()` attributes routine calls like the Skills fold and sorts by calls, then conversations, then name.
+
+Columns (`AdminToolCallsReportRow`): **Tool** (name and share of all calls), **Calls** (every call in range, whoever issued it; the sub-line splits out sub-agent, sandbox-script, `tool_call`-routed and backfill-imported calls), **Routine calls**, **Conversations** and **Users** (distinct; a script call without a launching conversation counts for its user only), **Last call**. Arguments and outputs are never recorded. The header summary carries the backfill status.
+
 ## Guides Section
 
 A deprecation tracker for the retired [guides](guides.md) feature: guide creation is already disabled, and this section lists who still has guides so the remaining users can be contacted before the feature is removed entirely. It renders one row per guide in the system, sorted by owner email (fetch-on-demand: on mount and via the refresh button; no date range -- guides are a current-state inventory, not an activity stream). Two kinds of rows share the table (`AdminGuideReportRow`, `kind` discriminated):
@@ -179,8 +185,8 @@ The realtime infrastructure is per-user-scoped; broadcasting global activity to 
 **Why clamp `limit` server-side?**
 Both handlers cap `limit` at 100 so a crafted query string cannot fan out into a giant scan. The FE only ever requests the defaults (20 latest / 30 most expensive).
 
-**Why does the Skills section read a ledger instead of the transcripts?**
-A transcript scan (what PR #170 built) re-reads every `chat_history.json` overlapping the range on each refresh, cannot see auto-loads at all (they leave no message) and gets slower with every conversation. The ledger is written once at the moment of the load, knows the source, and aggregates in one grouped query -- see [Analytics Store](analytics.md) for why that ledger is not in `quest.db`.
+**Why do the Skills and Tool Calls sections read ledgers instead of the transcripts?**
+A transcript scan (what PR #170 built) re-reads every `chat_history.json` overlapping the range on each refresh, cannot see auto-loads at all (they leave no message), misses sandbox-script calls (never persisted) and gets slower with every conversation. A ledger row is written once at the moment of the event, knows its source, and aggregates in one grouped query -- see [Analytics Store](analytics.md) for why the ledgers are not in `quest.db`.
 
 **Why rank by known cost instead of skipping unpriced conversations?**
 Hiding spend because one model lacks a pricing entry would make the report silently lossy; ranking by the priceable portion keeps every conversation visible while the null total flags the estimate as incomplete.

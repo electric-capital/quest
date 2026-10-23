@@ -738,7 +738,7 @@ async def run_conversation_turn(
         # personal autoloads must not shape a run they are not driving.
         resolved_skills_content = ""
         from db.skill_store import get_user_autoloaded_skills
-        from analytics.ledger import record_skill_load
+        from analytics.ledger import record_skill_load, record_tool_call
         skill_parts = []
         included_skill_ids = set()
         # (source, skill ids) per tier, for the skill_loads ledger.
@@ -1431,6 +1431,14 @@ async def run_conversation_turn(
                     "tool_id": tool_id,
                     "intent_message": intent_message,
                 }, durable_extra={"role": "assistant"})
+                # One tool_calls ledger row per call, at dispatch time so a
+                # call that suspends the turn still counts (best-effort;
+                # see analytics/ledger.py).
+                record_tool_call(
+                    user_id=user["id"], tool_name=fc_event.tool_name, args=args,
+                    call_type="top_level", conversation_id=conversation_id,
+                    tool_id=tool_id, project_id=project_id, routine_id=routine_id,
+                )
 
                 # Execute: loop-handled arms (sub-agent spawners, blocking
                 # action-request / Slack-reply / wait arms, origin-specific

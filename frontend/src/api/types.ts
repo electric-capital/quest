@@ -2268,6 +2268,38 @@ export interface AdminSkillsReportResponse {
   backfill: AdminSkillsReportBackfill | null;
 }
 
+// System Reports "Tool Calls" section: one row per effective tool called in
+// the selected range (tool_calls ledger; a call through the tool_call
+// meta-tool counts under the tool it routed to).
+export interface AdminToolCallsReportRow {
+  tool: string;
+  // Calls in range, and the splits in the sub-line.
+  call_count: number;
+  // Issued through the tool_call meta-tool rather than by the tool's own name.
+  dynamic_count: number;
+  // Calls made in routine-created conversations.
+  routine_call_count: number;
+  sub_agent_call_count: number;
+  // Calls bridged from sandbox scripts (POST /api/tool-call).
+  script_call_count: number;
+  // Rows imported from pre-ledger chat_history.json transcripts.
+  backfill_count: number;
+  // Distinct conversations with a call in range, and distinct users.
+  conversation_count: number;
+  user_count: number;
+  // Newest call in range (ISO, naive UTC).
+  last_called_at: string | null;
+}
+
+export interface AdminToolCallsReportResponse {
+  tools: AdminToolCallsReportRow[];
+  call_count: number;
+  // Distinct conversations with any tool call in range.
+  conversation_count: number;
+  // Status of the transcript import; null until it has run.
+  backfill: AdminSkillsReportBackfill | null;
+}
+
 // Admin feature gates (server-global on/off switches for optional features;
 // every feature is off by default)
 export interface FeatureGate {
