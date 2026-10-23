@@ -81,10 +81,15 @@ class TestTokenStore:
         assert (lease.conversation_id, lease.project_id, lease.is_public) == (
             "conv-1", "proj-1", True,
         )
+        # The two tokens issued above stay live; the context-managed lease
+        # is revoked on exit.
+        assert active_lease_count() == 2
         with sandbox_token_lease(7, ttl_seconds=60, project_id="proj-2") as tok2:
             assert resolve_sandbox_token(tok2).project_id == "proj-2"
             assert resolve_sandbox_token(tok2).is_public is False
-        assert active_lease_count() == 0
+            assert active_lease_count() == 3
+        assert resolve_sandbox_token(tok2) is None
+        assert active_lease_count() == 2
         # Revoking again is a no-op.
         revoke_sandbox_token(tok)
 
