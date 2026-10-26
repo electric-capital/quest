@@ -7,7 +7,10 @@
  * `markdownComponents`, with `assets/<name>` images resolved against the
  * doc's asset route via MarkdownWorkspaceContext.assetBase, or the raw
  * markdown in a <pre> -- and a footer naming the last writer and the update
- * time. Data comes from useDoc, which follows the realtime doc events.
+ * time. Data comes from useDoc, which follows the realtime doc events. In
+ * view mode the header sticks to the top of the scrolling pane; a sentinel
+ * above it sets `doc-viewer--scrolled` once the doc has scrolled under it,
+ * which draws the header's bottom hairline (DocViewer.css).
  *
  * Beside the column, an aside holds the doc's Assets list (DocAssetsPanel,
  * from the detail's `assets`). DocViewer.css lays it out: a 280px right
@@ -151,6 +154,17 @@ export function DocViewer({ docId }: { docId: string }) {
   const { userEmail } = useAuth();
   const draftScope = docDraftScope(userEmail);
   const viewerRef = useRef<HTMLDivElement>(null);
+
+  // The sticky header's hairline: on once the sentinel above the header has
+  // scrolled out of the pane (IntersectionObserver clips by the scrolling
+  // ancestor, so the viewport root is enough).
+  const [scrolled, setScrolled] = useState(false);
+  const sentinelRef = useCallback((node: HTMLDivElement | null) => {
+    if (!node || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(([entry]) => setScrolled(!entry.isIntersecting));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   // Show source is per doc: tagged with the doc it was turned on for, so
   // opening another doc starts rendered again.
@@ -313,8 +327,12 @@ export function DocViewer({ docId }: { docId: string }) {
   }
 
   return (
-    <div ref={viewerRef} className={`doc-viewer doc-viewer--${mode}`}>
+    <div
+      ref={viewerRef}
+      className={`doc-viewer doc-viewer--${mode}${scrolled ? ' doc-viewer--scrolled' : ''}`}
+    >
       <div className="doc-viewer-column">
+        <div ref={sentinelRef} className="doc-viewer-scroll-sentinel" aria-hidden="true" />
         <DocHeader
           key={doc.id}
           doc={doc}
