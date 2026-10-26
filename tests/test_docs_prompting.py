@@ -255,6 +255,21 @@ class TestQuestDocsSkill:
         assert "## YYYY-MM-DD" in content
         assert "Slack" in content
 
+    def test_content_says_versions_are_built_in(self):
+        # History keeps every replaced body, so the default for a revision
+        # is an edit of the same doc, never a "v2" copy.
+        from chat.docs.constants import (
+            DOC_REVISION_MAX_COUNT,
+            DOC_REVISION_RETENTION_DAYS,
+        )
+        from chat.system_skills import CATALOG
+        content = CATALOG["system:quest_docs"].content_builder(BASE_URL, API_KEY)
+        assert "### Versions are built in: revise the doc in place" in content
+        assert "change THAT doc with `edit_doc`" in content
+        assert "Create a separate doc only" in content
+        assert f"the last {DOC_REVISION_RETENTION_DAYS} days of versions" in content
+        assert f"up to {DOC_REVISION_MAX_COUNT} per doc" in content
+
     def test_action_request_docs_point_at_skill(self):
         from chat.llm.tool_schemas import TOP_LEVEL_TOOLS
         from chat.system_skills import CATALOG
@@ -359,6 +374,20 @@ class TestPromptGating:
         for name in DOC_TOOLS:
             assert core_bullet(name) in prompt, name
         assert "system:" not in prompt
+
+    def test_standalone_texts_say_revise_in_place(self):
+        # The tool descriptions and the public paragraph stand alone (the
+        # public prompt carries no skills), so each repeats the default.
+        from chat.gemini_api.system_prompt import get_public_project_system_prompt
+        from chat.llm.tool_schemas import TOOL_CALL_REGISTRY
+        for name in ("create_doc", "edit_doc"):
+            desc = TOOL_CALL_REGISTRY[name]["description"]
+            assert "built-in version history" in desc, name
+            assert "unless the user asks for a separate doc" in desc, name
+        prompt = get_public_project_system_prompt(docs_enabled=True)
+        assert "built-in version history" in prompt
+        assert "revise an existing doc in place" in prompt
+        assert "create a separate doc only when the user asks for one" in prompt
 
 
 # ---------------------------------------------------------------------------

@@ -34,6 +34,8 @@ from chat.docs.constants import (
     DOC_MAX_CONTENT_SIZE,
     DOC_MAX_IMAGE_SIZE,
     DOC_READ_MAX_CHARS,
+    DOC_REVISION_MAX_COUNT,
+    DOC_REVISION_RETENTION_DAYS,
     DOCS_SERVICE_KEY,
 )
 from chat.tables.constants import (
@@ -1268,6 +1270,10 @@ def _quest_docs_content(_base_url: str, _api_key: str) -> str:
     image_cap = f"{DOC_MAX_IMAGE_SIZE // mb} MB"
     assets_cap = f"{DOC_MAX_ASSETS} images / {DOC_MAX_ASSETS_TOTAL_BYTES // mb} MB"
     read_cap = f"{DOC_READ_MAX_CHARS:,}"
+    history_window = (
+        f"the last {DOC_REVISION_RETENTION_DAYS} days of versions, "
+        f"up to {DOC_REVISION_MAX_COUNT} per doc"
+    )
     return f"""## Quest Docs
 
 A **Quest Doc** is a markdown document kept inside Quest. Unlike a
@@ -1321,6 +1327,22 @@ Writes:
 
 There is no whole-body replace, and no tool renames or deletes a doc: the
 user does that in the UI. The body is capped at {body_cap}.
+
+### Versions are built in: revise the doc in place
+
+Every doc keeps its own version history. Before each change to the body,
+the previous body is saved as a version in the doc's **History**, where the
+user can browse, compare, restore or copy any earlier version in the Quest
+UI ({history_window}). So by default, when the user asks you to update,
+revise, rewrite, restructure or fix a doc, change THAT doc with `edit_doc` /
+`append_to_doc` (through a `write_doc` card when it needs approval). Do not
+create a new doc to keep the old text safe -- no "<title> v2",
+"<title> (revised)", dated or backup copy: History already keeps the old
+text, and a second doc splits the content and leaves later conversations
+guessing which one is current. Create a separate doc only when the user
+asks for one (a copy, a variant to keep side by side, a new doc).
+Restoring or copying an earlier version is done by the user in the doc's
+History view; point them there.
 
 ### Modes and who may write
 
