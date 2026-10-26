@@ -448,6 +448,47 @@ class TestGet:
         assert row["last_write_source"] == "action_request:7"
         assert row["last_write_conversation"] is None
 
+    def test_last_write_conversation_of_an_approved_card(self, docs_env):
+        """An approved card's write links the conversation that proposed it
+        when the card is the owner's own; a share recipient's card stays
+        unlinked (named by ``last_write_user``)."""
+        from datetime import datetime, timezone
+        from db import action_request_store, conversation_store
+
+        doc = seed_doc(docs_env, "Notes", "x\n", shares=[("bob", "write")])
+        conv_id = str(uuid.uuid4())
+        _run(conversation_store.create_conversation(
+            uid(docs_env, "alice"), conv_id, datetime.now(timezone.utc), custom_name="Planning",
+        ))
+        mine = _run(action_request_store.create_action_request(
+            uid(docs_env, "alice"), conv_id, "write_doc", {"doc_id": doc["id"]}, "r",
+        ))["id"]
+        _run(docs_env.doc_store.update_after_write(
+            doc["id"], content_size=2, last_write_source=f"action_request:{mine}",
+        ))
+        row = client(docs_env).get(f"/app/api/docs/{doc['id']}").json()
+        assert row["last_write_conversation"] == {
+            "id": conv_id, "title": "Planning", "project_id": None,
+        }
+        assert row["last_write_user"] is None
+        # Blanked for a share recipient along with last_write_source.
+        row = client(docs_env, "bob").get(f"/app/api/docs/{doc['id']}").json()
+        assert row["last_write_conversation"] is None
+
+        bob_conv = str(uuid.uuid4())
+        _run(conversation_store.create_conversation(
+            uid(docs_env, "bob"), bob_conv, datetime.now(timezone.utc), custom_name="Bob's chat",
+        ))
+        bobs = _run(action_request_store.create_action_request(
+            uid(docs_env, "bob"), bob_conv, "write_doc", {"doc_id": doc["id"]}, "r",
+        ))["id"]
+        _run(docs_env.doc_store.update_after_write(
+            doc["id"], content_size=2, last_write_source=f"action_request:{bobs}",
+        ))
+        row = client(docs_env).get(f"/app/api/docs/{doc['id']}").json()
+        assert row["last_write_conversation"] is None
+        assert row["last_write_user"]["id"] == uid(docs_env, "bob")
+
     def test_project_doc_visible_in_ui(self, docs_env):
         doc = seed_doc(docs_env, "Proj", "p\n", project_id=docs_env.private_project)
         row = client(docs_env).get(f"/app/api/docs/{doc['id']}").json()

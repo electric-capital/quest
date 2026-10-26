@@ -1198,7 +1198,11 @@ export interface Doc {
 }
 
 /** GET /docs/{id}: the row plus the whole markdown body. */
-/** The conversation named by `last_write_source`, for the viewer footer. */
+/**
+ * The conversation behind `last_write_source` (a `conversation:<id>` writer,
+ * or the conversation that proposed the owner's own approved card), for the
+ * viewer footer and History.
+ */
 export interface DocWriteConversation {
   id: string;
   title: string;
@@ -1219,8 +1223,9 @@ export interface DocDetail extends Doc {
   content: string;
   /**
    * Resolved by GET /docs/{id} when `last_write_source` is a conversation
-   * the owner still has; null otherwise (deleted, not a conversation, or
-   * blanked for non-owners together with `last_write_source`).
+   * the owner still has, or an approved card the owner proposed from one;
+   * null otherwise (deleted, a share recipient's card, not a conversation,
+   * or blanked for non-owners together with `last_write_source`).
    */
   last_write_conversation: DocWriteConversation | null;
   /** The doc's images, sorted by name (served by GET /docs/{id}/assets/{name}). */

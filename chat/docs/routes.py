@@ -743,8 +743,26 @@ async def get_ui_doc(
     row = await _ui_row(user, doc, access)
     row["content"] = content
     row["assets"] = asset_rows
-    row["last_write_conversation"] = await _last_write_conversation(user, row)
+    row["last_write_conversation"] = await _doc_last_write_conversation(user, row)
     return row
+
+
+async def _doc_last_write_conversation(user: dict, row: dict) -> Optional[dict]:
+    """:func:`_last_write_conversation`, plus the conversation that proposed
+    an approved ``write_doc`` card (``action_request:<id>``) when that card
+    is the viewer's own: the owner's footer then links the conversation
+    behind an approved change too. A share recipient's card stays unlinked
+    (their conversation is not the owner's to open); its proposer is named
+    by ``last_write_user``.
+    """
+    request_id = _source_id(_ACTION_REQUEST_SOURCE_RE, row.get("last_write_source"))
+    if request_id is None:
+        return await _last_write_conversation(user, row)
+    found = await action_request_store.get_action_request_conversations(
+        user["id"], [request_id],
+    )
+    conversation_id = found.get(request_id)
+    return await _conversation_ref(user, conversation_id) if conversation_id else None
 
 
 async def _last_write_conversation(user: dict, row: dict) -> Optional[dict]:
@@ -762,6 +780,12 @@ async def _last_write_conversation(user: dict, row: dict) -> Optional[dict]:
     conversation_id = source[len("conversation:"):]
     if not conversation_id:
         return None
+    return await _conversation_ref(user, conversation_id)
+
+
+async def _conversation_ref(user: dict, conversation_id: str) -> Optional[dict]:
+    """``{id, title, project_id}`` of one of ``user``'s conversations, or
+    None when it does not exist (or is someone else's)."""
     from chat.storage import ChatStorage
     from db.conversation_store import get_conversation_meta
 

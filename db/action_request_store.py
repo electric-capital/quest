@@ -66,6 +66,37 @@ async def get_action_request_owners(request_ids) -> dict[int, int]:
     return owners
 
 
+async def get_action_request_conversations(user_id: int, request_ids) -> dict[int, str]:
+    """``{request_id: conversation_id}`` for ``user_id``'s own requests among
+    ``request_ids``.
+
+    Quest Docs links an approved card's write (``action_request:<id>``) to
+    the conversation that proposed it, for the owner of that conversation
+    only: other users' cards and unknown ids are simply absent. One query
+    per 500 ids.
+    """
+    ids = sorted({
+        rid for rid in request_ids
+        if isinstance(rid, int) and not isinstance(rid, bool)
+    })
+    conversations: dict[int, str] = {}
+    if not ids:
+        return conversations
+    async with AsyncSessionLocal() as db:
+        for i in range(0, len(ids), 500):
+            result = await db.execute(
+                select(ActionRequest.id, ActionRequest.conversation_id)
+                .where(
+                    ActionRequest.user_id == user_id,
+                    ActionRequest.id.in_(ids[i:i + 500]),
+                )
+            )
+            for rid, conversation_id in result.all():
+                if conversation_id:
+                    conversations[rid] = conversation_id
+    return conversations
+
+
 async def list_action_requests(
     user_id: int,
     status: Optional[str] = None,

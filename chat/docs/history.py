@@ -35,12 +35,16 @@ anyone else is "the owner"; a conversation is its title for the owner ("a
 deleted conversation" when gone) and "a conversation" for anyone else;
 ``action_request:<id>`` (an approved ``write_doc`` card) is attributed to
 the card's proposer (``action_request_store.get_action_request_owners``):
-for the owner, "action request #<id>" when the owner proposed it (or the
-card is gone) and "<proposer's name or email> (approved change)" when a
-share recipient did ("a deleted user (approved change)" once that user is
-gone); for anyone else, "you (approved change)" when the viewer proposed it
-and "an approved change" otherwise; anything else is "unknown". Non-owners
-never receive raw sources, conversation ids/titles or action request ids.
+for the owner, "<conversation title> (approved change)" with ``conversation``
+set when the owner proposed it from a conversation that still exists
+(``action_request_store.get_action_request_conversations``), else "action
+request #<id>" (also when the card is gone), and "<proposer's name or
+email> (approved change)" when a share recipient did ("a deleted user
+(approved change)" once that user is gone; the recipient's conversation is
+not the owner's to open); for anyone else, "you (approved change)" when the
+viewer proposed it and "an approved change" otherwise; anything else is
+"unknown". Non-owners never receive raw sources, conversation ids/titles or
+action request ids.
 
 Editors' names ARE shown to every viewer, non-owners included (a
 write-share recipient sees which other recipient restored or edited a
@@ -49,6 +53,7 @@ the install are already discoverable through ``/users/search``. Lookups are
 batched: per response at most one ``action_request_store
 .get_action_request_owners``, then one ``user_store.get_users_by_ids``
 (UI writers and, for the owner, card proposers) and, for the owner, one
+``get_action_request_conversations`` (the owner's own cards) and one
 ``conversation_store.get_conversations_meta`` plus one thread hop for all
 conversation titles.
 
@@ -520,8 +525,10 @@ def _action_request_label(
     is_owner: bool,
     users: dict[int, dict],
     card_owners: dict[int, int],
+    conversation: Optional[dict],
 ) -> str:
-    """``source_label`` of an approved card's write (see the module doc)."""
+    """``source_label`` of an approved card's write (see the module doc);
+    ``conversation`` is the owner's own proposing conversation, if known."""
     card_id = _card_id(ref)
     proposer = card_owners.get(card_id) if card_id is not None else None
     if not is_owner:
@@ -530,6 +537,8 @@ def _action_request_label(
         return "an approved change"
     if proposer is not None and proposer != viewer_id:
         return f"{_user_label(users.get(proposer))} (approved change)"
+    if conversation is not None:
+        return f"{conversation['title']} (approved change)"
     return f"action request #{ref}" if ref else "an action request"
 
 
@@ -543,6 +552,7 @@ def _version_dict(
     users: dict[int, dict],
     conversations: dict[str, dict],
     card_owners: dict[int, int],
+    card_conversations: dict[int, str],
 ) -> dict:
     conversation = None
     if kind == "ui":
@@ -560,9 +570,12 @@ def _version_dict(
         else:
             label = "a conversation"
     elif kind == "action_request":
+        if is_owner:
+            found = conversations.get(card_conversations.get(_card_id(ref)))
+            conversation = dict(found) if found else None
         label = _action_request_label(
             ref, viewer_id=viewer_id, is_owner=is_owner,
-            users=users, card_owners=card_owners,
+            users=users, card_owners=card_owners, conversation=conversation,
         )
     else:
         label = "unknown"
@@ -582,7 +595,8 @@ async def _versions_for_viewer(user: dict, doc: dict, raws: list[_RawVersion]) -
     """Label ``raws`` for ``user``, with at most one lookup of each kind:
     card proposers (when some version came from an approved card), users
     (UI writers other than the viewer and, for the owner, proposers other
-    than the owner), and -- for the owner only -- conversations."""
+    than the owner), and -- for the owner only -- the conversations of the
+    owner's own cards and all conversations."""
     viewer_id = user["id"]
     is_owner = doc["owner_id"] == viewer_id
     classified = [(raw, *_classify(raw.source)) for raw in raws]
@@ -607,10 +621,20 @@ async def _versions_for_viewer(user: dict, doc: dict, raws: list[_RawVersion]) -
     users = await user_store.get_users_by_ids(user_ids) if user_ids else {}
 
     conversations: dict[str, dict] = {}
+    card_conversations: dict[int, str] = {}
     if is_owner:
+        own_cards = {
+            card_id for card_id, proposer in card_owners.items() if proposer == viewer_id
+        }
+        if own_cards:
+            card_conversations = (
+                await action_request_store.get_action_request_conversations(
+                    viewer_id, own_cards,
+                )
+            )
         conversation_ids = {
             ref for _raw, kind, ref in classified if kind == "conversation"
-        }
+        } | set(card_conversations.values())
         if conversation_ids:
             conversations = await _conversation_refs(viewer_id, conversation_ids)
 
@@ -619,6 +643,7 @@ async def _versions_for_viewer(user: dict, doc: dict, raws: list[_RawVersion]) -
             raw, kind, ref,
             viewer_id=viewer_id, is_owner=is_owner,
             users=users, conversations=conversations, card_owners=card_owners,
+            card_conversations=card_conversations,
         )
         for raw, kind, ref in classified
     ]

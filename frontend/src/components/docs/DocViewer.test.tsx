@@ -370,6 +370,19 @@ describe('DocViewer', () => {
       expect(footerText(container)).toBe('Last written by action request #42 · Updated 5m ago');
     });
 
+    it("links the conversation that proposed the owner's approved change", () => {
+      setView({ doc: doc({
+        last_write_source: 'action_request:42',
+        last_write_conversation: { id: 'c9', title: 'Quarterly planning', project_id: 'p1' },
+      }) });
+      const { container } = renderViewer();
+      expect(footerText(container)).toBe(
+        'Last written by Quarterly planning (approved change) · Updated 5m ago',
+      );
+      const link = screen.getByRole('link', { name: 'Quarterly planning' });
+      expect(link.getAttribute('href')).toBe('/projects/p1/c9');
+    });
+
     it('omits the writer when the source is null', () => {
       setView({ doc: doc({ last_write_source: null }) });
       const { container } = renderViewer();

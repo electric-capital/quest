@@ -179,14 +179,15 @@ def user_docs_of(env, who):
     return [d for d in docs if d["owner_id"] == uid(env, who)]
 
 
-def make_card(env, who, doc_id="d"):
-    """An approved write_doc action request row proposed by ``who``."""
+def make_card(env, who, doc_id="d", conversation_id=None):
+    """An approved write_doc action request row proposed by ``who`` (from a
+    conversation that does not exist unless ``conversation_id`` is given)."""
     from db.models import ActionRequest
 
     async def _add():
         async with env.doc_store.AsyncSessionLocal() as db:
             row = ActionRequest(
-                user_id=uid(env, who), conversation_id=str(uuid.uuid4()),
+                user_id=uid(env, who), conversation_id=conversation_id or str(uuid.uuid4()),
                 request_type="write_doc", params={"doc_id": doc_id},
                 reasoning="r", status="approved",
             )
@@ -454,6 +455,64 @@ class TestList:
         bob_rev = rev_ids(doc["id"])[2]  # v2, written by bob's card
         got = client(env).get(f"/app/api/docs/{doc['id']}/revisions/{bob_rev}").json()
         assert got["source_label"] == "Bob Builder (approved change)"
+
+    def test_owner_cards_link_their_conversation(self, env, monkeypatch):
+        """The owner's approved cards (several from one conversation, as
+        when the model proposes them in one response) link that
+        conversation; a recipient's card and a gone conversation do not.
+        One lookup for the owner's own cards' conversations, folded into the
+        one conversations lookup."""
+        from chat.docs import history
+
+        doc = seed_doc(env, "Cards", "v0\n", shares=[("bob", "write")])
+        cid = make_conversation(env, "Planning", project_id=env.private_project)
+        bob_cid = make_conversation(env, "Bob chat", owner="bob")
+        first = make_card(env, "alice", doc["id"], conversation_id=cid)
+        second = make_card(env, "alice", doc["id"], conversation_id=cid)
+        bobs = make_card(env, "bob", doc["id"], conversation_id=bob_cid)
+        orphan = make_card(env, "alice", doc["id"])  # its conversation is gone
+        for i, card in enumerate([first, second, bobs, orphan], start=1):
+            files.write_body(doc["id"], f"v{i}\n", write_source=f"action_request:{card}")
+
+        card_calls, batch_calls = [], []
+        real_cards = history.action_request_store.get_action_request_conversations
+        real_batch = history.conversation_store.get_conversations_meta
+
+        async def cards_spy(user_id, ids):
+            card_calls.append((user_id, set(ids)))
+            return await real_cards(user_id, ids)
+
+        async def batch_spy(user_id, ids):
+            batch_calls.append((user_id, set(ids)))
+            return await real_batch(user_id, ids)
+
+        monkeypatch.setattr(
+            history.action_request_store, "get_action_request_conversations", cards_spy,
+        )
+        monkeypatch.setattr(history.conversation_store, "get_conversations_meta", batch_spy)
+
+        listing = client(env).get(f"/app/api/docs/{doc['id']}/revisions").json()
+        versions = _chronological(listing)[1:]
+        planning = {"id": cid, "title": "Planning", "project_id": env.private_project}
+        assert [v["source_label"] for v in versions] == [
+            "Planning (approved change)",
+            "Planning (approved change)",
+            "Bob Builder (approved change)",
+            f"action request #{orphan}",
+        ]
+        assert [v["conversation"] for v in versions] == [planning, planning, None, None]
+        assert card_calls == [(uid(env, "alice"), {first, second, orphan})]
+        assert len(batch_calls) == 1 and cid in batch_calls[0][1]
+        assert bob_cid not in batch_calls[0][1]
+
+        # A recipient never gets conversations, not even of its own cards.
+        card_calls.clear()
+        batch_calls.clear()
+        listing = client(env, "bob").get(f"/app/api/docs/{doc['id']}/revisions").json()
+        versions = _chronological(listing)[1:]
+        assert [v["conversation"] for v in versions] == [None] * 4
+        assert versions[2]["source_label"] == "you (approved change)"
+        assert card_calls == [] and batch_calls == []
 
     def test_card_proposer_gone_or_no_cards(self, env, monkeypatch):
         from chat.docs import history

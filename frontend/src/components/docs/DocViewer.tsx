@@ -39,7 +39,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { docAssetBase } from '../../api/docsApi';
-import type { Doc, DocContentResponse, DocDetail, DocUserRef } from '../../api/types';
+import type { Doc, DocContentResponse, DocDetail, DocUserRef, DocWriteConversation } from '../../api/types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useDoc } from '../../hooks/useDoc';
 import { useIsMobile } from '../../hooks/useIsMobile';
@@ -82,7 +82,9 @@ function personName(user: DocUserRef): string {
  *   viewer, else that person (`last_write_user`), "a deleted user" if gone;
  * - `action_request:<id>` -> "<name> (approved change)" when a share
  *   recipient's card made it (`last_write_user`; "a deleted user" when its
- *   name and email are null), else "action request #id";
+ *   name and email are null), else a link to the conversation that proposed
+ *   the card (`last_write_conversation`) followed by "(approved change)",
+ *   else "action request #id";
  * - `conversation:<id>` -> a link to the conversation (title and project
  *   from `last_write_conversation`), "a deleted conversation" when gone.
  */
@@ -96,13 +98,19 @@ function lastWriter(doc: DocDetail, viewerEmail: string | null): ReactNode {
       !!viewerEmail && !!user.email && user.email.toLowerCase() === viewerEmail.toLowerCase();
     return isViewer ? 'you' : personName(user);
   }
+  const writer = doc.last_write_conversation;
   const actionRequest = source ? ACTION_REQUEST_SOURCE_RE.exec(source) : null;
   if (actionRequest) {
-    return user ? `${personName(user)} (approved change)` : `action request #${actionRequest[1]}`;
+    if (user) return `${personName(user)} (approved change)`;
+    if (!writer) return `action request #${actionRequest[1]}`;
+    return <>{conversationLink(writer)} (approved change)</>;
   }
   if (!source?.startsWith(CONVERSATION_SOURCE_PREFIX)) return null;
-  const writer = doc.last_write_conversation;
   if (!writer) return 'a deleted conversation';
+  return conversationLink(writer);
+}
+
+function conversationLink(writer: DocWriteConversation): ReactNode {
   const id = encodeURIComponent(writer.id);
   const path = writer.project_id
     ? `/projects/${encodeURIComponent(writer.project_id)}/${id}`
