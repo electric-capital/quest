@@ -113,6 +113,7 @@ Plugin-specific docs live inside each plugin's directory under `plugins/<dir>/do
 | [tailscale-api.md](../plugins/tailscale/docs/tailscale-api.md) | Tailscale plugin: read-only tailnet configuration via authed_get with per-user tokens |
 | [tailscale-setup.md](../plugins/tailscale/docs/tailscale-setup.md) | Connecting Quest to a tailnet with a read-scoped OAuth client or an API token |
 | [sec-edgar-api.md](../plugins/sec_edgar/docs/sec-edgar-api.md) | SEC EDGAR plugin: credential-free read access to filings and XBRL data |
+| [vulns-api.md](../plugins/vulns/docs/vulns-api.md) | Vulnerability data plugin: OSV package checks, CISA KEV and FIRST EPSS tools, merging, caching |
 | [google-admin-api.md](../plugins/google_admin/docs/google-admin-api.md) | Google Workspace Admin plugin: read-only directory, devices and Meet call-quality tools |
 | [google-admin-setup.md](../plugins/google_admin/docs/google-admin-setup.md) | Configuring Google Workspace Admin: Admin SDK, redirect URI, admin connection |
 | [imap-api.md](../plugins/imap/docs/imap-api.md) | IMAP plugin: read-only mailboxes, several accounts per user, verified TLS only |

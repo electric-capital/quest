@@ -100,7 +100,7 @@ plugins/
 
 ## Reference plugin
 
-Eleven in-tree implementations (proprietary integrations can live in
+Twelve in-tree implementations (proprietary integrations can live in
 external repos and load via `QUEST_PLUGIN_PATH`):
 
 - `plugins/github/` — the GitHub integration (plugin id `github`) with a
@@ -210,6 +210,13 @@ external repos and load via `QUEST_PLUGIN_PATH`):
   no action requests. Its `connected_services` key is always true, so
   `GET /me`'s `has_any_service_connected` skips plugins of this shape
   (`config.plugins.connectionless_plugin_ids()`).
+- `plugins/vulns/` — the vulnerability data integration (plugin id
+  `vulns`): the credential-free shape again, this time with **tools**
+  instead of `authed_get` entries -- four read-only `vulns_*` tools over
+  OSV.dev (package checks, advisories merged across databases), the CISA
+  KEV catalog (downloaded whole and cached in-process) and FIRST EPSS,
+  all in the script bridge, with no `requires_service` gate, and the
+  ungated `system:vulns` skill.
 
 Each `plugin.py` is a thin re-export of `manifest.py` so tests import
 the real modules through the normal `plugins.<id>.*` package path.
@@ -268,7 +275,7 @@ their `tests/` directories too (repo-root `conftest.py`). See
 Upstream gitignores `plugins/*` except this README, `.gitkeep`,
 `_example/`, and the in-tree `github/`,
 `m365/`, `slack/`, `twitter/`, `twilio/`, `unifi/`, `iru/`, `telegram/`,
-`google_admin/`, `tailscale/`, and `sec_edgar/` plugins. A fork
+`google_admin/`, `tailscale/`, `sec_edgar/`, and `vulns/` plugins. A fork
 that ships proprietary plugins should remove or override those ignore
 lines in the fork and commit its plugin directories as ordinary files —
 there is no upstream merge surface either way.
