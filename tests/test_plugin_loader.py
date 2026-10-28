@@ -1227,7 +1227,7 @@ def test_core_auth_namespace_plugin_ids_are_reserved(pid):
         validate_plugin(QuestPlugin(id=pid, label="X"), set())
 
 
-@pytest.mark.parametrize("pid", ["docs", "tables"])
+@pytest.mark.parametrize("pid", ["docs", "doc_notes", "tables"])
 def test_pseudo_service_key_plugin_ids_are_reserved(pid):
     """The connected-services map carries feature-gate pseudo-keys; a plugin
     of that id would have its connected state overwritten by the gate."""

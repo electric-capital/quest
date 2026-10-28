@@ -87,6 +87,20 @@ class TestGateRegistration:
                 seen.add(required)
                 required = fg.FEATURE_REQUIRES.get(required)
 
+    def test_cycle_in_requirements_terminates(self, gates_file, monkeypatch):
+        # A cycle can only come from a bad edit of FEATURE_REQUIRES; the
+        # check must still end, open only while every gate on it is open.
+        monkeypatch.setattr(fg, "FEATURE_REQUIRES", {
+            fg.FEATURE_DOCS: fg.FEATURE_DOC_NOTES,
+            fg.FEATURE_DOC_NOTES: fg.FEATURE_DOCS,
+        })
+        fg.set_feature_enabled(fg.FEATURE_DOC_NOTES, True)
+        assert not fg.doc_notes_enabled_for(ADA)
+        assert not fg.docs_enabled_for(ADA)
+        fg.set_feature_enabled(fg.FEATURE_DOCS, True)
+        assert fg.doc_notes_enabled_for(ADA)
+        assert fg.docs_enabled_for(ADA)
+
     def test_off_by_default(self, gates_file):
         assert fg.read_feature_gates()[fg.FEATURE_DOC_NOTES] == {
             "enabled": False, "allowed_users": None,
@@ -218,12 +232,6 @@ class TestPseudoKey:
         info = _run(user_routes.get_current_user_info(user=user))
         assert info["has_any_service_connected"] is False
         assert info["enabled_features"] == [fg.FEATURE_DOCS, fg.FEATURE_DOC_NOTES]
-
-    def test_plugin_id_is_reserved(self):
-        from config.plugin_types import QuestPlugin
-        from config.plugins import validate_plugin
-        with pytest.raises(ValueError, match="pseudo-key"):
-            validate_plugin(QuestPlugin(id="doc_notes", label="X"), set())
 
 
 # ---------------------------------------------------------------------------

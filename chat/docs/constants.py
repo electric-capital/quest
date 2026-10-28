@@ -123,8 +123,8 @@ def docs_disabled_message() -> str:
 def doc_notes_disabled_message() -> str:
     """Model/user-facing text (``doc_notes_disabled``) when the
     ``doc_notes`` feature gate is closed for the caller, which includes
-    Quest Docs being closed for them."""
+    Quest Docs being closed for them (the gate requires it)."""
     return (
         "Quest Doc notes are not enabled for this user. An admin can enable "
-        "them in Settings > Features."
+        "them in Settings > Features (they require Quest Docs)."
     )

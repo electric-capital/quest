@@ -111,8 +111,10 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
     # with ``requires_service: "docs"`` / ``"doc_notes"`` / ``"tables"``)
     # and their system skills are hidden from prompts while the gate is
     # closed for this user. Set after the plugin loop so the gate always
-    # decides these keys. doc_notes_enabled_for already folds in the docs
-    # gate it requires, so "doc_notes" is never true while "docs" is false.
+    # decides these keys. doc_notes_enabled_for folds in the docs gate it
+    # requires (each wrapper reads the gates file on its own, so a toggle
+    # landing between the two reads can skew one map; the next build
+    # corrects it).
     email = user.get("email") or ""
     services[DOCS_SERVICE_KEY] = docs_enabled_for(email)
     services[DOC_NOTES_SERVICE_KEY] = doc_notes_enabled_for(email)
@@ -135,9 +137,10 @@ def get_public_connected_services(user: dict) -> dict[str, bool]:
     are set. It gates the public system skills (``PUBLIC_SYSTEM_SKILLS``
     in ``chat/llm/tool_schemas.py``) in the public prompt's enumeration
     and in the public ``load_skills`` arm; the public prompt's tool
-    sections take the same gates as explicit flags. ``"doc_notes"`` is set
-    here too because public conversations get the doc-notes tools, gated
-    on that key, like the doc tools."""
+    sections take the same gates as explicit flags. ``"doc_notes"`` is
+    kept in step with :func:`get_user_connected_services`; like the other
+    gates, the public prompt's tool sections take it as an explicit flag
+    rather than from this map."""
     email = user.get("email") or ""
     return {
         DOCS_SERVICE_KEY: docs_enabled_for(email),
