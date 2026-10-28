@@ -321,7 +321,7 @@ Both card renderers go through `ActionRequestPreviewFields.tsx`. `DocImagePrevie
 - **Image deleted**: gone from `assets/` for every version ([Known Limitations](#known-limitations)).
 - **Project delete** (`delete_user_project` in `chat/project_routes.py`): `list_docs_for_project()` (rows with their shares, for the audience) runs before the project row goes. The `docs.project_id` CASCADE removes the rows with their shares and notes, `_delete_doc_dirs()` sweeps the directories (failures logged, never raised), then the events go out ([Realtime](#realtime)). The sweep runs before the unguarded conversation-directory `rmtree` loop, so a failure there cannot leave doc files behind.
 - **Account delete** (`delete_account` in `chat/routes/user.py`): `list_doc_ids_for_user()` (user and project docs alike) runs before any row delete, and the directories are swept in a thread after the cascades and before the unguarded `rmtree` loops, for the same reason. Share rows granted to the deleted user cascade away; an everyone row on another user's doc survives. Rosters and History labels name a deleted user as such, and recipients are not notified ([Known Limitations](#known-limitations)).
-- **Project archived**, **convert chat to project**, **duplicate workspace**: no effect on docs. **Conversation deleted**: no effect, and `last_write_source` becomes a dead reference.
+- **Project archived**, **convert chat to project**, **duplicate workspace**: no effect. **Conversation deleted**: its doc-note suggestions cascade, and `last_write_source` becomes a dead reference.
 - Orphan directories (a crash between layout and insert, a failed best-effort sweep) are swept by nothing; no row points at them, so they are invisible.
 
 ## Script Bridge
