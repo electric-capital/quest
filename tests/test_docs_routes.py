@@ -165,8 +165,10 @@ class TestList:
     def test_owner_row_shape(self, docs_env):
         doc = seed_doc(docs_env, "Mine")
         row = client(docs_env).get("/app/api/docs").json()["docs"][0]
+        # The store dict's doc-notes counters stay out of UI rows.
+        notes_keys = docs_env.doc_store.NOTES_STATE_KEYS
         assert row == {
-            **{k: v for k, v in doc.items()},
+            **{k: v for k, v in doc.items() if k not in notes_keys},
             **OWNER_ROW_EXTRAS,
             "scope": "user",
             "shared": False,
@@ -174,6 +176,7 @@ class TestList:
             "access": OWNER_ACCESS,
         }
         assert "content" not in row
+        assert not set(notes_keys) & set(row)
 
     def test_newest_updated_first(self, docs_env):
         a = seed_doc(docs_env, "A")

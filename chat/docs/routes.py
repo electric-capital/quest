@@ -261,7 +261,11 @@ def _doc_row(
     users = users or {}
     is_owner = doc["owner_id"] == user["id"]
     shares = doc.get("shares") or []
-    row = {key: value for key, value in doc.items() if key != "shares"}
+    # Notes stay out of UI rows; the Notes panel reads its own route.
+    row = {
+        key: value for key, value in doc.items()
+        if key != "shares" and key not in doc_store.NOTES_STATE_KEYS
+    }
     row["scope"] = "project" if doc.get("project_id") else "user"
     row["shared"] = bool(shares)
     row["shared_with_me"] = not is_owner

@@ -119,10 +119,16 @@ class TestCreate:
         assert set(doc) == {
             "id", "owner_id", "project_id", "title", "description", "mode",
             "content_size", "asset_count", "last_write_source",
-            "require_approval", "created_at", "updated_at", "shares",
+            "require_approval", "has_instructions", "memory_count",
+            "instructions_version", "memories_version",
+            "created_at", "updated_at", "shares",
         }
         assert doc["title"] == "Plan"
         assert doc["require_approval"] is False
+        assert doc["has_instructions"] is False
+        assert doc["memory_count"] == 0
+        assert doc["instructions_version"] == 0
+        assert doc["memories_version"] == 0
         assert doc["description"] == "why"
         assert doc["owner_id"] == env["alice"]
         assert doc["project_id"] is None
