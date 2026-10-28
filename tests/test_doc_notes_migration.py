@@ -151,6 +151,17 @@ def _snapshot(db_path, old_doc_columns) -> dict:
     }
 
 
+def _rootpage(db_path, table) -> int:
+    """The table's root b-tree page. ADD COLUMN and DROP COLUMN keep it; a
+    batch (copy and move) rebuild creates a new table and changes it --
+    and under PRAGMA foreign_keys=ON would cascade away the child rows."""
+    ((page,),) = rows(
+        db_path, "SELECT rootpage FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    )
+    return page
+
+
 def _at_previous_seeded(dep):
     """Migrate to the previous head, seed, and return the old docs columns
     with a snapshot of the docs and doc_shares rows."""
@@ -180,9 +191,12 @@ def test_revision_chain():
 def test_upgrade_gives_existing_docs_empty_notes(keyed):
     db_path = keyed.db_path
     old_doc_columns, before = _at_previous_seeded(keyed)
+    page = _rootpage(db_path, "docs")
 
     keyed.alembic("upgrade", REV)
 
+    # docs was altered in place, never rebuilt.
+    assert _rootpage(db_path, "docs") == page
     # Every existing doc starts with no notes; nothing else moved.
     assert rows(
         db_path,
@@ -415,6 +429,10 @@ def test_orm_reads_and_writes_the_migrated_schema(keyed):
 def test_downgrade_drops_notes_and_keeps_docs_and_shares(keyed):
     db_path = keyed.db_path
     old_doc_columns, before = _at_previous_seeded(keyed)
+    page = _rootpage(db_path, "docs")
+    schema_before = rows(
+        db_path, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'docs'",
+    )
     keyed.alembic("upgrade", REV)
 
     # Give the doc some notes the downgrade has to drop.
@@ -449,6 +467,12 @@ def test_downgrade_drops_notes_and_keeps_docs_and_shares(keyed):
         ("project_id", "projects", "id", "CASCADE"),
     }
     assert _snapshot(db_path, old_doc_columns) == before
+    # Dropped in place: same table, same schema text, no dangling keys.
+    assert _rootpage(db_path, "docs") == page
+    assert rows(
+        db_path, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'docs'",
+    ) == schema_before
+    assert rows(db_path, "PRAGMA foreign_key_check") == []
 
     # And upgrades again cleanly, back to empty notes.
     keyed.alembic("upgrade", "head")
@@ -476,7 +500,8 @@ def test_fresh_database_matches_the_orm(keyed):
     # clauses only, so autogenerate sees this one FK without its ondelete
     # and proposes re-creating it. PRAGMA foreign_key_list (asserted in the
     # upgrade test) and test_foreign_key_actions show the database has
-    # SET NULL.
+    # SET NULL. alembic/env.py (_INLINE_FKS / include_object) filters
+    # exactly this pair out of autogenerate.
     fk_pair = [
         d for d in mine
         if "instructions_updated_by" in d and d.startswith(("('add_fk'", "('remove_fk'"))

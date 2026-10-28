@@ -1704,7 +1704,13 @@ class Doc(Base):
     # ``instructions`` is deferred with raiseload: no ``select(Doc)`` or
     # ``db.get(Doc, ...)`` loads up to DOC_INSTRUCTIONS_MAX_CHARS per row,
     # and touching the attribute on such a row raises instead of
-    # lazy-loading. The notes store functions load it with ``undefer()``.
+    # lazy-loading. Read the text with ``select(Doc.instructions)`` or
+    # ``select(Doc).options(undefer(Doc.instructions))`` (``db.get`` ignores
+    # the option for a row already in the session, and ``db.refresh``
+    # defers it again). ``has_instructions`` is None before the first flush
+    # and expires when the row is flushed with changes, so read it only
+    # after ``db.refresh``; the counters below are changed with SQL-side
+    # ``UPDATE`` expressions, never read-modify-write on a loaded row.
     instructions: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default="",
         deferred=True, deferred_raiseload=True,
