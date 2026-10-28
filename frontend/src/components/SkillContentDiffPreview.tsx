@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import type { SkillContentDiff, SkillContentDiffLine } from '../api/types';
+import { inlineLineDetails } from '../utils/inlineDiff';
 import './SkillContentDiffPreview.css';
 
 interface SkillContentDiffPreviewProps {
@@ -8,6 +9,11 @@ interface SkillContentDiffPreviewProps {
 
 /** Unchanged lines kept around each change in the collapsed snippet view. */
 const CONTEXT_LINES = 2;
+
+interface ExpandedLines {
+  lines: SkillContentDiffLine[];
+  indexes: ReadonlySet<number>;
+}
 
 interface Hunk {
   start: number; // inclusive index into diff.lines
@@ -104,14 +110,67 @@ function countBelow(
  *   the document lines outside the rendered rows with "lines above / below
  *   not shown" separators, the toggle only reveals the window's context
  *   lines, and a truncation note follows the stats.
+ *
+ * Within the rows (utils/inlineDiff.ts): a removed line paired with the
+ * added line that replaced it highlights the changed words on both, and
+ * long unchanged text (around the changes of a long paired line, or a
+ * long context line) is shortened to an ellipsis button that shows the
+ * whole line (and its pair). The toggle's expanded view shows every line
+ * whole.
  */
 export function SkillContentDiffPreview({ diff }: SkillContentDiffPreviewProps) {
   const [showFull, setShowFull] = useState(false);
+  // Lines whose elided text the user revealed (a pair reveals together),
+  // for the `lines` they index: DocHistory swaps the diff in place.
+  const [expanded, setExpanded] = useState<ExpandedLines | null>(null);
+  const expandedLines = expanded?.lines === diff.lines ? expanded.indexes : null;
   const hunks = useMemo(() => computeHunks(diff.lines), [diff.lines]);
+  const details = useMemo(() => inlineLineDetails(diff.lines), [diff.lines]);
   if (diff.lines.length === 0) return null;
 
   const bounded = typeof diff.total_old_lines === 'number'
     || typeof diff.total_new_lines === 'number';
+
+  const expandLine = (i: number) => {
+    setExpanded((prev) => {
+      const indexes = new Set(prev?.lines === diff.lines ? prev.indexes : []);
+      indexes.add(i);
+      const partner = details[i].partner;
+      if (partner != null) indexes.add(partner);
+      return { lines: diff.lines, indexes };
+    });
+  };
+
+  const renderText = (line: SkillContentDiffLine, i: number) => {
+    const { pieces } = details[i];
+    if (!pieces) return line.text || ' ';
+    const whole = showFull || expandedLines?.has(i);
+    return pieces.map((piece, k) => {
+      if (piece.type === 'change') {
+        return <span key={k} className="skill-diff-change">{piece.text}</span>;
+      }
+      if (piece.type === 'elided' && !whole) {
+        // The spacing at the edges stays visible around the ellipsis.
+        const [, lead, , trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(piece.text)!;
+        return (
+          <React.Fragment key={k}>
+            {lead}
+            <button
+              type="button"
+              className="skill-diff-elided"
+              title="Show full line"
+              aria-label="Show full line"
+              onClick={() => expandLine(i)}
+            >
+              &hellip;
+            </button>
+            {trail}
+          </React.Fragment>
+        );
+      }
+      return <React.Fragment key={k}>{piece.text}</React.Fragment>;
+    });
+  };
 
   const renderLine = (line: SkillContentDiffLine, i: number) => (
     <tr key={i} className={`skill-diff-line ${line.type}`}>
@@ -120,7 +179,7 @@ export function SkillContentDiffPreview({ diff }: SkillContentDiffPreviewProps) 
       <td className="skill-diff-marker">
         {line.type === 'add' ? '+' : line.type === 'del' ? '-' : ''}
       </td>
-      <td className="skill-diff-text">{line.text || ' '}</td>
+      <td className="skill-diff-text">{renderText(line, i)}</td>
     </tr>
   );
 
@@ -203,7 +262,10 @@ export function SkillContentDiffPreview({ diff }: SkillContentDiffPreviewProps) 
         <button
           type="button"
           className="skill-diff-toggle"
-          onClick={() => setShowFull((prev) => !prev)}
+          onClick={() => {
+            setShowFull((prev) => !prev);
+            setExpanded(null);
+          }}
         >
           {/* Generic label: this preview also renders routine prompt diffs,
               not just skill bodies. A bounded window holds only the

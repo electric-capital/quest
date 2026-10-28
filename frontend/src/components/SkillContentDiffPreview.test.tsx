@@ -2,7 +2,8 @@
 // diff edit_skill / edit_routine cards send (must render exactly as
 // before), and write_doc's bounded window (changed region + 3 context
 // lines, `total_*_lines`, optional `truncated`) with "lines above / below
-// not shown" edge separators.
+// not shown" edge separators; plus the word highlights and shortened
+// unchanged text inside the rows.
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { SkillContentDiff, SkillContentDiffLine } from '../api/types';
@@ -22,12 +23,30 @@ function add(newLine: number, text: string): SkillContentDiffLine {
 
 const notShown = () => screen.queryAllByText(/not shown/);
 
+/** The text cells' contents, in row order (highlights split the text nodes). */
+const rowTexts = (container: HTMLElement) =>
+  Array.from(container.querySelectorAll('.skill-diff-text'), (td) => td.textContent);
+
+const changed = (container: HTMLElement, type: 'del' | 'add') =>
+  Array.from(
+    container.querySelectorAll(`.skill-diff-line.${type} .skill-diff-change`),
+    (span) => span.textContent,
+  );
+
+const LEAD = 'We spent most of September on the security review, which turned up two '
+  + 'issues in the sharing flow that needed a redesign before anything could ship.';
+const TAIL = 'Marketing will start the campaign two weeks before the launch, with a blog '
+  + 'post, a webinar and outreach to the beta customers who asked to be told first.';
+const paragraph = (quarter: string) =>
+  `${LEAD} The launch is planned for ${quarter}, pending the security review. ${TAIL}`;
+const SHORTENED = '… The launch is planned for Q3, pending the security review. …';
+
 describe('SkillContentDiffPreview', () => {
   afterEach(() => {
     cleanup();
   });
 
-  it('renders a whole-body (legacy) diff unchanged: unchanged-line separators, no edge separators', () => {
+  it('renders a whole-body (legacy) diff: unchanged-line separators, no edge separators', () => {
     // 10-line skill body, line 5 replaced. No total_* fields.
     const diff: SkillContentDiff = {
       added: 1,
@@ -38,10 +57,12 @@ describe('SkillContentDiffPreview', () => {
         context(6), context(7), context(8), context(9), context(10),
       ],
     };
-    render(<SkillContentDiffPreview diff={diff} />);
+    const { container } = render(<SkillContentDiffPreview diff={diff} />);
 
-    expect(screen.getByText('old five')).toBeTruthy();
-    expect(screen.getByText('new five')).toBeTruthy();
+    expect(rowTexts(container)).toContain('old five');
+    expect(rowTexts(container)).toContain('new five');
+    expect(changed(container, 'del')).toEqual(['old']);
+    expect(changed(container, 'add')).toEqual(['new']);
     // Collapsed: 2 context lines each side, the rest folded.
     expect(screen.getByText(/2 unchanged lines/)).toBeTruthy();
     expect(screen.getByText(/3 unchanged lines/)).toBeTruthy();
@@ -151,5 +172,67 @@ describe('SkillContentDiffPreview', () => {
     expect(screen.queryByText(/50 lines below not shown/)).toBeNull();
     // Collapsed: line 48 folds into the edge separator above.
     expect(screen.getByText(/48 lines above not shown/)).toBeTruthy();
+  });
+
+  it('highlights the changed words of a long paragraph and shortens the rest', () => {
+    const diff: SkillContentDiff = {
+      added: 1,
+      removed: 1,
+      lines: [del(7, paragraph('Q3')), add(7, paragraph('Q4'))],
+      truncated: false,
+      total_old_lines: 20,
+      total_new_lines: 20,
+    };
+    const { container } = render(<SkillContentDiffPreview diff={diff} />);
+
+    expect(changed(container, 'del')).toEqual(['Q3,']);
+    expect(changed(container, 'add')).toEqual(['Q4,']);
+    expect(rowTexts(container)).toEqual([SHORTENED, SHORTENED.replace('Q3', 'Q4')]);
+
+    // One ellipsis shows the line and its pair whole.
+    const expanders = screen.getAllByRole('button', { name: 'Show full line' });
+    expect(expanders).toHaveLength(4);
+    fireEvent.click(expanders[3]);
+    expect(rowTexts(container)).toEqual([paragraph('Q3'), paragraph('Q4')]);
+    expect(screen.queryByRole('button', { name: 'Show full line' })).toBeNull();
+    expect(changed(container, 'add')).toEqual(['Q4,']);
+  });
+
+  it('shows every line whole in the expanded view and shortens again after', () => {
+    const diff: SkillContentDiff = {
+      added: 1,
+      removed: 1,
+      lines: [
+        { type: 'context', old_line: 1, new_line: 1, text: paragraph('Q2') },
+        del(2, paragraph('Q3')),
+        add(2, paragraph('Q4')),
+      ],
+    };
+    const { container } = render(<SkillContentDiffPreview diff={diff} />);
+    // A long context line keeps its opening sentence.
+    expect(rowTexts(container)[0]).toBe(`${LEAD} …`);
+    expect(screen.getAllByRole('button', { name: 'Show full line' })).toHaveLength(5);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show full content' }));
+    expect(rowTexts(container)).toEqual([paragraph('Q2'), paragraph('Q3'), paragraph('Q4')]);
+    expect(screen.queryByRole('button', { name: 'Show full line' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show changes only' }));
+    expect(rowTexts(container)[1]).toBe(SHORTENED);
+  });
+
+  it('renders a rewritten line as plain removed and added rows', () => {
+    const diff: SkillContentDiff = {
+      added: 1,
+      removed: 1,
+      lines: [
+        del(1, 'Ship the beta to ten customers first.'),
+        add(1, 'Everyone gets the release on launch day.'),
+      ],
+    };
+    const { container } = render(<SkillContentDiffPreview diff={diff} />);
+    expect(container.querySelector('.skill-diff-change')).toBeNull();
+    expect(screen.getByText('Ship the beta to ten customers first.')).toBeTruthy();
+    expect(screen.getByText('Everyone gets the release on launch day.')).toBeTruthy();
   });
 });

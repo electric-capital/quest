@@ -73,6 +73,46 @@
   color: #7fdc9a;
 }
 
+/* Changed words of a removed line and the added line that replaced it:
+   a stronger tint and brighter text than the rest of the row. */
+.skill-diff-line .skill-diff-change {
+  border-radius: 2px;
+}
+
+.skill-diff-line.del .skill-diff-change {
+  background-color: rgba(255, 100, 100, 0.28);
+  color: #ffc9c9;
+}
+
+.skill-diff-line.add .skill-diff-change {
+  background-color: rgba(80, 200, 120, 0.26);
+  color: #b9f5c8;
+}
+
+/* Ellipsis standing in for long unchanged text; a click shows the line
+   (and its pair) whole. */
+.skill-diff-elided {
+  padding: 0 0.35em;
+  border: 1px solid #3a3a6a;
+  border-radius: 3px;
+  background-color: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.65);
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+
+.skill-diff-elided:hover {
+  color: rgba(255, 255, 255, 0.9);
+  border-color: #55558a;
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.skill-diff-elided:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* "N unchanged lines" separators between collapsed hunks. */
 .skill-diff-separator td {
   color: rgba(255, 255, 255, 0.4);
@@ -166,6 +206,28 @@
   .skill-diff-line.add .skill-diff-marker,
   .skill-diff-line.add .skill-diff-text {
     color: #1a7f37;
+  }
+
+  .skill-diff-line.del .skill-diff-change {
+    background-color: rgba(192, 48, 48, 0.18);
+    color: #9a1c1c;
+  }
+
+  .skill-diff-line.add .skill-diff-change {
+    background-color: rgba(26, 127, 55, 0.18);
+    color: #116329;
+  }
+
+  .skill-diff-elided {
+    border-color: #d8d8e4;
+    background-color: rgba(0, 0, 0, 0.04);
+    color: rgba(0, 0, 0, 0.6);
+  }
+
+  .skill-diff-elided:hover {
+    color: rgba(0, 0, 0, 0.9);
+    border-color: #b8b8d0;
+    background-color: rgba(0, 0, 0, 0.07);
   }
 
   .skill-diff-separator td {
