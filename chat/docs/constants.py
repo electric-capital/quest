@@ -1,7 +1,9 @@
-"""Caps, retention, and shared error text for Quest Docs.
+"""Caps, retention, and shared error text for Quest Docs and doc notes.
 
 Every limit the spec leaves tunable lives here so the tools, routes, the
-``write_doc`` action request, and the tests agree on one number.
+``write_doc`` action request, and the tests agree on one number. The doc
+notes section (per-doc instructions and memories,
+docs/architecture/doc-notes.md) follows the same rule.
 """
 
 # Body of doc.md, in bytes (1 MB).
@@ -43,6 +45,39 @@ DOC_SHARE_PERMISSIONS = ("read", "write")
 # from prompts while the gate is closed for the user.
 DOCS_SERVICE_KEY = "docs"
 
+# --- Doc notes (docs/architecture/doc-notes.md) ---
+# The instructions and memory caps count characters (not bytes) of the text
+# after stripping surrounding whitespace.
+
+# One doc's instructions field (docs.instructions).
+DOC_INSTRUCTIONS_MAX_CHARS = 4_000
+# One memory (a doc_memories row).
+DOC_MEMORY_MAX_CHARS = 1_000
+# Memories per doc.
+DOC_MAX_MEMORIES = 50
+# Pending suggestions per doc per reviewing user, not across reviewers: a
+# suggestion is visible only to its proposer, so a shared cap would let one
+# recipient's unreviewed rows block the owner's model unexplained.
+DOC_NOTE_MAX_PENDING_PER_DOC = 10
+# Pending suggestions per conversation, across all its docs.
+DOC_NOTE_MAX_PENDING_PER_CONVERSATION = 20
+# Budget of the notes block on a tool result: the whole instructions always,
+# then memories newest first while the block stays within this many chars.
+DOC_NOTES_DELIVERY_MAX_CHARS = 12_000
+# Budget of the block's text copy inside a write_doc pre-card refusal (an
+# ``Invalid parameters`` tool error, which has no cap of its own).
+DOC_NOTES_PRECARD_MAX_CHARS = 3_000
+
+# doc_note_suggestions.kind: "instructions" proposes the complete new text
+# of the field, "memory" adds or replaces one memory.
+DOC_NOTE_SUGGESTION_KINDS = ("instructions", "memory")
+
+# The feature gate (config/feature_gates.py FEATURE_DOC_NOTES, which
+# requires FEATURE_DOCS) and the connected-services pseudo-key that hides
+# the notes tools and the system skill from prompts while the gate is
+# closed for the user.
+DOC_NOTES_SERVICE_KEY = "doc_notes"
+
 
 def doc_not_found_message(doc_id: str) -> str:
     """The ONE not-found text.
@@ -82,4 +117,14 @@ def docs_disabled_message() -> str:
     return (
         "Quest Docs is not enabled for this user. An admin can enable it "
         "in Settings > Features."
+    )
+
+
+def doc_notes_disabled_message() -> str:
+    """Model/user-facing text (``doc_notes_disabled``) when the
+    ``doc_notes`` feature gate is closed for the caller, which includes
+    Quest Docs being closed for them."""
+    return (
+        "Quest Doc notes are not enabled for this user. An admin can enable "
+        "them in Settings > Features."
     )
