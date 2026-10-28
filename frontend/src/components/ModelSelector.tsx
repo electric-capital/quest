@@ -28,6 +28,10 @@
  *
  * Desktop interaction mirrors the Flags popover (opens upward, outside-click
  * close) plus Escape-to-close and hover-or-click to open the submenu.
+ * The thinking flyout opens right of the "All models" list, clear of its
+ * scrollbar. Both flyouts stay open while the pointer travels to them
+ * (useFlyoutGrace): a diagonal path across other rows, the gap, or the
+ * list's scrollbar does not switch or close them.
  *
  * Phone widths (useIsMobile) get a full-screen sheet instead of the popover:
  * a header with a close button over ONE scrolling list -- the top-level
@@ -38,7 +42,7 @@
  * keyboard while it is open and hands focus back to the composer on close.
  */
 
-import { useEffect, useRef, useState, useCallback, type Ref } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, type Ref } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import {
@@ -46,6 +50,7 @@ import {
   isDeprecatedModel, isModelAllowedFor,
 } from '../constants/models';
 import type { ModelInfo, ModelVisibility } from '../constants/models';
+import { useFlyoutGrace } from '../hooks/useFlyoutGrace';
 import { useIsMobile } from '../hooks/useIsMobile';
 
 export interface ModelSelectorProps {
@@ -80,9 +85,10 @@ export interface ModelSelectorProps {
   onOpenChange?: (open: boolean) => void;
 }
 
-/** Where the third-level thinking flyout sits: beside its model row, growing
- *  upward from the row's bottom edge (the menu opens above the composer at
- *  the bottom of the screen). Fixed, so the scrolling submenu does not clip it. */
+/** Where the third-level thinking flyout sits: right of the "All models"
+ *  list (outside its scrollbar), growing upward from its model row's bottom
+ *  edge (the menu opens above the composer at the bottom of the screen).
+ *  Fixed, so the scrolling submenu does not clip it. */
 interface EffortFlyoutAnchor {
   modelId: string;
   left: number;
@@ -104,6 +110,14 @@ export function ModelSelector({
   const [isSubmenuOpen, setIsSubmenuOpen] = useState(false);
   const [effortFlyout, setEffortFlyout] = useState<EffortFlyoutAnchor | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const submenuRef = useRef<HTMLDivElement>(null);
+  const effortFlyoutRef = useRef<HTMLDivElement>(null);
+  // The current selection's row in the "All models" list.
+  const submenuSelectedRef = useRef<HTMLButtonElement>(null);
+  // Pointer grace on the way from "All models" to its list, and from a model
+  // row to its thinking flyout.
+  const submenuGrace = useFlyoutGrace();
+  const effortGrace = useFlyoutGrace();
   const sheetRef = useRef<HTMLDivElement>(null);
   // Element that had focus when the phone sheet opened (the composer
   // textarea, i.e. the keyboard was up); focus returns there on close.
@@ -131,11 +145,13 @@ export function ModelSelector({
     // during a user gesture.
     restoreFocusRef.current?.focus();
     restoreFocusRef.current = null;
+    submenuGrace.end();
+    effortGrace.end();
     setIsOpen(false);
     setIsSubmenuOpen(false);
     setEffortFlyout(null);
     onOpenChangeRef.current?.(false);
-  }, []);
+  }, [submenuGrace, effortGrace]);
 
   // An unmount while open (conversation switch, composer going read-only)
   // must not leave the host believing the menu is still up.
@@ -182,11 +198,42 @@ export function ModelSelector({
     close();
   }, [onSelect, close]);
 
-  // Open the thinking flyout beside a model row (desktop "All models" list).
+  // Bring the current selection into view in the "All models" list, which
+  // scrolls once it outgrows its max-height. Once per opening: re-running on
+  // every render would yank a list the user scrolled back to the selection
+  // (and the scroll would close the thinking flyout being hovered).
+  useLayoutEffect(() => {
+    if (isSubmenuOpen) submenuSelectedRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [isSubmenuOpen]);
+
+  const closeSubmenu = useCallback(() => {
+    submenuGrace.end();
+    effortGrace.end();
+    setIsSubmenuOpen(false);
+    setEffortFlyout(null);
+  }, [submenuGrace, effortGrace]);
+
+  // Open the thinking flyout for a model row (desktop "All models" list):
+  // right of the list's outer edge, so the list's scrollbar is never painted
+  // over it, level with the row.
   const openEffortFlyout = useCallback((modelId: string, row: HTMLElement) => {
-    const rect = row.getBoundingClientRect();
-    setEffortFlyout({ modelId, left: rect.right, bottom: window.innerHeight - rect.bottom });
+    const list = row.closest('.model-submenu') ?? row;
+    const left = list.getBoundingClientRect().right;
+    const bottom = window.innerHeight - row.getBoundingClientRect().bottom;
+    setEffortFlyout((prev) => (prev?.modelId === modelId ? prev : { modelId, left, bottom }));
   }, []);
+
+  // The hover a row would apply: its own flyout when it has levels, none
+  // otherwise. `under` is any element (e.g. the one a grace ended over).
+  const hoverEffortRow = useCallback((under: Element | null) => {
+    const row = under?.closest<HTMLElement>('.model-effort-anchor');
+    const modelId = row?.dataset.modelId;
+    if (row && modelId && models.some((m) => m.id === modelId && m.thinkingEfforts.length > 0)) {
+      openEffortFlyout(modelId, row);
+    } else {
+      setEffortFlyout(null);
+    }
+  }, [models, openEffortFlyout]);
 
   // The admin's top-level picks for this visibility, limited to what is
   // actually selectable here.
@@ -338,13 +385,26 @@ export function ModelSelector({
               sub={pickSub(pick)}
               selected={isPickSelected(pick)}
               onClick={() => handlePick(pick.id, pick.slotEffort)}
-              onMouseEnter={() => setIsSubmenuOpen(false)}
+              onMouseEnter={(e) => {
+                if (!submenuGrace.isHeadingToFlyout(e)) closeSubmenu();
+              }}
             />
           ))}
           {topLevel.length > 0 && <div className="model-menu-divider" />}
           <div
             className="model-submenu-anchor"
-            onMouseEnter={() => setIsSubmenuOpen(true)}
+            onMouseEnter={() => {
+              submenuGrace.end();
+              setIsSubmenuOpen(true);
+            }}
+            onMouseLeave={(e) => {
+              if (!isSubmenuOpen) return;
+              // A pointer that stopped on, or moved off the way onto, a
+              // top-level pick closes the list as hovering the pick would.
+              submenuGrace.begin(e, submenuRef.current, (under) => {
+                if (under?.closest('.model-menu-item') && !under.closest('.model-submenu-anchor')) closeSubmenu();
+              });
+            }}
           >
             <button
               type="button"
@@ -368,9 +428,13 @@ export function ModelSelector({
               <div
                 className="model-submenu"
                 role="menu"
+                ref={submenuRef}
                 // The thinking flyout is pinned to its row's screen position;
                 // scrolling the list would leave it behind, so drop it.
-                onScroll={() => setEffortFlyout(null)}
+                onScroll={() => {
+                  effortGrace.end();
+                  setEffortFlyout(null);
+                }}
               >
                 {missingSelectionItem}
                 {models.map((model) => {
@@ -380,10 +444,22 @@ export function ModelSelector({
                     <div
                       key={model.id}
                       className="model-effort-anchor"
-                      onMouseEnter={hasEfforts
-                        ? (e) => openEffortFlyout(model.id, e.currentTarget)
-                        : () => setEffortFlyout(null)}
-                      onMouseLeave={hasEfforts ? () => setEffortFlyout(null) : undefined}
+                      data-model-id={model.id}
+                      onMouseEnter={(e) => {
+                        // Crossing this row on the way to another row's
+                        // flyout leaves that flyout up.
+                        if (!flyoutOpen && effortGrace.isHeadingToFlyout(e)) return;
+                        effortGrace.end();
+                        hoverEffortRow(e.currentTarget);
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!flyoutOpen) return;
+                        // Toward the flyout: keep it while the pointer gets
+                        // there; once the grace gives up, apply the hover of
+                        // whatever row the pointer is on by then.
+                        if (effortGrace.begin(e, effortFlyoutRef.current, hoverEffortRow)) return;
+                        setEffortFlyout(null);
+                      }}
                     >
                       <ModelMenuItem
                         role="menuitem"
@@ -394,12 +470,7 @@ export function ModelSelector({
                         selected={model.id === selectedModel}
                         open={flyoutOpen}
                         submenu={hasEfforts}
-                        // The submenu scrolls when the model list outgrows its
-                        // max-height; bring the current selection into view on
-                        // open so it isn't hidden below the fold.
-                        itemRef={model.id === selectedModel
-                          ? (el) => el?.scrollIntoView({ block: 'nearest' })
-                          : undefined}
+                        itemRef={model.id === selectedModel ? submenuSelectedRef : undefined}
                         // The row itself picks the model at its default level;
                         // the chevron only opens the level flyout.
                         onClick={() => handlePick(model.id, null)}
@@ -411,6 +482,7 @@ export function ModelSelector({
                         <div
                           className="model-submenu model-effort-submenu"
                           role="menu"
+                          ref={effortFlyoutRef}
                           aria-label={`Thinking level for ${model.name}`}
                           style={{ left: effortFlyout.left, bottom: effortFlyout.bottom }}
                         >
@@ -443,7 +515,7 @@ interface ModelMenuItemProps {
   sub?: string;
   selected: boolean;
   onClick: () => void;
-  onMouseEnter?: () => void;
+  onMouseEnter?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   role?: string;
   itemRef?: Ref<HTMLButtonElement>;
   /** Row that opens a further flyout: shows a chevron (clickable on its own). */
