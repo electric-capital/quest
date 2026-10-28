@@ -33,6 +33,7 @@
 | [public-projects.md](architecture/public-projects.md) | Public projects: internet-enabled sandbox with internal resources cut off, enforcement layers, public prompt and image |
 | [public-browser.md](architecture/public-browser.md) | Browser for public projects: one headless Chromium container per conversation, agent protocol, session manager and reaping, browser tools and gate |
 | [quest-docs.md](architecture/quest-docs.md) | Quest Docs (in-app markdown docs): storage, access rule, sharing, editing, history, model tools, approvals, frontend |
+| [doc-notes.md](architecture/doc-notes.md) | Quest Doc notes (per-doc instructions and memories): gate, data model, suggestions table, version counters, concurrency, caps |
 | [quest-tables.md](architecture/quest-tables.md) | Quest Tables (in-app typed tables): metadata, columns, table.db, change log and restore, access, service layer, events, prompting, gate |
 | [quest-tables-frontend.md](architecture/quest-tables-frontend.md) | Quest Tables UI: routes and gate, sidebar blocks, All Tables, viewer and grid, filters, schema editor, History drawer, card previews, phone layouts |
 | [plugins.md](architecture/plugins.md) | Plugin system: discovery, manifest validation, atomic registration, what a plugin can register, in-tree plugins |

@@ -21,7 +21,7 @@ Every handler goes through `chat/docs/service.py` (or `ui_writes.py` / `history.
 
 ## Response Shapes
 
-**Doc row** (built by `_ui_row()` / `_ui_rows()` in `chat/docs/routes.py`, one batched user lookup per response; shape documented in the module docstring and in the `Doc` type): the store's doc dict (`_doc_to_dict()` in `db/doc_store.py`: `id`, `owner_id`, `project_id`, `title`, `description`, `mode`, `content_size`, `asset_count`, `last_write_source`, `created_at`, `updated_at`) plus:
+**Doc row** (built by `_ui_row()` / `_ui_rows()` in `chat/docs/routes.py`, one batched user lookup per response; shape documented in the module docstring and in the `Doc` type): the store's doc dict (`_doc_to_dict()` in `db/doc_store.py`) without its [doc notes](../architecture/doc-notes.md) keys (`NOTES_STATE_KEYS`, dropped by `_doc_row()`), plus:
 
 - `scope`: `user` or `project`;
 - `shared`: the doc has any share row;
