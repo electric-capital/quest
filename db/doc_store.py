@@ -12,7 +12,9 @@ here (:func:`update_doc_instructions`), the ``doc_memories`` rows and the
 Notes writes never bump ``updated_at`` or ``last_write_source``, the way
 share changes leave them alone. The instructions text is never part of the
 doc dict (the column is deferred with raiseload on ``Doc``); doc dicts carry
-only :data:`NOTES_STATE_KEYS`, and :func:`get_notes_state` loads the text.
+only :data:`NOTES_STATE_KEYS`, and :func:`get_notes_state` (or
+:func:`load_notes_state_in_session` inside a caller's transaction) loads
+the text.
 
 Same async pattern as db/skill_store.py: each function opens a fresh
 ``AsyncSessionLocal()`` session (imported at module level so tests can
@@ -91,9 +93,14 @@ class StaleDocError(ValueError):
 
 
 class InvalidInstructionsError(DocValidationError):
-    """Instructions that cannot be saved: not a string, or longer than
-    ``DOC_INSTRUCTIONS_MAX_CHARS`` characters after stripping; also an
-    ``expected_version`` that is not an integer. Routes answer 400 ``code``.
+    """Instructions that cannot be saved: not a string, a NUL character, or
+    longer than ``DOC_INSTRUCTIONS_MAX_CHARS`` characters after stripping;
+    also an ``expected_version`` that is not an integer in ``0..2**63-1``.
+
+    Routes answer 400 with ``code`` (``invalid_instructions``). Being a
+    :class:`DocValidationError`, it would also be caught by the existing
+    handlers for that class, which answer with their own code: a route must
+    catch this class first, or answer with ``exc.code``.
     """
 
     code = "invalid_instructions"
@@ -178,12 +185,14 @@ def normalize_instructions(text) -> str:
     ``""`` means none.
 
     Raises:
-        InvalidInstructionsError: not a string, or more than
-            ``DOC_INSTRUCTIONS_MAX_CHARS`` characters (not bytes) after
-            stripping.
+        InvalidInstructionsError: not a string, a NUL character anywhere,
+            or more than ``DOC_INSTRUCTIONS_MAX_CHARS`` characters (not
+            bytes) after stripping.
     """
     if not isinstance(text, str):
         raise InvalidInstructionsError("Doc instructions must be a string.")
+    if "\x00" in text:
+        raise InvalidInstructionsError("Doc instructions cannot contain NUL characters.")
     stripped = text.strip()
     if len(stripped) > DOC_INSTRUCTIONS_MAX_CHARS:
         raise InvalidInstructionsError(
@@ -193,12 +202,29 @@ def normalize_instructions(text) -> str:
     return stripped
 
 
+# Bound of a SQLite INTEGER; a larger token would overflow in the driver.
+_MAX_VERSION = 2**63
+
+
 def _check_instructions_version(value) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 <= value < _MAX_VERSION
+    ):
         raise InvalidInstructionsError(
-            "expected_instructions_version must be an integer."
+            "expected_instructions_version must be a non-negative integer."
         )
     return value
+
+
+def _as_utc(value: datetime) -> datetime:
+    """``value`` as aware UTC; a naive value is taken as UTC already. SQLite
+    stores the wall time without the offset, so a non-UTC offset must be
+    converted before it is written."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _iso(value: Optional[datetime]) -> Optional[str]:
@@ -719,8 +745,17 @@ async def list_doc_ids_for_user(user_id: int) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-async def _load_notes_state(db, doc_id: str) -> Optional[dict]:
-    """The :func:`get_notes_state` dict, read in ``db``'s transaction."""
+async def load_notes_state_in_session(db, doc_id: str) -> Optional[dict]:
+    """The :func:`get_notes_state` dict, read in the caller's session.
+
+    The way a caller reads the exact versions its own writes produced
+    inside its transaction: after :func:`write_instructions_in_session` or
+    a ``db.doc_memory_store`` ``*_in_session`` helper, this read runs under
+    the transaction's write lock, so no other writer can have moved the
+    counters in between. Never read the counters from a ``Doc`` loaded in
+    the same session: the notes writers change them with SQL-side
+    ``UPDATE``s that do not refresh loaded objects.
+    """
     row = (
         await db.execute(
             select(
@@ -736,9 +771,11 @@ async def _load_notes_state(db, doc_id: str) -> Optional[dict]:
     ).first()
     if row is None:
         return None
+    instructions = row.instructions or ""
     return {
         "doc_id": row.id,
-        "instructions": row.instructions or "",
+        "instructions": instructions,
+        "has_instructions": instructions != "",
         "instructions_version": int(row.instructions_version or 0),
         "instructions_updated_at": _iso(row.instructions_updated_at),
         "instructions_updated_by": row.instructions_updated_by,
@@ -753,17 +790,21 @@ async def get_notes_state(doc_id: str) -> Optional[dict]:
     Shape::
 
         {"doc_id", "instructions",              # "" means none
+         "has_instructions",                    # bool, instructions != ""
          "instructions_version",
          "instructions_updated_at",             # ISO string or None
          "instructions_updated_by",             # user id or None
          "memories_version", "memory_count"}
 
-    The one read that loads the instructions text. No access checks:
-    callers resolve ``chat.docs.access.resolve_doc_access`` first, as for
-    every function here.
+    It carries every :data:`NOTES_STATE_KEYS` key with the doc dict's
+    meaning, so a consumer can take either dict. With
+    :func:`load_notes_state_in_session` (its in-session form), the only
+    read that loads the instructions text. No access checks: callers
+    resolve ``chat.docs.access.resolve_doc_access`` first, as for every
+    function here.
     """
     async with AsyncSessionLocal() as db:
-        return await _load_notes_state(db, doc_id)
+        return await load_notes_state_in_session(db, doc_id)
 
 
 async def write_instructions_in_session(
@@ -786,16 +827,24 @@ async def write_instructions_in_session(
     One compare-and-swap ``UPDATE docs ... WHERE id = :doc_id AND
     instructions_version = :expected_version AND instructions != :text``
     writes the text, ``instructions_version + 1`` (SQL-side),
-    ``instructions_updated_at = now`` and ``instructions_updated_by =
-    user_id``, so two saves holding the same token can never both land.
-    The state is then read back in the same transaction, under the
-    UPDATE's write lock, to tell the outcomes apart. Identical text is a
-    no-op (no bump, no timestamp change). ``""`` clears the instructions,
-    which is a change like any other. ``updated_at``,
-    ``last_write_source`` and ``memories_version`` are never touched.
+    ``instructions_updated_at = now`` (converted to UTC; a naive value is
+    taken as UTC) and ``instructions_updated_by = user_id``, so two saves
+    holding the same token can never both land. The state is then read
+    back in the same transaction, under the UPDATE's write lock, to tell
+    the outcomes apart. Identical text is a no-op (no bump, no timestamp
+    change). ``""`` clears the instructions, which is a change like any
+    other. ``updated_at``, ``last_write_source`` and ``memories_version``
+    are never touched.
 
-    On a raise nothing has been written, but the UPDATE has opened a write
-    transaction: the caller rolls back (closing the session does).
+    The UPDATE is SQL-side (``synchronize_session=False``): a ``Doc`` the
+    caller loaded in the same session keeps its old counters. Read the
+    versions from the returned dict or :func:`load_notes_state_in_session`,
+    never from a loaded ``Doc``.
+
+    ``InvalidInstructionsError`` is raised before any SQL runs.
+    ``StaleInstructionsError`` is raised after the UPDATE changed nothing
+    but opened a write transaction; the caller rolls back (closing the
+    session does), as for any failed step.
 
     Returns:
         The :func:`get_notes_state` dict after the write (or the unchanged
@@ -818,12 +867,12 @@ async def write_instructions_in_session(
         .values(
             instructions=clean,
             instructions_version=Doc.instructions_version + 1,
-            instructions_updated_at=now,
+            instructions_updated_at=_as_utc(now),
             instructions_updated_by=user_id,
         )
         .execution_options(synchronize_session=False)
     )
-    state = await _load_notes_state(db, doc_id)
+    state = await load_notes_state_in_session(db, doc_id)
     if state is None:
         return None
     if result.rowcount == 0 and state["instructions_version"] != expected_version:

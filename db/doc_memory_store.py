@@ -28,6 +28,20 @@ neither lose a version bump nor both pass the cap:
 Refusals, not-found and no-op updates stop before step 4, so they bump
 nothing; the public functions then roll back.
 
+Step 1 takes the lock only because pysqlite (under aiosqlite) runs in its
+legacy transaction mode: it issues ``BEGIN`` implicitly at the first
+write statement, so reads before it run in autocommit and hold no
+snapshot, and the transaction starts at step 1 already holding the write
+lock. An engine switched to explicit ``BEGIN`` at the first statement
+would need ``BEGIN IMMEDIATE`` instead: a read before step 1 would then
+hold a read lock or snapshot, and its upgrade to the write lock can fail
+with SQLITE_BUSY at once instead of waiting.
+
+Steps 1 and 4 are SQL-side ``UPDATE``s (``synchronize_session=False``):
+a ``Doc`` loaded in the same session keeps its old counters. Read the
+versions with ``db.doc_store.load_notes_state_in_session``, never from a
+loaded ``Doc``.
+
 No access checks: callers resolve ``chat.docs.access.resolve_doc_access()``
 (and the UI's ``can_edit``) first. Same session pattern as
 db/doc_store.py: each public function opens a fresh ``AsyncSessionLocal()``
@@ -49,9 +63,9 @@ from db.models import Doc, DocMemory
 
 
 class InvalidMemoryError(ValueError):
-    """Memory text that cannot be saved: not a string, empty after
-    stripping, or longer than ``DOC_MEMORY_MAX_CHARS`` characters. Routes
-    answer 400 ``code``."""
+    """Memory text that cannot be saved: not a string, a NUL character,
+    empty after stripping, or longer than ``DOC_MEMORY_MAX_CHARS``
+    characters. Routes answer 400 ``code``."""
 
     code = "invalid_memory"
 
@@ -94,11 +108,14 @@ def normalize_memory_content(content) -> str:
     stores cap bytes, so their ``normalize_content`` does not apply here).
 
     Raises:
-        InvalidMemoryError: not a string, empty after stripping, or more
-            than ``DOC_MEMORY_MAX_CHARS`` characters.
+        InvalidMemoryError: not a string, a NUL character anywhere, empty
+            after stripping, or more than ``DOC_MEMORY_MAX_CHARS``
+            characters.
     """
     if not isinstance(content, str):
         raise InvalidMemoryError("Memory content must be a string.")
+    if "\x00" in content:
+        raise InvalidMemoryError("Memory content cannot contain NUL characters.")
     text = content.strip()
     if not text:
         raise InvalidMemoryError("Memory content cannot be empty.")
@@ -149,6 +166,15 @@ def suggestion_source(suggestion_id: str) -> str:
 
 def _iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value else None
+
+
+def _as_utc(value: datetime) -> datetime:
+    """``value`` as aware UTC; a naive value is taken as UTC already. SQLite
+    stores the wall time without the offset, so a non-UTC offset must be
+    converted before it is written."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _to_dict(memory: DocMemory) -> dict:
@@ -224,12 +250,16 @@ async def _get_memory(db, doc_id: str, memory_id: str) -> Optional[DocMemory]:
 # For callers that change a memory as one step of a larger transaction
 # (accepting a doc note suggestion: claim the row, then insert or overwrite
 # the memory). Contract: they run in the caller's open session and never
-# commit or roll back; they normalize ``content`` themselves; they follow
-# the four steps of the module docstring (step 1 is a cheap no-op when the
-# caller already holds the write lock); a refusal raises having changed no
-# value, and the caller rolls back as for any failed step; a landed change
-# has bumped ``memories_version`` by exactly one and resynced
-# ``memory_count`` when the helper returns.
+# commit or roll back; they normalize ``content`` themselves and store
+# ``now`` as UTC (a naive value is taken as UTC); they follow the four
+# steps of the module docstring (step 1 is a cheap no-op when the caller
+# already holds the write lock); a refusal raises having changed no value,
+# and the caller rolls back as for any failed step; a landed change has
+# bumped ``memories_version`` by exactly one and resynced ``memory_count``
+# when the helper returns. Those ``docs`` changes are SQL-side ``UPDATE``s
+# (``synchronize_session=False``), so a ``Doc`` the caller loaded in the
+# same session keeps stale counters: read the versions with
+# ``db.doc_store.load_notes_state_in_session``, never from a loaded ``Doc``.
 
 
 async def insert_memory_in_session(
@@ -269,6 +299,7 @@ async def insert_memory_in_session(
     ).scalar_one()
     if existing >= DOC_MAX_MEMORIES:
         raise MemoriesCapReachedError()
+    now = _as_utc(now)
     memory = DocMemory(
         id=str(uuid.uuid4()),
         doc_id=doc_id,
@@ -333,7 +364,7 @@ async def _overwrite(
         raise DuplicateMemoryError(duplicate)
     memory.content = clean
     memory.updated_by = user_id
-    memory.updated_at = now
+    memory.updated_at = _as_utc(now)
     await _record_change(db, doc_id)
     await db.refresh(memory)
     return _to_dict(memory), True

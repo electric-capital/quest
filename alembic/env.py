@@ -214,7 +214,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             include_name=include_name,
-        include_object=include_object,
+            include_object=include_object,
             process_revision_directives=_process_revision_directives,
         )
 

@@ -15,7 +15,7 @@ matrix.
 
 Every row returned to the UI is built by :func:`_ui_row` (one batched user
 lookup per response via ``db.user_store.get_users_by_ids``): the store's
-doc dict plus
+doc dict without its doc-notes keys (``doc_store.NOTES_STATE_KEYS``) plus
 
 - ``scope`` (``user`` / ``project``), ``shared`` (has any share row);
 - ``access``: ``write`` (the UI verdict), ``can_edit`` (``write ==

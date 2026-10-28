@@ -1715,11 +1715,12 @@ class Doc(Base):
         Text, nullable=False, default="", server_default="",
         deferred=True, deferred_raiseload=True,
     )
-    # ``length(instructions) > 0`` in every ``select(Doc)``: list rows learn
-    # whether the doc has instructions without loading the text.
-    has_instructions: Mapped[bool] = column_property(
-        sa.func.length(instructions) > 0
-    )
+    # ``instructions != ''`` in every ``select(Doc)``: list rows learn
+    # whether the doc has instructions without loading the text. Not
+    # ``length(instructions) > 0``: SQLite's ``length()`` stops at the first
+    # NUL, so a text starting with one would read as empty (the stores also
+    # refuse NUL).
+    has_instructions: Mapped[bool] = column_property(instructions != "")
     # Bumped on every instructions change; also the UI save's
     # optimistic-concurrency token.
     instructions_version: Mapped[int] = mapped_column(

@@ -4,26 +4,32 @@ against an isolated SQLite file.
 Covers phase A1 of spec 00011 (docs/architecture/doc-notes.md):
 
 1. Instructions: save (strip, newlines kept, version bump, editor and
-   time recorded), clear, the character cap, the stale token, identical
-   text as a no-op, concurrent saves with one token, the session helper.
+   time recorded), clear, the character cap, NUL refused, the stale token
+   and its bounds, identical text as a no-op, concurrent saves with one
+   token, a NUL-led text still counting as instructions, the session
+   helper and its UTC ``now``.
 2. Memories: create / get / list newest first / update / delete, the
-   character cap, empty and non-string text, exact duplicates on create
-   and update, the per-doc cap (also under concurrency), missing docs,
-   memory ids of another doc, sources, timestamps, the session helpers.
+   character cap, empty, NUL and non-string text, exact duplicates on
+   create and update, the per-doc cap (also under concurrency), missing
+   docs, memory ids of another doc, sources, timestamps, the session
+   helpers, and the helpers as steps of one caller transaction.
 3. Each version is bumped only by its own kind of change, exactly once
    per landed write, never by a refusal or a no-op.
 4. ``docs.memory_count`` equals the real row count, also after
    concurrent creates.
 5. ``docs.updated_at`` and ``last_write_source`` are untouched by notes.
 6. The instructions are absent from ``update_doc_metadata()``, from every
-   doc dict and from the candidate queries' SQL (``length()`` only), and
-   the notes keys are absent from UI rows and tool list rows.
-7. ``get_notes_state()``.
+   doc dict and from the candidate queries' SQL (only the
+   ``has_instructions`` expression), and the notes keys are absent from UI
+   rows and tool list rows.
+7. ``get_notes_state()`` and ``load_notes_state_in_session()``.
 8. Cascades: ``delete_doc()`` (with and without foreign keys), a raw
    doc delete, a memory delete, a user delete.
 
 Same isolation pattern as tests/test_docs_store.py, with both stores'
-``AsyncSessionLocal`` pointed at the temp database.
+``AsyncSessionLocal`` pointed at the temp database, whose connections get
+the app's own PRAGMAs (``db.engine._set_sqlite_pragma``: WAL, busy_timeout,
+foreign keys), so the concurrency tests take the production lock path.
 """
 
 import asyncio
@@ -33,10 +39,10 @@ import shutil
 import tempfile
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from chat.docs.constants import (
@@ -44,14 +50,11 @@ from chat.docs.constants import (
     DOC_MAX_MEMORIES,
     DOC_MEMORY_MAX_CHARS,
 )
+from db.engine import _set_sqlite_pragma
 
 
 def _run(coro):
     return asyncio.run(coro)
-
-
-def _fk_on(dbapi_connection, _record):
-    dbapi_connection.execute("PRAGMA foreign_keys=ON")
 
 
 @pytest.fixture()
@@ -62,8 +65,8 @@ def env(monkeypatch):
         f"sqlite:///{db_path}", connect_args={"check_same_thread": False},
     )
     async_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
-    event.listen(sync_engine, "connect", _fk_on)
-    event.listen(async_engine.sync_engine, "connect", _fk_on)
+    event.listen(sync_engine, "connect", _set_sqlite_pragma)
+    event.listen(async_engine.sync_engine, "connect", _set_sqlite_pragma)
     session_local = async_sessionmaker(async_engine, expire_on_commit=False)
 
     import db.doc_memory_store as mem_mod
@@ -242,17 +245,68 @@ class TestInstructions:
         doc = _doc(env)
         with pytest.raises(env["store"].InvalidInstructionsError) as info:
             _save(env, doc["id"], bad, 0)
+        # Routes answer exc.code: the handlers for its DocValidationError
+        # base class would answer a different code, so they must not catch
+        # it first.
         assert info.value.code == "invalid_instructions"
-        # Mapped like every other doc validation error.
         assert isinstance(info.value, env["store"].DocValidationError)
         assert _versions(env, doc["id"]) == (0, 0, 0)
 
-    @pytest.mark.parametrize("bad", [None, "0", True, 0.0])
+    @pytest.mark.parametrize("bad", [None, "0", True, 0.0, -1, 2**63, 2**70])
     def test_bad_expected_version_refused(self, env, bad):
         doc = _doc(env)
         with pytest.raises(env["store"].InvalidInstructionsError):
             _save(env, doc["id"], "Rule", bad)
         assert _state(env, doc["id"])["instructions"] == ""
+
+    def test_largest_expected_version_is_merely_stale(self, env):
+        doc = _doc(env)
+        with pytest.raises(env["store"].StaleInstructionsError):
+            _save(env, doc["id"], "Rule", 2**63 - 1)
+
+    @pytest.mark.parametrize("bad", ["\x00Rule", "Rule\x00", "Rule\x00two", "\x00"])
+    def test_nul_refused(self, env, bad):
+        doc = _doc(env)
+        with pytest.raises(env["store"].InvalidInstructionsError):
+            _save(env, doc["id"], bad, 0)
+        assert _versions(env, doc["id"]) == (0, 0, 0)
+
+    def test_leading_nul_written_behind_the_store_still_counts(self, env):
+        """SQLite's length() stops at the first NUL; has_instructions must
+        not, or the text would hide from the delivery gate."""
+        doc = _doc(env)
+        with env["sync_engine"].begin() as conn:
+            conn.execute(
+                text("UPDATE docs SET instructions = :t WHERE id = :d"),
+                {"t": "\x00rule", "d": doc["id"]},
+            )
+        assert _scalar(
+            env, "SELECT length(instructions) FROM docs WHERE id = :d", d=doc["id"],
+        ) == 0
+        assert _run(env["store"].get_doc(doc["id"]))["has_instructions"] is True
+        listed = _run(env["store"].list_accessible_docs(env["alice"]))
+        assert [row["has_instructions"] for row in listed] == [True]
+        state = _state(env, doc["id"])
+        assert state["instructions"] == "\x00rule"
+        assert state["has_instructions"] is True
+
+    def test_now_is_stored_as_utc(self, env):
+        doc = _doc(env)
+        helper = env["store"].write_instructions_in_session
+
+        async def _write(text_, expected, now):
+            async with env["session"]() as db:
+                state = await helper(
+                    db, doc["id"], text_, expected_version=expected,
+                    user_id=env["alice"], now=now,
+                )
+                await db.commit()
+                return state
+
+        plus_two = datetime(2026, 10, 28, 12, 0, tzinfo=timezone(timedelta(hours=2)))
+        assert _run(_write("One", 0, plus_two))["instructions_updated_at"] == "2026-10-28T10:00:00"
+        naive = datetime(2026, 10, 28, 12, 0)
+        assert _run(_write("Two", 1, naive))["instructions_updated_at"] == "2026-10-28T12:00:00"
 
     def test_stale_token(self, env):
         doc = _doc(env)
@@ -468,6 +522,42 @@ class TestMemories:
         assert _versions(env, doc["id"]) == before
         assert _run(env["mem"].get_doc_memory(doc["id"], memory["id"])) == memory
 
+    @pytest.mark.parametrize("bad", ["\x00Fact", "Fact\x00", "Fa\x00ct", "\x00"])
+    def test_nul_refused(self, env, bad):
+        doc = _doc(env)
+        memory = _add(env, doc["id"], "Fact")
+        before = _versions(env, doc["id"])
+        with pytest.raises(env["mem"].InvalidMemoryError):
+            _add(env, doc["id"], bad)
+        with pytest.raises(env["mem"].InvalidMemoryError):
+            _run(env["mem"].update_doc_memory(doc["id"], memory["id"], bad, user_id=env["alice"]))
+        assert _versions(env, doc["id"]) == before
+        assert _run(env["mem"].get_doc_memory(doc["id"], memory["id"])) == memory
+
+    def test_now_is_stored_as_utc(self, env):
+        doc = _doc(env)
+        mem = env["mem"]
+        plus_two = datetime(2026, 10, 28, 12, 0, tzinfo=timezone(timedelta(hours=2)))
+        naive = datetime(2026, 10, 28, 13, 0)
+
+        async def _write():
+            async with env["session"]() as db:
+                created = await mem.insert_memory_in_session(
+                    db, doc["id"], "Fact", source=mem.ui_source(env["alice"]),
+                    user_id=env["alice"], now=plus_two,
+                )
+                edited = await mem.overwrite_memory_in_session(
+                    db, doc["id"], created["id"], "Fact 2", user_id=env["alice"], now=naive,
+                )
+                await db.commit()
+                return created, edited
+
+        created, edited = _run(_write())
+        assert created["created_at"] == created["updated_at"] == "2026-10-28T10:00:00"
+        assert edited["created_at"] == "2026-10-28T10:00:00"
+        assert edited["updated_at"] == "2026-10-28T13:00:00"
+        assert _run(mem.get_doc_memory(doc["id"], created["id"])) == edited
+
     def test_duplicate_on_create(self, env):
         doc = _doc(env)
         first = _add(env, doc["id"], "The board reads this on Fridays.")
@@ -648,6 +738,91 @@ class TestMemories:
         assert _versions(env, doc["id"]) == (0, 1, 1)
 
 
+class TestSessionContract:
+    """The session-level helpers as steps of one caller transaction (the
+    later suggestion accept: claim the row, then write the note)."""
+
+    def test_refusal_after_a_claim_rolls_back_everything(self, env):
+        doc = _doc(env)
+        _add(env, doc["id"], "Fact")
+        sid = _add_suggestion(env, doc["id"], content="Fact")
+        before = _state(env, doc["id"])
+        mem, models = env["mem"], env["models"]
+
+        async def _accept():
+            async with env["session"]() as db:
+                now = datetime.now(timezone.utc)
+                claimed = await db.execute(
+                    update(models.DocNoteSuggestion)
+                    .where(
+                        models.DocNoteSuggestion.id == sid,
+                        models.DocNoteSuggestion.status == models.MemorySuggestionStatus.PENDING,
+                    )
+                    .values(status=models.MemorySuggestionStatus.ACCEPTED, resolved_at=now)
+                )
+                assert claimed.rowcount == 1
+                try:
+                    await mem.insert_memory_in_session(
+                        db, doc["id"], "Fact", source=mem.suggestion_source(sid),
+                        user_id=env["alice"], now=now,
+                    )
+                except mem.DuplicateMemoryError:
+                    await db.rollback()
+                    return "refused"
+                return "inserted"
+
+        assert _run(_accept()) == "refused"
+        assert _scalar(
+            env, "SELECT status FROM doc_note_suggestions WHERE id = :s", s=sid,
+        ) == "pending"
+        assert _state(env, doc["id"]) == before
+        assert _memory_rows(env, doc["id"]) == 1
+
+    def test_two_inserts_in_one_transaction(self, env):
+        doc = _doc(env)
+        mem = env["mem"]
+
+        async def _both():
+            async with env["session"]() as db:
+                now = datetime.now(timezone.utc)
+                for content in ("First", "Second"):
+                    await mem.insert_memory_in_session(
+                        db, doc["id"], content, source=mem.ui_source(env["alice"]),
+                        user_id=env["alice"], now=now,
+                    )
+                await db.commit()
+
+        _run(_both())
+        assert _versions(env, doc["id"]) == (0, 2, 2)
+        assert _memory_rows(env, doc["id"]) == 2
+
+    def test_instructions_and_memory_in_one_transaction(self, env):
+        doc = _doc(env)
+        store, mem = env["store"], env["mem"]
+
+        async def _both():
+            async with env["session"]() as db:
+                now = datetime.now(timezone.utc)
+                written = await store.write_instructions_in_session(
+                    db, doc["id"], "Rule", expected_version=0, user_id=env["alice"], now=now,
+                )
+                await mem.insert_memory_in_session(
+                    db, doc["id"], "Fact", source=mem.ui_source(env["alice"]),
+                    user_id=env["alice"], now=now,
+                )
+                inside = await store.load_notes_state_in_session(db, doc["id"])
+                await db.commit()
+                return written, inside
+
+        written, inside = _run(_both())
+        assert written["instructions_version"] == 1
+        assert written["memories_version"] == 0
+        assert (inside["instructions_version"], inside["memories_version"],
+                inside["memory_count"]) == (1, 1, 1)
+        assert inside["has_instructions"] is True
+        assert _state(env, doc["id"]) == inside
+
+
 # ---------------------------------------------------------------------------
 # 3. Versions: each bumped only by its own kind of change
 # ---------------------------------------------------------------------------
@@ -710,6 +885,16 @@ class TestVersions:
 
 
 class TestMemoryCount:
+    def test_fixture_runs_on_the_app_pragmas(self, env):
+        async def _pragmas():
+            async with env["session"]() as db:
+                return [
+                    (await db.execute(text(f"PRAGMA {name}"))).scalar()
+                    for name in ("journal_mode", "busy_timeout", "foreign_keys")
+                ]
+
+        assert _run(_pragmas()) == ["wal", 5000, 1]
+
     def test_count_tracks_rows(self, env):
         doc = _doc(env)
         memories = [_add(env, doc["id"], f"Fact {i}") for i in range(3)]
@@ -828,7 +1013,7 @@ class TestOutOfMetadataAndListRows:
         _save(env, doc["id"], "", 1)
         assert _run(store.get_doc(doc["id"]))["has_instructions"] is False
 
-    def test_candidate_queries_select_length_not_text(self, env):
+    def test_candidate_queries_select_has_instructions_not_text(self, env):
         store = env["store"]
         doc = _noted_doc(env, project_id=env["p1"])
         _run(store.add_share(doc["id"], env["bob"], "write"))
@@ -858,15 +1043,16 @@ class TestOutOfMetadataAndListRows:
         finally:
             event.remove(engine, "before_cursor_execute", _capture)
 
+        expression = "docs.instructions != ?"
         bare = re.compile(r"docs\.instructions\b")
         for statement in doc_selects:
-            assert not bare.search(statement.replace("length(docs.instructions)", "")), statement
+            assert not bare.search(statement.replace(expression, "")), statement
         # Every Doc entity load (they all carry the cached count) selects
         # the has_instructions expression.
         entity_loads = [s for s in doc_selects if "docs.memory_count" in s]
         assert len(entity_loads) >= 6
         for statement in entity_loads:
-            assert "length(docs.instructions) >" in statement, statement
+            assert f"{expression} AS" in statement, statement
         # get_notes_state is the one read that loads the text.
         assert any(bare.search(s) for s in notes_selects)
 
@@ -906,6 +1092,7 @@ class TestNotesState:
         assert _state(env, doc["id"]) == {
             "doc_id": doc["id"],
             "instructions": "",
+            "has_instructions": False,
             "instructions_version": 0,
             "instructions_updated_at": None,
             "instructions_updated_by": None,
@@ -919,11 +1106,40 @@ class TestNotesState:
         _add(env, doc["id"], "Fact")
         state = _state(env, doc["id"])
         assert state["instructions"] == "Rule one\nRule two"
+        assert state["has_instructions"] is True
         assert state["instructions_version"] == 1
         assert state["instructions_updated_at"] == saved["instructions_updated_at"]
         assert state["instructions_updated_by"] == env["carol"]
         assert state["memories_version"] == 1
         assert state["memory_count"] == 1
+        assert _save(env, doc["id"], "", 1)["has_instructions"] is False
+
+    def test_carries_the_doc_dict_notes_keys(self, env):
+        store = env["store"]
+        doc = _doc(env)
+        for step in (
+            lambda: None,
+            lambda: _save(env, doc["id"], "Rule", 0),
+            lambda: _add(env, doc["id"], "Fact"),
+            lambda: _save(env, doc["id"], "", 1),
+        ):
+            step()
+            row = _run(store.get_doc(doc["id"]))
+            state = _state(env, doc["id"])
+            assert {k: state[k] for k in store.NOTES_STATE_KEYS} == {
+                k: row[k] for k in store.NOTES_STATE_KEYS
+            }
+
+    def test_in_session_form(self, env):
+        doc = _doc(env)
+        _save(env, doc["id"], "Rule", 0)
+
+        async def _read(doc_id):
+            async with env["session"]() as db:
+                return await env["store"].load_notes_state_in_session(db, doc_id)
+
+        assert _run(_read(doc["id"])) == _state(env, doc["id"])
+        assert _run(_read("no-such-doc")) is None
 
     def test_missing_doc(self, env):
         assert _state(env, "no-such-doc") is None
