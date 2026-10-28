@@ -18,11 +18,12 @@ from api.tasks import get_instructions as tasks_instructions
 from api.airtable import get_instructions as airtable_instructions
 from api.ramp import get_instructions as ramp_instructions
 from chat.browser_sessions import BROWSER_SERVICE_KEY
-from chat.docs.constants import DOCS_SERVICE_KEY
+from chat.docs.constants import DOC_NOTES_SERVICE_KEY, DOCS_SERVICE_KEY
 from chat.project_db import PROJECT_DB_SERVICE_KEY
 from chat.tables.constants import TABLES_SERVICE_KEY
 from config.feature_gates import (
-    browser_enabled_for, docs_enabled_for, tables_enabled_for,
+    browser_enabled_for, doc_notes_enabled_for, docs_enabled_for,
+    tables_enabled_for,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,8 @@ logger = logging.getLogger(__name__)
 # "connected" -- so aggregates such as GET /me's has_any_service_connected
 # must skip them.
 PSEUDO_SERVICE_KEYS = frozenset({
-    DOCS_SERVICE_KEY, TABLES_SERVICE_KEY, BROWSER_SERVICE_KEY, PROJECT_DB_SERVICE_KEY,
+    DOCS_SERVICE_KEY, DOC_NOTES_SERVICE_KEY, TABLES_SERVICE_KEY,
+    BROWSER_SERVICE_KEY, PROJECT_DB_SERVICE_KEY,
 })
 
 
@@ -52,9 +54,11 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
     user-side credential can't keep a plugin's ``system:<id>`` skill
     visible after an admin disables the plugin's service server-side.
 
-    The map also carries capability pseudo-keys (:data:`PSEUDO_SERVICE_KEYS`,
-    ``"docs"`` and ``"tables"`` for the Quest Docs and Quest Tables feature
-    gates) that gate tools and skills the same way but are not connections.
+    The map also carries capability pseudo-keys (:data:`PSEUDO_SERVICE_KEYS`:
+    ``"docs"``, ``"doc_notes"`` and ``"tables"`` for the Quest Docs, Quest
+    Doc notes and Quest Tables feature gates, ``"browser"`` and
+    ``"project_db"``) that gate tools and skills the same way but are not
+    connections.
     A plugin with neither a credential schema nor a user connection (a free public API, e.g.
     ``sec_edgar``) is always true here; GET /me's aggregate skips those
     ids via :func:`config.plugins.connectionless_plugin_ids`.
@@ -102,13 +106,18 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
         services[plugin.id] = connected and plugin_server_available(plugin)
 
     # Capability pseudo-keys (PSEUDO_SERVICE_KEYS), not connectors: they
-    # mirror the per-user Quest Docs / Quest Tables feature gates so the doc
-    # and table tools (registry specs with ``requires_service: "docs"`` /
-    # ``"tables"``) and their system skills are hidden from prompts while
-    # the gate is closed for this user. Set after the plugin loop so the
-    # gate always decides these keys.
+    # mirror the per-user Quest Docs / Quest Doc notes / Quest Tables
+    # feature gates so the doc, doc-notes and table tools (registry specs
+    # with ``requires_service: "docs"`` / ``"doc_notes"`` / ``"tables"``)
+    # and their system skills are hidden from prompts while the gate is
+    # closed for this user. Set after the plugin loop so the gate always
+    # decides these keys. doc_notes_enabled_for folds in the docs gate it
+    # requires (each wrapper reads the gates file on its own, so a toggle
+    # landing between the two reads can skew one map; the next build
+    # corrects it).
     email = user.get("email") or ""
     services[DOCS_SERVICE_KEY] = docs_enabled_for(email)
+    services[DOC_NOTES_SERVICE_KEY] = doc_notes_enabled_for(email)
     services[TABLES_SERVICE_KEY] = tables_enabled_for(email)
     # The browser tools exist for public projects only; their specs are
     # gated on this key so the regular prompts, which never carry a
@@ -128,10 +137,14 @@ def get_public_connected_services(user: dict) -> dict[str, bool]:
     are set. It gates the public system skills (``PUBLIC_SYSTEM_SKILLS``
     in ``chat/llm/tool_schemas.py``) in the public prompt's enumeration
     and in the public ``load_skills`` arm; the public prompt's tool
-    sections take the same gates as explicit flags."""
+    sections take the same gates as explicit flags. ``"doc_notes"`` is
+    kept in step with :func:`get_user_connected_services`; like the other
+    gates, the public prompt's tool sections take it as an explicit flag
+    rather than from this map."""
     email = user.get("email") or ""
     return {
         DOCS_SERVICE_KEY: docs_enabled_for(email),
+        DOC_NOTES_SERVICE_KEY: doc_notes_enabled_for(email),
         TABLES_SERVICE_KEY: tables_enabled_for(email),
         BROWSER_SERVICE_KEY: browser_enabled_for(email),
         PROJECT_DB_SERVICE_KEY: False,

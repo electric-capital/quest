@@ -7,7 +7,13 @@ from typing import Optional
 
 import sqlalchemy as sa
 from sqlalchemy import String, Text, DateTime, JSON
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    column_property,
+    mapped_column,
+    validates,
+)
 
 from config.encryption import hash_api_key
 from config.password_hashing import password_fingerprint
@@ -1689,6 +1695,56 @@ class Doc(Base):
         sa.Boolean, nullable=False, default=False, server_default=sa.false()
     )
 
+    # Doc notes (docs/architecture/doc-notes.md): the owner's instructions
+    # field and the version counters of the instructions and of the doc's
+    # ``doc_memories`` rows. Written only through db/doc_store.py and
+    # db/doc_memory_store.py, and never bump ``updated_at`` (the body's
+    # concurrency token) or ``last_write_source``.
+    #
+    # ``instructions`` is deferred with raiseload: no ``select(Doc)`` or
+    # ``db.get(Doc, ...)`` loads up to DOC_INSTRUCTIONS_MAX_CHARS per row,
+    # and touching the attribute on such a row raises instead of
+    # lazy-loading. Read the text with ``select(Doc.instructions)`` or
+    # ``select(Doc).options(undefer(Doc.instructions))`` (``db.get`` ignores
+    # the option for a row already in the session, and ``db.refresh``
+    # defers it again). ``has_instructions`` is None before the first flush
+    # and expires when the row is flushed with changes, so read it only
+    # after ``db.refresh``; the counters below are changed with SQL-side
+    # ``UPDATE`` expressions, never read-modify-write on a loaded row.
+    instructions: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default="",
+        deferred=True, deferred_raiseload=True,
+    )
+    # ``instructions != ''`` in every ``select(Doc)``: list rows learn
+    # whether the doc has instructions without loading the text. Not
+    # ``length(instructions) > 0``: SQLite's ``length()`` stops at the first
+    # NUL, so a text starting with one would read as empty (the stores also
+    # refuse NUL).
+    has_instructions: Mapped[bool] = column_property(instructions != "")
+    # Bumped on every instructions change; also the UI save's
+    # optimistic-concurrency token.
+    instructions_version: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+    instructions_updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, default=None
+    )
+    instructions_updated_by: Mapped[Optional[int]] = mapped_column(
+        sa.Integer,
+        sa.ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    # Both change in the same transaction as any doc_memories write
+    # (db/doc_memory_store.py); memory_count is cached for list rows and
+    # the delivery fast path.
+    memories_version: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+    memory_count: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+
     # Timestamps; updated_at doubles as the optimistic-concurrency token.
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
@@ -1739,6 +1795,137 @@ class DocShare(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class DocMemory(Base):
+    """One memory of a Quest Doc: a short plain-text fact about the doc.
+
+    Part of the doc's notes (docs/architecture/doc-notes.md), outside the
+    body and its revisions. People add and edit memories in the doc's Notes
+    panel (owner and write-share recipients), or by accepting a
+    ``DocNoteSuggestion``. db/doc_memory_store.py owns every write and
+    bumps ``docs.memories_version`` / ``docs.memory_count`` in the same
+    transaction. Rows cascade with the doc; listed newest first.
+    """
+
+    __tablename__ = "doc_memories"
+    __table_args__ = (
+        sa.Index("ix_doc_memories_doc_id_created_at", "doc_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    doc_id: Mapped[str] = mapped_column(
+        String(36),
+        sa.ForeignKey("docs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Plain text, stripped, 1..DOC_MEMORY_MAX_CHARS (enforced in the store).
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # "ui:<user_id>" | "suggestion:<suggestion_id>"
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[Optional[int]] = mapped_column(
+        sa.Integer,
+        sa.ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    updated_by: Mapped[Optional[int]] = mapped_column(
+        sa.Integer,
+        sa.ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class DocNoteSuggestion(Base):
+    """A doc note change a model proposed via ``suggest_doc_note``.
+
+    The doc-notes twin of ``ProjectMemorySuggestion``: registered on the
+    side while the turn keeps going, then accepted or dismissed by
+    ``user_id`` (the proposing conversation's user) from the composer
+    bubble, the inbox or the doc's Notes panel. ``kind`` is "memory" (one
+    fact; accepting adds a ``doc_memories`` row, replacing
+    ``replaces_memory_id`` when set) or "instructions" (the complete
+    proposed text of ``docs.instructions``, written against
+    ``base_instructions_version``). Rows cascade with the reviewer, the doc
+    and the conversation; written by db/doc_note_suggestion_store.py.
+    """
+
+    __tablename__ = "doc_note_suggestions"
+    __table_args__ = (
+        sa.Index(
+            "ix_doc_note_suggestions_conversation_status",
+            "conversation_id", "status",
+        ),
+        sa.Index("ix_doc_note_suggestions_doc_status", "doc_id", "status"),
+        sa.Index("ix_doc_note_suggestions_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    # The reviewer: the proposing conversation's user.
+    user_id: Mapped[int] = mapped_column(
+        sa.Integer,
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    doc_id: Mapped[str] = mapped_column(
+        String(36),
+        sa.ForeignKey("docs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    conversation_id: Mapped[str] = mapped_column(
+        String(36),
+        sa.ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # "instructions" | "memory"
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    # memory: the fact; instructions: the complete proposed text.
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # The model's one-line justification, shown under the suggestion.
+    reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    # instructions kind: the docs.instructions_version the proposal was
+    # written against. NULL for memory suggestions.
+    base_instructions_version: Mapped[Optional[int]] = mapped_column(
+        sa.Integer, nullable=True, default=None
+    )
+    # memory kind: the memory this suggestion replaces on accept. Nulled by
+    # the DB when that memory is deleted.
+    replaces_memory_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        sa.ForeignKey("doc_memories.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default=MemorySuggestionStatus.PENDING,
+        server_default=MemorySuggestionStatus.PENDING.value,
+    )
+    # The memory created on a memory accept (NULL otherwise).
+    memory_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        sa.ForeignKey("doc_memories.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, default=None
     )
 
 

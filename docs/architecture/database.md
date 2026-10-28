@@ -31,8 +31,6 @@ Per-user Slack OAuth data (`access_token`, `default_team_id`, `user_id`, `author
 
 The Telethon session followed when Telegram became a plugin: the dropped `users.telegram_session` column became a `telegram` row whose `oauth_blob` is `{"session": "<StringSession>", "phone": ..., "connected_at": ...}` (migration `d7a1f3c9e2b4` decrypts under the old column's label and re-encrypts under the row's, since the AES-GCM associated data differs per column); an in-flight login sits in the same blob under `pending`.
 
-The `User.to_dict()` method converts a model instance to a plain dict (including the `id` field) matching the format expected by code that receives user dicts, ensuring backward compatibility.
-
 ## UserServiceCredential Model
 
 The `UserServiceCredential` model maps to the `user_service_credentials` table: per-user credentials for **plugin-contributed** services, one row per **connection**: a `(user, service)` holds one row for an ordinary plugin and up to `connection_limit` rows for a `multi_connection` plugin (e.g. IMAP mailboxes), told apart by `account` with exactly one `is_default` row -- see [User Connections](user-connections.md). Core integrations keep their dedicated `users` columns (`ramp_oauth`, `airtable_token`, ...); plugins cannot add columns, so their per-user connections live here.
@@ -165,8 +163,6 @@ The columns are on the class. The ones whose meaning the schema cannot carry:
 - `last_message_seq` is the monotonic high-water mark for the per-conversation seq stamped on each message in `chat_history.json`. Cached here so the persistent-WS subscribe handler can answer `up_to_date` / `catchup` / `resync` without reading the file. Advanced by `record_messages_appended()` (one session per append, also setting `last_message_at` and `auto_title`) after each successful append. The JSON file is the source of truth for the seq on each message; this column is a denormalised cache. Added by Alembic migration `2a4c7e9b1d3f`; backfilled in `quest.py:lifespan` for pre-migration rows. See [Realtime Architecture](realtime.md).
 - `flags` holds the per-conversation opt-in behaviors set at the *start* of the conversation, as a JSON array of enabled flag-name strings. NULL/missing means no flags, like `origin`. Parsed from a magic `%%flags[...]` first line on the first web message and persisted by `set_conversation_flags()` (set-only-if-not-already-set; start-of-conversation only). The known flag set and the parser live in `chat/conversation_flags.py`. Added by Alembic migration `bf3a48a208a6` (no backfill needed -- NULL == no flags). See [Conversation Flags](conversation-flags.md).
 
-Before this migration, user→conversation ownership was inferred from the directory structure (`data/chats/{user_id}/{conversation_id}/`). It is now stored explicitly in the `conversations` table, and `ChatStorage` path helpers no longer take a `user_id` argument -- ownership is checked via the DB.
-
 The `user_id` column is an integer foreign key to `users.id` with `ON DELETE CASCADE`. An index on `user_id` and a composite index on `(user_id, last_message_at)` are declared in `__table_args__` on the model.
 
 ## SlackConversation Model
@@ -224,6 +220,8 @@ The columns are on the class (`skill_id` = the shared skill, `user_id` = the rec
 - `docs.require_approval` (migration `a9c2e7f4b1d3`, default false) is the owner's switch that makes every model-initiated write an approval card (access rule 7 in `chat/docs/access.py`).
 - `doc_shares.user_id` NULL means everyone on the install; the partial unique index `ix_doc_shares_everyone` allows one such row per doc.
 - Title uniqueness (case-insensitive per owner, project and mode) is enforced in `db/doc_store.py`, not by an index.
+- [Doc notes](doc-notes.md) (migration `7103d39f4efb`): the instructions text with its version, last editor and time, `memories_version` and the cached `memory_count` are `docs` columns, and `instructions` is deferred so `select(Doc)` never loads it. `DocMemory` (`doc_memories`) cascades with the doc. `DocNoteSuggestion` (`doc_note_suggestions`, the `MemorySuggestionStatus` lifecycle) cascades with its reviewer, doc and conversation, and its two memory references are `SET NULL`. Writes go through `db/doc_store.py` (instructions) and `db/doc_memory_store.py` (memories).
+- **`docs` is altered in place, never rebuilt with batch mode**: a rebuild cascades away every row referencing it ([Batch Rebuilds](#batch-rebuilds)). Migration `7103d39f4efb` adds its plain columns with `op.add_column` and the `instructions_updated_by` key as an inline `ADD COLUMN ... REFERENCES` ([Inline Foreign Key Exclusion](#inline-foreign-key-exclusion)).
 - `ProjectDocSource` (`project_doc_sources`, migration `b4d7e2a9c6f1`) links a private project to a public project whose docs its conversations may read (composite PK `(project_id, source_project_id)`, both cascading with their project); see [Projects -- Project Access](projects.md#project-access-doc-sources).
 
 See [Quest Docs -- Tables](quest-docs.md#tables).
@@ -347,7 +345,9 @@ The long-context flag (per-call context above the model's tier threshold -- `LON
 
 **`db/skill_store.py`** -- Skill CRUD, sharing management, access checks, and auto-load management. See [Skill Library Architecture](skill-library.md) for the full feature description. Access control follows four visibility levels (private, shared, public, project). `get_user_autoloaded_skills()`, `get_project_autoloaded_skills()`, and `get_routine_autoloaded_skills()` join with their respective auto-load junction tables and apply access control filtering, returning skills ordered by name for deterministic prompt ordering. Routine auto-load list/toggle helpers are `list_routine_autoloaded_skill_ids()` and `set_routine_skill_autoload()`.
 
-**`db/doc_store.py`** -- Quest Docs metadata: CRUD, per-mode title uniqueness (`_title_taken()`), the keyset candidate list `list_accessible_docs()`, `update_doc_metadata()` (raises `StaleDocError` on an `expected_updated_at` mismatch), `update_after_write()`, the id collectors used by the project- and account-delete directory sweeps, and the share helpers. Access decisions are NOT made here (see `chat/docs/access.py`); body writes go through `chat/docs/service.py`. See [Quest Docs](quest-docs.md).
+**`db/doc_store.py`** -- Quest Docs metadata: CRUD, per-mode title uniqueness (`_title_taken()`), the keyset candidate list `list_accessible_docs()`, `update_doc_metadata()` (raises `StaleDocError` on an `expected_updated_at` mismatch), `update_after_write()`, the id collectors used by the project- and account-delete directory sweeps, the share helpers, and the doc-notes instructions writers and `get_notes_state()`. Access decisions are NOT made here (see `chat/docs/access.py`); body writes go through `chat/docs/service.py`. See [Quest Docs](quest-docs.md).
+
+**`db/doc_memory_store.py`** -- Every `doc_memories` write, each bumping the doc's `memories_version` and recounting `memory_count` in the same transaction; the transaction shape is in the module docstring. See [Doc Notes](doc-notes.md).
 
 **`db/table_store.py`** -- Quest Tables metadata, shaped like `db/doc_store.py`, plus the per-owner cap and the `expected_schema_version` token on `update_schema()`. See [Quest Tables](quest-tables.md#store-rules).
 
@@ -400,6 +400,10 @@ Schema changes are managed by Alembic. Migration scripts live in `alembic/versio
 
 The `_FTS_VIRTUAL_TABLES` set in `alembic/env.py` lists the FTS5 virtual table names to exclude. Shadow tables are automatically excluded by matching the FTS table name with the standard FTS5 shadow suffixes in `_FTS_SHADOW_SUFFIXES` beside it. To add a new FTS5 table, add its name to `_FTS_VIRTUAL_TABLES` in `alembic/env.py`.
 
+### Inline Foreign Key Exclusion
+
+SQLite cannot add a constraint to an existing table, so a foreign key added to one goes inline with its column (`ADD COLUMN ... REFERENCES ... ON DELETE ...`), and SQLAlchemy's SQLite reflection does not see the `ON DELETE` action of such a key. Autogenerate would propose dropping and re-creating it on every run, operations SQLite refuses outside batch mode. The `include_object` callback in `alembic/env.py` skips the keys listed in `_INLINE_FKS` (table and constrained columns), so autogenerate neither reports nor maintains them: a migration that adds or changes such a key writes it by hand and lists it there.
+
 ### PK Nullable Suppression (SQLite Quirk)
 
 `alembic/env.py` registers a `process_revision_directives` hook (passed to `context.configure()` in both online and offline modes) that suppresses spurious `alter_column(nullable=False)` operations that Alembic autogenerate proposes for PRIMARY KEY columns.
@@ -415,13 +419,9 @@ The behavior differs by PK column type:
 
 The `_process_revision_directives` callback in `alembic/env.py` collects all PK column names from `Base.metadata` and strips any `AlterColumnOp` that is purely a nullable change on a PK column. This is implemented via `_is_pk_nullable_op()` (identifies PK nullable ops) and `_filter_pk_nullable_ops()` (filters them from both upgrade and downgrade op lists, including nested `ModifyTableOps`).
 
-### NOT NULL Constraint Fix (Migration `9fb10fc3827d`)
+### Batch Rebuilds
 
-The migration `9fb10fc3827d_fix_nullable_constraints_on_users_and_.py` fixes NOT NULL constraints on `users.name`, `users.api_key`, `users.created_at`, and `memories.created_at` that were lost during the PK migration (`a1b2c3d4e5f6`). The raw SQL `CREATE TABLE` in that migration omitted `NOT NULL` on these columns even though the SQLAlchemy models declare them as non-nullable.
-
-The migration uses `batch_alter_table` for SQLite compatibility (SQLite does not support `ALTER COLUMN` directly; batch mode rebuilds the table). Before applying `NOT NULL`, it fills any existing NULL values with safe defaults (`''` for strings, `datetime('now')` for timestamps).
-
-Because SQLite's `batch_alter_table` rebuilds the table by creating a new table and copying data, it can drop triggers attached to the original table. The migration includes FTS5 trigger safety checks: after altering the `memories` table, it verifies that the three FTS5 sync triggers (`memories_ai`, `memories_ad`, `memories_au`) still exist and re-creates any that are missing.
+SQLite has no `ALTER COLUMN`, so a type or nullability change takes `batch_alter_table`, which rebuilds the table: create a copy, move the rows, drop the original. The rebuild can lose the original's triggers, so migration `9fb10fc3827d` re-creates any missing FTS5 sync trigger afterwards. Under `PRAGMA foreign_keys=ON`, dropping the original also runs the `ON DELETE` actions of every key that references it, which is why `docs` is only ever altered in place ([Doc and DocShare Models](#doc-and-docshare-models)).
 
 **Running migrations**: `uv run alembic upgrade head`
 
@@ -530,32 +530,20 @@ Per-turn granularity allows distinguishing top-level agent usage from sub-agent 
 - The `updated_at` column, `archived` column, and the `(user_id, archived)` composite index are added by the Alembic migration `861a7abe9a23`.
 - The `guides` table and its indexes are created by the Alembic migration `4e8960c4dacc`, which also migrates existing `custom_system_prompt` data to default guides.
 - Guide content is capped by `MAX_GUIDE_CONTENT_SIZE` in `db/guide_store.py`, enforced at both the data access layer and the API validation layer (`chat/guide_routes.py`); guide names by `MAX_GUIDE_NAME_LENGTH` beside it.
-- The default guide cannot be renamed or deleted (enforced in `db/guide_store.py`).
 - The `conversations` table must exist before the server accepts requests. It is created by an Alembic migration; `run.py` runs `alembic upgrade head` on startup to ensure the schema is current.
 - The `projects` table and its indexes, and the `conversations.project_id` FK with its index, are created by the Alembic migration `f09302acbdf1`.
-- Project name and project instructions are capped by `MAX_PROJECT_NAME_LENGTH` / `MAX_PROJECT_GUIDE_SIZE` in `db/project_store.py`.
 - Deleting a project cascades to conversation metadata rows via `ON DELETE CASCADE` on `conversations.project_id`. The caller must separately delete filesystem directories (project workspace and conversation chat directories).
 - The `routines` table and its indexes are created by the Alembic migration `6766d7c126ba`.
-- Routine name length and prompt size are capped by `MAX_ROUTINE_NAME_LENGTH` / `MAX_ROUTINE_PROMPT_SIZE` in `db/routine_store.py`.
 - Routine prompt cannot be empty (enforced at both the data access layer and API validation layer).
-- Deleting a project cascades to routines via `ON DELETE CASCADE` on `routines.project_id`.
-- Deleting a guide sets `routines.guide_id` to NULL via `ON DELETE SET NULL` (does not delete the routine).
 - The `routine_schedules` table and its indexes (the unique one on `routine_id` enforcing one schedule per routine) are created by the Alembic migration `a91042ecde3b`.
-- Each routine can have at most one schedule (enforced by the unique index on `routine_schedules.routine_id`).
-- Deleting a routine cascades to its schedule via `ON DELETE CASCADE` on `routine_schedules.routine_id`.
-- Deleting a routine sets `conversations.routine_id` to NULL via `ON DELETE SET NULL` (does not delete conversations created by the routine).
-- Deleting a user cascades to schedules via `ON DELETE CASCADE` on `routine_schedules.user_id`.
 - The `conversations.routine_id` FK, index, and `ON DELETE SET NULL` behavior are created by the Alembic migration `c7e3f1a2b4d6`.
-- Valid `schedule_type` values are `SCHEDULE_TYPES` in `db/schedule_timing.py` (enforced at the application layer by `_validate_schedule_params()` in `db/schedule_store.py`).
 - The `conversations.archived` column is added by the Alembic migration `498112eb3e5d`. Existing conversations default to `archived=False`.
 - The `conversations.custom_name` column is added by the Alembic migration `0abafbc6a8f1`. Existing conversations default to `custom_name=NULL` (auto-generated title). Custom names are capped by `MAX_CONVERSATION_NAME_LENGTH` in `db/conversation_store.py`. Setting an empty string clears the custom name (stored as NULL).
 - The `conversations.auto_title` column is added by the Alembic migration `8fb2c1a4d7e5`. Existing rows default to `auto_title=NULL` and are filled in lazily by the `_backfill_conversation_auto_title` lifespan hook in `quest.py`; the conversation-list endpoint falls back to a one-shot `chat_history.json` read for any row still NULL.
 - The `conversations.model` column is added by the Alembic migration `d4a8e2f1c3b5`. Existing conversations default to `model=NULL`.
 - The `conversations.origin` column and the `slack_conversations` table (with its indexes) are created by the Alembic migration `e58a2bf14c01`. Existing conversations default to `origin=NULL`, which application code treats as web.
-- NOT NULL constraints on `users.name`, `users.api_key`, `users.created_at`, and `memories.created_at` are fixed by the Alembic migration `9fb10fc3827d`. This migration uses `batch_alter_table` for SQLite compatibility and includes FTS5 trigger safety checks.
 - The `llm_calls_gemini` and `llm_calls_anthropic` tables (each with the same three dimension indexes, declared on the classes) are created by the Alembic migration `05cdf20e3f2f`, which also backfills all `gemini_api_calls` history and drops that table (see the backfill caveat in [LlmCallGemini and LlmCallAnthropic Models](#llmcallgemini-and-llmcallanthropic-models)).
-- The `llm_calls_*` tables have no FK constraints -- they are append-only analytics logs that survive deletion of parent conversations or users.
 - The `llm_calls_openrouter.cost` / `upstream_inference_cost` / `is_byok` columns (OpenRouter-reported accounting fields) are added by the Alembic migration `f7d2a9c41e58`; earlier rows keep NULL and stay list-price estimated.
 - The `tool_wait_handles` table is created by the Alembic migration `c1f2a3d4e5b6`. Rows cascade on user deletion via `ON DELETE CASCADE` on `user_id`; `conversation_id` has no FK so rows survive conversation deletion (analytics / audit). See [Wait Handles Architecture](wait-handles.md#expiry) for `expires_at` enforcement.
-- `ChatStorage` path helpers no longer accept a `user_id` argument. Ownership is always checked via `db/conversation_store.py`.
+- `ChatStorage` path helpers take no `user_id`; ownership is always checked via `db/conversation_store.py`.
 - The on-disk chat directory structure changed from `data/chats/{user_id}/{conversation_id}/` to `data/chats/{conversation_id}/` (flat layout). Existing conversations under the old nested layout require a data migration to move directories.

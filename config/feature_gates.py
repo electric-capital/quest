@@ -20,6 +20,13 @@ but only while the admin gate is open. The feature key deliberately
 matches the flag name so :func:`filter_gated_flags` can drop
 globally-disabled flags at the send-message chokepoint.
 
+A gate can require another gate (:data:`FEATURE_REQUIRES`): it is then
+open for a user only while the gate it requires is open for that same
+user. The per-user checks (:func:`is_feature_enabled_for_user` and
+everything built on it) apply the requirement; the raw switch state
+(:func:`read_feature_gates`, :func:`is_feature_enabled`, the admin panel)
+stays each gate's own.
+
 This module intentionally uses only the Python standard library
 (mirroring ``config/paths.py`` and ``config/service_credentials.py``) so
 it can be imported cheaply from the WebSocket layer and the conversation
@@ -77,6 +84,22 @@ FEATURE_VOICE_INPUT = "voice_input"
 # to specific users (PER_USER_ACCESS_FEATURES).
 FEATURE_DOCS = "docs"
 
+# Quest Doc notes (see docs/architecture/doc-notes.md): per-doc instructions
+# and memories kept beside a Quest Doc's body. The doc tools deliver them
+# the first time a conversation touches a doc (read_doc attaches them, the
+# first write refuses once with them), and models only suggest changes,
+# each reviewed by a person. Requires Quest Docs (FEATURE_REQUIRES): open
+# for a user only while FEATURE_DOCS is also open for them, and always
+# evaluated for the caller, never for the doc's owner. Closed for a user =
+# every doc tool returns exactly what it returns without notes (no block,
+# no counts, no refusal), the notes tools and the system skill are hidden
+# from the prompt (connected-services pseudo-key "doc_notes") and refuse
+# with ``doc_notes_disabled``, the notes routes 403 and the Notes panel is
+# hidden. Suggestions already filed stay reviewable. Nothing is deleted:
+# reopening the gate restores everything. Access can be restricted to
+# specific users (PER_USER_ACCESS_FEATURES).
+FEATURE_DOC_NOTES = "doc_notes"
+
 # Quest Tables (see spec issue #110): user- and project-owned typed tables
 # stored one SQLite file per table (``<data_dir>/tables/<id>/table.db``,
 # resolved only via ``ChatStorage.get_table_dir``) that conversations read
@@ -112,6 +135,7 @@ KNOWN_FEATURES = (
     FEATURE_GUIDES,
     FEATURE_VOICE_INPUT,
     FEATURE_DOCS,
+    FEATURE_DOC_NOTES,
     FEATURE_TABLES,
     FEATURE_BROWSER,
 )
@@ -124,9 +148,22 @@ PER_USER_ACCESS_FEATURES = frozenset({
     FEATURE_GUIDES,
     FEATURE_VOICE_INPUT,
     FEATURE_DOCS,
+    FEATURE_DOC_NOTES,
     FEATURE_TABLES,
     FEATURE_BROWSER,
 })
+
+# Gates that depend on another gate: ``{feature: required feature}``. A
+# feature listed here is open for a user only while the feature it requires
+# is also open for that same user (:func:`is_feature_enabled_for_user`, so
+# also ``enabled_features()``, which feeds the frontend's enabledFeatures,
+# and every ``*_enabled_for()`` wrapper). The admin switch itself stays
+# independent: a dependent gate can be turned on while its prerequisite is
+# off, it just has no effect until the prerequisite opens, and its
+# FEATURE_LABELS description says what it requires.
+FEATURE_REQUIRES: dict[str, str] = {
+    FEATURE_DOC_NOTES: FEATURE_DOCS,
+}
 
 # Human text for the admin Settings > Features section, keyed by feature.
 FEATURE_LABELS: dict[str, dict[str, str]] = {
@@ -173,6 +210,18 @@ FEATURE_LABELS: dict[str, dict[str, str]] = {
             "is deleted."
         ),
     },
+    FEATURE_DOC_NOTES: {
+        "label": "Quest Doc notes",
+        "description": (
+            "Lets each Quest Doc carry instructions and memories, edited in "
+            "a Notes panel beside the doc. Models receive them the first "
+            "time a conversation touches the doc and can only suggest "
+            "changes, which a person reviews. Requires Quest Docs: it has "
+            "no effect for a user while Quest Docs is off for them. Access "
+            "can be granted to all users or only to specific users. "
+            "Turning it off hides the notes; nothing is deleted."
+        ),
+    },
     FEATURE_TABLES: {
         "label": "Quest Tables",
         "description": (
@@ -208,6 +257,20 @@ def docs_enabled_for(user_email: str) -> bool:
     the write_doc action request, the connected-services prompt gating).
     """
     return is_feature_enabled_for_user(FEATURE_DOCS, user_email)
+
+
+def doc_notes_enabled_for(user_email: str) -> bool:
+    """Whether Quest Doc notes are on for this user.
+
+    True only while Quest Docs is also on for the same user: the gate
+    requires ``docs`` (:data:`FEATURE_REQUIRES`), which
+    :func:`is_feature_enabled_for_user` applies. Convenience wrapper for
+    the doc-notes enforcement points (the notes block, counts and write
+    refusal in the doc tools, the notes tools and routes, the
+    connected-services prompt gating). Callers pass the caller's email,
+    never the doc owner's: the gate is evaluated per caller.
+    """
+    return is_feature_enabled_for_user(FEATURE_DOC_NOTES, user_email)
 
 
 def tables_enabled_for(user_email: str) -> bool:
@@ -275,7 +338,8 @@ def read_feature_gates() -> dict[str, dict]:
     Each gate is ``{"enabled": bool, "allowed_users": list[str] | None}``
     (``None`` = all users). Unknown keys in the file are ignored; known
     features missing from the file default to off. A missing or malformed
-    file means all off.
+    file means all off. This is each gate's own switch, as the admin panel
+    shows it: :data:`FEATURE_REQUIRES` is not applied here.
     """
     raw: dict = {}
     if FEATURE_GATES_FILE.exists():
@@ -296,7 +360,8 @@ def read_feature_gates() -> dict[str, dict]:
 def is_feature_enabled(feature: str) -> bool:
     """Whether an admin has enabled ``feature`` at all (for anyone).
 
-    Ignores any per-user restriction -- use
+    Ignores any per-user restriction and any :data:`FEATURE_REQUIRES`
+    dependency: this is the gate's own switch. Use
     :func:`is_feature_enabled_for_user` at enforcement points that act on
     behalf of a specific user. Unknown features are off.
     """
@@ -304,13 +369,11 @@ def is_feature_enabled(feature: str) -> bool:
     return bool(gate and gate["enabled"])
 
 
-def is_feature_enabled_for_user(feature: str, user_email: str) -> bool:
-    """Whether ``feature`` is enabled for the user with ``user_email``.
-
-    True when the gate is on and either open to all users or the email is
-    in the allowed list (case-insensitive). Unknown features are off.
-    """
-    gate = read_feature_gates().get(feature)
+def _gate_open_for(gates: dict[str, dict], feature: str, user_email: str) -> bool:
+    """Whether ``feature``'s own gate is open for the user: on, and either
+    open to all users or the email is in the allowed list
+    (case-insensitive). Does not look at :data:`FEATURE_REQUIRES`."""
+    gate = gates.get(feature)
     if not gate or not gate["enabled"]:
         return False
     if gate["allowed_users"] is None:
@@ -318,11 +381,44 @@ def is_feature_enabled_for_user(feature: str, user_email: str) -> bool:
     return _normalize_email(user_email) in gate["allowed_users"]
 
 
+def _enabled_for_user(gates: dict[str, dict], feature: str, user_email: str) -> bool:
+    """:func:`is_feature_enabled_for_user` over an already-read gate state:
+    the feature's own gate and, along :data:`FEATURE_REQUIRES`, every gate
+    it requires must be open for the user. The ``seen`` set only guards
+    against a cycle in the mapping."""
+    seen: set[str] = set()
+    current: str | None = feature
+    while current is not None and current not in seen:
+        if not _gate_open_for(gates, current, user_email):
+            return False
+        seen.add(current)
+        current = FEATURE_REQUIRES.get(current)
+    return True
+
+
+def is_feature_enabled_for_user(feature: str, user_email: str) -> bool:
+    """Whether ``feature`` is enabled for the user with ``user_email``.
+
+    True when the gate is on and either open to all users or the email is
+    in the allowed list (case-insensitive), and, for a feature listed in
+    :data:`FEATURE_REQUIRES`, the gate it requires is enabled for the same
+    user too. Unknown features are off.
+    """
+    return _enabled_for_user(read_feature_gates(), feature, user_email)
+
+
 def enabled_features(user_email: str) -> list[str]:
-    """The feature keys enabled for this user, in KNOWN_FEATURES order."""
+    """The feature keys enabled for this user, in KNOWN_FEATURES order.
+
+    Same rule as :func:`is_feature_enabled_for_user` (dependencies
+    included), over one read of the gates file. This is GET /me's
+    ``enabled_features``, so the frontend never sees a feature whose
+    required gate is closed for the user.
+    """
+    gates = read_feature_gates()
     return [
         feature for feature in KNOWN_FEATURES
-        if is_feature_enabled_for_user(feature, user_email)
+        if _enabled_for_user(gates, feature, user_email)
     ]
 
 
@@ -404,7 +500,8 @@ def filter_gated_flags(flags: list[str]) -> list[str]:
     Flags that are not feature-gated (no matching KNOWN_FEATURES key) pass
     through untouched. Dropping is silent-but-logged, matching the forgiving
     unknown-flag behavior of the ``%%flags`` parser. (No feature-gated flag
-    supports per-user access today, so only the on/off state matters here.)
+    supports per-user access or requires another gate today, so only the
+    on/off state matters here.)
     """
     gates = read_feature_gates()
     kept: list[str] = []

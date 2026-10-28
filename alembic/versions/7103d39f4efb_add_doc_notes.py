@@ -1,0 +1,167 @@
+"""add doc notes: docs instructions columns, doc_memories, doc_note_suggestions
+
+Revision ID: 7103d39f4efb
+Revises: a9d3e7f1c5b2
+Create Date: 2026-10-28 12:00:00.000000
+
+Doc notes are texts that stick to a Quest Doc outside its body: the owner's
+instructions (one field on the ``docs`` row, with a version counter that is
+also the UI save's concurrency token) and a list of short memories (one
+``doc_memories`` row per fact, cascading with the doc, counted and
+versioned on the ``docs`` row). ``doc_note_suggestions`` holds what models
+proposed through the non-blocking ``suggest_doc_note`` tool, with the
+pending / accepted / dismissed lifecycle of ``project_memory_suggestions``.
+
+Existing docs need no backfill: they have no notes, which is exactly the
+empty instructions, version 0 and zero memories the server defaults give.
+
+SQLite cannot add a constraint with ALTER TABLE, and a batch (copy and
+move) rebuild of ``docs`` would drop the table under ``PRAGMA
+foreign_keys=ON`` (alembic/env.py) and cascade away every ``doc_shares``
+row. So the five plain columns are added in place, and
+``instructions_updated_by`` with a raw ``ADD COLUMN ... REFERENCES``,
+which SQLite allows for a column whose default is NULL. SQLAlchemy's
+SQLite reflection reads ON DELETE only from table-level ``FOREIGN KEY``
+clauses, so it sees this inline key without its ``SET NULL``;
+``alembic/env.py`` (``_INLINE_FKS``) keeps autogenerate from proposing to
+re-create it. ``docs`` must never be rebuilt with batch mode.
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+
+
+# revision identifiers, used by Alembic.
+revision: str = '7103d39f4efb'
+down_revision: Union[str, Sequence[str], None] = 'a9d3e7f1c5b2'
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    """Add the notes columns to docs, then create both tables."""
+    op.add_column(
+        'docs',
+        sa.Column('instructions', sa.Text(), nullable=False, server_default=''),
+    )
+    op.add_column(
+        'docs',
+        sa.Column(
+            'instructions_version', sa.Integer(), nullable=False,
+            server_default='0',
+        ),
+    )
+    op.add_column(
+        'docs',
+        sa.Column('instructions_updated_at', sa.DateTime(), nullable=True),
+    )
+    op.execute(
+        "ALTER TABLE docs ADD COLUMN instructions_updated_by INTEGER "
+        "REFERENCES users(id) ON DELETE SET NULL"
+    )
+    op.add_column(
+        'docs',
+        sa.Column(
+            'memories_version', sa.Integer(), nullable=False,
+            server_default='0',
+        ),
+    )
+    op.add_column(
+        'docs',
+        sa.Column(
+            'memory_count', sa.Integer(), nullable=False, server_default='0',
+        ),
+    )
+
+    op.create_table(
+        'doc_memories',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('doc_id', sa.String(length=36), nullable=False),
+        sa.Column('content', sa.Text(), nullable=False),
+        sa.Column('source', sa.Text(), nullable=False),
+        sa.Column('created_by', sa.Integer(), nullable=True),
+        sa.Column('updated_by', sa.Integer(), nullable=True),
+        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.Column('updated_at', sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(['doc_id'], ['docs.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['created_by'], ['users.id'], ondelete='SET NULL'),
+        sa.ForeignKeyConstraint(['updated_by'], ['users.id'], ondelete='SET NULL'),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index(
+        'ix_doc_memories_doc_id_created_at', 'doc_memories',
+        ['doc_id', 'created_at'],
+    )
+
+    op.create_table(
+        'doc_note_suggestions',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('user_id', sa.Integer(), nullable=False),
+        sa.Column('doc_id', sa.String(length=36), nullable=False),
+        sa.Column('conversation_id', sa.String(length=36), nullable=False),
+        sa.Column('kind', sa.String(length=20), nullable=False),
+        sa.Column('content', sa.Text(), nullable=False),
+        sa.Column('reasoning', sa.Text(), nullable=True),
+        sa.Column('base_instructions_version', sa.Integer(), nullable=True),
+        sa.Column('replaces_memory_id', sa.String(length=36), nullable=True),
+        sa.Column(
+            'status', sa.String(length=20), nullable=False,
+            server_default='pending',
+        ),
+        sa.Column('memory_id', sa.String(length=36), nullable=True),
+        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.Column('resolved_at', sa.DateTime(), nullable=True),
+        sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['doc_id'], ['docs.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(
+            ['conversation_id'], ['conversations.id'], ondelete='CASCADE',
+        ),
+        sa.ForeignKeyConstraint(
+            ['replaces_memory_id'], ['doc_memories.id'], ondelete='SET NULL',
+        ),
+        sa.ForeignKeyConstraint(
+            ['memory_id'], ['doc_memories.id'], ondelete='SET NULL',
+        ),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index(
+        'ix_doc_note_suggestions_conversation_status', 'doc_note_suggestions',
+        ['conversation_id', 'status'],
+    )
+    op.create_index(
+        'ix_doc_note_suggestions_doc_status', 'doc_note_suggestions',
+        ['doc_id', 'status'],
+    )
+    op.create_index(
+        'ix_doc_note_suggestions_user_status', 'doc_note_suggestions',
+        ['user_id', 'status'],
+    )
+
+
+def downgrade() -> None:
+    """Drop both tables and the docs columns (all doc notes are lost).
+
+    Native ``ALTER TABLE DROP COLUMN``, no table rebuild, so ``doc_shares``
+    is untouched.
+    """
+    op.drop_index(
+        'ix_doc_note_suggestions_user_status', table_name='doc_note_suggestions',
+    )
+    op.drop_index(
+        'ix_doc_note_suggestions_doc_status', table_name='doc_note_suggestions',
+    )
+    op.drop_index(
+        'ix_doc_note_suggestions_conversation_status',
+        table_name='doc_note_suggestions',
+    )
+    op.drop_table('doc_note_suggestions')
+    op.drop_index('ix_doc_memories_doc_id_created_at', table_name='doc_memories')
+    op.drop_table('doc_memories')
+
+    op.drop_column('docs', 'memory_count')
+    op.drop_column('docs', 'memories_version')
+    op.drop_column('docs', 'instructions_updated_by')
+    op.drop_column('docs', 'instructions_updated_at')
+    op.drop_column('docs', 'instructions_version')
+    op.drop_column('docs', 'instructions')

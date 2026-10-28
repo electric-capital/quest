@@ -15,7 +15,7 @@ matrix.
 
 Every row returned to the UI is built by :func:`_ui_row` (one batched user
 lookup per response via ``db.user_store.get_users_by_ids``): the store's
-doc dict plus
+doc dict without its doc-notes keys (``doc_store.NOTES_STATE_KEYS``) plus
 
 - ``scope`` (``user`` / ``project``), ``shared`` (has any share row);
 - ``access``: ``write`` (the UI verdict), ``can_edit`` (``write ==
@@ -261,7 +261,11 @@ def _doc_row(
     users = users or {}
     is_owner = doc["owner_id"] == user["id"]
     shares = doc.get("shares") or []
-    row = {key: value for key, value in doc.items() if key != "shares"}
+    # Notes stay out of UI rows; the Notes panel reads its own route.
+    row = {
+        key: value for key, value in doc.items()
+        if key != "shares" and key not in doc_store.NOTES_STATE_KEYS
+    }
     row["scope"] = "project" if doc.get("project_id") else "user"
     row["shared"] = bool(shares)
     row["shared_with_me"] = not is_owner

@@ -65,7 +65,7 @@ The `has_project` flag is set to `bool(project_id)` in both `conversation.py` (f
 The project database is deprecated in favour of Quest Tables, and the first step of retiring it is that no project can start using it. The rule, in `chat/project_db.py`:
 
 - `project_has_legacy_db(project_id)` is true when the project's `project.db` exists and holds at least one user table (a `sqlite_master` lookup over a read-only connection). A missing file, an empty database (a file created lazily by a query that never made a table) or a database whose tables were all dropped is false; a file that exists but cannot be read counts as legacy data, so a transient SQLite error never hides a project's existing tables. The check never creates the file.
-- `PROJECT_DB_SERVICE_KEY` (`"project_db"`) is a connected-services pseudo-key (`PSEUDO_SERVICE_KEYS` in `api/instructions.py`, like the `docs`, `tables` and `browser` keys). The user-level maps (`get_user_connected_services`, `get_public_connected_services`) set it to false; the conversation-aware callers -- `run_conversation_turn`, `_run_sub_agent` and `_get_connected_services()` in `chat/gemini_api/tool_dispatch.py` -- overwrite it per project with `with_project_db_service(services, project_id)`.
+- `PROJECT_DB_SERVICE_KEY` (`"project_db"`) is a connected-services pseudo-key (`PSEUDO_SERVICE_KEYS` in `api/instructions.py`, like the feature-gate keys there). The user-level maps (`get_user_connected_services`, `get_public_connected_services`) set it to false; the conversation-aware callers -- `run_conversation_turn`, `_run_sub_agent` and `_get_connected_services()` in `chat/gemini_api/tool_dispatch.py` -- overwrite it per project with `with_project_db_service(services, project_id)`.
 
 Every surface follows the key:
 

@@ -35,8 +35,8 @@ DEFAULT_WORD_BUDGET = 6000
 # never raise it to make room for new text -- trim or split the doc instead.
 OVER_BUDGET_CEILINGS = {
     "docs/architecture/action-requests.md": 10473,
-    "docs/architecture/database.md": 10950,
-    "docs/architecture/quest-docs.md": 8500,
+    "docs/architecture/database.md": 10859,
+    "docs/architecture/quest-docs.md": 8498,
     "docs/architecture/realtime.md": 7500,
     "docs/architecture/llm-providers.md": 7500,
     "docs/architecture/skill-library.md": 7000,

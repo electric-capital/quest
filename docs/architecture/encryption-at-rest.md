@@ -132,9 +132,11 @@ the column with native `DROP COLUMN` (see the batch-mode caveat in
   legacy `server_credentials.json` / `twitter_credentials.json` project-root
   files (never modified; migrated copies in the store are encrypted),
   `users.settings` (no secrets), Quest Docs (`<data_dir>/docs/<id>/`
-  bodies, assets and revisions plus the `docs` / `doc_shares` rows: user
-  content, not secrets, so they stay plaintext like conversation workspaces
-  and chat histories -- see [Quest Docs](quest-docs.md)) and Quest Tables
+  bodies, assets and revisions plus the `docs` / `doc_shares` rows, and the
+  [doc notes](doc-notes.md) in the notes columns of `docs`, `doc_memories`
+  and `doc_note_suggestions`: user content, not secrets, so they stay
+  plaintext like conversation workspaces and chat histories -- see
+  [Quest Docs](quest-docs.md)) and Quest Tables
   (`<data_dir>/tables/<id>/` plus the `data_tables` / `data_table_shares`
   rows, for the same reason -- see [Quest Tables](quest-tables.md)).
   `inference_api_keys` were already hashed.

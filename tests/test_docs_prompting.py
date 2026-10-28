@@ -28,7 +28,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import config.feature_gates as fg
-from chat.docs.constants import DOCS_SERVICE_KEY
+from chat.docs.constants import DOC_NOTES_SERVICE_KEY, DOCS_SERVICE_KEY
 from chat.tables.constants import TABLES_SERVICE_KEY
 from tests.prompt_support import core_bullet, named_under_skill
 
@@ -89,10 +89,11 @@ class TestConnectedServicesDocsKey:
         from chat.browser_sessions import BROWSER_SERVICE_KEY
         from chat.project_db import PROJECT_DB_SERVICE_KEY
         assert PSEUDO_SERVICE_KEYS == frozenset({
-            DOCS_SERVICE_KEY, TABLES_SERVICE_KEY, BROWSER_SERVICE_KEY,
-            PROJECT_DB_SERVICE_KEY,
+            DOCS_SERVICE_KEY, DOC_NOTES_SERVICE_KEY, TABLES_SERVICE_KEY,
+            BROWSER_SERVICE_KEY, PROJECT_DB_SERVICE_KEY,
         })
         assert DOCS_SERVICE_KEY == "docs"
+        assert DOC_NOTES_SERVICE_KEY == "doc_notes"
         assert TABLES_SERVICE_KEY == "tables"
 
     def test_follows_gate(self, gates_file, no_plugins):

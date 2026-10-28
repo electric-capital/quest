@@ -62,6 +62,29 @@ def include_name(name, type_, parent_names):
     return True
 
 
+# ---- Unreflectable inline foreign keys ----
+# SQLite cannot ALTER TABLE ADD CONSTRAINT, so a foreign key added to an
+# existing table goes in inline (``ADD COLUMN ... REFERENCES ... ON DELETE
+# ...``), and SQLAlchemy's SQLite reflection reads ON DELETE only from
+# table-level ``FOREIGN KEY`` clauses. Autogenerate would then propose
+# dropping and re-creating such a key on every run; SQLite refuses both ops
+# and points at batch mode, and a batch rebuild of ``docs`` under PRAGMA
+# foreign_keys=ON cascades away every row referencing it. The database
+# enforces these keys (migration 7103d39f4efb), so autogenerate skips them.
+# Entries: (table, constrained columns).
+_INLINE_FKS = {("docs", ("instructions_updated_by",))}
+
+
+def include_object(object_, name, type_, reflected, compare_to):
+    """Skip the inline foreign keys listed in ``_INLINE_FKS``."""
+    if type_ == "foreign_key_constraint":
+        table = getattr(object_, "table", None)
+        columns = tuple(getattr(object_, "column_keys", ()) or ())
+        if table is not None and (table.name, columns) in _INLINE_FKS:
+            return False
+    return True
+
+
 # ---- PK nullable suppression for autogenerate ----
 # SQLite's PRAGMA table_info reports notnull=0 for PRIMARY KEY columns,
 # but PKs are inherently NOT NULL.  Alembic detects this as a mismatch
@@ -161,6 +184,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         include_name=include_name,
+        include_object=include_object,
         process_revision_directives=_process_revision_directives,
     )
 
@@ -190,6 +214,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             include_name=include_name,
+            include_object=include_object,
             process_revision_directives=_process_revision_directives,
         )
 
