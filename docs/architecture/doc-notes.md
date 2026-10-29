@@ -2,7 +2,7 @@
 
 ## Overview
 
-Doc notes are texts that stick to a [Quest Doc](quest-docs.md) outside its body and its revisions. The **instructions** are one plain-text field on the `docs` row, holding the rules a model should follow when it works on the doc. The **memories** are short plain-text facts about the doc, one `doc_memories` row each. `doc_note_suggestions` holds proposed changes to either, each reviewed by the user whose conversation proposed it, with the `MemorySuggestionStatus` lifecycle of [project memory suggestions](project-memories.md): an instructions suggestion carries the complete proposed text, a memory suggestion one fact, optionally replacing a memory. This doc covers the feature gate, the data model, the version counters, concurrency, caps, the per-conversation seen record, the delivery gate and the notes block.
+Doc notes are texts that stick to a [Quest Doc](quest-docs.md) outside its body and its revisions. The **instructions** are one plain-text field on the `docs` row, holding the rules a model should follow when it works on the doc. The **memories** are short plain-text facts about the doc, one `doc_memories` row each. `doc_note_suggestions` holds proposed changes to either, each reviewed by the user whose conversation proposed it, with the `MemorySuggestionStatus` lifecycle of [project memory suggestions](project-memories.md): an instructions suggestion carries the complete proposed text, a memory suggestion one fact, optionally replacing a memory. This doc covers the feature gate, the data model, the version counters, concurrency, caps, the per-conversation seen record, the delivery gate, the notes block, delivery on the doc reads, the write refusal, the instructions pin on `write_doc` cards and the known limitations.
 
 ## Key Files
 
@@ -16,7 +16,11 @@ Doc notes are texts that stick to a [Quest Doc](quest-docs.md) outside its body 
 | `db/doc_store.py` | `NOTES_STATE_KEYS`, the notes-state reads, the instructions writers, and `delete_doc()`, which removes the notes with the row |
 | `db/doc_memory_store.py` | Every `doc_memories` write; the module docstring gives the transaction shape |
 | `chat/docs/routes.py` | `_doc_row()`, which leaves `NOTES_STATE_KEYS` out of UI rows |
-| `chat/docs/notes.py` | The delivery gate, the notes block and its text copy, and the copy strings the model reads; no I/O |
+| `chat/docs/notes.py` | The delivery gate, the notes block and its text copy, and the copy strings the model reads, incl. both refusal messages; no I/O |
+| `chat/docs/service.py` | The "Doc notes" helper section (gate check, counts, loading, seen record), the delivery in the read tools and `create_doc`, and the notes step of `_resolve_write()`; the module docstring states the notes invariants |
+| `chat/gemini_api/tool_handlers/docs.py` | Maps `DocNotesUnseen` to the `doc_notes_unseen` tool result |
+| `chat/action_request_types/doc_precard.py` | The `write_doc` pre-card's text refusal and its `instructions_version` pin |
+| `chat/action_request_types/write_doc.py` | `SERVER_INJECTED_KEYS`, which holds the pin, and `WriteDocHandler.execute`, which passes it to the service |
 | `chat/storage.py` | The "Doc notes seen" section: the per-conversation `doc_notes_seen.json` sidecar |
 | `chat/compaction.py`, `chat/gemini_api/session.py` | The seen record's deleters, `compact_conversation()` and `get_or_create_chat()` |
 
@@ -74,7 +78,7 @@ The gate functions in `chat/docs/notes.py` do no I/O: a caller loads the doc's n
 - **Write refusal** (`write_refused()`): a model write is refused when there is no record and the doc has notes, or when the instructions moved past the record and are non-empty. A memory change or cleared instructions are delivered on the next read but never block a write: memories are background facts, while the instructions are the rules a change must follow.
 - A record ahead of the doc counts as current.
 
-`records_delivery()` decides whether a run's deliveries update its conversation's record, and so whether its writes can be refused for unseen notes: only the run kinds in `RECORDING_RUN_KINDS`, with a conversation id. Its docstring gives the reason for each other run kind. The one that spans files is `sub_agent`: it dispatches with the parent's `conversation_id`, so its reads count for the parent in `doc_reads.json`, but the parent model never sees the block the sub-agent was shown, so the seen record never credits it.
+`records_delivery()` decides whether a run's deliveries update its conversation's record, and so whether its writes can be refused for unseen notes: only the run kinds in `RECORDING_RUN_KINDS`, with a conversation id. Its docstring gives the reason for each other run kind. The one that spans files is `sub_agent`: it dispatches with the parent's `conversation_id`, so its reads count for the parent in `doc_reads.json`, but the parent model never sees the block the sub-agent was shown, so the seen record never credits it. What each run kind gets on a read is in [Delivery on Reads](#delivery-on-reads).
 
 ## Notes Block
 
@@ -89,6 +93,37 @@ The gate functions in `chat/docs/notes.py` do no I/O: a caller loads the doc's n
 `render_notes_text()` is the block's plain-text form for a `write_doc` pre-card refusal, an `Invalid parameters` tool error with no cap of its own, so it stays within `DOC_NOTES_PRECARD_MAX_CHARS` and leaves out the `note`. The instructions come whole, followed by the longest prefix of whole memories that fits, and a trailer counts every memory left out. The budget is sized so instructions within `DOC_INSTRUCTIONS_MAX_CHARS` always come whole beside the widest trailer, because a refusal records the delivery it carried and a cut copy could not be recorded. Only instructions longer than the budget allows (if the budget is lowered) are cut, ending in a marker line counting the characters cut, with no memory shown; the returned `NotesText` then has `instructions_whole` false, and a caller must not record that instructions version as seen.
 
 The strings the model reads in the block and in its text copy are module constants at the top of `chat/docs/notes.py`, kept together for review.
+
+## Delivery on Reads
+
+The doc tools check the gate through `notes_enabled()` in `chat/docs/service.py`, for the caller and never for the doc owner. While it is closed nothing below runs, and every doc tool returns the payload it returns without notes. While it is open:
+
+- **`list_docs` / `search_docs`**: every row ends with `notes`, the counts of `notes_counts()` read from the row. Never content; notes are never searched.
+- **`read_doc`**: the result ends with the `notes` counts and, when the notes are delivered, the `doc_notes` [block](#notes-block) from `load_notes()`, whose fresh state then also supplies the counts.
+- **`create_doc`**: records the new doc as seen at versions (0, 0), the creator exception. No notes can predate the creating conversation, and a note added later moves a version past the record, which re-arms delivery and, for instructions, the refusal.
+
+Whether a `read_doc` carries the block depends on the run kind:
+
+- **Recording runs** (`records_delivery()`): when `needs_delivery()` holds against the seen record, and the delivered versions are then recorded.
+- **Sub-agent and inference-API runs**: whenever the doc has notes (`has_notes()`), never recorded. A sub-agent shares its parent's conversation id, but the parent's record never suppresses its block.
+- **Scripts** (`_NOTES_COUNTS_ONLY_RUN_KINDS`): the counts only.
+
+`record_notes_delivery()` writes the record for the doc tools. It is a no-op outside recording runs and runs as the last step, with no `await` before the return or raise; its docstring gives the reason.
+
+## Write Refusal
+
+The notes step is the last check of `_resolve_write()` in `chat/docs/service.py`: after the denied verdict, `edit`'s read-before-edit and `add_image`'s conversation requirement, before the caller's approval verdict. The three write tools and the `write_doc` pre-card therefore share it, and read-only runs never reach it, because the access rule denies their writes first. It runs only in the first pass, outside the per-doc lock; the re-resolve under the lock skips it.
+
+In a recording run where `write_refused()` holds, `_refuse_unseen_notes()` records the delivery and raises `DocNotesUnseen`, which carries the block and its text copy. It decides on the row, then again on the freshly loaded state, so notes emptied in between never refuse. The identical retry passes. The model sees the refusal as:
+
+- **Write tools**: `{"error": "doc_notes_unseen", "message", "doc_notes": {...}}`, mapped in `chat/gemini_api/tool_handlers/docs.py`. The message is `DOC_NOTES_UNSEEN_MESSAGE` (`chat/docs/notes.py`) with the doc's title, and `doc_notes` is the block.
+- **`write_doc` pre-card** (`doc_precard_check()` -> `preview_write_operation()`, which asks for the text form): the same message, a blank line and the [text copy](#text-copy), as the same-turn `Invalid parameters` text. When the copy had to cut the instructions, the seen instructions version is left where it was, so the retry is refused again.
+
+## Instructions Pin on write_doc Cards
+
+While the gate is open for the proposer, the pre-card injects the live row's `instructions_version` into the card's params. It is one of the `SERVER_INJECTED_KEYS` in `chat/action_request_types/write_doc.py`, so a model-supplied copy is dropped. `WriteDocHandler.execute` passes it to the service as `expected_instructions_version`, a server-only pin of `_normalize_write_params()` (`_SERVER_PINS`, never part of a `suggested_request`).
+
+At approve time (`bypass_approval`) the notes step never consults the seen record. `_check_pinned_instructions()` refuses with `DOC_INSTRUCTIONS_CHANGED_MESSAGE` when the live `instructions_version` differs from the pin and the live instructions are non-empty. The refusal fails the Approve and leaves the request open, like a stale `old_string` ([Quest Docs -- The write_doc Action Request](quest-docs.md#the-write_doc-action-request)). A card without a pin (proposed while the gate was closed for the proposer) or a gate closed at execute is not compared, and memory changes never refuse. The card shows no notes.
 
 ## Constraints
 
@@ -114,3 +149,23 @@ The strings the model reads in the block and in its text copy are module constan
 **Why are the memories a newest-first prefix with a progress rule?** A prefix leaves one gap, the older end, which `memories_omitted` counts and a page at `memory_offset` resumes from; packing shorter older memories into the room a long one left would show a set with holes the model could neither name nor page to. The progress rule keeps a memory too large for the room beside the instructions from stalling paging at one offset.
 
 **Why does `records_delivery()` raise for an unknown run kind?** Not recording also means never refusing a write for unseen notes, so a run kind added to `RUN_KINDS` (`chat/artifact_access.py`) and silently treated as non-recording would let its model write past instructions it was never shown. Raising makes whoever adds a kind place it; a conversation id that is neither `None` nor a string raises `TypeError` for the same reason instead of reading as no conversation.
+
+**Why does a refusal record the delivery it carried?** The refusal result puts the block in the model's context, so the identical retry can pass. Requiring a `read_doc` before the retry was rejected: it costs a call and returns a body the write may not need, such as for an append, to deliver notes the model already holds.
+
+**Why does the notes step sit before the approval verdict?** The model meets the notes on its first write attempt, before an `approval_required` result hands it a `suggested_request` to forward, so the card it proposes can already follow the instructions. Placing the step after the verdict was rejected: the model would forward a card drafted without the rules and meet them only at the pre-card.
+
+**Why does approve-time execute skip the seen record but pin the instructions version?** The approver is a person, often a write-share recipient rather than the owner who wrote the rules, and the card shows no instructions, so they cannot weigh an instructions change themselves; the pin refuses a card whose instructions moved while it sat open. Re-checking the seen record at Approve was rejected because compaction can delete the record while the card sits open, refusing a proposal that had seen the notes.
+
+**Why do sub-agent and inference-API reads get the block without recording it?** The parent model never sees a sub-agent's block, so crediting it would let the parent write past notes it was never shown, while the sub-agent still needs the notes for its own work. An inference run is a fresh conversation per call, so there is nothing to remember and every read is a first touch.
+
+**Why does a doc without notes give those runs no block?** Attaching an empty block to every read was rejected as noise for a run that has nothing to remember. A recording run gets an emptied block only to learn that a rule it was shown is gone.
+
+**Why do scripts get the counts only?** A script is code, not the model, and records nothing, so a block delivered to it would vouch for nothing; the model's own write is still refused until the notes reach the model. The counts cost nothing and let a script see which docs have notes.
+
+**Why does a closed gate turn everything off, including the creator's (0, 0) record?** A closed gate must leave every doc tool and sidecar exactly as without notes, decided by one `notes_enabled()` check per tool. Writing the creator record regardless was rejected so that no part of the feature runs for a user who does not have it; a doc created while the gate was closed is treated like any other once it opens.
+
+## Known Limitations
+
+- **A second write in the same model response passes.** When one response issues several writes to a doc, the first refusal records the delivery, so the others are not refused. Tracking delivery per model step was judged out of proportion.
+- **The write gate is not re-checked under the per-doc lock.** It reads the versions in the first pass of `apply_write_operation()`, so an instructions change landing between that check and the write applies from the next write on.
+- **A process crash can leave a record for a block the model never received**, when it lands after a read recorded its delivery and before the tool result was flushed to the chat history. A Stop is safe: the tool result joins the run's messages with no `await` after the service returns (`_emit_durable()` in `chat/gemini_api/turn_tools.py`), and the next turn replays it.
