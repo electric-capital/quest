@@ -61,7 +61,7 @@ The stores make no access decisions; callers resolve `resolve_doc_access()` in `
 
 The record vouches only for blocks still in the model's context, so `clear_doc_notes_seen()` deletes it whenever the model-facing history is rebuilt from less than the full `sdk_history.json`:
 
-- `compact_conversation()` (`chat/compaction.py`), once the compacted history is written, because the summary may drop a delivered block.
+- `compact_conversation()` (`chat/compaction.py`), just before it writes the compacted history, because the summary may drop a delivered block. Clearing first means a failure in between leaves the full history with no record, never the compacted one with a stale record.
 - `get_or_create_chat()` (`chat/gemini_api/session.py`), whenever it creates a session with no history: a cross-provider switch with no compatible disk copy (also after a restart, when the caller discarded another provider's disk history) or a failed `save_history()` with none. On a conversation's first session this is a no-op.
 
 A thinking-effort or same-provider rebuild and a session seeded from compatible disk history carry the history over and keep the record. `doc_reads.json` survives both deletions, so after a rebuild a write still passes the read-before-edit gate, and `write_refused()`, finding no record, stops it while the doc has notes.

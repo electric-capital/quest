@@ -519,15 +519,45 @@ class TestDocNotesSeenRecord:
         assert result["history"] is None
         _assert_notes_record(conv_dir, kept=False)
 
-    def test_first_session_of_a_new_conversation_creates_no_file(
-        self, mock_provider, chats_root,
+    def test_empty_carried_over_history_clears(self, mock_provider, chats_root):
+        # An empty list is no history either (a `history is None` check
+        # would miss it).
+        conv_dir = _seed_doc_notes(chats_root)
+        _active_chats[(1, CONV)] = ("claude-haiku-4.5", {"model": "claude-haiku-4.5"})
+        mock_provider.save_history.return_value = []
+
+        result = get_or_create_chat(
+            mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt",
+        )
+
+        assert result["history"] is None
+        _assert_notes_record(conv_dir, kept=False)
+
+    def test_clear_touches_only_this_conversation(self, mock_provider, chats_root):
+        conv_dir = _seed_doc_notes(chats_root)
+        other_dir = chats_root / "conv-2"
+        other_dir.mkdir()
+        storage_mod.ChatStorage.record_doc_notes_seen("conv-2", DOC, 3, 7)
+        _active_chats[(1, CONV)] = ("gemini-3.1-pro-preview", {"model": "gemini-3.1-pro-preview"})
+
+        get_or_create_chat(mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt")
+
+        _assert_notes_record(conv_dir, kept=False)
+        assert storage_mod.ChatStorage.get_doc_notes_seen("conv-2", DOC) == notes_mod.NotesSeen(3, 7)
+
+    def test_first_session_of_a_new_conversation_creates_no_file_and_logs_nothing(
+        self, mock_provider, chats_root, monkeypatch, caplog,
     ):
         conv_dir = chats_root / CONV
         conv_dir.mkdir(parents=True)
+        # chat/logging_config.py turns propagation off for the "chat" logger.
+        monkeypatch.setattr(logging.getLogger("chat"), "propagate", True)
+        caplog.set_level(logging.INFO, logger="chat.gemini_api.session")
 
         get_or_create_chat(mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt")
 
         assert list(conv_dir.iterdir()) == []
+        assert not [r for r in caplog.records if "doc notes seen" in r.getMessage()]
 
     # -- failure --------------------------------------------------------
 

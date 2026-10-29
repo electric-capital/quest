@@ -335,7 +335,7 @@ class TestClear:
         (conv / "sdk_history.json").write_text("[]")
         _cs().record_doc_notes_seen("c1", "d1", 3, 7)
 
-        _cs().clear_doc_notes_seen("c1")
+        assert _cs().clear_doc_notes_seen("c1") is True
         assert not (conv / FILE_NAME).exists()
         assert _cs().get_doc_notes_seen("c1", "d1") is None
         assert _cs().get_doc_read_ids("c1") == ["d1"]
@@ -343,12 +343,12 @@ class TestClear:
         assert (conv / "sdk_history.json").read_text() == "[]"
 
     def test_missing_file_is_noop(self, conv, warnings_log):
-        _cs().clear_doc_notes_seen("c1")
+        assert _cs().clear_doc_notes_seen("c1") is False
         assert list(conv.iterdir()) == []
         assert not _storage_warnings(warnings_log)
 
     def test_missing_conversation_dir_is_noop(self, chats_root, warnings_log):
-        _cs().clear_doc_notes_seen("c1")
+        assert _cs().clear_doc_notes_seen("c1") is False
         assert not (chats_root / "c1").exists()
         assert not _storage_warnings(warnings_log)
 
@@ -362,7 +362,7 @@ class TestClear:
             return real_unlink(self, *args, **kwargs)
 
         monkeypatch.setattr(Path, "unlink", unlink)
-        _cs().clear_doc_notes_seen("c1")  # no exception
+        assert _cs().clear_doc_notes_seen("c1") is True  # no exception
         warnings = _storage_warnings(warnings_log)
         assert len(warnings) == 1
         assert "conversation=c1" in warnings[0].getMessage()
@@ -389,7 +389,7 @@ class TestClear:
 
         monkeypatch.setattr(Path, "unlink", unlink)
         monkeypatch.setattr("builtins.open", fake_open)
-        _cs().clear_doc_notes_seen("c1")  # no exception
+        assert _cs().clear_doc_notes_seen("c1") is False  # no exception
         errors = [
             r for r in warnings_log.records
             if r.name == "chat.storage" and r.levelno == logging.ERROR

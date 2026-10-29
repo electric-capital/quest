@@ -1824,13 +1824,13 @@ class ChatStorage:
             )
 
     @staticmethod
-    def clear_doc_notes_seen(conversation_id: str) -> None:
+    def clear_doc_notes_seen(conversation_id: str) -> bool:
         """Delete this conversation's doc notes seen record.
 
         Called whenever the model-facing history is rebuilt from less than
         the full sdk_history.json: ``compact_conversation()``
-        (chat/compaction.py), right after the new history is written,
-        since its summary may drop a delivered notes block; and
+        (chat/compaction.py), just before the compacted history is
+        written, since its summary may drop a delivered notes block; and
         ``get_or_create_chat()`` (chat/gemini_api/session.py) whenever it
         creates a session with no history (a cross-provider switch with no
         compatible disk copy, also after a restart, or a failed
@@ -1848,13 +1848,19 @@ class ChatStorage:
         Args:
             conversation_id: Conversation UUID.
 
+        Returns:
+            True when a record was removed (deleted or emptied), False when
+            there was none or it could not be removed.
+
         Raises:
             InvalidStorageIdError: invalid conversation id.
         """
         seen_file = ChatStorage._get_doc_notes_seen_file(conversation_id)
         try:
-            seen_file.unlink(missing_ok=True)
-            return
+            seen_file.unlink()
+            return True
+        except FileNotFoundError:
+            return False
         except OSError:
             logger.warning(
                 "[storage] failed to delete doc_notes_seen.json (conversation=%s); "
@@ -1864,12 +1870,14 @@ class ChatStorage:
         try:
             with open(seen_file, "w") as f:
                 json.dump({"docs": {}}, f)
+            return True
         except OSError:
             logger.error(
                 "[storage] failed to empty doc_notes_seen.json (conversation=%s); "
                 "a stale doc notes record may let writes skip the notes",
                 conversation_id, exc_info=True,
             )
+            return False
 
     # ------------------------------------------------------------------
     # System prompt (persisted per-conversation)

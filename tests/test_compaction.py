@@ -426,6 +426,32 @@ def test_compact_conversation_deletes_doc_notes_seen_keeps_doc_reads(
     assert json.loads((tmp_path / "doc_reads.json").read_text()) == _DOC_READS
 
 
+def test_compact_conversation_clears_doc_notes_seen_before_replacing_history(
+    monkeypatch, tmp_path,
+):
+    # A failure while replacing the history leaves the full history with no
+    # record (one extra delivery), never the compacted history with a
+    # stale record.
+    provider = FakeAnthropicProvider()
+    history = _long_anthropic_history()
+    _install_compaction_fakes(monkeypatch, tmp_path, provider, history)
+    _seed_doc_notes(tmp_path)
+
+    def failing_write(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(
+        "chat.gemini_api.history._write_sdk_history_file", failing_write,
+    )
+    with pytest.raises(OSError):
+        _run(compact_conversation(1, "conv-1", "claude-opus-4-8"))
+
+    assert not (tmp_path / "doc_notes_seen.json").exists()
+    assert json.loads((tmp_path / "doc_reads.json").read_text()) == _DOC_READS
+    with open(tmp_path / "sdk_history.json") as f:
+        assert json.load(f)["history"] == history
+
+
 class _FailingStreamProvider(FakeAnthropicProvider):
     async def send_message_stream(self, session, message):
         raise RuntimeError("summarizer unavailable")

@@ -174,12 +174,12 @@ def _clear_doc_notes_seen(conversation_id: str) -> None:
     try:
         from chat.storage import ChatStorage
 
-        ChatStorage.clear_doc_notes_seen(conversation_id)
-        logger.info(
-            "Cleared doc notes seen record for conversation %s: the new "
-            "session starts with no history.",
-            conversation_id,
-        )
+        if ChatStorage.clear_doc_notes_seen(conversation_id):
+            logger.info(
+                "Cleared doc notes seen record for conversation %s: the new "
+                "session starts with no history.",
+                conversation_id,
+            )
     except Exception:
         logger.warning(
             "Failed to clear doc notes seen record for conversation %s",
