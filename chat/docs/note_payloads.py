@@ -80,6 +80,15 @@ STALE_INSTRUCTIONS_SAVE_MESSAGE = (
 _UI_SOURCE_RE = re.compile(r"ui:([1-9][0-9]{0,17})")
 _SUGGESTION_PREFIX = "suggestion:"
 
+# The store row fields a suggestion row may carry to the client (an
+# allowlist, so a column added to the store later is not sent unreviewed);
+# the store's ``kind`` goes out as ``note_kind``.
+_SUGGESTION_KEYS = (
+    "id", "user_id", "doc_id", "conversation_id", "content", "reasoning",
+    "base_instructions_version", "replaces_memory_id", "status", "memory_id",
+    "created_at", "resolved_at",
+)
+
 # The review fields every review row carries (review_rows() leaves the
 # instructions pair off memory rows).
 _REVIEW_DEFAULTS = {
@@ -154,15 +163,17 @@ def public_memory(
 
 
 def public_suggestion(row: Mapping[str, Any]) -> dict:
-    """A ``doc_note_suggestions`` row as the routes send it: ``kind``
-    renamed ``note_kind``; a review row (it has ``doc_title``) also gets
-    every review field, ``None`` / ``False`` where ``review_rows()`` left
-    one off."""
-    out = {key: value for key, value in row.items() if key != "kind"}
+    """A ``doc_note_suggestions`` row as the routes send it: the store
+    fields in ``_SUGGESTION_KEYS`` with ``kind`` renamed ``note_kind``; a
+    review row (it has ``doc_title``) also gets ``doc_title`` and every
+    review field, ``None`` / ``False`` where ``review_rows()`` left one
+    off."""
+    out = {key: row.get(key) for key in _SUGGESTION_KEYS}
     out["note_kind"] = row["kind"]
     if "doc_title" in row:
+        out["doc_title"] = row["doc_title"]
         for key, default in _REVIEW_DEFAULTS.items():
-            out.setdefault(key, default)
+            out[key] = row.get(key, default)
     return out
 
 
