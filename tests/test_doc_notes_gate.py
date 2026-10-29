@@ -123,8 +123,8 @@ WRITE_REFUSED = {
 # it when needs_delivery() holds and records the delivery; "unrecorded"
 # attaches it whenever the doc has notes, exactly what a conversation with
 # no record gets, never suppressed by a record and recording nothing
-# (sub-agents, inference-API runs); "never" attaches it to no read (scripts
-# get counts only; the UI has its own routes and no tool reads). A
+# (sub-agents, inference-API runs); "never" attaches it to no read_doc
+# (scripts get counts only; the UI has its own routes and no tool reads). A
 # "record" run kind without a conversation reads like "unrecorded".
 DELIVERY_MODES = {
     "top_level": "record",

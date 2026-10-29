@@ -12,8 +12,9 @@ place::
 
 Doc notes (docs/architecture/doc-notes.md): while the ``doc_notes`` gate
 is open for the caller, :func:`read_doc` adds the ``notes`` counts and,
-when the conversation has not seen the current notes, the ``doc_notes``
-block, recorded in the seen sidecar (``doc_notes_seen.json``);
+when the notes are due (a recording run that has not seen them, recorded
+in the seen sidecar ``doc_notes_seen.json``; a sub-agent or inference-API
+run whenever the doc has notes), the ``doc_notes`` block;
 :func:`list_docs` / :func:`search_docs` rows add the counts and
 :func:`create_doc` records the new doc as seen at versions (0, 0). The
 helpers in the "Doc notes" section are shared with the notes tools.
@@ -46,7 +47,8 @@ Invariants kept here:
 - A notes delivery is recorded only once the block is in the result (or
   in the :class:`DocNotesUnseen` being raised), with no ``await`` before
   the return or raise, and never for a sub-agent, inference-API or script
-  read (:func:`record_notes_delivery`).
+  read (:func:`record_notes_delivery`). The one record without a block is
+  the creator's (0, 0).
 - Notes before writes: in a recording run with the ``doc_notes`` gate
   open, a model write to a doc whose notes this conversation has not seen
   (``notes.write_refused()``) is refused once with :class:`DocNotesUnseen`
@@ -508,9 +510,10 @@ async def _finish_write(
 # ---------------------------------------------------------------------------
 
 
-# Run kinds that get the notes counts but never the block: a script is
-# code, not the model; the UI has its own notes routes.
-_NOTES_COUNTS_ONLY_RUN_KINDS = frozenset({"script", "ui"})
+# Run kinds whose read_doc gets the notes counts but never the block: a
+# script is code, not the model; the UI has its own notes routes. Applies
+# to read_doc only (a script may still fetch the notes on purpose).
+_READ_DOC_COUNTS_ONLY_RUN_KINDS = frozenset({"script", "ui"})
 
 
 def notes_enabled(caller: Caller) -> bool:
@@ -529,6 +532,16 @@ def notes_counts(doc: Mapping[str, Any]) -> dict:
     return {
         "has_instructions": bool(doc["has_instructions"]),
         "memories": int(doc["memory_count"]),
+    }
+
+
+def _block_counts(block: Mapping[str, Any]) -> dict:
+    """:func:`notes_counts` of what a notes block (built from offset 0)
+    shows, so a result's counts agree with its block even when a memory
+    changed between the state read and the memories read."""
+    return {
+        "has_instructions": block["instructions"] != "",
+        "memories": len(block["memories"]) + block["memories_omitted"],
     }
 
 
@@ -561,15 +574,21 @@ async def load_notes(doc_id: str, *, memory_offset: int = 0) -> tuple[dict, dict
 def notes_seen(caller: Caller, doc_id: str) -> Optional[doc_notes.NotesSeen]:
     """The caller's seen record for ``doc_id``, or None.
 
-    None also for a caller without a conversation and for a record that
-    cannot be read: no record means deliver (and refuse a write), the
-    fail-closed direction.
+    None outside recording runs (``records_delivery()``): a sub-agent
+    shares its parent's conversation id, but the parent's record is not
+    its own, so it reads like a conversation with no record. None also
+    for a record that cannot be read: no record means deliver (and refuse
+    a write), the fail-closed direction.
+
+    Raises:
+        ValueError / TypeError: an unknown run kind or a non-string
+            conversation id (from ``records_delivery()``).
     """
-    if not caller.conversation_id:
+    if not doc_notes.records_delivery(caller.run_kind, caller.conversation_id):
         return None
     try:
         return _storage.ChatStorage.get_doc_notes_seen(caller.conversation_id, doc_id)
-    except (OSError, ValueError):
+    except (OSError, _storage.InvalidStorageIdError):
         logger.warning(
             "[docs] could not read the doc notes seen record "
             "(conversation=%s, doc=%s)",
@@ -593,7 +612,10 @@ def record_notes_delivery(
     model did not get. A failed write costs one extra delivery or refusal.
 
     Raises:
-        ValueError: an unknown run kind (from ``records_delivery()``).
+        ValueError / TypeError: an unknown run kind or a non-string
+            conversation id (from ``records_delivery()``), or a bad
+            ``doc_id`` / version (from ``record_doc_notes_seen()``): caller
+            bugs, never swallowed.
     """
     if not doc_notes.records_delivery(caller.run_kind, caller.conversation_id):
         return
@@ -601,7 +623,7 @@ def record_notes_delivery(
         _storage.ChatStorage.record_doc_notes_seen(
             caller.conversation_id, doc_id, instructions_version, memories_version,
         )
-    except (OSError, ValueError):
+    except (OSError, _storage.InvalidStorageIdError):
         logger.warning(
             "[docs] could not record doc notes delivery (conversation=%s, doc=%s)",
             caller.conversation_id, doc_id, exc_info=True,
@@ -923,21 +945,18 @@ async def read_doc(
     delivered: Optional[dict] = None
     if notes_enabled(caller):
         result["notes"] = notes_counts(doc)
-        recording = doc_notes.records_delivery(caller.run_kind, caller.conversation_id)
-        if caller.run_kind in _NOTES_COUNTS_ONLY_RUN_KINDS:
-            attach = False
-        elif recording:
-            attach = doc_notes.needs_delivery(doc, notes_seen(caller, doc["id"]))
-        else:
-            # Sub-agent and inference-API runs (and a run without a
-            # conversation): what a conversation with no record gets.
-            attach = doc_notes.has_notes(doc)
+        # Outside recording runs notes_seen() is None, so a sub-agent or
+        # inference-API read gets what a conversation with no record gets:
+        # the block whenever the doc has notes.
+        attach = (
+            caller.run_kind not in _READ_DOC_COUNTS_ONLY_RUN_KINDS
+            and doc_notes.needs_delivery(doc, notes_seen(caller, doc["id"]))
+        )
         if attach:
             state, block = await load_notes(doc["id"])
-            result["notes"] = notes_counts(state)
+            result["notes"] = _block_counts(block)
             result["doc_notes"] = block
-            if recording:
-                delivered = state
+            delivered = state
     _record_read(caller, doc["id"])
     if delivered is not None:
         # Last step, no await before the return (record_notes_delivery).

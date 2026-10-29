@@ -13,8 +13,8 @@ Covers:
    truncation ``note``) and records both versions; the next read does not
    carry it; a memory added, edited or deleted and an instructions change
    re-attach the current state, also when cleared or deleted down to
-   nothing; a change landing mid-read gives counts and a record that match
-   the block; a doc without notes never carries a block nor writes a
+   nothing; a change landing mid-read gives counts that match the block
+   and a record never newer than it; a doc without notes never carries a block nor writes a
    record; top-level, Slack and cross-user subagent reads record; a failed
    notes load records nothing.
 2. The creator exception: ``create_doc`` records ``(0, 0)``, so the
@@ -36,8 +36,9 @@ Covers:
    notes store or seen record, and its write lands; with the gate open the
    same read differs.
 8. The shared helpers: ``load_notes`` (state read before the memories,
-   offset, missing doc), ``notes_seen``, ``record_notes_delivery``,
-   ``notes_counts`` and ``notes_enabled``.
+   offset, missing doc), ``notes_seen`` (None outside recording runs),
+   ``record_notes_delivery`` (storage failures swallowed, caller bugs
+   raised), ``notes_counts`` and ``notes_enabled``.
 
 The write side (``DocNotesUnseen`` in the service's write resolve, the
 ``doc_notes_unseen`` tool result, the ``write_doc`` pre-card and the
@@ -432,6 +433,34 @@ class TestRecordingReads:
         ])
         assert seen(caller.conversation_id, doc["id"]) == _ns(1, 3)
 
+    def test_counts_follow_the_block_when_a_memory_lands_between_the_reads(
+        self, notes_env, monkeypatch,
+    ):
+        from db import doc_memory_store
+
+        doc, (m1, m2) = noted_doc(notes_env)
+        caller = make_caller(notes_env)
+        real_list = doc_memory_store.list_doc_memories
+        added = []
+
+        async def _memory_lands_first(doc_id):
+            # After get_notes_state() (memories_version 2), before the list.
+            alice = notes_env.users["alice"]["id"]
+            added.append(await doc_memory_store.create_doc_memory(
+                doc_id, "Late fact.", source=doc_memory_store.ui_source(alice), user_id=alice,
+            ))
+            return await real_list(doc_id)
+
+        monkeypatch.setattr(doc_memory_store, "list_doc_memories", _memory_lands_first)
+        result = _read(caller, doc["id"])
+        # The counts are the block's (3 memories), not the older state's (2).
+        assert result["notes"] == {"has_instructions": True, "memories": 3}
+        assert result["doc_notes"] == block(INSTRUCTIONS, 1, [
+            (added[0]["id"], "Late fact."), (m2["id"], MEMORY_2), (m1["id"], MEMORY_1),
+        ])
+        # The record stays at the state's version: never newer than shown.
+        assert seen(caller.conversation_id, doc["id"]) == _ns(1, 2)
+
     def test_doc_without_notes_never_attaches_nor_records(self, notes_env):
         doc = seed_doc(notes_env)
         caller = make_caller(notes_env)
@@ -568,16 +597,19 @@ class TestUnrecordedReads:
             assert result["notes"] == {"has_instructions": True, "memories": 2}
         assert seen_files(notes_env) == []
 
+    @pytest.mark.parametrize("record", [(1, 2), (0, 1)])
     @pytest.mark.parametrize("run_kind", ["sub_agent", "inference_api"])
-    def test_service_reads_ignore_the_seen_record(self, notes_env, run_kind):
+    def test_service_reads_ignore_the_seen_record(self, notes_env, run_kind, record):
         doc, memories = noted_doc(notes_env)
         caller = make_caller(notes_env, run_kind=run_kind)
         cid = caller.conversation_id
-        # A current record (e.g. the parent's) never suppresses the block.
-        _cs().record_doc_notes_seen(cid, doc["id"], 1, 2)
+        # A current record (e.g. the parent's) never suppresses the block,
+        # and an older one is never advanced.
+        _cs().record_doc_notes_seen(cid, doc["id"], *record)
         before = seen_file(notes_env, cid).read_bytes()
         for _ in range(2):
             assert _read(caller, doc["id"])["doc_notes"] == full_block(memories)
+        assert seen(cid, doc["id"]) == _ns(*record)
         assert seen_file(notes_env, cid).read_bytes() == before
 
     @pytest.mark.parametrize("flags", [{"is_sub_agent": True}, {"is_inference_api": True}])
@@ -941,6 +973,14 @@ class TestHelpers:
         assert service.notes_seen(make_caller(notes_env, cid=None), "doc-1") is None
         assert service.notes_seen(make_caller(notes_env, run_kind="script"), "doc-1") is None
 
+    @pytest.mark.parametrize("run_kind", ["sub_agent", "inference_api"])
+    def test_notes_seen_is_none_outside_recording_runs(self, notes_env, run_kind):
+        # A sub-agent shares its parent's conversation id; the parent's
+        # record is not its own.
+        caller = make_caller(notes_env, run_kind=run_kind)
+        _cs().record_doc_notes_seen(caller.conversation_id, "doc-1", 3, 4)
+        assert service.notes_seen(caller, "doc-1") is None
+
     def test_notes_seen_fails_closed_on_a_bad_conversation_id(self, notes_env, caplog):
         caller = Caller(user=notes_env.users["alice"], conversation_id="../x",
                         project_id=None, is_public=False, run_kind="top_level")
@@ -974,12 +1014,19 @@ class TestHelpers:
         assert "could not record doc notes delivery" in caplog.text
         assert seen_files(notes_env) == []
 
-    def test_record_notes_delivery_swallows_bad_arguments(self, notes_env, caplog):
+    def test_record_notes_delivery_raises_on_bad_arguments(self, notes_env):
+        # A caller bug, never swallowed (only storage failures are).
         caller = make_caller(notes_env)
-        with caplog.at_level(logging.WARNING, logger="chat.docs.service"):
+        with pytest.raises(ValueError, match="instructions_version"):
             service.record_notes_delivery(caller, "doc-1", -1, 4)
-        assert "could not record doc notes delivery" in caplog.text
         assert seen_files(notes_env) == []
+
+    def test_record_notes_delivery_swallows_a_bad_conversation_id(self, notes_env, caplog):
+        caller = Caller(user=notes_env.users["alice"], conversation_id="../x",
+                        project_id=None, is_public=False, run_kind="top_level")
+        with caplog.at_level(logging.WARNING, logger="chat.docs.service"):
+            service.record_notes_delivery(caller, "doc-1", 3, 4)
+        assert "could not record doc notes delivery" in caplog.text
 
     def test_record_notes_delivery_refuses_an_unknown_run_kind(self, notes_env):
         caller = Caller(user=notes_env.users["alice"], conversation_id=str(uuid.uuid4()),
