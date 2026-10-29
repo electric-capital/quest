@@ -1758,8 +1758,9 @@ class ChatStorage:
         version the model has seen. A plain overwrite would let two
         interleaved deliveries of the same doc (parallel tool calls awaiting
         DB reads in between) move the record backwards and cost an extra
-        delivery or refusal. ``create_doc`` records ``(0, 0)`` for the doc
-        it creates: no notes can predate the conversation that made the doc.
+        delivery or refusal. Recording ``(0, 0)`` marks a doc this
+        conversation created: no notes can predate the conversation that
+        made the doc.
 
         Malformed entries and a corrupt file are dropped: the write keeps
         the valid entries plus this one. Skips the write entirely when the

@@ -215,7 +215,7 @@ The `legacy_shared_workspace` and `converted_from_standalone` flags in `chat_his
 
 ### Model Change History Preservation
 
-`run_conversation_turn()` loads disk history every turn and, with no live session (e.g. after a restart), seeds one from it when the providers match (`get_provider_for_model()` in `chat/llm/config.py`). On a model switch, `get_or_create_chat()` carries the old session's history over within a provider family, falls back to a disk copy that matches the target provider across families, and otherwise starts empty. The frontend locks the provider after the first message, so cross-provider switches come mainly from routines whose model differs from the conversation's.
+`run_conversation_turn()` loads disk history every turn and, with no live session (e.g. after a restart), seeds one from it when the providers match (`get_provider_for_model()` in `chat/llm/config.py`). On a model switch, `get_or_create_chat()` carries the old session's history over within a provider family, falls back to a disk copy that matches the target provider across families, and otherwise starts empty; an empty start deletes the [doc notes seen record](doc-notes.md#seen-record). Routines cause most cross-provider switches: the frontend locks the provider after the first message.
 
 ### Interrupted Turns
 
@@ -256,7 +256,7 @@ Separately, the run's `UsageAccumulator` (`chat/gemini_api/usage.py`) sums the t
 
 ### Stats Event
 
-The `stats` event emitted at the end of each turn is the dict built by `UsageAccumulator.build_stats()`; its frontend type is `UsageStats` in `frontend/src/api/types.ts`. The shape, which the code cannot explain on its own:
+The `stats` event emitted at the end of each turn is the dict built by `UsageAccumulator.build_stats()`; its frontend type is `UsageStats` in `frontend/src/api/types.ts`. What the code cannot say about the shape:
 
 - the unprefixed token fields are totals across the top-level agent and every sub-agent, accumulated across ALL tool-call rounds of the turn; the `top_level_*` and `sub_agent_*` prefixed twins are the same metrics split by call type, and `sub_agent_call_count` counts sub-agent API calls
 - `new_input_tokens` (and its prefixed twins) is the provider-uniform uncached-work measure from `compute_new_input_tokens()`; `cached_tokens` is the provider's own cached count; the cache creation / read split is Anthropic-specific and stays 0 on providers without it
