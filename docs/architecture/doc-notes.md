@@ -99,14 +99,14 @@ The strings the model reads in the block and in its text copy are module constan
 The doc tools check the gate through `notes_enabled()` in `chat/docs/service.py`, for the caller and never for the doc owner. While it is closed nothing below runs, and every doc tool returns the payload it returns without notes. While it is open:
 
 - **`list_docs` / `search_docs`**: every row ends with `notes`, the counts of `notes_counts()` read from the row. Never content; notes are never searched.
-- **`read_doc`**: the result ends with the `notes` counts and, when the notes are delivered, the `doc_notes` [block](#notes-block) from `load_notes()`, whose fresh state then also supplies the counts.
+- **`read_doc`**: the result ends with the `notes` counts and, when the notes are delivered, the `doc_notes` [block](#notes-block) from `load_notes()`; the counts are then the block's, so they agree with it even when a memory changed between the two notes reads.
 - **`create_doc`**: records the new doc as seen at versions (0, 0), the creator exception. No notes can predate the creating conversation, and a note added later moves a version past the record, which re-arms delivery and, for instructions, the refusal.
 
 Whether a `read_doc` carries the block depends on the run kind:
 
 - **Recording runs** (`records_delivery()`): when `needs_delivery()` holds against the seen record, and the delivered versions are then recorded.
-- **Sub-agent and inference-API runs**: whenever the doc has notes (`has_notes()`), never recorded. A sub-agent shares its parent's conversation id, but the parent's record never suppresses its block.
-- **Scripts** (`_NOTES_COUNTS_ONLY_RUN_KINDS`): the counts only.
+- **Sub-agent and inference-API runs**: whenever the doc has notes, never recorded. `notes_seen()` returns no record outside recording runs, so a sub-agent, which shares its parent's conversation id, never has its block suppressed by the parent's record.
+- **Scripts** (`_READ_DOC_COUNTS_ONLY_RUN_KINDS`): the counts only.
 
 `record_notes_delivery()` writes the record for the doc tools. It is a no-op outside recording runs and runs as the last step, with no `await` before the return or raise; its docstring gives the reason.
 
