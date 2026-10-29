@@ -1,6 +1,6 @@
 # Admin System Reports
 
-Admin-only operator dashboard at `/admin/system-reports` (titled "System Reports"; the pre-rename `/admin/system-monitor` URL redirects, and the API prefix keeps the historical `system-monitor` name). A left-hand nav switches between report sections; ships with "Latest Conversations", "Total Usage", "Top Conversations", "Users", "Models", "Docs", "Tables", "Memories", "Skills", "Tool Calls", and "Guides".
+Admin-only operator dashboard at `/admin/system-reports` (titled "System Reports"; the pre-rename `/admin/system-monitor` URL redirects, and the API prefix keeps the historical `system-monitor` name). A left-hand nav switches between the report sections below.
 
 ## Overview
 
@@ -19,7 +19,7 @@ Admin gating is enforced on the backend via the inline `is_admin(user["email"])`
 - `db/user_store.py` -- `list_user_signup_dates()` (user id -> `created_at`, the new-user counts of Total Usage)
 - `db/llm_pricing.py` -- per-model USD list-price tables and `estimate_cost_usd()` (cache read/write rates incl. the Anthropic 5m/1h TTL split; long-context tiers: Gemini Pro >200K, Claude Haiku 5.5 >100K via a per-entry `long_context_threshold`; date-ranged rate sets, so a call is priced at the rate in force on its `created_at` -- the convention for recording a price change is in the module docstring), consulted only for calls without a provider-reported amount
 - `db/doc_store.py` / `db/table_store.py` -- `list_all_doc_rows()` / `list_all_table_rows()`, the narrow all-rows metadata projections (owner, project, mode, cached sizes, last write source, share count, timestamps; never a title or body) behind the Docs and Tables sections
-- `db/memory_store.py`, `db/memory_suggestion_store.py`, `db/project_memory_store.py`, `db/project_memory_suggestion_store.py` -- `list_all_memory_rows()`, `list_all_suggestion_rows()` (both stores) and `list_all_project_memory_rows()` (joined to the project owner), the text-free projections behind the Memories section
+- `db/memory_store.py`, `db/memory_suggestion_store.py`, `db/project_memory_store.py`, `db/project_memory_suggestion_store.py`, `db/doc_memory_store.py`, `db/doc_note_suggestion_store.py` -- `list_all_memory_rows()`, `list_all_suggestion_rows()` (the three suggestion stores), `list_all_project_memory_rows()` and `list_all_doc_memory_rows()` (joined to the project's or doc's owner), the text-free projections behind the Memories section
 - `analytics/reports.py` -- `query_skill_usage()` / `query_tool_calls()` (the grouped `skill_loads` / `tool_calls` queries, run on an [Analytics Store](analytics.md) cursor in a worker thread) and the pure `build_skills_report()` / `build_tool_calls_report()` folds behind the Skills and Tool Calls sections; `db/skill_store.py` -- `list_skill_labels()`, the any-owner name / kind / creator lookup for the skill ids a report names (never the content)
 - `db/guide_store.py` / `db/project_store.py` -- `list_all_guides()` (every user guide joined to its owner plus a per-guide routine reference count) and `list_all_project_guides()` (projects with non-empty `projects.guide` instructions) behind the guides report
 - `chat/storage.py` -- `ChatStorage.count_user_message_active_days()` (distinct UTC days with user messages, from chat_history.json) and the range-clipped day-set variant `user_message_active_days()`
@@ -77,8 +77,6 @@ Renders the global top-N most-recently-active conversations across all users. Ea
 - Cancellation: unmount cancels pending state updates.
 
 **Freshness indicator and manual refresh.** The header shows a live seconds-granularity elapsed label ("Updated 5s ago" / "2m ago" / "1h ago") driven by a 1s ticker (`formatElapsed`, distinct from the minute-granularity `formatRelativeTimestamp` used for the last-active column). The anchor is set only on a *successful* fetch, so during failed polls the label keeps growing while the error strip shows what went wrong. A manual refresh button (lucide-react `RefreshCw`) re-fetches immediately and resets the timer; it bypasses the hidden-tab guard (the click implies a visible tab) and is disabled with a spinning icon while a fetch is in flight.
-
-A future iteration may replace polling with an admin-scoped per-user global on the [persistent WebSocket](realtime.md); for v1 polling is fine because the section is admin-only and the row count is small.
 
 ## Total Usage Section
 
@@ -142,7 +140,7 @@ Three feature-adoption reports answering "who uses this, and how much": one row 
 
 **Tables** (`AdminTablesReportRow`): the same layout with **Rows** (sum of the cached `row_count`) and **Columns** (sum of the schema lengths) in place of size and images; a History restore (`revert:` source) counts as a human write. No `table.db` is opened.
 
-**Memories** (`AdminMemoriesReportRow`): **Memories** (active personal memories, archived ones in the sub-line), **Chars** (characters stored in the active ones), **Created** in range, the **Suggestions** funnel (suggestions the model raised in the user's conversations in range, split by their *current* status into accepted / dismissed / pending, with the acceptance rate in the tooltip), **Project memories** (active memories across the projects the user owns, with the number of those projects and the archived and created-in-range counts in the sub-line), the **Project suggestions** funnel (raised in the user's conversations, so attributed to the suggester, not the project owner) and **Last activity** (newest memory or suggestion timestamp of any kind). Sorted by in-range activity (memories created plus suggestions raised, personal and project), then active memories, then email.
+**Memories** (`AdminMemoriesReportRow`): **Memories** (active personal memories, archived ones in the sub-line), **Chars** (characters stored in the active ones), **Created** in range, the **Suggestions** funnel (suggestions the model raised in the user's conversations in range, split by their *current* status into accepted / dismissed / pending, with the acceptance rate in the tooltip), **Project memories** (active memories across the projects the user owns, with the number of those projects and the archived and created-in-range counts in the sub-line), the **Project suggestions** funnel (raised in the user's conversations, so attributed to the suggester, not the project owner) and **Last activity** (newest memory or suggestion timestamp of any kind). The row also carries the [doc notes](doc-notes.md) figures, doc memories per doc owner and doc note suggestions per reviewer, which have no column but count in the sort: in-range activity (memories created plus suggestions raised, of every kind), then memories held, then email.
 
 **"Updated in range" counts items, not writes.** `updated_at` is one timestamp per doc or table, bumped by any change (body, rename, share), so a doc written ten times in the range counts once, and a doc renamed in the range counts as updated. True write counts would need the per-doc revision snapshots (pruned by age and count) or every table's change log; see [Design Decisions](#design-decisions).
 
@@ -183,10 +181,10 @@ The UI was renamed to "System Reports"; the REST prefix (`/app/api/admin/system-
 The realtime infrastructure is per-user-scoped; broadcasting global activity to admins would require a new fan-out channel. For an internal dashboard with a small admin audience, 60s polling plus an on-demand manual refresh is cheap and avoids new protocol surface.
 
 **Why clamp `limit` server-side?**
-Both handlers cap `limit` at 100 so a crafted query string cannot fan out into a giant scan. The FE only ever requests the defaults (20 latest / 30 most expensive).
+Both handlers cap `limit` at 100 so a crafted query string cannot fan out into a giant scan.
 
 **Why do the Skills and Tool Calls sections read ledgers instead of the transcripts?**
-A transcript scan (what PR #170 built) re-reads every `chat_history.json` overlapping the range on each refresh, cannot see auto-loads at all (they leave no message), misses sandbox-script calls (never persisted) and gets slower with every conversation. A ledger row is written once at the moment of the event, knows its source, and aggregates in one grouped query -- see [Analytics Store](analytics.md) for why the ledgers are not in `quest.db`.
+A transcript scan re-reads every `chat_history.json` overlapping the range on each refresh, cannot see auto-loads at all (they leave no message), misses sandbox-script calls (never persisted) and gets slower with every conversation. A ledger row is written once at the moment of the event, knows its source, and aggregates in one grouped query -- see [Analytics Store](analytics.md) for why the ledgers are not in `quest.db`.
 
 **Why rank by known cost instead of skipping unpriced conversations?**
 Hiding spend because one model lacks a pricing entry would make the report silently lossy; ranking by the priceable portion keeps every conversation visible while the null total flags the estimate as incomplete.
@@ -212,8 +210,8 @@ Four bar charts with gridlines, ticks and a hover readout are ~150 lines of SVG;
 **Why do the Docs / Tables / Memories reports read only the metadata rows?**
 A per-user adoption view needs counts, sizes and timestamps, all of which the `docs` / `data_tables` / `memories` rows (and the suggestion rows) already carry. Counting actual writes would mean listing every doc's `revisions/` directory (snapshots are pruned past `DOC_REVISION_RETENTION_DAYS` and `DOC_REVISION_MAX_COUNT`, so old activity is gone anyway) or opening every table's `table.db` for its change log, one file per item on an admin request; the one-timestamp-per-item "updated in range" figure is cheap, honest about what it is, and enough to see who is active. For the same reason as the guides report, nothing a user wrote -- doc bodies, titles, table rows, memory text -- leaves the store.
 
-**Why does the Memories report attribute project memories to the project owner but project suggestions to the suggester?**
-A project memory belongs to the project, and the project to its owner, so "project memories" on a row are the memories of the projects that user owns. A suggestion is raised in one person's conversation (the `user_id` on the row) and is that person's to accept or dismiss, so the funnel measures how that person responds to the model's suggestions, whichever project they were working in.
+**Why does the Memories report attribute project and doc memories to the owner but their suggestions to the suggester?**
+A project memory belongs to the project and a doc memory to the doc, each owned by one user, so those figures on a row are the memories of what that user owns, whoever wrote them. A suggestion is raised in one person's conversation (the `user_id` on the row) and is that person's to accept or dismiss, so the funnel measures how that person responds to the model's suggestions, whichever project or doc they were working on.
 
 **Why does the guides report ship content length instead of the guide text?**
 The report exists to find owners, not to read prompts: an admin needs "who still has non-empty guides, and are any still wired to routines" to reach out before deprecation. Shipping every user's system-prompt text to a dashboard would be a needless disclosure for that purpose, and the length alone separates the empty auto-created default rows from real ones.

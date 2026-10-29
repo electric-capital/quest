@@ -2,22 +2,24 @@
 
 ## Overview
 
-REST endpoints for Quest Docs (user- and project-owned markdown documents; see [Quest Docs Architecture](../architecture/quest-docs.md)). This is the UI surface. Models never call it: they use the seven doc tools and the `write_doc` action request described in the architecture doc. Four routers, all mounted in `quest.py`:
+REST endpoints for Quest Docs (user- and project-owned markdown documents; see [Quest Docs Architecture](../architecture/quest-docs.md)). This is the UI surface. Models never call it: they use the seven doc tools and the `write_doc` action request described in the architecture doc. Six routers, all mounted in `quest.py`:
 
 - `chat/docs/routes.py`: list, create, read, rename, mode, asset, download, delete (request models `CreateDocRequest`, `UpdateDocRequest`, `SetDocModeRequest`);
 - `chat/docs/share_routes.py`: sharing (`AddDocShareRequest`);
 - `chat/docs/edit_routes.py`: content save, image upload and delete (the handlers read and bound their own bodies);
-- `chat/docs/history_routes.py`: revisions, restore, copy (`RestoreRevisionRequest`, `CopyRevisionRequest`).
+- `chat/docs/history_routes.py`: revisions, restore, copy (`RestoreRevisionRequest`, `CopyRevisionRequest`);
+- `chat/docs/note_routes.py`: a doc's [notes](../architecture/doc-notes.md), the instructions and the memories (`SaveInstructionsRequest`, `DocMemoryRequest`);
+- `chat/docs/note_suggestion_routes.py`: the review of doc note suggestions (`AcceptDocNoteSuggestionRequest`).
 
-Every handler goes through `chat/docs/service.py` (or `ui_writes.py` / `history.py`, which reuse its pipeline) and `db/doc_store.py`. The frontend types are in `frontend/src/api/types.ts` and the client in `frontend/src/api/docsApi.ts`. Not to be confused with the Google Docs integration ([Docs API](docs-api.md)).
+The first four go through `chat/docs/service.py` (or `ui_writes.py` / `history.py`, which reuse its pipeline) and `db/doc_store.py`. The notes routes call the notes stores (`db/doc_store.py`, `db/doc_memory_store.py`) and the review routes `chat/docs/note_suggestions.py`; both send the shapes of `chat/docs/note_payloads.py`. The frontend types are in `frontend/src/api/types.ts` and the client in `frontend/src/api/docsApi.ts`. Not to be confused with the Google Docs integration ([Docs API](docs-api.md)).
 
 ## Authentication, Gate and Visibility
 
 - **Auth**: `get_current_user_cookie_or_apikey_checked`, so either the session cookie or a Bearer `users.api_key` works, and the admission check (`require_user_allowed`) runs on every request (see [Chat API](chat-api.md)). The routes live under `/app/api`, so the model's `curl_proxy_*` tools (`/api/*` only) cannot reach them. The sandbox tool API port does not serve them either.
-- **Gate**: every handler first returns 403 `docs_disabled` while the `docs` feature gate is closed for the user ([Feature Gates](../architecture/feature-gates.md)).
-- **Visibility**: every by-id route resolves the doc through `_get_doc_for_ui()`, which calls `service.get_visible_doc()` with `run_kind="ui"`. A doc the user cannot see (not the owner, no share) is 404 `doc_not_found` with exactly the body a nonexistent id gets. That covers every by-id route of all four routers.
-- **Ownership**: rename (incl. the `require_approval` switch), the mode route, delete, share management and image delete require ownership, so a visible doc the user does not own is 403 `forbidden`.
-- **Write access**: the content save, image upload and every history route require the UI write verdict `free` (owner or write share, the row's `access.can_edit`), else 403 `forbidden`. The history routes check this right after visibility, before anything else.
+- **Gate**: every handler of the first four routers first returns 403 `docs_disabled` while the `docs` feature gate is closed for the user ([Feature Gates](../architecture/feature-gates.md)). The notes routes return 403 `doc_notes_disabled` first instead, which also covers a closed `docs` gate, since `doc_notes` requires it. The review routes check neither gate, so a pending suggestion stays answerable ([Doc Notes -- Design Decisions](../architecture/doc-notes.md#design-decisions)).
+- **Visibility**: every by-doc-id route resolves the doc with `run_kind="ui"`, through `_get_doc_for_ui()`, which calls `service.get_visible_doc()`, or, on the ungated per-doc suggestion list, through `service._get_visible_doc()`. A doc the user cannot see (not the owner, no share) is 404 `doc_not_found` with exactly the body a nonexistent id gets.
+- **Ownership**: rename (incl. the `require_approval` switch), the mode route, delete, share management, image delete and the instructions save require ownership, so a visible doc the user does not own is 403 `forbidden`, also for a write share.
+- **Write access**: the content save, image upload, every history route and the memory writes require the UI write verdict `free` (owner or write share, the row's `access.can_edit`), else 403 `forbidden`. The history routes check this right after visibility, before anything else.
 
 ## Response Shapes
 
@@ -38,7 +40,7 @@ Timestamps are naive-UTC ISO strings. `updated_at` is also the optimistic-concur
 
 **Version** (History; built in `chat/docs/history.py`, whose module docstring defines it; `DocVersion` in `types.ts`): `id` (`<YYYYMMDDTHHMMSSZ>-<n>`, null for the current body), `written_at` (when that body was written, ISO `...Z`), `replaced_at` (from the id, null for the current body), `size`, `source` (raw, owner only), `source_kind` (`conversation` / `action_request` / `ui` / `unknown`), `source_label` (who wrote it, phrased for this viewer; rules in [Quest Docs Architecture -- History](../architecture/quest-docs.md#history)) and `conversation` (`{id, title, project_id}`, owner only).
 
-**Errors** are `HTTPException(detail={"error": <code>, "message": ...})`, so the JSON body is `{"detail": {"error", "message"}}`. The one exception is the optimistic-concurrency conflict of rename, content save and restore, which is a **flat** 409 body `{"error": "stale_update", "message", "current": <doc row>}` (no `detail` wrapper, like `PUT /routines/{id}`; built by `_stale_conflict()`). Pydantic or query validation failures on the base router, such as a `limit` outside the `Query` bounds of `list_user_docs` or a missing `title`, are FastAPI's standard 422. The sharing, editing and history routes type their bodies loosely or read them by hand, so their bad bodies are 400s.
+**Errors** are `HTTPException(detail={"error": <code>, "message": ...})`, so the JSON body is `{"detail": {"error", "message"}}`. The two optimistic-concurrency conflicts are the exceptions, **flat** 409 bodies with no `detail` wrapper (like `PUT /routines/{id}`): `stale_update` of rename, content save and restore, `{"error", "message", "current": <doc row>}` (`_stale_conflict()`), and `stale_instructions` of the instructions save and an instructions accept, whose `current` carries only the instructions and their version (`stale_instructions_response()` in `chat/docs/note_payloads.py`). Pydantic or query validation failures on the base router, such as a `limit` outside the `Query` bounds of `list_user_docs` or a missing `title`, are FastAPI's standard 422. The other routers type their bodies loosely or read them by hand, so a bad field is a 400; the sharing, notes and review routes still answer a body that is not a JSON object with a 422.
 
 ## Endpoints
 
@@ -86,6 +88,28 @@ Editors only (owner or write share). Check order on all four: 403 `docs_disabled
 - **POST `/app/api/docs/{doc_id}/revisions/{rev_id}/restore`** (`restore_doc_revision`). Body `{expected_updated_at}` (required, else 400 `invalid_request`). Writes the revision's body back through `ui_writes.replace_body_from_ui()`: access and the token re-checked under the per-doc write lock (flat 409 `stale_update` with `current`), the current body snapshotted first, the restored one recorded as `ui:<user_id>`. A body identical to the current one writes nothing. Returns 200 like the content save: the row plus `content` and `changed`.
 - **POST `/app/api/docs/{doc_id}/revisions/{rev_id}/copy`** (`copy_doc_revision`, 201). Body `{title?}`. Creates a NEW **private user doc owned by the caller** from the revision (also from a project or public-project doc), with the description copied, the body written as `ui:<user_id>` and no revisions, and every asset the copied body references (escaped spellings included, as in the in-use rule) that the source still holds as a regular raster file within the caps copied under the same name. Title: the given one (400 `invalid_title`; 409 `duplicate_title` when the caller already has a user doc with that title) or `<title> (copy)`, `(copy 2)`, ... 400 `content_too_large` when the revision is over the body cap. Shielded: a cancelled request still completes the copy or cleans up. Returns the new doc's row and publishes `doc_list_changed` to the caller only.
 
+### Notes
+
+Any viewer reads a doc's notes; the instructions are the owner's, the memories every editor's (owner or write share). Check order and errors are in the `chat/docs/note_routes.py` module docstring: 403 `doc_notes_disabled` before any DB work, 404 `doc_not_found`, 403 `forbidden` for the role, the body (400 `invalid_instructions` / `invalid_memory`, validated by the stores), then the write's own refusals. A memory goes out as `public_memory()`: no raw `source` or editor id, and a `source_label` worded for the caller that names a person to the owner only (the label table is in the `chat/docs/note_payloads.py` module docstring). No notes write touches `updated_at` or `last_write_source`.
+
+- **GET `/app/api/docs/{doc_id}/notes`** (`get_doc_notes`). The instructions with their version and last edit, every memory newest first (no budget, unlike the model's [notes block](../architecture/doc-notes.md#notes-block)), `memories_version`, `can_edit` and `is_owner` (`_notes_payload()`). `instructions_updated_by` is filled for the owner only.
+- **PUT `/app/api/docs/{doc_id}/instructions`** (`save_doc_instructions`, owner only). Saves behind `expected_instructions_version`; `""` clears. A moved version is the flat 409 `stale_instructions`. Returns the GET payload.
+- **POST `/app/api/docs/{doc_id}/memories`** (`add_doc_memory`, 201, editors). 409 `duplicate_memory` (with the `memory_id` that already holds the text) or `memories_cap_reached`. Returns the memory.
+- **PUT / DELETE `/app/api/docs/{doc_id}/memories/{memory_id}`** (`update_doc_memory` / `delete_doc_memory`, editors). Last write wins, with no token. 404 `memory_not_found` for a missing memory or one of another doc.
+
+A write that moved a version publishes `doc_notes_changed` alone to the doc's audience (`service.publish_notes_changed()`); a refusal or an identical-text save publishes nothing.
+
+### Note Suggestions
+
+The review of the suggestions `suggest_doc_note` files ([Doc Notes -- Review](../architecture/doc-notes.md#review)). Every route serves only the suggestion's own user and checks no gate. Check order, errors and response shapes are in the `chat/docs/note_suggestion_routes.py` module docstring. A row is `public_suggestion()` (`chat/docs/note_payloads.py`): the store row with its kind sent as `note_kind`, plus the review fields of `review_rows()`.
+
+- **GET `/app/api/docs/{doc_id}/note-suggestions`** (`list_doc_note_suggestions`). The caller's pending rows for one doc, oldest first. A doc the caller cannot see is 404 `doc_not_found`, also while their rows on it are pending.
+- **GET `/app/api/conversations/{conversation_id}/doc-note-suggestions`** (`list_conversation_doc_note_suggestions`). The conversation's pending rows; 404 `conversation_not_found` unless the caller owns it. A row on a doc the caller can no longer see stays listed, its doc fields blanked.
+- **POST `/app/api/doc-note-suggestions/{suggestion_id}/accept`** (`accept_doc_note_suggestion`). Optional `content` override and `expected_instructions_version`. 404 `suggestion_not_found`, 409 `suggestion_resolved`, 403 `forbidden` (a memory needs edit access at accept time, instructions ownership), then the stores' refusals, the flat 409 `stale_instructions` among them; a refusal leaves the row pending and the notes unchanged. Returns the row, the memory written (labelled for the caller; null for instructions) and the notes counters, never text or an editor id.
+- **POST `/app/api/doc-note-suggestions/{suggestion_id}/dismiss`** (`dismiss_doc_note_suggestion`). 404 `suggestion_not_found`, 409 `suggestion_resolved`; needs no access to the doc. Returns the row.
+
+The routes publish nothing themselves: `accept_suggestion()` and `dismiss_suggestion()` send `doc_note_suggestions_changed` and, for an accept that changed the notes, `doc_notes_changed`.
+
 ### Not implemented
 
 Deliberately not built: a working mode switch. `PUT /app/api/docs/{id}/mode` exists only to refuse, since user docs are always private and a project doc keeps its project's mode. The UI never edits a description, although `PUT /app/api/docs/{id}` accepts one.
@@ -98,9 +122,10 @@ Deliberately not built: a working mode switch. `PUT /app/api/docs/{id}/mode` exi
 
 | Code | Status | Raised by |
 |------|--------|-----------|
-| `docs_disabled` | 403 | every route, gate closed for the user |
+| `docs_disabled` | 403 | every route of the four docs routers, gate closed for the user |
+| `doc_notes_disabled` | 403 | every notes route, `doc_notes` (or `docs`) gate closed for the user |
 | `doc_not_found` | 404 | per-doc routes; missing and hidden docs get identical bodies |
-| `forbidden` | 403 | rename / mode route / delete / share management / image delete on a visible doc the user does not own; content save / image upload / every history route for a read-only viewer |
+| `forbidden` | 403 | rename / mode route / delete / share management / image delete / instructions save on a visible doc the user does not own; content save / image upload / every history route / memory writes for a read-only viewer; an accept the reviewer may no longer apply |
 | `project_not_found` | 404 | list or create with a `project_id` that is not the user's visible project |
 | `invalid_cursor` | 400 | list with a malformed `cursor` |
 | `invalid_title` / `invalid_description` | 400 | create, rename (`service.validate_doc_metadata()`); `invalid_title` also on copy |
@@ -110,6 +135,12 @@ Deliberately not built: a working mode switch. `PUT /app/api/docs/{id}/mode` exi
 | `project_doc_mode_inherited` | 400 | create with a mode that disagrees with the project; every mode-route call on a project doc |
 | `duplicate_title` | 409 | create, rename, copy with an explicit title |
 | `stale_update` | 409 (flat body with `current`) | rename, content save or restore with a stale `expected_updated_at` |
+| `stale_instructions` | 409 (flat body with `current`) | instructions save or instructions accept behind a moved `instructions_version` |
+| `invalid_instructions` / `invalid_memory` | 400 | instructions save, memory add / edit, accept with a bad text or version |
+| `duplicate_memory` / `memories_cap_reached` | 409 | memory add or memory accept (both); memory edit (`duplicate_memory`) |
+| `memory_not_found` | 404 | memory edit / delete with a missing id or one of another doc |
+| `suggestion_not_found` / `suggestion_resolved` | 404 / 409 | accept / dismiss of a missing suggestion, another user's or one whose doc is gone (404), or of a resolved one (409) |
+| `conversation_not_found` | 404 | conversation suggestion list for a conversation the user does not own |
 | `invalid_permission` | 400 | share with a permission other than `read` / `write` |
 | `user_not_found` | 404 | share with an email no Quest user has |
 | `ambiguous_user` | 409 | share with an email that matches several accounts case-insensitively and none exactly |
@@ -133,7 +164,7 @@ Two per-user globals on the persistent WebSocket, sent to the doc's **audience**
 - `doc_list_changed` (no payload): list views re-fetch their window;
 - `doc_changed {doc_id, updated_at}`: an open viewer re-fetches, and can skip the fetch when it already shows that `updated_at`. `updated_at: null` means "this doc's existence or the receiver's access to it changed; re-fetch" (`events.publish_doc_gone_or_access_changed_to()`): sent on doc delete, share add / change / remove and project delete (per doc), always before that change's `doc_list_changed`, because none of those bumps `updated_at`.
 
-A change to a doc's notes sends a third global to the same audience, `doc_notes_changed`, and pending note suggestions have their own per-reviewer `doc_note_suggestions_changed` ([Doc Notes -- Realtime](../architecture/doc-notes.md#realtime)).
+A change to a doc's notes sends a third global to the same audience, `doc_notes_changed`, and pending note suggestions have their own per-reviewer `doc_note_suggestions_changed` ([Doc Notes -- Realtime](../architecture/doc-notes.md#realtime)). `useDocNotes` (`frontend/src/hooks/useDocNotes.ts`) follows both and its own doc's null `doc_changed` ([Doc Notes -- Frontend](../architecture/doc-notes.md#frontend)).
 
 `chat/docs/service.py` publishes for every model, action-request or UI body/asset write (UI writes and restore go through its `_finish_write()`) and for UI create and delete (delete: the null `doc_changed`, then `doc_list_changed`). The rename route publishes for itself, only when something changed. Share changes publish the null `doc_changed` then `doc_list_changed` to the owner and the affected recipient (every connected user for the everyone row; `publish_share_changed(doc_id, owner_id, recipient_user_id)`). A History copy publishes `doc_list_changed` to the caller only. The mode route never publishes, since it changes nothing. The project-delete route publishes, after its directory sweep, the null `doc_changed` per deleted doc to that doc's audience, then one `doc_list_changed` to the owner plus every recipient of the deleted docs, then `doc_note_suggestions_changed` for the pending note suggestions those docs took with them. The account delete sends only the last of these, to everyone but the deleted user.
 

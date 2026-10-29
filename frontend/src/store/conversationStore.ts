@@ -46,6 +46,10 @@ export interface ConversationState {
   // project-memory bubble), fed by ``pending_project_memory_suggestions``
   // and ``project_memory_suggestions_changed``.
   pendingProjectMemorySuggestions: number;
+  // The same for ``suggest_doc_note`` proposals (doc instructions and doc
+  // memories), fed by ``pending_doc_note_suggestions`` and
+  // ``doc_note_suggestions_changed``.
+  pendingDocNoteSuggestions: number;
 }
 
 /**
@@ -70,6 +74,7 @@ function createDefaultState(): ConversationState {
     expensiveResumeAcknowledged: false,
     pendingMemorySuggestions: 0,
     pendingProjectMemorySuggestions: 0,
+    pendingDocNoteSuggestions: 0,
   };
 }
 
@@ -560,6 +565,12 @@ class ConversationStore {
   setPendingProjectMemorySuggestions(id: string, count: number): void {
     if (this.getConversation(id).pendingProjectMemorySuggestions === count) return;
     this.updateConversation(id, { pendingProjectMemorySuggestions: count });
+  }
+
+  /** Doc-note twin of ``setPendingMemorySuggestions``. */
+  setPendingDocNoteSuggestions(id: string, count: number): void {
+    if (this.getConversation(id).pendingDocNoteSuggestions === count) return;
+    this.updateConversation(id, { pendingDocNoteSuggestions: count });
   }
 
   /**

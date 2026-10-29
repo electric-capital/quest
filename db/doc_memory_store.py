@@ -478,3 +478,40 @@ async def delete_doc_memory(doc_id: str, memory_id: str) -> bool:
         await _record_change(db, doc_id)
         await db.commit()
         return True
+
+
+# ---------------------------------------------------------------------------
+# Admin report
+# ---------------------------------------------------------------------------
+
+
+async def list_all_doc_memory_rows() -> list[dict]:
+    """Every doc memory across all docs for the admin Memories usage
+    report, attributed to the doc's owner.
+
+    One narrow row per ``doc_memories`` row joined to its doc: ``user_id``
+    (the doc owner), ``doc_id``, ``content_length`` (characters; never the
+    text) and naive-UTC ``created_at`` / ``updated_at`` as stored. Doc
+    memories have no archive, so there is no ``archived`` field. Folded per
+    owner by ``build_memories_report()`` in chat/feature_usage_report.py.
+    """
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(
+                Doc.owner_id,
+                DocMemory.doc_id,
+                func.length(DocMemory.content),
+                DocMemory.created_at,
+                DocMemory.updated_at,
+            ).join(Doc, Doc.id == DocMemory.doc_id)
+        )
+        return [
+            {
+                "user_id": user_id,
+                "doc_id": doc_id,
+                "content_length": int(length or 0),
+                "created_at": created_at,
+                "updated_at": updated_at,
+            }
+            for user_id, doc_id, length, created_at, updated_at in result.all()
+        ]

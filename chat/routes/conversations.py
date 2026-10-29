@@ -433,6 +433,16 @@ async def get_conversation(conversation_id: str, user: dict = Depends(get_curren
     conversation["pending_project_memory_suggestions"] = await count_pending_project(
         user_id, conversation_id,
     )
+    # ... and the doc-notes twin (chat/docs/note_suggestions.py), which
+    # drives the composer's doc-notes bubble; later changes arrive as
+    # ``doc_note_suggestions_changed`` events. Never gated: a pending row
+    # stays reviewable while the ``doc_notes`` gate is closed.
+    from db.doc_note_suggestion_store import (
+        count_pending as count_pending_doc_notes,
+    )
+    conversation["pending_doc_note_suggestions"] = await count_pending_doc_notes(
+        user_id, conversation_id,
+    )
 
     return conversation
 

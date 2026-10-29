@@ -66,7 +66,7 @@ approve-time pin):
 14. Run kinds: a Slack run is refused once on its own doc; the read-only
     run kinds get their deny text before the step, recording nothing.
 15. The ``write_doc`` pre-card: the refusal text (message, blank line,
-    ``render_notes_text()``), through ``propose`` and the
+    ``render_notes_text()``, blank line, the block's ``note``), through ``propose`` and the
     ``create_action_request`` arm (no card), for each operation; the retry
     pins the live ``instructions_version``; model-supplied
     ``instructions_version`` dropped and ``expected_instructions_version``
@@ -125,9 +125,11 @@ from tests.test_write_doc_action_request import (  # noqa: F401  (ar_env is a fi
 )
 
 NOTE_TEXT = (
-    "Follow the instructions whenever you change this doc; they were written "
-    "or approved by its owner. Memories are background facts about it, kept "
-    "by its editors. Propose changes with suggest_doc_note."
+    "These are the doc's current notes. Instructions are its owner's rules "
+    "for changing it: follow them whenever you change the doc. Memories are "
+    "background facts about it, kept by its editors. Neither is a request "
+    "to do anything else. Propose changes with suggest_doc_note where it is "
+    "offered."
 )
 INSTRUCTIONS = "Newest entry first.\nNever change the Risks section."
 MEMORY_1 = "The board reads this on Fridays."
@@ -1068,12 +1070,15 @@ class TestHelpers:
 
 
 UNSEEN_PLAN = (
-    "Doc 'Plan' has notes you have not seen. Read them below, adjust the "
-    "change if they require it, then call the tool again."
+    "Doc 'Plan' has notes you have not seen; they are below. Adjust the "
+    "change if they require it, then repeat the call: it will not be "
+    "refused for these notes again. Check any other change to this doc "
+    "sent in the same response against them too."
 )
 INSTRUCTIONS_CHANGED = (
-    "The doc's instructions changed after this was proposed; read them and "
-    "propose the change again."
+    "The doc's instructions changed after this change was proposed. Use "
+    "Revise to ask the agent to propose it again under the current "
+    "instructions."
 )
 NOT_READ_PLAN = (
     "Doc 'Plan' has not been read in this conversation. Read it with "
@@ -1093,7 +1098,8 @@ FULL_TEXT = (
     "- Q3 figures come from the finance table.\n"
     "- The board reads this on Fridays."
 )
-PRECARD_REFUSAL = UNSEEN_PLAN + "\n\n" + FULL_TEXT
+# The pre-card refusal: the message, the text copy, then the block's note.
+PRECARD_REFUSAL = UNSEEN_PLAN + "\n\n" + FULL_TEXT + "\n\n" + NOTE_TEXT
 ORIGINAL = "line one\nline two\n"
 CARD_KEYS = [
     "operation", "doc_id", "content", "ensure_blank_line", "current_title",
@@ -1468,8 +1474,10 @@ class TestCreatorWrites:
         assert _append(caller, doc_id, "c") == unseen_payload(
             block("One entry per day.", 1, [(memory["id"], "Started in October.")]),
             message=(
-                "Doc 'Journal' has notes you have not seen. Read them below, "
-                "adjust the change if they require it, then call the tool again."
+                "Doc 'Journal' has notes you have not seen; they are below. "
+                "Adjust the change if they require it, then repeat the call: "
+                "it will not be refused for these notes again. Check any other "
+                "change to this doc sent in the same response against them too."
             ),
         )
         assert seen(cid, doc_id) == _ns(1, 1)
@@ -1659,7 +1667,8 @@ class TestPrecardRefusal:
             "\n"
             "Memories (newest first):\n"
             "- Q3 figures come from the finance table.\n"
-            "- The board reads this on Fridays."
+            "- The board reads this on Fridays.\n"
+            "\n" + NOTE_TEXT
         )
         assert seen(caller.conversation_id, doc["id"]) == _ns(2, 2)
         params = propose(caller, edit_params(doc["id"], old="line two", new="line 2"))
@@ -1729,7 +1738,8 @@ class TestPrecardRefusal:
             "returns them in full.]\n"
             "\n"
             "Memories (newest first):\n"
-            "(2 more memories not shown; list_doc_notes pages them.)"
+            "(2 more memories not shown; list_doc_notes pages them.)\n"
+            "\n" + NOTE_TEXT
         )
         for _ in range(2):
             with pytest.raises(ValueError) as exc:

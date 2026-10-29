@@ -1,10 +1,12 @@
 /**
- * Catchup / resync handling in ``useConversation``.
+ * Catchup / resync handling and suggestion counts in ``useConversation``.
  *
  * The hook owns the per-conversation subscription on the persistent socket
  * and turns the server's ``subscribed`` verdicts into store updates:
  * ``catchup`` applies the embedded rows, ``resync`` refetches the whole
  * conversation, ``message_appended`` tail-fetches past the last known seq.
+ * It also keeps the pending doc-note suggestion count, seeded from the GET
+ * payload and replaced by ``doc_note_suggestions_changed`` per-user globals.
  * The realtime singletons and the API client are mocked; the store is real.
  */
 import { act, renderHook, waitFor } from '@testing-library/react';
@@ -19,9 +21,11 @@ type TailResponse = { messages: Array<Record<string, unknown>>; last_message_seq
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, Set<Handler>>();
+  const globals = new Set<Handler>();
   const lastSeq = new Map<string, number>();
   return {
     handlers,
+    globals,
     lastSeq,
     fetchConversation: vi.fn<(id: string) => Promise<ConversationDetail>>(),
     fetchConversationTail: vi.fn<(id: string, afterSeq: number) => Promise<TailResponse>>(),
@@ -30,6 +34,9 @@ const mocks = vi.hoisted(() => {
     attachToResumeStream: vi.fn<(id: string) => void>(),
     emit(conversationId: string, event: Envelope) {
       for (const h of Array.from(handlers.get(conversationId) ?? [])) h(event);
+    },
+    emitGlobal(event: Envelope) {
+      for (const h of Array.from(globals)) h(event);
     },
   };
 });
@@ -55,7 +62,12 @@ vi.mock('../services/PersistentWebSocket', () => ({
         mocks.handlers.get(conversationId)?.delete(handler);
       };
     },
-    onGlobalEvent: () => () => {},
+    onGlobalEvent: (handler: Handler) => {
+      mocks.globals.add(handler);
+      return () => {
+        mocks.globals.delete(handler);
+      };
+    },
     getLastSeq: (id: string) => mocks.lastSeq.get(id) ?? 0,
     setLastSeq: (id: string, seq: number) => {
       mocks.lastSeq.set(id, Math.max(seq, mocks.lastSeq.get(id) ?? 0));
@@ -94,28 +106,39 @@ function rows(id: string): Array<[string, string, number | undefined]> {
   return (conversationStore.getConversation(id).messages as Message[]).map((m) => [m.role, m.content, m.seq]);
 }
 
-/** Mount the hook against a two-message conversation and wait for the load. */
-async function mountLoaded() {
+/**
+ * Mount the hook against a two-message conversation and wait for the load.
+ * ``overrides`` extend the GET payload; ``prime`` runs against the fresh id
+ * before the hook mounts (to put stale state in the store).
+ */
+async function mountLoaded(
+  overrides: Partial<ConversationDetail> = {},
+  prime?: (id: string) => void,
+) {
   counter += 1;
   const id = `conv-${counter}`;
+  prime?.(id);
   mocks.fetchConversation.mockResolvedValueOnce(
-    detail(id, [message('user', 'hi', 1), message('assistant', 'hello', 2)]),
+    detail(id, [message('user', 'hi', 1), message('assistant', 'hello', 2)], overrides),
   );
   const rendered = renderHook(() => useConversation(id));
   await waitFor(() => expect(rendered.result.current.isLoaded).toBe(true));
   return { id, ...rendered };
 }
 
+function resetMocks() {
+  mocks.fetchConversation.mockReset();
+  mocks.fetchConversationTail.mockReset();
+  mocks.subscribe.mockReset();
+  mocks.syncRunState.mockReset();
+  mocks.attachToResumeStream.mockReset();
+  mocks.handlers.clear();
+  mocks.globals.clear();
+  mocks.lastSeq.clear();
+}
+
 describe('useConversation realtime reconciliation', () => {
-  beforeEach(() => {
-    mocks.fetchConversation.mockReset();
-    mocks.fetchConversationTail.mockReset();
-    mocks.subscribe.mockReset();
-    mocks.syncRunState.mockReset();
-    mocks.attachToResumeStream.mockReset();
-    mocks.handlers.clear();
-    mocks.lastSeq.clear();
-  });
+  beforeEach(resetMocks);
 
   it('loads the conversation, seeds the subscribe baseline and subscribes', async () => {
     const { id, result } = await mountLoaded();
@@ -250,5 +273,124 @@ describe('useConversation realtime reconciliation', () => {
     });
 
     expect(mocks.attachToResumeStream).toHaveBeenCalledWith(id);
+  });
+});
+
+describe('useConversation pending doc-note suggestions', () => {
+  beforeEach(resetMocks);
+
+  it('seeds the count from the GET payload into the hook and the store', async () => {
+    const { id, result } = await mountLoaded({ pending_doc_note_suggestions: 3 });
+
+    expect(result.current.pendingDocNoteSuggestions).toBe(3);
+    expect(conversationStore.getConversation(id).pendingDocNoteSuggestions).toBe(3);
+  });
+
+  it('a payload without the field seeds 0', async () => {
+    const { id, result } = await mountLoaded({}, (fresh) => {
+      conversationStore.setPendingDocNoteSuggestions(fresh, 4);
+    });
+
+    expect(result.current.pendingDocNoteSuggestions).toBe(0);
+    expect(conversationStore.getConversation(id).pendingDocNoteSuggestions).toBe(0);
+  });
+
+  it('a resync ack re-reads the count', async () => {
+    const { id, result } = await mountLoaded({ pending_doc_note_suggestions: 1 });
+    mocks.fetchConversation.mockResolvedValueOnce(
+      detail(id, [message('user', 'hi', 1), message('assistant', 'hello', 2)], { pending_doc_note_suggestions: 4 }),
+    );
+
+    act(() => {
+      mocks.emit(id, { type: 'subscribed', conversation_id: id, mode: 'resync', run_active: false });
+    });
+
+    await waitFor(() => expect(result.current.pendingDocNoteSuggestions).toBe(4));
+    expect(conversationStore.getConversation(id).pendingDocNoteSuggestions).toBe(4);
+  });
+
+  it('a server-pushed resync event re-reads the count, and a missing field resets it to 0', async () => {
+    const { id, result } = await mountLoaded({ pending_doc_note_suggestions: 2 });
+    mocks.fetchConversation.mockResolvedValueOnce(
+      detail(id, [message('user', 'hi', 1), message('assistant', 'hello', 2)], { pending_doc_note_suggestions: 5 }),
+    );
+
+    act(() => {
+      mocks.emit(id, { type: 'resync', conversation_id: id });
+    });
+
+    await waitFor(() => expect(result.current.pendingDocNoteSuggestions).toBe(5));
+
+    mocks.fetchConversation.mockResolvedValueOnce(
+      detail(id, [message('user', 'hi', 1), message('assistant', 'hello', 2)]),
+    );
+    act(() => {
+      mocks.emit(id, { type: 'resync', conversation_id: id });
+    });
+
+    await waitFor(() => expect(mocks.fetchConversation).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(result.current.pendingDocNoteSuggestions).toBe(0));
+  });
+
+  it('a doc_note_suggestions_changed global for this conversation replaces the count', async () => {
+    const { id, result } = await mountLoaded({ pending_doc_note_suggestions: 1 });
+
+    act(() => {
+      mocks.emitGlobal({ type: 'doc_note_suggestions_changed', conversation_id: id, pending_count: 2, total_pending: 5 });
+    });
+    expect(result.current.pendingDocNoteSuggestions).toBe(2);
+    expect(conversationStore.getConversation(id).pendingDocNoteSuggestions).toBe(2);
+
+    act(() => {
+      mocks.emitGlobal({ type: 'doc_note_suggestions_changed', conversation_id: id, pending_count: 0, total_pending: 3 });
+    });
+    expect(result.current.pendingDocNoteSuggestions).toBe(0);
+  });
+
+  it('ignores the event for another conversation or without a numeric pending_count', async () => {
+    const { id, result } = await mountLoaded({ pending_doc_note_suggestions: 1 });
+
+    act(() => {
+      mocks.emitGlobal({ type: 'doc_note_suggestions_changed', conversation_id: 'someone-else', pending_count: 9, total_pending: 9 });
+      mocks.emitGlobal({ type: 'doc_note_suggestions_changed', pending_count: 9, total_pending: 9 });
+      mocks.emitGlobal({ type: 'doc_note_suggestions_changed', conversation_id: id, pending_count: '9', total_pending: 9 });
+      mocks.emitGlobal({ type: 'doc_note_suggestions_changed', conversation_id: id, total_pending: 9 });
+      mocks.emitGlobal({ type: 'doc_note_suggestions_changed', conversation_id: id, pending_count: null, total_pending: 9 });
+    });
+
+    expect(result.current.pendingDocNoteSuggestions).toBe(1);
+    expect(conversationStore.getConversation(id).pendingDocNoteSuggestions).toBe(1);
+  });
+
+  it('each suggestions event updates only its own count', async () => {
+    const { id, result } = await mountLoaded({
+      pending_memory_suggestions: 1,
+      pending_project_memory_suggestions: 2,
+      pending_doc_note_suggestions: 3,
+    });
+    expect(result.current.pendingMemorySuggestions).toBe(1);
+    expect(result.current.pendingProjectMemorySuggestions).toBe(2);
+    expect(result.current.pendingDocNoteSuggestions).toBe(3);
+
+    act(() => {
+      mocks.emitGlobal({ type: 'project_memory_suggestions_changed', conversation_id: id, pending_count: 7, total_pending: 7 });
+    });
+    expect(result.current.pendingProjectMemorySuggestions).toBe(7);
+    expect(result.current.pendingDocNoteSuggestions).toBe(3);
+    expect(result.current.pendingMemorySuggestions).toBe(1);
+
+    act(() => {
+      mocks.emitGlobal({ type: 'doc_note_suggestions_changed', conversation_id: id, pending_count: 8, total_pending: 8 });
+    });
+    expect(result.current.pendingDocNoteSuggestions).toBe(8);
+    expect(result.current.pendingProjectMemorySuggestions).toBe(7);
+    expect(result.current.pendingMemorySuggestions).toBe(1);
+
+    act(() => {
+      mocks.emitGlobal({ type: 'memory_suggestions_changed', conversation_id: id, pending_count: 6, total_pending: 6 });
+    });
+    expect(result.current.pendingMemorySuggestions).toBe(6);
+    expect(result.current.pendingDocNoteSuggestions).toBe(8);
+    expect(result.current.pendingProjectMemorySuggestions).toBe(7);
   });
 });

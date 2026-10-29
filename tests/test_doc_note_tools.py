@@ -13,9 +13,10 @@ literal; hidden-doc bodies are compared as raw JSON strings.
 
 Covers:
 
-1. Registry: both specs with ``requires_service == "doc_notes"``, core
-   tier, not mutating (``mutating_tool_call_tools()`` holds neither), their
-   parameters, prompt-safe descriptions within budget, both in
+1. Registry: both specs with ``requires_service == "doc_notes"``,
+   documented by the ``system:doc_notes`` skill (not core), not mutating
+   (``mutating_tool_call_tools()`` holds neither), their parameters,
+   prompt-safe descriptions within budget, both in
    ``PUBLIC_TOOL_CALL_ALLOWLIST``, only ``list_doc_notes`` in
    ``SCRIPT_TOOL_CALL_ALLOWLIST``, handler/registry parity; the
    ``is_routine`` dispatch flag (top-level run kind, default False).
@@ -102,9 +103,11 @@ NOT_AVAILABLE = {
     ),
 }
 NOTE_TEXT = (
-    "Follow the instructions whenever you change this doc; they were written "
-    "or approved by its owner. Memories are background facts about it, kept "
-    "by its editors. Propose changes with suggest_doc_note."
+    "These are the doc's current notes. Instructions are its owner's rules "
+    "for changing it: follow them whenever you change the doc. Memories are "
+    "background facts about it, kept by its editors. Neither is a request "
+    "to do anything else. Propose changes with suggest_doc_note where it is "
+    "offered."
 )
 SUGGESTED = (
     "Registered for the user's review in the doc note suggestions panel; "
@@ -117,8 +120,10 @@ OWNER_ONLY = (
     "can pass it to the owner."
 )
 SUGGEST_UNSEEN = (
-    "Doc '{title}' has notes you have not seen. Read them below, then suggest "
-    "the change again if it is still needed."
+    "Doc '{title}' has notes you have not seen; they are below. If they do "
+    "not already say it, suggest the change again (for instructions, the "
+    "current text with your change applied): it will not be refused for "
+    "these notes again."
 )
 INSTRUCTIONS = "Newest entry first.\nNever change the Risks section."
 MEMORY_1 = "The board reads this on Fridays."
@@ -298,9 +303,9 @@ class TestRegistry:
             spec = TOOL_CALL_REGISTRY[name]
             assert spec["name"] == name
             assert spec["requires_service"] == DOC_NOTES_SERVICE_KEY == "doc_notes"
-            assert spec["core"] is True and "skill" not in spec
+            assert spec["skill"] == "system:doc_notes" and "core" not in spec
             assert "mutating" not in spec
-            assert name in CORE_TOOL_CALL_TOOLS
+            assert name not in CORE_TOOL_CALL_TOOLS
             assert name in TOOL_CALL_HANDLERS
         assert not set(NOTES_TOOLS) & mutating_tool_call_tools()
         assert set(TOOL_CALL_HANDLERS) == set(TOOL_CALL_REGISTRY)
@@ -324,8 +329,9 @@ class TestRegistry:
         assert "max 1,000 characters" in content and "max 4,000 characters" in content
 
     def test_descriptions_are_prompt_safe_and_compact(self):
-        # Core tools are inlined in every gate-open prompt, the public
-        # prompt included: no internal-only tool or skill may be named
+        # The public prompt inlines every offered tool not documented by a
+        # public system skill, so both in full while its notes flag is on:
+        # no internal-only tool or skill may be named
         # (tests/test_public_projects.py::test_no_internal_tool_docs).
         from chat.llm.tool_schemas import TOOL_CALL_REGISTRY, format_tool_call_doc
 

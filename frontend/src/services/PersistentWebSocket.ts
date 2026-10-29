@@ -322,6 +322,7 @@ class PersistentWebSocketClient {
       || type === 'file_list_changed'
       || type === 'memory_suggestions_changed'
       || type === 'project_memory_suggestions_changed'
+      || type === 'doc_note_suggestions_changed'
     );
     if (conversationId && !isPerUserGlobalWithConversationId) {
       // Track high-water seq from durable events so a reconnect can issue

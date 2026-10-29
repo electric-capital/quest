@@ -353,15 +353,20 @@ class TestPublicSystemPrompt:
         assert "curl_proxy" not in p
         assert "localhost" not in p
 
+    @pytest.mark.parametrize("is_routine", [False, True])
     @pytest.mark.parametrize("docs_enabled,doc_notes_enabled", [
         (False, False), (True, False), (True, True),
     ])
-    def test_no_internal_tool_docs(self, docs_enabled, doc_notes_enabled):
+    def test_no_internal_tool_docs(self, docs_enabled, doc_notes_enabled, is_routine):
         # Internal tool NAMES must not be documented as callable. (The
         # Boundaries block legitimately names Slack/email as unavailable.)
         # Holds with the Quest Docs tools and paragraph present too, and
-        # with the doc-notes tools beside them.
-        p = self._prompt(docs_enabled=docs_enabled, doc_notes_enabled=doc_notes_enabled)
+        # with the doc-notes tools and the paragraph's notes line beside
+        # them, in a routine run as well.
+        p = self._prompt(
+            docs_enabled=docs_enabled, doc_notes_enabled=doc_notes_enabled,
+            is_routine=is_routine,
+        )
         for term in (
             "memory_search", "authed_get", "authed_post", "load_skills",
             "system:", "agent_task(",

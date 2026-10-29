@@ -2,7 +2,7 @@
 
 ## Overview
 
-A background daemon that reminds users over Slack about whatever is "unanswered" in their inbox: action requests that are still `open` and waiting for an Approve / Revise / Stop click in the web UI, and suggested memories (personal and project) still awaiting review. While a user has at least one such item, Quest's Slack bot DMs them a reminder at most once per interval (default 60 minutes). The interval is tunable per user and the reminders can be disabled entirely from Settings > Slack.
+A background daemon that reminds users over Slack about whatever is "unanswered" in their inbox: action requests that are still `open` and waiting for an Approve / Revise / Stop click in the web UI, and suggestions still awaiting review in the inbox's Memories tab (personal memories, project memories and Quest Doc notes). While a user has at least one such item, Quest's Slack bot DMs them a reminder at most once per interval (default 60 minutes). The interval is tunable per user and the reminders can be disabled entirely from Settings > Slack.
 
 The notifier only needs the shared Slack bot token (`chat.postMessage`) and the user's per-user Slack OAuth record (for the `U...` user id to DM) -- Socket Mode is not required. On deployments without Slack credentials, or for users who never connected Slack, the loop is inert.
 
@@ -10,7 +10,7 @@ The notifier only needs the shared Slack bot token (`chat.postMessage`) and the 
 
 - [`chat/slack_notifier.py`](../../chat/slack_notifier.py) -- the daemon: `notifier_loop()` polling every `POLL_INTERVAL_SECONDS`, `_collect_pending()` merging the two summary queries per user, per-user due-checking, DM composition (`_build_reminder`), and the in-process `_last_notified` throttle map. Constants: `DEFAULT_INTERVAL_MINUTES = 60`, `MIN_INTERVAL_MINUTES = 5`, `MAX_INTERVAL_MINUTES = 1440`
 - [`db/action_request_store.py`](../../db/action_request_store.py) -- `list_open_request_summaries()`: one row per user with open requests (`user_id`, `open_count`, `oldest_created_at`), riding the `ix_action_requests_user_id_status` index
-- [`chat/memory_inbox.py`](../../chat/memory_inbox.py) -- `list_pending_summaries()`: the same shape (`pending_count`) for pending memory suggestions of both kinds; see [Memory Suggestions](memory-suggestions.md)
+- [`chat/memory_inbox.py`](../../chat/memory_inbox.py) -- `list_pending_summaries()`: the same shape (`pending_count`) for pending suggestions of the inbox's three kinds; see [Memory Suggestions](memory-suggestions.md)
 - [`chat/routes/user.py`](../../chat/routes/user.py) -- `PUT /settings` validation for the two `users.settings` keys (see below)
 - [`quest.py`](../../quest.py) -- `lifespan()` starts `notifier_loop()` as an asyncio task next to the routine scheduler and cancels it on shutdown
 - [`auth/config.py`](../../auth/config.py) -- `load_slack_bot_token()`, loaded fresh each poll cycle so admin credential changes apply without a restart
@@ -29,7 +29,7 @@ Two keys in the `users.settings` JSON column (same pattern as `slack_default_mod
 
 `_poll_once()` in `chat/slack_notifier.py`, every 60 seconds:
 
-1. `_collect_pending()` -- `list_open_request_summaries()` (all users with open action requests) and `list_pending_summaries()` (all users with pending memory suggestions), two grouped queries merged into one row per user: `open_count`, `suggestion_count` and the `oldest_created_at` of either kind
+1. `_collect_pending()` -- `list_open_request_summaries()` (all users with open action requests) and `list_pending_summaries()` (all users with pending suggestions of any kind), two grouped queries merged into one row per user: `open_count`, `suggestion_count` and the `oldest_created_at` of either kind
 2. Prune `_last_notified` entries for users no longer in the set (so a user's *next* pending item starts a fresh interval)
 3. Load the bot token; return quietly when Slack is not configured
 4. Per user: skip when the user row is gone, `slack_pending_notifications_enabled` is `false`, or the Slack OAuth record has no `user_id`/`access_token` (blob shape mirrors `get_user_by_slack_user_id()` in `db/user_store.py`)
@@ -42,7 +42,7 @@ Two keys in the `users.settings` JSON column (same pattern as `slack_default_mod
 
 ## The /inbox Deep Links
 
-The inbox (`RequestsView`, previously reachable only via the sidebar Inbox button's client-side state) has a URL per tab so the reminder DM can land the user directly on it:
+The inbox (`RequestsView`) has a URL per tab so the reminder DM can land the user directly on it:
 
 - `quest.py` -- `serve_spa_inbox()` serves `index.html` for `GET /inbox` and `GET /inbox/memories` (explicit routes; the `/{filename}` static fallback would 404 them)
 - `frontend/src/App.tsx` -- `/inbox` and `/inbox/memories` routes rendering `AppContent`, plus a URL->state sync effect: `showRequestsView` is set from the pathname being one of the two, so browser back/forward and any in-app navigation close the view naturally; `RequestsView` reads the pathname to pick the tab
@@ -51,7 +51,7 @@ The inbox (`RequestsView`, previously reachable only via the sidebar Inbox butto
 ## Constraints
 
 - `_last_notified` is per-process state. A restart forgets it; the age gate still applies, so the worst case is one reminder arriving early after a redeploy. Nothing is persisted per notification.
-- Reminders count **open action requests** (`action_requests.status == "open"`) and **pending memory suggestions** of both kinds. Pending `slack_reply` wait handles are answered in Slack itself and are deliberately not included.
+- Reminders count **open action requests** (`action_requests.status == "open"`) and **pending suggestions** of every inbox kind, doc note suggestions included whatever the user's `docs` and `doc_notes` gates ([Doc Notes -- Design Decisions](doc-notes.md#design-decisions)); the DM calls them all suggested memories. Pending `slack_reply` wait handles are answered in Slack itself and are deliberately not included.
 - The DM is sent from the shared bot (no user attribution) because it is a system notification, not a user-authored message -- unlike `send_slack_message` action requests, which carry the Quest attribution footer from `plugins/slack/handlers.py`.
 - The notifier lives in core `chat/` and does not import the Slack plugin; it uses `slack_sdk.AsyncWebClient` + `load_slack_bot_token()` like the Socket Mode worker and reads the oauth_blob shape directly (core stays plugin-agnostic).
 

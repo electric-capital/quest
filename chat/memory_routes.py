@@ -339,8 +339,9 @@ async def memory_inbox_counts(
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
     """The user's pending suggestions across all conversations, per kind
-    and in total (the sidebar inbox badge adds ``pending_count`` to the
-    open action requests)."""
+    (``user`` personal, ``project`` project memory, ``doc`` doc notes) and
+    in total (the sidebar inbox badge adds ``pending_count`` to the open
+    action requests). Doc rows count while the doc-notes gate is closed."""
     return await memory_inbox.count_pending(user["id"])
 
 
@@ -348,9 +349,14 @@ async def memory_inbox_counts(
 async def memory_inbox_pending(
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """Every pending personal and project suggestion of the user, oldest
-    first, each tagged ``kind`` and carrying its conversation's title and
-    project (the inbox Memories tab's open list)."""
+    """Every pending suggestion of the three kinds (personal, project and
+    doc notes) of the user, oldest first, each tagged ``kind`` (``user`` /
+    ``project`` / ``doc``) and carrying its conversation's title and project
+    (the inbox Memories tab's open list). A ``doc`` row also carries
+    ``note_kind``, ``doc_title`` and the review fields
+    (chat/memory_inbox.py); it is accepted or dismissed through
+    ``/doc-note-suggestions/{id}/accept`` and ``/dismiss``, the other two
+    kinds through their own suggestion routes."""
     suggestions = await memory_inbox.list_pending(user["id"])
     return {"suggestions": suggestions, "pending_count": len(suggestions)}
 
@@ -364,8 +370,9 @@ async def memory_inbox_resolved(
     ),
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """One page of the user's accepted / dismissed suggestions of both
-    kinds, most recently resolved first; ``next_cursor`` is null at the end."""
+    """One page of the user's accepted / dismissed suggestions of the three
+    kinds (personal, project and doc notes), most recently resolved first;
+    ``next_cursor`` is null at the end."""
     try:
         suggestions, next_cursor = await memory_inbox.list_resolved(
             user["id"], limit, cursor,

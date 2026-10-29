@@ -1,11 +1,12 @@
-// The inbox's Memories tab: open suggestions of both kinds with their
+// The inbox's Memories tab: open personal and project suggestions with their
 // source line, accept / dismiss through the kind's endpoint moving the row
 // into the reviewed list, a 409 dropping the row silently, the reviewed
 // list paging in through the scroll sentinel (and the Load more fallback),
-// and a per-user global re-reading the open list.
+// a per-user global re-reading the open list, and doc note rows (a kind
+// with no endpoints here) left out of both lists.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { MemoryInboxSuggestion } from '../api/types';
+import type { DocNoteInboxSuggestion, MemoryInboxRow, MemoryInboxSuggestion } from '../api/types';
 import { ApiClientError } from '../api/request';
 import { MemoryInbox, RESOLVED_PAGE_SIZE } from './MemoryInbox';
 
@@ -65,11 +66,43 @@ function reviewed(id: string, content: string, status: 'accepted' | 'dismissed',
   return row(id, content, { status, resolved_at: '2026-10-14T12:00:00', ...extra });
 }
 
-function servePending(list: MemoryInboxSuggestion[]) {
+/** A doc note suggestion as the inbox lists it (``kind: 'doc'``). */
+function docRow(
+  id: string,
+  content: string,
+  extra: Partial<DocNoteInboxSuggestion> = {},
+): DocNoteInboxSuggestion {
+  return {
+    id,
+    user_id: 1,
+    doc_id: `doc-${id}`,
+    conversation_id: `conv-${id}`,
+    note_kind: 'memory',
+    content,
+    reasoning: `Why ${id}`,
+    base_instructions_version: null,
+    replaces_memory_id: null,
+    status: 'pending',
+    memory_id: null,
+    created_at: '2026-10-14T00:00:00',
+    resolved_at: null,
+    doc_title: `Doc ${id}`,
+    replaces_content: null,
+    current_instructions: null,
+    instructions_moved: false,
+    kind: 'doc',
+    project_id: null,
+    project_name: null,
+    conversation_title: `Chat ${id}`,
+    ...extra,
+  };
+}
+
+function servePending(list: MemoryInboxRow[]) {
   mocks.fetchMemoryInboxPending.mockResolvedValue({ suggestions: list, pending_count: list.length });
 }
 
-function serveResolved(list: MemoryInboxSuggestion[], nextCursor: string | null = null) {
+function serveResolved(list: MemoryInboxRow[], nextCursor: string | null = null) {
   mocks.fetchMemoryInboxResolved.mockResolvedValue({ suggestions: list, next_cursor: nextCursor });
 }
 
@@ -277,5 +310,101 @@ describe('MemoryInbox', () => {
     // Unrelated globals are ignored.
     emit({ type: 'request_count_changed', counts: { open: 1 } });
     expect(mocks.fetchMemoryInboxPending).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['accept', 'dismiss'] as const)(
+    'leaves doc note rows out of the open list, its count and %s all',
+    async (action) => {
+      servePending([
+        row('s1', 'Likes tea'),
+        docRow('d1', 'Cite sources', { note_kind: 'instructions', base_instructions_version: 2 }),
+        row('p1', 'Ships on Fridays', { kind: 'project', project_id: 'proj', project_name: 'Launch' }),
+        docRow('d2', 'Uses metric units'),
+      ]);
+      const resolvedAs = (s: MemoryInboxSuggestion) => ({
+        suggestion: { ...s, status: action === 'accept' ? 'accepted' : 'dismissed', resolved_at: '2026-10-15T00:00:00' },
+        memory: {},
+      });
+      mocks.acceptMemorySuggestion.mockResolvedValue(resolvedAs(row('s1', 'Likes tea')));
+      mocks.dismissMemorySuggestion.mockResolvedValue(resolvedAs(row('s1', 'Likes tea')));
+      mocks.acceptProjectMemorySuggestion.mockResolvedValue(resolvedAs(row('p1', 'Ships on Fridays')));
+      mocks.dismissProjectMemorySuggestion.mockResolvedValue(resolvedAs(row('p1', 'Ships on Fridays')));
+      render(<MemoryInbox onGoToConversation={vi.fn()} />);
+      await screen.findByDisplayValue('Likes tea');
+
+      const open = screen.getByRole('region', { name: /Open suggestions/ });
+      expect(within(open).getAllByRole('textbox').map((el) => (el as HTMLTextAreaElement).value))
+        .toEqual(['Likes tea', 'Ships on Fridays']);
+      expect(open.querySelector('.memory-inbox-section-count')?.textContent).toBe('2');
+      expect(screen.queryByDisplayValue('Cite sources')).toBeNull();
+      expect(screen.queryByDisplayValue('Uses metric units')).toBeNull();
+      for (const text of ['Why d1', 'Doc d1', 'Chat d1', 'Chat d2']) {
+        expect(open.textContent).not.toContain(text);
+      }
+
+      fireEvent.click(within(open).getByRole('button', { name: action === 'accept' ? 'Accept all' : 'Dismiss all' }));
+      await screen.findByText(/No open suggestions/);
+
+      const calls = [
+        mocks.acceptMemorySuggestion,
+        mocks.dismissMemorySuggestion,
+        mocks.acceptProjectMemorySuggestion,
+        mocks.dismissProjectMemorySuggestion,
+      ].flatMap((mock) => mock.mock.calls.map((args) => args[0]));
+      expect(calls.sort()).toEqual(['p1', 's1']);
+      const done = screen.getByRole('region', { name: 'Recently reviewed' });
+      expect(Array.from(done.querySelectorAll('.memory-inbox-reviewed-content')).map((el) => el.textContent))
+        .toEqual(['Ships on Fridays', 'Likes tea']);
+      expect(screen.queryAllByRole('alert')).toHaveLength(0);
+    },
+  );
+
+  it('leaves doc note rows out of the reviewed list, page after page', async () => {
+    servePending([]);
+    mocks.fetchMemoryInboxResolved
+      .mockResolvedValueOnce({
+        suggestions: [
+          reviewed('r1', 'First', 'accepted'),
+          docRow('d1', 'Cite sources', { status: 'accepted', resolved_at: '2026-10-14T11:00:00' }),
+        ],
+        next_cursor: 'c1',
+      })
+      .mockResolvedValueOnce({
+        suggestions: [
+          docRow('d2', 'Uses metric units', { status: 'dismissed', resolved_at: '2026-10-14T10:00:00' }),
+          reviewed('r2', 'Second', 'dismissed'),
+        ],
+        next_cursor: null,
+      });
+    render(<MemoryInbox onGoToConversation={vi.fn()} />);
+    await screen.findByText('First');
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
+    await screen.findByText('Second');
+
+    const done = screen.getByRole('region', { name: 'Recently reviewed' });
+    expect(Array.from(done.querySelectorAll('.memory-inbox-reviewed-content')).map((el) => el.textContent))
+      .toEqual(['First', 'Second']);
+    expect(done.querySelectorAll('.memory-inbox-reviewed')).toHaveLength(2);
+    for (const text of ['Cite sources', 'Uses metric units', 'Doc d1', 'Chat d1', 'Chat d2']) {
+      expect(done.textContent).not.toContain(text);
+    }
+  });
+
+  it('does not call the reviewed list empty while a page of left-out rows has a cursor', async () => {
+    servePending([]);
+    mocks.fetchMemoryInboxResolved
+      .mockResolvedValueOnce({
+        suggestions: [docRow('d1', 'Cite sources', { status: 'accepted', resolved_at: '2026-10-14T11:00:00' })],
+        next_cursor: 'c1',
+      })
+      .mockResolvedValueOnce({ suggestions: [], next_cursor: null });
+    render(<MemoryInbox onGoToConversation={vi.fn()} />);
+    const loadMore = await screen.findByRole('button', { name: 'Load more' });
+    expect(screen.queryByText('Nothing reviewed yet.')).toBeNull();
+
+    // The last page (no cursor) settles it.
+    fireEvent.click(loadMore);
+    await screen.findByText('Nothing reviewed yet.');
+    expect(screen.queryByText('Cite sources')).toBeNull();
   });
 });

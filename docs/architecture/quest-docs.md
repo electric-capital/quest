@@ -204,7 +204,7 @@ Parameters are the registry specs, and success results are the dicts the service
 Error results come in four shapes:
 
 - `{"error": "docs_disabled", "message"}` when the gate is closed (checked before anything else).
-- `{"error": "doc_notes_unseen", "message", "doc_notes": {...}}` when the conversation has not seen the doc's notes ([Doc Notes -- Write Refusal](doc-notes.md#write-refusal)).
+- `{"error": "doc_notes_unseen", "message", "doc_notes": {...}}` for unseen doc notes ([Doc Notes -- Write Refusal](doc-notes.md#write-refusal)).
 - `{"error": "approval_required", "message", "suggested_request": {"request_type": "write_doc", "params": {...}}}` when the verdict is Approval. The model forwards `suggested_request` unchanged through `create_action_request`; the `params` sets are pinned to what `write_doc.validate_params` accepts per operation (`OPERATION_PARAM_KEYS` in `chat/action_request_types/write_doc.py`).
 - `{"error": "<text>"}` for every other refusal: missing or hidden doc (the one not-found text), a denied write (`deny_reason`), an unread doc, a failed match, bad arguments, caps.
 
@@ -233,9 +233,9 @@ Enforcement outside the access rule:
 
 ## Prompting
 
-- **`system:quest_docs`** (`_quest_docs_content` in `chat/system_skills/catalog.py`, name "Quest Docs"; `system:docs` is the Google Docs skill) is the model's guide to the tools, modes, verdicts, read-before-edit, revising in place, the `approval_required` -> `write_doc` handoff and the routine pattern: one doc appended to under a dated heading per run, never a new doc per run. Caps and the History window come from `chat/docs/constants.py`.
+- **`system:quest_docs`** (`_quest_docs_content`; `system:docs` is Google Docs) is the model's guide to the tools, modes, verdicts, read-before-edit, revising in place, the `approval_required` -> `write_doc` handoff and the routine pattern: one doc appended to under a dated heading per run. Its caps and History window come from `chat/docs/constants.py`; its "Read before edit" ends with a pointer to `system:doc_notes`.
 - **Revise in place**: History keeps every replaced body ([Revision policy](#revision-policy)), so the skill, the `create_doc` / `edit_doc` descriptions and `_PUBLIC_DOCS_SECTION` tell the model to change an existing doc, not create a copy, unless the user asks for one.
-- **Public prompt**: `_PUBLIC_DOCS_SECTION` follows the Boundaries block only while `docs_enabled`, and stands in for the skill (only this project's public docs, always created with `create_doc(target="project")`). It may not name internal-only tools or skills (`tests/test_public_projects.py::test_no_internal_tool_docs`), which is why the write-tool descriptions say "write_doc action request" rather than spelling out `create_action_request(`.
+- **Public prompt**: `_PUBLIC_DOCS_SECTION` follows the Boundaries block only while `docs_enabled`, and stands in for the skill (only this project's public docs, always created with `create_doc(target="project")`), followed by the [notes line](doc-notes-tools.md#prompting) while `doc_notes_enabled` too. It may not name internal-only tools or skills (`tests/test_public_projects.py::test_no_internal_tool_docs`), which is why the write-tool descriptions say "write_doc action request" rather than spelling out `create_action_request(`.
 - No doc titles are ever injected into a prompt. Discovery is tools-only.
 - `system:action_requests` and the `create_action_request` description route `write_doc` to `system:quest_docs`.
 
@@ -249,7 +249,7 @@ Three per-user globals ([Realtime](realtime.md)), built in `chat/realtime/events
 
 The **audience** is the owner plus every direct share recipient, plus every connected user (`bus.connected_user_ids()`, resolved at publish time) when the doc has an everyone row. Every change an open viewer must notice reaches it as a `doc_changed` for its own doc, so viewers ignore `doc_list_changed`, which can be install-wide traffic.
 
-Publishing is event-loop-thread only, because `bus.publish_to_user` is not thread-safe. The service publishes for every write; tool handlers never publish. No envelope carries a `conversation_id`, so they reach `PersistentWebSocket`'s global handlers without an allow-list entry. Consumers: [Realtime consumers](#realtime-consumers); limits: [Known Limitations](#known-limitations).
+Publishing is event-loop-thread only, because `bus.publish_to_user` is not thread-safe. The service publishes for every write; tool handlers never publish. None carries a `conversation_id` ([Realtime -- Subscription Protocol](realtime.md#subscription-protocol)). Consumers: [Realtime consumers](#realtime-consumers); limits: [Known Limitations](#known-limitations).
 
 ## Frontend
 
@@ -257,10 +257,10 @@ The UI at `/docs`: browse, read, create empty docs, rename, download and delete;
 
 | File | Role |
 |------|------|
-| `api/docsApi.ts` | Client for `/app/api/docs*`, the cookie-authed asset and download URL builders, `DOCS_FEATURE`, and the helpers for the flat 409 `stale_update` |
+| `api/docsApi.ts` | Client for `/app/api/docs*` and the doc-note suggestion routes, the cookie-authed asset and download URL builders, `DOCS_FEATURE` and `DOC_NOTES_FEATURE`, and the helpers for the flat 409s `stale_update` and `stale_instructions` |
 | `api/types.ts` | `Doc`, `DocDetail` and the share, editing and history types; `CreateDocRequest` has no `mode` |
 | `utils/docsRoute.ts` | `parseDocsRoute()` and the docs path builders |
-| `hooks/useDocs.ts` / `hooks/useProjectDocsIndex.ts` / `hooks/useDoc.ts` | One keyset-paged list; the per-project fan-out for All Docs; one doc (row + body) for the viewer |
+| `hooks/useDocs.ts` / `hooks/useProjectDocsIndex.ts` / `hooks/useDoc.ts` / `hooks/useDocNotes.ts` | One keyset-paged list; the per-project fan-out for All Docs; one doc (row + body) for the viewer; one doc's notes ([Doc Notes -- Frontend](doc-notes.md#frontend)) |
 | `components/sidebar/DocsSection.tsx` + `utils/sidebarDocs.ts` | The sidebar Docs blocks (main panel and project drill-down) |
 | `components/docs/DocsListView.tsx` + `utils/allDocsGrouping.ts`, `components/docs/NewDocModal.tsx` | All Docs and New Doc |
 | `components/docs/DocViewer.tsx`, `DocHeader.tsx`, `DocAssetsPanel.tsx`, `DocImageLightbox.tsx` | The viewer, its title unit and its Assets list |
@@ -278,7 +278,7 @@ The UI at `/docs`: browse, read, create empty docs, rename, download and delete;
 
 ### Routes and state
 
-`/docs` is All Docs, `/docs?project=<id>` the same view filtered to one project, and `/docs/<id>` the viewer. The URL is the only state ([Design Decisions](#design-decisions)): `App.tsx` and the Sidebar run `parseDocsRoute()` on every render, and `NavigationContext` has no docs field. A viewer id must match `DOC_ID_RE` in `utils/docsRoute.ts`, so a decoded `/` or `..` is never spliced into an `/app/api/docs/<id>/...` URL. A docs route is a full main-pane takeover like `/inbox`, with no RightPanel and no active conversation; the `showRequestsView` flag behind `/inbox` still wins the render, so the Sidebar clears it before navigating to a docs view. `MobileShell.tsx` renders the same views, and the Sidebar's `onNavigateAway` lets it close the phone drawer after a docs click. On the server, `serve_spa_docs` serves `index.html` for `/docs` and `/docs/{rest:path}` ([Quest Docs API -- SPA Routes](../api/quest-docs-api.md#spa-routes)).
+`/docs` is All Docs, `/docs?project=<id>` the same view filtered to one project, and `/docs/<id>` the viewer. The URL is the only state ([Design Decisions](#design-decisions)): `App.tsx` and the Sidebar run `parseDocsRoute()` on every render, and `NavigationContext` has no docs field. A viewer id must match `DOC_ID_RE` in `utils/docsRoute.ts`, so a decoded `/` or `..` is never spliced into an `/app/api/docs/<id>/...` URL. A docs route takes over the main pane with no active conversation ([Frontend -- Quest Docs and Quest Tables UI](frontend.md#quest-docs-and-quest-tables-ui)). `MobileShell.tsx` renders the same views, and the Sidebar's `onNavigateAway` lets it close the phone drawer after a docs click. On the server, `serve_spa_docs` serves `index.html` for `/docs` and `/docs/{rest:path}` ([Quest Docs API -- SPA Routes](../api/quest-docs-api.md#spa-routes)).
 
 ### Lists
 

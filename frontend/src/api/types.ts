@@ -547,6 +547,9 @@ export interface ConversationDetail {
    *  project-memory bubble); kept fresh by
    *  ``project_memory_suggestions_changed``. */
   pending_project_memory_suggestions?: number;
+  /** The same for ``suggest_doc_note`` proposals (Quest Doc notes); kept
+   *  fresh by ``doc_note_suggestions_changed``. */
+  pending_doc_note_suggestions?: number;
 }
 
 export interface CreateConversationResponse {
@@ -943,20 +946,28 @@ export interface MemoryInboxSuggestion extends MemorySuggestion {
   conversation_title: string | null;
 }
 
+/** Any row of the inbox's Memories tab: a personal or project memory
+ *  suggestion, or a doc note suggestion (``kind: 'doc'``). */
+export type MemoryInboxRow = MemoryInboxSuggestion | DocNoteInboxSuggestion;
+
 export interface MemoryInboxCountsResponse {
   user: number;
   project: number;
-  /** Pending suggestions of both kinds across all conversations. */
+  /** Pending doc note suggestions (``suggest_doc_note``). */
+  doc: number;
+  /** Pending suggestions of all three kinds across all conversations. */
   pending_count: number;
 }
 
 export interface MemoryInboxPendingResponse {
-  suggestions: MemoryInboxSuggestion[];
+  /** Oldest first, all three kinds. */
+  suggestions: MemoryInboxRow[];
   pending_count: number;
 }
 
 export interface MemoryInboxResolvedResponse {
-  suggestions: MemoryInboxSuggestion[];
+  /** Newest resolved first, all three kinds. */
+  suggestions: MemoryInboxRow[];
   /** Cursor of the next page; null at the end. */
   next_cursor: string | null;
 }
@@ -1337,6 +1348,165 @@ export interface UpdateDocRequest {
   // Optimistic-concurrency token (the row's updated_at as loaded). A
   // mismatch rejects with a flat 409 stale_update carrying `current`.
   expected_updated_at?: string;
+}
+
+// Quest Doc notes: a doc's instructions and memories (/app/api/docs/{id}/notes,
+// /instructions, /memories) and the review of `suggest_doc_note` proposals
+// (/app/api/docs/{id}/note-suggestions, /app/api/doc-note-suggestions/{id}).
+
+/** One memory of a doc, as every viewer sees it (ISO timestamps). */
+export interface DocMemory {
+  id: string;
+  content: string;
+  /**
+   * Ready-to-show origin, e.g. "Added by you", "Added by <name>" (owner
+   * only), "Added in the Notes panel", "Suggested in a conversation".
+   */
+  source_label: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * GET /docs/{id}/notes (and the PUT /docs/{id}/instructions response): the
+ * doc's instructions and all its memories, newest first. The two versions
+ * are monotonic counters, each bumped on every change to its part.
+ */
+export interface DocNotes {
+  doc_id: string;
+  /** "" when the doc has none. */
+  instructions: string;
+  /** Optimistic-concurrency token of the instructions save. */
+  instructions_version: number;
+  instructions_updated_at: string | null;
+  /** Who last saved the instructions; owner only (null for anyone else). */
+  instructions_updated_by: DocUserRef | null;
+  memories: DocMemory[];
+  memories_version: number;
+  /** Add, edit and delete memories (owner or write share). */
+  can_edit: boolean;
+  /** Only the owner edits the instructions. */
+  is_owner: boolean;
+}
+
+/** What a doc note suggestion proposes: the instructions text or one memory. */
+export type DocNoteKind = 'instructions' | 'memory';
+
+/**
+ * A note the model proposed via `suggest_doc_note`, reviewed by the user
+ * who ran the conversation (the composer bubble, the doc's Notes panel, the
+ * inbox). The accept and dismiss responses return the row without the four
+ * review fields at the end.
+ */
+export interface DocNoteSuggestion {
+  id: string;
+  user_id: number;
+  doc_id: string;
+  conversation_id: string;
+  note_kind: DocNoteKind;
+  /** The proposed instructions text or memory text. */
+  content: string;
+  /** The model's one-line justification, or null. */
+  reasoning: string | null;
+  /** The instructions version the proposal was written against (instructions only). */
+  base_instructions_version: number | null;
+  /** The doc memory an accept overwrites in place (memory rows), or null. */
+  replaces_memory_id: string | null;
+  status: 'pending' | 'accepted' | 'dismissed';
+  /** The memory an accepted memory suggestion wrote, else null. */
+  memory_id: string | null;
+  created_at: string | null;
+  resolved_at: string | null;
+  /** The doc's title; "" when the doc is gone or no longer visible. List rows only. */
+  doc_title?: string;
+  /** Current text of the memory it replaces. List rows only. */
+  replaces_content?: string | null;
+  /** The doc's current instructions (instructions rows). List rows only. */
+  current_instructions?: string | null;
+  /** The instructions changed since the proposal was written. List rows only. */
+  instructions_moved?: boolean;
+}
+
+/**
+ * GET /docs/{id}/note-suggestions and GET /conversations/{id}/doc-note-suggestions:
+ * the viewer's own pending rows, oldest first.
+ */
+export interface DocNoteSuggestionsListResponse {
+  suggestions: DocNoteSuggestion[];
+  pending_count: number;
+}
+
+/** A doc's note versions and counts after an accept: no text, no editor. */
+export interface DocNotesCounters {
+  doc_id: string;
+  instructions_version: number;
+  memories_version: number;
+  has_instructions: boolean;
+  memory_count: number;
+}
+
+/** POST /doc-note-suggestions/{id}/accept. `memory` is null for an instructions row. */
+export interface AcceptDocNoteSuggestionResponse {
+  suggestion: DocNoteSuggestion;
+  memory: DocMemory | null;
+  notes: DocNotesCounters;
+}
+
+/** POST /doc-note-suggestions/{id}/dismiss. */
+export interface DismissDocNoteSuggestionResponse {
+  suggestion: DocNoteSuggestion;
+}
+
+/** The server's current instructions carried by a flat 409 stale_instructions. */
+export interface StaleInstructionsCurrent {
+  instructions: string;
+  instructions_version: number;
+}
+
+/** PUT /docs/{id}/instructions (owner only; both fields required). */
+export interface SaveDocInstructionsRequest {
+  instructions: string;
+  /** The `instructions_version` as loaded; a mismatch rejects with 409 stale_instructions. */
+  expected_instructions_version: number;
+}
+
+/** POST /doc-note-suggestions/{id}/accept; only the keys given are sent. */
+export interface AcceptDocNoteSuggestionRequest {
+  /** The user's edited text ("" clears the instructions); omitted = the proposed text. */
+  content?: string;
+  /**
+   * An instructions row: the version its diff was rendered against (omitted =
+   * the version the proposal was written against). A memory row ignores it.
+   */
+  expected_instructions_version?: number;
+}
+
+/**
+ * Every route-specific error code of the notes and review routes (the auth
+ * dependency's 401 / 403 `access_denied` aside).
+ */
+export type DocNotesErrorCode =
+  | 'doc_notes_disabled'
+  | 'doc_not_found'
+  | 'forbidden'
+  | 'invalid_instructions'
+  | 'invalid_memory'
+  | 'stale_instructions'
+  | 'duplicate_memory'
+  | 'memories_cap_reached'
+  | 'memory_not_found'
+  | 'suggestion_not_found'
+  | 'suggestion_resolved'
+  | 'conversation_not_found';
+
+/** A doc note row of the inbox's Memories tab: the list row plus where it came from. */
+export interface DocNoteInboxSuggestion extends DocNoteSuggestion {
+  kind: 'doc';
+  /** The conversation's project (a doc suggestion carries none of its own). */
+  project_id: string | null;
+  project_name: string | null;
+  /** The conversation's sidebar title; null when it has none yet or is gone. */
+  conversation_title: string | null;
 }
 
 // Quest Tables types (/app/api/tables; see docs/api/tables-api.md). Field

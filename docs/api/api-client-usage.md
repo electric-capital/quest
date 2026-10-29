@@ -14,7 +14,7 @@ The browser authenticates only with the session cookie (`COOKIE_NAME` in `auth/c
 | `frontend/src/api/request.ts` | Shared JSON request wrapper (`apiGet` / `apiPost` / `apiPut` / `apiDelete`, `withQuery`, `handleErrorResponse`) and the `ApiClientError` class every `client.ts` function is built on |
 | `frontend/src/api/types.ts` | Request and response types, including the socket envelopes (`StreamEvent`, `WebSocketSendMessage`) and message content (`MessageContent`) |
 | `frontend/src/api/config.ts` | The `endpoints` URL builders, including the `ws://` / `wss://` socket URL |
-| `frontend/src/api/fileApi.ts`, `frontend/src/api/docsApi.ts`, `frontend/src/api/projectDbApi.ts` | Clients for the workspace file routes, Quest Docs and project tables (see [Frontend Architecture -- Right Panel](../architecture/frontend.md#right-panel-file-browser-and-project-tables)) |
+| `frontend/src/api/fileApi.ts`, `frontend/src/api/docsApi.ts`, `frontend/src/api/projectDbApi.ts` | Clients for the workspace file routes, Quest Docs (doc notes and their suggestion review included) and project tables (see [Frontend Architecture -- Right Panel](../architecture/frontend.md#right-panel-file-browser-and-project-tables)) |
 | `frontend/src/services/PersistentWebSocket.ts`, `frontend/src/services/WebSocketManager.ts` | The single multiplexed socket and the shim that routes its events into the conversation store |
 | `frontend/src/services/desktopNotifications.ts` | Browser Notification API wrapper; `WebSocketManager` asks for permission on the first send and raises the response-complete alert |
 | `frontend/src/utils/auth.ts` | `checkSession()` |

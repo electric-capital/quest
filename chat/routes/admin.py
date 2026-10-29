@@ -27,6 +27,10 @@ from db.llm_call_store import (
     get_usage_by_model_for_conversations,
     get_usage_by_user,
 )
+from db.doc_memory_store import list_all_doc_memory_rows
+from db.doc_note_suggestion_store import (
+    list_all_suggestion_rows as list_all_doc_suggestion_rows,
+)
 from db.doc_store import list_all_doc_rows
 from db.guide_store import list_all_guides
 from db.memory_store import list_all_memory_rows
@@ -833,13 +837,16 @@ async def admin_memories_report(
     range.
 
     One row per user with any personal memory, memory suggestion, project
-    memory (in a project they own) or project memory suggestion (raised in
-    their conversation): active and archived memory counts with the
-    characters stored, memories created in range, and the suggestions
-    created in range split by their current status (accepted / dismissed /
-    pending), each for personal and for project memories. Memory text is
-    never returned. Row shape and sort order are on
-    ``build_memories_report`` in chat/feature_usage_report.py.
+    memory (in a project they own), project memory suggestion (raised in
+    their conversation), doc memory (on a doc they own) or doc note
+    suggestion (raised in their conversation): memory counts (active and
+    archived for personal and project memories; doc memories have no
+    archive), the characters stored (personal memories only), memories
+    created in range, and the suggestions created in range split by their
+    current status (accepted / dismissed / pending), each for personal,
+    project and doc memories. Memory and suggestion text is never returned. Row shape and
+    sort order are on ``build_memories_report`` in
+    chat/feature_usage_report.py.
     """
     _require_admin(user)
     start_date, end_date, _, _ = _resolve_range_window(start, end)
@@ -847,10 +854,13 @@ async def admin_memories_report(
     suggestion_rows = await list_all_suggestion_rows()
     project_memory_rows = await list_all_project_memory_rows()
     project_suggestion_rows = await list_all_project_suggestion_rows()
+    doc_memory_rows = await list_all_doc_memory_rows()
+    doc_suggestion_rows = await list_all_doc_suggestion_rows()
     users = await list_all_users()
     return await asyncio.to_thread(
         build_memories_report,
         memory_rows, suggestion_rows, project_memory_rows, project_suggestion_rows,
+        doc_memory_rows, doc_suggestion_rows,
         users, start_date, end_date,
     )
 

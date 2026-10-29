@@ -116,6 +116,26 @@ describe('persistentWebSocket', () => {
     expect(globalEvents.map((e) => e.type)).toEqual(['conversation_list_changed', 'request_count_changed']);
   });
 
+  it('keeps the suggestion-count globals off the conversation channel despite their conversation_id', async () => {
+    client = await loadClient();
+    client.connect();
+    latest().open();
+
+    const conversationEvents: Envelope[] = [];
+    const globalEvents: Envelope[] = [];
+    client.onConversationEvent('c1', (e) => conversationEvents.push(e));
+    client.onGlobalEvent((e) => globalEvents.push(e));
+
+    latest().receive({ type: 'doc_note_suggestions_changed', conversation_id: 'c1', pending_count: 2, total_pending: 3 });
+    latest().receive({ type: 'project_memory_suggestions_changed', conversation_id: 'c1', pending_count: 1, total_pending: 1 });
+
+    expect(conversationEvents).toEqual([]);
+    expect(globalEvents).toEqual([
+      { type: 'doc_note_suggestions_changed', conversation_id: 'c1', pending_count: 2, total_pending: 3 },
+      { type: 'project_memory_suggestions_changed', conversation_id: 'c1', pending_count: 1, total_pending: 1 },
+    ]);
+  });
+
   it('reconnects after a drop and resubscribes with the recorded high-water seq', async () => {
     client = await loadClient();
     client.connect();

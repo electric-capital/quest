@@ -9,9 +9,9 @@ This document describes the REST and WebSocket endpoints for Quest. The WebSocke
 All frontend-facing endpoints (`/app/api/*`) support **dual authentication**: session cookie OR API key Bearer token. The backend tries cookie auth first, then falls back to API key auth.
 
 - **Browser frontend**: Uses the session cookie automatically (set during OAuth login; cookie name is environment-dependent via `COOKIE_NAME` in `auth/config.py`). No API key is stored or transmitted by the frontend.
-- **Scripts and LLM agents**: Continue using `Authorization: Bearer <api_key>` header as before.
+- **Scripts and LLM agents**: Use the `Authorization: Bearer <api_key>` header.
 - **Upstream service endpoints** (`/api/gmail-*`, `/api/docs-*`, `/api/sheets-*`, plus the sandbox bridges `/api/authed-get`, `/api/authed-post`, and `/api/tool-call`): API key auth only (not called by the browser frontend).
-  - Note: Calendar and Drive reads use `authed_get` tool calls instead of proxy endpoints, and Slack is dedicated dynamic tools with no HTTP routes at all (reads and the `send_slack_dm_to_self` self-DM send alike; the old `/api/slack-simple/dm-self` route is retired -- scripts use the `/api/tool-call` bridge), as are the Telegram reads (`telegram_*` tools; the old `/api/telegram/*` routes are retired the same way).
+  - Note: Calendar and Drive reads use `authed_get` tool calls instead of proxy endpoints, and Slack (reads and the `send_slack_dm_to_self` self-DM send alike) and the Telegram reads are dedicated dynamic tools with no HTTP routes; scripts reach them over the `/api/tool-call` bridge.
   - Plugin service access is via plugin tools only -- plugins cannot mount proxy routes.
 
 ### Chat App HTML
@@ -87,7 +87,7 @@ The response also carries `pending_wait_handles` -- a list projected from `tool_
 
 It additionally carries `expensive_resume` -- the verdict from `check_expensive_resume()` in `chat/expensive_resume.py` (`null` == no warning) -- so the FE can block the composer behind the expensive-resume warning card on load. See [Expensive-Resume Warning](../architecture/expensive-resume.md).
 
-It also carries `pending_memory_suggestions` (model-proposed memories awaiting review); the suggestion and `/app/api/memory-inbox/*` routes are in `chat/memory_routes.py`. See [Memory Suggestions](../architecture/memory-suggestions.md).
+It also carries `pending_memory_suggestions` (model-proposed memories awaiting review; the suggestion and `/app/api/memory-inbox/*` routes are in `chat/memory_routes.py`, see [Memory Suggestions](../architecture/memory-suggestions.md)) and its twins `pending_project_memory_suggestions` and `pending_doc_note_suggestions` ([Doc Notes](../architecture/doc-notes.md#ui-routes-inbox-and-report)).
 
 Returns `404 Not Found` with error code `conversation_not_found` when the conversation does not exist or does not belong to the authenticated user.
 

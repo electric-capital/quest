@@ -240,6 +240,8 @@ interface UseConversationResult {
   pendingMemorySuggestions: number;
   /** Model-proposed project memories awaiting review (the second bubble). */
   pendingProjectMemorySuggestions: number;
+  /** Model-proposed doc notes (instructions and memories) awaiting review. */
+  pendingDocNoteSuggestions: number;
 }
 
 /**
@@ -350,6 +352,10 @@ export function useConversation(conversationId: string, options?: UseConversatio
         conversationStore.setPendingProjectMemorySuggestions(
           conversationId,
           response.pending_project_memory_suggestions ?? 0,
+        );
+        conversationStore.setPendingDocNoteSuggestions(
+          conversationId,
+          response.pending_doc_note_suggestions ?? 0,
         );
 
         // Seed the persistent-WS last-seq cache from the server's high-water
@@ -554,6 +560,10 @@ export function useConversation(conversationId: string, options?: UseConversatio
                   conversationId,
                   full.pending_project_memory_suggestions ?? 0,
                 );
+                conversationStore.setPendingDocNoteSuggestions(
+                  conversationId,
+                  full.pending_doc_note_suggestions ?? 0,
+                );
               } catch {
                 // Silently ignore; next event or reload recovers.
               }
@@ -595,6 +605,10 @@ export function useConversation(conversationId: string, options?: UseConversatio
                 conversationId,
                 full.pending_project_memory_suggestions ?? 0,
               );
+              conversationStore.setPendingDocNoteSuggestions(
+                conversationId,
+                full.pending_doc_note_suggestions ?? 0,
+              );
             } catch {
               // ignore
             }
@@ -625,20 +639,24 @@ export function useConversation(conversationId: string, options?: UseConversatio
     });
   }, [conversationId]);
 
-  // Keep the suggested-memories bubble counts in sync: the ``suggest_memory``
-  // / ``suggest_project_memory`` tools, and accept / dismiss from any tab,
-  // publish the conversation's new pending count as a per-user global
-  // (``memory_suggestions_changed`` / ``project_memory_suggestions_changed``).
+  // Keep the suggestion counts in sync: the ``suggest_memory`` /
+  // ``suggest_project_memory`` / ``suggest_doc_note`` tools, and accept /
+  // dismiss from any tab, publish the conversation's new pending count as a
+  // per-user global (``memory_suggestions_changed`` /
+  // ``project_memory_suggestions_changed`` / ``doc_note_suggestions_changed``).
   useEffect(() => {
     if (!conversationId) return;
     return persistentWebSocket.onGlobalEvent((event) => {
       const isProject = event.type === 'project_memory_suggestions_changed';
-      if (!isProject && event.type !== 'memory_suggestions_changed') return;
+      const isDocNote = event.type === 'doc_note_suggestions_changed';
+      if (!isProject && !isDocNote && event.type !== 'memory_suggestions_changed') return;
       if ((event.conversation_id as string | undefined) !== conversationId) return;
       const count = event.pending_count;
       if (typeof count !== 'number') return;
       if (isProject) {
         conversationStore.setPendingProjectMemorySuggestions(conversationId, count);
+      } else if (isDocNote) {
+        conversationStore.setPendingDocNoteSuggestions(conversationId, count);
       } else {
         conversationStore.setPendingMemorySuggestions(conversationId, count);
       }
@@ -781,5 +799,6 @@ export function useConversation(conversationId: string, options?: UseConversatio
     clearExpensiveResume,
     pendingMemorySuggestions: state.pendingMemorySuggestions,
     pendingProjectMemorySuggestions: state.pendingProjectMemorySuggestions,
+    pendingDocNoteSuggestions: state.pendingDocNoteSuggestions,
   };
 }
