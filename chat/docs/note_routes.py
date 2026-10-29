@@ -1,5 +1,5 @@
-"""HTTP routes for a Quest Doc's notes (spec 00011 section 7,
-docs/architecture/doc-notes.md): the instructions and the memories as the
+"""HTTP routes for a Quest Doc's notes (docs/architecture/doc-notes.md,
+docs/api/quest-docs-api.md): the instructions and the memories as the
 Notes panel reads and edits them.
 
 Five routes under ``/app/api``, authenticated by

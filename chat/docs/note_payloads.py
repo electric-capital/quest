@@ -26,7 +26,7 @@ of :func:`label_user_ids` with ``db.user_store.get_users_by_ids`` first.
   Every other error is the usual ``{"detail": {"error", "message", ...}}``
   (:func:`note_error`).
 
-``source_label`` strings (:func:`source_label`), decided in phase A6:
+``source_label`` strings (:func:`source_label`):
 
 | Source | Owner sees | Anyone else sees |
 |---|---|---|
