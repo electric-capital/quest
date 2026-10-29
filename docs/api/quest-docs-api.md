@@ -141,4 +141,4 @@ Frontend consumers: `useDocs` (`frontend/src/hooks/useDocs.ts`, the sidebar Docs
 
 ## Agent Tools
 
-Models read and write docs only through `list_docs`, `search_docs`, `read_doc`, `create_doc`, `edit_doc`, `append_to_doc`, `add_doc_image` (`TOOL_CALL_REGISTRY` in `chat/llm/tool_schemas.py`) and the `write_doc` action request. Sandbox scripts get the three reads over the tool-call bridge. None of them can reach the routes above. See [Quest Docs Architecture -- Model-Facing Tools](../architecture/quest-docs.md#model-facing-tools).
+Models read and write docs only through `list_docs`, `search_docs`, `read_doc`, `create_doc`, `edit_doc`, `append_to_doc`, `add_doc_image` (`TOOL_CALL_REGISTRY` in `chat/llm/tool_schemas.py`) and the `write_doc` action request, and reach a doc's notes through `list_doc_notes` and `suggest_doc_note` ([Doc Notes Tools](../architecture/doc-notes-tools.md)). Sandbox scripts get the three reads and `list_doc_notes` over the tool-call bridge. None of them can reach the routes above. See [Quest Docs Architecture -- Model-Facing Tools](../architecture/quest-docs.md#model-facing-tools).
