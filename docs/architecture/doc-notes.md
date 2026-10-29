@@ -4,7 +4,7 @@
 
 Doc notes are texts that stick to a [Quest Doc](quest-docs.md) outside its body and its revisions. The **instructions** are one plain-text field on the `docs` row, holding the rules a model should follow when it works on the doc. The **memories** are short plain-text facts about the doc, one `doc_memories` row each. `doc_note_suggestions` holds proposed changes to either, each reviewed by the user whose conversation proposed it, with the `MemorySuggestionStatus` lifecycle of [project memory suggestions](project-memories.md): an instructions suggestion carries the complete proposed text, a memory suggestion one fact, optionally replacing a memory.
 
-This doc covers the gate, the data model and its concurrency, the seen record, the delivery gate and the notes block, delivery on reads, the write refusal, the `write_doc` instructions pin, suggestions and their review, the realtime events, the UI routes, the delete lifecycle and the known limitations. The two model tools, `list_doc_notes` and `suggest_doc_note`, and the prompting (the `system:doc_notes` skill) are in [Doc Notes Tools](doc-notes-tools.md).
+The two model tools, `list_doc_notes` and `suggest_doc_note`, and the prompting (the `system:doc_notes` skill) are in [Doc Notes Tools](doc-notes-tools.md).
 
 ## Key Files
 
@@ -20,7 +20,7 @@ This doc covers the gate, the data model and its concurrency, the seen record, t
 | `db/doc_note_suggestion_store.py` | The `doc_note_suggestions` rows; the module docstring gives the kinds, the supersede rule and the one-transaction accept |
 | `chat/docs/routes.py` | `_doc_row()`, which leaves `NOTES_STATE_KEYS` out of UI rows |
 | `chat/docs/notes.py` | The delivery gate, the suggestion taint rule (`suggestion_allowed()`), the notes block and its text copy, and the copy strings: the refusal messages and the `suggest_doc_note` copy (`DOC_NOTE_*`); no I/O |
-| `chat/docs/service.py` | The "Doc notes" helper section (gate check, counts, loading, seen record, `publish_notes_changed()`), the delivery in the read tools and `create_doc`, the notes step of `_resolve_write()`, and the suggestion events of `delete_doc_from_ui()`; the module docstring states the notes invariants |
+| `chat/docs/service.py` | The "Doc notes" helper section, the delivery in the read tools and `create_doc`, the notes step of `_resolve_write()`, and the suggestion events of `delete_doc_from_ui()`; the module docstring states the notes invariants |
 | `chat/docs/note_suggestions.py` | The `suggest_doc_note` body, accept, dismiss, the review rows and the `doc_note_suggestions_changed` publisher; the module docstring states who may suggest and review |
 | `chat/docs/access.py` | `DocAccess.deny_cause`, the machine cause of a denied verdict, which the suggestion gate reads |
 | `chat/realtime/events.py`, `chat/docs/events.py` | The two notes envelopes; the audience publishers of `doc_notes_changed` |
@@ -158,7 +158,7 @@ A registration publishes `doc_note_suggestions_changed` for its conversation and
 
 ### Review
 
-`accept_suggestion()`, `dismiss_suggestion()` and `review_rows()` in `chat/docs/note_suggestions.py` serve only the suggestion's own user, and none is gated, by `doc_notes` or by `docs`; nor are the routes over them ([UI Routes, Inbox and Report](#ui-routes-inbox-and-report)).
+`accept_suggestion()`, `dismiss_suggestion()` and `review_rows()` in `chat/docs/note_suggestions.py` serve only the suggestion's own user, and none is gated, by `doc_notes` or by `docs`, nor are their routes.
 
 - **Accept re-checks access** on a freshly loaded doc row: a memory needs the UI verdict `free` (`can_edit`), instructions need ownership; anything else is `forbidden`. **Dismiss** needs nothing but ownership of the suggestion, so a recipient whose share was revoked or downgraded can still clear their rows.
 - **One transaction, claim first**: the store's `accept_suggestion()` claims the row (`pending` -> `accepted`), which takes the write lock, then writes the notes through the `*_in_session` writers ([Concurrency](#concurrency)). Any refusal rolls the claim back with the write, so the row stays pending and the notes unchanged; an accept or dismiss that lost the claim gets `suggestion_resolved`.
@@ -186,7 +186,11 @@ The routes, their shapes and their errors are in [Quest Docs API -- Notes](../ap
 - **Gates**: the notes routes answer `doc_notes_disabled` first; the review routes check no gate ([Review](#review)).
 - **Identities**: a memory goes out with a `source_label` instead of its `source` and editor ids, naming a person to the doc owner only (`source_label()` in `chat/docs/note_payloads.py`), and `instructions_updated_by` is the owner's alone.
 
-`GET /conversations/{id}` carries `pending_doc_note_suggestions`, which `doc_note_suggestions_changed` then replaces. The inbox's Memories tab lists the user's suggestions as its `doc` kind ([Memory Suggestions -- The Inbox's Memories Tab](memory-suggestions.md#the-inboxs-memories-tab)), and the [Slack reminder](slack-pending-request-notifier.md) counts them with the rest. The admin Memories report counts doc memories per doc owner and doc note suggestions per reviewer ([Admin System Reports -- Docs, Tables and Memories Sections](admin-system-monitor.md#docs-tables-and-memories-sections)).
+`GET /conversations/{id}` carries `pending_doc_note_suggestions`. The inbox routes list the user's suggestions as the `doc` kind, which the Memories tab leaves out ([Memory Suggestions -- The Inbox's Memories Tab](memory-suggestions.md#the-inboxs-memories-tab)), and the [Slack reminder](slack-pending-request-notifier.md) counts them with the rest. The admin Memories report counts doc memories per doc owner and doc note suggestions per reviewer ([Admin System Reports -- Docs, Tables and Memories Sections](admin-system-monitor.md#docs-tables-and-memories-sections)).
+
+## Frontend
+
+`frontend/src/api/docsApi.ts` holds the notes and review calls, the gate name `DOC_NOTES_FEATURE` and the helpers for the `stale_instructions` and `duplicate_memory` conflicts. `frontend/src/hooks/useDocNotes.ts` serves one doc's notes and the viewer's own pending suggestions for it, gated inside the hook; its header comment gives the events it follows and the stale-payload guard. `frontend/src/store/conversationStore.ts` keeps `pendingDocNoteSuggestions`, fed by `pending_doc_note_suggestions` and `doc_note_suggestions_changed`.
 
 ## Lifecycle
 

@@ -83,7 +83,7 @@ Provider locks also live here; see [Provider Locking](#provider-locking).
 
 ### useConversation Hook (`src/hooks/useConversation.ts`)
 
-The per-conversation entry point (`UseConversationResult`). It loads the conversation once, records `last_message_seq` with `persistentWebSocket.setLastSeq()` and subscribes, so the first subscribe is answered with up-to-date or catchup; answers `message_appended` with a tail fetch, applies catchup rows directly and refetches on resync; and hydrates context usage from the newest stats row, loaded skills, `pending_wait_handles` and the header's title and archive state. On unmount it detaches its handler but sends no `unsubscribe`, so an away conversation keeps receiving events until the server-side TTL lapses. An entry seeded by `seedNewConversation()` (loaded, zero messages) skips the loading state: a just-created conversation shows its empty composer at once.
+The per-conversation entry point (`UseConversationResult`). It loads the conversation once, records `last_message_seq` with `persistentWebSocket.setLastSeq()` and subscribes, so the first subscribe is answered with up-to-date or catchup; answers `message_appended` with a tail fetch, applies catchup rows directly and refetches on resync; and hydrates context usage from the newest stats row, loaded skills, `pending_wait_handles`, the header's title and archive state, and the pending suggestion counts (`pendingMemorySuggestions`, `pendingProjectMemorySuggestions`, `pendingDocNoteSuggestions`), which this conversation's `*_suggestions_changed` globals then replace. On unmount it detaches its handler but sends no `unsubscribe`, so an away conversation keeps receiving events until the server-side TTL lapses. An entry seeded by `seedNewConversation()` (loaded, zero messages) skips the loading state: a just-created conversation shows its empty composer at once.
 
 ### Design Decisions
 
@@ -115,7 +115,7 @@ A `/chats/<id>` URL for a project conversation is rewritten to `/projects/<pid>/
 
 ## Authentication
 
-The browser authenticates only with the session cookie (`COOKIE_NAME` in `auth/config.py`): REST calls send it with `credentials: 'include'` and the WebSocket upgrade carries it, so no API key is held in browser storage or URLs. `AuthContext` runs `checkSession()` (`frontend/src/utils/auth.ts`, `GET /app/api/me`) once on mount. `SignInScreen.tsx` renders the form for the configured sign-in method and, in local mode, the canned-account picker; `SetPasswordScreen.tsx` serves `/set-password` outside the auth gate. Methods and routes: [Auth -- Sign-in Methods](auth.md#sign-in-methods). A user with no connected service gets Settings opened on Data Connections, on desktop only, since the full-screen phone settings would take over the first view.
+The browser authenticates with the session cookie alone ([Frontend API Client](../api/api-client-usage.md#overview)). `AuthContext` runs `checkSession()` (`frontend/src/utils/auth.ts`, `GET /app/api/me`) once on mount. `SignInScreen.tsx` renders the form for the configured sign-in method and, in local mode, the canned-account picker; `SetPasswordScreen.tsx` serves `/set-password` outside the auth gate. Methods and routes: [Auth -- Sign-in Methods](auth.md#sign-in-methods). A user with no connected service gets Settings opened on Data Connections, on desktop only, since the full-screen phone settings would take over the first view.
 
 ## Sidebar Component (`src/components/Sidebar.tsx`)
 
