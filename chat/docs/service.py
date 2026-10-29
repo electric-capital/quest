@@ -19,11 +19,14 @@ block, recorded in the seen sidecar (``doc_notes_seen.json``);
 helpers in the "Doc notes" section are shared with the notes tools.
 
 Errors are raised as :class:`DocError` (model/user-facing message; tools
-wrap it as ``{"error": str(e)}``) or its two structured subclasses:
+wrap it as ``{"error": str(e)}``) or its structured subclasses:
 :class:`DocApprovalRequired` (the write needs a ``write_doc`` action
 request; carries the ``suggested_request`` payload the model forwards
-unchanged) and :class:`DocDisabled` (the ``docs`` feature gate is closed
-for the user; raised before any DB work).
+unchanged), :class:`DocNotesUnseen` (a model write refused once because
+the conversation has not seen the doc's current notes; carries the notes
+block and its text copy, and the refusal has recorded the delivery) and
+:class:`DocDisabled` (the ``docs`` feature gate is closed for the user;
+raised before any DB work). :class:`DocRequestError` serves the UI routes.
 
 Invariants kept here:
 
@@ -40,9 +43,17 @@ Invariants kept here:
   run on the event loop, never inside ``asyncio.to_thread``
   (``ChatStorage.add_doc_read_ids``, ``record_doc_notes_seen`` and
   ``bus.publish_to_user`` rely on the single-event-loop guarantee).
-- A notes delivery is recorded only once the block is in the result,
-  with no ``await`` before the return, and never for a sub-agent,
-  inference-API or script read (:func:`record_notes_delivery`).
+- A notes delivery is recorded only once the block is in the result (or
+  in the :class:`DocNotesUnseen` being raised), with no ``await`` before
+  the return or raise, and never for a sub-agent, inference-API or script
+  read (:func:`record_notes_delivery`).
+- Notes before writes: in a recording run with the ``doc_notes`` gate
+  open, a model write to a doc whose notes this conversation has not seen
+  (``notes.write_refused()``) is refused once with :class:`DocNotesUnseen`
+  in :func:`_resolve_write`, after the denied and read-before-edit checks
+  and before the approval verdict, so the write tools and the write_doc
+  pre-card share it. Approve-time execute skips the seen record and
+  instead refuses when the card's pinned ``instructions_version`` moved.
 - Results never expose a doc's share roster; list/read rows carry only a
   ``shared`` flag.
 """
@@ -100,6 +111,7 @@ __all__ = [
     "DocApprovalRequired",
     "DocDisabled",
     "DocError",
+    "DocNotesUnseen",
     "DocRequestError",
     "add_doc_image",
     "append_to_doc",
@@ -190,6 +202,24 @@ class DocApprovalRequired(DocError):
 
 class DocDisabled(DocError):
     """The ``docs`` feature gate is closed for the user."""
+
+
+class DocNotesUnseen(DocError):
+    """A model write refused until the conversation has seen the doc's notes.
+
+    Raised by :func:`_resolve_write` in a recording run with the
+    ``doc_notes`` gate open, once the delivery it carries is recorded, so
+    the identical retry passes. ``notes_block`` is the ``doc_notes`` block
+    the write tools return; ``notes_text`` its plain-text copy
+    (``notes.render_notes_text()``), which the write_doc pre-card puts in
+    its ``Invalid parameters`` text. ``str(e)`` is
+    ``notes.DOC_NOTES_UNSEEN_MESSAGE`` with the doc's title.
+    """
+
+    def __init__(self, message: str, notes_block: dict, notes_text: str):
+        super().__init__(message)
+        self.notes_block = notes_block
+        self.notes_text = notes_text
 
 
 class DocRequestError(DocError):
@@ -1207,12 +1237,21 @@ def _bool_param(params: dict, key: str, default: bool) -> bool:
     return value
 
 
+# Server-only pins: set by the write_doc action request at approve time,
+# never part of a suggested_request (a model-supplied copy in a write_doc
+# proposal is refused as an unknown param by its validate_params).
+_SERVER_PINS = ("expected_sha256", "expected_instructions_version")
+
+
 def _normalize_write_params(operation: str, params: dict) -> dict:
     """Validate and complete one operation's params (defaults filled in).
 
     The result has exactly the keys of ``suggested_request.params`` minus
-    ``operation``/``doc_id``; unknown keys in ``params`` are ignored (the
-    write_doc handler validates the request shape itself).
+    ``operation``/``doc_id``, plus the server-only pins when given
+    (:data:`_SERVER_PINS`, stripped again by :func:`_suggested_request`):
+    ``expected_sha256`` (add_image) and ``expected_instructions_version``
+    (any operation; an int >= 0). Unknown keys in ``params`` are ignored
+    (the write_doc handler validates the request shape itself).
     """
     if operation not in WRITE_OPERATIONS:
         raise DocError(f"operation must be one of: {', '.join(WRITE_OPERATIONS)}.")
@@ -1227,57 +1266,155 @@ def _normalize_write_params(operation: str, params: dict) -> dict:
             raise DocError(
                 "old_string and new_string are identical -- nothing to change."
             )
-        return {
+        clean = {
             "old_string": old_string,
             "new_string": new_string,
             "replace_all": _bool_param(params, "replace_all", False),
         }
-    if operation == "append":
+    elif operation == "append":
         content = _normalize_text(_str_param(params, "content"))
         if not content.strip():
             raise DocError("content must not be empty.")
-        return {
+        clean = {
             "content": content,
             "ensure_blank_line": _bool_param(params, "ensure_blank_line", True),
         }
-    workspace_path = _str_param(params, "workspace_path")
-    if not workspace_path.strip():
-        raise DocError("workspace_path must not be empty.")
-    placement = _str_param(params, "placement", default="append") or "append"
-    if placement not in IMAGE_PLACEMENTS:
-        raise DocError('placement must be "append" or "none".')
-    clean = {
-        "workspace_path": workspace_path,
-        "alt": _str_param(params, "alt", default=""),
-        "placement": placement,
-    }
-    # Server-only pin set by the write_doc action request at approve time:
-    # the stored asset must be the file the card showed (the user can
-    # still swap the conversation-workspace file between proposal and
-    # approval, through the Chat Files card or their own sandbox runs).
-    expected = params.get("expected_sha256")
-    if expected:
-        clean["expected_sha256"] = str(expected)
+    else:
+        workspace_path = _str_param(params, "workspace_path")
+        if not workspace_path.strip():
+            raise DocError("workspace_path must not be empty.")
+        placement = _str_param(params, "placement", default="append") or "append"
+        if placement not in IMAGE_PLACEMENTS:
+            raise DocError('placement must be "append" or "none".')
+        clean = {
+            "workspace_path": workspace_path,
+            "alt": _str_param(params, "alt", default=""),
+            "placement": placement,
+        }
+        # Server-only pin: the stored asset must be the file the card
+        # showed (the user can still swap the conversation-workspace file
+        # between proposal and approval, through the Chat Files card or
+        # their own sandbox runs).
+        expected = params.get("expected_sha256")
+        if expected:
+            clean["expected_sha256"] = str(expected)
+    # Server-only pin: the doc's instructions_version when the write_doc
+    # card was proposed (_check_pinned_instructions).
+    pinned = params.get("expected_instructions_version")
+    if pinned is not None:
+        if isinstance(pinned, bool) or not isinstance(pinned, int) or pinned < 0:
+            raise DocError(
+                "expected_instructions_version must be a non-negative integer."
+            )
+        clean["expected_instructions_version"] = pinned
     return clean
 
 
 def _suggested_request(operation: str, doc_id: str, params: dict) -> dict:
-    params = {k: v for k, v in params.items() if k != "expected_sha256"}
+    params = {k: v for k, v in params.items() if k not in _SERVER_PINS}
     return {
         "request_type": "write_doc",
         "params": {"operation": operation, "doc_id": doc_id, **params},
     }
 
 
+def _check_pinned_instructions(doc: dict, clean: dict) -> None:
+    """Approve-time execute: refuse when the doc's instructions changed
+    since the write_doc card was proposed.
+
+    ``doc`` is the live row. No pin (a card proposed before the pin
+    existed, or while the ``doc_notes`` gate was closed for the proposer)
+    passes. Cleared instructions never refuse, as in ``write_refused()``;
+    memory changes never do. The seen record is never consulted: the
+    approver is a person, who may not be the one whose conversation saw
+    the notes.
+
+    Raises:
+        DocError: ``notes.DOC_INSTRUCTIONS_CHANGED_MESSAGE``.
+    """
+    pinned = clean.get("expected_instructions_version")
+    if pinned is None:
+        return
+    if doc["instructions_version"] != pinned and doc["has_instructions"]:
+        raise DocError(doc_notes.DOC_INSTRUCTIONS_CHANGED_MESSAGE)
+
+
+_NOTES_FORMS = ("block", "text")
+
+
+async def _refuse_unseen_notes(caller: Caller, doc: dict, notes_form: str) -> None:
+    """Invariant 1 (notes before writes): raise :class:`DocNotesUnseen`
+    when this recording run has not seen the doc's current notes
+    (``notes.write_refused()``), after recording the delivery it carries.
+
+    Decides on the row first (no notes query for a doc without notes or
+    with a current record), then on the freshly loaded state, so notes
+    emptied meanwhile never refuse. ``notes_form`` says what the model
+    will be shown: ``"block"`` (the write tools: the whole block) or
+    ``"text"`` (the write_doc pre-card: ``render_notes_text()``). When the
+    text had to cut the instructions, the refusal records the seen
+    instructions version unchanged (never instructions the model was not
+    shown whole), so the retry is refused again.
+
+    Raises:
+        DocNotesUnseen: the refusal (its delivery recorded).
+        DocError: the doc is gone (``doc_not_found_message``).
+    """
+    if not doc_notes.records_delivery(caller.run_kind, caller.conversation_id):
+        return
+    seen = notes_seen(caller, doc["id"])
+    if not doc_notes.write_refused(doc, seen):
+        return
+    state, block = await load_notes(doc["id"])
+    if not doc_notes.write_refused(state, seen):
+        return
+    text = doc_notes.render_notes_text(block)
+    instructions_version = state["instructions_version"]
+    if notes_form == "text" and not text.instructions_whole:
+        instructions_version = seen.instructions if seen else 0
+    # Last step, no await between the record and the raise
+    # (record_notes_delivery).
+    record_notes_delivery(
+        caller, doc["id"], instructions_version, state["memories_version"],
+    )
+    raise DocNotesUnseen(
+        doc_notes.DOC_NOTES_UNSEEN_MESSAGE.format(title=doc["title"]),
+        block,
+        text.text,
+    )
+
+
 async def _resolve_write(
-    caller: Caller, doc_id: str, operation: str, params: dict,
+    caller: Caller,
+    doc_id: str,
+    operation: str,
+    params: dict,
+    *,
+    bypass_approval: bool = False,
+    notes_form: str = "block",
+    check_notes: bool = True,
 ) -> tuple[dict, DocAccess, dict]:
     """Gate, normalize, look up and check everything that is not the verdict.
 
     Order: gate -> params -> visibility (hidden == missing) -> denied ->
-    edit's read-before-edit -> add_image's conversation requirement. The
-    approval verdict is left to the caller.
+    edit's read-before-edit -> add_image's conversation requirement ->
+    doc notes (only with ``check_notes`` and the ``doc_notes`` gate open
+    for the caller). The approval verdict is left to the caller, so a
+    model meets the notes before it drafts a card.
+
+    The notes step: with ``bypass_approval`` (approve-time execute) only
+    the card's pinned ``expected_instructions_version`` is compared with
+    the live row (:func:`_check_pinned_instructions`); otherwise a
+    recording run that has not seen the current notes is refused once with
+    :class:`DocNotesUnseen` (:func:`_refuse_unseen_notes`), its notes in
+    ``notes_form`` (``"block"`` for the tools, ``"text"`` for the
+    write_doc pre-card).
+
+    Raises:
+        ValueError: an unknown ``notes_form`` (a programming error).
     """
+    if notes_form not in _NOTES_FORMS:
+        raise ValueError(f"Unknown notes_form: {notes_form!r}")
     require_enabled(caller)
     clean = _normalize_write_params(operation, params)
     doc, access = await _get_visible_doc(caller, doc_id)
@@ -1293,6 +1430,11 @@ async def _resolve_write(
             "add_doc_image copies a file from the conversation workspace, so "
             "it needs a conversation."
         )
+    if check_notes and notes_enabled(caller):
+        if bypass_approval:
+            _check_pinned_instructions(doc, clean)
+        else:
+            await _refuse_unseen_notes(caller, doc, notes_form)
     return doc, access, clean
 
 
@@ -1586,12 +1728,25 @@ async def apply_write_operation(
     revoked or the doc deleted meanwhile) and ``denied`` (``deny_reason``)
     still refuse, and edit still requires the read sidecar.
 
+    Order of the refusals (:func:`_resolve_write`): denied -> unread ->
+    doc notes -> the approval dry-run / ``approval_required``. The notes
+    step runs once, in the first pass outside the lock (an instructions
+    change landing after it applies from the next write on): a tool write
+    in a recording run that has not seen the doc's notes raises
+    :class:`DocNotesUnseen`; with ``bypass_approval`` the seen record is
+    skipped and only a moved ``expected_instructions_version`` pin (the
+    write_doc card's, a server-only key in ``params``) refuses, with
+    ``notes.DOC_INSTRUCTIONS_CHANGED_MESSAGE``.
+
     Raises:
-        DocDisabled, DocApprovalRequired (unless bypass_approval), DocError.
+        DocDisabled, DocApprovalRequired (unless bypass_approval),
+        DocNotesUnseen (unless bypass_approval), DocError.
     """
     # First pass outside the lock: hidden / missing / denied / unread docs
-    # never take (or create) a per-doc lock.
-    doc, access, clean = await _resolve_write(caller, doc_id, operation, params)
+    # and notes refusals never take (or create) a per-doc lock.
+    doc, access, clean = await _resolve_write(
+        caller, doc_id, operation, params, bypass_approval=bypass_approval,
+    )
     if access.write == "approval" and not bypass_approval:
         # Dry-run first so a stale old_string, a bad image or an over-cap
         # body fails now instead of after the model forwarded the request.
@@ -1606,9 +1761,10 @@ async def apply_write_operation(
         async with _write_lock(doc["id"]):
             # Re-resolve under the lock: a share added or revoked while
             # this write queued must change the verdict (the approval card
-            # and the hidden / read-only refusals are decided here).
+            # and the hidden / read-only refusals are decided here). The
+            # notes step is not repeated (spec 00011 section 10).
             fresh_doc, fresh_access, fresh_clean = await _resolve_write(
-                caller, doc_id, operation, params,
+                caller, doc_id, operation, params, check_notes=False,
             )
             if fresh_access.write == "approval" and not bypass_approval:
                 raise DocApprovalRequired(
@@ -1630,14 +1786,23 @@ async def preview_write_operation(
     raises -- the caller inspects ``access``. Reads the live body and
     applies the operation in memory.
 
+    The doc notes step is the tools' (a recording run that has not seen
+    the notes gets :class:`DocNotesUnseen`, its delivery recorded), with
+    the notes as text: ``notes_text`` is ``render_notes_text()`` of the
+    block, and when that cut the instructions the seen instructions
+    version is left where it was, so the retry is refused again.
+
     Returns:
         ``{"doc", "access", "current_body", "new_body", "replacements"}``;
         add_image adds ``"asset_name_preview"`` (sanitized stem + sniffed
         extension; the stored name may get a ``-2`` suffix on collision),
         ``"image_bytes_size"`` and ``"markdown"``. For add_image with
-        placement ``"none"`` the body is unchanged.
+        placement ``"none"`` the body is unchanged. ``doc`` is the live row
+        (its ``instructions_version`` is what the card pins).
     """
-    doc, access, clean = await _resolve_write(caller, doc_id, operation, params)
+    doc, access, clean = await _resolve_write(
+        caller, doc_id, operation, params, notes_form="text",
+    )
     return await _compute_preview(caller, doc, access, operation, clean)
 
 

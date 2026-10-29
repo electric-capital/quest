@@ -6,6 +6,12 @@ and the raw tool arguments, coerces loosely-typed arguments (``"true"``,
 
 - ``{"error": "docs_disabled", "message": ...}`` -- the ``docs`` feature
   gate is closed for the user (checked before anything else, no DB work);
+- ``{"error": "doc_notes_unseen", "message": ..., "doc_notes": {...}}`` --
+  a write refused once because the conversation has not seen the doc's
+  current notes (``doc_notes`` gate open, recording run): ``doc_notes`` is
+  the notes block, the delivery is recorded, and the identical retry
+  passes. Checked after the denied and unread refusals, before
+  ``approval_required``;
 - ``{"error": "approval_required", "message": ...,
   "suggested_request": {"request_type": "write_doc", "params": {...}}}`` --
   a shared private doc: the model forwards ``suggested_request`` as a
@@ -20,7 +26,13 @@ import json
 from typing import Any, Awaitable, Callable
 
 from chat.docs import service
-from chat.docs.service import Caller, DocApprovalRequired, DocDisabled, DocError
+from chat.docs.service import (
+    Caller,
+    DocApprovalRequired,
+    DocDisabled,
+    DocError,
+    DocNotesUnseen,
+)
 
 
 def _int_arg(args: dict, key: str, default=None):
@@ -71,6 +83,12 @@ async def _run(caller: Caller, op: Callable[[], Awaitable[Any]]) -> str:
         result = await op()
     except DocDisabled as exc:
         return json.dumps({"error": "docs_disabled", "message": str(exc)})
+    except DocNotesUnseen as exc:
+        return json.dumps({
+            "error": "doc_notes_unseen",
+            "message": str(exc),
+            "doc_notes": exc.notes_block,
+        })
     except DocApprovalRequired as exc:
         return json.dumps({
             "error": "approval_required",
