@@ -38,12 +38,19 @@ Memories row: ``memory_count`` (active, i.e. not archived) and
 ``created_in_range``; the suggestion funnel for suggestions created in
 the range (``suggested_in_range`` split into ``accepted_in_range``,
 ``dismissed_in_range`` and ``pending_in_range`` by current status); the
-same figures for project memories (``project_memory_count`` across the
-projects the user owns, ``project_count`` the projects among them that
-hold a memory, ``project_created_in_range``) and project suggestions
+same figures for project memories (``project_memory_count`` /
+``project_archived_count`` across the projects the user owns,
+``project_count`` the projects among them that hold a memory,
+``project_created_in_range``) and project suggestions
 (``project_suggested_in_range`` etc., attributed to the user whose
-conversation raised them); and ``last_activity_at``, the newest memory
-or suggestion timestamp of any kind.
+conversation raised them); the same again for doc notes
+(``doc_memory_count`` across the docs the user owns, ``doc_count`` the
+docs among them that hold a memory, ``doc_created_in_range``; doc
+memories have no archive, so there is no ``doc_archived_count``) and doc
+note suggestions of both note kinds, memory and instructions
+(``doc_suggested_in_range`` etc., attributed to the reviewer, the user
+whose conversation raised them); and ``last_activity_at``, the newest
+memory or suggestion timestamp of any kind.
 """
 
 from datetime import date, datetime
@@ -214,24 +221,51 @@ def _empty_memory_row() -> dict:
         "project_accepted_in_range": 0,
         "project_dismissed_in_range": 0,
         "project_pending_in_range": 0,
-        "_projects": set(),
+        "doc_memory_count": 0,
+        "doc_created_in_range": 0,
+        "doc_suggested_in_range": 0,
+        "doc_accepted_in_range": 0,
+        "doc_dismissed_in_range": 0,
+        "doc_pending_in_range": 0,
+        # Distinct containers holding a memory, per prefix with a container
+        # (``project_count``, ``doc_count``).
+        "_containers": {"project_": set(), "doc_": set()},
         "_last_activity": None,
     }
 
 
-def _fold_memory_rows(acc_for, rows, start, end, prefix: str) -> None:
+def _fold_memory_rows(
+    acc_for,
+    rows,
+    start,
+    end,
+    prefix: str,
+    *,
+    archivable: bool = True,
+    count_chars: bool = False,
+    container: Optional[str] = None,
+) -> None:
+    """Fold one memory projection into the ``<prefix>`` figures.
+
+    ``archivable``: the rows carry ``archived`` and an archived one counts
+    in ``<prefix>archived_count`` instead of ``<prefix>memory_count`` (doc
+    memories have no archive). ``count_chars``: active rows add their
+    ``content_length`` to ``content_chars`` (personal memories only).
+    ``container``: the row field naming the project / doc the memory
+    belongs to, collected for ``<container noun>_count``.
+    """
     for row in rows:
         acc = acc_for(row["user_id"])
-        if row["archived"]:
+        if archivable and row["archived"]:
             acc[f"{prefix}archived_count"] += 1
         else:
             acc[f"{prefix}memory_count"] += 1
-            if prefix == "":
+            if count_chars:
                 acc["content_chars"] += int(row["content_length"] or 0)
         if _in_range(row["created_at"], start, end):
             acc[f"{prefix}created_in_range"] += 1
-        if prefix:
-            acc["_projects"].add(row["project_id"])
+        if container is not None:
+            acc["_containers"][prefix].add(row[container])
         acc["_last_activity"] = _newest(acc["_last_activity"], row["created_at"])
         acc["_last_activity"] = _newest(acc["_last_activity"], row["updated_at"])
 
@@ -253,14 +287,18 @@ def build_memories_report(
     suggestion_rows: list[dict],
     project_memory_rows: list[dict],
     project_suggestion_rows: list[dict],
+    doc_memory_rows: list[dict],
+    doc_suggestion_rows: list[dict],
     users: list[dict],
     start: Optional[date] = None,
     end: Optional[date] = None,
 ) -> dict:
-    """Fold the four memory projections per user (row shape in the module
-    docstring). A user gets a row when any of the four has a row for them.
-    Sorted by in-range activity (memories created plus suggestions raised,
-    personal and project), then active memories, then email."""
+    """Fold the six memory projections per user (row shape in the module
+    docstring): personal, project and doc memories with their suggestions.
+    A user gets a row when any of the six has a row for them. Sorted by
+    in-range activity (memories created plus suggestions raised, personal,
+    project and doc), then memories held (active personal, active project
+    and doc), then email."""
     roster = _roster(users)
     per_user: dict[int, dict] = {}
 
@@ -270,19 +308,27 @@ def build_memories_report(
             acc = per_user[user_id] = _empty_memory_row()
         return acc
 
-    _fold_memory_rows(acc_for, memory_rows, start, end, "")
+    _fold_memory_rows(acc_for, memory_rows, start, end, "", count_chars=True)
     _fold_suggestion_rows(acc_for, suggestion_rows, start, end, "")
-    _fold_memory_rows(acc_for, project_memory_rows, start, end, "project_")
+    _fold_memory_rows(
+        acc_for, project_memory_rows, start, end, "project_", container="project_id",
+    )
     _fold_suggestion_rows(acc_for, project_suggestion_rows, start, end, "project_")
+    _fold_memory_rows(
+        acc_for, doc_memory_rows, start, end, "doc_",
+        archivable=False, container="doc_id",
+    )
+    _fold_suggestion_rows(acc_for, doc_suggestion_rows, start, end, "doc_")
 
     out = []
     for user_id, acc in per_user.items():
-        projects = acc.pop("_projects")
+        containers = acc.pop("_containers")
         last_activity = acc.pop("_last_activity")
         out.append({
             **_identity(user_id, roster),
             **acc,
-            "project_count": len(projects),
+            "project_count": len(containers["project_"]),
+            "doc_count": len(containers["doc_"]),
             "last_activity_at": _iso(last_activity),
         })
 
@@ -290,10 +336,11 @@ def build_memories_report(
         return (
             r["created_in_range"] + r["suggested_in_range"]
             + r["project_created_in_range"] + r["project_suggested_in_range"]
+            + r["doc_created_in_range"] + r["doc_suggested_in_range"]
         )
 
-    out.sort(key=lambda r: (
-        -activity(r), -(r["memory_count"] + r["project_memory_count"]),
-        r["user_email"], r["user_id"],
-    ))
+    def held(r: dict) -> int:
+        return r["memory_count"] + r["project_memory_count"] + r["doc_memory_count"]
+
+    out.sort(key=lambda r: (-activity(r), -held(r), r["user_email"], r["user_id"]))
     return {"users": out, "total_users": len(users)}

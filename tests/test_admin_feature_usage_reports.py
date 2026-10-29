@@ -5,8 +5,9 @@
    range clipping, model-written detection, sort order, unknown owners.
 2. The narrow all-rows store projections behind them (``list_all_doc_rows``,
    ``list_all_table_rows``, ``list_all_memory_rows`` and the suggestion /
-   project-memory twins), against a throwaway sqlite file.
-3. The three endpoints' admin gating, range parsing and wiring.
+   project-memory / doc-memory twins), against a throwaway sqlite file.
+3. The three endpoints' admin gating, range parsing and wiring (the
+   Memories endpoint with doc notes included).
 """
 
 import asyncio
@@ -187,6 +188,33 @@ def _project_memory(user, project, *, archived=False, length=10, created=D1, upd
             "content_length": length, "created_at": created, "updated_at": updated}
 
 
+def _doc_memory(user, doc, *, length=10, created=D1, updated=None):
+    # The list_all_doc_memory_rows() shape: no ``archived`` (no archive).
+    return {"user_id": user, "doc_id": doc, "content_length": length,
+            "created_at": created, "updated_at": updated}
+
+
+def _doc_suggestion(user, doc, status, *, kind="memory", created=D1, resolved=None):
+    return {"user_id": user, "doc_id": doc, "kind": kind, "status": status,
+            "created_at": created, "resolved_at": resolved}
+
+
+MEMORY_ROW_KEYS = {
+    "user_id", "user_email", "user_name",
+    "memory_count", "archived_count", "content_chars", "created_in_range",
+    "suggested_in_range", "accepted_in_range", "dismissed_in_range",
+    "pending_in_range",
+    "project_memory_count", "project_archived_count", "project_count",
+    "project_created_in_range", "project_suggested_in_range",
+    "project_accepted_in_range", "project_dismissed_in_range",
+    "project_pending_in_range",
+    "doc_memory_count", "doc_count", "doc_created_in_range",
+    "doc_suggested_in_range", "doc_accepted_in_range", "doc_dismissed_in_range",
+    "doc_pending_in_range",
+    "last_activity_at",
+}
+
+
 def test_memories_report_counts_memories_and_suggestion_funnel():
     memories = [
         _memory(1, length=100, created=D1),
@@ -213,12 +241,13 @@ def test_memories_report_counts_memories_and_suggestion_funnel():
         _suggestion(3, "pending", created=D5, project="p3"),
     ]
     report = build_memories_report(
-        memories, suggestions, project_memories, project_suggestions, USERS,
+        memories, suggestions, project_memories, project_suggestions, [], [], USERS,
         date(2026, 10, 5), date(2026, 10, 9),
     )
     assert report["total_users"] == 3
     by_id = {r["user_id"]: r for r in report["users"]}
     assert list(by_id) == [1, 3, 2]  # by in-range activity, then holdings
+    assert all(set(r) == MEMORY_ROW_KEYS for r in report["users"])
 
     alice = by_id[1]
     assert alice["memory_count"] == 2
@@ -237,6 +266,11 @@ def test_memories_report_counts_memories_and_suggestion_funnel():
     assert alice["project_dismissed_in_range"] == 1
     assert alice["project_accepted_in_range"] == 0
     assert alice["project_pending_in_range"] == 0
+    # No doc notes rows were given.
+    assert alice["doc_memory_count"] == 0
+    assert alice["doc_count"] == 0
+    assert alice["doc_created_in_range"] == 0
+    assert alice["doc_suggested_in_range"] == 0
     assert alice["last_activity_at"] == D12.isoformat()
 
     bob = by_id[2]
@@ -254,8 +288,84 @@ def test_memories_report_counts_memories_and_suggestion_funnel():
 
 
 def test_memories_report_skips_users_without_any_rows():
-    report = build_memories_report([], [], [], [], USERS)
+    report = build_memories_report([], [], [], [], [], [], USERS)
     assert report == {"users": [], "total_users": 3}
+
+
+def test_memories_report_counts_doc_notes_and_their_funnel():
+    doc_memories = [
+        _doc_memory(1, "d1", length=50, created=D5),
+        _doc_memory(1, "d1", created=D1, updated=D9),
+        _doc_memory(1, "d2", created=D12),  # outside the range
+        _doc_memory(3, "d3", created=D5),
+    ]
+    doc_suggestions = [
+        _doc_suggestion(1, "d1", "accepted", created=D5, resolved=D5),
+        _doc_suggestion(1, "d1", "dismissed", kind="instructions", created=D5, resolved=D9),
+        # Reviewed by alice on a doc she does not own: still hers.
+        _doc_suggestion(1, "d9", "pending", kind="instructions", created=D9),
+        _doc_suggestion(1, "d1", "accepted", created=D1, resolved=D5),  # created outside
+        _doc_suggestion(2, "d1", "pending", created=D9),
+    ]
+    report = build_memories_report(
+        [], [], [], [], doc_memories, doc_suggestions, USERS,
+        date(2026, 10, 5), date(2026, 10, 9),
+    )
+    by_id = {r["user_id"]: r for r in report["users"]}
+    # alice: 1 created + 3 suggested; carol and bob tie on activity (1 each)
+    # and carol holds a doc memory.
+    assert list(by_id) == [1, 3, 2]
+    assert all(set(r) == MEMORY_ROW_KEYS for r in report["users"])
+
+    alice = by_id[1]
+    assert alice["doc_memory_count"] == 3
+    assert alice["doc_count"] == 2
+    assert alice["doc_created_in_range"] == 1
+    assert alice["doc_suggested_in_range"] == 3
+    assert alice["doc_accepted_in_range"] == 1
+    assert alice["doc_dismissed_in_range"] == 1
+    assert alice["doc_pending_in_range"] == 1
+    # Doc rows never touch the personal or project figures.
+    assert alice["memory_count"] == 0
+    assert alice["archived_count"] == 0
+    assert alice["content_chars"] == 0
+    assert alice["project_memory_count"] == 0
+    assert alice["project_count"] == 0
+    assert alice["last_activity_at"] == D12.isoformat()
+
+    # bob has nothing but a doc note suggestion and still gets a row.
+    bob = by_id[2]
+    assert bob["doc_memory_count"] == 0
+    assert bob["doc_count"] == 0
+    assert bob["doc_suggested_in_range"] == 1
+    assert bob["doc_pending_in_range"] == 1
+    assert bob["doc_accepted_in_range"] == 0
+    assert bob["last_activity_at"] == D9.isoformat()
+
+    carol = by_id[3]
+    assert carol["doc_memory_count"] == 1
+    assert carol["doc_count"] == 1
+    assert carol["doc_created_in_range"] == 1
+    assert carol["doc_suggested_in_range"] == 0
+    assert carol["last_activity_at"] == D5.isoformat()
+
+
+def test_memories_report_sort_counts_doc_activity_and_holdings():
+    # Activity: bob's 3 doc suggestions outrank alice's 2 personal memories.
+    report = build_memories_report(
+        [_memory(1, created=D5), _memory(1, created=D5)], [], [], [],
+        [], [_doc_suggestion(2, "d1", "pending", created=D5) for _ in range(3)],
+        USERS, date(2026, 10, 5), date(2026, 10, 9),
+    )
+    assert [r["user_id"] for r in report["users"]] == [2, 1]
+
+    # No activity in range: carol's 2 doc memories outrank alice's 1 memory.
+    report = build_memories_report(
+        [_memory(1)], [], [], [],
+        [_doc_memory(3, "d3"), _doc_memory(3, "d4")], [],
+        USERS, date(2026, 10, 5), date(2026, 10, 9),
+    )
+    assert [r["user_id"] for r in report["users"]] == [3, 1]
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +387,8 @@ def _isolated_db(monkeypatch):
 
     import db.models as models_mod
     import db.conversation_store as conversation_store
+    import db.doc_memory_store as doc_memory_store
+    import db.doc_note_suggestion_store as doc_suggestion_store
     import db.doc_store as doc_store
     import db.memory_store as memory_store
     import db.memory_suggestion_store as suggestion_store
@@ -290,6 +402,8 @@ def _isolated_db(monkeypatch):
     mods = {
         "models": models_mod,
         "conversation_store": conversation_store,
+        "doc_memory_store": doc_memory_store,
+        "doc_suggestion_store": doc_suggestion_store,
         "doc_store": doc_store,
         "memory_store": memory_store,
         "suggestion_store": suggestion_store,
@@ -477,6 +591,49 @@ def test_memory_projections_cover_all_users_and_hide_text(_isolated_db):
     ]
 
 
+def test_doc_memory_projection_attributes_owner_and_hides_text(_isolated_db):
+    mods = _isolated_db
+    doc_store = mods["doc_store"]
+    doc_memory_store = mods["doc_memory_store"]
+    doc_suggestion_store = mods["doc_suggestion_store"]
+
+    async def _seed():
+        alice = await _create_user(mods, "alice@example.com", "Alice")
+        bob = await _create_user(mods, "bob@example.com")
+        conv = await _create_conversation(mods, bob)
+        d1 = (await doc_store.create_doc(alice, "Notes", mode="private"))["id"]
+        d2 = (await doc_store.create_doc(bob, "Plan", mode="private"))["id"]
+        # Written by bob (a write-share recipient) on alice's doc: still
+        # attributed to the doc's owner.
+        await doc_memory_store.create_doc_memory(
+            d1, "Use metric units", source=doc_memory_store.ui_source(bob), user_id=bob,
+        )
+        await doc_memory_store.create_doc_memory(
+            d2, "Bob's fact", source=doc_memory_store.ui_source(bob), user_id=bob,
+        )
+        # An accepted suggestion lands a memory on alice's doc too.
+        row, _ = await doc_suggestion_store.create_suggestion(
+            bob, d1, conv, "memory", "Cite sources",
+        )
+        await doc_suggestion_store.accept_suggestion(bob, row["id"])
+        return alice, bob, d1, d2
+
+    alice, bob, d1, d2 = _run(_seed())
+    rows = _run(doc_memory_store.list_all_doc_memory_rows())
+    assert sorted((r["user_id"], r["doc_id"], r["content_length"]) for r in rows) == sorted([
+        (alice, d1, len("Use metric units")),
+        (alice, d1, len("Cite sources")),
+        (bob, d2, len("Bob's fact")),
+    ])
+    assert all(
+        set(r) == {"user_id", "doc_id", "content_length", "created_at", "updated_at"}
+        for r in rows
+    )
+    assert all(isinstance(r["created_at"], datetime) for r in rows)
+    assert all(isinstance(r["updated_at"], datetime) for r in rows)
+    assert all(r["created_at"].tzinfo is None for r in rows)  # naive UTC as stored
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -545,6 +702,53 @@ def test_tables_and_memories_endpoints_return_rosters(_isolated_db, _admin):
     assert [(r["user_id"], r["memory_count"]) for r in memories["users"]] == [(alice, 1)]
     # Today falls in the open range, so the fresh memory counts as created.
     assert memories["users"][0]["created_in_range"] == 1
+    assert memories["users"][0]["doc_memory_count"] == 0
+    assert memories["users"][0]["doc_suggested_in_range"] == 0
+
+
+def test_memories_endpoint_includes_doc_notes(_isolated_db, _admin):
+    mods = _isolated_db
+    doc_store = mods["doc_store"]
+    doc_memory_store = mods["doc_memory_store"]
+    doc_suggestion_store = mods["doc_suggestion_store"]
+
+    async def _seed():
+        alice = await _create_user(mods, "alice@example.com", "Alice")
+        bob = await _create_user(mods, "bob@example.com")
+        await _create_user(mods, "carol@example.com")
+        conv = await _create_conversation(mods, bob)
+        doc_id = (await doc_store.create_doc(alice, "Notes", mode="private"))["id"]
+        for text in ("Fact one", "Fact two"):
+            await doc_memory_store.create_doc_memory(
+                doc_id, text, source=doc_memory_store.ui_source(alice), user_id=alice,
+            )
+        await doc_suggestion_store.create_suggestion(
+            bob, doc_id, conv, "instructions", "Be brief.", base_instructions_version=0,
+        )
+        dismissed, _ = await doc_suggestion_store.create_suggestion(
+            bob, doc_id, conv, "memory", "Fact three",
+        )
+        await doc_suggestion_store.dismiss_suggestion(bob, dismissed["id"])
+        return alice, bob
+
+    alice, bob = _run(_seed())
+    report = _run(_admin.admin_memories_report(user={"email": "admin@example.com"}))
+    assert report["total_users"] == 3
+    by_id = {r["user_id"]: r for r in report["users"]}
+    # alice: 2 doc memories created today; bob: 2 suggestions raised today.
+    # Tied on activity, alice holds the memories.
+    assert list(by_id) == [alice, bob]
+    assert by_id[alice]["doc_memory_count"] == 2
+    assert by_id[alice]["doc_count"] == 1
+    assert by_id[alice]["doc_created_in_range"] == 2
+    assert by_id[alice]["doc_suggested_in_range"] == 0
+    assert by_id[alice]["memory_count"] == 0
+    assert by_id[bob]["doc_memory_count"] == 0
+    assert by_id[bob]["doc_suggested_in_range"] == 2
+    assert by_id[bob]["doc_pending_in_range"] == 1
+    assert by_id[bob]["doc_dismissed_in_range"] == 1
+    assert by_id[bob]["doc_accepted_in_range"] == 0
+    assert all(set(r) == MEMORY_ROW_KEYS for r in report["users"])
 
 
 @pytest.mark.parametrize("handler", ["admin_docs_report", "admin_tables_report",
