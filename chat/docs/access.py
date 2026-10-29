@@ -110,12 +110,15 @@ service loads the project's sources.
 The procedure itself lives in ``chat/artifact_access.py`` (shared with the
 Quest Tables resolver, ``chat/tables/access.py``, whose matrix is the same
 plus a schema verdict); this module owns the doc verdict type and wording.
+A denied verdict keeps the procedure's machine-readable cause beside its
+text (``DocAccess.deny_cause``) for the callers that must tell causes
+apart; no payload carries it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from chat import artifact_access
@@ -123,6 +126,7 @@ from chat.artifact_access import (
     READ_ONLY_RUN_KINDS,
     RUN_KINDS,
     WRITE_VERDICTS,
+    DenyCause,
     WriteVerdict,
 )
 from chat.docs.constants import DOC_MODES
@@ -214,6 +218,18 @@ class DocAccess:
     require-approval switch produced (rule 7) -- the only difference is the
     wording of the notes the model sees (:func:`write_note`); it is never
     set on any other verdict.
+
+    ``deny_cause`` is the machine-readable twin of ``deny_reason``: the
+    ``artifact_access.DENY_CAUSES`` entry the procedure returned
+    (``CoreVerdict.cause``), set by :func:`resolve_doc_access` on every
+    denied verdict and only there (never on :data:`HIDDEN`). It is for
+    callers that must tell causes apart where the wording is not a key,
+    such as the doc notes suggestion gate, which admits the two Slack
+    causes (``slack_needs_approval``, ``slack_approval_required``): those
+    deny a write only because Slack cannot open a card. It never reaches
+    a payload, and equality ignores it (``compare=False``): the reason text
+    already maps one-to-one to the cause, so two verdicts that differ only
+    in a missing cause are the same verdict.
     """
 
     visible: bool
@@ -221,6 +237,7 @@ class DocAccess:
     write: WriteVerdict
     deny_reason: str | None
     required_by_owner: bool = False
+    deny_cause: DenyCause | None = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
         if self.write not in WRITE_VERDICTS:
@@ -233,6 +250,11 @@ class DocAccess:
             raise ValueError("deny_reason is set exactly when a visible doc's write is denied")
         if self.required_by_owner and self.write != "approval":
             raise ValueError("required_by_owner is set only on an approval verdict")
+        if self.deny_cause is not None:
+            if self.deny_cause not in artifact_access.DENY_CAUSES:
+                raise ValueError(f"unknown deny cause: {self.deny_cause!r}")
+            if not self.visible or self.write != "denied":
+                raise ValueError("deny_cause is set only on a visible doc's denied verdict")
 
 
 HIDDEN = DocAccess(visible=False, can_read=False, write="denied", deny_reason=None)
@@ -243,8 +265,10 @@ _APPROVAL_REQUIRED = DocAccess(
 )
 
 
-def _read_only(reason: str) -> DocAccess:
-    return DocAccess(visible=True, can_read=True, write="denied", deny_reason=reason)
+def _read_only(reason: str, cause: DenyCause) -> DocAccess:
+    return DocAccess(
+        visible=True, can_read=True, write="denied", deny_reason=reason, deny_cause=cause,
+    )
 
 
 def effective_share(doc: Mapping[str, Any], user_id: int) -> str | None:
@@ -278,6 +302,9 @@ def resolve_doc_access(
     projects whose docs the calling (private) project may read (rule 2),
     empty unless the caller is a private project conversation.
 
+    A denied verdict carries both its text (``deny_reason``) and its cause
+    (``deny_cause``); :data:`HIDDEN` carries neither.
+
     Raises ValueError for an unknown ``run_kind`` or doc mode, or a doc
     dict without its ``shares`` list.
     """
@@ -293,7 +320,7 @@ def resolve_doc_access(
     if not core.visible:
         return HIDDEN
     if core.write == "denied":
-        return _read_only(_DENY_TEXT[core.cause])
+        return _read_only(_DENY_TEXT[core.cause], core.cause)
     if core.write == "free":
         return _FREE
     return _APPROVAL_REQUIRED if core.required_by_owner else _APPROVAL

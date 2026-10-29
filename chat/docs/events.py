@@ -1,14 +1,22 @@
 """Realtime publishing for Quest Docs.
 
-Two per-user globals on the persistent WebSocket, built by
+Three per-user globals on the persistent WebSocket, built by
 chat/realtime/events.py: ``doc_list_changed`` (list views re-fetch their
-window) and ``doc_changed {doc_id, updated_at}`` (an open viewer of that
-doc re-fetches unless it already shows that version). ``updated_at: null``
+window), ``doc_changed {doc_id, updated_at}`` (an open viewer of that
+doc re-fetches unless it already shows that version) and
+``doc_notes_changed {doc_id, instructions_version, memories_version}``
+(an open Notes panel of that doc re-fetches the notes). ``updated_at: null``
 means "this doc's existence or the receiver's access to it changed":
 always re-fetch (sent on delete, project delete and share changes, which
 do not bump ``updated_at``). Every change an open viewer must notice
 reaches it as a ``doc_changed`` for its doc, so viewers can ignore the
 install-wide ``doc_list_changed`` traffic.
+
+Notes (the owner's instructions and the doc's memories) never bump
+``updated_at`` and are not part of list rows, so a notes change sends
+``doc_notes_changed`` alone, never with a ``doc_changed`` or a
+``doc_list_changed``; the body viewer ignores it. It carries the notes
+counters, never the notes text.
 
 Audience: everyone who can see the doc in the UI -- its owner plus every
 direct share recipient; a doc with an "everyone" share row reaches every
@@ -36,6 +44,12 @@ Who publishes what:
   ``doc_list_changed`` to the audience captured before the delete; the
   model's ``create_doc`` (a new doc has no shares, so the owner is the
   whole audience).
+- chat/docs/service.py's ``publish_notes_changed()``: ``doc_notes_changed``
+  to the doc's audience (:func:`publish_doc_notes_changed_for`, with the
+  versions of the ``get_notes_state()`` dict after the change). The one
+  place a notes change is published from: an accepted note suggestion
+  (chat/docs/note_suggestions.py) and the notes routes' instructions and
+  memory writes call it after their store write.
 - chat/docs/routes.py: the metadata-only rename (audience helpers).
 - chat/docs/share_routes.py: share add / update / remove send
   ``doc_changed {updated_at: null}`` then ``doc_list_changed`` to the owner
@@ -77,6 +91,8 @@ __all__ = [
     "publish_doc_list_changed",
     "publish_doc_list_changed_for",
     "publish_doc_list_changed_to",
+    "publish_doc_notes_changed_for",
+    "publish_doc_notes_changed_to",
     "publish_doc_write",
     "publish_share_changed",
 ]
@@ -176,6 +192,24 @@ def publish_doc_changed(
         )
 
 
+def _publish_doc_notes_changed(
+    user_id: int, doc_id: str, instructions_version: int, memories_version: int,
+) -> None:
+    """Best-effort: tell the user's tabs a doc's notes changed."""
+    try:
+        bus.publish_to_user(
+            user_id,
+            realtime_events.make_doc_notes_changed(
+                doc_id, instructions_version, memories_version,
+            ),
+        )
+    except Exception:
+        logger.debug(
+            "[docs] publish doc_notes_changed failed (user_id=%s, doc_id=%s)",
+            user_id, doc_id, exc_info=True,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Audiences
 # ---------------------------------------------------------------------------
@@ -204,6 +238,30 @@ def publish_doc_changed_for(doc: Mapping) -> None:
     """``doc_changed`` (the row's ``updated_at``) to everyone who can see
     ``doc``."""
     publish_doc_changed_to(doc_audience(doc), doc["id"], doc.get("updated_at"))
+
+
+def publish_doc_notes_changed_to(
+    audience: DocAudience, doc_id: str, instructions_version: int, memories_version: int,
+) -> None:
+    """``doc_notes_changed`` to every user of a (captured) audience,
+    best-effort per user."""
+    for user_id in audience_user_ids(audience):
+        _publish_doc_notes_changed(user_id, doc_id, instructions_version, memories_version)
+
+
+def publish_doc_notes_changed_for(doc: Mapping, state: Mapping) -> None:
+    """``doc_notes_changed`` to everyone who can see ``doc`` (with shares).
+
+    ``state`` is the ``db.doc_store.get_notes_state()`` dict after the
+    change (or its in-session form); only its two versions travel, never
+    the instructions text.
+    """
+    publish_doc_notes_changed_to(
+        doc_audience(doc),
+        doc["id"],
+        state["instructions_version"],
+        state["memories_version"],
+    )
 
 
 def publish_doc_write(doc: Mapping) -> None:
