@@ -78,7 +78,9 @@ async def _run_sub_agent(
     spawner) -- there is no 3rd level.
 
     The sub-agent runs until it calls agent_task_response, at which point
-    the response string is extracted and returned. If the sub-agent finishes
+    the response string is extracted and returned at once: the call is never
+    answered and no further model request is sent, because the ephemeral
+    session is discarded on return. If the sub-agent finishes
     without calling agent_task_response (runs out of things to do), its
     accumulated text output is returned instead as a fallback.
 
@@ -387,13 +389,6 @@ async def _run_sub_agent(
                     "[sub-agent:%s] agent_task_response called (conversation=%s, user=%s, response_length=%d)",
                     agent_name, conversation_id, user["email"], len(agent_response),
                 )
-                # Build a tool result acknowledging receipt
-                tool_results.append({
-                    "name": fc_event.tool_name,
-                    "result": "Response received. Task complete.",
-                    "tool_id": fc_event.tool_id,
-                    "extra_parts": [],
-                })
                 break  # Stop processing further function calls
 
             # Nested spawn: a 1st-level sub-agent (can_nest) may delegate one
@@ -613,6 +608,15 @@ async def _run_sub_agent(
                 "extra_parts": extra_parts,
             })
 
+        # agent_task_response ends the sub-agent here. Its call is left
+        # unanswered and no further request is sent: the session is ephemeral
+        # and discarded on return, so answering it would only buy one more
+        # full-context model call whose output nobody reads. Calls earlier in
+        # the same response have already run; later ones are skipped.
+        if agent_response is not None:
+            await _emit_finished("success")
+            return agent_response
+
         # Format tool results for the provider
         formatted_results = provider.format_tool_results(session, tool_results)
 
@@ -648,70 +652,6 @@ async def _run_sub_agent(
                 "[sub-agent:%s] Context window warning injected (context=%d/%d, %d%%, conversation=%s, user=%s)",
                 agent_name, context_tokens, max_context, pct, conversation_id, user["email"],
             )
-
-        # If agent_task_response was called, send the acknowledgment back
-        # to the model and drain its final response before returning.
-        if agent_response is not None:
-            drain_start = time.time()
-            try:
-                async for _event in provider.send_message_stream(session, formatted_results):
-                    # Consume all events -- we expect the model to produce
-                    # little or no output after the task-complete acknowledgment.
-                    pass
-
-                drain_usage = provider.get_usage(session)
-                drain_input = drain_usage.input_tokens
-                drain_output = drain_usage.output_tokens
-                drain_cached = drain_usage.cached_tokens
-                drain_cache_creation = drain_usage.cache_creation_tokens
-                drain_cache_read = drain_usage.cache_read_tokens
-                drain_duration_ms = int((time.time() - drain_start) * 1000)
-                drain_new_input = compute_new_input_tokens(drain_usage, sub_provider_name)
-                logger.info(
-                    "[sub-agent:%s] Drained final response after agent_task_response "
-                    "(conversation=%s, user=%s, input_tokens=%d, output_tokens=%d)",
-                    agent_name, conversation_id, user["email"],
-                    drain_input, drain_output,
-                )
-
-                # Record drain call usage
-                try:
-                    await record_api_call(
-                        conversation_id=conversation_id,
-                        user_id=user["id"],
-                        model=model,
-                        call_type=ApiCallType.SUB_AGENT,
-                        input_tokens=drain_input,
-                        output_tokens=drain_output,
-                        duration_ms=drain_duration_ms,
-                        agent_name=agent_name,
-                        cached_tokens=drain_cached,
-                        provider=sub_provider_name,
-                        backend=get_backend_for_model(model),
-                        level=level,
-                        raw_usage=drain_usage.raw_usage,
-                    )
-                except Exception:
-                    logger.warning("Failed to record sub-agent drain API call usage", exc_info=True)
-
-                if usage_accumulator is not None:
-                    usage_accumulator["input_tokens"] = usage_accumulator.get("input_tokens", 0) + drain_input
-                    usage_accumulator["output_tokens"] = usage_accumulator.get("output_tokens", 0) + drain_output
-                    usage_accumulator["cached_tokens"] = usage_accumulator.get("cached_tokens", 0) + drain_cached
-                    usage_accumulator["cache_creation_tokens"] = usage_accumulator.get("cache_creation_tokens", 0) + drain_cache_creation
-                    usage_accumulator["cache_read_tokens"] = usage_accumulator.get("cache_read_tokens", 0) + drain_cache_read
-                    usage_accumulator["new_input_tokens"] = usage_accumulator.get("new_input_tokens", 0) + drain_new_input
-                    usage_accumulator["call_count"] = usage_accumulator.get("call_count", 0) + 1
-
-            except Exception:
-                logger.debug(
-                    "[sub-agent:%s] Error draining final response after agent_task_response "
-                    "(conversation=%s, user=%s), continuing with captured response",
-                    agent_name, conversation_id, user["email"],
-                    exc_info=True,
-                )
-            await _emit_finished("success")
-            return agent_response
 
         # Send function responses back to the sub-agent for the next turn
         current_message = formatted_results
