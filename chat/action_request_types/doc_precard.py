@@ -14,9 +14,10 @@ size caps) and only interprets the verdict:
   byte-equal ``doc_not_found_message`` text).
 - unseen doc notes (``doc_notes`` gate open, the conversation has not seen
   the doc's current notes; checked after denied / unread, before the
-  verdict) -> ``DocNotesUnseen``: its message, a blank line and the text
+  verdict) -> ``DocNotesUnseen``: its message, a blank line, the text
   copy of the notes (``notes.render_notes_text()``, within
-  ``DOC_NOTES_PRECARD_MAX_CHARS``). The service has recorded the delivery,
+  ``DOC_NOTES_PRECARD_MAX_CHARS``), a blank line and the block's ``note``
+  (``notes.DOC_NOTES_BLOCK_NOTE``). The service has recorded the delivery,
   so the identical retry passes (unless the text had to cut the
   instructions, which then refuse again).
 - ``approval`` -> accepted; the server-only preview keys are injected into
@@ -42,6 +43,7 @@ from chat.action_request_types.write_doc import (
     operation_params,
     project_is_public,
 )
+from chat.docs import notes as doc_notes
 from chat.docs import service as doc_service
 
 
@@ -95,9 +97,14 @@ async def doc_precard_check(
             caller, doc_id, operation, operation_params(validated_params),
         )
     except doc_service.DocNotesUnseen as e:
-        # The tool's message, then the notes as text (the delivery is
-        # recorded: the identical retry passes).
-        raise ValueError(f"{e}\n\n{e.notes_text}") from None
+        # The tool's message, the notes as text, then the block's note,
+        # which the text copy leaves out and which scopes the notes to
+        # changing this doc (the delivery is recorded: the identical retry
+        # passes). The note is outside DOC_NOTES_PRECARD_MAX_CHARS, which
+        # bounds the text copy alone.
+        raise ValueError(
+            f"{e}\n\n{e.notes_text}\n\n{doc_notes.DOC_NOTES_BLOCK_NOTE}"
+        ) from None
     except doc_service.DocError as e:
         # Includes DocDisabled; the text is the tool's own error.
         raise ValueError(str(e)) from None

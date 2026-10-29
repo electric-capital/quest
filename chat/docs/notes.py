@@ -117,7 +117,7 @@ NOTES_TEXT_MORE_MEMORIES = "({count} more memories not shown; list_doc_notes pag
 # The write refusal (``DocNotesUnseen`` in chat/docs/service.py): the
 # ``message`` of a ``doc_notes_unseen`` tool result, and the first line of
 # the write_doc pre-card's ``Invalid parameters`` text (the text copy of
-# the block follows it). It says the retry passes, since the refusal
+# the block and then the block's note follow it). It says the retry passes, since the refusal
 # recorded the delivery, so a model neither loops on reads nor gives up.
 # Only the first of several writes in one response is refused (the others
 # pass on the recorded delivery), so it asks for those to be checked too.
@@ -510,7 +510,8 @@ def render_notes_text(block: Mapping[str, Any]) -> NotesText:
     Otherwise the instructions are cut and end in a marker line giving the
     characters cut, and no memory is rendered. The trailer counts the
     block's ``memories_omitted`` plus its memories not rendered. The
-    ``note`` is left out: the caller writes its own message above.
+    ``note`` is left out of the budget: the pre-card writes its own
+    message above and appends :data:`DOC_NOTES_BLOCK_NOTE` below.
 
     Returns:
         :class:`NotesText`: the text, and whether the instructions came

@@ -66,7 +66,7 @@ approve-time pin):
 14. Run kinds: a Slack run is refused once on its own doc; the read-only
     run kinds get their deny text before the step, recording nothing.
 15. The ``write_doc`` pre-card: the refusal text (message, blank line,
-    ``render_notes_text()``), through ``propose`` and the
+    ``render_notes_text()``, blank line, the block's ``note``), through ``propose`` and the
     ``create_action_request`` arm (no card), for each operation; the retry
     pins the live ``instructions_version``; model-supplied
     ``instructions_version`` dropped and ``expected_instructions_version``
@@ -1098,7 +1098,8 @@ FULL_TEXT = (
     "- Q3 figures come from the finance table.\n"
     "- The board reads this on Fridays."
 )
-PRECARD_REFUSAL = UNSEEN_PLAN + "\n\n" + FULL_TEXT
+# The pre-card refusal: the message, the text copy, then the block's note.
+PRECARD_REFUSAL = UNSEEN_PLAN + "\n\n" + FULL_TEXT + "\n\n" + NOTE_TEXT
 ORIGINAL = "line one\nline two\n"
 CARD_KEYS = [
     "operation", "doc_id", "content", "ensure_blank_line", "current_title",
@@ -1666,7 +1667,8 @@ class TestPrecardRefusal:
             "\n"
             "Memories (newest first):\n"
             "- Q3 figures come from the finance table.\n"
-            "- The board reads this on Fridays."
+            "- The board reads this on Fridays.\n"
+            "\n" + NOTE_TEXT
         )
         assert seen(caller.conversation_id, doc["id"]) == _ns(2, 2)
         params = propose(caller, edit_params(doc["id"], old="line two", new="line 2"))
@@ -1736,7 +1738,8 @@ class TestPrecardRefusal:
             "returns them in full.]\n"
             "\n"
             "Memories (newest first):\n"
-            "(2 more memories not shown; list_doc_notes pages them.)"
+            "(2 more memories not shown; list_doc_notes pages them.)\n"
+            "\n" + NOTE_TEXT
         )
         for _ in range(2):
             with pytest.raises(ValueError) as exc:
