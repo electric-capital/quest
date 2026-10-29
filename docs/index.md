@@ -70,7 +70,7 @@
 | [gmail-api.md](api/gmail-api.md) | Gmail tools (read, draft, send-to-self, labels), raw Gmail API reads, and email HTML sanitizing |
 | [inference-api.md](api/inference-api.md) | One-shot inference endpoint for internal apps: per-user tokens, read-only headless runs |
 | [project-db-api.md](api/project-db-api.md) | REST endpoints for browsing and deleting project database tables |
-| [quest-docs-api.md](api/quest-docs-api.md) | Quest Docs UI routes: list, create, read, edit, assets, sharing, history |
+| [quest-docs-api.md](api/quest-docs-api.md) | Quest Docs UI routes: list, create, read, edit, assets, sharing, history, doc notes and the review of note suggestions |
 | [tables-api.md](api/tables-api.md) | Quest Tables caller contract: query language, results, refusal codes, model tools and tiers, the table action requests, the HTTP routes |
 | [ramp-api.md](api/ramp-api.md) | Ramp spend-management read access via authed_get over per-user OAuth |
 | [projects-api.md](api/projects-api.md) | Project REST endpoints: CRUD, conversion from a conversation, files, archiving, public flag, doc sources |

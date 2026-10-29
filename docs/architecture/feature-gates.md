@@ -71,7 +71,7 @@ Deliberately NOT gated: the admin System Reports > Guides deprecation tracker (`
 
 1. **Tools**: each of the seven doc tools returns the structured `{"error": "docs_disabled", ...}` before any DB work (`service.require_enabled()`, checked first in `chat/gemini_api/tool_handlers/docs.py`), so a routine that calls them fails cleanly.
 2. **Prompt**: `get_user_connected_services()` in `api/instructions.py` sets the capability pseudo-key `docs` from the gate. The registry specs (`requires_service: "docs"`) and the `system:quest_docs` skill (`requires="docs"`) then drop out like a disconnected service. An explicit `load_skills` of `system:quest_docs` returns `docs_disabled_message()` (pointing at Settings > Features) rather than the connector text (`load_system_skills()` in `chat/system_skills/loader.py`). `PSEUDO_SERVICE_KEYS` keeps the key out of `GET /me`'s `has_any_service_connected` and is a reserved plugin id (`validate_plugin()` in `config/plugins.py`), since the gate would overwrite such a plugin's connected state. The public-project prompt has no connected-services map, so `run_conversation_turn` passes the gate as `docs_enabled` to `get_public_project_system_prompt()`.
-3. **API**: every `/app/api/docs*` route returns 403 `docs_disabled` first.
+3. **API**: every route of the four docs routers returns 403 `docs_disabled` first. The doc notes routes answer `doc_notes_disabled` instead, and the note-suggestion review routes check no gate ([Quest Docs API -- Authentication, Gate and Visibility](../api/quest-docs-api.md#authentication-gate-and-visibility)).
 4. **Action request**: the `write_doc` pre-card and the approve-time `execute()` both go through the service gate, so a card approved after the gate closed fails.
 5. **Frontend**: the gate arrives as `enabled_features` on `GET /me` (`DOCS_FEATURE` in `frontend/src/api/docsApi.ts`). The sidebar Docs blocks are not rendered, the doc hooks fetch nothing (`enabled: false`), and a `/docs*` URL renders `DocsGateClosed.tsx` instead of the view.
 
@@ -83,7 +83,7 @@ Nothing is deleted. Doc rows, files and revisions survive, and restoring access 
 
 The two notes tools, `list_doc_notes` and `suggest_doc_note`, declare the pseudo-key, so no prompt lists them while it is false, and both answer `{"error": "doc_notes_disabled", ...}` before anything else, for every run kind. The public-project prompt has no connected-services map, so `run_conversation_turn` passes the gate as `doc_notes_enabled` to `get_public_project_system_prompt()` ([Doc Notes Tools -- Registry and Gate](doc-notes-tools.md#registry-and-gate)).
 
-Nothing is deleted, and the review of suggestions already filed is never gated ([Doc Notes -- Review](doc-notes.md#review)).
+The notes routes (`chat/docs/note_routes.py`) answer 403 `doc_notes_disabled` before any DB work, which also covers a closed `docs` gate. Nothing is deleted, and the review of suggestions already filed is never gated, neither its routes nor the inbox and the Slack reminder that count the rows ([Doc Notes -- Review](doc-notes.md#review)).
 
 ## Enforcement Layers (Quest Tables)
 
