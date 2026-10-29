@@ -30,10 +30,10 @@ Doc notes: the pre-card goes through the service's notes refusal like the
 write tools, and while the ``doc_notes`` gate is open for the proposer it
 pins the doc's ``instructions_version`` on the card (a server-injected
 key). ``execute`` passes the pin as ``expected_instructions_version`` and
-the service refuses when the live row's instructions changed since (the
-request stays open, like a stale ``old_string``); it never consults the
-conversation's seen record, and memory changes never refuse. The card
-shows no notes.
+the service refuses when the live row's instructions changed since and
+are non-empty (the request stays open, like a stale ``old_string``); it
+never consults the conversation's seen record, and memory changes never
+refuse. The card shows no notes.
 
 Like the skill handlers there is no ``validate_against_upstream`` -- docs
 are an internal Quest store.
@@ -403,7 +403,8 @@ class WriteDocHandler(ActionRequestHandler):
             if isinstance(pinned, int) and not isinstance(pinned, bool):
                 # Server-injected at pre-card time while the doc_notes gate
                 # was open for the proposer (absent otherwise): the service
-                # refuses when the doc's instructions changed since.
+                # refuses when the doc's instructions changed since and are
+                # non-empty.
                 op_params["expected_instructions_version"] = pinned
             result = await doc_service.apply_write_operation(
                 caller,

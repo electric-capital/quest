@@ -51,7 +51,9 @@ approve-time pin):
    memories-only doc refuses a conversation without a record; the service
    raises ``DocNotesUnseen`` with the block and its text copy; the seen
    record is read once per write (not again under the lock) and never by
-   approve-time execute.
+   approve-time execute; a refusal records the freshly loaded state, not
+   the row; a recording kind without a conversation is never refused; a
+   current instructions record skips the notes load.
 10. Re-arming: an instructions change after a read refuses the next write
     once; memory changes and cleared instructions never refuse (the next
     read re-attaches), also when cleared between the row lookup and the
@@ -74,9 +76,11 @@ approve-time pin):
     the instructions-changed text when the pinned version moved, the
     request left open through the resolve route; a memory change, cleared
     instructions, a card without a pin and a closed gate at approve time
-    all apply; bad pins are refused by the service.
-17. The known limitation of spec section 10: a second write issued in the
-    same model response as a refused one passes.
+    all apply; bad pins are refused by the service; the pin is checked
+    again on the row re-read under the per-doc lock.
+17. The known limitations of spec section 10: a tool write's notes step is
+    not re-checked under the lock, and a second write issued in the same
+    model response as a refused one passes.
 18. Hidden vs missing on the write side, tools and pre-card alike.
 19. The write gate is the caller's: a share recipient with the gate open
     is refused and pinned while the owner with it closed is not.
@@ -1257,6 +1261,53 @@ class TestWriteRefusal:
         assert calls == []
         assert body(doc["id"]) == ORIGINAL + "\na\n\nb\n"
 
+    def test_refusal_records_the_loaded_state_not_the_row(self, notes_env, monkeypatch):
+        """A memory landing after the row lookup: the refusal carries and
+        records the freshly loaded state (memories version 3), never the
+        row's older versions."""
+        from db import doc_memory_store
+
+        doc, (m1, m2) = noted_doc(notes_env)  # row: (1, 2)
+        caller = make_caller(notes_env)
+        real_state = service.doc_store.get_notes_state
+        added = []
+
+        async def _memory_lands_first(doc_id):
+            alice = notes_env.users["alice"]["id"]
+            added.append(await doc_memory_store.create_doc_memory(
+                doc_id, "Late fact.", source=doc_memory_store.ui_source(alice), user_id=alice,
+            ))
+            return await real_state(doc_id)
+
+        monkeypatch.setattr(service.doc_store, "get_notes_state", _memory_lands_first)
+        assert _append(caller, doc["id"], "x") == unseen_payload(block(INSTRUCTIONS, 1, [
+            (added[0]["id"], "Late fact."), (m2["id"], MEMORY_2), (m1["id"], MEMORY_1),
+        ]))
+        assert seen(caller.conversation_id, doc["id"]) == _ns(1, 3)
+
+    def test_recording_kind_without_a_conversation_is_never_refused(self, notes_env, monkeypatch):
+        doc, _memories = noted_doc(notes_env)
+        caller = make_caller(notes_env, cid=None)
+        _trap_notes_reads(monkeypatch)
+        _assert_landed(_append(caller, doc["id"], "a"), "appended_lines")
+        assert body(doc["id"]) == ORIGINAL + "\na\n"
+        assert seen_files(notes_env) == []
+
+    def test_current_instructions_skip_the_notes_load(self, notes_env, monkeypatch):
+        """The row decides first: with the instructions seen, a memory
+        change needs no notes query before the write lands."""
+        doc, _memories = noted_doc(notes_env)
+        caller = make_caller(notes_env)
+        _read(caller, doc["id"])  # records (1, 2)
+        add_memory(notes_env, doc["id"], "Third fact.")  # row: (1, 3)
+
+        async def _no_load(*_a, **_k):
+            raise AssertionError("notes loaded for a write that cannot be refused")
+
+        monkeypatch.setattr(service, "load_notes", _no_load)
+        _assert_landed(_append(caller, doc["id"], "a"), "appended_lines")
+        assert seen(caller.conversation_id, doc["id"]) == _ns(1, 2)
+
 
 # ---------------------------------------------------------------------------
 # 10. Re-arming: instructions changes refuse, memory changes never do
@@ -1776,6 +1827,32 @@ class TestExecute:
         assert row["status"] == "open"
         assert body(doc["id"]) == ORIGINAL
 
+    def test_pin_rechecked_under_the_lock(self, notes_env, monkeypatch):
+        """An instructions change landing between the first pass and the
+        re-resolve under the per-doc lock still refuses an approved card."""
+        caller = make_caller(notes_env)
+        doc, _memories, params, _applied = _card(notes_env, caller, "append")
+        real_get = service.doc_store.get_doc
+        lookups = []
+
+        async def _change_before_the_locked_lookup(doc_id, **kwargs):
+            lookups.append(doc_id)
+            if len(lookups) == 2:  # the re-resolve under the lock
+                state = await notes_env.doc_store.get_notes_state(doc_id)
+                await notes_env.doc_store.update_doc_instructions(
+                    doc_id, "Figures in USD thousands.",
+                    expected_version=state["instructions_version"],
+                    user_id=notes_env.users["alice"]["id"],
+                )
+            return await real_get(doc_id, **kwargs)
+
+        monkeypatch.setattr(service.doc_store, "get_doc", _change_before_the_locked_lookup)
+        with pytest.raises(RuntimeError) as exc:
+            execute(params, caller)
+        assert str(exc.value) == INSTRUCTIONS_CHANGED
+        assert len(lookups) == 2
+        assert body(doc["id"]) == ORIGINAL
+
     def test_memory_changes_while_open_never_refuse(self, notes_env):
         caller = make_caller(notes_env)
         doc, (m1, _m2), params, applied = _card(notes_env, caller, "append")
@@ -1860,6 +1937,33 @@ class TestExecute:
 
 
 class TestParallelCallsLimitation:
+    def test_tool_write_not_rechecked_under_the_lock(self, notes_env, monkeypatch):
+        """Spec 00011 section 10, a known limitation: a tool write's notes
+        step reads the versions before the per-doc lock, so an instructions
+        change landing between the check and the write applies from the
+        next write on."""
+        doc, _memories = noted_doc(notes_env)
+        caller = make_caller(notes_env)
+        _read(caller, doc["id"])  # records (1, 2)
+        real_get = service.doc_store.get_doc
+        lookups = []
+
+        async def _change_before_the_locked_lookup(doc_id, **kwargs):
+            lookups.append(doc_id)
+            if len(lookups) == 2:
+                state = await notes_env.doc_store.get_notes_state(doc_id)
+                await notes_env.doc_store.update_doc_instructions(
+                    doc_id, "Figures in USD thousands.",
+                    expected_version=state["instructions_version"],
+                    user_id=notes_env.users["alice"]["id"],
+                )
+            return await real_get(doc_id, **kwargs)
+
+        monkeypatch.setattr(service.doc_store, "get_doc", _change_before_the_locked_lookup)
+        _assert_landed(_append(caller, doc["id"], "a"), "appended_lines")
+        monkeypatch.setattr(service.doc_store, "get_doc", real_get)
+        assert _append(caller, doc["id"], "b")["error"] == "doc_notes_unseen"
+
     def test_second_write_in_the_same_response_passes(self, notes_env):
         """Spec 00011 section 10, a known limitation: a second write issued
         in the same model response as a refused one is not refused, because

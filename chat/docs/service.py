@@ -55,7 +55,8 @@ Invariants kept here:
   in :func:`_resolve_write`, after the denied and read-before-edit checks
   and before the approval verdict, so the write tools and the write_doc
   pre-card share it. Approve-time execute skips the seen record and
-  instead refuses when the card's pinned ``instructions_version`` moved.
+  instead refuses when the card's pinned ``instructions_version`` moved
+  and the live instructions are non-empty.
 - Results never expose a doc's share roster; list/read rows carry only a
   ``shared`` flag.
 """
@@ -1344,9 +1345,10 @@ def _check_pinned_instructions(doc: dict, clean: dict) -> None:
     ``doc`` is the live row. No pin (a card proposed before the pin
     existed, or while the ``doc_notes`` gate was closed for the proposer)
     passes. Cleared instructions never refuse, as in ``write_refused()``;
-    memory changes never do. The seen record is never consulted: the
-    approver is a person, who may not be the one whose conversation saw
-    the notes.
+    memory changes never do. The seen record is never consulted: it
+    describes the model's context, which compaction may clear while the
+    card sits open, whereas the pin is what the proposal was held to, and
+    the card shows the approver no instructions.
 
     Raises:
         DocError: ``notes.DOC_INSTRUCTIONS_CHANGED_MESSAGE``.
@@ -1430,6 +1432,10 @@ async def _resolve_write(
     write_doc pre-card).
 
     Raises:
+        DocDisabled: the ``docs`` gate is closed.
+        DocNotesUnseen: the notes refusal (not with ``bypass_approval``).
+        DocError: bad params, hidden/missing doc, denied, unread, no
+            conversation for add_image, or a moved instructions pin.
         ValueError: an unknown ``notes_form`` (a programming error).
     """
     if notes_form not in _NOTES_FORMS:
@@ -1748,14 +1754,15 @@ async def apply_write_operation(
     still refuse, and edit still requires the read sidecar.
 
     Order of the refusals (:func:`_resolve_write`): denied -> unread ->
-    doc notes -> the approval dry-run / ``approval_required``. The notes
-    step runs once, in the first pass outside the lock (an instructions
-    change landing after it applies from the next write on): a tool write
-    in a recording run that has not seen the doc's notes raises
-    :class:`DocNotesUnseen`; with ``bypass_approval`` the seen record is
+    doc notes -> the approval dry-run / ``approval_required``. For a tool
+    write the notes step runs once, in the first pass outside the lock (an
+    instructions change landing after it applies from the next write on):
+    a recording run that has not seen the doc's notes gets
+    :class:`DocNotesUnseen`. With ``bypass_approval`` the seen record is
     skipped and only a moved ``expected_instructions_version`` pin (the
     write_doc card's, a server-only key in ``params``) refuses, with
-    ``notes.DOC_INSTRUCTIONS_CHANGED_MESSAGE``.
+    ``notes.DOC_INSTRUCTIONS_CHANGED_MESSAGE``; that comparison is pure, so
+    it runs again on the row re-read under the lock.
 
     Raises:
         DocDisabled, DocApprovalRequired (unless bypass_approval),
@@ -1780,10 +1787,12 @@ async def apply_write_operation(
         async with _write_lock(doc["id"]):
             # Re-resolve under the lock: a share added or revoked while
             # this write queued must change the verdict (the approval card
-            # and the hidden / read-only refusals are decided here). The
-            # notes step is not repeated (spec 00011 section 10).
+            # and the hidden / read-only refusals are decided here). A
+            # tool write's notes step is not repeated (spec 00011 section
+            # 10); an approved card's pin check is, on the fresh row.
             fresh_doc, fresh_access, fresh_clean = await _resolve_write(
-                caller, doc_id, operation, params, check_notes=False,
+                caller, doc_id, operation, params,
+                bypass_approval=bypass_approval, check_notes=bypass_approval,
             )
             if fresh_access.write == "approval" and not bypass_approval:
                 raise DocApprovalRequired(

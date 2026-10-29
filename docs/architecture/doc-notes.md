@@ -112,7 +112,7 @@ Whether a `read_doc` carries the block depends on the run kind:
 
 ## Write Refusal
 
-The notes step is the last check of `_resolve_write()` in `chat/docs/service.py`: after the denied verdict, `edit`'s read-before-edit and `add_image`'s conversation requirement, before the caller's approval verdict. The three write tools and the `write_doc` pre-card therefore share it, and read-only runs never reach it, because the access rule denies their writes first. It runs only in the first pass, outside the per-doc lock; the re-resolve under the lock skips it.
+The notes step is the last check of `_resolve_write()` in `chat/docs/service.py`: after the denied verdict, `edit`'s read-before-edit and `add_image`'s conversation requirement, before the caller's approval verdict. The three write tools and the `write_doc` pre-card therefore share it, and read-only runs never reach it, because the access rule denies their writes first. For a tool write it runs only in the first pass, outside the per-doc lock; the re-resolve under the lock skips it (approve-time execute repeats only its [pin check](#instructions-pin-on-write_doc-cards)).
 
 In a recording run where `write_refused()` holds, `_refuse_unseen_notes()` records the delivery and raises `DocNotesUnseen`, which carries the block and its text copy. It decides on the row, then again on the freshly loaded state, so notes emptied in between never refuse. The identical retry passes. The model sees the refusal as:
 
@@ -123,7 +123,7 @@ In a recording run where `write_refused()` holds, `_refuse_unseen_notes()` recor
 
 While the gate is open for the proposer, the pre-card injects the live row's `instructions_version` into the card's params. It is one of the `SERVER_INJECTED_KEYS` in `chat/action_request_types/write_doc.py`, so a model-supplied copy is dropped. `WriteDocHandler.execute` passes it to the service as `expected_instructions_version`, a server-only pin of `_normalize_write_params()` (`_SERVER_PINS`, never part of a `suggested_request`).
 
-At approve time (`bypass_approval`) the notes step never consults the seen record. `_check_pinned_instructions()` refuses with `DOC_INSTRUCTIONS_CHANGED_MESSAGE` when the live `instructions_version` differs from the pin and the live instructions are non-empty. The refusal fails the Approve and leaves the request open, like a stale `old_string` ([Quest Docs -- The write_doc Action Request](quest-docs.md#the-write_doc-action-request)). A card without a pin (proposed while the gate was closed for the proposer) or a gate closed at execute is not compared, and memory changes never refuse. The card shows no notes.
+At approve time (`bypass_approval`) the notes step never consults the seen record. `_check_pinned_instructions()` refuses with `DOC_INSTRUCTIONS_CHANGED_MESSAGE` when the live `instructions_version` differs from the pin and the live instructions are non-empty; being a pure comparison, it runs in the first pass and again on the row re-read under the per-doc lock. The refusal fails the Approve and leaves the request open, like a stale `old_string` ([Quest Docs -- The write_doc Action Request](quest-docs.md#the-write_doc-action-request)). A card without a pin (proposed while the gate was closed for the proposer) or a gate closed at execute is not compared, and memory changes never refuse. The card shows no notes.
 
 ## Constraints
 
@@ -167,5 +167,5 @@ At approve time (`bypass_approval`) the notes step never consults the seen recor
 ## Known Limitations
 
 - **A second write in the same model response passes.** When one response issues several writes to a doc, the first refusal records the delivery, so the others are not refused. Tracking delivery per model step was judged out of proportion.
-- **The write gate is not re-checked under the per-doc lock.** It reads the versions in the first pass of `apply_write_operation()`, so an instructions change landing between that check and the write applies from the next write on.
+- **A tool write's notes step is not re-checked under the per-doc lock.** It reads the versions in the first pass of `apply_write_operation()`, so an instructions change landing between that check and the write applies from the next write on.
 - **A process crash can leave a record for a block the model never received**, when it lands after a read recorded its delivery and before the tool result was flushed to the chat history. A Stop is safe: the tool result joins the run's messages with no `await` after the service returns (`_emit_durable()` in `chat/gemini_api/turn_tools.py`), and the next turn replays it.
