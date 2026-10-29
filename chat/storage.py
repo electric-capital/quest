@@ -42,9 +42,12 @@ import uuid
 import weakref
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, List, Dict, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Awaitable, List, Dict, Optional, TypeVar
 
 from config.paths import CHATS_DIR, DOCS_DIR, PROJECTS_DIR, TABLES_DIR
+
+if TYPE_CHECKING:
+    from chat.docs.notes import NotesSeen
 
 logger = logging.getLogger(__name__)
 
@@ -1635,6 +1638,216 @@ class ChatStorage:
         reads_file = ChatStorage._get_doc_reads_file(conversation_id)
         with open(reads_file, "w") as f:
             json.dump({"doc_ids": existing + new_ids}, f, indent=2)
+
+    # ------------------------------------------------------------------
+    # Doc notes seen (per conversation and doc, the instructions and
+    # memories versions the model was last shown; gates notes delivery)
+    # ------------------------------------------------------------------
+    #
+    # CHATS_DIR/<conversation_id>/doc_notes_seen.json:
+    #     {"docs": {"<doc_id>": {"instructions": 3, "memories": 7}}}
+    # Written on the event loop under the same single-event-loop guarantee
+    # as doc_reads.json; deleted by ``clear_doc_notes_seen``.
+
+    @staticmethod
+    def _get_doc_notes_seen_file(conversation_id: str) -> Path:
+        """Return the path to doc_notes_seen.json for a conversation."""
+        return ChatStorage._get_conversation_dir(conversation_id) / "doc_notes_seen.json"
+
+    @staticmethod
+    def _load_doc_notes_seen(conversation_id: str) -> dict[str, tuple[int, int]]:
+        """Read doc_notes_seen.json as ``{doc_id: (instructions, memories)}``.
+
+        Never raises for what is on disk. A missing file or conversation
+        directory, an unreadable file (any ``OSError``), bytes that are not
+        UTF-8 JSON, or a top level that is not ``{"docs": {...}}`` all read
+        as no record for any doc. A malformed entry (not an object, a field
+        missing, a field that is not a non-negative ``int``, a ``bool``, an
+        empty doc id) reads as no record for that doc only. Anything other
+        than a missing file is logged at warning; the next
+        ``record_doc_notes_seen`` rewrites the file without the bad parts.
+
+        Raises:
+            InvalidStorageIdError: invalid conversation id.
+        """
+        seen_file = ChatStorage._get_doc_notes_seen_file(conversation_id)
+        try:
+            raw = seen_file.read_bytes()
+        except FileNotFoundError:
+            return {}
+        except OSError:
+            logger.warning(
+                "[storage] cannot read doc_notes_seen.json (conversation=%s); "
+                "treating it as empty",
+                conversation_id, exc_info=True,
+            )
+            return {}
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (ValueError, RecursionError):
+            data = None
+        docs = data.get("docs") if isinstance(data, dict) else None
+        if not isinstance(docs, dict):
+            logger.warning(
+                "[storage] doc_notes_seen.json is not {\"docs\": {...}} "
+                "(conversation=%s); treating it as empty",
+                conversation_id,
+            )
+            return {}
+
+        entries: dict[str, tuple[int, int]] = {}
+        dropped = 0
+        for doc_id, entry in docs.items():
+            fields = (
+                (entry.get("instructions"), entry.get("memories"))
+                if isinstance(entry, dict) else (None, None)
+            )
+            if doc_id and all(
+                isinstance(v, int) and not isinstance(v, bool) and v >= 0
+                for v in fields
+            ):
+                entries[doc_id] = fields
+            else:
+                dropped += 1
+        if dropped:
+            logger.warning(
+                "[storage] doc_notes_seen.json: ignoring %d malformed "
+                "entries (conversation=%s)",
+                dropped, conversation_id,
+            )
+        return entries
+
+    @staticmethod
+    def get_doc_notes_seen(conversation_id: str, doc_id: str) -> "NotesSeen | None":
+        """Return the doc notes versions this conversation was last shown.
+
+        Args:
+            conversation_id: Conversation UUID.
+            doc_id: Doc UUID.
+
+        Returns:
+            ``NotesSeen(instructions, memories)`` for the doc, or ``None``
+            when the conversation has no valid record for it (never shown,
+            the file missing or unreadable, or the entry malformed).
+
+        Raises:
+            InvalidStorageIdError: invalid conversation id.
+        """
+        from chat.docs.notes import NotesSeen
+
+        entry = ChatStorage._load_doc_notes_seen(conversation_id).get(doc_id)
+        if entry is None:
+            return None
+        return NotesSeen(instructions=entry[0], memories=entry[1])
+
+    @staticmethod
+    def record_doc_notes_seen(
+        conversation_id: str,
+        doc_id: str,
+        instructions_version: int,
+        memories_version: int,
+    ) -> None:
+        """Record that this conversation was shown a doc's notes at these versions.
+
+        The stored entry becomes the per-field maximum of the existing valid
+        entry (if any) and the new versions, so the record never moves
+        backwards. Versions only grow, and every recorded value was really
+        delivered into this conversation's model context (the file is
+        wiped whenever that context is rebuilt), so the maximum is still a
+        version the model has seen. A plain overwrite would let two
+        interleaved deliveries of the same doc (parallel tool calls awaiting
+        DB reads in between) move the record backwards and cost an extra
+        delivery or refusal. ``create_doc`` records ``(0, 0)`` for the doc
+        it creates: no notes can predate the conversation that made the doc.
+
+        Malformed entries and a corrupt file are dropped: the write keeps
+        the valid entries plus this one. Skips the write entirely when the
+        stored entry would not change. A failed write (any ``OSError``,
+        including a missing conversation directory, which is never created
+        here) is logged and swallowed; it costs at most one extra delivery
+        or refusal.
+
+        Concurrency note: same single-event-loop guarantee as
+        ``add_workspace_read_paths`` -- this method must stay fully
+        synchronous.
+
+        Args:
+            conversation_id: Conversation UUID.
+            doc_id: Doc UUID (non-empty string).
+            instructions_version: The doc's instructions version that was
+                shown (non-negative int).
+            memories_version: The doc's memories version that was shown
+                (non-negative int).
+
+        Raises:
+            ValueError: ``doc_id`` is not a non-empty string, or a version
+                is not a non-negative ``int`` (``bool`` refused).
+            InvalidStorageIdError: invalid conversation id.
+        """
+        if not isinstance(doc_id, str) or not doc_id:
+            raise ValueError(f"doc_id must be a non-empty string, got {doc_id!r}")
+        for name, value in (
+            ("instructions_version", instructions_version),
+            ("memories_version", memories_version),
+        ):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"{name} must be a non-negative int, got {value!r}")
+
+        seen_file = ChatStorage._get_doc_notes_seen_file(conversation_id)
+        entries = ChatStorage._load_doc_notes_seen(conversation_id)
+        old = entries.get(doc_id)
+        new = (instructions_version, memories_version)
+        if old is not None:
+            new = (max(old[0], new[0]), max(old[1], new[1]))
+            if new == old:
+                return
+        entries[doc_id] = new
+
+        payload = {
+            "docs": {
+                did: {"instructions": instructions, "memories": memories}
+                for did, (instructions, memories) in entries.items()
+            }
+        }
+        try:
+            write_json_atomic(seen_file, payload)
+        except OSError:
+            logger.warning(
+                "[storage] failed to write doc_notes_seen.json "
+                "(conversation=%s, doc=%s); the doc's notes may be delivered "
+                "or refused once more",
+                conversation_id, doc_id, exc_info=True,
+            )
+
+    @staticmethod
+    def clear_doc_notes_seen(conversation_id: str) -> None:
+        """Delete this conversation's doc notes seen record.
+
+        Called whenever the model-facing history is rebuilt from less than
+        the full sdk_history.json: ``compact_conversation()``
+        (chat/compaction.py), whose summary may drop a delivered notes
+        block, and the cross-provider branch of ``get_or_create_chat()``
+        (chat/gemini_api/session.py), which starts the history fresh. A
+        thinking-effort change rebuilds the session from the old history
+        and keeps the record. Touches no other file (doc_reads.json
+        survives both).
+
+        A missing file is a no-op; an ``OSError`` is logged and swallowed.
+
+        Args:
+            conversation_id: Conversation UUID.
+
+        Raises:
+            InvalidStorageIdError: invalid conversation id.
+        """
+        seen_file = ChatStorage._get_doc_notes_seen_file(conversation_id)
+        try:
+            seen_file.unlink(missing_ok=True)
+        except OSError:
+            logger.warning(
+                "[storage] failed to delete doc_notes_seen.json (conversation=%s)",
+                conversation_id, exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # System prompt (persisted per-conversation)
