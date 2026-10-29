@@ -570,6 +570,8 @@ from chat.docs.routes import router as docs_router
 from chat.docs.share_routes import router as docs_share_router
 from chat.docs.edit_routes import router as docs_edit_router
 from chat.docs.history_routes import router as docs_history_router
+from chat.docs.note_routes import router as docs_note_router
+from chat.docs.note_suggestion_routes import router as docs_note_suggestion_router
 from chat.tables.routes import router as tables_router
 from chat.tables.history_routes import router as tables_history_router
 from chat.tables.download_routes import router as tables_download_router
@@ -594,6 +596,8 @@ app.include_router(docs_router)
 app.include_router(docs_share_router)
 app.include_router(docs_edit_router)
 app.include_router(docs_history_router)
+app.include_router(docs_note_router)
+app.include_router(docs_note_suggestion_router)
 app.include_router(tables_router)
 app.include_router(tables_history_router)
 app.include_router(tables_download_router)
