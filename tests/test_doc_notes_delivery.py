@@ -125,9 +125,10 @@ from tests.test_write_doc_action_request import (  # noqa: F401  (ar_env is a fi
 )
 
 NOTE_TEXT = (
-    "Follow the instructions whenever you change this doc; they were written "
-    "or approved by its owner. Memories are background facts about it, kept "
-    "by its editors. Propose changes with suggest_doc_note."
+    "These are the doc's current notes. Instructions are its owner's rules "
+    "for changing it: follow them whenever you change the doc. Memories are "
+    "background facts about it, kept by its editors. Propose changes with "
+    "suggest_doc_note where it is offered."
 )
 INSTRUCTIONS = "Newest entry first.\nNever change the Risks section."
 MEMORY_1 = "The board reads this on Fridays."
@@ -1068,12 +1069,14 @@ class TestHelpers:
 
 
 UNSEEN_PLAN = (
-    "Doc 'Plan' has notes you have not seen. Read them below, adjust the "
-    "change if they require it, then call the tool again."
+    "Doc 'Plan' has notes you have not seen; they are below. Adjust the "
+    "change if they require it, then repeat the call: it will not be "
+    "refused for these notes again."
 )
 INSTRUCTIONS_CHANGED = (
-    "The doc's instructions changed after this was proposed; read them and "
-    "propose the change again."
+    "The doc's instructions changed after this change was proposed. Use "
+    "Revise to ask the agent to propose it again under the current "
+    "instructions."
 )
 NOT_READ_PLAN = (
     "Doc 'Plan' has not been read in this conversation. Read it with "
@@ -1468,8 +1471,9 @@ class TestCreatorWrites:
         assert _append(caller, doc_id, "c") == unseen_payload(
             block("One entry per day.", 1, [(memory["id"], "Started in October.")]),
             message=(
-                "Doc 'Journal' has notes you have not seen. Read them below, "
-                "adjust the change if they require it, then call the tool again."
+                "Doc 'Journal' has notes you have not seen; they are below. "
+                "Adjust the change if they require it, then repeat the call: "
+                "it will not be refused for these notes again."
             ),
         )
         assert seen(cid, doc_id) == _ns(1, 1)

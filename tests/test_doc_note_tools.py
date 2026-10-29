@@ -102,9 +102,10 @@ NOT_AVAILABLE = {
     ),
 }
 NOTE_TEXT = (
-    "Follow the instructions whenever you change this doc; they were written "
-    "or approved by its owner. Memories are background facts about it, kept "
-    "by its editors. Propose changes with suggest_doc_note."
+    "These are the doc's current notes. Instructions are its owner's rules "
+    "for changing it: follow them whenever you change the doc. Memories are "
+    "background facts about it, kept by its editors. Propose changes with "
+    "suggest_doc_note where it is offered."
 )
 SUGGESTED = (
     "Registered for the user's review in the doc note suggestions panel; "
@@ -117,8 +118,10 @@ OWNER_ONLY = (
     "can pass it to the owner."
 )
 SUGGEST_UNSEEN = (
-    "Doc '{title}' has notes you have not seen. Read them below, then suggest "
-    "the change again if it is still needed."
+    "Doc '{title}' has notes you have not seen; they are below. If they do "
+    "not already say it, suggest the change again (for instructions, the "
+    "current text with your change applied): it will not be refused for "
+    "these notes again."
 )
 INSTRUCTIONS = "Newest entry first.\nNever change the Risks section."
 MEMORY_1 = "The board reads this on Fridays."
