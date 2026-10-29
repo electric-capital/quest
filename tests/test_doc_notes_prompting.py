@@ -234,6 +234,10 @@ class TestPublicPrompt:
             is_routine=is_routine,
         ))
 
+    def test_needs_the_docs_flag_too(self):
+        # The notes tools never appear without the doc tools they point to.
+        _assert_none_named(_public(docs_enabled=False, doc_notes_enabled=True))
+
     def test_routine_reads_but_never_suggests(self):
         prompt = _public(docs_enabled=True, doc_notes_enabled=True, is_routine=True)
         assert core_bullet(LIST) in prompt

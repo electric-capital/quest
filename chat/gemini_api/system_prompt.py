@@ -1135,9 +1135,10 @@ def get_public_project_system_prompt(
 
     ``doc_notes_enabled`` is the same switch for the Quest Doc notes gate
     (``config.feature_gates.doc_notes_enabled_for``, true only while the
-    Quest Docs gate is open too): while False (the default) the two notes
-    tools (``list_doc_notes`` / ``suggest_doc_note``) are excluded from the
-    Dynamic Tools section; while True they are listed in full. A routine
+    Quest Docs gate is open too): while False (the default), or while
+    ``docs_enabled`` is False, the two notes tools (``list_doc_notes`` /
+    ``suggest_doc_note``) are excluded from the Dynamic Tools section;
+    while both are True they are listed in full. A routine
     run reads notes but never suggests one, as in get_system_prompt().
 
     ``tables_enabled`` is the same switch for the Quest Tables gate
@@ -1219,7 +1220,9 @@ def get_public_project_system_prompt(
         public_exclude.add("suggest_doc_note")
     if not docs_enabled:
         public_exclude |= _doc_tool_names()
-    if not doc_notes_enabled:
+    if not (docs_enabled and doc_notes_enabled):
+        # Never the notes tools without the doc tools they point to (the
+        # caller reads the two gates separately).
         public_exclude |= _doc_note_tool_names()
     if not tables_enabled:
         public_exclude |= _table_tool_names()

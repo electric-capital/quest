@@ -19,8 +19,8 @@ run whenever the doc has notes), the ``doc_notes`` block;
 :func:`create_doc` records the new doc as seen at versions (0, 0).
 :func:`list_doc_notes` is the ``list_doc_notes`` tool body: the whole
 instructions and a page of memories, for any run kind, recorded like a
-read_doc delivery (page 0 both versions, a later page the instructions
-version only). The helpers in the "Doc notes" section are shared with the
+read_doc delivery (page 0 both versions; a later page the instructions
+version only, and only over an existing entry). The helpers in the "Doc notes" section are shared with the
 notes tools and chat/docs/note_suggestions.py; :func:`publish_notes_changed`
 there is the one publisher of ``doc_notes_changed``. :func:`delete_doc_from_ui` tells
 the users with pending note suggestions on the doc that they went with it.
@@ -678,11 +678,16 @@ async def list_doc_notes(
     runs), the last step with no ``await`` before the return: page 0 shows
     the whole current notes, so it records both versions, like read_doc. A
     later page also carries the whole instructions but not the newest
-    memories, so it records the instructions version with memories version
-    0; ``record_doc_notes_seen()`` keeps the per-field maximum, so an
-    existing memories entry stays as it was and a conversation with no
-    entry gets ``(instructions, 0)``: a write is not refused for
-    instructions it saw, and the next read_doc still delivers the memories.
+    memories. When the conversation already has an entry for the doc (it
+    was shown page 0 at some point), the page advances the instructions
+    version only: it records memories version 0, and
+    ``record_doc_notes_seen()`` keeps the per-field maximum, so the
+    memories entry stays as it was and the next read_doc still delivers
+    the newer memories. With no entry it records nothing: an entry, even
+    ``(instructions, 0)``, would let a write pass (``write_refused()``
+    then looks at the instructions only), so the newest memories would
+    never reach the model; without one the first write is still refused
+    with the whole notes (invariant 1).
 
     Args:
         caller: who is asking.
@@ -718,11 +723,13 @@ async def list_doc_notes(
         "can_suggest": bool(may_suggest)
         and doc_notes.suggestion_allowed(access.write, access.deny_cause),
     }
-    memories_version = state["memories_version"] if offset == 0 else 0
     # Last step, no await before the return (record_notes_delivery).
-    record_notes_delivery(
-        caller, doc["id"], state["instructions_version"], memories_version,
-    )
+    if offset == 0:
+        record_notes_delivery(
+            caller, doc["id"], state["instructions_version"], state["memories_version"],
+        )
+    elif notes_seen(caller, doc["id"]) is not None:
+        record_notes_delivery(caller, doc["id"], state["instructions_version"], 0)
     return result
 
 

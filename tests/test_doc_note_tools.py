@@ -34,9 +34,10 @@ Covers:
    offset past the end, offsets refused (before the doc lookup) or
    coerced.
 5. Recording: page 0 records both versions (read_doc then carries no
-   block, a write is not refused); a later page records the instructions
-   version only (read_doc still delivers, a write is not refused, an
-   existing memories entry is kept); Slack, cross-user subagent and
+   block, a write is not refused); a later page advances only the
+   instructions of an existing entry (the memories entry is kept, read_doc
+   still delivers) and records nothing without one (the first write is
+   still refused with the whole notes); Slack, cross-user subagent and
    routine runs record; sub-agent (on its parent's conversation),
    inference-API and script runs never do.
 6. ``can_suggest``: owner, write share, read share, the two Slack deny
@@ -578,23 +579,33 @@ class TestRecording:
         assert "error" not in appended
         assert body(doc["id"]).endswith("more\n")
 
-    def test_later_page_records_the_instructions_version_only(self, env):
-        doc = noted_doc(env, memories=("A.", "B.", "C."))
-        # A write after a later page is not refused: the instructions were
-        # shown whole.
+    def test_later_page_without_an_entry_records_nothing(self, env):
+        # Memories only: a record of any kind would let a write pass, so a
+        # later page shown first must leave the first write refused with
+        # the whole notes (the newest memories were never shown).
+        doc = new_doc(env)
+        for text in ("A.", "B.", "C."):
+            add_memory(env, doc["id"], text)
         writer = conv(env)
-        call(env, "list_doc_notes", {"doc_id": doc["id"], "memory_offset": 1}, cid=writer)
-        assert seen(writer, doc["id"]) == ns_seen(1, 0)
-        appended = call(env, "append_to_doc", {"doc_id": doc["id"], "content": "more"}, cid=writer)
-        assert "error" not in appended
-        # The newest memory was never shown, so read_doc still delivers.
+        listed = call(env, "list_doc_notes", {"doc_id": doc["id"], "memory_offset": 2},
+                      cid=writer)
+        assert [m["content"] for m in listed["doc_notes"]["memories"]] == ["A."]
+        assert seen(writer, doc["id"]) is None
+        refused = call(env, "append_to_doc", {"doc_id": doc["id"], "content": "more"}, cid=writer)
+        assert refused["error"] == "doc_notes_unseen"
+        assert [m["content"] for m in refused["doc_notes"]["memories"]] == ["C.", "B.", "A."]
+        retried = call(env, "append_to_doc", {"doc_id": doc["id"], "content": "more"}, cid=writer)
+        assert "error" not in retried
+        # With instructions too: nothing recorded, read_doc delivers all.
+        noted = noted_doc(env, memories=("A.", "B.", "C."))
         reader = conv(env)
-        call(env, "list_doc_notes", {"doc_id": doc["id"], "memory_offset": 2}, cid=reader)
-        read = call(env, "read_doc", {"doc_id": doc["id"]}, cid=reader)
+        call(env, "list_doc_notes", {"doc_id": noted["id"], "memory_offset": 1}, cid=reader)
+        assert seen(reader, noted["id"]) is None
+        read = call(env, "read_doc", {"doc_id": noted["id"]}, cid=reader)
         assert [m["content"] for m in read["doc_notes"]["memories"]] == [
-            m["content"] for m in memories(doc["id"])
+            m["content"] for m in memories(noted["id"])
         ]
-        assert seen(reader, doc["id"]) == ns_seen(1, 3)
+        assert seen(reader, noted["id"]) == full_versions(env, noted["id"])
 
     def test_later_page_keeps_an_existing_memories_entry(self, env):
         doc = noted_doc(env)
