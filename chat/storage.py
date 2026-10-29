@@ -1665,7 +1665,8 @@ class ChatStorage:
         missing, a field that is not a non-negative ``int``, a ``bool``, an
         empty doc id) reads as no record for that doc only. Anything other
         than a missing file is logged at warning; the next
-        ``record_doc_notes_seen`` rewrites the file without the bad parts.
+        ``record_doc_notes_seen`` that changes the record rewrites the file
+        without the bad parts.
 
         Raises:
             InvalidStorageIdError: invalid conversation id.
@@ -1764,8 +1765,10 @@ class ChatStorage:
         the valid entries plus this one. Skips the write entirely when the
         stored entry would not change. A failed write (any ``OSError``,
         including a missing conversation directory, which is never created
-        here) is logged and swallowed; it costs at most one extra delivery
-        or refusal.
+        here) is logged and swallowed. The record then stays as it was, so
+        the doc's notes are delivered again (and a refused write is refused
+        again) until a write lands: one extra delivery or refusal for a
+        passing failure, the fail-closed direction for a lasting one.
 
         Concurrency note: same single-event-loop guarantee as
         ``add_workspace_read_paths`` -- this method must stay fully
@@ -1835,7 +1838,11 @@ class ChatStorage:
         the history over and keep the record. Touches no other file
         (doc_reads.json survives both).
 
-        A missing file is a no-op; an ``OSError`` is logged and swallowed.
+        A missing file is a no-op. A record that survives would vouch for
+        blocks the model no longer has and let writes skip the notes, so
+        when the delete fails (``OSError``) the file is emptied in place
+        instead (``{"docs": {}}``, which needs no directory write); when
+        that fails too, the error is logged and swallowed.
 
         Args:
             conversation_id: Conversation UUID.
@@ -1846,9 +1853,20 @@ class ChatStorage:
         seen_file = ChatStorage._get_doc_notes_seen_file(conversation_id)
         try:
             seen_file.unlink(missing_ok=True)
+            return
         except OSError:
             logger.warning(
-                "[storage] failed to delete doc_notes_seen.json (conversation=%s)",
+                "[storage] failed to delete doc_notes_seen.json (conversation=%s); "
+                "emptying it in place",
+                conversation_id, exc_info=True,
+            )
+        try:
+            with open(seen_file, "w") as f:
+                json.dump({"docs": {}}, f)
+        except OSError:
+            logger.error(
+                "[storage] failed to empty doc_notes_seen.json (conversation=%s); "
+                "a stale doc notes record may let writes skip the notes",
                 conversation_id, exc_info=True,
             )
 

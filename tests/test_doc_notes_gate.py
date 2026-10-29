@@ -14,7 +14,8 @@ Covers phase A2 of spec 00011 (docs/architecture/doc-notes.md):
 2. Gate edge cases: a seen record ahead of the doc, a doc that never had
    notes, the instructions text winning over ``has_instructions``,
    control characters counting as instructions, a dict without either
-   instructions key, missing counters, an unknown run kind.
+   instructions key, missing counters, an unknown run kind, a
+   conversation id that is not a string.
 3. ``build_notes_block()``: keys and their order, the note text, memory
    items reduced to id and content, the empty current-state block, the
    delivery budget measured in JSON characters (non-ASCII counting once),
@@ -22,12 +23,14 @@ Covers phase A2 of spec 00011 (docs/architecture/doc-notes.md):
    ``memory_offset`` pages and paging loops, and the refused inputs.
 4. ``render_notes_text()``: a pinned rendering, the empty forms,
    multi-line memories, instructions fitting exactly, the instructions
-   cut and its marker, the memory prefix and trailer counts (singular
-   too), and the pre-card budget under randomized pathological blocks.
+   cut and its marker, ``instructions_whole``, the memory prefix and
+   trailer counts (singular too), and the pre-card budget under
+   randomized pathological blocks.
 """
 
 import json
 import random
+import uuid
 
 import pytest
 
@@ -40,6 +43,7 @@ from chat.docs.notes import (
     DOC_NOTES_BLOCK_NOTE,
     RECORDING_RUN_KINDS,
     NotesSeen,
+    NotesText,
     build_notes_block,
     has_notes,
     needs_delivery,
@@ -111,6 +115,21 @@ WRITE_REFUSED = {
         "no_notes": False, "memories_only": False,
         "instructions_only": False, "both": False,
     },
+}
+
+# How a read in each run kind gets the block (spec 6.1): "record" attaches
+# it when needs_delivery() holds and records the delivery; "always" attaches
+# it on every read and records nothing (sub-agents, inference-API runs);
+# "never" attaches it to no read (scripts get counts only; the UI has its
+# own routes and no tool reads).
+DELIVERY_MODES = {
+    "top_level": "record",
+    "slack": "record",
+    "user_subagent": "record",
+    "sub_agent": "always",
+    "inference_api": "always",
+    "script": "never",
+    "ui": "never",
 }
 
 # records_delivery(run_kind, "conv-1").
@@ -189,22 +208,28 @@ def test_needs_delivery_and_write_refused_grid(seen_name, notes_name, shape):
 @pytest.mark.parametrize("notes_name", list(NOTES_STATES))
 @pytest.mark.parametrize("seen_name", list(SEEN_STATES))
 def test_phase_a3_decisions_grid(seen_name, notes_name, shape, run_kind, conversation_id):
-    """A read attaches the block when the run does not record or the notes
-    need delivery; a write is refused only in a recording run."""
+    """How phase A3 combines the gate: in a recording run a read attaches
+    the block when the notes need delivery and a write is refused when
+    write_refused() holds; outside one, the run kind's delivery mode decides
+    the read and no write is refused."""
     doc = SHAPES[shape](*NOTES_STATES[notes_name])
     seen = SEEN_STATES[seen_name]
-    records = RECORDS_DELIVERY[run_kind] and conversation_id is not None
+    mode = DELIVERY_MODES[run_kind]
+    records = mode == "record" and conversation_id is not None
 
     if records:
         expected_attach = NEEDS_DELIVERY[seen_name][notes_name]
         expected_refused = WRITE_REFUSED[seen_name][notes_name]
     else:
-        expected_attach = True
+        expected_attach = mode != "never"
         expected_refused = False
 
     recording = records_delivery(run_kind, conversation_id)
     assert recording is records
-    attach = not recording or needs_delivery(doc, seen)
+    if recording:
+        attach = needs_delivery(doc, seen)
+    else:
+        attach = mode != "never"
     refused = recording and write_refused(doc, seen)
     assert attach is expected_attach
     assert refused is expected_refused
@@ -212,7 +237,9 @@ def test_phase_a3_decisions_grid(seen_name, notes_name, shape, run_kind, convers
 
 def test_records_delivery_table_covers_every_run_kind():
     assert set(RECORDS_DELIVERY) == set(RUN_KINDS)
+    assert set(DELIVERY_MODES) == set(RUN_KINDS)
     assert RECORDING_RUN_KINDS == {k for k, v in RECORDS_DELIVERY.items() if v}
+    assert RECORDING_RUN_KINDS == {k for k, m in DELIVERY_MODES.items() if m == "record"}
 
 
 @pytest.mark.parametrize("run_kind", RUN_KINDS)
@@ -318,6 +345,14 @@ def test_missing_counter_raises(missing):
 def test_records_delivery_refuses_an_unknown_run_kind(conversation_id):
     with pytest.raises(ValueError, match="bogus"):
         records_delivery("bogus", conversation_id)
+
+
+@pytest.mark.parametrize("conversation_id", [uuid.UUID(int=1), 7, b"conv-1"])
+@pytest.mark.parametrize("run_kind", RUN_KINDS)
+def test_records_delivery_refuses_a_non_str_conversation_id(run_kind, conversation_id):
+    # Silently not recording would also skip the write refusal.
+    with pytest.raises(TypeError):
+        records_delivery(run_kind, conversation_id)
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +580,13 @@ def test_block_paging_visits_every_memory_once(instructions, memories):
 # ---------------------------------------------------------------------------
 
 
+def _render(block: dict) -> str:
+    """The text of render_notes_text(), checked to be a NotesText."""
+    rendered = render_notes_text(block)
+    assert isinstance(rendered, NotesText)
+    return rendered.text
+
+
 def _block(instructions: str, contents: list[str], omitted: int = 0) -> dict:
     return {
         "instructions": instructions,
@@ -561,7 +603,7 @@ def test_render_small_block():
         ["The Q3 numbers come from the finance sheet.", "Sections:\nRisks, Plan"],
         omitted=3,
     )
-    assert render_notes_text(block) == (
+    assert _render(block) == (
         "Instructions (follow them whenever you change this doc):\n"
         "Newest entry first.\n"
         "Never change the Risks section.\n"
@@ -575,7 +617,7 @@ def test_render_small_block():
 
 
 def test_render_all_memories_has_no_trailer():
-    text = render_notes_text(_block("Rule.", ["One.", "Two."]))
+    text = _render(_block("Rule.", ["One.", "Two."]))
     assert text == (
         "Instructions (follow them whenever you change this doc):\n"
         "Rule.\n"
@@ -587,11 +629,11 @@ def test_render_all_memories_has_no_trailer():
 
 
 def test_render_empty_forms():
-    assert render_notes_text(_block("", [])) == "Instructions: none.\n\nMemories: none."
-    assert render_notes_text(_block("", ["Fact."])) == (
+    assert _render(_block("", [])) == "Instructions: none.\n\nMemories: none."
+    assert _render(_block("", ["Fact."])) == (
         "Instructions: none.\n\nMemories (newest first):\n- Fact."
     )
-    assert render_notes_text(_block("Rule.", [])) == (
+    assert _render(_block("Rule.", [])) == (
         "Instructions (follow them whenever you change this doc):\nRule.\n\nMemories: none."
     )
 
@@ -599,15 +641,15 @@ def test_render_empty_forms():
 def test_render_none_instructions():
     block = _block("", [])
     block["instructions"] = None
-    assert render_notes_text(block) == "Instructions: none.\n\nMemories: none."
+    assert _render(block) == "Instructions: none.\n\nMemories: none."
 
 
 def test_render_leaves_the_note_out():
-    assert "suggest_doc_note" not in render_notes_text(_block("Rule.", ["Fact."]))
+    assert "suggest_doc_note" not in _render(_block("Rule.", ["Fact."]))
 
 
 def test_render_multi_line_memory():
-    text = render_notes_text(_block("", ["first line\nsecond line\n\nfourth", "next"]))
+    text = _render(_block("", ["first line\nsecond line\n\nfourth", "next"]))
     assert text == (
         "Instructions: none.\n"
         "\n"
@@ -621,13 +663,13 @@ def test_render_multi_line_memory():
 
 
 def test_render_singular_trailer():
-    assert render_notes_text(_block("", [], omitted=1)) == (
+    assert _render(_block("", [], omitted=1)) == (
         "Instructions: none.\n\n"
         "Memories (newest first):\n"
         "(1 more memory not shown; list_doc_notes pages them.)"
     )
     # The second memory does not fit next to the first.
-    text = render_notes_text(_block("Rule.", ["a" * 1500, "b" * 1500]))
+    text = _render(_block("Rule.", ["a" * 1500, "b" * 1500]))
     assert text.endswith("- " + "a" * 1500 + "\n(1 more memory not shown; list_doc_notes pages them.)")
     assert len(text) <= DOC_NOTES_PRECARD_MAX_CHARS
 
@@ -636,18 +678,18 @@ def test_render_instructions_fit_exactly():
     tail = "\n\nMemories: none."
     length = DOC_NOTES_PRECARD_MAX_CHARS - len(INSTRUCTIONS_HEADER + "\n") - len(tail)
     instructions = "i" * length
-    text = render_notes_text(_block(instructions, []))
+    text = _render(_block(instructions, []))
     assert text == INSTRUCTIONS_HEADER + "\n" + instructions + tail
     assert len(text) == DOC_NOTES_PRECARD_MAX_CHARS
 
-    over = render_notes_text(_block(instructions + "i", []))
+    over = _render(_block(instructions + "i", []))
     assert "[Instructions cut here: " in over
     assert len(over) <= DOC_NOTES_PRECARD_MAX_CHARS
 
 
 def test_render_instructions_cut():
     block = _block("a" * 5000, ["One.", "Two.", "Three."], omitted=2)
-    text = render_notes_text(block)
+    text = _render(block)
     assert text == (
         INSTRUCTIONS_HEADER + "\n"
         + "a" * 2777 + "\n"
@@ -661,7 +703,7 @@ def test_render_instructions_cut():
 
 
 def test_render_instructions_cut_without_memories():
-    text = render_notes_text(_block("a" * 5000, []))
+    text = _render(_block("a" * 5000, []))
     kept = text.split("\n")[1]
     assert set(kept) == {"a"}
     assert text.endswith(
@@ -671,11 +713,28 @@ def test_render_instructions_cut_without_memories():
     assert len(text) <= DOC_NOTES_PRECARD_MAX_CHARS
 
 
+@pytest.mark.parametrize(
+    "instructions, contents, whole",
+    [
+        ("", [], True),
+        ("", ["Fact."] * 3, True),
+        ("Rule.", ["Fact."], True),
+        ("i" * 2900, [], True),
+        ("i" * 2950, [], False),
+        ("a" * 5000, ["One."], False),
+    ],
+)
+def test_render_reports_whether_the_instructions_came_whole(instructions, contents, whole):
+    rendered = render_notes_text(_block(instructions, contents))
+    assert rendered.instructions_whole is whole
+    assert ("[Instructions cut here: " in rendered.text) is not whole
+
+
 def test_render_max_caps_block_counts_every_memory():
     memories = _memories(50)
     block = build_notes_block(_state("i" * 4000), memories)
     assert block["memories"]
-    text = render_notes_text(block)
+    text = _render(block)
     assert "\n- " not in text
     assert text.endswith("(50 more memories not shown; list_doc_notes pages them.)")
     assert len(text) <= DOC_NOTES_PRECARD_MAX_CHARS
@@ -683,7 +742,7 @@ def test_render_max_caps_block_counts_every_memory():
 
 def test_render_memories_prefix_and_trailer():
     contents = [f"{i}" + "m" * 899 for i in range(10)]
-    text = render_notes_text(_block("Keep it short.", contents, omitted=4))
+    text = _render(_block("Keep it short.", contents, omitted=4))
     assert text == (
         INSTRUCTIONS_HEADER + "\n"
         "Keep it short.\n"
@@ -700,7 +759,7 @@ def test_render_last_memory_replaces_the_trailer():
     tail = "\n\nMemories (newest first):\n- x"
     length = DOC_NOTES_PRECARD_MAX_CHARS - len(INSTRUCTIONS_HEADER + "\n") - len(tail)
     instructions = "i" * length
-    text = render_notes_text(_block(instructions, ["x"]))
+    text = _render(_block(instructions, ["x"]))
     assert text == INSTRUCTIONS_HEADER + "\n" + instructions + tail
     trailer_tail = "\n\nMemories (newest first):\n(1 more memory not shown; list_doc_notes pages them.)"
     assert len(INSTRUCTIONS_HEADER + "\n" + instructions + trailer_tail) > DOC_NOTES_PRECARD_MAX_CHARS
@@ -735,7 +794,7 @@ def test_render_stays_within_budget_for_pathological_blocks():
                 instructions, contents,
                 omitted=rng.choice([0, 1, 2, 9, 10, 99_999, 10**9]),
             )
-        text = render_notes_text(block)
+        text = _render(block)
         assert len(text) <= DOC_NOTES_PRECARD_MAX_CHARS
         assert text.startswith("Instructions")
         assert not text.endswith("\n")

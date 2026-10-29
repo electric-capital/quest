@@ -16,8 +16,9 @@ The module owns:
   tool result carries, with the whole instructions and as many memories,
   newest first, as fit in ``DOC_NOTES_DELIVERY_MAX_CHARS``.
 - Its text copy (:func:`render_notes_text`) for the ``write_doc`` pre-card
-  refusal, within ``DOC_NOTES_PRECARD_MAX_CHARS``, and the copy strings
-  both use, gathered below so they can be reviewed in one place.
+  refusal, within ``DOC_NOTES_PRECARD_MAX_CHARS``, which also says whether
+  the instructions came whole, and the copy strings both use, gathered
+  below so they can be reviewed in one place.
 
 Callers load ``get_notes_state()`` BEFORE ``list_doc_memories()``: a memory
 change between the two reads then shows the model memories at least as new
@@ -29,7 +30,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NamedTuple
 
 from chat.docs.access import RUN_KINDS
 from chat.docs.constants import (
@@ -155,14 +156,16 @@ def records_delivery(run_kind: str, conversation_id: str | None) -> bool:
         ValueError: ``run_kind`` is not one of ``RUN_KINDS``. A run kind
             added later must be placed here explicitly; silently not
             recording would also skip the write refusal.
+        TypeError: ``conversation_id`` is neither ``None`` nor a ``str``
+            (e.g. a ``UUID``), for the same reason.
     """
     if run_kind not in RUN_KINDS:
         raise ValueError(f"Unknown run kind: {run_kind!r}")
-    return (
-        run_kind in RECORDING_RUN_KINDS
-        and isinstance(conversation_id, str)
-        and conversation_id != ""
-    )
+    if conversation_id is not None and not isinstance(conversation_id, str):
+        raise TypeError(
+            f"conversation_id must be a str or None, got {type(conversation_id).__name__}"
+        )
+    return run_kind in RECORDING_RUN_KINDS and bool(conversation_id)
 
 
 # --- Notes block ---
@@ -254,6 +257,18 @@ def build_notes_block(
 # --- Text copy of the block ---
 
 
+class NotesText(NamedTuple):
+    """The text copy of a notes block (:func:`render_notes_text`).
+
+    ``instructions_whole`` is False when the instructions were cut to fit
+    the pre-card budget: the model was then not shown the whole rules, so
+    a caller must not record that instructions version as seen.
+    """
+
+    text: str
+    instructions_whole: bool
+
+
 def _render_memory(content: str) -> str:
     """One bulleted memory; continuation lines indented under the bullet."""
     return NOTES_TEXT_MEMORY_BULLET + content.replace("\n", "\n" + NOTES_TEXT_MEMORY_INDENT)
@@ -313,7 +328,7 @@ def _cut_instructions(instructions: str, tail_len: int) -> str:
     return f"{NOTES_TEXT_INSTRUCTIONS_HEADER}\n{instructions[:keep]}\n{marker}"
 
 
-def render_notes_text(block: Mapping[str, Any]) -> str:
+def render_notes_text(block: Mapping[str, Any]) -> NotesText:
     """The plain-text copy of a notes block for the ``write_doc`` pre-card
     refusal, at most ``DOC_NOTES_PRECARD_MAX_CHARS`` characters::
 
@@ -332,6 +347,10 @@ def render_notes_text(block: Mapping[str, Any]) -> str:
     characters cut, and no memory is rendered. The trailer counts the
     block's ``memories_omitted`` plus its memories not rendered. The
     ``note`` is left out: the caller writes its own message above.
+
+    Returns:
+        :class:`NotesText`: the text, and whether the instructions came
+        whole (always True for empty instructions).
     """
     instructions = block["instructions"] or ""
     rendered = [_render_memory(m["content"]) for m in block["memories"]]
@@ -342,6 +361,8 @@ def render_notes_text(block: Mapping[str, Any]) -> str:
         head = NOTES_TEXT_NO_INSTRUCTIONS
     shown = _fitting_memory_count(len(head), rendered, total)
     if shown is not None:
-        return f"{head}\n\n{_memories_section(rendered[:shown], total - shown)}"
+        text = f"{head}\n\n{_memories_section(rendered[:shown], total - shown)}"
+        return NotesText(text, instructions_whole=True)
     tail = _memories_section([], total)
-    return f"{_cut_instructions(instructions, len(tail))}\n\n{tail}"
+    text = f"{_cut_instructions(instructions, len(tail))}\n\n{tail}"
+    return NotesText(text, instructions_whole=False)

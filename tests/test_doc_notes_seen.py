@@ -367,7 +367,37 @@ class TestClear:
         assert len(warnings) == 1
         assert "conversation=c1" in warnings[0].getMessage()
         assert isinstance(warnings[0].exc_info[1], PermissionError)
-        assert (conv / FILE_NAME).exists()
+        # The record is emptied in place instead, so it vouches for nothing.
+        assert _on_disk(conv) == {"docs": {}}
+        assert _cs().get_doc_notes_seen("c1", "d1") is None
+        assert not [r for r in warnings_log.records if r.levelno >= logging.ERROR]
+
+    def test_delete_and_empty_both_failing_logs_an_error(
+        self, conv, warnings_log, monkeypatch,
+    ):
+        _cs().record_doc_notes_seen("c1", "d1", 3, 7)
+
+        def unlink(self, *args, **kwargs):
+            raise PermissionError(errno.EACCES, "Permission denied", str(self))
+
+        real_open = open
+
+        def fake_open(path, mode="r", *args, **kwargs):
+            if str(path).endswith(FILE_NAME) and "w" in mode:
+                raise PermissionError(errno.EACCES, "Permission denied", str(path))
+            return real_open(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", unlink)
+        monkeypatch.setattr("builtins.open", fake_open)
+        _cs().clear_doc_notes_seen("c1")  # no exception
+        errors = [
+            r for r in warnings_log.records
+            if r.name == "chat.storage" and r.levelno == logging.ERROR
+        ]
+        assert len(errors) == 1
+        assert "conversation=c1" in errors[0].getMessage()
+        # Left as it was (the stale record the error warns about).
+        assert _on_disk(conv) == {"docs": {"d1": {"instructions": 3, "memories": 7}}}
 
 
 # ---------------------------------------------------------------------------
