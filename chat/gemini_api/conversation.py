@@ -892,7 +892,8 @@ async def run_conversation_turn(
                 get_public_project_system_prompt,
             )
             from config.feature_gates import (
-                browser_enabled_for, docs_enabled_for, tables_enabled_for,
+                browser_enabled_for, doc_notes_enabled_for, docs_enabled_for,
+                tables_enabled_for,
             )
             system_prompt = get_public_project_system_prompt(
                 user_name=user.get("name", ""),
@@ -900,9 +901,11 @@ async def run_conversation_turn(
                 project_guide=resolved_project_guide,
                 is_routine=bool(routine_id),
                 # The public prompt has no connected-services gating, so
-                # the Quest Docs, Quest Tables and browser gates are
-                # passed explicitly.
+                # the Quest Docs, Quest Doc notes (which folds in the docs
+                # gate), Quest Tables and browser gates are passed
+                # explicitly.
                 docs_enabled=docs_enabled_for(user["email"]),
+                doc_notes_enabled=doc_notes_enabled_for(user["email"]),
                 tables_enabled=tables_enabled_for(user["email"]),
                 browser_enabled=browser_enabled_for(user["email"]),
                 project_db_enabled=project_has_legacy_db(project_id),

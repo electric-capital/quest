@@ -8,7 +8,7 @@ here. Instead, the prompt enumerates available "system skills" via
 the relevant skill(s) on demand through the existing ``load_skills`` tool.
 """
 
-from chat.docs.constants import DOCS_SERVICE_KEY
+from chat.docs.constants import DOC_NOTES_SERVICE_KEY, DOCS_SERVICE_KEY
 from chat.tables.constants import TABLES_SERVICE_KEY
 from chat.gemini_api.constants import (
     MAX_PARALLEL_TASKS,
@@ -35,6 +35,18 @@ def _doc_tool_names() -> frozenset[str]:
     return frozenset(
         name for name, spec in TOOL_CALL_REGISTRY.items()
         if spec.get("requires_service") == DOCS_SERVICE_KEY
+    )
+
+
+def _doc_note_tool_names() -> frozenset[str]:
+    """The two Quest Doc notes tools (list_doc_notes / suggest_doc_note):
+    the registry specs gated on the ``doc_notes`` connected-services
+    pseudo-key (``requires_service == DOC_NOTES_SERVICE_KEY``), which is
+    true only while the Quest Docs gate is open too. Kept apart from
+    _doc_tool_names() because the notes have their own gate."""
+    return frozenset(
+        name for name, spec in TOOL_CALL_REGISTRY.items()
+        if spec.get("requires_service") == DOC_NOTES_SERVICE_KEY
     )
 
 
@@ -669,10 +681,13 @@ Facts the user has saved about themselves and how they want you to work, newest 
     if is_routine:
         # Routine conversations already carry the routine's name; the model
         # has nothing to name. A routine run is a canned task, not a
-        # conversation with the user, so it proposes no memories either.
+        # conversation with the user, so it proposes nothing for review
+        # either: no personal or project memories and no doc notes (it
+        # still reads doc notes with list_doc_notes).
         top_level_exclude.add("set_conversation_name")
         top_level_exclude.add("suggest_memory")
         top_level_exclude.add("suggest_project_memory")
+        top_level_exclude.add("suggest_doc_note")
     dynamic_tools_section = _build_dynamic_tools_section(
         exclude=top_level_exclude, connected_services=connected_services,
     )
@@ -905,12 +920,13 @@ def get_user_subagent_system_prompt(
     # Cross-user runs cannot mutate connected services or Quest artifacts.
     # Dispatch enforces the boundary; the prompt advertises only reads.
     # The run is a standalone conversation in the target's account, so the
-    # project-only tools never apply.
+    # project-only tools never apply. Nobody reviews suggestions here, so
+    # the suggest tools are out (doc notes stay readable: list_doc_notes).
     user_subagent_exclude = (
         {
             "wait_for_handles", "request_service_connection",
             "list_service_connections",
-            "set_conversation_name", "suggest_memory",
+            "set_conversation_name", "suggest_memory", "suggest_doc_note",
         }
         | PROJECT_ONLY_TOOL_CALL_TOOLS
         | mutating_tool_call_tools()
@@ -1014,11 +1030,13 @@ def get_inference_api_system_prompt(
     # (chat/gemini_api/tool_dispatch.py, is_inference_api): inference runs
     # must not change anything. That covers the Quest Docs writes too.
     # Inference runs are standalone conversations: no project-only tools.
+    # Nobody reviews suggestions in a headless run, so the suggest tools
+    # are out too (doc notes stay readable: list_doc_notes).
     inference_exclude = (
         {
             "wait_for_handles", "request_service_connection",
             "list_service_connections",
-            "set_conversation_name", "suggest_memory",
+            "set_conversation_name", "suggest_memory", "suggest_doc_note",
         }
         | PROJECT_ONLY_TOOL_CALL_TOOLS
         | mutating_tool_call_tools()
@@ -1080,6 +1098,7 @@ def get_public_project_system_prompt(
     project_guide: str = "",
     is_routine: bool = False,
     docs_enabled: bool = False,
+    doc_notes_enabled: bool = False,
     tables_enabled: bool = False,
     browser_enabled: bool = False,
     project_db_enabled: bool = False,
@@ -1113,6 +1132,13 @@ def get_public_project_system_prompt(
     "Quest Docs" paragraph is omitted; while True the tools are listed and
     the paragraph follows the Boundaries block (it stands in for the
     ``system:quest_docs`` skill, since this prompt carries no skills).
+
+    ``doc_notes_enabled`` is the same switch for the Quest Doc notes gate
+    (``config.feature_gates.doc_notes_enabled_for``, true only while the
+    Quest Docs gate is open too): while False (the default) the two notes
+    tools (``list_doc_notes`` / ``suggest_doc_note``) are excluded from the
+    Dynamic Tools section; while True they are listed in full. A routine
+    run reads notes but never suggests one, as in get_system_prompt().
 
     ``tables_enabled`` is the same switch for the Quest Tables gate
     (``config.feature_gates.tables_enabled_for``): while False the table
@@ -1190,8 +1216,11 @@ def get_public_project_system_prompt(
     if is_routine:
         public_exclude.add("set_conversation_name")
         public_exclude.add("suggest_project_memory")
+        public_exclude.add("suggest_doc_note")
     if not docs_enabled:
         public_exclude |= _doc_tool_names()
+    if not doc_notes_enabled:
+        public_exclude |= _doc_note_tool_names()
     if not tables_enabled:
         public_exclude |= _table_tool_names()
     if not project_db_enabled:
@@ -1429,11 +1458,14 @@ def get_sub_agent_system_prompt(
     # project-only tools when not in a project conversation. Sub-agents are
     # read-only for Quest Docs (access rule run_kind "sub_agent": "only the
     # top-level agent writes docs"), so the doc and table write tools are
-    # hidden too.
+    # hidden too. Suggestions are the top-level agent's (memories, project
+    # memories, doc notes); a sub-agent still reads doc notes with
+    # list_doc_notes.
     sub_agent_exclude = {
         "wait_for_handles", "request_service_connection",
         "list_service_connections",
         "set_conversation_name", "suggest_memory", "suggest_project_memory",
+        "suggest_doc_note",
     }
     sub_agent_exclude |= _doc_write_tool_names() | _table_write_tool_names()
     if has_project:
