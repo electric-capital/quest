@@ -247,7 +247,7 @@ class TestConstants:
         assert dc.DOC_NOTE_MAX_PENDING_PER_DOC == 10
         assert dc.DOC_NOTE_MAX_PENDING_PER_CONVERSATION == 20
         assert dc.DOC_NOTES_DELIVERY_MAX_CHARS == 12_000
-        assert dc.DOC_NOTES_PRECARD_MAX_CHARS == 3_000
+        assert dc.DOC_NOTES_PRECARD_MAX_CHARS == 4_200
 
     def test_suggestion_kinds(self):
         assert dc.DOC_NOTE_SUGGESTION_KINDS == ("instructions", "memory")

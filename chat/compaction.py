@@ -21,17 +21,26 @@ Key properties:
   (chat/expensive_resume.py) stops warning once the history has shrunk --
   the ``llm_calls_*`` tables only learn the new context size after the next
   real turn.
+- The doc notes seen record (``doc_notes_seen.json``) is deleted just
+  before the new envelope is written, since the summary may drop a
+  delivered doc notes block; ``doc_reads.json`` is kept.
 - The display transcript (``chat_history.json``) is never rewritten; a
   ``compaction`` marker message is appended so the user can see what
   happened and read the summary the model will see.
 
 Entry point: :func:`compact_conversation`, called by
 ``POST /conversations/{id}/compact`` (chat/routes/conversations.py), which
-the FE offers from the expensive-resume warning card.
+the FE offers from the expensive-resume warning card. Compaction refuses
+to replace a history a model run is appending to: the route refuses while
+:func:`conversation_run_active` holds, and :func:`compact_conversation`
+checks again, and that ``sdk_history.json`` is the file it summarized,
+just before writing. Runs that function cannot see are listed in its
+docstring.
 """
 
 import json
 import logging
+import os
 import shutil
 from datetime import datetime, timezone
 from typing import Any, Iterator, Optional
@@ -645,6 +654,47 @@ def compaction_count(conversation_id: str) -> int:
         return 0
 
 
+def conversation_run_active(conversation_id: str) -> bool:
+    """True while a model run is in flight on this conversation.
+
+    Composes the registries the run drivers already keep: the WS send run
+    (``get_active_send_run()`` in chat/realtime/socket.py), a headless
+    wait-handle resume, held ones included (``is_resuming()`` in
+    chat/wait_handles/resume.py), which together are the guard the WS send
+    path itself applies, and a Slack-driven run (``is_run_active()`` in
+    chat/slack_driven_runtime.py). Scheduled routine runs
+    (chat/scheduler.py) and cross-user subagent runs (chat/user_subagent.py)
+    keep no per-conversation entry and are not seen here; the
+    history-changed check in :func:`compact_conversation` catches one that
+    saved while the summary was being written, but not one that saves its
+    older session over the compacted history afterwards. Those runs are
+    project, fresh or cross-user conversations, which the expensive-resume
+    card that offers compaction does not reach.
+    """
+    from chat import slack_driven_runtime
+    from chat.realtime.socket import get_active_send_run
+    from chat.wait_handles.resume import is_resuming
+
+    return (
+        get_active_send_run(conversation_id) is not None
+        or is_resuming(conversation_id)
+        or slack_driven_runtime.is_run_active(conversation_id)
+    )
+
+
+def _history_stamp(conversation_dir) -> Optional[tuple[int, int, int]]:
+    """Identity of ``sdk_history.json`` (inode, mtime, size), or None when
+    it is missing. Every writer replaces the file atomically, so a save
+    changes at least the inode."""
+    from chat.gemini_api.constants import _SDK_HISTORY_FILENAME
+
+    try:
+        st = os.stat(conversation_dir / _SDK_HISTORY_FILENAME)
+    except OSError:
+        return None
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+
 def _write_compaction_meta(conversation_id: str, meta: dict) -> None:
     with open(_meta_file(conversation_id), "w") as f:
         json.dump(meta, f, indent=2)
@@ -775,7 +825,9 @@ async def compact_conversation(
     """Compact a conversation's model-facing history.
 
     Loads ``sdk_history.json``, splits it at a safe boundary, summarizes the
-    older span with a one-off LLM call on ``model``, archives the old file,
+    older span with a one-off LLM call on ``model``, deletes the doc notes
+    seen record (``doc_notes_seen.json``; the summary may drop a delivered
+    notes block, while ``doc_reads.json`` is kept), archives the old file,
     writes the new envelope (summary + ack + kept messages), updates the
     ``compaction_meta.json`` sidecar, drops the in-memory session, and
     appends a ``compaction`` marker to the display transcript.
@@ -793,6 +845,9 @@ async def compact_conversation(
     )
     from chat.storage import ChatStorage, _publish_appended_to_bus
 
+    conversation_dir = ChatStorage._get_conversation_dir(conversation_id)
+    # Taken before the read: a save landing after it shows up as a change.
+    stamp_before = _history_stamp(conversation_dir)
     loaded = _load_sdk_history(conversation_id)
     if loaded is None:
         raise CompactionError(
@@ -850,10 +905,31 @@ async def compact_conversation(
     new_history = _build_new_history(provider_name, summary_text, kept)
     tokens_after = _estimate_history_tokens(new_history)
 
+    # The summary took a model call: a run may have started meanwhile, or
+    # started and saved. Replacing the history now would drop what it
+    # appended, so refuse and leave everything as it was. Nothing from
+    # here to the write awaits, so no run can start in between.
+    if (
+        conversation_run_active(conversation_id)
+        or _history_stamp(conversation_dir) != stamp_before
+    ):
+        raise CompactionError(
+            "conversation_busy",
+            "This conversation's history changed while it was being "
+            "compacted (a reply or another compaction); nothing was "
+            "changed. Try again once it has finished.",
+        )
+
+    # The summary may drop a delivered doc notes block, so the record of
+    # what the model was shown no longer holds (doc_reads.json is kept).
+    # Cleared before the history is replaced: a failure in between then
+    # leaves the full history without a record (one extra delivery), never
+    # the compacted history with a stale one.
+    ChatStorage.clear_doc_notes_seen(conversation_id)
+
     # Archive the pre-compaction envelope, then atomically replace it.
     prior_meta = load_compaction_meta(conversation_id) or {}
     count = int(prior_meta.get("count", 0)) + 1
-    conversation_dir = ChatStorage._get_conversation_dir(conversation_id)
     archive_name = f"sdk_history.compacted-{count:03d}.json"
     shutil.copy2(
         conversation_dir / _SDK_HISTORY_FILENAME,

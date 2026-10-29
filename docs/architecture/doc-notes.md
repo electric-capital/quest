@@ -2,7 +2,7 @@
 
 ## Overview
 
-Doc notes are texts that stick to a [Quest Doc](quest-docs.md) outside its body and its revisions. The **instructions** are one plain-text field on the `docs` row, holding the rules a model should follow when it works on the doc. The **memories** are short plain-text facts about the doc, one `doc_memories` row each. `doc_note_suggestions` holds proposed changes to either, each reviewed by the user whose conversation proposed it, with the `MemorySuggestionStatus` lifecycle of [project memory suggestions](project-memories.md): an instructions suggestion carries the complete proposed text, a memory suggestion one fact, optionally replacing a memory. This doc covers the gate, the data model, the version counters, concurrency and caps.
+Doc notes are texts that stick to a [Quest Doc](quest-docs.md) outside its body and its revisions. The **instructions** are one plain-text field on the `docs` row, holding the rules a model should follow when it works on the doc. The **memories** are short plain-text facts about the doc, one `doc_memories` row each. `doc_note_suggestions` holds proposed changes to either, each reviewed by the user whose conversation proposed it, with the `MemorySuggestionStatus` lifecycle of [project memory suggestions](project-memories.md): an instructions suggestion carries the complete proposed text, a memory suggestion one fact, optionally replacing a memory. This doc covers the feature gate, the data model, the version counters, concurrency, caps, the per-conversation seen record, the delivery gate and the notes block.
 
 ## Key Files
 
@@ -16,6 +16,9 @@ Doc notes are texts that stick to a [Quest Doc](quest-docs.md) outside its body 
 | `db/doc_store.py` | `NOTES_STATE_KEYS`, the notes-state reads, the instructions writers, and `delete_doc()`, which removes the notes with the row |
 | `db/doc_memory_store.py` | Every `doc_memories` write; the module docstring gives the transaction shape |
 | `chat/docs/routes.py` | `_doc_row()`, which leaves `NOTES_STATE_KEYS` out of UI rows |
+| `chat/docs/notes.py` | The delivery gate, the notes block and its text copy, and the copy strings the model reads; no I/O |
+| `chat/storage.py` | The "Doc notes seen" section: the per-conversation `doc_notes_seen.json` sidecar |
+| `chat/compaction.py`, `chat/gemini_api/session.py` | The seen record's deleters, `compact_conversation()` and `get_or_create_chat()` |
 
 ## Feature Gate
 
@@ -42,11 +45,50 @@ Each version counter moves only with its own kind of change: `instructions_versi
 
 ## Caps
 
-Every doc-notes cap and budget is a constant in the doc-notes section of `chat/docs/constants.py`, explained beside it. The stores enforce the instructions and memory lengths and the memories-per-doc count.
+Every doc-notes cap and budget is a constant in the doc-notes section of `chat/docs/constants.py`, explained beside it. The stores enforce the instructions and memory lengths and the memories-per-doc count; `chat/docs/notes.py` keeps the notes block and its text copy within their budgets ([Notes Block](#notes-block)).
 
 ## Access
 
 The stores make no access decisions; callers resolve `resolve_doc_access()` in `chat/docs/access.py` first, as for every `db/doc_store.py` function.
+
+## Seen Record
+
+`CHATS_DIR/<conversation_id>/doc_notes_seen.json` holds, per doc, the `instructions_version` and `memories_version` this conversation's model was last shown, read back as a `NotesSeen` (`chat/docs/notes.py`). `ChatStorage` manages it in its "Doc notes seen" section (`chat/storage.py`), whose docstrings give the file shape and the validation.
+
+- **Never backwards**: `record_doc_notes_seen()` stores the per-field maximum of the stored entry and the given versions, and skips a write that changes nothing.
+- **Failures fail closed**: a missing or corrupt file reads as no record for any doc, a malformed entry as no record for that doc. A failed write is logged and leaves the record as it was, so the notes are delivered (or a write refused) again until a write lands. A failed delete empties the file in place instead, because a surviving record would let writes skip the notes; only when that fails too is the record left standing, logged as an error.
+- **Event loop only**: it is written synchronously on the event loop, under the single-event-loop guarantee of the [read sidecar](quest-docs.md#read-sidecar), with no lock.
+
+The record vouches only for blocks still in the model's context, so `clear_doc_notes_seen()` deletes it whenever the model-facing history is rebuilt from less than the full `sdk_history.json`:
+
+- `compact_conversation()` (`chat/compaction.py`), just before it writes the compacted history, because the summary may drop a delivered block. Clearing first means a failure in between leaves the full history with no record, never the compacted one with a stale record.
+- `get_or_create_chat()` (`chat/gemini_api/session.py`), whenever it creates a session with no history: a cross-provider switch with no compatible disk copy (also after a restart, when the caller discarded another provider's disk history) or a failed `save_history()` with none. On a conversation's first session this is a no-op.
+
+A thinking-effort or same-provider rebuild and a session seeded from compatible disk history carry the history over and keep the record. `doc_reads.json` survives both deletions, so after a rebuild a write still passes the read-before-edit gate, and `write_refused()`, finding no record, stops it while the doc has notes.
+
+## Delivery Gate
+
+The gate functions in `chat/docs/notes.py` do no I/O: a caller loads the doc's notes state and the conversation's `NotesSeen`, decides with them, and writes the record back. `has_notes()`, `needs_delivery()` and `write_refused()` take either a doc dict (`has_instructions`, never the text) or the `get_notes_state()` dict; their docstrings give the exact rules. What the rules encode:
+
+- **Delivery** (`needs_delivery()`): a read carries the notes block when the conversation has no record and the doc has notes, or when either version moved past the record, also when the change emptied the notes, so the model learns that a rule it saw is gone.
+- **Write refusal** (`write_refused()`): a model write is refused when there is no record and the doc has notes, or when the instructions moved past the record and are non-empty. A memory change or cleared instructions are delivered on the next read but never block a write: memories are background facts, while the instructions are the rules a change must follow.
+- A record ahead of the doc counts as current.
+
+`records_delivery()` decides whether a run's deliveries update its conversation's record, and so whether its writes can be refused for unseen notes: only the run kinds in `RECORDING_RUN_KINDS`, with a conversation id. Its docstring gives the reason for each other run kind. The one that spans files is `sub_agent`: it dispatches with the parent's `conversation_id`, so its reads count for the parent in `doc_reads.json`, but the parent model never sees the block the sub-agent was shown, so the seen record never credits it.
+
+## Notes Block
+
+`build_notes_block()` builds the `doc_notes` object a doc tool result carries; its docstring gives the keys. It takes the `get_notes_state()` dict, since doc dicts never carry the instructions text, and `list_doc_memories()`, newest first. Callers read `get_notes_state()` before `list_doc_memories()`, so a memory change between the two reads shows the model memories at least as new as the `memories_version` it records, never older.
+
+- **Budget**: the block's JSON text, written with `ensure_ascii=False`, stays within `DOC_NOTES_DELIVERY_MAX_CHARS`. The instructions always come whole; the memories are a prefix, newest first, ending before the first one that does not fit, and `memories_omitted` counts the rest.
+- **Paging**: `memory_offset` skips that many of the newest memories. When memories remain past the offset but none fits, the block still carries the newest remaining one, over the budget, so advancing the offset by the memories returned always moves forward.
+- **Current state**: the block shows the notes as they are, whatever the record says; cleared instructions come as the empty string and no memories as an empty list.
+
+### Text Copy
+
+`render_notes_text()` is the block's plain-text form for a `write_doc` pre-card refusal, an `Invalid parameters` tool error with no cap of its own, so it stays within `DOC_NOTES_PRECARD_MAX_CHARS` and leaves out the `note`. The instructions come whole, followed by the longest prefix of whole memories that fits, and a trailer counts every memory left out. The budget is sized so instructions within `DOC_INSTRUCTIONS_MAX_CHARS` always come whole beside the widest trailer, because a refusal records the delivery it carried and a cut copy could not be recorded. Only instructions longer than the budget allows (if the budget is lowered) are cut, ending in a marker line counting the characters cut, with no memory shown; the returned `NotesText` then has `instructions_whole` false, and a caller must not record that instructions version as seen.
+
+The strings the model reads in the block and in its text copy are module constants at the top of `chat/docs/notes.py`, kept together for review.
 
 ## Constraints
 
@@ -62,3 +104,13 @@ The stores make no access decisions; callers resolve `resolve_doc_access()` in `
 **Why do notes changes never bump `updated_at`?** It is the body's token for editor saves, rename and restore, so a notes change would turn an open editor's save into a false conflict, the same reason share changes leave it alone.
 
 **Why version counters rather than timestamps?** A counter moves by exactly one per landed change and compares by equality, so the compare-and-swap is immune to two writes in one clock tick or clock skew. Two counters let a consumer tell an instructions change from a memory change; `memory_count` is recounted rather than incremented so it cannot drift.
+
+**Why does the seen record keep the maximum rather than the latest write?** Two deliveries of one doc can interleave (parallel tool calls awaiting database reads in between), and an overwrite would let the older one land last, moving the record backwards and costing an extra delivery or refusal. Versions only grow and every recorded one was delivered into the current context, so the maximum is a version the model has seen.
+
+**Why do compaction and a history-less session delete the seen record but keep `doc_reads.json`?** The record vouches that delivered rules are still in the model's context, which a summary or an empty history may have dropped; keeping it was rejected because a write that ignores a rule still lands, with nothing to catch it. A stale view of the body is caught by the exact-match edit instead ([Quest Docs -- Design Decisions](quest-docs.md#design-decisions)), so the read sidecar keeps its credits and the notes gate alone stops the first write after a rebuild.
+
+**Why is the block budget measured on its JSON text with `ensure_ascii=False`?** The block reaches the model as JSON, so the measure includes what serialization adds (keys, the note, escaped quotes and control characters), which a sum of the raw texts would miss. `ensure_ascii=False` counts a non-ASCII character once, as the instructions and memory caps do, so notes in a non-Latin script get as many memories as English ones instead of a fraction under `\uXXXX` escaping.
+
+**Why are the memories a newest-first prefix with a progress rule?** A prefix leaves one gap, the older end, which `memories_omitted` counts and a page at `memory_offset` resumes from; packing shorter older memories into the room a long one left would show a set with holes the model could neither name nor page to. The progress rule keeps a memory too large for the room beside the instructions from stalling paging at one offset.
+
+**Why does `records_delivery()` raise for an unknown run kind?** Not recording also means never refusing a write for unseen notes, so a run kind added to `RUN_KINDS` (`chat/artifact_access.py`) and silently treated as non-recording would let its model write past instructions it was never shown. Raising makes whoever adds a kind place it; a conversation id that is neither `None` nor a string raises `TypeError` for the same reason instead of reading as no conversation.

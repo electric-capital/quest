@@ -4,7 +4,7 @@
 
 Resuming a long-idle, long-context conversation on a costly model re-reads the entire history at uncached input rates (the provider prompt cache expires after a short inactivity window), so a single resumed message can cost dollars.
 
-When a **standalone** (non-project) conversation matches a configured rule (model family + minimum context tokens + minimum idle time), the web UI blocks the composer behind a warning card that offers cheaper alternatives (Duplicate Workspace, Create Project from Chat) and only unlocks after an explicit "Continue anyway" acknowledgement.
+When a **standalone** (non-project) conversation matches a configured rule (model family + minimum context tokens + minimum idle time), the web UI blocks the composer behind a warning card that offers cheaper alternatives (Duplicate Workspace, Create Project from Chat, Compact this chat) and only unlocks after an explicit "Continue anyway" acknowledgement.
 
 The server independently rejects unacknowledged sends, so the block cannot be bypassed by a stale tab. Project conversations never warn -- `check_expensive_resume` returns `None` when `meta.project_id` is set.
 
@@ -14,7 +14,8 @@ The server independently rejects unacknowledged sends, so the block cannot be by
 - `db/llm_call_store.py` -- `get_latest_context_tokens()`: the latest top-level call's input-side token count from the provider's raw `llm_calls_*` table (sub-agent rows excluded), using the same per-call context formula the pricing tiers key on
 - `chat/routes/conversations.py` -- `get_conversation()` surfaces the verdict as the `expensive_resume` response field (`null` == no warning)
 - `chat/realtime/socket.py` -- `_handle_send_message` rejects a matching non-first-message send with `{type: "send_message_rejected", reason: "expensive_resume_unacknowledged"}` unless the envelope carries `expensive_resume_acknowledged: true`
-- `frontend/src/components/ExpensiveResumeWarning.tsx` -- the blocking card above the composer (three actions + "Learn more"); rendered by `ChatPanel.tsx`, which owns the action handlers (duplicate-workspace navigation, `ConvertToProjectModal` mount)
+- `chat/compaction.py` -- `compact_conversation()`, behind `POST /conversations/{id}/compact` (`chat/routes/conversations.py`): summarizes the older history, keeps the recent turns verbatim, archives the old `sdk_history.json` and appends a `compaction` marker; the module docstring gives the details
+- `frontend/src/components/ExpensiveResumeWarning.tsx` -- the blocking card above the composer (the actions + "Learn more"); rendered by `ChatPanel.tsx`, which owns the action handlers (duplicate-workspace navigation, `ConvertToProjectModal` mount, compaction)
 - `frontend/src/components/TokenCostModal.tsx` -- the "Learn more" modal explaining prompt-cache expiry and the projects-plus-short-conversations pattern
 - `frontend/src/store/conversationStore.ts` -- per-conversation `expensiveResume` / `expensiveResumeAcknowledged` state; `WebSocketManager.sendMessage` reads the acknowledged flag into the WS envelope
 - `frontend/src/hooks/useConversation.ts` -- seeds the store from the GET payload and exposes `expensiveResumeBlocked` / `acknowledgeExpensiveResume` to `ChatPanel` / `Composer`
@@ -23,8 +24,9 @@ The server independently rejects unacknowledged sends, so the block cannot be by
 
 1. `GET /conversations/{id}` -> `check_expensive_resume(conversation_id, meta)` -> `expensive_resume` field on the response
 2. FE seeds `conversationStore.setExpensiveResume` -> `ChatPanel` renders `ExpensiveResumeWarning`, `Composer` disables input (`expensiveResumeBlocked` prop)
-3. User picks: Duplicate Workspace (`POST /conversations/{id}/duplicate-workspace`, navigate to the fresh chat), Create Project from Chat (`ConvertToProjectModal` -> `POST /projects/from-conversation`), or Continue anyway (`conversationStore.acknowledgeExpensiveResume`)
+3. User picks: Duplicate Workspace (`POST /conversations/{id}/duplicate-workspace`, navigate to the fresh chat), Create Project from Chat (`ConvertToProjectModal` -> `POST /projects/from-conversation`), Compact this chat (`POST /conversations/{id}/compact`, then the warning clears), or Continue anyway (`conversationStore.acknowledgeExpensiveResume`).
 4. Acknowledged sends carry `expensive_resume_acknowledged: true` on the `send_message` envelope; the server gate in `_handle_send_message` re-checks and lets the turn through
+5. A compaction refusal is a 409 whose message the card shows. `conversation_busy` means a wait handle is pending, a model run is in progress (`conversation_run_active()` in `chat/compaction.py`; its docstring lists the runs it sees), or a run changed the history while the summary was being written. The other codes are `CompactionError`'s, raised in `compact_conversation()`.
 
 ## Design Decisions
 

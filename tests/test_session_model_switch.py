@@ -4,12 +4,19 @@ Regression tests ensuring that:
 - Same-provider model switches preserve conversation history (Bug 2 fix: commit df521cf)
 - Cross-provider switches use compatible disk history or start fresh
 - Session store integrity is maintained across switches
+- The doc notes seen record (doc_notes_seen.json, issue #187 spec 4.2) is
+  deleted when a session starts without the conversation's history and
+  kept when the history is carried over
 """
 
+import json
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import chat.docs.notes as notes_mod
+import chat.storage as storage_mod
 from chat.gemini_api.session import get_or_create_chat, _active_chats
 
 
@@ -25,6 +32,15 @@ def _clean_active_chats():
     yield
     _active_chats.clear()
     _active_chats.update(saved)
+
+
+@pytest.fixture(autouse=True)
+def chats_root(tmp_path, monkeypatch):
+    """Point CHATS_DIR at a tmp dir: the cross-provider paths clear the
+    doc notes seen record, which must never touch the real data dir."""
+    root = tmp_path / "chats"
+    monkeypatch.setattr(storage_mod, "CHATS_DIR", root, raising=True)
+    return root
 
 
 @pytest.fixture()
@@ -243,7 +259,7 @@ class TestNewSessionCreation:
 
     def test_new_session_with_history(self, mock_provider):
         history = [{"role": "model", "parts": []}]
-        result = get_or_create_chat(
+        get_or_create_chat(
             mock_provider, 1, "conv-1", "gemini-3.1-pro-preview", "system prompt",
             history=history,
         )
@@ -295,3 +311,284 @@ class TestSessionStoreIntegrity:
 
         # conv-2 must be untouched
         assert _active_chats[(1, "conv-2")] == ("gemini-3.1-pro-preview", session_2)
+
+
+# ---------------------------------------------------------------------------
+# Tests: doc notes seen record (issue #187 spec 4.2)
+# ---------------------------------------------------------------------------
+
+CONV = "conv-1"
+DOC = "doc-1"
+SEEN_FILE = "doc_notes_seen.json"
+DOC_READS_FILE = "doc_reads.json"
+DOC_READS_TEXT = json.dumps({"doc_ids": [DOC]})
+
+
+class _Session:
+    def __init__(self, model, thinking_effort=None):
+        self.model = model
+        self.thinking_effort = thinking_effort
+
+
+def _seed_doc_notes(chats_root):
+    """Give conversation CONV a doc notes seen record and a doc_reads.json."""
+    conv_dir = chats_root / CONV
+    conv_dir.mkdir(parents=True, exist_ok=True)
+    # Other suites reload chat.storage (in place); look it up at call time.
+    storage_mod.ChatStorage.record_doc_notes_seen(CONV, DOC, 3, 7)
+    (conv_dir / DOC_READS_FILE).write_text(DOC_READS_TEXT)
+    assert (conv_dir / SEEN_FILE).exists()
+    return conv_dir
+
+
+def _assert_notes_record(conv_dir, *, kept):
+    seen = storage_mod.ChatStorage.get_doc_notes_seen(CONV, DOC)
+    if kept:
+        assert seen == notes_mod.NotesSeen(instructions=3, memories=7)
+    else:
+        assert not (conv_dir / SEEN_FILE).exists()
+        assert seen is None
+    # doc_reads.json is never touched.
+    assert (conv_dir / DOC_READS_FILE).read_text() == DOC_READS_TEXT
+
+
+class TestDocNotesSeenRecord:
+    """The record goes when the new session lacks the conversation's
+    history (the delivered notes blocks are gone from the model's
+    context) and stays when the history is carried over."""
+
+    # -- cleared --------------------------------------------------------
+
+    def test_cross_provider_switch_without_compatible_disk_history_clears(
+        self, mock_provider, chats_root,
+    ):
+        conv_dir = _seed_doc_notes(chats_root)
+        _active_chats[(1, CONV)] = ("gemini-3.1-pro-preview", {"model": "gemini-3.1-pro-preview"})
+
+        result = get_or_create_chat(
+            mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt",
+            disk_history=[{"role": "model", "parts": []}], disk_provider="gemini",
+        )
+
+        assert result["history"] is None
+        _assert_notes_record(conv_dir, kept=False)
+
+    def test_cross_provider_switch_with_no_disk_history_clears(
+        self, mock_provider, chats_root,
+    ):
+        conv_dir = _seed_doc_notes(chats_root)
+        _active_chats[(1, CONV)] = ("gemini-3.1-pro-preview", {"model": "gemini-3.1-pro-preview"})
+
+        result = get_or_create_chat(
+            mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt",
+        )
+
+        assert result["history"] is None
+        _assert_notes_record(conv_dir, kept=False)
+
+    def test_same_provider_save_failure_without_compatible_disk_copy_clears(
+        self, mock_provider, chats_root,
+    ):
+        conv_dir = _seed_doc_notes(chats_root)
+        _active_chats[(1, CONV)] = ("claude-haiku-4.5", {"model": "claude-haiku-4.5"})
+        mock_provider.save_history.side_effect = Exception("extraction failed")
+
+        result = get_or_create_chat(
+            mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt",
+            disk_history=[{"role": "model", "parts": []}], disk_provider="gemini",
+        )
+
+        assert result["history"] is None
+        _assert_notes_record(conv_dir, kept=False)
+
+    def test_no_live_session_with_incompatible_disk_history_clears(
+        self, mock_provider, chats_root,
+    ):
+        # After a restart or eviction the caller discards another
+        # provider's disk history and passes history=None.
+        conv_dir = _seed_doc_notes(chats_root)
+
+        result = get_or_create_chat(
+            mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt",
+            history=None,
+            disk_history=[{"role": "model", "parts": []}], disk_provider="gemini",
+        )
+
+        assert result["history"] is None
+        _assert_notes_record(conv_dir, kept=False)
+
+    # -- kept -----------------------------------------------------------
+
+    def test_cross_provider_switch_with_compatible_disk_history_keeps(
+        self, mock_provider, chats_root,
+    ):
+        conv_dir = _seed_doc_notes(chats_root)
+        _active_chats[(1, CONV)] = ("gemini-3.1-pro-preview", {"model": "gemini-3.1-pro-preview"})
+        disk_history = [{"role": "assistant", "content": "anthropic data"}]
+
+        result = get_or_create_chat(
+            mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt",
+            disk_history=disk_history, disk_provider="anthropic",
+        )
+
+        assert result["history"] == disk_history
+        _assert_notes_record(conv_dir, kept=True)
+
+    def test_thinking_effort_rebuild_keeps(self, mock_provider, chats_root):
+        conv_dir = _seed_doc_notes(chats_root)
+        session = _Session("gemini-4-argon", "low")
+        _active_chats[(1, CONV)] = ("gemini-4-argon", session)
+        # mock_provider.set_thinking_effort returns False: rebuild via save_history
+
+        result = get_or_create_chat(
+            mock_provider, 1, CONV, "gemini-4-argon", "system prompt",
+            thinking_effort="high",
+        )
+
+        mock_provider.save_history.assert_called_once_with(session)
+        assert result["history"] == [{"role": "user", "content": "hello"}]
+        _assert_notes_record(conv_dir, kept=True)
+
+    def test_in_place_thinking_effort_switch_keeps(self, mock_provider, chats_root):
+        conv_dir = _seed_doc_notes(chats_root)
+        session = _Session("claude-opus-5-5")
+        _active_chats[(1, CONV)] = ("claude-opus-5-5", session)
+        mock_provider.set_thinking_effort.return_value = True
+
+        result = get_or_create_chat(
+            mock_provider, 1, CONV, "claude-opus-5-5", "system prompt",
+            thinking_effort="max",
+        )
+
+        assert result is session
+        mock_provider.create_session.assert_not_called()
+        _assert_notes_record(conv_dir, kept=True)
+
+    def test_same_provider_model_switch_keeps(self, mock_provider, chats_root):
+        conv_dir = _seed_doc_notes(chats_root)
+        _active_chats[(1, CONV)] = ("claude-haiku-4.5", {"model": "claude-haiku-4.5"})
+
+        result = get_or_create_chat(
+            mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt",
+        )
+
+        assert result["history"] == [{"role": "user", "content": "hello"}]
+        _assert_notes_record(conv_dir, kept=True)
+
+    def test_same_provider_save_failure_with_compatible_disk_copy_keeps(
+        self, mock_provider, chats_root,
+    ):
+        conv_dir = _seed_doc_notes(chats_root)
+        _active_chats[(1, CONV)] = ("claude-haiku-4.5", {"model": "claude-haiku-4.5"})
+        mock_provider.save_history.side_effect = Exception("extraction failed")
+        disk_history = [{"role": "user", "content": "disk hello"}]
+
+        result = get_or_create_chat(
+            mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt",
+            disk_history=disk_history, disk_provider="anthropic",
+        )
+
+        assert result["history"] == disk_history
+        _assert_notes_record(conv_dir, kept=True)
+
+    def test_no_live_session_seeded_from_compatible_history_keeps(
+        self, mock_provider, chats_root,
+    ):
+        conv_dir = _seed_doc_notes(chats_root)
+        disk_history = [{"role": "assistant", "content": "anthropic data"}]
+
+        result = get_or_create_chat(
+            mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt",
+            history=disk_history,
+            disk_history=disk_history, disk_provider="anthropic",
+        )
+
+        assert result["history"] == disk_history
+        _assert_notes_record(conv_dir, kept=True)
+
+    def test_session_without_any_history_clears(self, mock_provider, chats_root):
+        # No live session and no disk history (e.g. the first save of the
+        # history failed): the new session holds no notes block, so a
+        # record left over could only be stale.
+        conv_dir = _seed_doc_notes(chats_root)
+
+        result = get_or_create_chat(
+            mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt",
+        )
+
+        assert result["history"] is None
+        _assert_notes_record(conv_dir, kept=False)
+
+    def test_empty_carried_over_history_clears(self, mock_provider, chats_root):
+        # An empty list is no history either (a `history is None` check
+        # would miss it).
+        conv_dir = _seed_doc_notes(chats_root)
+        _active_chats[(1, CONV)] = ("claude-haiku-4.5", {"model": "claude-haiku-4.5"})
+        mock_provider.save_history.return_value = []
+
+        result = get_or_create_chat(
+            mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt",
+        )
+
+        assert result["history"] is None
+        _assert_notes_record(conv_dir, kept=False)
+
+    def test_clear_touches_only_this_conversation(self, mock_provider, chats_root):
+        conv_dir = _seed_doc_notes(chats_root)
+        other_dir = chats_root / "conv-2"
+        other_dir.mkdir()
+        storage_mod.ChatStorage.record_doc_notes_seen("conv-2", DOC, 3, 7)
+        _active_chats[(1, CONV)] = ("gemini-3.1-pro-preview", {"model": "gemini-3.1-pro-preview"})
+
+        get_or_create_chat(mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt")
+
+        _assert_notes_record(conv_dir, kept=False)
+        assert storage_mod.ChatStorage.get_doc_notes_seen("conv-2", DOC) == notes_mod.NotesSeen(3, 7)
+
+    def test_first_session_of_a_new_conversation_creates_no_file_and_logs_nothing(
+        self, mock_provider, chats_root, monkeypatch, caplog,
+    ):
+        conv_dir = chats_root / CONV
+        conv_dir.mkdir(parents=True)
+        # chat/logging_config.py turns propagation off for the "chat" logger.
+        monkeypatch.setattr(logging.getLogger("chat"), "propagate", True)
+        caplog.set_level(logging.INFO, logger="chat.gemini_api.session")
+
+        get_or_create_chat(mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt")
+
+        assert list(conv_dir.iterdir()) == []
+        assert not [r for r in caplog.records if "doc notes seen" in r.getMessage()]
+
+    # -- failure --------------------------------------------------------
+
+    def test_failed_clear_is_logged_and_session_still_created(
+        self, mock_provider, chats_root, monkeypatch, caplog,
+    ):
+        conv_dir = _seed_doc_notes(chats_root)
+        _active_chats[(1, CONV)] = ("gemini-3.1-pro-preview", {"model": "gemini-3.1-pro-preview"})
+
+        def _boom(conversation_id):
+            raise RuntimeError("disk on fire")
+
+        monkeypatch.setattr(
+            storage_mod.ChatStorage, "clear_doc_notes_seen", staticmethod(_boom),
+        )
+        # chat/logging_config.py turns propagation off for the "chat" logger.
+        monkeypatch.setattr(logging.getLogger("chat"), "propagate", True)
+        caplog.set_level(logging.WARNING, logger="chat.gemini_api.session")
+
+        result = get_or_create_chat(
+            mock_provider, 1, CONV, "claude-sonnet-4-6", "system prompt",
+        )
+
+        assert result == {"model": "claude-sonnet-4-6", "history": None, "thinking_effort": None}
+        assert _active_chats[(1, CONV)] == ("claude-sonnet-4-6", result)
+        warnings = [
+            r for r in caplog.records
+            if r.name == "chat.gemini_api.session" and r.levelno == logging.WARNING
+        ]
+        assert len(warnings) == 1
+        assert "doc notes seen" in warnings[0].getMessage()
+        assert warnings[0].exc_info is not None
+        # The clear never ran, so the record is still there.
+        _assert_notes_record(conv_dir, kept=True)

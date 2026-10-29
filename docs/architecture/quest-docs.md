@@ -54,7 +54,7 @@ Docs come in two **modes** that mirror [public projects](public-projects.md). **
 Invariants the code keeps (code comments cite them by number):
 
 1. **Taint.** Content enters a public doc only from public conversations or from a person in the UI. A private conversation never gets a non-denied write verdict on a public doc, every doc is created in its final mode and keeps it, and History's copy always creates a private doc (public -> private is safe, the reverse never happens). The action request re-resolves access at Approve, so a doc that became hidden while its card sat open (share revoked, doc deleted) refuses.
-2. **Invisibility.** In every tool, a doc the caller may not see behaves exactly like a nonexistent id. The text is the same (`doc_not_found_message`) and so is the work: `doc_store.get_doc` runs its shares query for a missing id too, so both cost two queries and neither touches the files. Hidden docs never appear in list or search output, and title uniqueness is scoped per mode so that a `create_doc` collision cannot reveal a private title to a public conversation ([Tables](#tables)).
+2. **Invisibility.** In every tool, a doc the caller may not see behaves exactly like a nonexistent id. The text is the same (`doc_not_found_message`) and so is the work: `doc_store.get_doc` runs its shares query for a missing id too, so both cost two queries and neither touches the files. Hidden docs never appear in list or search output, and title uniqueness is scoped per mode so a `create_doc` collision cannot reveal a private title to a public conversation ([Tables](#tables)).
 3. **Single rule.** Every read/write decision goes through `resolve_doc_access()`. Tools, routes, the pre-card, the approve-time execute, `list_docs` / `search_docs` and the UI `access` object consume its `DocAccess`; none re-derive the rule.
 4. **Paths.** `ChatStorage.get_doc_dir()` is the only id-to-path resolver (canonical id + containment check, see [Data Paths](data-paths.md)). `chat/docs/files.py` gets every path through `doc_paths()`.
 5. **No full replace.** No model-facing path replaces a whole body in one call. Edits are exact search/replace (`apply_content_edit`), plus append and image add. `files.write_body()` has one production caller, `ui_writes.replace_body_from_ui()` (the editor's save and History's restore), which only the `/app/api` routes reach; no model-driven channel can address them ([Human Editing](#human-editing)).
@@ -97,7 +97,7 @@ A version is a body. Creation takes no snapshot, metadata and share changes touc
 
 ### Read sidecar
 
-`CHATS_DIR/<conversation_id>/doc_reads.json` (`ChatStorage.get_doc_read_ids` / `add_doc_read_ids`) records the docs this conversation has read. It is the read-before-edit gate for `edit_doc` and for `write_doc` with `operation: "edit"`. `read_doc` and `create_doc` feed it; `search_docs` snippets do not count. The service writes it on the event loop (never in a thread), relying on the same single-event-loop guarantee as the workspace and skill sidecars. Sub-agents dispatch with the parent's `conversation_id`, so a sub-agent's `read_doc` counts for the parent. Scripts have no conversation and record nothing.
+`CHATS_DIR/<conversation_id>/doc_reads.json` (`ChatStorage.get_doc_read_ids` / `add_doc_read_ids`) lists the docs this conversation has read, the read-before-edit gate for `edit_doc` and for `write_doc` with `operation: "edit"`. `read_doc` and `create_doc` feed it; `search_docs` snippets do not count. The service writes it on the event loop, under the workspace and skill sidecars' single-event-loop guarantee. A sub-agent's `read_doc` counts for the parent, whose `conversation_id` it shares; scripts have no conversation and record nothing. The [doc notes seen record](doc-notes.md#seen-record) never credits a sub-agent and is deleted on model history rebuilds.
 
 ## Access Rule
 
@@ -113,7 +113,7 @@ A version is a body. Creation takes no snapshot, metadata and share changes touc
 
 ### run_kind derivation
 
-`ToolContext.run_kind` in `chat/gemini_api/tool_dispatch.py` derives one of `RUN_KINDS` from the context's `is_*` flags, first match wins (the order is the property's body; `top_level` is the fall-through). Routine runs are `top_level`, and whether the conversation is public is the separate `is_public` field. `run_conversation_turn` passes `is_user_subagent` and `is_slack` (the conversation origin) into `_dispatch_tool_call`, `chat/gemini_api/sub_agent.py` passes `is_sub_agent=True`, and the script bridge passes `is_script=True` together with the `project_id` and `is_public` recorded on the container's sandbox lease.
+`ToolContext.run_kind` in `chat/gemini_api/tool_dispatch.py` derives one of `RUN_KINDS` from the context's `is_*` flags, first match wins (the order is the property's body; `top_level` is the fall-through). Routine runs are `top_level`, and whether the conversation is public is the separate `is_public` field. `run_conversation_turn` passes `is_user_subagent` and `is_slack` (the conversation origin) into `_dispatch_tool_call`, `chat/gemini_api/sub_agent.py` passes `is_sub_agent=True`, and the script bridge passes `is_script=True` with the `project_id` and `is_public` recorded on the container's sandbox lease.
 
 `_doc_caller()` builds the service `Caller` straight from the context (a script's context has `conversation_id=None` and the launching conversation's `project_id` and `is_public`). Other callers build their own: the routes (and `ui_writes.ui_caller()`) use `run_kind="ui"` with no project and `is_public=False`, and the `write_doc` pre-card and execute use `run_kind="top_level"` with `is_public` re-derived from the project row (`project_is_public()` in `write_doc.py`).
 
@@ -144,7 +144,7 @@ A version is a body. Creation takes no snapshot, metadata and share changes touc
 
 ### UI mutations
 
-`delete_doc_from_ui()` serves `DELETE /docs/{id}`: visibility as `ui`, then ownership (`forbidden`), then the row delete and a best-effort directory removal under the per-doc `asyncio.Lock` and `_shielded()`. It therefore waits for any in-flight model write, and it re-reads the row with its shares under the lock to capture the audience before the cascade removes them. Rename is a plain metadata update in the route (`doc_store.update_doc_metadata`). Share changes, body saves, restores and asset changes all take the same per-doc lock ([Sharing](#sharing), [Human Editing](#human-editing), [History](#history)).
+`delete_doc_from_ui()` serves `DELETE /docs/{id}`: visibility as `ui`, then ownership (`forbidden`), then the row delete and a best-effort directory removal under the per-doc `asyncio.Lock` and `_shielded()`. It therefore waits for any in-flight model write and re-reads the row with its shares under the lock to capture the audience before the cascade removes them. Rename is a plain metadata update in the route (`doc_store.update_doc_metadata`). Share changes, body saves, restores and asset changes all take the same per-doc lock ([Sharing](#sharing), [Human Editing](#human-editing), [History](#history)).
 
 ## Sharing
 
