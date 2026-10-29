@@ -10,12 +10,24 @@ place::
       -> DB bump (db/doc_store.update_after_write)
       -> read sidecar (doc_reads.json) -> realtime events (chat/docs/events.py)
 
+Doc notes (docs/architecture/doc-notes.md): while the ``doc_notes`` gate
+is open for the caller, :func:`read_doc` adds the ``notes`` counts and,
+when the notes are due (a recording run that has not seen them, recorded
+in the seen sidecar ``doc_notes_seen.json``; a sub-agent or inference-API
+run whenever the doc has notes), the ``doc_notes`` block;
+:func:`list_docs` / :func:`search_docs` rows add the counts and
+:func:`create_doc` records the new doc as seen at versions (0, 0). The
+helpers in the "Doc notes" section are shared with the notes tools.
+
 Errors are raised as :class:`DocError` (model/user-facing message; tools
-wrap it as ``{"error": str(e)}``) or its two structured subclasses:
+wrap it as ``{"error": str(e)}``) or its structured subclasses:
 :class:`DocApprovalRequired` (the write needs a ``write_doc`` action
 request; carries the ``suggested_request`` payload the model forwards
-unchanged) and :class:`DocDisabled` (the ``docs`` feature gate is closed
-for the user; raised before any DB work).
+unchanged), :class:`DocNotesUnseen` (a model write refused once because
+the conversation has not seen the doc's current notes; carries the notes
+block and its text copy, and the refusal has recorded the delivery) and
+:class:`DocDisabled` (the ``docs`` feature gate is closed for the user;
+raised before any DB work). :class:`DocRequestError` serves the UI routes.
 
 Invariants kept here:
 
@@ -28,9 +40,23 @@ Invariants kept here:
   holds a per-doc ``asyncio.Lock`` from the file op through the DB bump
   and the events, so concurrent writers never lose a change and the DB
   counters / ``updated_at`` land in write order.
-- The read sidecar and the realtime publishers run on the event loop,
-  never inside ``asyncio.to_thread`` (``ChatStorage.add_doc_read_ids`` and
+- The read sidecar, the notes seen sidecar and the realtime publishers
+  run on the event loop, never inside ``asyncio.to_thread``
+  (``ChatStorage.add_doc_read_ids``, ``record_doc_notes_seen`` and
   ``bus.publish_to_user`` rely on the single-event-loop guarantee).
+- A notes delivery is recorded only once the block is in the result (or
+  in the :class:`DocNotesUnseen` being raised), with no ``await`` before
+  the return or raise, and never for a sub-agent, inference-API or script
+  read (:func:`record_notes_delivery`). The one record without a block is
+  the creator's (0, 0).
+- Notes before writes: in a recording run with the ``doc_notes`` gate
+  open, a model write to a doc whose notes this conversation has not seen
+  (``notes.write_refused()``) is refused once with :class:`DocNotesUnseen`
+  in :func:`_resolve_write`, after the denied and read-before-edit checks
+  and before the approval verdict, so the write tools and the write_doc
+  pre-card share it. Approve-time execute skips the seen record and
+  instead refuses when the card's pinned ``instructions_version`` moved
+  and the live instructions are non-empty.
 - Results never expose a doc's share roster; list/read rows carry only a
   ``shared`` flag.
 """
@@ -47,6 +73,7 @@ import stat
 import sys
 import uuid
 import weakref
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -55,6 +82,7 @@ from typing import Any, Optional
 from chat import storage as _storage
 from chat.docs import constants
 from chat.docs import files as doc_files
+from chat.docs import notes as doc_notes
 from chat.docs.access import (
     DENY_INFERENCE_API,
     DENY_SCRIPT,
@@ -72,7 +100,7 @@ from chat.docs.constants import (
     user_doc_mode_private_message,
 )
 from config import feature_gates
-from db import doc_store
+from db import doc_memory_store, doc_store
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +114,7 @@ __all__ = [
     "DocApprovalRequired",
     "DocDisabled",
     "DocError",
+    "DocNotesUnseen",
     "DocRequestError",
     "add_doc_image",
     "append_to_doc",
@@ -95,9 +124,14 @@ __all__ = [
     "edit_doc",
     "get_visible_doc",
     "list_docs",
+    "load_notes",
     "mode_switch_refusal",
+    "notes_counts",
+    "notes_enabled",
+    "notes_seen",
     "preview_write_operation",
     "read_doc",
+    "record_notes_delivery",
     "require_enabled",
     "search_docs",
     "validate_doc_metadata",
@@ -171,6 +205,24 @@ class DocApprovalRequired(DocError):
 
 class DocDisabled(DocError):
     """The ``docs`` feature gate is closed for the user."""
+
+
+class DocNotesUnseen(DocError):
+    """A model write refused until the conversation has seen the doc's notes.
+
+    Raised by :func:`_resolve_write` in a recording run with the
+    ``doc_notes`` gate open, once the delivery it carries is recorded, so
+    the identical retry passes. ``notes_block`` is the ``doc_notes`` block
+    the write tools return; ``notes_text`` its plain-text copy
+    (``notes.render_notes_text()``), which the write_doc pre-card puts in
+    its ``Invalid parameters`` text. ``str(e)`` is
+    ``notes.DOC_NOTES_UNSEEN_MESSAGE`` with the doc's title.
+    """
+
+    def __init__(self, message: str, notes_block: dict, notes_text: str):
+        super().__init__(message)
+        self.notes_block = notes_block
+        self.notes_text = notes_text
 
 
 class DocRequestError(DocError):
@@ -452,6 +504,134 @@ async def _finish_write(
 
 
 # ---------------------------------------------------------------------------
+# Doc notes: gate, counts, block and seen record (docs/architecture/doc-notes.md)
+#
+# Shared by the doc tools here and the notes tools. The gate is the
+# caller's, never the doc owner's; with it closed none of this runs.
+# ---------------------------------------------------------------------------
+
+
+# Run kinds whose read_doc gets the notes counts but never the block: a
+# script is code, not the model; the UI has its own notes routes. Applies
+# to read_doc only (a script may still fetch the notes on purpose).
+_READ_DOC_COUNTS_ONLY_RUN_KINDS = frozenset({"script", "ui"})
+
+
+def notes_enabled(caller: Caller) -> bool:
+    """Whether the ``doc_notes`` gate is open for the caller.
+
+    The one place the doc tools check that gate (invariant 6: closed means
+    every doc tool returns what it did before notes existed).
+    """
+    return feature_gates.doc_notes_enabled_for((caller.user or {}).get("email") or "")
+
+
+def notes_counts(doc: Mapping[str, Any]) -> dict:
+    """The ``notes`` counts of a result row: ``{"has_instructions": bool,
+    "memories": int}``, from a doc dict or the ``get_notes_state()`` dict.
+    Never any content."""
+    return {
+        "has_instructions": bool(doc["has_instructions"]),
+        "memories": int(doc["memory_count"]),
+    }
+
+
+def _block_counts(block: Mapping[str, Any]) -> dict:
+    """:func:`notes_counts` of what a notes block (built from offset 0)
+    shows, so a result's counts agree with its block even when a memory
+    changed between the state read and the memories read."""
+    return {
+        "has_instructions": block["instructions"] != "",
+        "memories": len(block["memories"]) + block["memories_omitted"],
+    }
+
+
+async def load_notes(doc_id: str, *, memory_offset: int = 0) -> tuple[dict, dict]:
+    """The doc's notes state and its notes block, for a visible doc.
+
+    Reads ``get_notes_state()`` BEFORE ``list_doc_memories()``: a memory
+    change landing between the two reads then shows memories at least as
+    new as the state's ``memories_version``, so the version a caller
+    records is never newer than the memories it showed.
+
+    Returns:
+        ``(state, block)``: the ``get_notes_state()`` dict and the
+        ``doc_notes`` block (``build_notes_block``) with memories from
+        ``memory_offset``.
+
+    Raises:
+        DocError: ``memory_offset`` is not an int >= 0 (checked before any
+            read), or ``doc_not_found_message`` when the doc is gone.
+    """
+    if isinstance(memory_offset, bool) or not isinstance(memory_offset, int) or memory_offset < 0:
+        raise DocError("memory_offset must be a non-negative integer.")
+    state = await doc_store.get_notes_state(doc_id)
+    if state is None:
+        raise DocError(doc_not_found_message(doc_id))
+    memories = await doc_memory_store.list_doc_memories(doc_id)
+    return state, doc_notes.build_notes_block(state, memories, memory_offset)
+
+
+def notes_seen(caller: Caller, doc_id: str) -> Optional[doc_notes.NotesSeen]:
+    """The caller's seen record for ``doc_id``, or None.
+
+    None outside recording runs (``records_delivery()``): a sub-agent
+    shares its parent's conversation id, but the parent's record is not
+    its own, so it reads like a conversation with no record. None also
+    for a record that cannot be read: no record means deliver (and refuse
+    a write), the fail-closed direction.
+
+    Raises:
+        ValueError / TypeError: an unknown run kind or a non-string
+            conversation id (from ``records_delivery()``).
+    """
+    if not doc_notes.records_delivery(caller.run_kind, caller.conversation_id):
+        return None
+    try:
+        return _storage.ChatStorage.get_doc_notes_seen(caller.conversation_id, doc_id)
+    except (OSError, _storage.InvalidStorageIdError):
+        logger.warning(
+            "[docs] could not read the doc notes seen record "
+            "(conversation=%s, doc=%s)",
+            caller.conversation_id, doc_id, exc_info=True,
+        )
+        return None
+
+
+def record_notes_delivery(
+    caller: Caller, doc_id: str, instructions_version: int, memories_version: int,
+) -> None:
+    """Record that the caller's model was shown ``doc_id``'s notes at these
+    versions (best-effort).
+
+    A no-op unless the run records deliveries (``records_delivery()``:
+    top-level, Slack and cross-user subagent runs with a conversation), so
+    sub-agent, inference-API and script reads never advance a record.
+    Synchronous on purpose, like :func:`_record_read`. Call it as the last
+    step once the block is in the result, with no ``await`` between it and
+    the return (or raise), so a cancelled call never records a block the
+    model did not get. A failed write costs one extra delivery or refusal.
+
+    Raises:
+        ValueError / TypeError: an unknown run kind or a non-string
+            conversation id (from ``records_delivery()``), or a bad
+            ``doc_id`` / version (from ``record_doc_notes_seen()``): caller
+            bugs, never swallowed.
+    """
+    if not doc_notes.records_delivery(caller.run_kind, caller.conversation_id):
+        return
+    try:
+        _storage.ChatStorage.record_doc_notes_seen(
+            caller.conversation_id, doc_id, instructions_version, memories_version,
+        )
+    except (OSError, _storage.InvalidStorageIdError):
+        logger.warning(
+            "[docs] could not record doc notes delivery (conversation=%s, doc=%s)",
+            caller.conversation_id, doc_id, exc_info=True,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Visibility + read side
 # ---------------------------------------------------------------------------
 
@@ -538,8 +718,8 @@ async def _visible_docs(
         before = (datetime.fromisoformat(last["updated_at"]), last["id"])
 
 
-def _list_row(doc: dict, access: DocAccess) -> dict:
-    return {
+def _list_row(doc: dict, access: DocAccess, *, with_notes: bool = False) -> dict:
+    row = {
         "id": doc["id"],
         "title": doc["title"],
         "description": doc["description"],
@@ -553,6 +733,9 @@ def _list_row(doc: dict, access: DocAccess) -> dict:
         "writable": access.write,
         "write_note": write_note(access),
     }
+    if with_notes:
+        row["notes"] = notes_counts(doc)
+    return row
 
 
 async def list_docs(
@@ -567,11 +750,21 @@ async def list_docs(
     sources, from a public conversation its own project's docs, nothing
     elsewhere) or ``"all"`` (everything). ``limit`` is clamped to 1..200.
     Hidden docs never appear.
+
+    Returns:
+        Rows ``{id, title, description, mode, scope, project_id,
+        content_size, asset_count, updated_at, shared, writable,
+        write_note}``, plus ``notes`` (:func:`notes_counts`, never content)
+        last while the ``doc_notes`` gate is open for the caller.
     """
     require_enabled(caller)
     scope = _check_scope(scope)
     limit = _check_limit(limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT)
-    return [_list_row(doc, access) for doc, access in await _visible_docs(caller, scope, limit)]
+    with_notes = notes_enabled(caller)
+    return [
+        _list_row(doc, access, with_notes=with_notes)
+        for doc, access in await _visible_docs(caller, scope, limit)
+    ]
 
 
 def _body_snippets(body: str, pattern: re.Pattern, max_snippets: int) -> list[dict]:
@@ -608,14 +801,18 @@ async def search_docs(
     ``matches: []``. Does NOT record a read (snippets are not a read).
 
     Returns:
-        ``{"results": [{id, title, mode, scope, matches: [{line, snippet}]}],
-        "truncated": bool}``, at most ``limit`` (1..50) results.
+        ``{"results": [{id, title, mode, scope, matches: [{line, snippet}],
+        notes?}], "truncated": bool}``, at most ``limit`` (1..50) results;
+        ``notes`` (:func:`notes_counts`, never content) comes last while
+        the ``doc_notes`` gate is open for the caller. Notes are never
+        searched.
     """
     require_enabled(caller)
     if not isinstance(query, str) or not query.strip():
         raise DocError("query must be a non-empty string.")
     scope = _check_scope(scope)
     limit = _check_limit(limit, SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT)
+    with_notes = notes_enabled(caller)
 
     needle = query.strip()
     folded = needle.casefold()
@@ -644,13 +841,16 @@ async def search_docs(
             scanned += len(body.encode("utf-8"))
             matches = _body_snippets(body, pattern, snippets_per_doc)
         if matches or meta_hit:
-            results.append({
+            row = {
                 "id": doc["id"],
                 "title": doc["title"],
                 "mode": doc["mode"],
                 "scope": _scope(doc),
                 "matches": matches,
-            })
+            }
+            if with_notes:
+                row["notes"] = notes_counts(doc)
+            results.append(row)
     return {"results": results, "truncated": truncated}
 
 
@@ -667,10 +867,19 @@ async def read_doc(
     ``truncated`` and a ``note`` telling the model to page. Records the doc
     in the conversation's read sidecar (the edit_doc prerequisite).
 
+    While the ``doc_notes`` gate is open for the caller, the result also
+    ends with ``notes`` (:func:`notes_counts`) and, when the notes are
+    delivered, ``doc_notes`` (the block of :func:`load_notes`, the current
+    state even when emptied). A recording run delivers when
+    ``needs_delivery()`` holds for its seen record and then records the
+    delivered versions; sub-agent and inference-API runs deliver whenever
+    the doc has notes and record nothing; scripts get the counts only.
+
     Returns:
-        ``{id, title, mode, scope, total_lines, content, writable,
-        write_note, start_line, end_line, truncated, note?}`` (start/end are
-        the returned range; 0/0 for an empty doc).
+        ``{id, title, mode, scope, total_lines, content, shared, writable,
+        write_note, start_line, end_line, truncated, note?, notes?,
+        doc_notes?}`` (start/end are the returned range; 0/0 for an empty
+        doc).
     """
     require_enabled(caller)
     for name, value in (("start_line", start_line), ("end_line", end_line)):
@@ -734,7 +943,28 @@ async def read_doc(
             f"start_line/end_line (returned lines {returned_start}-"
             f"{returned_end} of {total})."
         )
+    delivered: Optional[dict] = None
+    if notes_enabled(caller):
+        result["notes"] = notes_counts(doc)
+        # Outside recording runs notes_seen() is None, so a sub-agent or
+        # inference-API read gets what a conversation with no record gets:
+        # the block whenever the doc has notes.
+        attach = (
+            caller.run_kind not in _READ_DOC_COUNTS_ONLY_RUN_KINDS
+            and doc_notes.needs_delivery(doc, notes_seen(caller, doc["id"]))
+        )
+        if attach:
+            state, block = await load_notes(doc["id"])
+            result["notes"] = _block_counts(block)
+            result["doc_notes"] = block
+            delivered = state
     _record_read(caller, doc["id"])
+    if delivered is not None:
+        # Last step, no await before the return (record_notes_delivery).
+        record_notes_delivery(
+            caller, doc["id"],
+            delivered["instructions_version"], delivered["memories_version"],
+        )
     return result
 
 
@@ -764,6 +994,9 @@ async def create_doc(
     crash in between leaves an invisible orphan directory, never a row
     without a body); the directory is removed again if the insert fails.
     Records the new doc as read and publishes doc_list_changed + doc_changed.
+    While the ``doc_notes`` gate is open for the caller, also records the
+    doc as seen at notes versions (0, 0) (the creator exception: no notes
+    can predate this conversation, and later ones re-arm the gate).
 
     Returns:
         ``{id, title, mode, scope, project_id, content_size, updated_at}``.
@@ -844,6 +1077,8 @@ async def create_doc(
         raise
 
     _record_read(caller, doc["id"])
+    if notes_enabled(caller):
+        record_notes_delivery(caller, doc["id"], 0, 0)
     events = _events()
     events.publish_doc_list_changed(doc["owner_id"])
     events.publish_doc_changed(doc["owner_id"], doc["id"], doc["updated_at"])
@@ -1022,12 +1257,21 @@ def _bool_param(params: dict, key: str, default: bool) -> bool:
     return value
 
 
+# Server-only pins: set by the write_doc action request at approve time,
+# never part of a suggested_request (a model-supplied copy in a write_doc
+# proposal is refused as an unknown param by its validate_params).
+_SERVER_PINS = ("expected_sha256", "expected_instructions_version")
+
+
 def _normalize_write_params(operation: str, params: dict) -> dict:
     """Validate and complete one operation's params (defaults filled in).
 
     The result has exactly the keys of ``suggested_request.params`` minus
-    ``operation``/``doc_id``; unknown keys in ``params`` are ignored (the
-    write_doc handler validates the request shape itself).
+    ``operation``/``doc_id``, plus the server-only pins when given
+    (:data:`_SERVER_PINS`, stripped again by :func:`_suggested_request`):
+    ``expected_sha256`` (add_image) and ``expected_instructions_version``
+    (any operation; an int >= 0). Unknown keys in ``params`` are ignored
+    (the write_doc handler validates the request shape itself).
     """
     if operation not in WRITE_OPERATIONS:
         raise DocError(f"operation must be one of: {', '.join(WRITE_OPERATIONS)}.")
@@ -1042,57 +1286,160 @@ def _normalize_write_params(operation: str, params: dict) -> dict:
             raise DocError(
                 "old_string and new_string are identical -- nothing to change."
             )
-        return {
+        clean = {
             "old_string": old_string,
             "new_string": new_string,
             "replace_all": _bool_param(params, "replace_all", False),
         }
-    if operation == "append":
+    elif operation == "append":
         content = _normalize_text(_str_param(params, "content"))
         if not content.strip():
             raise DocError("content must not be empty.")
-        return {
+        clean = {
             "content": content,
             "ensure_blank_line": _bool_param(params, "ensure_blank_line", True),
         }
-    workspace_path = _str_param(params, "workspace_path")
-    if not workspace_path.strip():
-        raise DocError("workspace_path must not be empty.")
-    placement = _str_param(params, "placement", default="append") or "append"
-    if placement not in IMAGE_PLACEMENTS:
-        raise DocError('placement must be "append" or "none".')
-    clean = {
-        "workspace_path": workspace_path,
-        "alt": _str_param(params, "alt", default=""),
-        "placement": placement,
-    }
-    # Server-only pin set by the write_doc action request at approve time:
-    # the stored asset must be the file the card showed (the user can
-    # still swap the conversation-workspace file between proposal and
-    # approval, through the Chat Files card or their own sandbox runs).
-    expected = params.get("expected_sha256")
-    if expected:
-        clean["expected_sha256"] = str(expected)
+    else:
+        workspace_path = _str_param(params, "workspace_path")
+        if not workspace_path.strip():
+            raise DocError("workspace_path must not be empty.")
+        placement = _str_param(params, "placement", default="append") or "append"
+        if placement not in IMAGE_PLACEMENTS:
+            raise DocError('placement must be "append" or "none".')
+        clean = {
+            "workspace_path": workspace_path,
+            "alt": _str_param(params, "alt", default=""),
+            "placement": placement,
+        }
+        # Server-only pin: the stored asset must be the file the card
+        # showed (the user can still swap the conversation-workspace file
+        # between proposal and approval, through the Chat Files card or
+        # their own sandbox runs).
+        expected = params.get("expected_sha256")
+        if expected:
+            clean["expected_sha256"] = str(expected)
+    # Server-only pin: the doc's instructions_version when the write_doc
+    # card was proposed (_check_pinned_instructions).
+    pinned = params.get("expected_instructions_version")
+    if pinned is not None:
+        if isinstance(pinned, bool) or not isinstance(pinned, int) or pinned < 0:
+            raise DocError(
+                "expected_instructions_version must be a non-negative integer."
+            )
+        clean["expected_instructions_version"] = pinned
     return clean
 
 
 def _suggested_request(operation: str, doc_id: str, params: dict) -> dict:
-    params = {k: v for k, v in params.items() if k != "expected_sha256"}
+    params = {k: v for k, v in params.items() if k not in _SERVER_PINS}
     return {
         "request_type": "write_doc",
         "params": {"operation": operation, "doc_id": doc_id, **params},
     }
 
 
+def _check_pinned_instructions(doc: dict, clean: dict) -> None:
+    """Approve-time execute: refuse when the doc's instructions changed
+    since the write_doc card was proposed.
+
+    ``doc`` is the live row. No pin (a card proposed before the pin
+    existed, or while the ``doc_notes`` gate was closed for the proposer)
+    passes. Cleared instructions never refuse, as in ``write_refused()``;
+    memory changes never do. The seen record is never consulted: it
+    describes the model's context, which compaction may clear while the
+    card sits open, whereas the pin is what the proposal was held to, and
+    the card shows the approver no instructions.
+
+    Raises:
+        DocError: ``notes.DOC_INSTRUCTIONS_CHANGED_MESSAGE``.
+    """
+    pinned = clean.get("expected_instructions_version")
+    if pinned is None:
+        return
+    if doc["instructions_version"] != pinned and doc["has_instructions"]:
+        raise DocError(doc_notes.DOC_INSTRUCTIONS_CHANGED_MESSAGE)
+
+
+_NOTES_FORMS = ("block", "text")
+
+
+async def _refuse_unseen_notes(caller: Caller, doc: dict, notes_form: str) -> None:
+    """Invariant 1 (notes before writes): raise :class:`DocNotesUnseen`
+    when this recording run has not seen the doc's current notes
+    (``notes.write_refused()``), after recording the delivery it carries.
+
+    Decides on the row first (no notes query for a doc without notes or
+    with a current record), then on the freshly loaded state, so notes
+    emptied meanwhile never refuse. ``notes_form`` says what the model
+    will be shown: ``"block"`` (the write tools: the whole block) or
+    ``"text"`` (the write_doc pre-card: ``render_notes_text()``). When the
+    text had to cut the instructions, the refusal records the seen
+    instructions version unchanged (never instructions the model was not
+    shown whole), so the retry is refused again.
+
+    Raises:
+        DocNotesUnseen: the refusal (its delivery recorded).
+        DocError: the doc is gone (``doc_not_found_message``).
+    """
+    if not doc_notes.records_delivery(caller.run_kind, caller.conversation_id):
+        return
+    seen = notes_seen(caller, doc["id"])
+    if not doc_notes.write_refused(doc, seen):
+        return
+    state, block = await load_notes(doc["id"])
+    if not doc_notes.write_refused(state, seen):
+        return
+    text = doc_notes.render_notes_text(block)
+    instructions_version = state["instructions_version"]
+    if notes_form == "text" and not text.instructions_whole:
+        instructions_version = seen.instructions if seen else 0
+    # Last step, no await between the record and the raise
+    # (record_notes_delivery).
+    record_notes_delivery(
+        caller, doc["id"], instructions_version, state["memories_version"],
+    )
+    raise DocNotesUnseen(
+        doc_notes.DOC_NOTES_UNSEEN_MESSAGE.format(title=doc["title"]),
+        block,
+        text.text,
+    )
+
+
 async def _resolve_write(
-    caller: Caller, doc_id: str, operation: str, params: dict,
+    caller: Caller,
+    doc_id: str,
+    operation: str,
+    params: dict,
+    *,
+    bypass_approval: bool = False,
+    notes_form: str = "block",
+    check_notes: bool = True,
 ) -> tuple[dict, DocAccess, dict]:
     """Gate, normalize, look up and check everything that is not the verdict.
 
     Order: gate -> params -> visibility (hidden == missing) -> denied ->
-    edit's read-before-edit -> add_image's conversation requirement. The
-    approval verdict is left to the caller.
+    edit's read-before-edit -> add_image's conversation requirement ->
+    doc notes (only with ``check_notes`` and the ``doc_notes`` gate open
+    for the caller). The approval verdict is left to the caller, so a
+    model meets the notes before it drafts a card.
+
+    The notes step: with ``bypass_approval`` (approve-time execute) only
+    the card's pinned ``expected_instructions_version`` is compared with
+    the live row (:func:`_check_pinned_instructions`); otherwise a
+    recording run that has not seen the current notes is refused once with
+    :class:`DocNotesUnseen` (:func:`_refuse_unseen_notes`), its notes in
+    ``notes_form`` (``"block"`` for the tools, ``"text"`` for the
+    write_doc pre-card).
+
+    Raises:
+        DocDisabled: the ``docs`` gate is closed.
+        DocNotesUnseen: the notes refusal (not with ``bypass_approval``).
+        DocError: bad params, hidden/missing doc, denied, unread, no
+            conversation for add_image, or a moved instructions pin.
+        ValueError: an unknown ``notes_form`` (a programming error).
     """
+    if notes_form not in _NOTES_FORMS:
+        raise ValueError(f"Unknown notes_form: {notes_form!r}")
     require_enabled(caller)
     clean = _normalize_write_params(operation, params)
     doc, access = await _get_visible_doc(caller, doc_id)
@@ -1108,6 +1455,11 @@ async def _resolve_write(
             "add_doc_image copies a file from the conversation workspace, so "
             "it needs a conversation."
         )
+    if check_notes and notes_enabled(caller):
+        if bypass_approval:
+            _check_pinned_instructions(doc, clean)
+        else:
+            await _refuse_unseen_notes(caller, doc, notes_form)
     return doc, access, clean
 
 
@@ -1401,12 +1753,26 @@ async def apply_write_operation(
     revoked or the doc deleted meanwhile) and ``denied`` (``deny_reason``)
     still refuse, and edit still requires the read sidecar.
 
+    Order of the refusals (:func:`_resolve_write`): denied -> unread ->
+    doc notes -> the approval dry-run / ``approval_required``. For a tool
+    write the notes step runs once, in the first pass outside the lock (an
+    instructions change landing after it applies from the next write on):
+    a recording run that has not seen the doc's notes gets
+    :class:`DocNotesUnseen`. With ``bypass_approval`` the seen record is
+    skipped and only a moved ``expected_instructions_version`` pin (the
+    write_doc card's, a server-only key in ``params``) refuses, with
+    ``notes.DOC_INSTRUCTIONS_CHANGED_MESSAGE``; that comparison is pure, so
+    it runs again on the row re-read under the lock.
+
     Raises:
-        DocDisabled, DocApprovalRequired (unless bypass_approval), DocError.
+        DocDisabled, DocApprovalRequired (unless bypass_approval),
+        DocNotesUnseen (unless bypass_approval), DocError.
     """
     # First pass outside the lock: hidden / missing / denied / unread docs
-    # never take (or create) a per-doc lock.
-    doc, access, clean = await _resolve_write(caller, doc_id, operation, params)
+    # and notes refusals never take (or create) a per-doc lock.
+    doc, access, clean = await _resolve_write(
+        caller, doc_id, operation, params, bypass_approval=bypass_approval,
+    )
     if access.write == "approval" and not bypass_approval:
         # Dry-run first so a stale old_string, a bad image or an over-cap
         # body fails now instead of after the model forwarded the request.
@@ -1421,9 +1787,12 @@ async def apply_write_operation(
         async with _write_lock(doc["id"]):
             # Re-resolve under the lock: a share added or revoked while
             # this write queued must change the verdict (the approval card
-            # and the hidden / read-only refusals are decided here).
+            # and the hidden / read-only refusals are decided here). A
+            # tool write's notes step is not repeated (spec 00011 section
+            # 10); an approved card's pin check is, on the fresh row.
             fresh_doc, fresh_access, fresh_clean = await _resolve_write(
                 caller, doc_id, operation, params,
+                bypass_approval=bypass_approval, check_notes=bypass_approval,
             )
             if fresh_access.write == "approval" and not bypass_approval:
                 raise DocApprovalRequired(
@@ -1445,14 +1814,23 @@ async def preview_write_operation(
     raises -- the caller inspects ``access``. Reads the live body and
     applies the operation in memory.
 
+    The doc notes step is the tools' (a recording run that has not seen
+    the notes gets :class:`DocNotesUnseen`, its delivery recorded), with
+    the notes as text: ``notes_text`` is ``render_notes_text()`` of the
+    block, and when that cut the instructions the seen instructions
+    version is left where it was, so the retry is refused again.
+
     Returns:
         ``{"doc", "access", "current_body", "new_body", "replacements"}``;
         add_image adds ``"asset_name_preview"`` (sanitized stem + sniffed
         extension; the stored name may get a ``-2`` suffix on collision),
         ``"image_bytes_size"`` and ``"markdown"``. For add_image with
-        placement ``"none"`` the body is unchanged.
+        placement ``"none"`` the body is unchanged. ``doc`` is the live row
+        (its ``instructions_version`` is what the card pins).
     """
-    doc, access, clean = await _resolve_write(caller, doc_id, operation, params)
+    doc, access, clean = await _resolve_write(
+        caller, doc_id, operation, params, notes_form="text",
+    )
     return await _compute_preview(caller, doc, access, operation, clean)
 
 

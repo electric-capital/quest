@@ -98,6 +98,7 @@ def docs_env(tmp_path, monkeypatch):
     session_local = async_sessionmaker(async_engine, expire_on_commit=False)
 
     import db.conversation_store as conversation_store
+    import db.doc_memory_store as doc_memory_store
     import db.doc_store as doc_store
     import db.models as models
     import db.project_store as project_store
@@ -111,8 +112,10 @@ def docs_env(tmp_path, monkeypatch):
     # get_users_by_ids / get_action_request_owners (never the real data dir).
     import db.table_store as table_store
     # table_store: project and account deletes sweep table directories too.
-    for mod in (doc_store, project_store, conversation_store, user_store,
-                action_request_store, table_store):
+    # doc_memory_store: doc notes memories, read by the doc tools while the
+    # doc_notes gate is open.
+    for mod in (doc_store, doc_memory_store, project_store, conversation_store,
+                user_store, action_request_store, table_store):
         monkeypatch.setattr(mod, "AsyncSessionLocal", session_local)
 
     dirs = {name: tmp_path / name for name in ("chats", "projects", "docs")}

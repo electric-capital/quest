@@ -120,16 +120,18 @@ WRITE_REFUSED = {
 }
 
 # How a read in each run kind gets the block (spec 6.1): "record" attaches
-# it when needs_delivery() holds and records the delivery; "always" attaches
-# it on every read and records nothing (sub-agents, inference-API runs);
-# "never" attaches it to no read (scripts get counts only; the UI has its
-# own routes and no tool reads).
+# it when needs_delivery() holds and records the delivery; "unrecorded"
+# attaches it whenever the doc has notes, exactly what a conversation with
+# no record gets, never suppressed by a record and recording nothing
+# (sub-agents, inference-API runs); "never" attaches it to no read_doc
+# (scripts get counts only; the UI has its own routes and no tool reads). A
+# "record" run kind without a conversation reads like "unrecorded".
 DELIVERY_MODES = {
     "top_level": "record",
     "slack": "record",
     "user_subagent": "record",
-    "sub_agent": "always",
-    "inference_api": "always",
+    "sub_agent": "unrecorded",
+    "inference_api": "unrecorded",
     "script": "never",
     "ui": "never",
 }
@@ -212,8 +214,9 @@ def test_needs_delivery_and_write_refused_grid(seen_name, notes_name, shape):
 def test_phase_a3_decisions_grid(seen_name, notes_name, shape, run_kind, conversation_id):
     """How phase A3 combines the gate: in a recording run a read attaches
     the block when the notes need delivery and a write is refused when
-    write_refused() holds; outside one, the run kind's delivery mode decides
-    the read and no write is refused."""
+    write_refused() holds; outside one, a read attaches it exactly when it
+    would without a seen record (the doc has notes), whatever the record
+    says, except for the "never" run kinds, and no write is refused."""
     doc = SHAPES[shape](*NOTES_STATES[notes_name])
     seen = SEEN_STATES[seen_name]
     mode = DELIVERY_MODES[run_kind]
@@ -222,16 +225,21 @@ def test_phase_a3_decisions_grid(seen_name, notes_name, shape, run_kind, convers
     if records:
         expected_attach = NEEDS_DELIVERY[seen_name][notes_name]
         expected_refused = WRITE_REFUSED[seen_name][notes_name]
+    elif mode == "never":
+        expected_attach = False
+        expected_refused = False
     else:
-        expected_attach = mode != "never"
+        expected_attach = NEEDS_DELIVERY["no_record"][notes_name]
         expected_refused = False
 
     recording = records_delivery(run_kind, conversation_id)
     assert recording is records
-    if recording:
+    if mode == "never":
+        attach = False
+    elif recording:
         attach = needs_delivery(doc, seen)
     else:
-        attach = mode != "never"
+        attach = has_notes(doc)
     refused = recording and write_refused(doc, seen)
     assert attach is expected_attach
     assert refused is expected_refused

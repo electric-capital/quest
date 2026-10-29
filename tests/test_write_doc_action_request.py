@@ -50,7 +50,7 @@ from tests.test_docs_service import (  # noqa: F401  (docs_env is a fixture)
 SHARED_BODY = "alpha beta\ngamma\n"
 INJECTED = (
     "content_diff", "current_title", "doc_mode", "doc_scope",
-    "share_summary", "require_approval", "image_preview",
+    "share_summary", "require_approval", "image_preview", "instructions_version",
 )
 
 

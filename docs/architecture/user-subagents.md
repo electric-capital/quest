@@ -119,6 +119,10 @@ lease: both the script tool-call bridge and direct mutating HTTP routes reject
 these operations. The prompt omits mutating tools as well. The subagent can
 still read connected services and write files in its own workspace for an
 approved return; it cannot change the target's connected-service state.
+It reads Quest Docs as the target, so the `doc_notes` gate and the notes
+seen record are the target's, and the notes of the target's docs can reach
+the caller in the `return_to_caller` text, as a doc body can, under the
+double approval ([doc-notes.md](doc-notes.md#delivery-on-reads)).
 
 ## Files
 

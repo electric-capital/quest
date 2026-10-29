@@ -26,6 +26,15 @@ writes, bumps ``updated_at`` and records
 ``last_write_source = "action_request:<id>"``.
 The service publishes ``doc_changed`` / ``doc_list_changed`` itself.
 
+Doc notes: the pre-card goes through the service's notes refusal like the
+write tools, and while the ``doc_notes`` gate is open for the proposer it
+pins the doc's ``instructions_version`` on the card (a server-injected
+key). ``execute`` passes the pin as ``expected_instructions_version`` and
+the service refuses when the live row's instructions changed since and
+are non-empty (the request stays open, like a stale ``old_string``); it
+never consults the conversation's seen record, and memory changes never
+refuse. The card shows no notes.
+
 Like the skill handlers there is no ``validate_against_upstream`` -- docs
 are an internal Quest store.
 """
@@ -75,6 +84,10 @@ SERVER_INJECTED_KEYS = frozenset(
         "share_summary",
         "require_approval",
         "image_preview",
+        # The doc's instructions_version at proposal (doc_notes gate open
+        # for the proposer only); execute passes it on as the
+        # expected_instructions_version pin.
+        "instructions_version",
     }
 )
 
@@ -375,7 +388,9 @@ class WriteDocHandler(ActionRequestHandler):
         try:
             # bypass_approval: the user just approved. Hidden / denied
             # verdicts (e.g. the share was revoked meanwhile), a closed gate,
-            # an unread doc and a stale old_string still refuse.
+            # an unread doc, a stale old_string and instructions changed
+            # since the proposal still refuse; the doc notes seen record is
+            # not consulted.
             op_params = operation_params(params)
             if operation == "add_image":
                 # Server-injected at pre-card time (model copies are
@@ -384,6 +399,13 @@ class WriteDocHandler(ActionRequestHandler):
                 preview = params.get("image_preview")
                 if isinstance(preview, dict) and preview.get("sha256"):
                     op_params["expected_sha256"] = preview["sha256"]
+            pinned = params.get("instructions_version")
+            if isinstance(pinned, int) and not isinstance(pinned, bool):
+                # Server-injected at pre-card time while the doc_notes gate
+                # was open for the proposer (absent otherwise): the service
+                # refuses when the doc's instructions changed since and are
+                # non-empty.
+                op_params["expected_instructions_version"] = pinned
             result = await doc_service.apply_write_operation(
                 caller,
                 doc_id,

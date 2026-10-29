@@ -12,16 +12,26 @@ size caps) and only interprets the verdict:
 - ``denied`` / hidden / missing / unread / stale ``old_string`` / gate
   closed -> the service's own message, verbatim (a hidden doc keeps the
   byte-equal ``doc_not_found_message`` text).
+- unseen doc notes (``doc_notes`` gate open, the conversation has not seen
+  the doc's current notes; checked after denied / unread, before the
+  verdict) -> ``DocNotesUnseen``: its message, a blank line and the text
+  copy of the notes (``notes.render_notes_text()``, within
+  ``DOC_NOTES_PRECARD_MAX_CHARS``). The service has recorded the delivery,
+  so the identical retry passes (unless the text had to cut the
+  instructions, which then refuse again).
 - ``approval`` -> accepted; the server-only preview keys are injected into
   ``validated_params`` (never accepted from the model, see
   ``write_doc.SERVER_INJECTED_KEYS``): ``current_title``, ``doc_mode``,
   ``doc_scope``, ``share_summary``, ``content_diff`` (the edit_skill line
   diff of the live body vs the result; for ``add_image`` only when the body
-  changes) and, for ``add_image``, ``image_preview``.
+  changes), for ``add_image`` ``image_preview``, and, while the
+  ``doc_notes`` gate is open for the proposer, ``instructions_version``
+  (the live row's; execute refuses when it moved).
 
 Rejections raise ``ValueError`` so the dispatch arm reuses its ``Invalid
 parameters`` early return -- same turn, no card. ``WriteDocHandler.execute``
-re-runs the whole check at approve time (TOCTOU close).
+re-runs the whole check at approve time (TOCTOU close), except the seen
+record: there only the pinned ``instructions_version`` counts.
 """
 
 import asyncio
@@ -63,8 +73,8 @@ async def doc_precard_check(
     Raises:
         ValueError: the doc is writable directly (``free``), or the service
             refused (hidden/missing doc, denied write, unread doc for edit,
-            failed match, caps, gate closed) -- surfaced as ``Invalid
-            parameters`` by the dispatch arm.
+            unseen doc notes, failed match, caps, gate closed) -- surfaced
+            as ``Invalid parameters`` by the dispatch arm.
     """
     operation = validated_params["operation"]
     doc_id = validated_params["doc_id"]
@@ -84,6 +94,10 @@ async def doc_precard_check(
         preview = await doc_service.preview_write_operation(
             caller, doc_id, operation, operation_params(validated_params),
         )
+    except doc_service.DocNotesUnseen as e:
+        # The tool's message, then the notes as text (the delivery is
+        # recorded: the identical retry passes).
+        raise ValueError(f"{e}\n\n{e.notes_text}") from None
     except doc_service.DocError as e:
         # Includes DocDisabled; the text is the tool's own error.
         raise ValueError(str(e)) from None
@@ -125,3 +139,8 @@ async def doc_precard_check(
             # Pins the file the card showed: execute refuses a swapped file.
             "sha256": preview["image_sha256"],
         }
+    if doc_service.notes_enabled(caller):
+        # Pins the instructions the proposer's conversation was held to:
+        # execute refuses when they changed while the card sat open. Not
+        # injected with the gate closed, so the card stays as it was.
+        validated_params["instructions_version"] = doc["instructions_version"]

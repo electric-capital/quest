@@ -18,7 +18,9 @@ The module owns:
 - Its text copy (:func:`render_notes_text`) for the ``write_doc`` pre-card
   refusal, within ``DOC_NOTES_PRECARD_MAX_CHARS``, which also says whether
   the instructions came whole, and the copy strings both use, gathered
-  below so they can be reviewed in one place.
+  below so they can be reviewed in one place, together with the write
+  refusal's message (:data:`DOC_NOTES_UNSEEN_MESSAGE`) and the approve-time
+  instructions-changed error (:data:`DOC_INSTRUCTIONS_CHANGED_MESSAGE`).
 
 Callers load ``get_notes_state()`` BEFORE ``list_doc_memories()``: a memory
 change between the two reads then shows the model memories at least as new
@@ -77,6 +79,22 @@ NOTES_TEXT_MEMORY_BULLET = "- "
 NOTES_TEXT_MEMORY_INDENT = "  "
 NOTES_TEXT_ONE_MORE_MEMORY = "(1 more memory not shown; list_doc_notes pages them.)"
 NOTES_TEXT_MORE_MEMORIES = "({count} more memories not shown; list_doc_notes pages them.)"
+
+# The write refusal (``DocNotesUnseen`` in chat/docs/service.py): the
+# ``message`` of a ``doc_notes_unseen`` tool result, and the first line of
+# the write_doc pre-card's ``Invalid parameters`` text (the text copy of
+# the block follows it).
+DOC_NOTES_UNSEEN_MESSAGE = (
+    "Doc '{title}' has notes you have not seen. Read them below, adjust the "
+    "change if they require it, then call the tool again."
+)
+
+# Approve-time execute of a write_doc card whose pinned instructions version
+# is behind the doc's (the request stays open).
+DOC_INSTRUCTIONS_CHANGED_MESSAGE = (
+    "The doc's instructions changed after this was proposed; read them and "
+    "propose the change again."
+)
 
 
 # --- Gate ---
