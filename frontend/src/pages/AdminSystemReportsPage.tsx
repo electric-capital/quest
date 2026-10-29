@@ -12,7 +12,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { LatestActiveConversationsTable } from '../components/LatestActiveConversationsTable';
 import { TotalUsageReport } from '../components/TotalUsageReport';
-import { CostAnalysisTable } from '../components/CostAnalysisTable';
+import { TopConversationsTable } from '../components/TopConversationsTable';
 import { UsersReportTable } from '../components/UsersReportTable';
 import { ModelsReportTable } from '../components/ModelsReportTable';
 import { GuidesReportTable } from '../components/GuidesReportTable';
@@ -36,9 +36,9 @@ const SECTIONS = [
     component: TotalUsageReport,
   },
   {
-    key: 'costs',
-    label: 'Cost Analysis',
-    component: CostAnalysisTable,
+    key: 'top',
+    label: 'Top Conversations',
+    component: TopConversationsTable,
   },
   {
     key: 'users',

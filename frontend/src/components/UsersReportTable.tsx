@@ -2,13 +2,13 @@
  * UsersReportTable - System Reports "Users" section.
  *
  * Fetches /admin/system-monitor/user-report for a selected date range (same
- * picker as Cost Analysis) and renders one row per user: range-clipped
+ * picker as Top Conversations) and renders one row per user: range-clipped
  * active days and conversation count (both excluding routines), the
  * cost split into non-routine vs routine spend (provider-reported where
  * the provider reports it, list-price estimated otherwise), the routine spend
  * itemized per routine (priciest first), and the per-model token breakdown
  * aggregated across all the user's conversations. On-demand
- * report like Cost Analysis: fetches on mount, on range change, and via the
+ * report like Top Conversations: fetches on mount, on range change, and via the
  * manual refresh button.
  */
 

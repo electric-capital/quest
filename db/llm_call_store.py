@@ -1038,7 +1038,7 @@ async def _collect_usage_buckets(
     (``conversation_id_select``, applied as an ``IN (subquery)`` so an
     unbounded set -- e.g. every run of a routine -- never has to be
     materialised into a bind-parameter list), and/or a ``created_at``
-    window (cost analysis), one grouped query per provider table either
+    window (Top Conversations), one grouped query per provider table either
     way. The query splits each (conversation, model) into (at most) a
     normal- and a long-context bucket so tier pricing is exact, and into
     one bucket per pricing period (``pricing_period_starts()``: the

@@ -11,6 +11,7 @@ from chat.compaction import (
     KEEP_RECENT_TOKENS,
     build_summary_message_text,
     compact_conversation,
+    compaction_count,
     compaction_newer_than,
     extract_preserved_records,
     find_cut_index,
@@ -420,6 +421,23 @@ def test_compact_conversation_second_compaction_increments_archive(
         meta = json.load(f)
     assert meta["count"] == 2
     assert len(meta["archives"]) == 2
+    assert compaction_count("conv-1") == 2
+
+
+def test_compaction_count_without_or_with_bad_sidecar(monkeypatch, tmp_path):
+    from chat.storage import ChatStorage
+
+    monkeypatch.setattr(
+        ChatStorage, "_get_conversation_dir",
+        staticmethod(lambda conversation_id: tmp_path),
+    )
+    # Never compacted (or deleted): no sidecar.
+    assert compaction_count("conv-1") == 0
+
+    (tmp_path / "compaction_meta.json").write_text('{"count": "x"}')
+    assert compaction_count("conv-1") == 0
+    (tmp_path / "compaction_meta.json").write_text("not json")
+    assert compaction_count("conv-1") == 0
 
 
 def test_compact_conversation_rejects_small_history(monkeypatch, tmp_path):

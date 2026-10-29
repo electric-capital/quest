@@ -1,7 +1,7 @@
 /**
  * ConversationUsageCell - per-conversation token-usage breakdown cell.
  *
- * Shared by the System Reports tables (Latest Conversations, Cost Analysis):
+ * Shared by the System Reports tables (Latest Conversations, Top Conversations):
  * a bold all-in total line plus one provider-native row per model, with the
  * exact raw fields (incl. the Anthropic 5m/1h cache-write TTL split) in each
  * row's tooltip.

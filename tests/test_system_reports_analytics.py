@@ -3,7 +3,7 @@
 Covers the read-side additions behind the System Reports page:
 
 1. ``get_most_expensive_conversations()`` -- date-range-filtered, known-cost
-   ranking over the raw ``llm_calls_*`` tables (top-N cost analysis), and
+   ranking over the raw ``llm_calls_*`` tables (Top Conversations), and
    ``get_usage_by_user()`` -- the per-user fold behind the Users report incl.
    the routine cost split and its per-routine breakdown, and
    ``get_usage_by_model()`` -- the per-model fold behind the Models report
@@ -12,6 +12,8 @@ Covers the read-side additions behind the System Reports page:
    latest-top-level-call context size across both provider tables.
 3. ``ChatStorage.count_user_message_active_days()`` -- distinct UTC days
    with user messages, read from chat_history.json.
+4. ``_admin_conversation_view()`` -- the lifetime compaction count on the
+   shared conversation row.
 
 Store tests run against the shared ``isolated_db`` fixture (a fresh SQLite
 file per test, see tests/db_support.py) with asyncio.run.
@@ -728,3 +730,28 @@ def test_active_days_set_clips_to_inclusive_range(tmp_path, monkeypatch):
         "2026-08-01",
     }
     assert ChatStorage.user_message_active_days("conv", "2026-08-10", None) == set()
+
+
+# ---------------------------------------------------------------------------
+# _admin_conversation_view: lifetime compaction count
+# ---------------------------------------------------------------------------
+
+def test_conversation_view_reports_compaction_count(tmp_path, monkeypatch):
+    from chat.routes.admin import _EMPTY_USAGE, _admin_conversation_view
+    from chat.storage import ChatStorage
+
+    monkeypatch.setattr(
+        ChatStorage, "_get_conversation_dir", staticmethod(lambda _cid: tmp_path)
+    )
+    monkeypatch.setattr(
+        ChatStorage,
+        "_get_chat_history_file",
+        staticmethod(lambda _cid: tmp_path / "chat_history.json"),
+    )
+
+    view = _admin_conversation_view("conv", None, _EMPTY_USAGE, None)
+    assert view["compaction_count"] == 0
+
+    (tmp_path / "compaction_meta.json").write_text(json.dumps({"count": 3}))
+    view = _admin_conversation_view("conv", None, _EMPTY_USAGE, None)
+    assert view["compaction_count"] == 3

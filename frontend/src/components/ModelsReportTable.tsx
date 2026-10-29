@@ -2,7 +2,7 @@
  * ModelsReportTable - System Reports "Models" section.
  *
  * Fetches /admin/system-monitor/model-report for a selected date range (same
- * picker as Cost Analysis and Users) and renders one row per model with at
+ * picker as Top Conversations and Users) and renders one row per model with at
  * least one call in the range: total cost, how many users used it, the ten
  * most expensive users, the share of spend accrued in routine runs and by
  * sub-agent calls, and the model's token totals. On-demand report like the
