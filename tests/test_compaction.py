@@ -510,6 +510,157 @@ def test_compact_conversation_refusal_keeps_doc_notes_seen(
     assert json.loads((tmp_path / "doc_reads.json").read_text()) == _DOC_READS
 
 
+# ---------------------------------------------------------------------------
+# Refusing while a model run is active (POST /conversations/{id}/compact)
+# ---------------------------------------------------------------------------
+
+
+# Each puts a run task into one registry the run drivers keep; monkeypatch
+# removes it again at teardown.
+def _register_send_run(monkeypatch, conversation_id, task):
+    from chat.realtime import socket as realtime_socket
+
+    monkeypatch.setitem(realtime_socket._active_send_runs, conversation_id, task)
+
+
+def _register_resume(monkeypatch, conversation_id, task):
+    from chat.wait_handles import resume as wait_resume
+
+    monkeypatch.setitem(wait_resume._active_resumes, conversation_id, task)
+
+
+def _register_slack_run(monkeypatch, conversation_id, task):
+    from chat import slack_driven_runtime
+
+    monkeypatch.setitem(slack_driven_runtime._active_runs, conversation_id, task)
+
+
+RUN_REGISTRIES = {
+    "ws_send": _register_send_run,
+    "wait_handle_resume": _register_resume,
+    "slack": _register_slack_run,
+}
+
+
+def _snapshot(tmp_path):
+    """The files a refused compaction must leave exactly as they were."""
+    return {
+        p.name: p.read_bytes() for p in sorted(tmp_path.iterdir()) if p.is_file()
+    }
+
+
+def _install_route_fakes(monkeypatch, model="claude-opus-4-8"):
+    import chat.routes.conversations as conv_routes
+    from db import tool_wait_handle_store
+
+    async def owned(user_id, conversation_id):
+        return {"id": conversation_id, "model": model}
+
+    async def no_pending(user_id, conversation_id):
+        return []
+
+    monkeypatch.setattr(conv_routes, "require_owned_conversation", owned)
+    monkeypatch.setattr(tool_wait_handle_store, "list_pending_for_conversation", no_pending)
+    return conv_routes.compact_conversation_endpoint
+
+
+@pytest.mark.parametrize("registry", sorted(RUN_REGISTRIES))
+def test_compact_route_refuses_while_a_run_is_active(monkeypatch, tmp_path, registry):
+    from fastapi import HTTPException
+
+    provider = FakeAnthropicProvider()
+    _install_compaction_fakes(monkeypatch, tmp_path, provider, _long_anthropic_history())
+    _seed_doc_notes(tmp_path)
+    endpoint = _install_route_fakes(monkeypatch)
+    before = _snapshot(tmp_path)
+
+    async def scenario():
+        run = asyncio.get_running_loop().create_future()
+        RUN_REGISTRIES[registry](monkeypatch, "conv-1", run)
+        with pytest.raises(HTTPException) as exc_info:
+            await endpoint("conv-1", user={"id": 1})
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail["error"] == "conversation_busy"
+        assert "in progress" in exc_info.value.detail["message"]
+        # Refused before any work: no summary call, nothing on disk moved.
+        assert provider.summarize_calls == []
+        assert _snapshot(tmp_path) == before
+
+        # Once the run has ended (its task done) the compaction goes through.
+        run.set_result(None)
+        return await endpoint("conv-1", user={"id": 1})
+
+    result = _run(scenario())
+    assert result["messages_summarized"] > 0
+    assert not (tmp_path / "doc_notes_seen.json").exists()
+
+
+def test_compact_route_proceeds_with_no_run(monkeypatch, tmp_path):
+    provider = FakeAnthropicProvider()
+    _install_compaction_fakes(monkeypatch, tmp_path, provider, _long_anthropic_history())
+    endpoint = _install_route_fakes(monkeypatch)
+
+    result = _run(endpoint("conv-1", user={"id": 1}))
+    assert result["messages_summarized"] > 0
+
+
+class _RunDuringSummaryProvider(FakeAnthropicProvider):
+    """A summarizer during whose call a run starts (and, optionally, saves
+    the history), as another tab could."""
+
+    def __init__(self, tmp_path, monkeypatch, *, register=None, save=False):
+        super().__init__()
+        self.tmp_path = tmp_path
+        self.monkeypatch = monkeypatch
+        self.register = register
+        self.save = save
+
+    async def send_message_stream(self, session, message):
+        if self.register is not None:
+            run = asyncio.get_running_loop().create_future()
+            self.register(self.monkeypatch, "conv-1", run)
+        if self.save:
+            # The way every history writer saves: an atomic replace.
+            from chat.storage import write_json_atomic
+
+            envelope = json.loads((self.tmp_path / "sdk_history.json").read_text())
+            envelope["history"] = envelope["history"] + _anthropic_turn("sent meanwhile")
+            write_json_atomic(self.tmp_path / "sdk_history.json", envelope)
+        async for event in super().send_message_stream(session, message):
+            yield event
+
+
+@pytest.mark.parametrize(
+    "register, save",
+    [
+        pytest.param(_register_send_run, False, id="run-started"),
+        pytest.param(_register_resume, False, id="resume-started"),
+        pytest.param(_register_slack_run, False, id="slack-run-started"),
+        pytest.param(None, True, id="run-started-and-saved"),
+    ],
+)
+def test_compact_conversation_refuses_when_a_run_starts_during_the_summary(
+    monkeypatch, tmp_path, register, save,
+):
+    provider = _RunDuringSummaryProvider(tmp_path, monkeypatch, register=register, save=save)
+    _install_compaction_fakes(monkeypatch, tmp_path, provider, _long_anthropic_history())
+    _seed_doc_notes(tmp_path)
+
+    with pytest.raises(CompactionError) as exc_info:
+        _run(compact_conversation(1, "conv-1", "claude-opus-4-8"))
+
+    assert exc_info.value.code == "conversation_busy"
+    assert len(provider.summarize_calls) == 1
+    # Nothing replaced: the history on disk is whatever the run left there,
+    # no archive or meta was written, and both sidecars are untouched.
+    envelope = json.loads((tmp_path / "sdk_history.json").read_text())
+    assert ("sent meanwhile" in json.dumps(envelope)) is save
+    assert not list(tmp_path.glob("sdk_history.compacted-*.json"))
+    assert not (tmp_path / "compaction_meta.json").exists()
+    assert json.loads((tmp_path / "doc_notes_seen.json").read_text()) == _DOC_NOTES_SEEN
+    assert json.loads((tmp_path / "doc_reads.json").read_text()) == _DOC_READS
+
+
 def test_compact_conversation_second_compaction_increments_archive(
     monkeypatch, tmp_path,
 ):

@@ -204,7 +204,7 @@ async def duplicate_conversation_workspace(
     """
     user_id = user["id"]
 
-    meta = await require_owned_conversation(user_id, conversation_id)
+    await require_owned_conversation(user_id, conversation_id)
 
     new_conversation_id, created_at_str = await ChatStorage.create_conversation(user_id)
     # The source's CONVERSATION workspace only, also for a project
@@ -244,9 +244,10 @@ async def compact_conversation_endpoint(
 
     Raises:
         HTTPException: 404 unknown conversation; 409 when the conversation
-        cannot be compacted right now (no model, pending wait handles, no
-        history, nothing to compact, provider mismatch, summarization
-        failure).
+        cannot be compacted right now (no model, pending wait handles, a
+        model run in progress or one that changed the history while the
+        summary was written, no history, nothing to compact, provider
+        mismatch, summarization failure).
     """
     user_id = user["id"]
 
@@ -277,7 +278,22 @@ async def compact_conversation_endpoint(
             }
         )
 
-    from chat.compaction import CompactionError, compact_conversation
+    # A running turn appends to the history; compacting under it would
+    # drop what it appends (compact_conversation re-checks before writing).
+    from chat.compaction import (
+        CompactionError,
+        compact_conversation,
+        conversation_run_active,
+    )
+    if conversation_run_active(conversation_id):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "conversation_busy",
+                "message": "This conversation has a reply in progress and cannot be compacted right now.",
+            }
+        )
+
     try:
         result = await compact_conversation(user_id, conversation_id, model)
     except CompactionError as e:
