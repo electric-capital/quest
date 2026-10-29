@@ -100,6 +100,38 @@ Public docs the user owns or was given write access to are written directly, wit
 """
 
 
+# The notes line closing the public Quest Docs paragraph while the Quest Doc
+# notes gate is open too (docs_enabled and doc_notes_enabled); it stands in
+# for system:doc_notes, which the public prompt cannot load. A separate
+# line after _PUBLIC_DOCS_SECTION, so the prompt with the notes gate closed
+# stays exactly as it was. Must not name internal-only tools or skills
+# (tests/test_public_projects.py); a routine run is not offered
+# suggest_doc_note, so its variant never names it.
+_PUBLIC_DOC_NOTES_SENTENCE = (
+    "Docs can carry notes (the owner's instructions, which you follow "
+    "whenever you change the doc, and memories, background facts about "
+    "it): `read_doc` attaches them as `doc_notes` the first time you read "
+    "a doc with notes and after they change, a write to a doc whose notes "
+    "you have not seen is refused once with `doc_notes_unseen` and the "
+    "notes (adjust the change if needed, then repeat the call), and "
+    "`list_doc_notes` re-reads them."
+)
+_PUBLIC_DOC_NOTES_SUGGEST = (
+    " Propose a change to a doc's notes with `suggest_doc_note`; nothing is "
+    "saved until the user accepts it."
+)
+_PUBLIC_DOC_NOTES_ROUTINE = (
+    " A routine run cannot suggest notes: put a proposed note in your "
+    "response instead."
+)
+
+
+def _public_doc_notes_line(is_routine: bool) -> str:
+    """The notes line of the public Quest Docs paragraph (with its newline)."""
+    tail = _PUBLIC_DOC_NOTES_ROUTINE if is_routine else _PUBLIC_DOC_NOTES_SUGGEST
+    return _PUBLIC_DOC_NOTES_SENTENCE + tail + "\n"
+
+
 # Public-project prompt paragraph shown while Quest Tables is enabled for
 # the user; stands in for system:tables (the public prompt carries no
 # skills). The three table cards are public-safe action requests, so it
@@ -1138,8 +1170,11 @@ def get_public_project_system_prompt(
     Quest Docs gate is open too): while False (the default), or while
     ``docs_enabled`` is False, the two notes tools (``list_doc_notes`` /
     ``suggest_doc_note``) are excluded from the Dynamic Tools section;
-    while both are True they are listed in full. A routine
-    run reads notes but never suggests one, as in get_system_prompt().
+    while both are True they are listed in full and the "Quest Docs"
+    paragraph ends with a line on notes (``_public_doc_notes_line()``,
+    standing in for the ``system:doc_notes`` skill). A routine run reads
+    notes but never suggests one, as in get_system_prompt(), and its notes
+    line does not name ``suggest_doc_note``.
 
     ``tables_enabled`` is the same switch for the Quest Tables gate
     (``config.feature_gates.tables_enabled_for``): while False the table
@@ -1237,6 +1272,8 @@ def get_public_project_system_prompt(
         exclude=public_exclude, core_only=False,
     )
     docs_section = _PUBLIC_DOCS_SECTION if docs_enabled else ""
+    if docs_enabled and doc_notes_enabled:
+        docs_section += _public_doc_notes_line(is_routine)
     tables_section = _PUBLIC_TABLES_SECTION if tables_enabled else ""
 
     # Public system skills (PUBLIC_SYSTEM_SKILLS, gated like any other

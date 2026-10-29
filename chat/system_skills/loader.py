@@ -9,7 +9,12 @@ from typing import Callable, Optional
 
 from chat.browser_sessions import BROWSER_SERVICE_KEY, browser_disabled_message
 from chat.project_db import PROJECT_DB_SERVICE_KEY, project_db_retired_message
-from chat.docs.constants import DOCS_SERVICE_KEY, docs_disabled_message
+from chat.docs.constants import (
+    DOC_NOTES_SERVICE_KEY,
+    DOCS_SERVICE_KEY,
+    doc_notes_disabled_message,
+    docs_disabled_message,
+)
 from chat.tables.constants import TABLES_SERVICE_KEY, tables_disabled_message
 from chat.llm.tool_schemas import (
     TOOL_CALL_REGISTRY,
@@ -181,6 +186,10 @@ def load_system_skills(
                 # A feature-gate pseudo-key, not a connector (see
                 # api/instructions.py PSEUDO_SERVICE_KEYS).
                 error = docs_disabled_message()
+            elif skill.requires == DOC_NOTES_SERVICE_KEY:
+                # Closed for the user, also while Quest Docs is (the gate
+                # requires it); the message names both.
+                error = doc_notes_disabled_message()
             elif skill.requires == TABLES_SERVICE_KEY:
                 error = tables_disabled_message()
             elif skill.requires == BROWSER_SERVICE_KEY:
