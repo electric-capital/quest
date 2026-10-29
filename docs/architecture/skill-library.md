@@ -170,7 +170,7 @@ When no entries resolve at all (empty input handling aside -- see below), the do
 
 **Error envelopes still use JSON.** Two paths return a single-line JSON error envelope (`{"error": "..."}`) rather than markdown: an empty `skill_ids` list (API-contract error), and any outer exception while loading. This matches the Gmail Simple Fetch convention (see [Gmail API -- Message Fetch Response Format](../api/gmail-api.md#message-fetch-response-format)) where per-entry failures live inside the markdown document while API-contract errors surface as JSON.
 
-**Why markdown?** The tool output is consumed only by the LLM. A JSON envelope wrapping skill bodies forces the model to read past escaped `\n`, `\"`, and `\\` sequences for every line of skill content (up to 64KB per skill), which wastes tokens and obscures nested markdown fences inside the skill. Emitting the bodies verbatim inside a single markdown document eliminates that escape tax. This mirrors the `render_message_markdown()` / `render_batch_markdown()` approach introduced for Gmail Simple Fetch (commit `9f23b54`).
+**Why markdown?** The tool output is consumed only by the LLM. A JSON envelope wrapping skill bodies forces the model to read past escaped `\n`, `\"`, and `\\` sequences for every line of skill content (up to 64KB per skill), which wastes tokens and obscures nested markdown fences inside the skill. Emitting the bodies verbatim inside a single markdown document eliminates that escape tax.
 
 ## Creating and Editing Skills via Action Requests
 
@@ -186,13 +186,13 @@ The full per-type parameter semantics, ownership / visibility / sharing rules, t
 - **Sharing mutation**: user skills accept `share_emails` on create and `add_share_emails` / `remove_share_emails` on edit (only while `shared`); the route-layer email->id resolution pattern (unknown / self silently skipped) is reused at execute time. Moving visibility away from `shared` wipes the roster via `clear_skill_shares()` in `db/skill_store.py`.
 - **Project auto-load**: `edit_skill` exposes a project-only `project_autoload: bool` that toggles the `project_skill_autoloads` flag via `set_project_skill_autoload()`, reusing the same single-owner access gate as the REST `PUT .../skills/{skill_id}/autoload` endpoint. There is no user/routine auto-load toggle on the write path.
 - **`system:*` skills are not editable** (rejected by `is_system_skill_id()` in `validate_params`).
-- **`_skill_to_dict()`** in `db/skill_store.py` now includes `project_id` so `edit_skill` and the pre-card check can branch user-vs-project from the returned dict.
+- **`_skill_to_dict()`** in `db/skill_store.py` includes `project_id` so `edit_skill` and the pre-card check can branch user-vs-project from the returned dict.
 
 The model-facing parameter spec lives in the `system:skill_management` system skill (see the catalog below), which co-documents the read inspection tools and these write request types.
 
 ## System Skills
 
-System skills are hardcoded (non-DB) skills that carry per-backend API documentation. They used to live inline in the system prompt on every turn; moving them into loadable skills shrinks the always-present prompt and lets the model pull in only the backend(s) it needs.
+System skills are hardcoded (non-DB) skills that carry per-backend API documentation. Loading them on demand keeps the always-present prompt small: the model pulls in only the backends it needs.
 
 ### Public Projects
 
@@ -206,7 +206,7 @@ A [public project](../architecture/public-projects.md) conversation has no user,
 
 ### Visibility
 
-System skills expose the string literal `"visibility": "system"` in tool results. This is distinct from the `SkillVisibility` enum in `db/models.py` (which is DB-only and still has exactly four values: `private`, `shared`, `public`, `project`). The `"system"` literal is attached by the tool handlers; no database row exists for a system skill.
+System skills expose the string literal `"visibility": "system"` in tool results. This is distinct from the DB-only `SkillVisibility` enum in `db/models.py`. The `"system"` literal is attached by the tool handlers; no database row exists for a system skill.
 
 ### Catalog
 
@@ -235,6 +235,7 @@ Current catalog (registered in order):
 | `system:action_requests` | — | Generic approval / cancel / retry mechanics for `create_action_request`; points at per-backend skills for request-type specs; includes an "Inside a sub-agent" subsection covering the `agent_task_response` escape hatch |
 | `system:skill_management` | — | Skill inspection (`list_my_skills` / `get_skill`) plus the `create_skill` / `edit_skill` action-request specs (user-vs-project targeting, visibility/share rules, project auto-load toggle, collision behavior); content built from a string in `catalog.py` |
 | `system:quest_docs` | `docs` (pseudo-key: the per-user Quest Docs feature gate) | Quest Docs tools (list / search / read / create / edit / append / add image), modes and write verdicts, read-before-edit, the `approval_required` -> `write_doc` action-request handoff, images, paging, the routine append pattern, and the script bridge. Not `system:docs` (that is Google Docs). See [Quest Docs](quest-docs.md#prompting) |
+| `system:doc_notes` | `doc_notes` (pseudo-key: the Quest Doc notes gate, which requires Quest Docs) | Following a doc's instructions and memories, the `doc_notes_unseen` retry, and when, what and from where to suggest notes. See [Doc Notes Tools -- Prompting](doc-notes-tools.md#prompting) |
 | `system:tables` | `tables` (pseudo-key: the Quest Tables gate) | Quest Tables tools, write verdicts, paging and upsert syncs, the `approval_required` -> `write_table_rows` handoff and the `create_table` / `change_table_schema` cards. See [Quest Tables -- Prompting](quest-tables.md#prompting) |
 | `system:routines` | — (requires project) | Project-routine inspection (`list_routines`) plus the `create_routine` / `edit_routine` action-request specs (name / full-replacement prompt / model / schedule / skill auto-loads); content built from a string in `catalog.py`. See [Routines Architecture -- Agent Tools](routines.md#agent-tools) |
 | `system:project_db` | `project_db` key + project | `project_db_query` for the legacy project database ([gate](project-db.md#deprecation-gate)) |
@@ -257,7 +258,7 @@ The three existing skill tools handle `system:*` ids uniformly:
 - `_handle_list_skills()` and `_handle_search_skills()` in `chat/gemini_api/tool_handlers/skills.py` prepend system-skill entries (with `visibility: "system"` and a `when_to_load` field) to the DB-resolved results. Search performs a case-insensitive substring match against the skill's id, name, description, and `when_to_load`.
 - `_handle_load_skills()` partitions incoming `skill_ids` via `is_system_skill_id()`: `system:*` ids go to `load_system_skills()`, other ids go to `db.skill_store.get_accessible_skills_by_ids()`. Results are merged preserving call order.
   - A system skill's content is its `content_builder` output followed by a "Tool reference" section (`build_skill_content()`, via `render_tool_reference()` in `chat/llm/tool_schemas.py`): the full description and parameters of every registry tool the skill documents, rendered from the live registry so the skill's prose never has to repeat (or drift from) a tool's parameter schema. Skills that document no tool get no section.
-  - System ids whose gate fails yield an internal entry with an `error` key ("not connected — connect in Settings > Data Connections" or "project-only") instead of `content`; for `system:quest_docs` and `system:tables`, gated on a feature-gate pseudo-key rather than a connector, it is the gate's own text (`docs_disabled_message()` / `tables_disabled_message()`, as the tools return). Unknown `system:*` ids are silently skipped.
+  - System ids whose gate fails yield an internal entry with an `error` key ("not connected — connect in Settings > Data Connections" or "project-only") instead of `content`; for `system:quest_docs`, `system:doc_notes` and `system:tables`, gated on a feature-gate pseudo-key rather than a connector, it is the gate's own text (`docs_disabled_message()`, `doc_notes_disabled_message()`, `tables_disabled_message()`, as the tools return). Unknown `system:*` ids are silently skipped.
   - The merged entry list is then handed to `_render_loaded_skills_markdown()` (see [load_skills Response Format](#load_skills-response-format)) -- gate-failed entries become bullets under `## Load errors`, successful entries become `===`-separated blocks.
 
 The `list_skills` / `search_skills` / `load_skills` tool descriptions in `chat/llm/tool_schemas.py` document the system-id scheme and call out that system and DB ids can be mixed in a single `load_skills` call.

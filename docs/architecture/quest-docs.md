@@ -204,7 +204,7 @@ Parameters are the registry specs, and success results are the dicts the service
 Error results come in four shapes:
 
 - `{"error": "docs_disabled", "message"}` when the gate is closed (checked before anything else).
-- `{"error": "doc_notes_unseen", "message", "doc_notes": {...}}` when the conversation has not seen the doc's notes ([Doc Notes -- Write Refusal](doc-notes.md#write-refusal)).
+- `{"error": "doc_notes_unseen", "message", "doc_notes": {...}}` for unseen doc notes ([Doc Notes -- Write Refusal](doc-notes.md#write-refusal)).
 - `{"error": "approval_required", "message", "suggested_request": {"request_type": "write_doc", "params": {...}}}` when the verdict is Approval. The model forwards `suggested_request` unchanged through `create_action_request`; the `params` sets are pinned to what `write_doc.validate_params` accepts per operation (`OPERATION_PARAM_KEYS` in `chat/action_request_types/write_doc.py`).
 - `{"error": "<text>"}` for every other refusal: missing or hidden doc (the one not-found text), a denied write (`deny_reason`), an unread doc, a failed match, bad arguments, caps.
 
@@ -233,9 +233,9 @@ Enforcement outside the access rule:
 
 ## Prompting
 
-- **`system:quest_docs`** (`_quest_docs_content` in `chat/system_skills/catalog.py`, name "Quest Docs"; `system:docs` is the Google Docs skill) is the model's guide to the tools, modes, verdicts, read-before-edit, revising in place, the `approval_required` -> `write_doc` handoff and the routine pattern: one doc appended to under a dated heading per run, never a new doc per run. Caps and the History window come from `chat/docs/constants.py`.
+- **`system:quest_docs`** (`_quest_docs_content`; `system:docs` is Google Docs) is the model's guide to the tools, modes, verdicts, read-before-edit, revising in place, the `approval_required` -> `write_doc` handoff and the routine pattern: one doc appended to under a dated heading per run. Its caps and History window come from `chat/docs/constants.py`; its "Read before edit" ends with a pointer to `system:doc_notes`.
 - **Revise in place**: History keeps every replaced body ([Revision policy](#revision-policy)), so the skill, the `create_doc` / `edit_doc` descriptions and `_PUBLIC_DOCS_SECTION` tell the model to change an existing doc, not create a copy, unless the user asks for one.
-- **Public prompt**: `_PUBLIC_DOCS_SECTION` follows the Boundaries block only while `docs_enabled`, and stands in for the skill (only this project's public docs, always created with `create_doc(target="project")`). It may not name internal-only tools or skills (`tests/test_public_projects.py::test_no_internal_tool_docs`), which is why the write-tool descriptions say "write_doc action request" rather than spelling out `create_action_request(`.
+- **Public prompt**: `_PUBLIC_DOCS_SECTION` follows the Boundaries block only while `docs_enabled`, and stands in for the skill (only this project's public docs, always created with `create_doc(target="project")`), followed by the [notes line](doc-notes-tools.md#prompting) while `doc_notes_enabled` too. It may not name internal-only tools or skills (`tests/test_public_projects.py::test_no_internal_tool_docs`), which is why the write-tool descriptions say "write_doc action request" rather than spelling out `create_action_request(`.
 - No doc titles are ever injected into a prompt. Discovery is tools-only.
 - `system:action_requests` and the `create_action_request` description route `write_doc` to `system:quest_docs`.
 

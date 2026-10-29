@@ -2,7 +2,9 @@
 
 ## Overview
 
-Doc notes are texts that stick to a [Quest Doc](quest-docs.md) outside its body and its revisions. The **instructions** are one plain-text field on the `docs` row, holding the rules a model should follow when it works on the doc. The **memories** are short plain-text facts about the doc, one `doc_memories` row each. `doc_note_suggestions` holds proposed changes to either, each reviewed by the user whose conversation proposed it, with the `MemorySuggestionStatus` lifecycle of [project memory suggestions](project-memories.md): an instructions suggestion carries the complete proposed text, a memory suggestion one fact, optionally replacing a memory. This doc covers the gate, the data model and its concurrency, the per-conversation seen record, the delivery gate and the notes block, delivery on reads, the write refusal, the `write_doc` instructions pin, suggestions and their review, the realtime events, the rules of the UI routes, the delete lifecycle and the known limitations. The two model tools, `list_doc_notes` and `suggest_doc_note`, are in [Doc Notes Tools](doc-notes-tools.md).
+Doc notes are texts that stick to a [Quest Doc](quest-docs.md) outside its body and its revisions. The **instructions** are one plain-text field on the `docs` row, holding the rules a model should follow when it works on the doc. The **memories** are short plain-text facts about the doc, one `doc_memories` row each. `doc_note_suggestions` holds proposed changes to either, each reviewed by the user whose conversation proposed it, with the `MemorySuggestionStatus` lifecycle of [project memory suggestions](project-memories.md): an instructions suggestion carries the complete proposed text, a memory suggestion one fact, optionally replacing a memory.
+
+This doc covers the gate, the data model and its concurrency, the seen record, the delivery gate and the notes block, delivery on reads, the write refusal, the `write_doc` instructions pin, suggestions and their review, the realtime events, the UI routes, the delete lifecycle and the known limitations. The two model tools, `list_doc_notes` and `suggest_doc_note`, and the prompting (the `system:doc_notes` skill) are in [Doc Notes Tools](doc-notes-tools.md).
 
 ## Key Files
 
@@ -17,7 +19,7 @@ Doc notes are texts that stick to a [Quest Doc](quest-docs.md) outside its body 
 | `db/doc_memory_store.py` | Every `doc_memories` write (the module docstring gives the transaction shape) and the admin report's `list_all_doc_memory_rows()` |
 | `db/doc_note_suggestion_store.py` | The `doc_note_suggestions` rows; the module docstring gives the kinds, the supersede rule and the one-transaction accept |
 | `chat/docs/routes.py` | `_doc_row()`, which leaves `NOTES_STATE_KEYS` out of UI rows |
-| `chat/docs/notes.py` | The delivery gate, the suggestion taint rule (`suggestion_allowed()`), the notes block and its text copy, and the copy strings the model reads: the refusal messages and the `suggest_doc_note` copy (`DOC_NOTE_*`); no I/O |
+| `chat/docs/notes.py` | The delivery gate, the suggestion taint rule (`suggestion_allowed()`), the notes block and its text copy, and the copy strings: the refusal messages and the `suggest_doc_note` copy (`DOC_NOTE_*`); no I/O |
 | `chat/docs/service.py` | The "Doc notes" helper section (gate check, counts, loading, seen record, `publish_notes_changed()`), the delivery in the read tools and `create_doc`, the notes step of `_resolve_write()`, and the suggestion events of `delete_doc_from_ui()`; the module docstring states the notes invariants |
 | `chat/docs/note_suggestions.py` | The `suggest_doc_note` body, accept, dismiss, the review rows and the `doc_note_suggestions_changed` publisher; the module docstring states who may suggest and review |
 | `chat/docs/access.py` | `DocAccess.deny_cause`, the machine cause of a denied verdict, which the suggestion gate reads |
@@ -100,7 +102,7 @@ The gate functions in `chat/docs/notes.py` do no I/O: a caller loads the doc's n
 
 `render_notes_text()` is the block's plain-text form for a `write_doc` pre-card refusal, an `Invalid parameters` tool error with no cap of its own, so it stays within `DOC_NOTES_PRECARD_MAX_CHARS`; its docstring gives the layout and what is cut. The budget is sized so instructions within `DOC_INSTRUCTIONS_MAX_CHARS` always come whole beside the widest trailer, because a refusal records the delivery it carried and a cut copy could not be recorded. Should the budget be lowered below that, a cut copy returns `NotesText` with `instructions_whole` false, and a caller must not record that instructions version as seen.
 
-The strings the model reads in the block and in its text copy are module constants at the top of `chat/docs/notes.py`, kept together for review.
+The strings the model reads in the block and in its text copy are module constants at the top of `chat/docs/notes.py`, kept together for review under the [stand-alone rule](doc-notes-tools.md#prompting).
 
 ## Delivery on Reads
 
@@ -125,13 +127,13 @@ The notes step is the last check of `_resolve_write()` in `chat/docs/service.py`
 In a recording run where `write_refused()` holds, `_refuse_unseen_notes()` records the delivery and raises `DocNotesUnseen`, which carries the block and its text copy. It decides on the row, then again on the freshly loaded state, so notes emptied in between never refuse. The identical retry passes. The model sees the refusal as:
 
 - **Write tools**: `{"error": "doc_notes_unseen", "message", "doc_notes": {...}}`, mapped in `chat/gemini_api/tool_handlers/docs.py`. The message is `DOC_NOTES_UNSEEN_MESSAGE` (`chat/docs/notes.py`) with the doc's title, and `doc_notes` is the block.
-- **`write_doc` pre-card** (`doc_precard_check()` -> `preview_write_operation()`, which asks for the text form): the same message, a blank line and the [text copy](#text-copy), as the same-turn `Invalid parameters` text. When the copy had to cut the instructions, the seen instructions version is left where it was, so the retry is refused again.
+- **`write_doc` pre-card** (`doc_precard_check()` -> `preview_write_operation()`, which asks for the text form): the same message, the [text copy](#text-copy) and the block's `note`, as the same-turn `Invalid parameters` text. When the copy had to cut the instructions, the seen instructions version is left where it was, so the retry is refused again.
 
 ## Instructions Pin on write_doc Cards
 
 While the gate is open for the proposer, the pre-card injects the live row's `instructions_version` into the card's params. It is one of the `SERVER_INJECTED_KEYS` in `chat/action_request_types/write_doc.py`, so a model-supplied copy is dropped. `WriteDocHandler.execute` passes it to the service as `expected_instructions_version`, a server-only pin of `_normalize_write_params()` (`_SERVER_PINS`, never part of a `suggested_request`).
 
-At approve time (`bypass_approval`) the notes step never consults the seen record. `_check_pinned_instructions()` refuses with `DOC_INSTRUCTIONS_CHANGED_MESSAGE` when the live `instructions_version` differs from the pin and the live instructions are non-empty; being a pure comparison, it runs in the first pass and again on the row re-read under the per-doc lock. The refusal fails the Approve and leaves the request open, like a stale `old_string` ([Quest Docs -- The write_doc Action Request](quest-docs.md#the-write_doc-action-request)). A card without a pin (proposed while the gate was closed for the proposer) or a gate closed at execute is not compared, and memory changes never refuse. The card shows no notes.
+At approve time (`bypass_approval`) the notes step never consults the seen record. `_check_pinned_instructions()` refuses with `DOC_INSTRUCTIONS_CHANGED_MESSAGE` when the live `instructions_version` differs from the pin and the live instructions are non-empty; being a pure comparison, it runs in the first pass and again on the row re-read under the per-doc lock. The refusal fails the Approve and leaves the request open, like a stale `old_string` ([Quest Docs -- The write_doc Action Request](quest-docs.md#the-write_doc-action-request)); [its text](doc-notes-tools.md#prompting) is for the approver. A card without a pin (proposed while the gate was closed for the proposer) or a gate closed at execute is not compared, and memory changes never refuse. The card shows no notes.
 
 ## Suggestions
 
@@ -253,7 +255,7 @@ The routes, their shapes and their errors are in [Quest Docs API -- Notes](../ap
 
 ## Known Limitations
 
-- **A second write in the same model response passes.** When one response issues several writes to a doc, the first refusal records the delivery, so the others are not refused. Tracking delivery per model step was judged out of proportion.
+- **A second write in the same model response passes.** When one response issues several writes to a doc, the first refusal records the delivery, so the others are not refused; the refusal message (`DOC_NOTES_UNSEEN_MESSAGE`) asks the model to check them against the notes. Tracking delivery per model step was judged out of proportion.
 - **A tool write's notes step is not re-checked under the per-doc lock.** It reads the versions in the first pass of `apply_write_operation()`, so an instructions change landing between that check and the write applies from the next write on.
 - **A process crash can leave a record for a block the model never received**, when it lands after a read recorded its delivery and before the tool result was flushed to the chat history. A Stop is safe: the tool result joins the run's messages with no `await` after the service returns (`_emit_durable()` in `chat/gemini_api/turn_tools.py`), and the next turn replays it.
 - **A conversation delete drops its suggestions without an event.** The rows cascade with the conversation, as do those of a project delete's own conversations, and, as for project memory suggestions, no `doc_note_suggestions_changed` goes out; the user's other tabs catch up on their next event or a reload.
