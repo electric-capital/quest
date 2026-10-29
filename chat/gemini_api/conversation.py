@@ -1520,6 +1520,9 @@ async def run_conversation_turn(
                         is_inference_api=ctx.is_inference_api,
                         is_user_subagent=ctx.is_user_subagent,
                         is_slack=ctx.is_slack_origin,
+                        # Routine runs keep run_kind "top_level" but may not
+                        # suggest doc notes (the suggest_doc_note backstop).
+                        is_routine=bool(ctx.routine_id),
                     )
 
                     # Emit conversation_updated event when the name was set

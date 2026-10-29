@@ -52,6 +52,8 @@ Covers:
 8. The script bridge: ``list_doc_notes`` returns the full block with
    ``can_suggest: false`` and records nothing; ``suggest_doc_note`` is not
    allowlisted (400).
+9. The conversation loop: ``run_conversation_turn`` dispatches with
+   ``is_routine`` true for a routine run and false otherwise.
 """
 
 import asyncio
@@ -893,3 +895,85 @@ class TestScriptBridge:
         assert response.status_code == 400
         assert "not available from scripts" in json.loads(response.body)["error"]
         assert all_rows(env) == 0
+
+
+# ---------------------------------------------------------------------------
+# 9. The conversation loop passes is_routine to dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestLoopWiring:
+    """run_conversation_turn hands ``is_routine=bool(routine_id)`` to
+    ``_dispatch_tool_call``, so the suggest_doc_note backstop and
+    ``can_suggest`` see routine runs (their run kind stays top_level).
+    The collaborators are stubbed as in tests/test_stream_error_surfacing.py."""
+
+    def _dispatch_kwargs(self, monkeypatch, *, routine_id):
+        from unittest.mock import AsyncMock, MagicMock
+
+        import api.instructions as instructions
+        import db.conversation_store as conv_store
+        import db.skill_store as skill_store
+        from chat.gemini_api import conversation as conv_mod
+        from chat.llm.base import StreamEvent, UsageStats
+
+        monkeypatch.setattr(conv_mod, "load_server_config", lambda: {"gemini": {"model": "fake"}})
+        monkeypatch.setattr(conv_mod, "get_provider_for_model", lambda _m: "gemini")
+        monkeypatch.setattr(conv_mod, "get_system_prompt", lambda *a, **kw: "system prompt")
+        monkeypatch.setattr(conv_mod, "_load_sdk_history", lambda _cid: None)
+        monkeypatch.setattr(conv_mod, "_save_sdk_history", lambda *a: None)
+        monkeypatch.setattr(conv_mod, "get_or_create_chat", lambda *a, **kw: object())
+        monkeypatch.setattr(conv_mod, "record_api_call", AsyncMock())
+        monkeypatch.setattr(conv_store, "update_conversation_model", AsyncMock())
+        monkeypatch.setattr(skill_store, "get_user_autoloaded_skills", AsyncMock(return_value=[]))
+        monkeypatch.setattr(skill_store, "get_routine_autoloaded_skills", AsyncMock(return_value=[]))
+        monkeypatch.setattr(instructions, "get_user_connected_services", lambda _u: {})
+
+        async def _fake_history(_cid):
+            return {}
+
+        monkeypatch.setattr(conv_mod, "_read_chat_history", _fake_history)
+        monkeypatch.setattr(
+            conv_mod.ChatStorage, "set_system_prompt", staticmethod(lambda *a, **kw: None),
+        )
+
+        provider = MagicMock()
+        provider.get_pending_tool_use_args = MagicMock(return_value=[])
+        provider.get_usage = MagicMock(return_value=UsageStats())
+        provider.repair_session_history = MagicMock(return_value=0)
+        turns: list = []
+
+        async def _stream(_chat, _message):
+            turns.append(_message)
+            if len(turns) == 1:
+                yield StreamEvent(
+                    type="tool_call", tool_name="tool_call", tool_id="call_1",
+                    tool_args={"tool_name": "suggest_doc_note", "arguments": {
+                        "doc_id": "d1", "kind": "memory", "content": "A fact.",
+                    }},
+                )
+            else:
+                yield StreamEvent(type="text", text="done")
+
+        provider.send_message_stream = _stream
+        monkeypatch.setattr(conv_mod, "get_provider_instance", lambda _n, _i=None: provider)
+        dispatched = AsyncMock(return_value=(json.dumps(NOT_AVAILABLE), []))
+        monkeypatch.setattr(conv_mod, "_dispatch_tool_call", dispatched)
+
+        async def _on_event(_event):
+            return None
+
+        _run(conv_mod.run_conversation_turn(
+            app=None,
+            user={"id": 1, "email": "t@example.com", "api_key": "k", "name": "T"},
+            message="hello", conversation_id="conv-routine-wiring", timezone="UTC",
+            model="fake", on_event=_on_event, messages_out=[], routine_id=routine_id,
+        ))
+        assert dispatched.await_count == 1
+        return dispatched.await_args.kwargs
+
+    def test_routine_run_dispatches_with_is_routine(self, monkeypatch):
+        assert self._dispatch_kwargs(monkeypatch, routine_id="r1")["is_routine"] is True
+
+    def test_ordinary_run_dispatches_without_it(self, monkeypatch):
+        assert self._dispatch_kwargs(monkeypatch, routine_id=None)["is_routine"] is False
