@@ -103,7 +103,7 @@ A version is a body. Creation takes no snapshot, metadata and share changes touc
 
 `resolve_doc_access()` in `chat/docs/access.py` returns a `DocAccess` whose `write` is one of `WRITE_VERDICTS` (free / approval / denied). The matrix (the doc's mode and share state x who asks from which conversation kind, with cells Free / Approval / Read / Hidden) and the seven rules layered on it are written down once, in the module docstring; this doc refers to its rows, cells and rules by those names. What spans other files:
 
-- The procedure that applies the matrix is `resolve_core()` in `chat/artifact_access.py`, shared with [Quest Tables](quest-tables.md#access) so both artifacts follow one rule. It returns a wording-free `CoreVerdict`: a denied verdict carries a machine cause from `DENY_CAUSES`, and each resolver maps every cause to its own text (`_DENY_TEXT`, asserted complete at import). Only `resolve_doc_access()` and `resolve_table_access()` call it.
+- The procedure that applies the matrix is `resolve_core()` in `chat/artifact_access.py`, shared with [Quest Tables](quest-tables.md#access) so both artifacts follow one rule. It returns a wording-free `CoreVerdict`: a denied verdict carries a machine cause from `DENY_CAUSES`, and each resolver maps every cause to its own text (`_DENY_TEXT`, asserted complete at import). Only `resolve_doc_access()` and `resolve_table_access()` call it. `DocAccess` keeps the cause as `deny_cause` for the [note suggestion gate](doc-notes.md#registration).
 
 - `doc` must carry its `shares` list; a dict fetched without shares raises instead of being read as unshared. `doc_source_project_ids` are loaded by the service from `project_doc_sources` for a private project's conversations and are empty for every other caller.
 - Rule 2 (project docs outside their project): the owner's standalone conversations (`project_id` None, not public) see the docs of all of the owner's projects read-only, with `DENY_OUTSIDE_PROJECT` on a private doc and `DENY_PUBLIC_DOC_FROM_PRIVATE` on a public one; the service's `_reaches_own_projects()` is the listing-side counterpart, and `doc_store.list_accessible_docs(include_owned_project_docs=True)` supplies the candidates. Ownership is the only reach: a project doc shared with the caller stays Hidden outside its project. A sandbox script carries the project and mode of the conversation that launched it, so it reaches exactly what that conversation reaches ([Script Bridge](#script-bridge)).
@@ -145,7 +145,7 @@ A version is a body. Creation takes no snapshot, metadata and share changes touc
 
 ### UI mutations
 
-`delete_doc_from_ui()` serves `DELETE /docs/{id}`: visibility as `ui`, then ownership (`forbidden`), then the row delete and a best-effort directory removal under the per-doc `asyncio.Lock` and `_shielded()`. It therefore waits for any in-flight model write and re-reads the row with its shares under the lock to capture the audience before the cascade removes them. Rename is a plain metadata update in the route (`doc_store.update_doc_metadata`). Share changes, body saves, restores and asset changes all take the same per-doc lock ([Sharing](#sharing), [Human Editing](#human-editing), [History](#history)).
+`delete_doc_from_ui()` serves `DELETE /docs/{id}`: visibility as `ui`, then ownership (`forbidden`), then the row delete and a best-effort directory removal under the per-doc `asyncio.Lock` and `_shielded()`. It therefore waits for any in-flight model write and re-reads the row with its shares under the lock to capture the audience, and who has [pending note suggestions](doc-notes.md#lifecycle) on it, before the cascade removes them. Rename is a plain metadata update in the route (`doc_store.update_doc_metadata`). Share changes, body saves, restores and asset changes all take the same per-doc lock.
 
 ## Sharing
 
@@ -241,14 +241,15 @@ Enforcement outside the access rule:
 
 ## Realtime
 
-Two per-user globals ([Realtime](realtime.md)), built by `make_doc_list_changed()` / `make_doc_changed()` in `chat/realtime/events.py` and published best-effort through `chat/docs/events.py`, whose module docstring records who publishes what:
+Three per-user globals ([Realtime](realtime.md)), built in `chat/realtime/events.py` and published best-effort through `chat/docs/events.py`, whose module docstring records who publishes what:
 
 - `doc_list_changed` (no payload): list views re-fetch their window.
-- `doc_changed {doc_id, updated_at}`: an open viewer of that doc re-fetches unless it already shows that `updated_at`. `updated_at: null` means "this doc's existence or your access to it changed; re-fetch". Doc delete, share changes and project delete send it, always before that change's `doc_list_changed`, because they do not bump `updated_at` and a token could not signal them.
+- `doc_changed {doc_id, updated_at}`: an open viewer of that doc re-fetches unless it already shows that `updated_at`. `updated_at: null` means "this doc's existence or your access to it changed; re-fetch". Doc delete, share changes and project delete send it, always before that change's `doc_list_changed`, because they do not bump `updated_at`.
+- `doc_notes_changed`: sent alone on a notes change ([Doc Notes](doc-notes.md#realtime)).
 
-The **audience** is the owner plus every direct share recipient, plus every connected user (`bus.connected_user_ids()`, resolved at publish time) when the doc has an everyone row. A delete captures it before the cascade removes the share rows. Every change an open viewer must notice reaches it as a `doc_changed` for its own doc, so viewers ignore `doc_list_changed`, which can be install-wide traffic.
+The **audience** is the owner plus every direct share recipient, plus every connected user (`bus.connected_user_ids()`, resolved at publish time) when the doc has an everyone row. Every change an open viewer must notice reaches it as a `doc_changed` for its own doc, so viewers ignore `doc_list_changed`, which can be install-wide traffic.
 
-Publishing is event-loop-thread only, because `bus.publish_to_user` is not thread-safe. The service publishes for every write; tool handlers never publish. Neither envelope carries a `conversation_id`, so they reach `PersistentWebSocket`'s global handlers without an allow-list entry. Consumers: [Realtime consumers](#realtime-consumers); limits: [Known Limitations](#known-limitations).
+Publishing is event-loop-thread only, because `bus.publish_to_user` is not thread-safe. The service publishes for every write; tool handlers never publish. No envelope carries a `conversation_id`, so they reach `PersistentWebSocket`'s global handlers without an allow-list entry. Consumers: [Realtime consumers](#realtime-consumers); limits: [Known Limitations](#known-limitations).
 
 ## Frontend
 
@@ -322,7 +323,7 @@ Both card renderers go through `ActionRequestPreviewFields.tsx`. `DocImagePrevie
 - **Share revoked**: access ends at once ([Sharing](#sharing)); the recipient's History copies are their own docs and stay.
 - **Image deleted**: gone from `assets/` for every version ([Known Limitations](#known-limitations)).
 - **Project delete** (`delete_user_project` in `chat/project_routes.py`): `list_docs_for_project()` (rows with their shares, for the audience) runs before the project row goes. The `docs.project_id` CASCADE removes the rows with their shares and notes, `_delete_doc_dirs()` sweeps the directories (failures logged, never raised), then the events go out ([Realtime](#realtime)). The sweep runs before the unguarded conversation-directory `rmtree` loop, so a failure there cannot leave doc files behind.
-- **Account delete** (`delete_account` in `chat/routes/user.py`): `list_doc_ids_for_user()` (user and project docs alike) runs before any row delete, and the directories are swept in a thread after the cascades and before the unguarded `rmtree` loops, for the same reason. Share rows granted to the deleted user cascade away; an everyone row on another user's doc survives. Rosters and History labels name a deleted user as such, and recipients are not notified ([Known Limitations](#known-limitations)).
+- **Account delete** (`delete_account` in `chat/routes/user.py`): `list_doc_ids_for_user()` (user and project docs alike) runs before any row delete, and the directories are swept in a thread after the cascades and before the unguarded `rmtree` loops, for the same reason. Share rows granted to the deleted user cascade away; an everyone row on another user's doc survives. Rosters and History labels name a deleted user as such, and recipients get no doc event ([Known Limitations](#known-limitations)).
 - **Project archived**, **convert chat to project**, **duplicate workspace**: no effect. **Conversation deleted**: its doc-note suggestions cascade, and `last_write_source` becomes a dead reference.
 - Orphan directories (a crash between layout and insert, a failed best-effort sweep) are swept by nothing; no row points at them, so they are invisible.
 
@@ -373,7 +374,7 @@ Public containers get no sandbox token and so have no bridge at all, so `is_publ
 
 ## Known Limitations
 
-- **Account deletion sends no event to recipients.** Their lists refresh on their next `doc_list_changed` or reload. An open viewer of one of the deleted user's docs keeps showing it until it re-fetches (a reload, or any action that hits the server), since no `doc_changed` comes for it; the re-fetch then 404s.
+- **Account deletion sends no doc event to recipients.** Their lists refresh on their next `doc_list_changed` or reload. An open viewer of one of the deleted user's docs keeps showing it until it re-fetches (a reload, or any action that hits the server), since no `doc_changed` comes for it; the re-fetch then 404s.
 - **The everyone-share broadcast ignores gates and costs one list refetch per connected user per write burst.** A user who cannot open the doc learns only its id and `updated_at`, never content or a title, because the follow-up fetch 404s. Open viewers ignore it ([Realtime consumers](#realtime-consumers)).
 - **A read-only viewer's row still carries the doc's total `asset_count`.** The detail, asset route and zip are filtered to the images the current body references, but the row (shown in All Docs' size column) counts every image in `assets/`. It reveals a count, never content.
 - **Button navigation is not intercepted by the editor guard** ([Editor](#editor)). The draft backup covers it only in that browser, for `DOC_DRAFT_MAX_AGE_MS` or until logout.
