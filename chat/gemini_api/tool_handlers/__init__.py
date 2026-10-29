@@ -101,6 +101,10 @@ from chat.gemini_api.tool_handlers.docs import (
     _handle_edit_doc,
     _handle_append_to_doc,
     _handle_add_doc_image,
+    _handle_list_doc_notes,
+    _handle_suggest_doc_note,
+    _doc_notes_closed_result,
+    _suggest_doc_note_not_available_result,
 )
 
 __all__ = [
@@ -172,4 +176,8 @@ __all__ = [
     "_handle_edit_doc",
     "_handle_append_to_doc",
     "_handle_add_doc_image",
+    "_handle_list_doc_notes",
+    "_handle_suggest_doc_note",
+    "_doc_notes_closed_result",
+    "_suggest_doc_note_not_available_result",
 ]

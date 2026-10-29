@@ -192,7 +192,7 @@ Editors (the owner or a write share) browse, diff, restore and copy a doc's vers
 
 ## Model-Facing Tools
 
-The seven tools are the `TOOL_CALL_REGISTRY` entries in Key Files, dispatched through `tool_call`. Their descriptions stand alone, because the public prompt carries no skills. Handlers are thin wrappers in `chat/gemini_api/tool_handlers/docs.py`.
+The seven tools are the `TOOL_CALL_REGISTRY` entries in Key Files, dispatched through `tool_call`. Their descriptions stand alone, because the public prompt carries no skills. The doc notes tools are in [Doc Notes Tools](doc-notes-tools.md).
 
 | Tool | Available to |
 |------|--------------|
@@ -329,7 +329,7 @@ Both card renderers go through `ActionRequestPreviewFields.tsx`. `DocImagePrevie
 
 ## Script Bridge
 
-Sandbox scripts (`run_script` / `run_python` through `POST /api/tool-call`, see [Gemini API -- Script tool-call bridge](gemini-api.md)) get the three reads only (`SCRIPT_TOOL_CALL_ALLOWLIST`). The container's sandbox lease (`SandboxLease` in `chat/sandbox_tokens.py`) records the launching conversation's `project_id` and `is_public`; the bridge dispatches with `is_script=True`, those two and `conversation_id=None`. A script therefore sees exactly the docs the conversation that ran it sees ([Access Rule](#access-rule)). Every write is denied (`DENY_SCRIPT`), and no read is recorded, so a script's `read_doc` never satisfies the agent's read-before-edit gate; it gets doc notes counts, never the notes block. A lease-less call (tests only) behaves like a standalone conversation.
+Sandbox scripts (`run_script` / `run_python` through `POST /api/tool-call`, see [Gemini API -- Script tool-call bridge](gemini-api.md)) get the three reads and `list_doc_notes` (`SCRIPT_TOOL_CALL_ALLOWLIST`). The container's sandbox lease (`SandboxLease` in `chat/sandbox_tokens.py`) records the launching conversation's `project_id` and `is_public`; the bridge dispatches with `is_script=True`, those two and `conversation_id=None`. A script therefore sees exactly the docs the conversation that ran it sees ([Access Rule](#access-rule)). Every write is denied (`DENY_SCRIPT`), and no read is recorded, so a script's `read_doc` never satisfies the agent's read-before-edit gate and carries the doc notes counts only. A lease-less call (tests only) behaves like a standalone conversation.
 
 Public containers get no sandbox token and so have no bridge at all, so `is_public` is never set on a lease a script presents. The doc routes are out of reach for the same reason as for models ([Human Editing](#human-editing)), so neither the model nor a script can use the `ui` run kind.
 

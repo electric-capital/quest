@@ -15,7 +15,8 @@ Covers phase A2 of spec 00011 (docs/architecture/doc-notes.md):
    notes, the instructions text winning over ``has_instructions``,
    control characters counting as instructions, a dict without either
    instructions key, missing counters, an unknown run kind, a
-   conversation id that is not a string.
+   conversation id that is not a string. ``suggestion_allowed()`` (the
+   suggestion taint rule) over every deny cause and the admitting verdicts.
 3. ``build_notes_block()``: keys and their order, the note text, memory
    items reduced to id and content, the empty current-state block, the
    delivery budget measured in JSON characters (non-ASCII counting once),
@@ -34,6 +35,7 @@ import uuid
 
 import pytest
 
+from chat.artifact_access import DENY_CAUSES
 from chat.docs.access import RUN_KINDS
 from chat.docs.constants import (
     DOC_INSTRUCTIONS_MAX_CHARS,
@@ -44,6 +46,7 @@ from chat.docs.constants import (
 from chat.docs.notes import (
     DOC_NOTES_BLOCK_NOTE,
     RECORDING_RUN_KINDS,
+    SLACK_DENY_CAUSES,
     NotesSeen,
     NotesText,
     build_notes_block,
@@ -51,6 +54,7 @@ from chat.docs.notes import (
     needs_delivery,
     records_delivery,
     render_notes_text,
+    suggestion_allowed,
     write_refused,
 )
 
@@ -363,6 +367,44 @@ def test_records_delivery_refuses_a_non_str_conversation_id(run_kind, conversati
     # Silently not recording would also skip the write refusal.
     with pytest.raises(TypeError):
         records_delivery(run_kind, conversation_id)
+
+
+# The suggestion taint rule (invariant 4): free and approval admit; a denial
+# admits only for the two Slack causes. Every deny cause is listed, so a
+# cause added to chat/artifact_access.py fails here until it is placed.
+_SUGGESTION_ALLOWED_BY_CAUSE = {
+    "sub_agent": False,
+    "inference_api": False,
+    "user_subagent": False,
+    "script": False,
+    "read_only_share": False,
+    "public_from_private": False,
+    "outside_project": False,
+    "slack_needs_approval": True,
+    "slack_approval_required": True,
+    "ui_read_only": False,
+}
+
+
+def test_suggestion_allowed_table_covers_every_deny_cause():
+    assert set(_SUGGESTION_ALLOWED_BY_CAUSE) == set(DENY_CAUSES)
+    assert SLACK_DENY_CAUSES == {
+        cause for cause, allowed in _SUGGESTION_ALLOWED_BY_CAUSE.items() if allowed
+    }
+
+
+@pytest.mark.parametrize("cause", sorted(_SUGGESTION_ALLOWED_BY_CAUSE))
+def test_suggestion_allowed_for_a_denied_verdict(cause):
+    assert suggestion_allowed("denied", cause) is _SUGGESTION_ALLOWED_BY_CAUSE[cause]
+
+
+@pytest.mark.parametrize("write", ["free", "approval"])
+def test_suggestion_allowed_for_free_and_approval(write):
+    assert suggestion_allowed(write, None) is True
+
+
+def test_suggestion_refused_for_a_denial_without_a_cause():
+    assert suggestion_allowed("denied", None) is False
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Doc notes are texts that stick to a [Quest Doc](quest-docs.md) outside its body and its revisions. The **instructions** are one plain-text field on the `docs` row, holding the rules a model should follow when it works on the doc. The **memories** are short plain-text facts about the doc, one `doc_memories` row each. `doc_note_suggestions` holds proposed changes to either, each reviewed by the user whose conversation proposed it, with the `MemorySuggestionStatus` lifecycle of [project memory suggestions](project-memories.md): an instructions suggestion carries the complete proposed text, a memory suggestion one fact, optionally replacing a memory. This doc covers the feature gate, the data model, the version counters, concurrency, caps, the per-conversation seen record, the delivery gate, the notes block, delivery on the doc reads, the write refusal, the instructions pin on `write_doc` cards, suggestions and their review, the realtime events, the delete lifecycle and the known limitations.
+Doc notes are texts that stick to a [Quest Doc](quest-docs.md) outside its body and its revisions. The **instructions** are one plain-text field on the `docs` row, holding the rules a model should follow when it works on the doc. The **memories** are short plain-text facts about the doc, one `doc_memories` row each. `doc_note_suggestions` holds proposed changes to either, each reviewed by the user whose conversation proposed it, with the `MemorySuggestionStatus` lifecycle of [project memory suggestions](project-memories.md): an instructions suggestion carries the complete proposed text, a memory suggestion one fact, optionally replacing a memory. This doc covers the feature gate, the data model, the version counters, concurrency, caps, the per-conversation seen record, the delivery gate, the notes block, delivery on the doc reads, the write refusal, the instructions pin on `write_doc` cards, suggestions and their review, the realtime events, the delete lifecycle and the known limitations. The two model tools, `list_doc_notes` and `suggest_doc_note`, are in [Doc Notes Tools](doc-notes-tools.md).
 
 ## Key Files
 
@@ -17,7 +17,7 @@ Doc notes are texts that stick to a [Quest Doc](quest-docs.md) outside its body 
 | `db/doc_memory_store.py` | Every `doc_memories` write; the module docstring gives the transaction shape |
 | `db/doc_note_suggestion_store.py` | The `doc_note_suggestions` rows; the module docstring gives the kinds, the supersede rule and the one-transaction accept |
 | `chat/docs/routes.py` | `_doc_row()`, which leaves `NOTES_STATE_KEYS` out of UI rows |
-| `chat/docs/notes.py` | The delivery gate, the notes block and its text copy, and the copy strings the model reads: the refusal messages and the `suggest_doc_note` copy (`DOC_NOTE_*`); no I/O |
+| `chat/docs/notes.py` | The delivery gate, the suggestion taint rule (`suggestion_allowed()`), the notes block and its text copy, and the copy strings the model reads: the refusal messages and the `suggest_doc_note` copy (`DOC_NOTE_*`); no I/O |
 | `chat/docs/service.py` | The "Doc notes" helper section (gate check, counts, loading, seen record, `publish_notes_changed()`), the delivery in the read tools and `create_doc`, the notes step of `_resolve_write()`, and the suggestion events of `delete_doc_from_ui()`; the module docstring states the notes invariants |
 | `chat/docs/note_suggestions.py` | The `suggest_doc_note` body, accept, dismiss, the review rows and the `doc_note_suggestions_changed` publisher; the module docstring states who may suggest and review |
 | `chat/docs/access.py` | `DocAccess.deny_cause`, the machine cause of a denied verdict, which the suggestion gate reads |
@@ -111,7 +111,7 @@ Whether a `read_doc` carries the block depends on the run kind:
 
 - **Recording runs** (`records_delivery()`): when `needs_delivery()` holds against the seen record, and the delivered versions are then recorded.
 - **Sub-agent and inference-API runs**: whenever the doc has notes, never recorded. `notes_seen()` returns no record outside recording runs, so a sub-agent, which shares its parent's conversation id, never has its block suppressed by the parent's record.
-- **Scripts** (`_READ_DOC_COUNTS_ONLY_RUN_KINDS`): the counts only.
+- **Scripts** (`_READ_DOC_COUNTS_ONLY_RUN_KINDS`): the counts only; `list_doc_notes` gives them the block ([Doc Notes Tools](doc-notes-tools.md#list_doc_notes)).
 
 `record_notes_delivery()` writes the record for the doc tools. It is a no-op outside recording runs and runs as the last step, with no `await` before the return or raise; its docstring gives the reason.
 
@@ -132,7 +132,7 @@ At approve time (`bypass_approval`) the notes step never consults the seen recor
 
 ## Suggestions
 
-A model never writes the notes: it proposes a change with `suggest_doc_note`, and a person accepts or dismisses it. `db/doc_note_suggestion_store.py` is the doc-notes twin of `db/project_memory_suggestion_store.py`, sharing its status lifecycle, `SuggestionAlreadyResolvedError` and resolved-list keyset cursor, and `chat/docs/note_suggestions.py` is the twin of `chat/project_memories.py`. The reviewer is always the proposing conversation's user (`user_id`); every store function but the cross-user reports is scoped to that user.
+A model never writes the notes: it proposes a change with `suggest_doc_note` ([Doc Notes Tools](doc-notes-tools.md#suggest_doc_note)), and a person accepts or dismisses it. `db/doc_note_suggestion_store.py` is the doc-notes twin of `db/project_memory_suggestion_store.py`, sharing its status lifecycle, `SuggestionAlreadyResolvedError` and resolved-list keyset cursor, and `chat/docs/note_suggestions.py` is the twin of `chat/project_memories.py`. The reviewer is always the proposing conversation's user (`user_id`); every store function but the cross-user reports is scoped to that user.
 
 - **Supersede**: a user has at most one pending instructions suggestion per doc, so they never review two competing full texts. `create_suggestion()` dismisses the older one, from any of the user's conversations, in the insert's own transaction, after taking SQLite's write lock with the same no-op `UPDATE` of the doc row as the [memory writers](#concurrency). Two concurrent creates for one user and doc therefore never both leave a pending row, and a replaced memory deleted meanwhile cannot slip between its check and the insert.
 - **Content** is normalized by the notes stores' own functions, so the suggestion caps count characters exactly as the notes caps do.
@@ -142,7 +142,7 @@ A model never writes the notes: it proposes a change with `suggest_doc_note`, an
 
 `register_suggestion()` is the `suggest_doc_note` body; its docstring lists the checks in order and the result statuses. What the order encodes:
 
-- **Taint**: only a conversation whose write verdict on the doc is `free` or `approval`, or `denied` with one of the Slack causes in `_SLACK_DENY_CAUSES` (matched on `DocAccess.deny_cause`), may suggest, so a private conversation can never put text into a public doc's notes. Any other denied verdict answers with its `deny_reason`, and a hidden doc with the missing doc's text, exactly as the doc tools do.
+- **Taint** (`suggestion_allowed()` in `chat/docs/notes.py`): only a conversation whose write verdict on the doc is `free` or `approval`, or `denied` with one of the `SLACK_DENY_CAUSES` (matched on `DocAccess.deny_cause`), may suggest, so a private conversation can never put text into a public doc's notes. Any other denied verdict answers with its `deny_reason`, and a hidden doc with the missing doc's text, exactly as the doc tools do.
 - **Owner-only instructions**: an instructions suggestion also needs the conversation's user to own the doc (`instructions_owner_only`).
 - **Seen first**: the conversation must have seen every current note, memories included (`needs_delivery()`, stricter than the write refusal's `write_refused()`), so a model never proposes a change to notes it has not read. It is checked on the doc row and again, under the lock, on the notes state the guards and `base_instructions_version` come from, so an instructions save landing in between reaches the model before a suggestion can claim it as its base. The refusal is a `DocNotesUnseen` with its own message, and it records the delivery it carries, so the identical retry passes.
 - **Guards**: `already_saved` (a memory, or the instructions, already holds exactly this text) and `already_suggested` (the same text pending from any of the user's conversations) answer with a status, not an error. The pending caps count this user's rows only (the reasons are beside `DOC_NOTE_MAX_PENDING_PER_DOC` in `chat/docs/constants.py`), and an instructions suggestion is never refused by a cap that the row it supersedes would free.
@@ -214,7 +214,7 @@ Two per-user globals, built by `make_doc_notes_changed()` and `make_doc_note_sug
 
 **Why does a doc without notes give those runs no block?** Attaching an empty block to every read was rejected as noise for a run that has nothing to remember. A recording run gets an emptied block only to learn that a rule it was shown is gone.
 
-**Why do scripts get the counts only?** A script is code, not the model, and records nothing, so a block delivered to it would vouch for nothing; the model's own write is still refused until the notes reach the model. The counts cost nothing and let a script see which docs have notes.
+**Why does a script's `read_doc` carry the counts only?** A script is code, not the model, and records nothing, so a block delivered to it would vouch for nothing; the model's own write is still refused until the notes reach the model. The counts cost nothing and let a script see which docs have notes.
 
 **Why does a closed gate turn everything off, including the creator's (0, 0) record?** A closed gate must leave every doc tool and sidecar exactly as without notes, decided by one `notes_enabled()` check per tool. Writing the creator record regardless was rejected so that no part of the feature runs for a user who does not have it; a doc created while the gate was closed is treated like any other once it opens.
 

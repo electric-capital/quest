@@ -331,6 +331,12 @@ def _browser_tools() -> set[str]:
     return set(_browser_tool_names())
 
 
+def _doc_note_tools() -> set[str]:
+    """The Quest Doc notes tools (gated on the doc_notes pseudo-key)."""
+    from chat.gemini_api.system_prompt import _doc_note_tool_names
+    return set(_doc_note_tool_names())
+
+
 class TestPublicSystemPrompt:
     def _prompt(self, **kw):
         from chat.gemini_api.system_prompt import get_public_project_system_prompt
@@ -347,12 +353,15 @@ class TestPublicSystemPrompt:
         assert "curl_proxy" not in p
         assert "localhost" not in p
 
-    @pytest.mark.parametrize("docs_enabled", [False, True])
-    def test_no_internal_tool_docs(self, docs_enabled):
+    @pytest.mark.parametrize("docs_enabled,doc_notes_enabled", [
+        (False, False), (True, False), (True, True),
+    ])
+    def test_no_internal_tool_docs(self, docs_enabled, doc_notes_enabled):
         # Internal tool NAMES must not be documented as callable. (The
         # Boundaries block legitimately names Slack/email as unavailable.)
-        # Holds with the Quest Docs tools and paragraph present too.
-        p = self._prompt(docs_enabled=docs_enabled)
+        # Holds with the Quest Docs tools and paragraph present too, and
+        # with the doc-notes tools beside them.
+        p = self._prompt(docs_enabled=docs_enabled, doc_notes_enabled=doc_notes_enabled)
         for term in (
             "memory_search", "authed_get", "authed_post", "load_skills",
             "system:", "agent_task(",
@@ -390,14 +399,15 @@ class TestPublicSystemPrompt:
         assert 'create_action_request(request_type="write_doc"' in p
 
     def test_keeps_identity_project_guide_and_public_tools(self):
-        # docs_enabled / tables_enabled / browser_enabled: every allowlisted
-        # tool, the doc, table and browser tools included, is documented
-        # (those are gated on the Quest Docs, Quest Tables and browser gates).
+        # docs_enabled / doc_notes_enabled / tables_enabled /
+        # browser_enabled: every allowlisted tool, the doc, doc-notes, table
+        # and browser tools included, is documented (those are gated on the
+        # Quest Docs, Quest Doc notes, Quest Tables and browser gates).
         # project_db_enabled: the legacy project database is offered only
         # to a project that already holds tables in it.
         p = self._prompt(
-            docs_enabled=True, tables_enabled=True, browser_enabled=True,
-            project_db_enabled=True,
+            docs_enabled=True, doc_notes_enabled=True, tables_enabled=True,
+            browser_enabled=True, project_db_enabled=True,
         )
         assert "Ada" in p and "ada@example.com" in p
         assert "Track BTC prices." in p
@@ -407,14 +417,16 @@ class TestPublicSystemPrompt:
         assert "internet" in p.lower()
 
     def test_doc_tools_hidden_when_docs_gate_closed(self):
-        # Default (gate closed for the user): none of the seven doc tools
+        # Default (gate closed for the user): none of the seven doc tools,
+        # none of the doc-notes tools (their gate is closed by default too)
         # and no Quest Docs paragraph; the rest of the allowlist stays.
         p = self._prompt()
-        for name in _DOC_TOOLS:
+        for name in (*_DOC_TOOLS, *sorted(_doc_note_tools())):
             assert name not in p, name
         assert "Quest Docs" not in p
         for name in sorted(
-            PUBLIC_TOOL_CALL_ALLOWLIST - set(_DOC_TOOLS) - _table_tools() - _browser_tools()
+            PUBLIC_TOOL_CALL_ALLOWLIST - set(_DOC_TOOLS) - _doc_note_tools()
+            - _table_tools() - _browser_tools()
             - {"project_db_query"}  # gated on project_db_enabled, default off
         ):
             assert name in p, name
@@ -439,10 +451,15 @@ class TestPublicSystemPrompt:
 
     def test_doc_registry_roster_matches(self):
         # The prompt derives the doc tools from the registry's
-        # requires_service key; pin that it finds exactly the seven.
+        # requires_service key; pin that it finds exactly the seven. The
+        # two doc-notes tools have their own key and are allowlisted too:
+        # a public conversation reads and suggests notes on its project's
+        # public docs (tests/test_doc_notes_prompting.py covers the flag).
         from chat.gemini_api.system_prompt import _doc_tool_names
         assert _doc_tool_names() == frozenset(_DOC_TOOLS)
         assert set(_DOC_TOOLS) <= PUBLIC_TOOL_CALL_ALLOWLIST
+        assert _doc_note_tools() == {"list_doc_notes", "suggest_doc_note"}
+        assert _doc_note_tools() <= PUBLIC_TOOL_CALL_ALLOWLIST
 
     def test_table_tools_follow_the_tables_gate(self):
         # Hidden by default (gate closed), listed in full when open; the

@@ -65,6 +65,9 @@ class TestRegistryTiers:
     def test_core_roster(self):
         assert "authed_get" in CORE_TOOL_CALL_TOOLS
         assert "memory_search" in CORE_TOOL_CALL_TOOLS
+        # The doc-notes tools are core until the system:doc_notes skill
+        # exists (issue #187 phase A7 moves them onto its line).
+        assert {"list_doc_notes", "suggest_doc_note"} <= CORE_TOOL_CALL_TOOLS
         for name in (
             "authed_post", "wait_for_handles", "project_db_query", "list_docs",
             *GMAIL_TOOLS,
@@ -156,8 +159,8 @@ class TestPrompts:
 
     def test_public_prompt_inlines_every_offered_tool(self):
         prompt = get_public_project_system_prompt(
-            docs_enabled=True, tables_enabled=True, browser_enabled=True,
-            project_db_enabled=True,
+            docs_enabled=True, doc_notes_enabled=True, tables_enabled=True,
+            browser_enabled=True, project_db_enabled=True,
         )
         for name in PUBLIC_TOOL_CALL_ALLOWLIST - PROJECT_HIDDEN_WORKSPACE_TOOLS:
             if name not in TOOL_CALL_REGISTRY:

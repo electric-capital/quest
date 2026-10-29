@@ -14,7 +14,13 @@ import copy
 
 from chat.browser_sessions import BROWSER_SERVICE_KEY
 from chat.project_db import PROJECT_DB_SERVICE_KEY
-from chat.docs.constants import DOCS_SERVICE_KEY
+from chat.docs.constants import (
+    DOC_INSTRUCTIONS_MAX_CHARS,
+    DOC_MEMORY_MAX_CHARS,
+    DOC_NOTE_SUGGESTION_KINDS,
+    DOC_NOTES_SERVICE_KEY,
+    DOCS_SERVICE_KEY,
+)
 from chat.tables.constants import (
     TABLE_FILTER_IN_MAX_VALUES,
     TABLE_WRITE_MAX_ROWS,
@@ -2185,6 +2191,147 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "required": ["doc_id", "workspace_path"],
         },
     },
+    # -- Quest Doc notes (docs/architecture/doc-notes.md): list_doc_notes
+    # (chat/docs/service.py list_doc_notes) and suggest_doc_note
+    # (chat/docs/note_suggestions.py register_suggestion). Both carry
+    # requires_service=DOC_NOTES_SERVICE_KEY: the "doc_notes"
+    # connected-services pseudo-key mirrors the per-user doc_notes feature
+    # gate (which requires docs), so the tools are left out of prompts
+    # while the gate is closed (the handlers also refuse with
+    # doc_notes_disabled). Neither is "mutating": list_doc_notes reads, and
+    # suggest_doc_note only registers a pending row for the user's review;
+    # its dispatch backstop refuses the run kinds that may not suggest.
+    "list_doc_notes": {
+        "name": "list_doc_notes",
+        "requires_service": DOC_NOTES_SERVICE_KEY,
+        "description": (
+            "Read a Quest Doc's notes. Instructions are rules set by the "
+            "doc's owner: follow them whenever you change the doc. Memories "
+            "are background facts about the doc, kept by its editors, "
+            "newest first. read_doc attaches the same doc_notes block while "
+            "this conversation has not seen the doc's current notes, and "
+            "a write to the doc is refused once until it has (later, only "
+            "after an instructions change); use this tool to page memories "
+            "a block left out, to re-check the notes later in a long "
+            "conversation, or to get the memory id a replacing suggestion "
+            "names. Returns {id, title, memory_offset, "
+            "doc_notes: {instructions, instructions_version, memories: "
+            "[{id, content}], memories_omitted, note}, can_suggest}: the "
+            "whole instructions and the memories that fit, skipping the "
+            "memory_offset newest. When memories_omitted is above 0, call "
+            "again with memory_offset increased by the number of memories "
+            "returned. can_suggest says whether this conversation may "
+            "propose notes for this doc, with suggest_doc_note where it is "
+            "offered (an instructions change also needs the doc's owner)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "doc_id": {
+                    "type": "string",
+                    "description": "The doc id from list_docs, search_docs or read_doc.",
+                },
+                "memory_offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": (
+                        "How many of the newest memories to skip (default "
+                        "0). To page, add the number of memories the "
+                        "previous call returned."
+                    ),
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'Check doc notes'."
+                    ),
+                },
+            },
+            "required": ["doc_id"],
+        },
+    },
+    "suggest_doc_note": {
+        "name": "suggest_doc_note",
+        "requires_service": DOC_NOTES_SERVICE_KEY,
+        "description": (
+            "Propose a change to a Quest Doc's notes for the user to review "
+            "later, WITHOUT interrupting the conversation. It is registered "
+            "on the side and this call returns at once; the user accepts or "
+            "dismisses it when they like. Nothing is saved until they "
+            "accept, so never claim it was saved, and do not restate the "
+            "suggestion in your reply. kind 'memory': one durable, "
+            "self-contained fact about the doc (its sources, audience, "
+            "structure, recurring pitfalls) that helps whoever changes it "
+            "later; to replace an outdated memory, pass its id as "
+            "replaces_memory_id (ids from list_doc_notes). kind "
+            "'instructions': only for an explicit standing rule for the doc "
+            "('from now on, in this doc always ...'); content is the "
+            "COMPLETE new instructions text, the current text with the "
+            "change applied, and only the doc owner's conversations may "
+            "suggest it. Check the current notes first and do not suggest "
+            "what they already say. A handful of suggestions per "
+            "conversation at most. A doc_notes_unseen result carries the "
+            "doc's current notes: read them, then suggest again only if "
+            "still needed. Returns {status: 'suggested', suggestion_id, "
+            "pending_count, message}; status 'already_saved' or "
+            "'already_suggested' means there is nothing to add."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "doc_id": {
+                    "type": "string",
+                    "description": "The doc id from list_docs, search_docs or read_doc.",
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": list(DOC_NOTE_SUGGESTION_KINDS),
+                    "description": (
+                        "'memory' adds one fact (or replaces one with "
+                        "replaces_memory_id); 'instructions' replaces the "
+                        "whole instructions text when the user accepts."
+                    ),
+                },
+                "content": {
+                    "type": "string",
+                    "description": (
+                        "For 'memory': the fact exactly as it should be "
+                        "saved, concise and self-contained (max "
+                        f"{DOC_MEMORY_MAX_CHARS:,} characters). For "
+                        "'instructions': the complete new instructions "
+                        "text with your change applied (max "
+                        f"{DOC_INSTRUCTIONS_MAX_CHARS:,} characters)."
+                    ),
+                },
+                "reasoning": {
+                    "type": "string",
+                    "description": (
+                        "One sentence, shown to the user under the "
+                        "suggestion: why the doc's notes should change."
+                    ),
+                },
+                "replaces_memory_id": {
+                    "type": "string",
+                    "description": (
+                        "Memory suggestions only: id of the doc's memory "
+                        "(from list_doc_notes or a doc_notes block) that "
+                        "this one replaces when the user accepts. Omit for "
+                        "a new fact."
+                    ),
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'Suggest doc memory'."
+                    ),
+                },
+            },
+            "required": ["doc_id", "kind", "content"],
+        },
+    },
     # -- Quest Tables (chat/tables/service.py). All carry
     # requires_service=TABLES_SERVICE_KEY: the "tables" connected-services
     # pseudo-key mirrors the per-user tables feature gate, so the tools are
@@ -4143,6 +4290,11 @@ PUBLIC_ROUTINE_TOOLS: list[ToolSpec] = PUBLIC_TOOLS + [_ROUTINE_COMPLETED]
 # memories of the conversation's own (public) project, every suggestion
 # waits for the user's accept, and a public project's memories are never
 # visible anywhere else. The user's personal memories stay unreachable.
+# The two Quest Doc notes tools are allowed on the docs' terms: a public
+# conversation reads and suggests the notes of its own project's public
+# docs only (the access rule hides every private doc, notes included,
+# exactly like a nonexistent id), and every suggestion waits for the
+# user's accept.
 # The browser tools (``browser_*``, the names gated on the ``browser``
 # pseudo-key) are allowed: they drive the conversation's own internet-only
 # browser container (chat/browser_sessions.py), which has the public
@@ -4176,6 +4328,8 @@ PUBLIC_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     "edit_doc",
     "append_to_doc",
     "add_doc_image",
+    "list_doc_notes",
+    "suggest_doc_note",
     "list_tables",
     "get_table",
     "query_rows",
@@ -4223,6 +4377,12 @@ CORE_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
     "write_file",
     "edit_file",
     "copy_file",
+    # Quest Doc notes: core until the system:doc_notes skill exists in the
+    # system-skill catalog (phase A7 of spec 00011), when both move to
+    # _SKILL_DOCUMENTED_TOOLS -> "system:doc_notes". Gated on the
+    # doc_notes pseudo-key, so no prompt shows them while it is closed.
+    "list_doc_notes",
+    "suggest_doc_note",
 })
 
 # The system skill documenting each built-in tool that is not core.
