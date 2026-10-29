@@ -65,8 +65,13 @@ DOC_NOTE_MAX_PENDING_PER_CONVERSATION = 20
 # then memories newest first while the block stays within this many chars.
 DOC_NOTES_DELIVERY_MAX_CHARS = 12_000
 # Budget of the block's text copy inside a write_doc pre-card refusal (an
-# ``Invalid parameters`` tool error, which has no cap of its own).
-DOC_NOTES_PRECARD_MAX_CHARS = 3_000
+# ``Invalid parameters`` tool error, which has no cap of its own). Sized so
+# instructions of up to DOC_INSTRUCTIONS_MAX_CHARS always come whole: with
+# the section headers and the widest memories trailer around them they
+# need at most 4 140 characters (tests/test_doc_notes_gate.py pins it). A
+# cut copy could not be recorded as seen, so the identical retry would be
+# refused again.
+DOC_NOTES_PRECARD_MAX_CHARS = 4_200
 
 # doc_note_suggestions.kind: "instructions" proposes the complete new text
 # of the field, "memory" adds or replaces one memory.

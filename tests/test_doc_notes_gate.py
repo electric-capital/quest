@@ -36,6 +36,8 @@ import pytest
 
 from chat.docs.access import RUN_KINDS
 from chat.docs.constants import (
+    DOC_INSTRUCTIONS_MAX_CHARS,
+    DOC_MAX_MEMORIES,
     DOC_NOTES_DELIVERY_MAX_CHARS,
     DOC_NOTES_PRECARD_MAX_CHARS,
 )
@@ -669,8 +671,9 @@ def test_render_singular_trailer():
         "(1 more memory not shown; list_doc_notes pages them.)"
     )
     # The second memory does not fit next to the first.
-    text = _render(_block("Rule.", ["a" * 1500, "b" * 1500]))
-    assert text.endswith("- " + "a" * 1500 + "\n(1 more memory not shown; list_doc_notes pages them.)")
+    half = DOC_NOTES_PRECARD_MAX_CHARS // 2
+    text = _render(_block("Rule.", ["a" * half, "b" * half]))
+    assert text.endswith("- " + "a" * half + "\n(1 more memory not shown; list_doc_notes pages them.)")
     assert len(text) <= DOC_NOTES_PRECARD_MAX_CHARS
 
 
@@ -692,8 +695,8 @@ def test_render_instructions_cut():
     text = _render(block)
     assert text == (
         INSTRUCTIONS_HEADER + "\n"
-        + "a" * 2777 + "\n"
-        "[Instructions cut here: 2223 more characters. "
+        + "a" * 3977 + "\n"
+        "[Instructions cut here: 1023 more characters. "
         "list_doc_notes returns them in full.]\n"
         "\n"
         "Memories (newest first):\n"
@@ -713,21 +716,51 @@ def test_render_instructions_cut_without_memories():
     assert len(text) <= DOC_NOTES_PRECARD_MAX_CHARS
 
 
+# The longest instructions that come whole beside "Memories: none.".
+_WHOLE_MAX = (
+    DOC_NOTES_PRECARD_MAX_CHARS - len(INSTRUCTIONS_HEADER + "\n") - len("\n\nMemories: none.")
+)
+
+
 @pytest.mark.parametrize(
     "instructions, contents, whole",
     [
-        ("", [], True),
-        ("", ["Fact."] * 3, True),
-        ("Rule.", ["Fact."], True),
-        ("i" * 2900, [], True),
-        ("i" * 2950, [], False),
-        ("a" * 5000, ["One."], False),
+        pytest.param("", [], True, id="empty"),
+        pytest.param("", ["Fact."] * 3, True, id="empty-with-memories"),
+        pytest.param("Rule.", ["Fact."], True, id="short"),
+        pytest.param("i" * _WHOLE_MAX, [], True, id="longest-whole"),
+        pytest.param("i" * (_WHOLE_MAX + 1), [], False, id="one-over"),
+        pytest.param("a" * 5000, ["One."], False, id="over-the-field-cap"),
     ],
 )
 def test_render_reports_whether_the_instructions_came_whole(instructions, contents, whole):
     rendered = render_notes_text(_block(instructions, contents))
     assert rendered.instructions_whole is whole
     assert ("[Instructions cut here: " in rendered.text) is not whole
+
+
+def test_render_max_size_instructions_come_whole_without_memories():
+    instructions = "i" * DOC_INSTRUCTIONS_MAX_CHARS
+    rendered = render_notes_text(_block(instructions, []))
+    assert rendered.instructions_whole is True
+    assert rendered.text == INSTRUCTIONS_HEADER + "\n" + instructions + "\n\nMemories: none."
+    assert len(rendered.text) <= DOC_NOTES_PRECARD_MAX_CHARS
+
+
+@pytest.mark.parametrize("hidden", range(DOC_MAX_MEMORIES + 1))
+def test_render_max_size_instructions_come_whole_with_any_memory_count(hidden):
+    """The cut path is unreachable for instructions within the field cap:
+    the widest trailer (every memory of a full doc left out) still fits."""
+    instructions = "\n" * DOC_INSTRUCTIONS_MAX_CHARS
+    rendered = render_notes_text(_block(instructions, [], omitted=hidden))
+    assert rendered.instructions_whole is True
+    assert rendered.text.startswith(INSTRUCTIONS_HEADER + "\n" + instructions + "\n\n")
+    assert len(rendered.text) <= DOC_NOTES_PRECARD_MAX_CHARS
+
+
+def test_render_max_caps_block_from_build_notes_block_is_whole():
+    block = build_notes_block(_state("i" * DOC_INSTRUCTIONS_MAX_CHARS), _memories(DOC_MAX_MEMORIES))
+    assert render_notes_text(block).instructions_whole is True
 
 
 def test_render_max_caps_block_counts_every_memory():
@@ -748,8 +781,8 @@ def test_render_memories_prefix_and_trailer():
         "Keep it short.\n"
         "\n"
         "Memories (newest first):\n"
-        + "".join(f"- {c}\n" for c in contents[:3])
-        + "(11 more memories not shown; list_doc_notes pages them.)"
+        + "".join(f"- {c}\n" for c in contents[:4])
+        + "(10 more memories not shown; list_doc_notes pages them.)"
     )
 
 
@@ -776,7 +809,7 @@ def test_render_stays_within_budget_for_pathological_blocks():
     rng = random.Random(187)
     for _ in range(400):
         instructions = _random_text(
-            rng, rng.choice([0, 1, 50, 2900, 2926, 2927, 2990, 3000, 4000, 20000, 100000])
+            rng, rng.choice([0, 1, 50, 2900, 3000, 4000, 4074, 4126, 4127, 4140, 4200, 20000, 100000])
         )
         count = rng.choice([0, 1, 2, 5, 50, 1000, 3000])
         if count <= 50:
