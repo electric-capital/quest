@@ -845,6 +845,13 @@ async def run_conversation_turn(
         if not (is_public or is_user_subagent or is_inference_api):
             from chat.memory_prompt import load_memories_content
             memories_content = await load_memories_content(user["id"])
+        # The project's own memories go into every project conversation's
+        # prompt, public ones included (they are the project's, readable
+        # there anyway through the project_memory_* tools).
+        project_memories_content = ""
+        if project_id and not (is_user_subagent or is_inference_api):
+            from chat.memory_prompt import load_project_memories_content
+            project_memories_content = await load_project_memories_content(project_id)
 
         from api.instructions import get_user_connected_services
         from chat.project_db import project_has_legacy_db, with_project_db_service
@@ -911,6 +918,7 @@ async def run_conversation_turn(
                 project_db_enabled=project_has_legacy_db(project_id),
                 legacy_shared_workspace=legacy_shared_workspace,
                 converted_from_standalone=converted_from_standalone,
+                project_memories_content=project_memories_content,
             )
         else:
             system_prompt = get_system_prompt(
@@ -930,6 +938,7 @@ async def run_conversation_turn(
                 converted_from_standalone=converted_from_standalone,
                 connected_accounts=connected_accounts,
                 memories_content=memories_content,
+                project_memories_content=project_memories_content,
             )
         ChatStorage.set_system_prompt(conversation_id, system_prompt)
         # Always load saved SDK history from disk so it's available as a

@@ -11,8 +11,9 @@ Every project, public ones included, keeps its own memories beside each user's p
 - `db/project_memory_suggestion_store.py` -- the suggestion rows; reuses the content normalisation, cap and `SuggestionAlreadyResolvedError` of `db/memory_suggestion_store.py`. Accept creates the project memory and archives `replaces_memory_id` in one transaction.
 - `chat/project_memories.py` -- the `suggest_project_memory` tool body with the same duplicate guards as `suggest_memory`, accept / dismiss wrappers, and the `project_memory_suggestions_changed` per-user global. Its Quest Doc notes twin is `chat/docs/note_suggestions.py` ([Doc Notes -- Suggestions](doc-notes.md#suggestions)).
 - `chat/llm/tool_schemas.py` -- the three tool specs, members of `PROJECT_ONLY_TOOL_CALL_TOOLS` (hidden outside projects) and of `PUBLIC_TOOL_CALL_ALLOWLIST`, but not of `SCRIPT_TOOL_CALL_ALLOWLIST`.
-- `chat/gemini_api/tool_dispatch.py` / `chat/gemini_api/tool_handlers/memory.py` -- handlers; every tool works on `ToolContext.project_id` only, and the suggest handler refuses every non-top-level run.
-- `chat/gemini_api/system_prompt.py` -- `_project_memories_section()`: the "Project Memories" paragraph of every project prompt, telling the model to suggest proactively and, outside public projects, how a project memory differs from a personal one. `chat/system_skills/catalog.py` (`_memory_content`) carries the full guidance in `system:memory`.
+- `chat/gemini_api/tool_dispatch.py` / `chat/gemini_api/tool_handlers/memory.py` -- handlers; every tool works on `ToolContext.project_id` only (`project_memory_get` takes up to `MAX_MEMORY_GET_IDS` ids and reports the ones that match nothing of this project's as `missing`), and the suggest handler refuses every non-top-level run.
+- `chat/memory_prompt.py` -- `build_project_memories_content()` / `load_project_memories_content()`: the project's memory block for the prompt (newest in full, then an index of one-line references, then a count), the project twin of the personal block ([Conversation Loop -- System Prompt](gemini-api.md#system-prompt)).
+- `chat/gemini_api/system_prompt.py` -- `_project_memories_section()`: the "Project Memories" paragraph of every project prompt, carrying that block when the run has one (top-level private and public conversations, routine runs) and telling the model to suggest proactively and, outside public projects, how a project memory differs from a personal one. `chat/system_skills/catalog.py` (`_memory_content`) carries the full guidance in `system:memory`.
 - `chat/project_memory_routes.py` -- owner CRUD under `/app/api/projects/{id}/memories` and the suggestion review routes, mirroring `chat/memory_routes.py`.
 - `chat/routes/conversations.py` -- `pending_project_memory_suggestions` on `GET /conversations/{id}`.
 - `frontend/src/components/MemorySuggestions.tsx` -- `kind="project"` renders the project bubble and panel; `ChatPanel.tsx` shows both kinds side by side in `.memory-suggestions-bar`. The project kind has its own icon, wording and a fixed amber colour so it never reads as a personal suggestion under any colour theme.
@@ -20,18 +21,18 @@ Every project, public ones included, keeps its own memories beside each user's p
 
 ## Flow
 
-1. The model reads with `project_memory_search` / `project_memory_list`, then proposes with `suggest_project_memory`, unprompted or because the user asked.
+1. The model starts with the project's memories in its prompt, reads an indexed one with `project_memory_get` or searches with `project_memory_search` / `project_memory_list`, then proposes with `suggest_project_memory`, unprompted or because the user asked.
 2. `register_suggestion()` in `chat/project_memories.py` stores the row and publishes the pending count; `useConversation.ts` feeds it into `pendingProjectMemorySuggestions` in `conversationStore.ts`.
 3. The user accepts or dismisses from the project panel or the inbox's Memories tab (`/app/api/project-memory-suggestions/{id}/accept|dismiss`; the inbox lists project suggestions beside personal ones, see [Memory Suggestions -- The Inbox's Memories Tab](memory-suggestions.md#the-inboxs-memories-tab)), or edits memories directly in Project Settings.
 
 ## Who Sees Them
 
-| Run | Read tools | Suggest |
-|-----|-----------|---------|
-| Project conversation (private or public), top level | yes | yes |
-| Project routine run | yes | no (prompt + tier) |
-| Sub-agent in a project | yes | no (dispatch refuses) |
-| Standalone, cross-user subagent, inference API, script | no | no |
+| Run | In the prompt | Read tools | Suggest |
+|-----|---------------|-----------|---------|
+| Project conversation (private or public), top level | yes | yes | yes |
+| Project routine run | yes | yes | no (prompt + tier) |
+| Sub-agent in a project | no | yes | no (dispatch refuses) |
+| Standalone, cross-user subagent, inference API, script | no | no | no |
 
 ## Design Decisions
 

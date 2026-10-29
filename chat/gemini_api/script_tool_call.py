@@ -66,6 +66,7 @@ SCRIPT_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     # Memory reads (user-scoped)
     "memory_search",
     "memory_list",
+    "memory_get",
     # Quest Docs reads. Scripts run with run_kind="script" (is_script below)
     # and the project / public flag of the conversation that launched the
     # container (from its sandbox lease), so the access rule shows a script

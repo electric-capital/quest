@@ -346,13 +346,14 @@ _CORE_READ_OR_WORKSPACE_TOOLS = {
     "get_current_time",
     "list_workspace_files", "get_workspace_file",
     "write_workspace_file", "edit_workspace_file",  # workspace-local only
-    "memory_search", "memory_list",
+    "memory_search", "memory_list", "memory_get",
     # Registers a pending row in the user's own account for later review;
     # nothing external changes, and the handler refuses inference runs.
     "suggest_memory",
     # Project memories: reads, plus the same review-only suggestion row
     # (and inference runs have no project anyway).
-    "project_memory_search", "project_memory_list", "suggest_project_memory",
+    "project_memory_search", "project_memory_list", "project_memory_get",
+    "suggest_project_memory",
     "wait_for_handles",
     "list_service_connections",  # read-only view of the Settings rows
     "download_drive_file", "google_export_doc",  # external read -> workspace
