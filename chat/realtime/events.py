@@ -187,7 +187,7 @@ def make_table_changed(
 
 
 def make_memory_suggestions_changed(
-    conversation_id: str,
+    conversation_id: Optional[str],
     pending_count: int,
     total_pending: int,
 ) -> dict[str, Any]:
@@ -199,7 +199,9 @@ def make_memory_suggestions_changed(
     conversation's new pending count so the composer bubble updates
     without a fetch (the open panel re-fetches the list), and the user's
     pending count across all conversations (``total_pending``) for the
-    sidebar inbox badge and the inbox's Memories tab.
+    sidebar inbox badge and the inbox's Memories tab. A dream's suggestions
+    (chat/dreaming.py) belong to no conversation: ``conversation_id`` is
+    None and ``pending_count`` 0, so only the inbox moves.
     """
     return {
         "type": "memory_suggestions_changed",

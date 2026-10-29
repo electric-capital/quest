@@ -22,11 +22,15 @@ export const ROW_LABELS = {
     textLabel: 'Memory text',
     replacesLabel: 'Replaces an existing memory',
     replacesTitle: 'Accepting archives the memory this one updates',
+    archiveLabel: 'Archives this memory',
+    archiveTitle: 'Accepting archives this memory; nothing new is saved',
   },
   project: {
     textLabel: 'Project memory text',
     replacesLabel: 'Replaces an existing project memory',
     replacesTitle: 'Accepting archives the project memory this one updates',
+    archiveLabel: 'Archives this project memory',
+    archiveTitle: 'Accepting archives this project memory; nothing new is saved',
   },
 } as const;
 
@@ -111,24 +115,44 @@ export function MemorySuggestionRow({
   children,
 }: MemorySuggestionRowProps) {
   const labels = ROW_LABELS[kind];
+  // An archive-only row (a dream saying a memory is stale or merged
+  // elsewhere) has no text of its own: it shows the memory it retires
+  // instead of a textarea, and Accept just archives it.
+  const archiveOnly = suggestion.content === null;
   // A replacement with the old text in hand gets the diff; one without
   // (memory deleted meanwhile) keeps the plain pill.
   const replacedText = suggestion.replaces_memory_id
     ? suggestion.replaces_content ?? null
     : null;
-  const orphanReplacement = Boolean(suggestion.replaces_memory_id) && replacedText === null;
+  const orphanReplacement = !archiveOnly
+    && Boolean(suggestion.replaces_memory_id) && replacedText === null;
   return (
     <div
       className={`memory-suggestion-row memory-suggestion-row--${kind}${busy ? ' is-busy' : ''}`}
     >
-      <AutoGrowTextarea
-        className="memory-suggestion-content"
-        value={draft}
-        onChange={(e) => onDraftChange(e.target.value)}
-        disabled={busy}
-        aria-label={labels.textLabel}
-      />
-      {replacedText !== null && (
+      {archiveOnly ? (
+        <div className="memory-suggestion-archive" data-testid="memory-suggestion-archive">
+          <div className="memory-suggestion-diff-label">
+            <span title={labels.archiveTitle}>{labels.archiveLabel}</span>
+          </div>
+          {replacedText !== null ? (
+            <div className="memory-suggestion-archive-body">{replacedText}</div>
+          ) : (
+            <div className="memory-suggestion-archive-body memory-suggestion-archive-gone">
+              This memory is already gone; accepting changes nothing.
+            </div>
+          )}
+        </div>
+      ) : (
+        <AutoGrowTextarea
+          className="memory-suggestion-content"
+          value={draft}
+          onChange={(e) => onDraftChange(e.target.value)}
+          disabled={busy}
+          aria-label={labels.textLabel}
+        />
+      )}
+      {!archiveOnly && replacedText !== null && (
         <ReplacementDiff
           before={replacedText}
           after={draft}
@@ -157,7 +181,7 @@ export function MemorySuggestionRow({
           type="button"
           className="memory-suggestion-accept"
           onClick={onAccept}
-          disabled={busy || !draft.trim()}
+          disabled={busy || (!archiveOnly && !draft.trim())}
         >
           {busy ? (
             <LoaderCircle size={14} className="memory-suggestions-spinner" aria-hidden="true" />

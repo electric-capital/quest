@@ -492,13 +492,26 @@ class MemorySuggestionStatus(StrEnum):
     DISMISSED = "dismissed"
 
 
-class MemorySuggestion(Base):
-    """A memory the model proposed mid-conversation via ``suggest_memory``.
+class MemorySuggestionSource(StrEnum):
+    """Where a memory suggestion came from (``memory_suggestions.source``)."""
+    # The ``suggest_memory`` tool, mid-conversation (chat/memory_suggestions.py).
+    CONVERSATION = "conversation"
+    # A dream: the offline review of the user's memory store (chat/dreaming.py).
+    DREAM = "dream"
 
-    Unlike the blocking ``create_memory`` action request, a suggestion is
-    registered on the side and the turn keeps going; the user reviews the
-    conversation's pending suggestions in the composer's suggestions panel
-    and accepts (creating a ``memories`` row) or dismisses each one.
+
+class MemorySuggestion(Base):
+    """A memory change proposed for the user's review.
+
+    Mid-conversation, the ``suggest_memory`` tool registers one on the side
+    and the turn keeps going (unlike the blocking ``create_memory`` action
+    request); the user reviews the conversation's pending suggestions in
+    the composer's suggestions panel. A dream (chat/dreaming.py) registers
+    them without a conversation, reviewed from the inbox only. Accepting
+    creates a ``memories`` row from ``content`` and archives
+    ``replaces_memory_id``; a row with no ``content`` is an archive-only
+    proposal (a dream saying a memory is stale or merged elsewhere) and
+    accepting it just archives ``replaces_memory_id``.
     """
 
     __tablename__ = "memory_suggestions"
@@ -518,13 +531,31 @@ class MemorySuggestion(Base):
         index=True,
         nullable=False,
     )
-    conversation_id: Mapped[str] = mapped_column(
+    # The proposing conversation; NULL for a dream's suggestions, which
+    # belong to no conversation and are reviewed from the inbox.
+    conversation_id: Mapped[Optional[str]] = mapped_column(
         String(36),
         sa.ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    source: Mapped[str] = mapped_column(
+        String(20),
         nullable=False,
+        default=MemorySuggestionSource.CONVERSATION,
+        server_default=MemorySuggestionSource.CONVERSATION.value,
+    )
+    # The dream run that proposed this row (``source == "dream"`` only);
+    # nulled by the DB when the run row is deleted.
+    dream_run_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        sa.ForeignKey("dream_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
     )
     # Proposed memory text (same cap as memories.content: MAX_MEMORY_SIZE).
-    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # NULL = archive-only: accepting creates no memory, only archives
+    # ``replaces_memory_id`` (which such a row always has).
+    content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # The model's one-line justification, shown under the suggestion.
     reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
     # Optional existing memory this suggestion supersedes; archived when the
@@ -552,6 +583,70 @@ class MemorySuggestion(Base):
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
     resolved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, default=None
+    )
+
+
+class DreamRunStatus(StrEnum):
+    """Lifecycle of one dream (see chat/dreaming.py)."""
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class DreamRun(Base):
+    """One dream: an offline review of a user's memory store.
+
+    A dream reads the user's active memories, asks the dreaming model for
+    hygiene proposals (merge duplicates, archive stale or contradicted
+    facts, absolutise relative dates, shorten over-long entries) and
+    registers each as a ``memory_suggestions`` row (``source == "dream"``,
+    ``dream_run_id`` pointing here) for the user to accept or dismiss. The
+    row is the run's ledger entry: when it ran, on which model, what it
+    read and produced, what it cost, and why it failed if it did. The
+    latest completed row of a user gates their next dream.
+    """
+
+    __tablename__ = "dream_runs"
+    __table_args__ = (
+        sa.Index("ix_dream_runs_user_started", "user_id", "started_at"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[int] = mapped_column(
+        sa.Integer,
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    # "scheduled" (the daemon) or "manual" (an admin's run-now request).
+    trigger: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=DreamRunStatus.RUNNING,
+    )
+    # The stored model id the dream ran on (None when it failed before
+    # resolving one) and the thinking level it was asked for.
+    model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    thinking_effort: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Active memories the dream read, suggestions it registered.
+    memories_read: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    suggestions_created: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    # Provider-reported token counts of the one model call (the Anthropic /
+    # Gemini conventions of ``UsageStats`` in chat/llm/base.py) and their
+    # list-price estimate; NULL when the call never happened or the model
+    # has no pricing entry.
+    input_tokens: Mapped[Optional[int]] = mapped_column(sa.Integer, nullable=True)
+    output_tokens: Mapped[Optional[int]] = mapped_column(sa.Integer, nullable=True)
+    cached_tokens: Mapped[Optional[int]] = mapped_column(sa.Integer, nullable=True)
+    estimated_cost_usd: Mapped[Optional[float]] = mapped_column(sa.Float, nullable=True)
+    # One line on a failed run (provider error, unparseable output, ...).
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    finished_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True, default=None
     )
 

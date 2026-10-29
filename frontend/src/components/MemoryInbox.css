@@ -130,6 +130,19 @@
   color: rgba(255, 255, 255, 0.65);
 }
 
+/* A dream's suggestion: no chat to link to, just where it came from. */
+.memory-inbox-from--dream {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* An archive-only row in the reviewed list has no text of its own. */
+.memory-inbox-reviewed-archive {
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
 /* Reviewed (accepted / dismissed) rows. */
 .memory-inbox-reviewed {
   display: flex;

@@ -20,3 +20,4 @@ from chat.routes import user  # noqa: E402, F401
 from chat.routes import admin  # noqa: E402, F401
 from chat.routes import inference_api_keys  # noqa: E402, F401
 from chat.routes import transcribe  # noqa: E402, F401
+from chat.routes import dreaming  # noqa: E402, F401

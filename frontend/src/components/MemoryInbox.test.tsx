@@ -47,6 +47,8 @@ function row(
     id,
     user_id: 1,
     conversation_id: `conv-${id}`,
+    source: 'conversation',
+    dream_run_id: null,
     content,
     reasoning: null,
     replaces_memory_id: null,
@@ -187,6 +189,38 @@ describe('MemoryInbox', () => {
     expect(goTo).toHaveBeenCalledWith('conv-s1', null);
     fireEvent.click(within(open).getByRole('button', { name: 'Untitled chat' }));
     expect(goTo).toHaveBeenCalledWith('conv-p1', 'proj');
+  });
+
+  it('shows a dream\'s archive-only row with its source and no chat link', async () => {
+    servePending([
+      row('d1', '', {
+        content: null, source: 'dream', dream_run_id: 'run-1', conversation_id: null,
+        conversation_title: null, replaces_memory_id: 'm1', replaces_content: 'Prefers tea',
+        reasoning: 'Duplicate of a newer memory.',
+      }),
+    ]);
+    mocks.acceptMemorySuggestion.mockResolvedValue({
+      suggestion: { ...row('d1', '', { content: null, status: 'accepted', resolved_at: '2026-10-29T00:00:00' }), memory_id: null },
+      memory: null,
+    });
+    const goTo = vi.fn();
+    render(<MemoryInbox onGoToConversation={goTo} />);
+
+    const open = screen.getByRole('region', { name: /Open suggestions/ });
+    await waitFor(() => expect(open.textContent).toContain('From a memory review'));
+    expect(within(open).queryByRole('textbox')).toBeNull();
+    expect(within(open).queryByRole('button', { name: /chat/i })).toBeNull();
+    expect(screen.getByTestId('memory-suggestion-archive').textContent).toContain('Prefers tea');
+    expect(open.textContent).toContain('Archives this memory');
+    expect(open.textContent).toContain('Duplicate of a newer memory.');
+
+    const accept = within(open).getByRole('button', { name: 'Accept' });
+    expect((accept as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(accept);
+    await waitFor(() => expect(mocks.acceptMemorySuggestion).toHaveBeenCalledWith('d1', undefined));
+    const done = screen.getByRole('region', { name: 'Recently reviewed' });
+    await waitFor(() => expect(done.textContent).toContain('Archived a memory'));
+    expect(goTo).not.toHaveBeenCalled();
   });
 
   it('shows the empty states', async () => {

@@ -14,7 +14,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Brain, FolderBookmark, LoaderCircle } from 'lucide-react';
+import { Brain, FolderBookmark, LoaderCircle, Moon } from 'lucide-react';
 import {
   acceptMemorySuggestion,
   acceptProjectMemorySuggestion,
@@ -61,12 +61,14 @@ function errorMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
-/** Which chat (and project) a suggestion came from, with a link to it. */
+/** Where a suggestion came from: the chat (and project) it was proposed
+ *  in, with a link to it, or the memory review (a dream) that proposed it. */
 function SuggestionSource({
   suggestion,
   onGoToConversation,
 }: { suggestion: MemoryInboxSuggestion; onGoToConversation: MemoryInboxProps['onGoToConversation'] }) {
   const KindIcon = suggestion.kind === 'project' ? FolderBookmark : Brain;
+  const conversationId = suggestion.conversation_id;
   return (
     <div className="memory-inbox-source">
       <span
@@ -78,23 +80,33 @@ function SuggestionSource({
         <KindIcon size={12} aria-hidden="true" />
         {suggestion.kind === 'project' ? 'Project memory' : 'Memory'}
       </span>
-      <span className="memory-inbox-from">
-        From
-        {' '}
-        <button
-          type="button"
-          className="memory-inbox-conversation-link"
-          onClick={() => onGoToConversation(suggestion.conversation_id, suggestion.project_id)}
+      {suggestion.source === 'dream' || conversationId === null ? (
+        <span
+          className="memory-inbox-from memory-inbox-from--dream"
+          title="Proposed by the periodic review of your saved memories, not by a chat"
         >
-          {suggestion.conversation_title || 'Untitled chat'}
-        </button>
-        {suggestion.project_name && (
-          <>
-            {' in '}
-            <span className="memory-inbox-project">{suggestion.project_name}</span>
-          </>
-        )}
-      </span>
+          <Moon size={12} aria-hidden="true" />
+          From a memory review
+        </span>
+      ) : (
+        <span className="memory-inbox-from">
+          From
+          {' '}
+          <button
+            type="button"
+            className="memory-inbox-conversation-link"
+            onClick={() => onGoToConversation(conversationId, suggestion.project_id)}
+          >
+            {suggestion.conversation_title || 'Untitled chat'}
+          </button>
+          {suggestion.project_name && (
+            <>
+              {' in '}
+              <span className="memory-inbox-project">{suggestion.project_name}</span>
+            </>
+          )}
+        </span>
+      )}
     </div>
   );
 }
@@ -242,7 +254,9 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
       let outcome: MemorySuggestion;
       if (action === 'accept') {
         const draft = drafts[suggestion.id];
-        const edited = draft !== undefined && draft.trim() !== suggestion.content.trim();
+        // An archive-only row has no text to edit, so it never sends one.
+        const edited = suggestion.content !== null
+          && draft !== undefined && draft.trim() !== suggestion.content.trim();
         outcome = (await api.accept(suggestion.id, edited ? draft.trim() : undefined)).suggestion;
       } else {
         outcome = (await api.dismiss(suggestion.id)).suggestion;
@@ -328,8 +342,9 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
           )}
         </div>
         <p className="memory-inbox-hint">
-          Memories the assistant proposed in your chats. Edit the text if you
-          like, then accept to save it or dismiss it. Nothing is saved until you
+          Memories the assistant proposed in your chats, and clean-ups from the
+          periodic review of your saved memories. Edit the text if you like,
+          then accept to save it or dismiss it. Nothing changes until you
           accept.
         </p>
         {pendingError && (
@@ -349,7 +364,7 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
                 key={suggestion.id}
                 suggestion={suggestion}
                 kind={suggestion.kind}
-                draft={drafts[suggestion.id] ?? suggestion.content}
+                draft={drafts[suggestion.id] ?? suggestion.content ?? ''}
                 onDraftChange={(text) => setDrafts((prev) => ({ ...prev, [suggestion.id]: text }))}
                 busy={busyIds.has(suggestion.id)}
                 error={rowErrors[suggestion.id]}
@@ -400,7 +415,15 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
                     </span>
                   )}
                 </div>
-                <div className="memory-inbox-reviewed-content">{suggestion.content}</div>
+                <div className="memory-inbox-reviewed-content">
+                  {suggestion.content ?? (
+                    <span className="memory-inbox-reviewed-archive">
+                      {suggestion.status === 'accepted'
+                        ? 'Archived a memory'
+                        : 'Proposed archiving a memory'}
+                    </span>
+                  )}
+                </div>
                 <SuggestionSource suggestion={suggestion} onGoToConversation={onGoToConversation} />
               </div>
             ))}

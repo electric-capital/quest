@@ -54,21 +54,23 @@ Keys are written by the generic routes `POST /auth/service-key/{service}` and `P
 
 The `Memory` model in `db/models.py` maps to the `memories` table. Memories are markdown text blobs associated with a user (size capped by `MAX_MEMORY_SIZE` in `db/memory_store.py`, enforced at the application layer), supporting inline editing, soft-delete via archiving, and full-text search. The columns are on the class; ids are UUIDs generated at the application layer, `updated_at` is stamped on content update, archive and unarchive, and archived rows are excluded from list/search by default.
 
-The composite `(user_id, archived)` index (declared in `__table_args__` on the model) speeds up the common query pattern of listing non-archived memories for a user. The `user_id` column has a foreign key to `users.id` with `ON DELETE CASCADE`, so memories are automatically deleted when the parent user record is removed.
+The composite `(user_id, archived)` index serves the common query, listing a user's non-archived memories; `user_id` cascades on user delete.
 
 ### Full-Text Search (FTS5)
 
 Memory content is searchable via an FTS5 virtual table (`memories_fts`) kept in sync by database triggers. The FTS5 table and triggers are created in the Alembic migration `alembic/versions/94c49d92fea7_create_memories_table.py`.
 
-**FTS5 virtual table**: `memories_fts` is a content-sync FTS5 table (`content='memories'`, `content_rowid='rowid'`) that indexes the `content` column.
+**FTS5 virtual table**: `memories_fts` is a content-sync FTS5 table (`content='memories'`, `content_rowid='rowid'`) over the `content` column, kept in step by the three AFTER INSERT / DELETE / UPDATE triggers that migration names, so no application code touches it on write.
 
-**Sync triggers**: three triggers created (and named) in that migration -- AFTER INSERT, AFTER DELETE and AFTER UPDATE on `memories` -- keep the index in step with the table, so no application code touches `memories_fts` on write.
-
-**Search capabilities**: The `search_memories()` function in `db/memory_store.py` supports FTS5 query syntax including simple words, quoted phrases, prefix matching (`meet*`), and boolean operators (`AND`, `OR`, `NOT`). Results are ordered by FTS5 relevance rank.
+**Search**: `search_memories()` in `db/memory_store.py` takes FTS5 query syntax (words, quoted phrases, `meet*` prefixes, `AND` / `OR` / `NOT`) and orders by FTS5 rank.
 
 ### Memory suggestions
 
-The `MemorySuggestion` model maps to `memory_suggestions`: memories the model proposed via the non-blocking `suggest_memory` tool, awaiting the user's review (see [Memory Suggestions](memory-suggestions.md)). Rows cascade with their user and conversation; the `memory_id` created on accept and the optional `replaces_memory_id` are nulled when that memory is deleted. Data access is in `db/memory_suggestion_store.py`; the table is created by `alembic/versions/c7e2a9b4d1f8_add_memory_suggestions.py`.
+The `MemorySuggestion` model maps to `memory_suggestions`: memory changes awaiting the user's review, written by the `suggest_memory` tool (`source` `conversation`, with the proposing conversation) or by a dream (`source` `dream`, no conversation, a `dream_run_id`); a row without `content` is archive-only. The cascade and `SET NULL` actions are on the class. See [Memory Suggestions](memory-suggestions.md) and [Dreaming](dreaming.md); data access is `db/memory_suggestion_store.py`, the migrations `c7e2a9b4d1f8_add_memory_suggestions.py` and `b4e8d2c7a1f3_add_dreaming.py`.
+
+### Dream runs
+
+The `DreamRun` model maps to `dream_runs`: one row per dream with its outcome, model, counts and token cost ([Dreaming](dreaming.md)), cascading with the user. Columns are on the class; data access is `db/dream_run_store.py`, created by `b4e8d2c7a1f3_add_dreaming.py`.
 
 ### Cascade Deletion
 

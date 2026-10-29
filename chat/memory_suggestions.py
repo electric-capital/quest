@@ -27,14 +27,19 @@ from db.memory_suggestion_store import (
 logger = logging.getLogger(__name__)
 
 
-async def publish_changed(user_id: int, conversation_id: str) -> int:
+async def publish_changed(user_id: int, conversation_id: Optional[str]) -> int:
     """Publish ``memory_suggestions_changed`` with the fresh pending counts
     (the conversation's, and the user's total for the inbox badge).
 
-    Returns the conversation's count. Publishing is best-effort: a bus
-    failure is logged and never fails the write that triggered it.
+    ``conversation_id`` None is a dream's suggestion (chat/dreaming.py): no
+    composer bubble moves, so the conversation count is 0 and only
+    ``total_pending`` matters. Returns the conversation's count. Publishing
+    is best-effort: a bus failure is logged and never fails the write that
+    triggered it.
     """
-    pending_count = await store.count_pending(user_id, conversation_id)
+    pending_count = (
+        await store.count_pending(user_id, conversation_id) if conversation_id else 0
+    )
     total_pending = await store.count_pending_for_user(user_id)
     try:
         from chat.realtime.bus import bus
