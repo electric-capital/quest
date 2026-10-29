@@ -68,7 +68,8 @@ DOC_NOTES_DELIVERY_MAX_CHARS = 12_000
 # ``Invalid parameters`` tool error, which has no cap of its own). Sized so
 # instructions of up to DOC_INSTRUCTIONS_MAX_CHARS always come whole: with
 # the section headers and the widest memories trailer around them they
-# need at most 4 140 characters (tests/test_doc_notes_gate.py pins it). A
+# need at most 4 140 characters (tests/test_doc_notes_gate.py pins that
+# they fit). A
 # cut copy could not be recorded as seen, so the identical retry would be
 # refused again.
 DOC_NOTES_PRECARD_MAX_CHARS = 4_200
