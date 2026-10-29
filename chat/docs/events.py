@@ -48,8 +48,8 @@ Who publishes what:
   to the doc's audience (:func:`publish_doc_notes_changed_for`, with the
   versions of the ``get_notes_state()`` dict after the change). The one
   place a notes change is published from: an accepted note suggestion
-  (chat/docs/note_suggestions.py) and the notes routes' instructions and
-  memory writes call it after their store write.
+  (chat/docs/note_suggestions.py) calls it, and every other writer of the
+  instructions or the memories must call it after its store write.
 - chat/docs/routes.py: the metadata-only rename (audience helpers).
 - chat/docs/share_routes.py: share add / update / remove send
   ``doc_changed {updated_at: null}`` then ``doc_list_changed`` to the owner

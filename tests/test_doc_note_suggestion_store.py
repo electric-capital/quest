@@ -20,6 +20,12 @@ Covers the store of phase A4 of spec 00011 (docs/architecture/doc-notes.md):
 5. ``dismiss_suggestion``, scoping and resolved rows.
 6. Cascades: doc delete, conversation delete, memory delete; the admin
    report rows.
+7. ``create_suggestion`` takes the doc's write lock first (the
+   replaced-memory check runs inside the transaction) and reports a doc or
+   conversation gone as ``SuggestionTargetGoneError``; concurrent
+   instructions creates leave one pending row; the claim precedes both
+   notes reads and the instructions write; dismiss losing its claim;
+   no-op accepts resolve the row without a notes change.
 """
 
 import asyncio
@@ -981,3 +987,172 @@ def test_list_all_suggestion_rows_shape(env):
     assert by_user[bob]["status"] == "dismissed"
     assert isinstance(by_user[bob]["resolved_at"], datetime)
     assert all(row["doc_id"] == doc_id for row in rows)
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups: the doc lock, gone targets, claim order, no-op accepts
+# ---------------------------------------------------------------------------
+
+
+def test_create_on_a_missing_doc_or_conversation_raises_target_gone(env):
+    alice = _uid(env, "alice")
+    doc_id, cid = _doc(env), _conv(env)
+    for kind, kw in (("memory", {}), ("instructions", {"base_instructions_version": 0})):
+        with pytest.raises(store.SuggestionTargetGoneError):
+            _run(store.create_suggestion(
+                alice, str(uuid.uuid4()), cid, kind, "text", **kw,
+            ))
+        with pytest.raises(store.SuggestionTargetGoneError):
+            _run(store.create_suggestion(
+                alice, doc_id, str(uuid.uuid4()), kind, "text", **kw,
+            ))
+    assert _row_count(env) == 0
+
+
+def test_create_takes_the_doc_lock_before_the_replaced_memory_check(env, monkeypatch):
+    """The replaced-memory check runs inside the write transaction, so a
+    memory delete (which takes the same doc lock) cannot slip between the
+    check and the insert."""
+    doc_id, cid = _doc(env), _conv(env)
+    memory = _memory(env, doc_id, "old")
+    real = env.doc_store.AsyncSessionLocal
+    statements: list[str] = []
+
+    def watching_session():
+        session = real()
+        original_execute = session.execute
+
+        async def execute(stmt, *args, **kwargs):
+            text = str(stmt)
+            if text.startswith("UPDATE docs"):
+                statements.append("lock")
+            elif "FROM doc_memories" in text:
+                statements.append("memory check")
+            return await original_execute(stmt, *args, **kwargs)
+
+        session.execute = execute
+        return session
+
+    monkeypatch.setattr(store, "AsyncSessionLocal", watching_session)
+    _mem_suggest(env, doc_id, cid, "new", replaces_memory_id=memory["id"])
+    assert statements == ["lock", "memory check"]
+
+
+def test_concurrent_instructions_creates_leave_one_pending(env):
+    alice = _uid(env, "alice")
+    doc_id = _doc(env)
+    cids = [_conv(env) for _ in range(5)]
+
+    async def all_at_once():
+        return await asyncio.gather(*(
+            store.create_suggestion(
+                alice, doc_id, cid, "instructions", f"Rule {i}",
+                base_instructions_version=0,
+            )
+            for i, cid in enumerate(cids)
+        ))
+
+    results = _run(all_at_once())
+    pending = _run(store.list_pending_for_doc(alice, doc_id))
+    assert len(pending) == 1
+    created = {row["id"] for row, _sup in results}
+    superseded = [s["id"] for _row, sup in results for s in sup]
+    # Every row but the survivor was superseded exactly once, by a later create.
+    assert sorted(superseded) == sorted(created - {pending[0]["id"]})
+
+
+def test_accept_reads_notes_before_under_the_claim(env, monkeypatch):
+    alice = _uid(env, "alice")
+    doc_id, cid = _doc(env), _conv(env)
+    row = _mem_suggest(env, doc_id, cid, "fact")
+    real = env.doc_store.load_notes_state_in_session
+    seen: list[str] = []
+
+    async def watching(db, doc_id):
+        seen.append((await db.execute(
+            select(DocNoteSuggestion.status).where(DocNoteSuggestion.id == row["id"])
+        )).scalar_one())
+        return await real(db, doc_id)
+
+    monkeypatch.setattr(env.doc_store, "load_notes_state_in_session", watching)
+    _run(store.accept_suggestion(alice, row["id"]))
+    assert seen == ["accepted", "accepted"]  # notes_before and notes_after
+
+
+def test_instructions_accept_claims_first_and_undoes_the_claim(env, monkeypatch):
+    alice = _uid(env, "alice")
+    doc_id, cid = _doc(env), _conv(env)
+    row, _sup = _instr_suggest(env, doc_id, cid, "Rule")
+    before = _state(env, doc_id)
+    seen: list[str] = []
+
+    async def failing_write(db, doc_id, text, **kw):
+        seen.append((await db.execute(
+            select(DocNoteSuggestion.status).where(DocNoteSuggestion.id == row["id"])
+        )).scalar_one())
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(env.doc_store, "write_instructions_in_session", failing_write)
+    with pytest.raises(RuntimeError):
+        _run(store.accept_suggestion(alice, row["id"]))
+    assert seen == ["accepted"]
+    fresh = _get(env, row)
+    assert fresh["status"] == "pending" and fresh["resolved_at"] is None
+    assert _state(env, doc_id) == before
+
+
+def test_dismiss_loses_the_claim_to_a_concurrent_resolve(env, monkeypatch):
+    alice = _uid(env, "alice")
+    doc_id, cid = _doc(env), _conv(env)
+    row = _mem_suggest(env, doc_id, cid, "fact")
+    real = env.doc_store.AsyncSessionLocal
+
+    def racing_session():
+        session = real()
+        original_get = session.get
+
+        async def get(*args, **kwargs):
+            loaded = await original_get(*args, **kwargs)
+            async with real() as other:  # another tab accepts first
+                await other.execute(
+                    update(DocNoteSuggestion)
+                    .where(DocNoteSuggestion.id == row["id"])
+                    .values(status="accepted",
+                            resolved_at=datetime.now(timezone.utc))
+                )
+                await other.commit()
+            return loaded
+
+        session.get = get
+        return session
+
+    monkeypatch.setattr(store, "AsyncSessionLocal", racing_session)
+    with pytest.raises(store.SuggestionAlreadyResolvedError) as exc_info:
+        _run(store.dismiss_suggestion(alice, row["id"]))
+    assert exc_info.value.status == "resolved"
+    monkeypatch.setattr(store, "AsyncSessionLocal", real)
+    assert _get(env, row)["status"] == "accepted"
+
+
+def test_noop_accepts_resolve_the_row_without_a_notes_change(env):
+    alice = _uid(env, "alice")
+    doc_id, cid = _doc(env), _conv(env)
+
+    # Instructions equal to the field at the expected version.
+    _run(env.doc_store.update_doc_instructions(
+        doc_id, "Rule", expected_version=0, user_id=alice,
+    ))
+    row, _sup = _instr_suggest(env, doc_id, cid, "Rule", base=1)
+    result = _run(store.accept_suggestion(alice, row["id"]))
+    assert result["suggestion"]["status"] == "accepted"
+    assert result["notes_after"] == result["notes_before"]
+    assert result["notes_after"]["instructions_version"] == 1
+
+    # A replace in place with the memory's own text.
+    memory = _memory(env, doc_id, "fact")
+    replace = _mem_suggest(env, doc_id, cid, "fact", replaces_memory_id=memory["id"])
+    result = _run(store.accept_suggestion(alice, replace["id"]))
+    assert result["suggestion"]["status"] == "accepted"
+    assert result["suggestion"]["memory_id"] == memory["id"]
+    assert result["memory"]["id"] == memory["id"]
+    assert result["notes_after"] == result["notes_before"]

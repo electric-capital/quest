@@ -228,8 +228,8 @@ class DocAccess:
     causes (``slack_needs_approval``, ``slack_approval_required``): those
     deny a write only because Slack cannot open a card. It never reaches
     a payload, and equality ignores it (``compare=False``): the reason text
-    already maps one-to-one to the cause, so two verdicts that differ only
-    in a missing cause are the same verdict.
+    already maps one-to-one to the cause, so verdicts that differ only in
+    ``deny_cause`` compare equal.
     """
 
     visible: bool

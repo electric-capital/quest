@@ -23,21 +23,26 @@ Two kinds (``DOC_NOTE_SUGGESTION_KINDS``):
 
 Supersede rule: a user has at most one pending instructions suggestion per
 doc, so they never review two competing full texts. :func:`create_suggestion`
-enforces it in its own transaction: the UPDATE that dismisses the user's
-older pending instructions suggestions for the doc (from any of their
-conversations) is the transaction's first write, so it takes SQLite's
-write lock (see db/doc_memory_store.py) and two concurrent creates for one
-user and doc serialize instead of both leaving a pending row.
+enforces it in its own transaction. Its first write is a no-op ``UPDATE`` of
+the doc row, which takes SQLite's write lock as db/doc_memory_store.py's
+writers do (step 1 of its module docstring), so the replaced-memory check,
+the UPDATE that dismisses the user's older pending instructions suggestions
+for the doc (from any of their conversations) and the insert run serialized
+against every other notes writer of the doc: two concurrent creates for one
+user and doc never both leave a pending row, and a memory deleted meanwhile
+cannot slip between the check and the insert.
 
 Accept is one transaction, all or nothing: claim the row first (``pending``
 -> ``accepted``, which takes the write lock), then make the notes write
-through the A1 session helpers (``db.doc_memory_store.*_in_session``,
+through the notes stores' session helpers (``db.doc_memory_store.*_in_session``,
 ``db.doc_store.write_instructions_in_session``), which never commit and
 raise having changed nothing. Any refusal rolls the whole transaction back,
 the claim included, so the row stays pending and the notes are unchanged.
 The notes versions are read with ``db.doc_store.load_notes_state_in_session``
 only, never from a loaded ``Doc`` (the notes writers bump them with SQL-side
-UPDATEs that do not refresh loaded objects).
+UPDATEs that do not refresh loaded objects). Every returned dict is built
+inside the transaction, before the commit, so a delete landing right after
+it cannot turn a landed change into an error.
 
 Content is normalized by the notes stores' own functions
 (``doc_memory_store.normalize_memory_content``,
@@ -59,6 +64,7 @@ from typing import Iterable, Optional
 import uuid
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 
 from chat.docs.constants import DOC_NOTE_SUGGESTION_KINDS
 from db import doc_memory_store, doc_store
@@ -70,10 +76,11 @@ from db.memory_suggestion_store import (
     _normalize_reasoning,
     resolved_keyset_filter,
 )
-from db.models import DocMemory, DocNoteSuggestion, MemorySuggestionStatus
+from db.models import Doc, DocMemory, DocNoteSuggestion, MemorySuggestionStatus
 
 __all__ = [
     "SuggestionAlreadyResolvedError",
+    "SuggestionTargetGoneError",
     "accept_suggestion",
     "count_pending",
     "count_pending_for_doc",
@@ -94,6 +101,13 @@ __all__ = [
 
 KIND_INSTRUCTIONS = "instructions"
 KIND_MEMORY = "memory"
+
+
+class SuggestionTargetGoneError(LookupError):
+    """:func:`create_suggestion` found its doc gone, or the insert's foreign
+    key refused the row because the doc or the conversation was deleted
+    after the caller's checks. Nothing is written; the caller reports the
+    doc as not found."""
 
 # Bound of a SQLite INTEGER (as db/doc_store.py's instructions token).
 _MAX_VERSION = 2**63
@@ -216,10 +230,10 @@ async def create_suggestion(
     ``base_instructions_version``, and its ``replaces_memory_id`` must name
     a memory of this doc.
 
-    For kind ``instructions``, in the same transaction and as its first
-    write, every pending instructions suggestion of this user for this doc
-    (from any of their conversations) is marked ``dismissed`` with
-    ``resolved_at`` = now, before the insert (module docstring). Memory
+    The transaction first takes the doc's write lock (module docstring);
+    then, for kind ``instructions``, every pending instructions suggestion
+    of this user for this doc (from any of their conversations) is marked
+    ``dismissed`` with ``resolved_at`` = now, before the insert. Memory
     suggestions never supersede.
 
     Returns:
@@ -234,6 +248,7 @@ async def create_suggestion(
             instructions suggestion; a ``replaces_memory_id`` that is not a
             memory of this doc. Nothing is written.
         InvalidMemoryError, InvalidInstructionsError: invalid content.
+        SuggestionTargetGoneError: the doc or the conversation is gone.
     """
     content = normalize_suggestion_content(kind, content)
     reasoning = _normalize_reasoning(reasoning)
@@ -258,6 +273,14 @@ async def create_suggestion(
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as db:
         try:
+            locked = await db.execute(
+                update(Doc)
+                .where(Doc.id == doc_id)
+                .values(memories_version=Doc.memories_version)
+                .execution_options(synchronize_session=False)
+            )
+            if locked.rowcount == 0:
+                raise SuggestionTargetGoneError(f"Doc {doc_id} is gone.")
             superseded_ids: list[str] = []
             if kind == KIND_INSTRUCTIONS:
                 result = await db.execute(
@@ -300,18 +323,27 @@ async def create_suggestion(
                 created_at=now,
             )
             db.add(row)
+            try:
+                await db.flush()
+            except IntegrityError as exc:
+                raise SuggestionTargetGoneError(
+                    "The doc or the conversation was deleted."
+                ) from exc
+            await db.refresh(row)
+            superseded: list[dict] = []
+            if superseded_ids:
+                result = await db.execute(_oldest_first(
+                    select(DocNoteSuggestion).where(
+                        DocNoteSuggestion.id.in_(superseded_ids)
+                    )
+                ))
+                superseded = [_to_dict(r) for r in result.scalars().all()]
+            created = _to_dict(row)
             await db.commit()
         except BaseException:
             await db.rollback()
             raise
-        await db.refresh(row)
-        superseded: list[dict] = []
-        if superseded_ids:
-            result = await db.execute(_oldest_first(
-                select(DocNoteSuggestion).where(DocNoteSuggestion.id.in_(superseded_ids))
-            ))
-            superseded = [_to_dict(r) for r in result.scalars().all()]
-        return _to_dict(row), superseded
+        return created, superseded
 
 
 # ---------------------------------------------------------------------------
@@ -591,17 +623,18 @@ async def accept_suggestion(
                 raise ValueError(f"Unknown doc note suggestion kind {row.kind!r}.")
 
             notes_after = await doc_store.load_notes_state_in_session(db, doc_id)
+            await db.refresh(row)
+            accepted = {
+                "suggestion": _to_dict(row),
+                "memory": memory,
+                "notes_before": notes_before,
+                "notes_after": notes_after,
+            }
             await db.commit()
         except BaseException:
             await db.rollback()
             raise
-        await db.refresh(row)
-        return {
-            "suggestion": _to_dict(row),
-            "memory": memory,
-            "notes_before": notes_before,
-            "notes_after": notes_after,
-        }
+        return accepted
 
 
 async def dismiss_suggestion(user_id: int, suggestion_id: str) -> Optional[dict]:
@@ -635,12 +668,13 @@ async def dismiss_suggestion(user_id: int, suggestion_id: str) -> Optional[dict]
             )
             if claimed.rowcount != 1:
                 raise SuggestionAlreadyResolvedError("resolved")
+            await db.refresh(row)
+            dismissed = _to_dict(row)
             await db.commit()
         except BaseException:
             await db.rollback()
             raise
-        await db.refresh(row)
-        return _to_dict(row)
+        return dismissed
 
 
 # ---------------------------------------------------------------------------
