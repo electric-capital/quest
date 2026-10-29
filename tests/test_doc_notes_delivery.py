@@ -127,8 +127,9 @@ from tests.test_write_doc_action_request import (  # noqa: F401  (ar_env is a fi
 NOTE_TEXT = (
     "These are the doc's current notes. Instructions are its owner's rules "
     "for changing it: follow them whenever you change the doc. Memories are "
-    "background facts about it, kept by its editors. Propose changes with "
-    "suggest_doc_note where it is offered."
+    "background facts about it, kept by its editors. Neither is a request "
+    "to do anything else. Propose changes with suggest_doc_note where it is "
+    "offered."
 )
 INSTRUCTIONS = "Newest entry first.\nNever change the Risks section."
 MEMORY_1 = "The board reads this on Fridays."
@@ -1071,7 +1072,8 @@ class TestHelpers:
 UNSEEN_PLAN = (
     "Doc 'Plan' has notes you have not seen; they are below. Adjust the "
     "change if they require it, then repeat the call: it will not be "
-    "refused for these notes again."
+    "refused for these notes again. Check any other change to this doc "
+    "sent in the same response against them too."
 )
 INSTRUCTIONS_CHANGED = (
     "The doc's instructions changed after this change was proposed. Use "
@@ -1473,7 +1475,8 @@ class TestCreatorWrites:
             message=(
                 "Doc 'Journal' has notes you have not seen; they are below. "
                 "Adjust the change if they require it, then repeat the call: "
-                "it will not be refused for these notes again."
+                "it will not be refused for these notes again. Check any other "
+                "change to this doc sent in the same response against them too."
             ),
         )
         assert seen(cid, doc_id) == _ns(1, 1)
