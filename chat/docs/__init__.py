@@ -11,5 +11,7 @@ Modules:
 - ``events`` -- the ``doc_list_changed`` / ``doc_changed`` realtime globals.
 - ``service`` -- the high-level operations shared by the model-facing tools,
   the HTTP routes, and the ``write_doc`` action request.
+- ``note_suggestions`` -- the ``suggest_doc_note`` checks and the review
+  (accept / dismiss) of doc note suggestions.
 - ``routes`` -- the ``/app/api/docs`` HTTP API.
 """

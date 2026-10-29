@@ -17,7 +17,10 @@ in the seen sidecar ``doc_notes_seen.json``; a sub-agent or inference-API
 run whenever the doc has notes), the ``doc_notes`` block;
 :func:`list_docs` / :func:`search_docs` rows add the counts and
 :func:`create_doc` records the new doc as seen at versions (0, 0). The
-helpers in the "Doc notes" section are shared with the notes tools.
+helpers in the "Doc notes" section are shared with the notes tools and
+chat/docs/note_suggestions.py; :func:`publish_notes_changed` there is the
+one publisher of ``doc_notes_changed``. :func:`delete_doc_from_ui` tells
+the users with pending note suggestions on the doc that they went with it.
 
 Errors are raised as :class:`DocError` (model/user-facing message; tools
 wrap it as ``{"error": str(e)}``) or its structured subclasses:
@@ -130,6 +133,7 @@ __all__ = [
     "notes_enabled",
     "notes_seen",
     "preview_write_operation",
+    "publish_notes_changed",
     "read_doc",
     "record_notes_delivery",
     "require_enabled",
@@ -628,6 +632,30 @@ def record_notes_delivery(
         logger.warning(
             "[docs] could not record doc notes delivery (conversation=%s, doc=%s)",
             caller.conversation_id, doc_id, exc_info=True,
+        )
+
+
+async def publish_notes_changed(doc_id: str, state: Mapping[str, Any]) -> None:
+    """Publish ``doc_notes_changed`` for a change to a doc's notes.
+
+    The one publisher of that event: an accepted note suggestion
+    (chat/docs/note_suggestions.py) calls it, and every other writer of the
+    instructions or the memories must call it after its store write. Loads
+    the doc with its shares for the audience (owner, direct share
+    recipients, every connected user for an everyone share;
+    ``events.doc_audience()``) and sends the two versions of ``state``, the
+    ``get_notes_state()`` dict after the change. A doc gone meanwhile
+    publishes nothing.
+
+    Best-effort: a failure is logged and never fails the write.
+    """
+    try:
+        doc = await doc_store.get_doc(doc_id, with_shares=True)
+        if doc is not None:
+            _events().publish_doc_notes_changed_for(doc, state)
+    except Exception:
+        logger.warning(
+            "[docs] could not publish doc_notes_changed (doc=%s)", doc_id, exc_info=True,
         )
 
 
@@ -1979,11 +2007,13 @@ def mode_switch_refusal(doc: dict) -> DocRequestError:
 
 
 async def delete_doc_from_ui(user: dict, doc_id: str) -> dict:
-    """Owner-only delete, under the doc lock: the row (shares cascade), then
-    the directory (best-effort, logged), then ``doc_changed {updated_at:
-    null}`` and ``doc_list_changed`` to the doc's audience (owner + share
-    recipients, every connected user for an everyone row), captured under
-    the lock BEFORE the rows go.
+    """Owner-only delete, under the doc lock: the row (shares, notes and
+    note suggestions cascade), then the directory (best-effort, logged),
+    then ``doc_changed {updated_at: null}`` and ``doc_list_changed`` to the
+    doc's audience (owner + share recipients, every connected user for an
+    everyone row), captured under the lock BEFORE the rows go, and last
+    ``doc_note_suggestions_changed`` for every conversation that had a
+    pending note suggestion on the doc (also captured before the delete).
 
     Raises:
         DocDisabled, DocError (hidden/missing), DocRequestError ``forbidden``.
@@ -2002,6 +2032,10 @@ async def delete_doc_from_ui(user: dict, doc_id: str) -> dict:
             if current is None:
                 raise DocError(doc_not_found_message(doc_id))
             audience = _events().doc_audience(current)
+            # Who had pending note suggestions on it: their bubbles and
+            # badges must drop the rows the delete takes with it.
+            from chat.docs import note_suggestions
+            pending_pairs = await note_suggestions.capture_pending_pairs([doc["id"]])
             if not await doc_store.delete_doc(doc["id"]):
                 raise DocError(doc_not_found_message(doc_id))
             try:
@@ -2016,6 +2050,7 @@ async def delete_doc_from_ui(user: dict, doc_id: str) -> dict:
             # state); list views refresh their window.
             events.publish_doc_gone_or_access_changed_to(audience, doc["id"])
             events.publish_doc_list_changed_to(audience)
+            await note_suggestions.publish_changed_for_pairs(pending_pairs)
             return doc
 
     return await _shielded(_locked())

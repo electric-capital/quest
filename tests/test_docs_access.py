@@ -11,7 +11,9 @@ import itertools
 
 import pytest
 
+from chat.artifact_access import DENY_CAUSES
 from chat.docs.access import (
+    _DENY_TEXT,
     APPROVAL_REQUIRED_WRITE_NOTE,
     APPROVAL_WRITE_NOTE,
     DENY_INFERENCE_API,
@@ -889,3 +891,220 @@ def test_required_by_owner_only_on_approval_verdicts():
             required_by_owner=True,
         )
     assert AR_REQ != AR
+
+
+# ---------------------------------------------------------------------------
+# deny_cause: the machine-readable cause beside deny_reason
+# ---------------------------------------------------------------------------
+
+# The doc wording is one-to-one with the cause, so every expected verdict
+# above names its cause through its text.
+_CAUSE_BY_TEXT = {text: cause for cause, text in _DENY_TEXT.items()}
+
+
+def test_deny_texts_map_one_to_one_to_causes():
+    assert set(_DENY_TEXT) == set(DENY_CAUSES)
+    assert len(_CAUSE_BY_TEXT) == len(DENY_CAUSES) == 10
+
+
+def _check_cause(access):
+    """The deny_cause invariant on a resolved verdict; returns the cause."""
+    if access.visible and access.write == "denied":
+        assert access.deny_cause in DENY_CAUSES
+        assert _DENY_TEXT[access.deny_cause] == access.deny_reason
+    else:
+        assert access.deny_cause is None
+    return access.deny_cause
+
+
+def _expected_cause(verdict):
+    return None if verdict.deny_reason is None else _CAUSE_BY_TEXT[verdict.deny_reason]
+
+
+@pytest.mark.parametrize("switch", [False, True])
+@pytest.mark.parametrize(
+    "row,column",
+    [(r, c) for r in DOC_ROWS for c in COLUMNS],
+)
+def test_matrix_cell_deny_cause(row, column, switch):
+    """Every cell of the matrix (and of the require-approval matrix): a
+    denied verdict names the cause its expected text stands for; Free,
+    Approval and Hidden carry none."""
+    user_id, is_public, run_kind, project_id = COLUMNS[column]
+    doc = {**DOC_ROWS[row], "require_approval": True} if switch else DOC_ROWS[row]
+    access = resolve_doc_access(
+        doc, user_id=user_id, is_public=is_public, project_id=project_id, run_kind=run_kind,
+    )
+    expected = _with_switch(EXPECTED[row][column], column) if switch else EXPECTED[row][column]
+    assert _check_cause(access) == _expected_cause(expected), (row, column, switch)
+
+
+@pytest.mark.parametrize("run_kind", sorted(READ_ONLY_RUN_KINDS))
+@pytest.mark.parametrize("row", sorted(DOC_ROWS))
+def test_read_only_run_kinds_in_public_context_deny_cause(run_kind, row):
+    access = resolve_doc_access(
+        DOC_ROWS[row], user_id=OWNER, is_public=True, project_id=PROJECT, run_kind=run_kind,
+    )
+    cause = _check_cause(access)
+    assert cause in (None, run_kind)
+    assert (cause is None) == (access == HIDDEN)
+
+
+def _sweep(run_kind):
+    """The taint sweep's combinations (plus the owner's switch both ways)."""
+    for mode, shares, user_id, is_public, project_id, doc_project_id, sources, switch in (
+        itertools.product(
+            DOC_MODES,
+            _SHARE_SETS,
+            (OWNER, RECIPIENT, STRANGER),
+            (False, True),
+            (None, PROJECT, OTHER_PROJECT),
+            (None, PROJECT),
+            (frozenset(), SOURCES),
+            (False, True),
+        )
+    ):
+        doc = {**_doc(mode, shares, project_id=doc_project_id), "require_approval": switch}
+        yield resolve_doc_access(
+            doc, user_id=user_id, is_public=is_public, project_id=project_id,
+            run_kind=run_kind, doc_source_project_ids=sources,
+        )
+
+
+@pytest.mark.parametrize("run_kind", RUN_KINDS)
+def test_deny_cause_holds_everywhere(run_kind):
+    """Every combination of every run kind: the cause is set exactly on a
+    visible denied verdict and names its text; a read-only run kind's
+    denial is always its own cause."""
+    for access in _sweep(run_kind):
+        cause = _check_cause(access)
+        if run_kind in READ_ONLY_RUN_KINDS and cause is not None:
+            assert cause == run_kind
+        if not access.visible:
+            assert access is HIDDEN
+
+
+def test_the_sweep_reaches_every_cause():
+    reached = {access.deny_cause for run_kind in RUN_KINDS for access in _sweep(run_kind)}
+    assert reached - {None} == set(DENY_CAUSES)
+
+
+_SWITCHED_SHARED = {**_doc("private", [(RECIPIENT, "write")]), "require_approval": True}
+
+# cause -> (doc, resolve_doc_access kwargs): one named case per cause.
+CAUSE_CASES = {
+    "sub_agent": (_doc("private"), {"run_kind": "sub_agent"}),
+    "inference_api": (_doc("private"), {"run_kind": "inference_api"}),
+    "user_subagent": (_doc("private"), {"run_kind": "user_subagent"}),
+    "script": (_doc("private"), {"run_kind": "script"}),
+    "read_only_share": (
+        _doc("private", [(RECIPIENT, "read")]), {"user_id": RECIPIENT},
+    ),
+    "public_from_private": (
+        _doc("public", project_id=PROJECT), {"project_id": PROJECT},
+    ),
+    "outside_project": (_doc("private", project_id=PROJECT), {"project_id": None}),
+    # A Slack run on a shared private doc: Approval elsewhere, but Slack
+    # cannot open the card.
+    "slack_needs_approval": (
+        _doc("private", [(RECIPIENT, "read")]), {"run_kind": "slack"},
+    ),
+    # A Slack run on a doc whose owner requires approval for every change.
+    "slack_approval_required": (
+        {**_doc("private"), "require_approval": True}, {"run_kind": "slack"},
+    ),
+    "ui_read_only": (
+        _doc("private", [(RECIPIENT, "read")]), {"user_id": RECIPIENT, "run_kind": "ui"},
+    ),
+}
+
+
+def test_cause_cases_cover_every_cause():
+    assert set(CAUSE_CASES) == set(DENY_CAUSES)
+
+
+@pytest.mark.parametrize("cause", sorted(CAUSE_CASES))
+def test_each_cause_is_reached(cause):
+    doc, kwargs = CAUSE_CASES[cause]
+    access = _access(doc, **kwargs)
+    assert access.visible and access.can_read and access.write == "denied"
+    assert access.deny_cause == cause
+    assert access.deny_reason == _DENY_TEXT[cause]
+
+
+@pytest.mark.parametrize("user_id", [OWNER, RECIPIENT])
+def test_slack_causes_on_a_write_shared_doc(user_id):
+    """Owner and write recipient alike: the plain shared doc is
+    slack_needs_approval, the owner's switch makes it
+    slack_approval_required."""
+    shared = _doc("private", [(RECIPIENT, "write")])
+    assert _access(shared, user_id=user_id, run_kind="slack").deny_cause == (
+        "slack_needs_approval"
+    )
+    assert _access(_SWITCHED_SHARED, user_id=user_id, run_kind="slack").deny_cause == (
+        "slack_approval_required"
+    )
+    # The same docs from a web conversation are approvals, with no cause.
+    assert _access(shared, user_id=user_id).deny_cause is None
+    assert _access(_SWITCHED_SHARED, user_id=user_id).deny_cause is None
+
+
+def test_hidden_carries_no_deny_cause():
+    assert HIDDEN.deny_cause is None
+    assert _access(_doc("private"), user_id=STRANGER).deny_cause is None
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        # Hidden: grants nothing, names no cause.
+        {"visible": False, "can_read": False, "write": "denied", "deny_reason": None,
+         "deny_cause": "script"},
+        # Not denied.
+        {"visible": True, "can_read": True, "write": "free", "deny_reason": None,
+         "deny_cause": "read_only_share"},
+        {"visible": True, "can_read": True, "write": "approval", "deny_reason": None,
+         "deny_cause": "slack_needs_approval"},
+        {"visible": True, "can_read": True, "write": "approval", "deny_reason": None,
+         "required_by_owner": True, "deny_cause": "slack_approval_required"},
+        # Unknown causes.
+        {"visible": True, "can_read": True, "write": "denied", "deny_reason": "x",
+         "deny_cause": "nope"},
+        {"visible": True, "can_read": True, "write": "denied", "deny_reason": "x",
+         "deny_cause": ""},
+        {"visible": True, "can_read": True, "write": "denied", "deny_reason": "x",
+         "deny_cause": "ui"},
+    ],
+)
+def test_doc_access_rejects_misplaced_or_unknown_causes(kwargs):
+    with pytest.raises(ValueError):
+        DocAccess(**kwargs)
+
+
+@pytest.mark.parametrize("cause", DENY_CAUSES)
+def test_doc_access_accepts_every_cause_on_a_denied_verdict(cause):
+    access = DocAccess(
+        visible=True, can_read=True, write="denied", deny_reason=_DENY_TEXT[cause],
+        deny_cause=cause,
+    )
+    assert access.deny_cause == cause
+
+
+def test_equality_ignores_the_cause():
+    """``compare=False``: the expected tables (built without causes) still
+    equal the resolved verdicts, and so does HIDDEN."""
+    resolved = _access(_doc("private"), run_kind="script")
+    assert resolved.deny_cause == "script"
+    assert resolved == RO(DENY_SCRIPT)
+    assert RO(DENY_SCRIPT).deny_cause is None
+    assert hash(resolved) == hash(RO(DENY_SCRIPT))
+    with_cause = DocAccess(
+        visible=True, can_read=True, write="denied", deny_reason="x", deny_cause="script",
+    )
+    other_cause = DocAccess(
+        visible=True, can_read=True, write="denied", deny_reason="x", deny_cause="sub_agent",
+    )
+    assert with_cause == other_cause == RO("x")
+    assert HIDDEN == DocAccess(visible=False, can_read=False, write="denied", deny_reason=None)
+    # The fields that do compare still do.
+    assert RO(DENY_SCRIPT) != RO(DENY_SUB_AGENT)

@@ -752,6 +752,11 @@ async def delete_account(
     # project docs' rows, and delete_user() cascades the rest.
     from db import doc_store
     doc_ids = await doc_store.list_doc_ids_for_user(user_id)
+    # The pending note suggestions on those docs cascade with them; collect
+    # whose bubbles and badges must hear about it (other users' only: this
+    # user's tabs are gone with the account).
+    from chat.docs import note_suggestions
+    pending_note_pairs = await note_suggestions.capture_pending_pairs(doc_ids)
     # Same for the Quest Tables the user owns (user and project tables).
     from db import table_store
     table_ids = await table_store.list_table_ids_for_user(user_id)
@@ -780,6 +785,9 @@ async def delete_account(
                     )
 
         await asyncio.to_thread(_sweep_doc_dirs)
+        await note_suggestions.publish_changed_for_pairs(
+            pending_note_pairs, exclude_user_id=user_id,
+        )
 
     # Each table's directory (table.db). Best-effort per id, never raises,
     # so it also runs before the rmtree loops below.

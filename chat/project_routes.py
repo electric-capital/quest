@@ -427,6 +427,10 @@ async def delete_user_project(
     # the shares tell who must hear about it (collected now, before they go).
     project_docs = await doc_store.list_docs_for_project(project_id)
     doc_ids = [doc["id"] for doc in project_docs]
+    # Same for the pending note suggestions on those docs (they cascade
+    # with them): whose bubbles and badges must hear about it.
+    from chat.docs import note_suggestions
+    pending_note_pairs = await note_suggestions.capture_pending_pairs(doc_ids)
     # Same for the project's Quest Tables (data_tables.project_id CASCADE):
     # the rows with their shares, collected now for the sweep and the audience.
     project_tables = await _list_project_tables(project_id)
@@ -455,6 +459,7 @@ async def delete_user_project(
         doc_events.publish_doc_list_changed_to(
             doc_events.docs_audience(project_docs, user_id),
         )
+        await note_suggestions.publish_changed_for_pairs(pending_note_pairs)
 
     # Each project table's directory, same reasons and order as the docs.
     if project_tables:

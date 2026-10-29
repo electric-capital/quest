@@ -130,6 +130,29 @@ def make_doc_changed(doc_id: str, updated_at: Optional[str]) -> dict[str, Any]:
     }
 
 
+def make_doc_notes_changed(
+    doc_id: str, instructions_version: int, memories_version: int,
+) -> dict[str, Any]:
+    """Envelope for ``doc_notes_changed``.
+
+    Per-user global published after every change to a doc's notes (its
+    owner's instructions or one of its memories, an accepted note
+    suggestion included) so an open Notes panel of ``doc_id`` re-fetches
+    them. ``instructions_version`` and ``memories_version`` are the doc's
+    notes counters after the change, letting a panel skip a re-fetch when
+    it already shows them. Notes never bump the doc's ``updated_at``, so
+    this event never comes with a ``doc_changed`` and the body viewer
+    ignores it. Carries no notes text. Published through
+    chat/docs/events.py only, to the same audience as ``doc_changed``.
+    """
+    return {
+        "type": "doc_notes_changed",
+        "doc_id": doc_id,
+        "instructions_version": instructions_version,
+        "memories_version": memories_version,
+    }
+
+
 def make_table_list_changed() -> dict[str, Any]:
     """Envelope for ``table_list_changed``.
 
@@ -200,6 +223,31 @@ def make_project_memory_suggestions_changed(
     """
     return {
         "type": "project_memory_suggestions_changed",
+        "conversation_id": conversation_id,
+        "pending_count": pending_count,
+        "total_pending": total_pending,
+    }
+
+
+def make_doc_note_suggestions_changed(
+    conversation_id: str,
+    pending_count: int,
+    total_pending: int,
+) -> dict[str, Any]:
+    """Envelope for ``doc_note_suggestions_changed``.
+
+    The doc-notes twin of ``project_memory_suggestions_changed``: published
+    to the reviewing user (by chat/docs/note_suggestions.py) when a
+    conversation's pending ``suggest_doc_note`` set changes -- a suggestion
+    registered, accepted or dismissed, an instructions suggestion
+    superseded by a newer one (possibly from another of the user's
+    conversations), or pending rows dropped with their deleted doc. Drives
+    the composer's doc-notes bubble (``pending_count``, this conversation's
+    pending count) and the inbox (``total_pending``, the user's pending
+    doc-note count across all conversations).
+    """
+    return {
+        "type": "doc_note_suggestions_changed",
         "conversation_id": conversation_id,
         "pending_count": pending_count,
         "total_pending": total_pending,
