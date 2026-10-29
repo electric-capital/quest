@@ -14,8 +14,9 @@ nothing reaches the notes until that person accepts it
 Who may suggest (invariant 4, taint): a conversation whose write verdict on
 the doc (``resolve_doc_access()``) is ``free`` or ``approval``, or
 ``denied`` with one of the two Slack causes (the person could write; only
-the approval card cannot be opened in Slack), so a private conversation
-can never put text into a public doc's notes. Instructions are the
+the approval card cannot be opened in Slack; ``notes.suggestion_allowed()``,
+which ``list_doc_notes`` shares for its ``can_suggest``), so a private
+conversation can never put text into a public doc's notes. Instructions are the
 owner's: only the owner's conversations may suggest a new text. The
 conversation must also have seen the doc's current notes (the seen record
 of chat/docs/service.py), so a model never proposes a change to notes it
@@ -97,11 +98,6 @@ __all__ = [
     "register_suggestion",
     "review_rows",
 ]
-
-# Write verdicts denied only because Slack cannot open an approval card
-# (access rule 6 and the owner's switch, rule 7): the person could write
-# from the web UI, and a suggestion already waits for a person.
-_SLACK_DENY_CAUSES = frozenset({"slack_needs_approval", "slack_approval_required"})
 
 # Run kinds that suggest from a conversation of their own; a suggestion row
 # needs that conversation. The read-only run kinds are refused by their
@@ -437,8 +433,9 @@ async def register_suggestion(
     replaces = _check_arguments(kind, content, reasoning, replaces_memory_id)
     doc, access = await service.get_visible_doc(caller, doc_id)
 
-    # 2. Taint (invariant 4), then instructions ownership.
-    if access.write == "denied" and access.deny_cause not in _SLACK_DENY_CAUSES:
+    # 2. Taint (invariant 4: free, approval, or denied by a Slack cause
+    # only), then instructions ownership.
+    if not doc_notes.suggestion_allowed(access.write, access.deny_cause):
         raise DocError(access.deny_reason)
     user_id = caller.user["id"]
     if kind == KIND_INSTRUCTIONS and doc["owner_id"] != user_id:

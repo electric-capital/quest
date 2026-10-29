@@ -74,6 +74,12 @@ SCRIPT_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     "list_docs",
     "search_docs",
     "read_doc",
+    # Quest Doc notes, read-only: the whole notes block of a doc the
+    # launching conversation sees (unlike read_doc, which gives a script
+    # the counts only), with can_suggest false. A script has no
+    # conversation, so nothing is recorded as seen; suggest_doc_note is
+    # not listed (its dispatch backstop refuses scripts too).
+    "list_doc_notes",
     # Quest Tables reads, on the same terms as the doc reads: the launching
     # conversation's reach (tool_dispatch _table_caller), read-only --
     # resolve_table_access denies every row write, and the write tools are

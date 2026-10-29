@@ -12,6 +12,11 @@ The module owns:
   :data:`RECORDING_RUN_KINDS`). The first three take either a doc dict
   from ``db/doc_store.py`` (``has_instructions``, never the text) or the
   ``get_notes_state()`` dict (the ``instructions`` text too).
+- The taint rule of suggestions (invariant 4):
+  :func:`suggestion_allowed` over a doc's write verdict, with
+  :data:`SLACK_DENY_CAUSES`. ``register_suggestion()``
+  (chat/docs/note_suggestions.py) refuses with it, and ``list_doc_notes``
+  derives its ``can_suggest`` from it.
 - The notes block (:func:`build_notes_block`): the ``doc_notes`` object a
   tool result carries, with the whole instructions and as many memories,
   newest first, as fit in ``DOC_NOTES_DELIVERY_MAX_CHARS``.
@@ -23,7 +28,9 @@ The module owns:
   instructions-changed error (:data:`DOC_INSTRUCTIONS_CHANGED_MESSAGE`).
 - The ``suggest_doc_note`` copy (the ``DOC_NOTE_*`` constants): the
   ``message`` of each result status and the text of each refusal that
-  chat/docs/note_suggestions.py returns to the model.
+  chat/docs/note_suggestions.py returns to the model, and the dispatch
+  backstop's refusal for the run kinds that may not suggest
+  (:data:`DOC_NOTE_SUGGEST_NOT_AVAILABLE_MESSAGE`).
 
 Callers load ``get_notes_state()`` BEFORE ``list_doc_memories()``: a memory
 change between the two reads then shows the model memories at least as new
@@ -57,6 +64,13 @@ class NotesSeen:
 # the only ones whose writes can be refused for unseen notes. ``top_level``
 # includes routine runs (ordinary conversations).
 RECORDING_RUN_KINDS = frozenset({"top_level", "slack", "user_subagent"})
+
+# Write verdict causes that deny a write only because Slack cannot open an
+# approval card (access rule 6, and the owner's require-approval switch,
+# rule 7): the person could write from the web UI, and a suggestion already
+# waits for a person, so these still admit a suggestion
+# (:func:`suggestion_allowed`).
+SLACK_DENY_CAUSES = frozenset({"slack_needs_approval", "slack_approval_required"})
 
 # --- Copy (the model reads every string below) ---
 
@@ -167,6 +181,16 @@ DOC_NOTE_REPLACES_WITH_INSTRUCTIONS_MESSAGE = (
     "suggestion carries the complete new text of the instructions."
 )
 
+# The ``suggest_not_available`` refusal of the suggest_doc_note dispatch
+# backstop (chat/gemini_api/tool_dispatch.py): a run kind with no
+# conversation of the user's own to review the suggestion in.
+DOC_NOTE_SUGGEST_NOT_AVAILABLE_MESSAGE = (
+    "suggest_doc_note is only available to the top-level agent of a user's "
+    "own conversation, not to sub-agents, cross-user subagents, inference "
+    "API runs, sandbox scripts or routine runs. Include the proposed note in "
+    "your response instead."
+)
+
 
 # --- Gate ---
 
@@ -255,6 +279,27 @@ def records_delivery(run_kind: str, conversation_id: str | None) -> bool:
             f"conversation_id must be a str or None, got {type(conversation_id).__name__}"
         )
     return run_kind in RECORDING_RUN_KINDS and bool(conversation_id)
+
+
+def suggestion_allowed(write: str, deny_cause: str | None) -> bool:
+    """Whether a conversation with this write verdict on a doc may suggest a
+    change to its notes (invariant 4, taint).
+
+    True for a ``free`` or ``approval`` verdict, and for ``denied`` with one
+    of :data:`SLACK_DENY_CAUSES`; every other denial refuses, so a private
+    conversation can never put text into a public doc's notes. Run kinds
+    are not judged here: the read-only ones are denied by their verdict,
+    and the suggest_doc_note dispatch backstop keeps the rest out. Instructions
+    ownership is a separate check.
+
+    Args:
+        write: ``DocAccess.write`` (``"free"``, ``"approval"`` or
+            ``"denied"``).
+        deny_cause: ``DocAccess.deny_cause`` (None unless denied).
+    """
+    if write in ("free", "approval"):
+        return True
+    return write == "denied" and deny_cause in SLACK_DENY_CAUSES
 
 
 # --- Notes block ---

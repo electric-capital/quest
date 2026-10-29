@@ -74,6 +74,10 @@ from chat.gemini_api.tool_handlers import (
     _handle_edit_doc,
     _handle_append_to_doc,
     _handle_add_doc_image,
+    _handle_list_doc_notes,
+    _handle_suggest_doc_note,
+    _doc_notes_closed_result,
+    _suggest_doc_note_not_available_result,
 )
 from chat.gemini_api.tool_handlers import browser as _browser
 from chat.gemini_api.tool_handlers.tables import (
@@ -189,6 +193,12 @@ class ToolContext:
     # project_id / is_public are the launching conversation's (from the
     # sandbox lease), so the artifact access rule scopes the script like it.
     is_script: bool = False
+    # Routine run (scheduled or one-click; the conversation has a
+    # routine_id). Not a run kind of its own: run_kind stays "top_level",
+    # so its doc reads record notes deliveries like any conversation. Only
+    # what a routine run must not do reads it (suggest_doc_note: nobody
+    # reviews a routine conversation's suggestions as it runs).
+    is_routine: bool = False
 
     @property
     def block_mutating_tools(self) -> bool:
@@ -202,8 +212,8 @@ class ToolContext:
 
         First match wins: script, sub_agent, inference_api, user_subagent,
         slack, else top_level (routine runs included: they are ordinary
-        conversations). Whether the conversation is public is the separate
-        ``is_public`` field.
+        conversations; ``is_routine`` marks them). Whether the conversation
+        is public is the separate ``is_public`` field.
         """
         if self.is_script:
             return "script"
@@ -676,6 +686,50 @@ async def _tool_add_doc_image(ctx: ToolContext, args: dict) -> str:
     return await _handle_add_doc_image(_doc_caller(ctx), args)
 
 
+# The run kinds whose conversation may suggest doc notes: a suggestion is
+# reviewed by the conversation's user in that conversation's composer
+# bubble or the inbox, which sub-agent, cross-user subagent, inference-API
+# and sandbox-script runs never have.
+_SUGGEST_DOC_NOTE_RUN_KINDS = frozenset({"top_level", "slack"})
+
+
+def _may_suggest_doc_notes(ctx: ToolContext) -> bool:
+    """Whether this run kind may suggest doc notes at all: a top-level or
+    Slack conversation of the user's own that is not a routine run (the
+    prompt also leaves suggest_doc_note out there; this is the backstop).
+    The one predicate behind the suggest_doc_note refusal and
+    list_doc_notes' ``can_suggest`` (which the docs service ANDs with the
+    doc's write verdict)."""
+    return (
+        ctx.run_kind in _SUGGEST_DOC_NOTE_RUN_KINDS
+        and not ctx.is_routine
+        and bool(ctx.conversation_id)
+    )
+
+
+async def _tool_list_doc_notes(ctx: ToolContext, args: dict) -> str:
+    # Every run kind and public conversations (on their own project's
+    # public docs); the doc_notes gate is checked first, in the handler.
+    return await _handle_list_doc_notes(
+        _doc_caller(ctx), args, may_suggest=_may_suggest_doc_notes(ctx),
+    )
+
+
+async def _tool_suggest_doc_note(ctx: ToolContext, args: dict) -> str:
+    # The suggest_project_memory backstop for doc notes, with routine runs
+    # refused too. Order: the doc_notes gate first (closed reads the same
+    # for every run kind), then the run kind, then the handler. Slack and
+    # public-project conversations may suggest: the access rule decides
+    # which docs, and every suggestion waits for the user's accept.
+    caller = _doc_caller(ctx)
+    closed = _doc_notes_closed_result(caller)
+    if closed is not None:
+        return closed
+    if not _may_suggest_doc_notes(ctx):
+        return _suggest_doc_note_not_available_result()
+    return await _handle_suggest_doc_note(caller, args)
+
+
 def _table_caller(ctx: ToolContext):
     """The Quest Tables service caller for this dispatch context.
 
@@ -770,6 +824,10 @@ TOOL_CALL_HANDLERS: dict[str, ToolHandler] = {
     "edit_doc": _tool_edit_doc,
     "append_to_doc": _tool_append_to_doc,
     "add_doc_image": _tool_add_doc_image,
+    # Quest Doc notes (gated per caller by the doc_notes feature gate
+    # inside the handlers; suggest_doc_note has its run-kind backstop).
+    "list_doc_notes": _tool_list_doc_notes,
+    "suggest_doc_note": _tool_suggest_doc_note,
     # Quest Tables (chat/tables/service.py; gated per user by the tables
     # feature gate inside the handlers).
     "list_tables": _tool_list_tables,
@@ -905,6 +963,7 @@ async def _dispatch_tool_call(
     is_user_subagent: bool = False,
     is_slack: bool = False,
     is_script: bool = False,
+    is_routine: bool = False,
 ) -> tuple[str, list]:
     """Dispatch a tool call to the appropriate handler.
 
@@ -956,6 +1015,10 @@ async def _dispatch_tool_call(
             POST /api/tool-call bridge. Together with is_sub_agent and
             is_inference_api these derive ``ToolContext.run_kind``, which
             the Quest Docs access rule consumes.
+        is_routine: Whether the conversation is a routine run (scheduled
+            or one-click). It does not change ``run_kind`` (a routine run
+            is ``top_level`` and records doc notes deliveries); it keeps
+            suggest_doc_note out (``ToolContext.is_routine``).
 
     Returns:
         Tuple of (result_string, extra_parts) where extra_parts is a
@@ -968,7 +1031,7 @@ async def _dispatch_tool_call(
             is_sub_agent=is_sub_agent, agent_name=agent_name,
             is_public=is_public, is_inference_api=is_inference_api,
             is_user_subagent=is_user_subagent, is_slack=is_slack,
-            is_script=is_script,
+            is_script=is_script, is_routine=is_routine,
         )
     except Exception as exc:
         label = tool_name
@@ -1004,6 +1067,7 @@ async def _dispatch_tool_call_inner(
     is_user_subagent: bool = False,
     is_slack: bool = False,
     is_script: bool = False,
+    is_routine: bool = False,
 ) -> tuple[str, list]:
     """Un-guarded dispatch body; see ``_dispatch_tool_call``."""
     extra_parts = []
@@ -1024,6 +1088,7 @@ async def _dispatch_tool_call_inner(
         is_user_subagent=is_user_subagent,
         is_slack=is_slack,
         is_script=is_script,
+        is_routine=is_routine,
     )
 
     # Public-project enforcement. This is the security boundary, not the

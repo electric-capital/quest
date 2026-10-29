@@ -16,10 +16,13 @@ when the notes are due (a recording run that has not seen them, recorded
 in the seen sidecar ``doc_notes_seen.json``; a sub-agent or inference-API
 run whenever the doc has notes), the ``doc_notes`` block;
 :func:`list_docs` / :func:`search_docs` rows add the counts and
-:func:`create_doc` records the new doc as seen at versions (0, 0). The
-helpers in the "Doc notes" section are shared with the notes tools and
-chat/docs/note_suggestions.py; :func:`publish_notes_changed` there is the
-one publisher of ``doc_notes_changed``. :func:`delete_doc_from_ui` tells
+:func:`create_doc` records the new doc as seen at versions (0, 0).
+:func:`list_doc_notes` is the ``list_doc_notes`` tool body: the whole
+instructions and a page of memories, for any run kind, recorded like a
+read_doc delivery (page 0 both versions, a later page the instructions
+version only). The helpers in the "Doc notes" section are shared with the
+notes tools and chat/docs/note_suggestions.py; :func:`publish_notes_changed`
+there is the one publisher of ``doc_notes_changed``. :func:`delete_doc_from_ui` tells
 the users with pending note suggestions on the doc that they went with it.
 
 Errors are raised as :class:`DocError` (model/user-facing message; tools
@@ -28,9 +31,11 @@ wrap it as ``{"error": str(e)}``) or its structured subclasses:
 request; carries the ``suggested_request`` payload the model forwards
 unchanged), :class:`DocNotesUnseen` (a model write refused once because
 the conversation has not seen the doc's current notes; carries the notes
-block and its text copy, and the refusal has recorded the delivery) and
+block and its text copy, and the refusal has recorded the delivery),
 :class:`DocDisabled` (the ``docs`` feature gate is closed for the user;
-raised before any DB work). :class:`DocRequestError` serves the UI routes.
+raised before any DB work) and :class:`DocNotesDisabled` (the
+``doc_notes`` gate is closed for the caller; raised by the notes tool body
+before any DB work). :class:`DocRequestError` serves the UI routes.
 
 Invariants kept here:
 
@@ -98,6 +103,7 @@ from chat.docs.access import (
 )
 from chat.docs.constants import (
     doc_not_found_message,
+    doc_notes_disabled_message,
     docs_disabled_message,
     user_doc_in_public_conversation_message,
     user_doc_mode_private_message,
@@ -117,6 +123,7 @@ __all__ = [
     "DocApprovalRequired",
     "DocDisabled",
     "DocError",
+    "DocNotesDisabled",
     "DocNotesUnseen",
     "DocRequestError",
     "add_doc_image",
@@ -126,6 +133,7 @@ __all__ = [
     "create_doc_from_ui",
     "edit_doc",
     "get_visible_doc",
+    "list_doc_notes",
     "list_docs",
     "load_notes",
     "mode_switch_refusal",
@@ -209,6 +217,13 @@ class DocApprovalRequired(DocError):
 
 class DocDisabled(DocError):
     """The ``docs`` feature gate is closed for the user."""
+
+
+class DocNotesDisabled(DocError):
+    """The ``doc_notes`` feature gate is closed for the caller (which
+    includes Quest Docs being closed for them). ``str(e)`` is
+    ``doc_notes_disabled_message()``; the tools answer
+    ``{"error": "doc_notes_disabled", "message": ...}``."""
 
 
 class DocNotesUnseen(DocError):
@@ -550,6 +565,18 @@ def _block_counts(block: Mapping[str, Any]) -> dict:
     }
 
 
+def _check_memory_offset(memory_offset: Any) -> int:
+    """``memory_offset`` as given when it is an int >= 0 (``bool`` refused).
+
+    Raises:
+        DocError: anything else (one text for :func:`load_notes` and
+            :func:`list_doc_notes`).
+    """
+    if isinstance(memory_offset, bool) or not isinstance(memory_offset, int) or memory_offset < 0:
+        raise DocError("memory_offset must be a non-negative integer.")
+    return memory_offset
+
+
 async def load_notes(doc_id: str, *, memory_offset: int = 0) -> tuple[dict, dict]:
     """The doc's notes state and its notes block, for a visible doc.
 
@@ -567,8 +594,7 @@ async def load_notes(doc_id: str, *, memory_offset: int = 0) -> tuple[dict, dict
         DocError: ``memory_offset`` is not an int >= 0 (checked before any
             read), or ``doc_not_found_message`` when the doc is gone.
     """
-    if isinstance(memory_offset, bool) or not isinstance(memory_offset, int) or memory_offset < 0:
-        raise DocError("memory_offset must be a non-negative integer.")
+    _check_memory_offset(memory_offset)
     state = await doc_store.get_notes_state(doc_id)
     if state is None:
         raise DocError(doc_not_found_message(doc_id))
@@ -633,6 +659,71 @@ def record_notes_delivery(
             "[docs] could not record doc notes delivery (conversation=%s, doc=%s)",
             caller.conversation_id, doc_id, exc_info=True,
         )
+
+
+async def list_doc_notes(
+    caller: Caller, doc_id: str, memory_offset: int = 0, *, may_suggest: bool,
+) -> dict:
+    """The ``list_doc_notes`` tool body: a visible doc's notes block, for
+    every run kind (scripts included: the whole block, unlike read_doc's
+    counts-only rule for them).
+
+    Order: the ``doc_notes`` gate (:class:`DocNotesDisabled`, which also
+    covers a closed ``docs`` gate), ``memory_offset``, then visibility (a
+    hidden doc reads exactly like a missing one, ``doc_not_found_message``)
+    and the notes load (:func:`load_notes`, the block read_doc attaches,
+    paged from ``memory_offset``).
+
+    Recording (:func:`record_notes_delivery`, a no-op outside recording
+    runs), the last step with no ``await`` before the return: page 0 shows
+    the whole current notes, so it records both versions, like read_doc. A
+    later page also carries the whole instructions but not the newest
+    memories, so it records the instructions version with memories version
+    0; ``record_doc_notes_seen()`` keeps the per-field maximum, so an
+    existing memories entry stays as it was and a conversation with no
+    entry gets ``(instructions, 0)``: a write is not refused for
+    instructions it saw, and the next read_doc still delivers the memories.
+
+    Args:
+        caller: who is asking.
+        doc_id: the doc.
+        memory_offset: skip this many of the newest memories (an int >= 0).
+        may_suggest: whether the caller's run kind may suggest doc notes
+            at all (the dispatch layer's ``_may_suggest_doc_notes()``);
+            ANDed here with the doc's write verdict.
+
+    Returns:
+        ``{"id", "title", "memory_offset", "doc_notes", "can_suggest"}``.
+        ``can_suggest`` is ``may_suggest`` and
+        ``notes.suggestion_allowed()`` of the doc's write verdict: whether
+        a memory suggestion would pass the run-kind and taint checks
+        (instructions ownership, the seen record and the caps are not
+        part of it).
+
+    Raises:
+        DocNotesDisabled: the ``doc_notes`` gate is closed for the caller.
+        DocError: a bad ``memory_offset`` or ``doc_id``, or
+            ``doc_not_found_message(doc_id)`` for a hidden or missing doc.
+    """
+    if not notes_enabled(caller):
+        raise DocNotesDisabled(doc_notes_disabled_message())
+    offset = _check_memory_offset(memory_offset)
+    doc, access = await get_visible_doc(caller, doc_id)
+    state, block = await load_notes(doc["id"], memory_offset=offset)
+    result = {
+        "id": doc["id"],
+        "title": doc["title"],
+        "memory_offset": offset,
+        "doc_notes": block,
+        "can_suggest": bool(may_suggest)
+        and doc_notes.suggestion_allowed(access.write, access.deny_cause),
+    }
+    memories_version = state["memories_version"] if offset == 0 else 0
+    # Last step, no await before the return (record_notes_delivery).
+    record_notes_delivery(
+        caller, doc["id"], state["instructions_version"], memories_version,
+    )
+    return result
 
 
 async def publish_notes_changed(doc_id: str, state: Mapping[str, Any]) -> None:

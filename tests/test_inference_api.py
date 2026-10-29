@@ -372,6 +372,10 @@ _CORE_READ_OR_WORKSPACE_TOOLS = {
     "telegram_get_me", "telegram_list_dialogs", "telegram_get_messages",
     "telegram_list_contacts",
     "list_docs", "search_docs", "read_doc",  # Quest Docs reads
+    # Quest Doc notes: a read, and a review-only pending row in the user's
+    # own account (like suggest_project_memory); the dispatch backstop
+    # refuses inference runs before any write.
+    "list_doc_notes", "suggest_doc_note",
     "list_tables", "get_table", "query_rows",  # Quest Tables reads
     # Browser tools: public projects only, and an inference run is never
     # public, so every handler refuses them there (browser_unavailable)
