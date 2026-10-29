@@ -196,7 +196,7 @@ class TestPublicToolTier:
 
     def test_allowlist_has_no_internal_data_tools(self):
         for name in (
-            "memory_search", "memory_list", "authed_get", "authed_post",
+            "memory_search", "memory_list", "memory_get", "authed_get", "authed_post",
             "wait_for_handles", "download_drive_file",
             "get_gmail_messages", "search_slack_messages",
         ):

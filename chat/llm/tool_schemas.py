@@ -400,6 +400,32 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "required": [],
         },
     },
+    "memory_get": {
+        "name": "memory_get",
+        "description": (
+            "Fetch the user's saved memories by id. The prompt's \"Saved "
+            "Memories\" section shows the newest memories in full and an index "
+            "of older ones (one line each with the id and the start of the "
+            "text); use this to read any indexed memory in full before acting "
+            "on it. Up to 20 ids per call; ids that match nothing are returned "
+            "under `missing`."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Memory ids, as shown in the prompt's memory section or returned by memory_search / memory_list.",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Read two saved memories'.",
+                },
+            },
+            "required": ["ids"],
+        },
+    },
     "suggest_memory": {
         "name": "suggest_memory",
         "description": (
@@ -504,6 +530,32 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                 },
             },
             "required": [],
+        },
+    },
+    "project_memory_get": {
+        "name": "project_memory_get",
+        "description": (
+            "Fetch this project's memories by id. The prompt's \"Project "
+            "Memories\" paragraph shows the newest project memories in full "
+            "and an index of older ones (one line each with the id and the "
+            "start of the text); use this to read any indexed project memory "
+            "in full before acting on it. Up to 20 ids per call; ids that "
+            "match nothing are returned under `missing`."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Project memory ids, as shown in the prompt or returned by project_memory_search / project_memory_list.",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Read a project memory'.",
+                },
+            },
+            "required": ["ids"],
         },
     },
     "suggest_project_memory": {
@@ -4065,6 +4117,7 @@ PROJECT_ONLY_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
     "project_db_query",
     "project_memory_search",
     "project_memory_list",
+    "project_memory_get",
     "suggest_project_memory",
     "list_files",
     "read_file",
@@ -4319,6 +4372,7 @@ PUBLIC_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     "copy_file",
     "project_memory_search",
     "project_memory_list",
+    "project_memory_get",
     "suggest_project_memory",
     "send_slack_dm_to_self",
     "list_docs",
@@ -4365,9 +4419,11 @@ CORE_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
     "get_response_content",
     "memory_search",
     "memory_list",
+    "memory_get",
     "suggest_memory",
     "project_memory_search",
     "project_memory_list",
+    "project_memory_get",
     "suggest_project_memory",
     "get_current_time",
     "set_conversation_name",

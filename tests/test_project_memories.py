@@ -306,8 +306,11 @@ class TestTools:
         assert row["project_id"] == pid
 
     def test_no_project(self, env):
-        for tool in ("project_memory_list", "project_memory_search", "suggest_project_memory"):
-            result = _dispatch(env, tool, {"query": "x", "content": "x"})
+        for tool in (
+            "project_memory_list", "project_memory_search", "project_memory_get",
+            "suggest_project_memory",
+        ):
+            result = _dispatch(env, tool, {"query": "x", "content": "x", "ids": ["x"]})
             assert "project conversations" in result["error"]
 
     @pytest.mark.parametrize("flag", [
@@ -325,11 +328,17 @@ class TestTools:
             env, "project_memory_list", {}, project_id=env.project_id, is_sub_agent=True,
         )
         assert result["memory_count"] == 0
+        result = _dispatch(
+            env, "project_memory_get", {"ids": ["nope"]},
+            project_id=env.project_id, is_sub_agent=True,
+        )
+        assert result == {"project_memories": [], "missing": ["nope"]}
 
     def test_public_conversations_use_their_own_project(self, env):
         from chat.llm.tool_schemas import PUBLIC_TOOL_CALL_ALLOWLIST
         assert {
-            "project_memory_search", "project_memory_list", "suggest_project_memory",
+            "project_memory_search", "project_memory_list", "project_memory_get",
+            "suggest_project_memory",
         } <= PUBLIC_TOOL_CALL_ALLOWLIST
         pub = env.public_project_id
         _run(env.memories.create_project_memory(pub, "Public fact about EUR"))
@@ -350,6 +359,72 @@ class TestTools:
         assert "project_memory_search" not in result["error"]
         result = _dispatch(env, "nope", {}, project_id=env.project_id)
         assert "project_memory_search" in result["error"]
+
+
+class TestGetTools:
+    """memory_get and project_memory_get: the ids the prompt's memory
+    index shows, fetched in full (chat/gemini_api/tool_handlers/memory.py)."""
+
+    def test_project_memory_get_by_id(self, env):
+        pid = env.project_id
+        a = _run(env.memories.create_project_memory(pid, "Figures are reported in EUR"))
+        b = _run(env.memories.create_project_memory(pid, "Board meets monthly"))
+        archived = _run(env.memories.create_project_memory(pid, "Old convention"))
+        _run(env.memories.set_project_memory_archived(pid, archived["id"], True))
+        other = _run(env.memories.create_project_memory(env.public_project_id, "Elsewhere"))
+
+        result = _dispatch(
+            env, "project_memory_get",
+            {"ids": [b["id"], "nope", a["id"], other["id"], archived["id"], b["id"]]},
+            project_id=pid,
+        )
+        # In the order asked, de-duplicated; another project's id is missing.
+        assert [m["content"] for m in result["project_memories"]] == [
+            "Board meets monthly", "Figures are reported in EUR", "Old convention",
+        ]
+        assert [m["archived"] for m in result["project_memories"]] == [False, False, True]
+        assert set(result["project_memories"][0]) == {
+            "id", "content", "created_at", "updated_at", "archived",
+        }
+        assert result["missing"] == ["nope", other["id"]]
+
+    def test_memory_get_by_id(self, env):
+        import db.memory_store as memory_store
+        alice = _uid(env)
+        bob = env.users["bob"]["id"]
+        mine = _run(memory_store.create_memory(alice, "Prefers metric units"))
+        theirs = _run(memory_store.create_memory(bob, "Bob's secret"))
+        result = _dispatch(env, "memory_get", {"ids": [mine["id"], theirs["id"]]})
+        assert [m["content"] for m in result["memories"]] == ["Prefers metric units"]
+        assert result["memories"][0]["archived"] is False
+        assert result["missing"] == [theirs["id"]]
+        # A single id string is accepted.
+        result = _dispatch(env, "memory_get", {"ids": mine["id"]})
+        assert [m["id"] for m in result["memories"]] == [mine["id"]]
+
+    @pytest.mark.parametrize("ids,message", [
+        (None, "non-empty list"),
+        ([], "non-empty list"),
+        ("", "id strings only"),
+        ([1], "id strings only"),
+        (["a", "  "], "id strings only"),
+        ([f"id{i}" for i in range(21)], "At most 20 ids"),
+    ])
+    def test_ids_validation(self, env, ids, message):
+        for tool, kw in (("memory_get", {}), ("project_memory_get", {"project_id": env.project_id})):
+            result = _dispatch(env, tool, {"ids": ids}, **kw)
+            assert message in result["error"], (tool, ids)
+
+    def test_public_conversation_gets_its_own_project_only(self, env):
+        pub = env.public_project_id
+        mine = _run(env.memories.create_project_memory(pub, "Public fact"))
+        private = _run(env.memories.create_project_memory(env.project_id, "Private fact"))
+        kw = dict(project_id=pub, is_public=True, conversation_id=env.public_cid)
+        result = _dispatch(env, "project_memory_get", {"ids": [mine["id"], private["id"]]}, **kw)
+        assert [m["content"] for m in result["project_memories"]] == ["Public fact"]
+        assert result["missing"] == [private["id"]]
+        assert "public-project" in _dispatch(env, "memory_get", {"ids": ["x"]}, **kw)["error"]
+
 
 
 # ---------------------------------------------------------------------------

@@ -92,11 +92,17 @@ def _memory_content(_base_url: str, _api_key: str) -> str:
 Quest maintains a per-user "memory" store of small factual notes about the
 user (preferences, ongoing context, things they've asked you to remember).
 A top-level conversation starts with the user's memories in its system
-prompt ("Saved Memories", newest first, capped: a trailing line says how
-many older ones were left out), so for most tasks you already have them.
+prompt ("Saved Memories", newest first): the newest in full, then an
+index of older ones -- one `<ref>` line each with the id, the date and
+the start of the text -- and, when even the index is full, a trailing
+line saying how many were left out. For most tasks you already have what
+you need; the index tells you what else exists.
 
 ### Reads (call directly via `tool_call`)
 
+- **memory_get(ids)** — the full text of up to 20 memories by id (the
+  ids the prompt's index lines carry). Read an indexed memory in full
+  before acting on it; ids that match nothing come back under `missing`.
 - **memory_search(query)** — full-text search over saved memories. Use
   this when the prompt's memory section says some were not shown, when
   the user refers to something they asked you to remember that is not
@@ -206,9 +212,13 @@ user's personal memories above. The tools below exist only in project
 conversations (public projects included, where they are the only memories
 in reach).
 
-- **project_memory_search(query)** / **project_memory_list()** -- same
-  shapes as the personal reads, scoped to the conversation's project.
-  Search them at the start of non-trivial project work.
+- **project_memory_search(query)** / **project_memory_list()** /
+  **project_memory_get(ids)** -- same shapes as the personal reads, scoped
+  to the conversation's project. The prompt's "Project Memories" paragraph
+  carries the project's memories the same way as the personal ones
+  (newest in full, then an index); read an indexed one with
+  `project_memory_get`, and search at the start of non-trivial project
+  work for anything saved since the session started.
 - **suggest_project_memory(content, reasoning?, replaces_memory_id?)** --
   the non-blocking proposal, exactly like `suggest_memory`, reviewed in a
   separate "suggested project memories" bubble (`replaces_memory_id` must

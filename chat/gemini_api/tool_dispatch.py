@@ -53,9 +53,11 @@ from chat.gemini_api.tool_handlers import (
     _handle_set_conversation_name,
     _handle_memory_search,
     _handle_memory_list,
+    _handle_memory_get,
     _handle_suggest_memory,
     _handle_project_memory_search,
     _handle_project_memory_list,
+    _handle_project_memory_get,
     _handle_suggest_project_memory,
     _handle_list_skills,
     _handle_search_skills,
@@ -343,6 +345,10 @@ async def _tool_memory_list(ctx: ToolContext, args: dict) -> str:
     return await _handle_memory_list(ctx.user["id"])
 
 
+async def _tool_memory_get(ctx: ToolContext, args: dict) -> str:
+    return await _handle_memory_get(ctx.user["id"], args.get("ids"))
+
+
 async def _tool_suggest_memory(ctx: ToolContext, args: dict) -> str:
     # Top-level web/Slack conversations only: a suggestion is reviewed in
     # the conversation's own composer panel, which sub-agent, cross-user
@@ -369,6 +375,10 @@ async def _tool_project_memory_search(ctx: ToolContext, args: dict) -> str:
 
 async def _tool_project_memory_list(ctx: ToolContext, args: dict) -> str:
     return await _handle_project_memory_list(ctx.project_id)
+
+
+async def _tool_project_memory_get(ctx: ToolContext, args: dict) -> str:
+    return await _handle_project_memory_get(ctx.project_id, args.get("ids"))
 
 
 async def _tool_suggest_project_memory(ctx: ToolContext, args: dict) -> str:
@@ -791,9 +801,11 @@ TOOL_CALL_HANDLERS: dict[str, ToolHandler] = {
     "copy_file": _tool_copy_file,
     "memory_search": _tool_memory_search,
     "memory_list": _tool_memory_list,
+    "memory_get": _tool_memory_get,
     "suggest_memory": _tool_suggest_memory,
     "project_memory_search": _tool_project_memory_search,
     "project_memory_list": _tool_project_memory_list,
+    "project_memory_get": _tool_project_memory_get,
     "suggest_project_memory": _tool_suggest_project_memory,
     "wait_for_handles": _tool_wait_for_handles_stub,
     "list_service_connections": _tool_list_service_connections,
@@ -872,6 +884,7 @@ DIRECT_TOOL_HANDLERS: dict[str, ToolHandler] = {
     "copy_file": _tool_copy_file,
     "memory_search": _tool_memory_search,
     "memory_list": _tool_memory_list,
+    "memory_get": _tool_memory_get,
     "list_skills": _tool_list_skills,
     "search_skills": _tool_search_skills,
     "load_skills": _tool_load_skills,
@@ -968,7 +981,8 @@ async def _dispatch_tool_call(
     """Dispatch a tool call to the appropriate handler.
 
     Handles all local tools (get_current_time, list_workspace_files,
-    get_workspace_file, write_workspace_file, memory_search, memory_list)
+    get_workspace_file, write_workspace_file, memory_search, memory_list,
+    memory_get)
     and falls back to route dispatch for HTTP tools
     (curl_proxy_get, curl_proxy_post).
 

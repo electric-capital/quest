@@ -68,6 +68,7 @@ class TestTableParity:
             "copy_file",
             "memory_search",
             "memory_list",
+            "memory_get",
             "list_skills",
             "search_skills",
             "load_skills",

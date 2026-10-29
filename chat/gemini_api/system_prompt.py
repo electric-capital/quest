@@ -200,13 +200,23 @@ _CONVERTED_FROM_STANDALONE_NOTE = (
 )
 
 
-def _project_memories_section(can_suggest: bool, personal_memories: bool = True) -> str:
+def _project_memories_section(
+    can_suggest: bool,
+    personal_memories: bool = True,
+    memories_content: str = "",
+) -> str:
     """The "Project Memories" paragraph of a project prompt
     (chat/project_memories.py): what project memories are and -- unless the
     run cannot suggest (routine runs, sub-agents) -- that the model proposes
     them proactively through ``suggest_project_memory``. ``personal_memories``
     is False in public projects, where the user's own memories are out of
-    reach, so the paragraph does not contrast the two kinds there."""
+    reach, so the paragraph does not contrast the two kinds there.
+    ``memories_content`` is the project's memory block as rendered by
+    ``chat.memory_prompt.build_project_memories_content`` (newest in full,
+    then an index, then a count): with it the paragraph carries the
+    memories as of the session's start and points the read tools at what
+    is not in full; without it (sub-agents, a project without memories)
+    the paragraph only tells the model to read them with the tools."""
     if personal_memories:
         intro = (
             "Besides the user's personal memories, this project keeps its own "
@@ -218,14 +228,29 @@ def _project_memories_section(can_suggest: bool, personal_memories: bool = True)
             "This project keeps its own *project memories*: facts about the "
             "project, shared by every conversation in it."
         )
-    text = (
-        f"\n\n**Project Memories:** {intro} Read them with "
-        '`tool_call(tool_name="project_memory_search", arguments={"query": "..."})` '
-        "(or `project_memory_list`) at the start of non-trivial project work and "
-        "whenever the user refers to something the project should already know; "
-        "they complement the project's instructions, which the user writes by "
-        "hand.\n"
-    )
+    if memories_content and memories_content.strip():
+        text = (
+            f"\n\n**Project Memories:** {intro} They complement the project's "
+            "instructions, which the user writes by hand. The project's "
+            "memories as of the start of this session follow (newest first; "
+            "the index lines name older ones by id and the start of their "
+            "text). Apply them when they bear on the task; read an indexed one "
+            "in full with "
+            '`tool_call(tool_name="project_memory_get", arguments={"ids": ["..."]})` '
+            "before acting on it, and use `project_memory_search` / "
+            "`project_memory_list` for anything saved after this session "
+            "started or not shown here.\n\n"
+            f"{memories_content.strip()}\n\n"
+        )
+    else:
+        text = (
+            f"\n\n**Project Memories:** {intro} Read them with "
+            '`tool_call(tool_name="project_memory_search", arguments={"query": "..."})` '
+            "(or `project_memory_list`) at the start of non-trivial project work and "
+            "whenever the user refers to something the project should already know; "
+            "they complement the project's instructions, which the user writes by "
+            "hand.\n"
+        )
     if not can_suggest:
         return text
     if personal_memories:
@@ -517,6 +542,7 @@ def get_system_prompt(
     converted_from_standalone: bool = False,
     connected_accounts: str = "",
     memories_content: str = "",
+    project_memories_content: str = "",
 ) -> str:
     """Build the system prompt with tool instructions and skill enumeration.
 
@@ -561,10 +587,16 @@ def get_system_prompt(
         connected_accounts: Pre-rendered "Connected accounts" paragraph
             (config.user_connections.build_connected_accounts_paragraph);
             empty -> nothing is added, so the prompt is unchanged.
-        memories_content: Pre-rendered entries of the user's saved memories
-            (chat.memory_prompt.build_memories_content). Wrapped in the
-            "Saved Memories" section; empty -> no section, so the prompt
-            of a user without memories is unchanged.
+        memories_content: Pre-rendered block of the user's saved memories
+            (chat.memory_prompt.build_memories_content: the newest in
+            full, then an index, then a count). Wrapped in the "Saved
+            Memories" section; empty -> no section, so the prompt of a
+            user without memories is unchanged.
+        project_memories_content: The same for the project's memories
+            (chat.memory_prompt.build_project_memories_content), rendered
+            into the "Project Memories" paragraph; empty -> the paragraph
+            only names the read tools. Ignored when ``has_project`` is
+            False.
 
     Project conversations also get the "Two file spaces" paragraph and a
     ``/project`` script example; a standalone conversation's prompt carries
@@ -606,16 +638,17 @@ def get_system_prompt(
 
 """
 
-    # Build the saved-memories section if the user has any. The entries
-    # (and the "N more not shown" line when the block was capped) are
-    # rendered by chat/memory_prompt.py; the guidance lives here.
+    # Build the saved-memories section if the user has any. The entries,
+    # the index of older memories and the "N not shown" line (when the
+    # block was capped) are rendered by chat/memory_prompt.py; the
+    # guidance lives here.
     memories_section = ""
     if memories_content and memories_content.strip():
         memories_section = f"""
 
 ## Saved Memories
 
-Facts the user has saved about themselves and how they want you to work, newest first, as of the start of this session (anything saved since is reachable with `memory_list` / `memory_search`). Apply them when they bear on the task and otherwise leave them alone: do not recite them, and do not bring one up unless it changes what you do. The `id` attribute is what `replaces_memory_id` takes when a memory is outdated.
+Facts the user has saved about themselves and how they want you to work, newest first, as of the start of this session (anything saved since is reachable with `memory_list` / `memory_search`). The newest are given in full; older ones may follow as an index of one-line references (id, date, start of the text) -- read an indexed memory in full with `memory_get` before acting on it. Apply them when they bear on the task and otherwise leave them alone: do not recite them, and do not bring one up unless it changes what you do. The `id` attribute is what `memory_get` and `replaces_memory_id` take.
 
 {memories_content.strip()}
 
@@ -633,7 +666,9 @@ Facts the user has saved about themselves and how they want you to work, newest 
             )
         project_extras += _project_files_section(
             legacy_shared_workspace, converted_from_standalone,
-        ) + _project_memories_section(can_suggest=not is_routine)
+        ) + _project_memories_section(
+            can_suggest=not is_routine, memories_content=project_memories_content,
+        )
     if project_guide and project_guide.strip():
         project_section = f"""
 
@@ -783,7 +818,7 @@ You have thirteen tools available:
 - **Converting documents (e.g. a Word file to PDF):** headless LibreOffice is installed in the sandbox -- run `soffice --headless --convert-to pdf --outdir /workspace <file>` via `run_python` / `run_script` (also `.doc` / `.odt` / `.rtf` / `.html` / `.xlsx` / `.pptx` sources and other target formats such as `docx`). Use it for every document conversion unless the user asks for another route; never build a PDF from `python-docx` output. For a document stored in Google Drive, `download_drive_file` it first; native Google Docs / Sheets / Slides are exported with `google_export_doc` / `google_export_sheet` / `google_export_slides` instead. Load `system:workspace` for details.
 - **Showing images to the user:** the web chat renders standard markdown images inline. To display a workspace image (a generated chart, a downloaded figure, a photo) directly in your reply, reference it by its workspace-relative path: `![Revenue by quarter](revenue.png)` or `![](reports/figure1.png)`. Paths always resolve from the workspace root. Only PNG/JPEG/GIF/WebP files render; avoid spaces in filenames you plan to embed (or percent-encode them as `%20`). External image URLs are never rendered inline (they display as plain links) -- to show a remote image, save it into the workspace first. This works only in the web chat -- Slack replies cannot render workspace images.
 - **Linking files for the user:** a plain markdown link to a workspace-relative path (`[note.txt](note.txt)`, `[the report](reports/q3.pdf)`) opens that file in the chat's file viewer (or downloads it when there is no viewer for its type). Use these to point at files you wrote; never invent URLs or absolute paths for workspace files. Web chat only, like inline images.
-- The user's saved memories are already in this prompt (the "Saved Memories" section, when they have any). Use `tool_call(tool_name="memory_search", arguments={{"query": "..."}})` when that section says some were not shown, when the user refers to something they asked you to remember that is not listed, or for anything saved after this session started. Load `system:memory` for full memory tool semantics.
+- The user's saved memories are already in this prompt (the "Saved Memories" section, when they have any): the newest in full, older ones as an index of one-line references. Use `tool_call(tool_name="memory_get", arguments={{"ids": ["..."]}})` to read an indexed memory in full, and `tool_call(tool_name="memory_search", arguments={{"query": "..."}})` when that section says some were not shown, when the user refers to something they asked you to remember that is not listed, or for anything saved after this session started. Load `system:memory` for full memory tool semantics.
 - **Memories.** When the user explicitly asks you to remember something, use `create_action_request(request_type="create_memory", params={{"content": "..."}}, reasoning="...")`: an Approve / Revise / Stop card that blocks until they resolve it, with the verdict on the return value. When you notice, unprompted, a fact worth keeping across conversations, call `tool_call(tool_name="suggest_memory", arguments={{"content": "...", "reasoning": "..."}})` instead -- it registers the suggestion on the side and returns at once (the user reviews a "suggested memories" bubble above their message box whenever they like), so keep working, do not restate the suggestion in your reply, and never claim it was saved. Suggest sparingly (a handful per conversation at most) and only facts that are stable over time, likely to matter again, and clearly about the user rather than the task at hand: who they are (role, expertise, preferences, working and writing style, recurring responsibilities), guidance on how you should work (corrections and confirmed approaches, with the reason), ongoing work, goals and constraints that files or history do not already record (relative dates made absolute), and pointers to resources they will want again (URLs, dashboards, tickets). Do NOT suggest one-off task details, temporary states ("at the airport today"), anything derivable from the workspace, project files or docs, anything that only matters in this conversation, or sensitive information (health, finances, credentials, secrets, other people's private details) unless the user asked to keep it. Before suggesting, `memory_search` the topic: skip facts a memory already covers; when a memory is outdated, suggest the replacement text with `replaces_memory_id` so accepting swaps it in. One fact per suggestion, concise and self-contained. Load `system:memory` for the full memory tool semantics.
 - When the user asks you to send a message or perform an action in an external service, use `create_action_request()`. Do NOT call write endpoints directly with `curl_proxy_post`. **Exception:** to send a message to the user themselves (e.g. "send me a reminder", "DM me"), use `tool_call(tool_name="send_slack_dm_to_self", arguments={{"message": "...", "files": ["optional/workspace/path.pdf"]}})` directly -- this needs no approval, works in scheduled routines, and can attach workspace files. Load `system:action_requests` for the full reference.
 - When you need to run multiple independent sub-agent tasks, prefer `agent_task_parallel` over multiple sequential `agent_task` calls.
@@ -1104,6 +1139,7 @@ def get_public_project_system_prompt(
     project_db_enabled: bool = False,
     legacy_shared_workspace: bool = False,
     converted_from_standalone: bool = False,
+    project_memories_content: str = "",
 ) -> str:
     """Build the system prompt for a conversation in a PUBLIC project.
 
@@ -1162,6 +1198,11 @@ def get_public_project_system_prompt(
     project workspace at ``/project``) is always present, and
     ``legacy_shared_workspace`` / ``converted_from_standalone`` (the
     conversation's notice flags) add their notes as in get_system_prompt().
+
+    ``project_memories_content`` is the project's own memory block
+    (chat.memory_prompt.build_project_memories_content), rendered into the
+    "Project Memories" paragraph as in get_system_prompt(): a public
+    conversation sees its own project's memories and nothing else.
     """
     from chat.llm.tool_schemas import (
         TOOL_CALL_REGISTRY, PUBLIC_TOOL_CALL_ALLOWLIST, PUBLIC_SYSTEM_SKILLS,
@@ -1186,7 +1227,10 @@ def get_public_project_system_prompt(
         ) if project_db_enabled else ""
     ) + _project_files_section(
         legacy_shared_workspace, converted_from_standalone,
-    ) + _project_memories_section(can_suggest=not is_routine, personal_memories=False)
+    ) + _project_memories_section(
+        can_suggest=not is_routine, personal_memories=False,
+        memories_content=project_memories_content,
+    )
     if project_guide and project_guide.strip():
         project_section = f"""
 
