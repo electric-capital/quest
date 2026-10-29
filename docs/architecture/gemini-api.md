@@ -229,7 +229,7 @@ The spawn arms in `chat/gemini_api/turn_tools.py` call `_run_sub_agent()` / `_ru
 - `agent_task_parallel` runs a batch concurrently (`asyncio.gather()`, at most `MAX_PARALLEL_TASKS`, non-empty unique task ids). `run_one_task()` isolates failures, and the result maps each task id to `status`, `name` and `response` or `error`.
 - `agent_task_parallel_template` renders one `prompt_template` per entry of `agents` (`_run_parallel_sub_agents_template()`, at most `MAX_PARALLEL_TEMPLATE_TASKS`), with a required `model` from `TEMPLATE_BATCH_ALLOWED_MODELS`.
 
-A sub-agent runs its own streaming loop on an ephemeral session with `get_sub_agent_system_prompt()` and the `SUB_AGENT_TOOLS` tier, shares the conversation workspace (and `proj://` in a project) and the parent's user, and dispatches shared tools through `_dispatch_tool_call()`, on the `model` argument or the parent's (any provider). It ends on `agent_task_response`, after which the loop acknowledges the call and drains the final response so the stream closes and usage is recorded; without that call its accumulated text is returned. An exception becomes a JSON error tool result. Beyond the parent's context it takes the nesting parameters below and `parent_tool_id`, grouping events under the spawning call.
+A sub-agent runs its own streaming loop on an ephemeral session with `get_sub_agent_system_prompt()` and the `SUB_AGENT_TOOLS` tier, shares the conversation workspace (and `proj://` in a project) and the parent's user, and dispatches shared tools through `_dispatch_tool_call()`, on the `model` argument or the parent's (any provider). It ends on `agent_task_response`, whose response returns with no further model request; later calls in that response are skipped. Without that call its accumulated text is returned. An exception becomes a JSON error tool result. Beyond the parent's context it takes the nesting parameters below and `parent_tool_id`, grouping events under the spawning call.
 
 Bounds: `get_sub_agent_turn_limits(model)` (`chat/gemini_api/constants.py`) sets a hard turn cap and an earlier warning turn, lower for models with a small registry `max_input_tokens`; a context warning fires at `SUB_AGENT_CONTEXT_WARNING_THRESHOLD` of `max_input_tokens` (via `compute_total_context_tokens()`). Both warnings ride `provider.inject_turn_warning()` and tell the sub-agent to return its findings immediately.
 
@@ -250,7 +250,7 @@ With the conversation's `nested_subagents` flag ([Conversation Flags](conversati
 
 ## Token Usage Tracking
 
-Every model call -- top-level turns, sub-agent turns and the sub-agent drain turn -- is recorded by `record_api_call()` (`db/llm_call_store.py`) into its provider's raw analytics table with call type (`ApiCallType`), agent name, `backend` (`get_backend_for_model()`), nesting `level`, duration and the provider-native `raw_usage` fields; the coalesced counts serve only when a stream returned no usage object. Recording failures are logged, never raised. Columns: [Database](database.md#llmcallgemini-and-llmcallanthropic-models).
+Every model call -- top-level turns and sub-agent turns -- is recorded by `record_api_call()` (`db/llm_call_store.py`) into its provider's raw analytics table with call type (`ApiCallType`), agent name, `backend` (`get_backend_for_model()`), nesting `level`, duration and the provider-native `raw_usage` fields; the coalesced counts serve only when a stream returned no usage object. Recording failures are logged, never raised. Columns: [Database](database.md#llmcallgemini-and-llmcallanthropic-models).
 
 Separately, the run's `UsageAccumulator` (`chat/gemini_api/usage.py`) sums the top-level rounds (`add_turn()`) and the `usage_accumulator` dicts the sub-agent runners fill (`add_sub_agent()`, called from the spawn arms in `chat/gemini_api/turn_tools.py`), and `build_stats()` produces the `stats` event. Each sub-agent computes its `new_input_tokens` with its own provider, so mixed-provider batches add up correctly, and the parallel runner merges its per-task dicts before handing them up. Passing a mutable dict down was chosen over shared counters so concurrent sub-agents need no global state.
 
@@ -296,7 +296,7 @@ Sub-agent activity logs under `[agent_task]` / `[agent_task_parallel]` / `[agent
 
 **Why `agent_task_parallel` instead of several `agent_task` calls?** Tool calls in one response run sequentially, so only an explicit batch runs concurrently, and one result keyed by task id is easier to map than separate results. The per-turn `agent_task` cap pushes the model to the batch; `MAX_PARALLEL_TASKS` bounds a batch because every sub-agent opens its own model session and may call tools.
 
-**Why drain the response after `agent_task_response`?** Returning without consuming the final stream would leave its HTTP connection open and the session history incomplete.
+**Why not answer `agent_task_response`?** The session is ephemeral and discarded on return, so answering would only buy another full-context model call whose output nobody reads.
 
 **Why co-locate `get_instructions()` with each API module?** The endpoint code and its model-facing usage notes change together; the system-skill catalog (`chat/system_skills/catalog.py`) only binds skill ids to them.
 
