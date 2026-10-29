@@ -315,6 +315,51 @@ class TestPublicEnforcement:
 
 
 # ---------------------------------------------------------------------------
+# Quest Doc notes tools and the is_routine flag (behaviour:
+# tests/test_doc_note_tools.py)
+# ---------------------------------------------------------------------------
+
+
+_DOC_NOTE_TOOLS = ("list_doc_notes", "suggest_doc_note")
+
+
+class TestDocNoteTools:
+    def test_dynamic_tools_only(self):
+        for name in _DOC_NOTE_TOOLS:
+            assert name in TOOL_CALL_REGISTRY
+            assert name in TOOL_CALL_HANDLERS
+            assert name not in DIRECT_TOOL_HANDLERS
+
+    def test_public_dispatch_admits_them(self, tmp_path, monkeypatch):
+        # Past the public allowlist; the doc_notes gate (closed in a fresh
+        # gates file) answers, not the public reject.
+        import config.feature_gates as fg
+
+        monkeypatch.setattr(fg, "FEATURE_GATES_FILE", tmp_path / "feature_gates.json")
+        for name in _DOC_NOTE_TOOLS:
+            result, _ = _dispatch(
+                "tool_call", {"tool_name": name, "arguments": {"doc_id": "d"}},
+                is_public=True,
+            )
+            assert json.loads(result)["error"] == "doc_notes_disabled"
+
+    def test_is_routine_reaches_the_context(self, monkeypatch):
+        contexts = []
+
+        async def _capture(ctx, args):
+            contexts.append(ctx)
+            return json.dumps({"ok": True})
+
+        monkeypatch.setitem(TOOL_CALL_HANDLERS, "get_current_time", _capture)
+        args = {"tool_name": "get_current_time", "arguments": {}}
+        _dispatch("tool_call", args, is_routine=True)
+        _dispatch("tool_call", dict(args))
+        assert [(c.is_routine, c.run_kind) for c in contexts] == [
+            (True, "top_level"), (False, "top_level"),
+        ]
+
+
+# ---------------------------------------------------------------------------
 # requires_service prompt gating
 # ---------------------------------------------------------------------------
 
