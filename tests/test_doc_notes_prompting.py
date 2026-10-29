@@ -1,7 +1,8 @@
 """Quest Doc notes prompting (issue #187).
 
 Covers the prompt layer of the two doc-notes model tools, ``list_doc_notes``
-and ``suggest_doc_note`` (phase A5):
+and ``suggest_doc_note``, and of the ``system:doc_notes`` skill that
+documents them:
 
 1. ``_doc_note_tool_names()`` finds exactly the two tools (the registry
    specs gated on the ``doc_notes`` pseudo-key), apart from the seven
@@ -12,18 +13,25 @@ and ``suggest_doc_note`` (phase A5):
    (sub-agents, cross-user subagents, inference API runs). While the key is
    false or missing, neither name appears in any prompt; an unknown context
    (``connected_services=None``) shows everything, as for every gated tool.
-3. The public-project prompt's ``doc_notes_enabled`` flag: both tools
-   inlined in full while it is on, neither named while it is off, and a
-   public routine run reads only.
+   Both are skill-documented: every regular prompt names them only on the
+   ``system:doc_notes`` enumeration line (``list_doc_notes`` alone where
+   ``suggest_doc_note`` is excluded, which such a prompt then names
+   nowhere), never as a Dynamic Tools bullet or on another skill's line,
+   and no regular prompt names the skill while the key is false or missing.
+3. The public-project prompt's ``doc_notes_enabled`` flag: having no skill
+   tier, it inlines both tools in full while the flag is on, names neither
+   while it is off, never names ``system:doc_notes``, and a public routine
+   run reads only.
 4. ``run_conversation_turn`` passes ``doc_notes_enabled_for()`` (which folds
    in the Quest Docs gate) into the public prompt.
-5. The ``system:doc_notes`` skill (phase A7): its registration, listed and
-   enumerated only while the pseudo-key is true (Quest Docs on either
-   way), its line never naming ``suggest_doc_note`` (routine and read-only
-   prompts list it too), loading it while closed answers exactly
-   ``doc_notes_disabled_message()``, its content covers spec section 6.5
-   and quotes the refusal texts from their constants; and the
-   ``system:quest_docs`` pointer to it.
+5. The ``system:doc_notes`` skill: its registration, listed and enumerated
+   only while the pseudo-key is true (Quest Docs on either way), its
+   description and trigger never naming ``suggest_doc_note`` (routine and
+   read-only prompts list it too), loading it while closed answers exactly
+   ``doc_notes_disabled_message()`` and while open ends with the Tool
+   reference of both tools, its content covers spec section 6.5 and quotes
+   the refusal texts from their constants; and the ``system:quest_docs``
+   pointer to it.
 6. The notes line of the public Quest Docs paragraph: present only while
    both public flags are on, appended after the unchanged
    ``_PUBLIC_DOCS_SECTION``, without ``suggest_doc_note`` in a routine run,
@@ -32,10 +40,6 @@ and ``suggest_doc_note`` (phase A5):
    and the unseen-notes messages) names no skill, and names
    ``suggest_doc_note`` only where the reader may lack it with a
    condition.
-
-Both tools are core in phase A5 (a full Dynamic Tools bullet, on no system
-skill line); the move onto the ``system:doc_notes`` line comes with their
-tier change.
 """
 
 import re
@@ -71,13 +75,18 @@ from chat.gemini_api.system_prompt import (
     get_system_prompt,
     get_user_subagent_system_prompt,
 )
+from chat.llm.tool_schemas import (
+    TOOL_CALL_REGISTRY,
+    format_tool_call_doc,
+    render_tool_reference,
+)
 from chat.system_skills import (
     CATALOG,
     build_system_skills_enumeration,
     list_system_skills,
     load_system_skills,
 )
-from tests.prompt_support import core_bullet, skill_tools, tool_offered
+from tests.prompt_support import core_bullet, named_under_skill, skill_tools, tool_offered
 from tests.test_conversation_workspace_prompts import (
     _ASSISTANT_MSG,
     _USER_MSG,
@@ -152,6 +161,32 @@ def _public(**kw):
         user_name="Ada", user_email="ada@example.com",
         project_guide="Track BTC prices.", **kw,
     )
+
+
+def _skill_line(prompt: str) -> str | None:
+    """The ``system:doc_notes`` enumeration line of a prompt, or None."""
+    match = re.search(r"^- `system:doc_notes` -- .*$", prompt, re.M)
+    return match.group(0) if match else None
+
+
+# Every regular prompt builder, as a function of the connected-services
+# map, with the tools its system:doc_notes line names while the gate is
+# open (registry order): suggest_doc_note only where it is offered.
+PROMPT_KINDS = {
+    "standalone": (lambda s: _top_level(s), [LIST, SUGGEST]),
+    "project": (lambda s: _top_level(s, has_project=True), [LIST, SUGGEST]),
+    "slack": (lambda s: _top_level(s, is_slack=True), [LIST, SUGGEST]),
+    "routine": (lambda s: _top_level(s, is_routine=True), [LIST]),
+    "routine_project": (lambda s: _top_level(s, has_project=True, is_routine=True), [LIST]),
+    "sub_agent": (lambda s: _sub_agent(s), [LIST]),
+    "sub_agent_nest": (lambda s: _sub_agent(s, can_nest=True), [LIST]),
+    "sub_agent_project": (lambda s: _sub_agent(s, has_project=True), [LIST]),
+    "sub_agent_project_nest": (
+        lambda s: _sub_agent(s, has_project=True, can_nest=True), [LIST],
+    ),
+    "user_subagent": (_user_subagent, [LIST]),
+    "inference": (_inference, [LIST]),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -232,28 +267,41 @@ class TestReadOnlyTiers:
         _assert_none_named(build(services))
 
 
-class TestCoreTier:
-    """Phase A5: both tools are core, so a prompt documents them as full
-    Dynamic Tools bullets and no system skill line names them (A7 moves
-    them onto the ``system:doc_notes`` line)."""
+class TestSkillTier:
+    """Both tools are documented by ``system:doc_notes``: a regular prompt
+    names them on that skill's enumeration line alone (minus the tools it
+    excludes), never as a Dynamic Tools bullet, and loading the skill gives
+    their full reference (``TestDocNotesSkill.test_load_while_open``)."""
 
-    @pytest.mark.parametrize("prompt_kind", [
-        "standalone", "project", "slack", "sub_agent", "user_subagent", "inference",
-    ])
-    def test_bullets_never_on_a_skill_line(self, prompt_kind):
-        prompt = {
-            "standalone": lambda: _top_level(OPEN),
-            "project": lambda: _top_level(OPEN, has_project=True),
-            "slack": lambda: _top_level(OPEN, is_slack=True),
-            "sub_agent": lambda: _sub_agent(OPEN),
-            "user_subagent": lambda: _user_subagent(OPEN),
-            "inference": lambda: _inference(OPEN),
-        }[prompt_kind]()
-        for name in _offered(prompt):
-            assert core_bullet(name) in prompt, name
-        for skill_id in CATALOG:
-            for name in NOTE_TOOLS:
-                assert name not in (skill_tools(prompt, skill_id) or []), (skill_id, name)
+    @pytest.mark.parametrize("kind", list(PROMPT_KINDS))
+    def test_named_on_the_skill_line_only(self, kind):
+        build, expected = PROMPT_KINDS[kind]
+        prompt = build(OPEN)
+        assert skill_tools(prompt, SKILL) == expected
+        for name in NOTE_TOOLS:
+            assert core_bullet(name) not in prompt, name
+            for skill_id in CATALOG:
+                if skill_id != SKILL:
+                    assert not named_under_skill(prompt, skill_id, name), (skill_id, name)
+        if SUGGEST not in expected:
+            # Excluded: offered nowhere, and named nowhere either (the
+            # skill line's description and trigger included).
+            assert not tool_offered(prompt, SUGGEST)
+            assert SUGGEST not in prompt
+
+    @pytest.mark.parametrize("kind", list(PROMPT_KINDS))
+    def test_unknown_context_names_them_too(self, kind):
+        # connected_services=None shows every gated skill and tool; the
+        # builder's exclusions still apply.
+        build, expected = PROMPT_KINDS[kind]
+        assert skill_tools(build(None), SKILL) == expected
+
+    @pytest.mark.parametrize("services", CLOSED_MAPS + DOCS_ONLY_MAPS[1:],
+                             ids=CLOSED_IDS + DOCS_ONLY_IDS[1:])
+    @pytest.mark.parametrize("kind", list(PROMPT_KINDS))
+    def test_skill_absent_when_closed(self, kind, services):
+        build, _ = PROMPT_KINDS[kind]
+        assert SKILL not in build(services)
 
 
 # ---------------------------------------------------------------------------
@@ -263,11 +311,29 @@ class TestCoreTier:
 
 class TestPublicPrompt:
     def test_both_inlined_when_open(self):
+        # Skill-documented in the registry, yet bulleted in full: the
+        # public prompt has no skill tier and inlines what it offers.
         prompt = _public(docs_enabled=True, doc_notes_enabled=True)
         for name in NOTE_TOOLS:
+            assert TOOL_CALL_REGISTRY[name]["skill"] == SKILL, name
             assert core_bullet(name) in prompt, name
         # The public prompt carries no regular skill machinery.
         assert "system:" not in prompt
+
+    @pytest.mark.parametrize("is_routine", [False, True])
+    @pytest.mark.parametrize("browser_enabled", [False, True])
+    @pytest.mark.parametrize("doc_notes_enabled", [False, True])
+    @pytest.mark.parametrize("docs_enabled", [False, True])
+    def test_never_names_the_skill(
+        self, docs_enabled, doc_notes_enabled, browser_enabled, is_routine,
+    ):
+        # Not one of PUBLIC_SYSTEM_SKILLS, so never on the public System
+        # Skills block (present with the browser), whatever the flags.
+        prompt = _public(
+            docs_enabled=docs_enabled, doc_notes_enabled=doc_notes_enabled,
+            browser_enabled=browser_enabled, is_routine=is_routine,
+        )
+        assert SKILL not in prompt
 
     @pytest.mark.parametrize("docs_enabled", [False, True])
     @pytest.mark.parametrize("is_routine", [False, True])
@@ -365,12 +431,6 @@ def test_public_turn_passes_the_notes_gate(
 # ---------------------------------------------------------------------------
 
 
-def _skill_line(prompt: str) -> str | None:
-    """The ``system:doc_notes`` enumeration line of a prompt, or None."""
-    match = re.search(r"^- `system:doc_notes` -- .*$", prompt, re.M)
-    return match.group(0) if match else None
-
-
 def _skill_content() -> str:
     return CATALOG[SKILL].content_builder(BASE_URL, API_KEY)
 
@@ -408,34 +468,30 @@ class TestDocNotesSkill:
         assert "`system:quest_docs`" in closed
         assert SKILL not in closed
 
-    @pytest.mark.parametrize("prompt_kind", ["standalone", "project", "slack"])
-    def test_on_the_top_level_prompts_while_open(self, prompt_kind):
-        kw = {"standalone": {}, "project": {"has_project": True},
-              "slack": {"is_slack": True}}[prompt_kind]
-        assert _skill_line(_top_level(OPEN, **kw)) is not None
-        for services in CLOSED_MAPS:
-            assert SKILL not in _top_level(services, **kw)
-
-    @pytest.mark.parametrize("has_project", [False, True])
-    def test_line_never_names_the_suggest_tool(self, has_project):
+    def test_line_never_names_the_suggest_tool(self):
         # The routine and read-only prompts list the skill but are not
-        # offered suggest_doc_note, so its line must not name it in the
-        # description or trigger (a Tools: tail drops excluded tools).
+        # offered suggest_doc_note, so its description and trigger must not
+        # name it; only the line's Tools: tail does, where the tool is
+        # offered (TestSkillTier checks the rendered lines).
         skill = CATALOG[SKILL]
         assert SUGGEST not in skill.description + skill.when_to_load
-        for prompt in (
-            _top_level(OPEN, has_project=has_project, is_routine=True),
-            _sub_agent(OPEN, has_project=has_project),
-        ):
-            line = _skill_line(prompt)
-            assert line is not None
-            assert SUGGEST not in line
+        line = _skill_line(_top_level(OPEN))
+        assert line is not None
+        assert line.endswith(f" Tools: `{LIST}`, `{SUGGEST}`.")
+        assert line.count(SUGGEST) == 1
 
     def test_load_while_open(self):
         [loaded] = load_system_skills([SKILL], OPEN, BASE_URL, API_KEY)
         assert loaded["id"] == SKILL
         assert "error" not in loaded
-        assert loaded["content"].startswith("## Quest Doc notes")
+        content = loaded["content"]
+        assert content.startswith("## Quest Doc notes")
+        # Ends with the Tool reference documenting both tools in full.
+        reference = render_tool_reference(SKILL)
+        assert reference.startswith("## Tool reference")
+        assert content.rstrip().endswith(reference.rstrip())
+        for name in NOTE_TOOLS:
+            assert format_tool_call_doc(name, TOOL_CALL_REGISTRY[name]) in reference, name
 
     @pytest.mark.parametrize("services", CLOSED_MAPS + DOCS_ONLY_MAPS[1:],
                              ids=CLOSED_IDS + DOCS_ONLY_IDS[1:])

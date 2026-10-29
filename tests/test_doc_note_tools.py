@@ -13,9 +13,10 @@ literal; hidden-doc bodies are compared as raw JSON strings.
 
 Covers:
 
-1. Registry: both specs with ``requires_service == "doc_notes"``, core
-   tier, not mutating (``mutating_tool_call_tools()`` holds neither), their
-   parameters, prompt-safe descriptions within budget, both in
+1. Registry: both specs with ``requires_service == "doc_notes"``,
+   documented by the ``system:doc_notes`` skill (not core), not mutating
+   (``mutating_tool_call_tools()`` holds neither), their parameters,
+   prompt-safe descriptions within budget, both in
    ``PUBLIC_TOOL_CALL_ALLOWLIST``, only ``list_doc_notes`` in
    ``SCRIPT_TOOL_CALL_ALLOWLIST``, handler/registry parity; the
    ``is_routine`` dispatch flag (top-level run kind, default False).
@@ -301,9 +302,9 @@ class TestRegistry:
             spec = TOOL_CALL_REGISTRY[name]
             assert spec["name"] == name
             assert spec["requires_service"] == DOC_NOTES_SERVICE_KEY == "doc_notes"
-            assert spec["core"] is True and "skill" not in spec
+            assert spec["skill"] == "system:doc_notes" and "core" not in spec
             assert "mutating" not in spec
-            assert name in CORE_TOOL_CALL_TOOLS
+            assert name not in CORE_TOOL_CALL_TOOLS
             assert name in TOOL_CALL_HANDLERS
         assert not set(NOTES_TOOLS) & mutating_tool_call_tools()
         assert set(TOOL_CALL_HANDLERS) == set(TOOL_CALL_REGISTRY)
@@ -327,9 +328,9 @@ class TestRegistry:
         assert "max 1,000 characters" in content and "max 4,000 characters" in content
 
     def test_descriptions_are_prompt_safe_and_compact(self):
-        # Core tools are inlined in every gate-open prompt, the public
-        # prompt included: no internal-only tool or skill may be named
-        # (tests/test_public_projects.py::test_no_internal_tool_docs).
+        # The public prompt, which has no skill tier, inlines both in full
+        # while its notes flag is on: no internal-only tool or skill may be
+        # named (tests/test_public_projects.py::test_no_internal_tool_docs).
         from chat.llm.tool_schemas import TOOL_CALL_REGISTRY, format_tool_call_doc
 
         rendered = "\n".join(

@@ -65,18 +65,16 @@ class TestRegistryTiers:
     def test_core_roster(self):
         assert "authed_get" in CORE_TOOL_CALL_TOOLS
         assert "memory_search" in CORE_TOOL_CALL_TOOLS
-        # The doc-notes tools are core until the system:doc_notes skill
-        # exists (issue #187 phase A7 moves them onto its line).
-        assert {"list_doc_notes", "suggest_doc_note"} <= CORE_TOOL_CALL_TOOLS
         for name in (
             "authed_post", "wait_for_handles", "project_db_query", "list_docs",
-            *GMAIL_TOOLS,
+            "list_doc_notes", "suggest_doc_note", *GMAIL_TOOLS,
         ):
             assert name not in CORE_TOOL_CALL_TOOLS, name
 
     def test_tools_for_skill(self):
         assert set(tools_for_skill("system:gmail")) == GMAIL_TOOLS
         assert tools_for_skill("system:gcp") == ["authed_post"]
+        assert tools_for_skill("system:doc_notes") == ["list_doc_notes", "suggest_doc_note"]
         assert tools_for_skill("system:calendar") == []
 
 

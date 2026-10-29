@@ -4377,12 +4377,6 @@ CORE_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
     "write_file",
     "edit_file",
     "copy_file",
-    # Quest Doc notes: core until the system:doc_notes skill exists in the
-    # system-skill catalog (phase A7 of spec 00011), when both move to
-    # _SKILL_DOCUMENTED_TOOLS -> "system:doc_notes". Gated on the
-    # doc_notes pseudo-key, so no prompt shows them while it is closed.
-    "list_doc_notes",
-    "suggest_doc_note",
 })
 
 # The system skill documenting each built-in tool that is not core.
@@ -4411,6 +4405,9 @@ _SKILL_DOCUMENTED_TOOLS: dict[str, str] = {
     "edit_doc": "system:quest_docs",
     "append_to_doc": "system:quest_docs",
     "add_doc_image": "system:quest_docs",
+    # Gated on the doc_notes pseudo-key, like the skill itself.
+    "list_doc_notes": "system:doc_notes",
+    "suggest_doc_note": "system:doc_notes",
     "list_tables": "system:tables",
     "get_table": "system:tables",
     "query_rows": "system:tables",
