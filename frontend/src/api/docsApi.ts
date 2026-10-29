@@ -314,18 +314,25 @@ function docNoteSuggestionEndpoint(suggestionId: string): string {
   return `${API_BASE_URL}/doc-note-suggestions/${encodeURIComponent(suggestionId)}`;
 }
 
+/** Options of acceptDocNoteSuggestion; only the ones given are sent. */
+export interface AcceptDocNoteSuggestionOptions {
+  /** Replaces the proposed text (the reviewer edited it before accepting). */
+  content?: string;
+  /** The `instructions_version` an instructions row's diff was rendered against. */
+  expectedInstructionsVersion?: number;
+}
+
 /**
- * Apply a suggestion to the doc's notes. `content` overrides the proposed
- * text; `expectedInstructionsVersion` is the version an instructions row's
- * diff was rendered against. Only the options given are sent (`{}` for
- * none). Rejects 404 `suggestion_not_found`, 409 `suggestion_resolved`, 403
- * `forbidden`, 400 `invalid_memory` / `invalid_instructions`, 409
- * `memories_cap_reached`, 409 `duplicate_memory` (duplicateMemoryId) and
- * the flat 409 stale_instructions (staleInstructionsCurrent).
+ * Apply a suggestion to the doc's notes (AcceptDocNoteSuggestionOptions;
+ * `{}` is sent for none). Rejects 404 `suggestion_not_found`, 409
+ * `suggestion_resolved`, 403 `forbidden`, 400 `invalid_memory` /
+ * `invalid_instructions`, 409 `memories_cap_reached`, 409
+ * `duplicate_memory` (duplicateMemoryId) and the flat 409
+ * stale_instructions (staleInstructionsCurrent).
  */
 export function acceptDocNoteSuggestion(
   suggestionId: string,
-  opts: { content?: string; expectedInstructionsVersion?: number } = {},
+  opts: AcceptDocNoteSuggestionOptions = {},
 ): Promise<AcceptDocNoteSuggestionResponse> {
   const body: AcceptDocNoteSuggestionRequest = {};
   if (opts.content !== undefined) body.content = opts.content;
