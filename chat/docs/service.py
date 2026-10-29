@@ -10,6 +10,14 @@ place::
       -> DB bump (db/doc_store.update_after_write)
       -> read sidecar (doc_reads.json) -> realtime events (chat/docs/events.py)
 
+Doc notes (docs/architecture/doc-notes.md): while the ``doc_notes`` gate
+is open for the caller, :func:`read_doc` adds the ``notes`` counts and,
+when the conversation has not seen the current notes, the ``doc_notes``
+block, recorded in the seen sidecar (``doc_notes_seen.json``);
+:func:`list_docs` / :func:`search_docs` rows add the counts and
+:func:`create_doc` records the new doc as seen at versions (0, 0). The
+helpers in the "Doc notes" section are shared with the notes tools.
+
 Errors are raised as :class:`DocError` (model/user-facing message; tools
 wrap it as ``{"error": str(e)}``) or its two structured subclasses:
 :class:`DocApprovalRequired` (the write needs a ``write_doc`` action
@@ -28,9 +36,13 @@ Invariants kept here:
   holds a per-doc ``asyncio.Lock`` from the file op through the DB bump
   and the events, so concurrent writers never lose a change and the DB
   counters / ``updated_at`` land in write order.
-- The read sidecar and the realtime publishers run on the event loop,
-  never inside ``asyncio.to_thread`` (``ChatStorage.add_doc_read_ids`` and
+- The read sidecar, the notes seen sidecar and the realtime publishers
+  run on the event loop, never inside ``asyncio.to_thread``
+  (``ChatStorage.add_doc_read_ids``, ``record_doc_notes_seen`` and
   ``bus.publish_to_user`` rely on the single-event-loop guarantee).
+- A notes delivery is recorded only once the block is in the result,
+  with no ``await`` before the return, and never for a sub-agent,
+  inference-API or script read (:func:`record_notes_delivery`).
 - Results never expose a doc's share roster; list/read rows carry only a
   ``shared`` flag.
 """
@@ -47,6 +59,7 @@ import stat
 import sys
 import uuid
 import weakref
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -55,6 +68,7 @@ from typing import Any, Optional
 from chat import storage as _storage
 from chat.docs import constants
 from chat.docs import files as doc_files
+from chat.docs import notes as doc_notes
 from chat.docs.access import (
     DENY_INFERENCE_API,
     DENY_SCRIPT,
@@ -72,7 +86,7 @@ from chat.docs.constants import (
     user_doc_mode_private_message,
 )
 from config import feature_gates
-from db import doc_store
+from db import doc_memory_store, doc_store
 
 logger = logging.getLogger(__name__)
 
@@ -95,9 +109,14 @@ __all__ = [
     "edit_doc",
     "get_visible_doc",
     "list_docs",
+    "load_notes",
     "mode_switch_refusal",
+    "notes_counts",
+    "notes_enabled",
+    "notes_seen",
     "preview_write_operation",
     "read_doc",
+    "record_notes_delivery",
     "require_enabled",
     "search_docs",
     "validate_doc_metadata",
@@ -452,6 +471,114 @@ async def _finish_write(
 
 
 # ---------------------------------------------------------------------------
+# Doc notes: gate, counts, block and seen record (docs/architecture/doc-notes.md)
+#
+# Shared by the doc tools here and the notes tools. The gate is the
+# caller's, never the doc owner's; with it closed none of this runs.
+# ---------------------------------------------------------------------------
+
+
+# Run kinds that get the notes counts but never the block: a script is
+# code, not the model; the UI has its own notes routes.
+_NOTES_COUNTS_ONLY_RUN_KINDS = frozenset({"script", "ui"})
+
+
+def notes_enabled(caller: Caller) -> bool:
+    """Whether the ``doc_notes`` gate is open for the caller.
+
+    The one place the doc tools check that gate (invariant 6: closed means
+    every doc tool returns what it did before notes existed).
+    """
+    return feature_gates.doc_notes_enabled_for((caller.user or {}).get("email") or "")
+
+
+def notes_counts(doc: Mapping[str, Any]) -> dict:
+    """The ``notes`` counts of a result row: ``{"has_instructions": bool,
+    "memories": int}``, from a doc dict or the ``get_notes_state()`` dict.
+    Never any content."""
+    return {
+        "has_instructions": bool(doc["has_instructions"]),
+        "memories": int(doc["memory_count"]),
+    }
+
+
+async def load_notes(doc_id: str, *, memory_offset: int = 0) -> tuple[dict, dict]:
+    """The doc's notes state and its notes block, for a visible doc.
+
+    Reads ``get_notes_state()`` BEFORE ``list_doc_memories()``: a memory
+    change landing between the two reads then shows memories at least as
+    new as the state's ``memories_version``, so the version a caller
+    records is never newer than the memories it showed.
+
+    Returns:
+        ``(state, block)``: the ``get_notes_state()`` dict and the
+        ``doc_notes`` block (``build_notes_block``) with memories from
+        ``memory_offset``.
+
+    Raises:
+        DocError: ``memory_offset`` is not an int >= 0 (checked before any
+            read), or ``doc_not_found_message`` when the doc is gone.
+    """
+    if isinstance(memory_offset, bool) or not isinstance(memory_offset, int) or memory_offset < 0:
+        raise DocError("memory_offset must be a non-negative integer.")
+    state = await doc_store.get_notes_state(doc_id)
+    if state is None:
+        raise DocError(doc_not_found_message(doc_id))
+    memories = await doc_memory_store.list_doc_memories(doc_id)
+    return state, doc_notes.build_notes_block(state, memories, memory_offset)
+
+
+def notes_seen(caller: Caller, doc_id: str) -> Optional[doc_notes.NotesSeen]:
+    """The caller's seen record for ``doc_id``, or None.
+
+    None also for a caller without a conversation and for a record that
+    cannot be read: no record means deliver (and refuse a write), the
+    fail-closed direction.
+    """
+    if not caller.conversation_id:
+        return None
+    try:
+        return _storage.ChatStorage.get_doc_notes_seen(caller.conversation_id, doc_id)
+    except (OSError, ValueError):
+        logger.warning(
+            "[docs] could not read the doc notes seen record "
+            "(conversation=%s, doc=%s)",
+            caller.conversation_id, doc_id, exc_info=True,
+        )
+        return None
+
+
+def record_notes_delivery(
+    caller: Caller, doc_id: str, instructions_version: int, memories_version: int,
+) -> None:
+    """Record that the caller's model was shown ``doc_id``'s notes at these
+    versions (best-effort).
+
+    A no-op unless the run records deliveries (``records_delivery()``:
+    top-level, Slack and cross-user subagent runs with a conversation), so
+    sub-agent, inference-API and script reads never advance a record.
+    Synchronous on purpose, like :func:`_record_read`. Call it as the last
+    step once the block is in the result, with no ``await`` between it and
+    the return (or raise), so a cancelled call never records a block the
+    model did not get. A failed write costs one extra delivery or refusal.
+
+    Raises:
+        ValueError: an unknown run kind (from ``records_delivery()``).
+    """
+    if not doc_notes.records_delivery(caller.run_kind, caller.conversation_id):
+        return
+    try:
+        _storage.ChatStorage.record_doc_notes_seen(
+            caller.conversation_id, doc_id, instructions_version, memories_version,
+        )
+    except (OSError, ValueError):
+        logger.warning(
+            "[docs] could not record doc notes delivery (conversation=%s, doc=%s)",
+            caller.conversation_id, doc_id, exc_info=True,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Visibility + read side
 # ---------------------------------------------------------------------------
 
@@ -538,8 +665,8 @@ async def _visible_docs(
         before = (datetime.fromisoformat(last["updated_at"]), last["id"])
 
 
-def _list_row(doc: dict, access: DocAccess) -> dict:
-    return {
+def _list_row(doc: dict, access: DocAccess, *, with_notes: bool = False) -> dict:
+    row = {
         "id": doc["id"],
         "title": doc["title"],
         "description": doc["description"],
@@ -553,6 +680,9 @@ def _list_row(doc: dict, access: DocAccess) -> dict:
         "writable": access.write,
         "write_note": write_note(access),
     }
+    if with_notes:
+        row["notes"] = notes_counts(doc)
+    return row
 
 
 async def list_docs(
@@ -567,11 +697,21 @@ async def list_docs(
     sources, from a public conversation its own project's docs, nothing
     elsewhere) or ``"all"`` (everything). ``limit`` is clamped to 1..200.
     Hidden docs never appear.
+
+    Returns:
+        Rows ``{id, title, description, mode, scope, project_id,
+        content_size, asset_count, updated_at, shared, writable,
+        write_note}``, plus ``notes`` (:func:`notes_counts`, never content)
+        last while the ``doc_notes`` gate is open for the caller.
     """
     require_enabled(caller)
     scope = _check_scope(scope)
     limit = _check_limit(limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT)
-    return [_list_row(doc, access) for doc, access in await _visible_docs(caller, scope, limit)]
+    with_notes = notes_enabled(caller)
+    return [
+        _list_row(doc, access, with_notes=with_notes)
+        for doc, access in await _visible_docs(caller, scope, limit)
+    ]
 
 
 def _body_snippets(body: str, pattern: re.Pattern, max_snippets: int) -> list[dict]:
@@ -608,14 +748,18 @@ async def search_docs(
     ``matches: []``. Does NOT record a read (snippets are not a read).
 
     Returns:
-        ``{"results": [{id, title, mode, scope, matches: [{line, snippet}]}],
-        "truncated": bool}``, at most ``limit`` (1..50) results.
+        ``{"results": [{id, title, mode, scope, matches: [{line, snippet}],
+        notes?}], "truncated": bool}``, at most ``limit`` (1..50) results;
+        ``notes`` (:func:`notes_counts`, never content) comes last while
+        the ``doc_notes`` gate is open for the caller. Notes are never
+        searched.
     """
     require_enabled(caller)
     if not isinstance(query, str) or not query.strip():
         raise DocError("query must be a non-empty string.")
     scope = _check_scope(scope)
     limit = _check_limit(limit, SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT)
+    with_notes = notes_enabled(caller)
 
     needle = query.strip()
     folded = needle.casefold()
@@ -644,13 +788,16 @@ async def search_docs(
             scanned += len(body.encode("utf-8"))
             matches = _body_snippets(body, pattern, snippets_per_doc)
         if matches or meta_hit:
-            results.append({
+            row = {
                 "id": doc["id"],
                 "title": doc["title"],
                 "mode": doc["mode"],
                 "scope": _scope(doc),
                 "matches": matches,
-            })
+            }
+            if with_notes:
+                row["notes"] = notes_counts(doc)
+            results.append(row)
     return {"results": results, "truncated": truncated}
 
 
@@ -667,10 +814,19 @@ async def read_doc(
     ``truncated`` and a ``note`` telling the model to page. Records the doc
     in the conversation's read sidecar (the edit_doc prerequisite).
 
+    While the ``doc_notes`` gate is open for the caller, the result also
+    ends with ``notes`` (:func:`notes_counts`) and, when the notes are
+    delivered, ``doc_notes`` (the block of :func:`load_notes`, the current
+    state even when emptied). A recording run delivers when
+    ``needs_delivery()`` holds for its seen record and then records the
+    delivered versions; sub-agent and inference-API runs deliver whenever
+    the doc has notes and record nothing; scripts get the counts only.
+
     Returns:
-        ``{id, title, mode, scope, total_lines, content, writable,
-        write_note, start_line, end_line, truncated, note?}`` (start/end are
-        the returned range; 0/0 for an empty doc).
+        ``{id, title, mode, scope, total_lines, content, shared, writable,
+        write_note, start_line, end_line, truncated, note?, notes?,
+        doc_notes?}`` (start/end are the returned range; 0/0 for an empty
+        doc).
     """
     require_enabled(caller)
     for name, value in (("start_line", start_line), ("end_line", end_line)):
@@ -734,7 +890,31 @@ async def read_doc(
             f"start_line/end_line (returned lines {returned_start}-"
             f"{returned_end} of {total})."
         )
+    delivered: Optional[dict] = None
+    if notes_enabled(caller):
+        result["notes"] = notes_counts(doc)
+        recording = doc_notes.records_delivery(caller.run_kind, caller.conversation_id)
+        if caller.run_kind in _NOTES_COUNTS_ONLY_RUN_KINDS:
+            attach = False
+        elif recording:
+            attach = doc_notes.needs_delivery(doc, notes_seen(caller, doc["id"]))
+        else:
+            # Sub-agent and inference-API runs (and a run without a
+            # conversation): what a conversation with no record gets.
+            attach = doc_notes.has_notes(doc)
+        if attach:
+            state, block = await load_notes(doc["id"])
+            result["notes"] = notes_counts(state)
+            result["doc_notes"] = block
+            if recording:
+                delivered = state
     _record_read(caller, doc["id"])
+    if delivered is not None:
+        # Last step, no await before the return (record_notes_delivery).
+        record_notes_delivery(
+            caller, doc["id"],
+            delivered["instructions_version"], delivered["memories_version"],
+        )
     return result
 
 
@@ -764,6 +944,9 @@ async def create_doc(
     crash in between leaves an invisible orphan directory, never a row
     without a body); the directory is removed again if the insert fails.
     Records the new doc as read and publishes doc_list_changed + doc_changed.
+    While the ``doc_notes`` gate is open for the caller, also records the
+    doc as seen at notes versions (0, 0) (the creator exception: no notes
+    can predate this conversation, and later ones re-arm the gate).
 
     Returns:
         ``{id, title, mode, scope, project_id, content_size, updated_at}``.
@@ -844,6 +1027,8 @@ async def create_doc(
         raise
 
     _record_read(caller, doc["id"])
+    if notes_enabled(caller):
+        record_notes_delivery(caller, doc["id"], 0, 0)
     events = _events()
     events.publish_doc_list_changed(doc["owner_id"])
     events.publish_doc_changed(doc["owner_id"], doc["id"], doc["updated_at"])
