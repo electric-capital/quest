@@ -1,13 +1,16 @@
 /**
  * The inbox's Memories tab: every suggested memory of the user in one place.
  *
- * Open suggestions of both kinds (personal ``suggest_memory`` and project
+ * Open suggestions (personal ``suggest_memory`` and project
  * ``suggest_project_memory`` proposals, across all conversations) come
  * first, each with the same editable row as the composer panel plus a line
  * saying which conversation it came from. Below them, the recently reviewed
  * (accepted / dismissed) suggestions, newest first, paged in as the user
  * scrolls. The lists come from ``/app/api/memory-inbox`` (chat/memory_inbox.py);
- * accept and dismiss go through each kind's own endpoints.
+ * accept and dismiss go through each kind's own endpoints (``KIND_API``).
+ * Rows of a kind this tab has no endpoints for (the doc note suggestions,
+ * ``kind: 'doc'``) are left out of both lists: never shown, counted or
+ * reached by Accept all / Dismiss all.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -21,7 +24,7 @@ import {
   fetchMemoryInboxResolved,
 } from '../api/client';
 import { ApiClientError } from '../api/request';
-import type { MemoryInboxSuggestion, MemorySuggestion } from '../api/types';
+import type { MemoryInboxRow, MemoryInboxSuggestion, MemorySuggestion } from '../api/types';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
 import { formatRelativeTimestamp } from '../utils/formatters';
 import { MemorySuggestionRow } from './MemorySuggestionRow';
@@ -43,6 +46,11 @@ const KIND_API = {
     saveError: 'Failed to save project memory',
   },
 } as const;
+
+/** A row of a kind ``KIND_API`` has accept / dismiss endpoints for. */
+function isReviewableRow(row: MemoryInboxRow): row is MemoryInboxSuggestion {
+  return Object.hasOwn(KIND_API, row.kind);
+}
 
 interface MemoryInboxProps {
   onGoToConversation: (conversationId: string, projectId?: string | null) => void;
@@ -117,10 +125,11 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
     try {
       const resp = await fetchMemoryInboxPending();
       if (generation !== generationRef.current) return;
-      setPending(resp.suggestions);
+      const rows = resp.suggestions.filter(isReviewableRow);
+      setPending(rows);
       setPendingError(null);
       setDrafts((prev) => {
-        const live = new Set(resp.suggestions.map((s) => s.id));
+        const live = new Set(rows.map((s) => s.id));
         const next: Record<string, string> = {};
         for (const [id, text] of Object.entries(prev)) {
           if (live.has(id)) next[id] = text;
@@ -140,12 +149,13 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
     setLoadingMore(true);
     try {
       const resp = await fetchMemoryInboxResolved(cursor, RESOLVED_PAGE_SIZE);
+      const rows = resp.suggestions.filter(isReviewableRow);
       setResolved((prev) => {
-        if (replace) return resp.suggestions;
+        if (replace) return rows;
         // A row accepted here while the page was in flight may come back
         // in it too; keep the first occurrence.
         const seen = new Set(prev.map((s) => s.id));
-        return [...prev, ...resp.suggestions.filter((s) => !seen.has(s.id))];
+        return [...prev, ...rows.filter((s) => !seen.has(s.id))];
       });
       setNextCursor(resp.next_cursor);
       setResolvedError(null);
@@ -368,7 +378,9 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
             Loading...
           </div>
         ) : resolved.length === 0 ? (
-          !resolvedError && (
+          // A page whose rows were all left out still has a cursor: more may
+          // follow, so the list is not known to be empty yet.
+          !resolvedError && !nextCursor && (
             <div className="memory-inbox-empty">Nothing reviewed yet.</div>
           )
         ) : (
