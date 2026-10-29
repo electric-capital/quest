@@ -1,15 +1,15 @@
-/* System Reports "Cost Analysis" section: ranked most-expensive table with a
+/* System Reports "Top Conversations" section: ranked most-expensive table with a
    date-range selector. Mirrors LatestActiveConversationsTable.css styling so
    the two report sections read as one dashboard. */
 
-.cost-analysis {
+.top-conversations {
   background-color: rgba(255, 255, 255, 0.02);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   overflow: hidden;
 }
 
-.cost-analysis-header {
+.top-conversations-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -17,7 +17,7 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.cost-analysis-header h3 {
+.top-conversations-header h3 {
   margin: 0;
   font-size: 0.8125rem;
   font-weight: 600;
@@ -26,7 +26,7 @@
   letter-spacing: 0.03em;
 }
 
-.cost-analysis-header .header-actions {
+.top-conversations-header .header-actions {
   display: flex;
   align-items: center;
   gap: 0.375rem;
@@ -35,7 +35,7 @@
 /* The range select + custom date inputs are the shared ReportDateRange
    component (ReportDateRange.css). */
 
-.cost-analysis-header .refresh-button {
+.top-conversations-header .refresh-button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -47,21 +47,21 @@
   cursor: pointer;
 }
 
-.cost-analysis-header .refresh-button:hover:not(:disabled) {
+.top-conversations-header .refresh-button:hover:not(:disabled) {
   color: rgba(255, 255, 255, 0.85);
   background-color: rgba(255, 255, 255, 0.06);
 }
 
-.cost-analysis-header .refresh-button:disabled {
+.top-conversations-header .refresh-button:disabled {
   cursor: default;
   color: rgba(255, 255, 255, 0.3);
 }
 
-.cost-analysis-header .refresh-button .spinning {
-  animation: cost-analysis-refresh-spin 0.8s linear infinite;
+.top-conversations-header .refresh-button .spinning {
+  animation: top-conversations-refresh-spin 0.8s linear infinite;
 }
 
-@keyframes cost-analysis-refresh-spin {
+@keyframes top-conversations-refresh-spin {
   from {
     transform: rotate(0deg);
   }
@@ -70,13 +70,13 @@
   }
 }
 
-.cost-analysis table {
+.top-conversations table {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
 }
 
-.cost-analysis thead th {
+.top-conversations thead th {
   text-align: left;
   font-size: 0.6875rem;
   font-weight: 600;
@@ -88,7 +88,7 @@
   background-color: rgba(255, 255, 255, 0.02);
 }
 
-.cost-analysis tbody td {
+.top-conversations tbody td {
   padding: 0.25rem 0.75rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   font-size: 0.8125rem;
@@ -100,13 +100,13 @@
   white-space: nowrap;
 }
 
-.cost-analysis tbody tr:last-child td {
+.top-conversations tbody tr:last-child td {
   border-bottom: none;
 }
 
 /* Column widths override the generic .col-* widths shared with the
    latest-conversations table (scoped selectors win on specificity). */
-.cost-analysis .col-rank {
+.top-conversations .col-rank {
   width: 3%;
   vertical-align: top;
   font-variant-numeric: tabular-nums;
@@ -114,51 +114,55 @@
   font-size: 0.75rem;
 }
 
-.cost-analysis .col-title {
-  width: 19%;
+.top-conversations .col-title {
+  width: 17%;
 }
 
-.cost-analysis .col-user {
+.top-conversations .col-user {
   width: 14%;
 }
 
 /* The ranking column: prominent estimated cost. */
-.cost-analysis .col-cost {
+.top-conversations .col-cost {
   width: 8%;
   vertical-align: top;
   font-variant-numeric: tabular-nums;
 }
 
-.cost-analysis .col-tokens {
-  width: 28%;
+.top-conversations .col-tokens {
+  width: 25%;
 }
 
-.cost-analysis .col-context {
+.top-conversations .col-context {
   width: 8%;
 }
 
-.cost-analysis .col-active-days {
+.top-conversations .col-active-days {
   width: 7%;
 }
 
-.cost-analysis .col-last-active {
+.top-conversations .col-compactions {
   width: 9%;
 }
 
-.cost-analysis .cost-value {
+.top-conversations .col-last-active {
+  width: 9%;
+}
+
+.top-conversations .cost-value {
   font-weight: 600;
   color: rgba(134, 239, 172, 0.9);
 }
 
-.cost-analysis-empty,
-.cost-analysis-loading {
+.top-conversations-empty,
+.top-conversations-loading {
   padding: 0.625rem 0.75rem;
   color: rgba(255, 255, 255, 0.5);
   font-size: 0.8125rem;
   text-align: center;
 }
 
-.cost-analysis-error {
+.top-conversations-error {
   padding: 0.375rem 0.75rem;
   border-top: 1px solid rgba(255, 80, 80, 0.25);
   background-color: rgba(255, 80, 80, 0.08);

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from chat.auth import get_current_user_cookie_or_apikey_checked, is_admin
 from auth.config import COOKIE_NAME, is_password_login
 from auth.session import get_user_from_cookie, set_impersonation_cookie, set_session_cookie
+from chat.compaction import compaction_count
 from chat.storage import ChatStorage
 from db.conversation_store import (
     get_conversations_with_users,
@@ -301,6 +302,8 @@ def _admin_conversation_view(
         # Distinct UTC days with at least one user message, over the whole
         # conversation lifetime (not clipped to a query window).
         "active_days": ChatStorage.count_user_message_active_days(conversation_id),
+        # Lifetime compaction count from the compaction_meta.json sidecar.
+        "compaction_count": compaction_count(conversation_id),
     }
 
 

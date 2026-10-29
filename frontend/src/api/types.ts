@@ -1946,6 +1946,9 @@ export interface AdminActiveConversation {
   // Distinct UTC days with at least one user message, over the whole
   // conversation lifetime.
   active_days: number;
+  // Times the conversation's model-facing history was compacted, over its
+  // whole lifetime; 0 when never compacted (or deleted).
+  compaction_count: number;
 }
 
 export interface LatestActiveConversationsResponse {

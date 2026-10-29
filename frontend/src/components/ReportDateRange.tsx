@@ -1,11 +1,11 @@
 /**
  * ReportDateRange - shared date-range picker for the System Reports sections
- * that window on a UTC date range (Cost Analysis, Users, Models).
+ * that window on a UTC date range (Top Conversations, Users, Models).
  *
  * A preset dropdown (Today, Last 7/30/90 days, Last 12 months, All time) plus a
  * custom start/end date pair; `resolveRange` maps the selection to the
  * endpoints' inclusive `start`/`end` query params. Extracted from
- * CostAnalysisTable so the two sections can never drift on the date math.
+ * TopConversationsTable so the two sections can never drift on the date math.
  */
 
 import './ReportDateRange.css';

@@ -1,10 +1,10 @@
 /**
- * CostAnalysisTable - System Reports "Cost Analysis" section.
+ * TopConversationsTable - System Reports "Top Conversations" section.
  *
  * Fetches /admin/system-monitor/most-expensive-conversations for a selected
  * date range (shortcut presets or a custom start/end pair) and renders the
- * top-30 conversations ranked by estimated cost. No polling: cost analysis
- * is an on-demand report, so it fetches on mount, on range change, and via
+ * top-30 conversations ranked by estimated cost. No polling: this is an
+ * on-demand report, so it fetches on mount, on range change, and via
  * the manual refresh button.
  */
 
@@ -20,13 +20,13 @@ import {
 } from './ConversationUsageCell';
 import { ReportDateRange, resolveRange } from './ReportDateRange';
 import type { RangeKey } from './ReportDateRange';
-import './CostAnalysisTable.css';
+import './TopConversationsTable.css';
 
 const LIMIT = 30;
 
 const ROUTINE_EMOJI = '⏰';
 
-export function CostAnalysisTable() {
+export function TopConversationsTable() {
   const [rows, setRows] = useState<AdminActiveConversation[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -66,9 +66,9 @@ export function CostAnalysisTable() {
   }, [load]);
 
   return (
-    <div className="cost-analysis">
-      <div className="cost-analysis-header">
-        <h3>Cost analysis</h3>
+    <div className="top-conversations">
+      <div className="top-conversations-header">
+        <h3>Top conversations</h3>
         <div className="header-actions">
           <ReportDateRange
             rangeKey={rangeKey}
@@ -91,9 +91,9 @@ export function CostAnalysisTable() {
         </div>
       </div>
       {rows === null ? (
-        <div className="cost-analysis-loading">Loading...</div>
+        <div className="top-conversations-loading">Loading...</div>
       ) : rows.length === 0 ? (
-        <div className="cost-analysis-empty">
+        <div className="top-conversations-empty">
           No recorded model calls in this date range.
         </div>
       ) : (
@@ -107,6 +107,7 @@ export function CostAnalysisTable() {
               <th className="col-tokens">Token usage</th>
               <th className="col-context">Context</th>
               <th className="col-active-days">Active days</th>
+              <th className="col-compactions">Compactions</th>
               <th className="col-last-active">Last active</th>
             </tr>
           </thead>
@@ -172,6 +173,16 @@ export function CostAnalysisTable() {
                 >
                   {row.active_days}
                 </td>
+                <td
+                  className="col-compactions"
+                  title="Times the conversation's history was compacted, over its whole lifetime"
+                >
+                  {row.compaction_count > 0 ? (
+                    row.compaction_count
+                  ) : (
+                    <span className="cell-empty">0</span>
+                  )}
+                </td>
                 <td className="col-last-active">
                   {row.last_message_at ? formatRelativeTimestamp(row.last_message_at) : '—'}
                 </td>
@@ -180,7 +191,7 @@ export function CostAnalysisTable() {
           </tbody>
         </table>
       )}
-      {error && <div className="cost-analysis-error">error: {error}</div>}
+      {error && <div className="top-conversations-error">error: {error}</div>}
     </div>
   );
 }

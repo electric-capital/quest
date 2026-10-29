@@ -1,6 +1,6 @@
 # Admin System Reports
 
-Admin-only operator dashboard at `/admin/system-reports` (titled "System Reports"; the pre-rename `/admin/system-monitor` URL redirects, and the API prefix keeps the historical `system-monitor` name). A left-hand nav switches between report sections; ships with "Latest Conversations", "Total Usage", "Cost Analysis", "Users", "Models", "Docs", "Tables", "Memories", "Skills", "Tool Calls", and "Guides".
+Admin-only operator dashboard at `/admin/system-reports` (titled "System Reports"; the pre-rename `/admin/system-monitor` URL redirects, and the API prefix keeps the historical `system-monitor` name). A left-hand nav switches between report sections; ships with "Latest Conversations", "Total Usage", "Top Conversations", "Users", "Models", "Docs", "Tables", "Memories", "Skills", "Tool Calls", and "Guides".
 
 ## Overview
 
@@ -28,14 +28,14 @@ Admin gating is enforced on the backend via the inline `is_admin(user["email"])`
 - `frontend/src/pages/AdminSystemReportsPage.tsx` / `.css` -- Shell page (admin guard, header, left nav, section container, `AdminOpsMenu` overlay)
 - `frontend/src/components/LatestActiveConversationsTable.tsx` / `.css` -- "Latest Conversations" polling section
 - `frontend/src/components/TotalUsageReport.tsx` / `.css` -- "Total Usage" section (period-comparison matrix + trend charts, fetch-on-demand), with `UsageBarChart.tsx` (the dependency-free SVG bar chart) and the pure helpers in `frontend/src/utils/usageReport.ts` (period labels, period-over-period deltas, axis math)
-- `frontend/src/components/CostAnalysisTable.tsx` / `.css` -- "Cost Analysis" section (date-range selector + ranked table, fetch-on-demand)
+- `frontend/src/components/TopConversationsTable.tsx` / `.css` -- "Top Conversations" section (date-range selector + ranked table, fetch-on-demand)
 - `frontend/src/components/UsersReportTable.tsx` / `.css` -- "Users" section (date-range selector + per-user activity/cost table, fetch-on-demand)
 - `frontend/src/components/ModelsReportTable.tsx` / `.css` -- "Models" section (date-range selector + per-model cost/audience table, fetch-on-demand)
 - `frontend/src/components/FeatureUsageReport.tsx` / `.css` -- the shared frame (header with summary, date range and refresh; loading / empty / error states), the `useRangedAdminReport` fetch hook and the cell helpers of the three feature-usage sections
 - `frontend/src/components/DocsReportTable.tsx`, `TablesReportTable.tsx`, `MemoriesReportTable.tsx` -- the "Docs", "Tables" and "Memories" sections (per-user tables on the shared frame)
 - `frontend/src/components/SkillsReportTable.tsx`, `ToolCallsReportTable.tsx` -- the "Skills" and "Tool Calls" sections (per-skill and per-tool tables on the shared frame)
 - `frontend/src/components/GuidesReportTable.tsx` / `.css` -- "Guides" section (deprecation tracker: every user guide and project guide with owner, fetch-on-demand, client-side "Hide empty" toggle)
-- `frontend/src/components/ReportDateRange.tsx` / `.css` -- shared date-range picker (presets + custom start/end, `resolveRange` date math) used by Cost Analysis, Users and Models
+- `frontend/src/components/ReportDateRange.tsx` / `.css` -- shared date-range picker (presets + custom start/end, `resolveRange` date math) used by Top Conversations, Users and Models
 - `frontend/src/components/ConversationUsageCell.tsx` / `.css` -- shared per-model token-usage breakdown cell (native-field row format + exact-numbers tooltip), used by both tables
 - `frontend/src/components/AdminOpsMenu.tsx` -- "System Reports" menu item (admin-only, hidden during impersonation; sibling to "Impersonate user" and the shutdown button)
 - `frontend/src/App.tsx` -- `AdminSystemReportsRoute` at `/admin/system-reports`, plus a legacy `/admin/system-monitor` redirect
@@ -92,23 +92,23 @@ Costs follow the dashboard-wide provenance rules (`~` marks a figure that includ
 
 Distinct counts are computed per period from per-day (conversation, model) buckets (`get_daily_usage_buckets()` folded by `build_usage_report()` in `chat/usage_report.py`), so a week's conversations or users are not the sum of its days. See [Admin System Reports API](../api/admin-system-monitor-api.md) for the exact response contract.
 
-## Cost Analysis Section
+## Top Conversations Section
 
-Renders the top-30 most-expensive conversations for a selected date range, ranked most-expensive-first with a rank column and a prominent green "Est. cost" column.
+Renders the top-30 most-expensive conversations for a selected date range, ranked most-expensive-first with a rank column and a prominent green "Est. cost" column. It adds a **Compactions** column: how often the history was compacted (`compaction_count()` in `chat/compaction.py`; 0 once deleted).
 
 **Date range selector.** The shared `ReportDateRange` component (also used by the Users and Models sections): a preset dropdown (Today, Last 7 / 30 / 90 days, Last 12 months, All time -- see `RANGE_PRESETS` in `ReportDateRange.tsx`) plus a "Custom range" option that swaps in two date inputs (either side may be left empty for an open-ended bound). Presets resolve to UTC dates ("Last N days" includes today, so the window starts N-1 days back; "Today" is the current UTC date alone) because the `llm_calls_*` rows are stamped in UTC; the backend interprets the inclusive `start`/`end` dates as UTC midnights.
 
 **Ranking.** Server-side in `get_most_expensive_conversations()`: the same tier-bucketed grouped queries as the batch aggregation, filtered to the `created_at` window instead of a conversation-id list, ranked by each conversation's *known* cost (the sum of per-model figures that could be priced -- reported or estimated) so a conversation mixing priced and unpriced models still ranks by what can be priced -- while the displayed total keeps the null-when-partial convention (the FE shows "n/a" with a tooltip pointing at the per-model tooltips).
 
-Ties break on total tokens. Only calls inside the window count toward the ranking and the displayed sums; the Context and Active days columns are whole-conversation values.
+Ties break on total tokens. Only calls inside the window count toward the ranking and the displayed sums; the Context, Active days and Compactions columns are whole-conversation values.
 
 **Deleted conversations.** The `llm_calls_*` tables are append-only and outlive conversation deletion, so a deleted conversation can still rank. It renders with a "(deleted conversation)" title, no last-active timestamp, and its owner resolved from the call rows' `user_id` (one `users` lookup per distinct missing owner).
 
-**Fetching.** No polling -- cost analysis is an on-demand report. The section fetches on mount, on every range change, and via a manual refresh button; a monotonic fetch counter discards stale responses so a slow wide-range query can never overwrite a newer selection.
+**Fetching.** No polling -- this is an on-demand report. The section fetches on mount, on every range change, and via a manual refresh button; a monotonic fetch counter discards stale responses so a slow wide-range query can never overwrite a newer selection.
 
 ## Users Section
 
-Renders one row per user for the selected date range (same `ReportDateRange` picker and fetch-on-demand pattern as Cost Analysis, incl. the stale-response guard), sorted by known in-range cost. Columns per row (`AdminUserReportRow`):
+Renders one row per user for the selected date range (same `ReportDateRange` picker and fetch-on-demand pattern as Top Conversations, incl. the stale-response guard), sorted by known in-range cost. Columns per row (`AdminUserReportRow`):
 
 - **Active days** -- distinct UTC days with at least one user message across the user's *non-routine* conversations, clipped to the range: the server unions per-conversation day sets (`ChatStorage.user_message_active_days()`) so one day spent in several chats counts once. Unlike the conversation tables' lifetime `active_days`, this one IS range-clipped.
 - **Convos** -- distinct non-routine conversations with at least one recorded call in the range (the routine count rides in the cell tooltip).
@@ -122,7 +122,7 @@ The roster comes from `list_all_users()` -- zero-activity users keep their row s
 
 ## Models Section
 
-Renders one row per model id with at least one recorded call in the selected date range (same `ReportDateRange` picker and fetch-on-demand pattern as Cost Analysis and Users, incl. the stale-response guard), sorted by known in-range cost, so an admin can see which models carry the spend and who drives it. Columns per row (`AdminModelReportRow`):
+Renders one row per model id with at least one recorded call in the selected date range (same `ReportDateRange` picker and fetch-on-demand pattern as Top Conversations and Users, incl. the stale-response guard), sorted by known in-range cost, so an admin can see which models carry the spend and who drives it. Columns per row (`AdminModelReportRow`):
 
 - **Model** -- the catalog display name (`getModelDisplayName()`, falling back to the raw id) over the raw model id; the row tooltip adds the provider.
 - **Cost** -- the model's total in-range spend across every user, conversation and call type (`usage_total.estimated_cost_usd`); `null`/"n/a" only when the model has no pricing entry and reported no amounts, with the usual `cost_source` provenance so the `~` drops only for fully provider-reported figures.

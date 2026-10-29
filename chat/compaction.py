@@ -633,6 +633,18 @@ def load_compaction_meta(conversation_id: str) -> Optional[dict]:
         return None
 
 
+def compaction_count(conversation_id: str) -> int:
+    """How many times the conversation has been compacted (the sidecar's
+    running ``count``); 0 when never compacted, deleted, or unreadable."""
+    meta = load_compaction_meta(conversation_id)
+    if meta is None:
+        return 0
+    try:
+        return max(int(meta.get("count", 0)), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _write_compaction_meta(conversation_id: str, meta: dict) -> None:
     with open(_meta_file(conversation_id), "w") as f:
         json.dump(meta, f, indent=2)

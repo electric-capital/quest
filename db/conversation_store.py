@@ -540,8 +540,8 @@ async def get_conversations_with_users(
     """Return conversation rows joined to users, keyed by conversation id.
 
     Batch companion to ``list_latest_active_conversations`` for admin views
-    that already know which conversations they want (e.g. the cost-analysis
-    ranking). Same row shape; ids without a surviving conversation row are
+    that already know which conversations they want (e.g. the Top
+    Conversations ranking). Same row shape; ids without a surviving conversation row are
     simply absent (the ``llm_calls_*`` tables outlive deleted conversations).
     """
     if not conversation_ids:

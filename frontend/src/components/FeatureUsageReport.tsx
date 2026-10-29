@@ -4,7 +4,7 @@
  *
  * The three feature-usage sections are the same report in three shapes: a
  * per-user table for a selected date range (the ReportDateRange picker of
- * Cost Analysis / Users / Models), fetched on mount, on range change and via
+ * Top Conversations / Users / Models), fetched on mount, on range change and via
  * the refresh button, with a stale-response guard. `useRangedAdminReport`
  * owns that fetch cycle; `FeatureUsageReportFrame` renders the header
  * (title, summary, picker, refresh), the loading / empty / error states and
