@@ -31,6 +31,16 @@ def get_or_create_chat(
     sdk_history.json file and passed to provider.create_session() so the
     model retains full context from prior turns.
 
+    Whenever the new session starts with no history, the doc notes seen
+    record (``doc_notes_seen.json``) is deleted: a session without history
+    holds no notes block, so any record could only vouch for blocks the
+    model no longer has. That is the cross-provider switch with no
+    compatible disk copy (also after a restart, when the caller discarded
+    another provider's disk history), a failed ``save_history`` with no
+    compatible disk copy, and a first session, where it is a no-op. A
+    thinking-effort rebuild, a same-provider switch and a session seeded
+    from compatible disk history carry the history over and keep it.
+
     Args:
         provider: LLMProvider instance.
         user_id: User's integer ID.
@@ -145,6 +155,8 @@ def get_or_create_chat(
             "history.",
             conversation_id, model,
         )
+    if not history:
+        _clear_doc_notes_seen(conversation_id)
     new_session = provider.create_session(
         model=model,
         system_prompt=system_prompt,
@@ -154,6 +166,26 @@ def get_or_create_chat(
     )
     _active_chats[key] = (model, new_session)
     return new_session
+
+
+def _clear_doc_notes_seen(conversation_id: str) -> None:
+    """Delete the doc notes seen record before a session that starts with
+    no history; never raises."""
+    try:
+        from chat.storage import ChatStorage
+
+        ChatStorage.clear_doc_notes_seen(conversation_id)
+        logger.info(
+            "Cleared doc notes seen record for conversation %s: the new "
+            "session starts with no history.",
+            conversation_id,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to clear doc notes seen record for conversation %s",
+            conversation_id,
+            exc_info=True,
+        )
 
 
 def _session_thinking_effort(session) -> str | None:

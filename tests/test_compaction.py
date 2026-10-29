@@ -8,7 +8,6 @@ import pytest
 
 from chat.compaction import (
     CompactionError,
-    KEEP_RECENT_TOKENS,
     build_summary_message_text,
     compact_conversation,
     compaction_count,
@@ -396,6 +395,93 @@ def test_compact_conversation_end_to_end(monkeypatch, tmp_path):
     assert meta["archives"][0]["file"] == result["archive_file"]
     assert len(appended) == 1
     assert appended[0]["type"] == "compaction"
+
+
+_DOC_NOTES_SEEN = {"docs": {"doc-1": {"instructions": 3, "memories": 7}}}
+_DOC_READS = {"doc_ids": ["doc-1"]}
+
+
+def _seed_doc_notes(tmp_path):
+    """Seed the doc notes seen record and doc_reads.json beside
+    sdk_history.json (the fakes point the conversation dir at tmp_path)."""
+    (tmp_path / "doc_notes_seen.json").write_text(json.dumps(_DOC_NOTES_SEEN))
+    (tmp_path / "doc_reads.json").write_text(json.dumps(_DOC_READS))
+
+
+def test_compact_conversation_deletes_doc_notes_seen_keeps_doc_reads(
+    monkeypatch, tmp_path,
+):
+    # The summary may drop a delivered doc notes block, so the record of
+    # what the model was shown goes; the read gate's record stays.
+    provider = FakeAnthropicProvider()
+    _install_compaction_fakes(
+        monkeypatch, tmp_path, provider, _long_anthropic_history(),
+    )
+    _seed_doc_notes(tmp_path)
+
+    result = _run(compact_conversation(1, "conv-1", "claude-opus-4-8"))
+
+    assert result["messages_summarized"] > 0
+    assert not (tmp_path / "doc_notes_seen.json").exists()
+    assert json.loads((tmp_path / "doc_reads.json").read_text()) == _DOC_READS
+
+
+class _FailingStreamProvider(FakeAnthropicProvider):
+    async def send_message_stream(self, session, message):
+        raise RuntimeError("summarizer unavailable")
+        yield  # pragma: no cover -- makes this an async generator
+
+
+def _suspended_provider():
+    provider = FakeAnthropicProvider()
+    provider.get_pending_tool_use_args_from_history = (
+        lambda history: [("t9", "wait_for_handles", {})]
+    )
+    return provider
+
+
+@pytest.mark.parametrize(
+    "make_provider, make_history, model, code",
+    [
+        (
+            FakeAnthropicProvider,
+            lambda: _anthropic_turn("hi") + _anthropic_turn("again"),
+            "claude-opus-4-8",
+            "nothing_to_compact",
+        ),
+        (
+            FakeAnthropicProvider,
+            _long_anthropic_history,
+            "gemini-3.5-flash",
+            "provider_mismatch",
+        ),
+        (
+            _suspended_provider,
+            _long_anthropic_history,
+            "claude-opus-4-8",
+            "conversation_suspended",
+        ),
+        (
+            _FailingStreamProvider,
+            _long_anthropic_history,
+            "claude-opus-4-8",
+            "summarization_failed",
+        ),
+    ],
+)
+def test_compact_conversation_refusal_keeps_doc_notes_seen(
+    monkeypatch, tmp_path, make_provider, make_history, model, code,
+):
+    # A refusal leaves the history as it was, so the record still holds.
+    _install_compaction_fakes(monkeypatch, tmp_path, make_provider(), make_history())
+    _seed_doc_notes(tmp_path)
+
+    with pytest.raises(CompactionError) as exc_info:
+        _run(compact_conversation(1, "conv-1", model))
+
+    assert exc_info.value.code == code
+    assert json.loads((tmp_path / "doc_notes_seen.json").read_text()) == _DOC_NOTES_SEEN
+    assert json.loads((tmp_path / "doc_reads.json").read_text()) == _DOC_READS
 
 
 def test_compact_conversation_second_compaction_increments_archive(

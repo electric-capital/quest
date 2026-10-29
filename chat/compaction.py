@@ -21,6 +21,9 @@ Key properties:
   (chat/expensive_resume.py) stops warning once the history has shrunk --
   the ``llm_calls_*`` tables only learn the new context size after the next
   real turn.
+- The doc notes seen record (``doc_notes_seen.json``) is deleted once the
+  new envelope is written, since the summary may drop a delivered doc
+  notes block; ``doc_reads.json`` is kept.
 - The display transcript (``chat_history.json``) is never rewritten; a
   ``compaction`` marker message is appended so the user can see what
   happened and read the summary the model will see.
@@ -776,7 +779,9 @@ async def compact_conversation(
 
     Loads ``sdk_history.json``, splits it at a safe boundary, summarizes the
     older span with a one-off LLM call on ``model``, archives the old file,
-    writes the new envelope (summary + ack + kept messages), updates the
+    writes the new envelope (summary + ack + kept messages), deletes the
+    doc notes seen record (``doc_notes_seen.json``; the summary may drop a
+    delivered notes block, while ``doc_reads.json`` is kept), updates the
     ``compaction_meta.json`` sidecar, drops the in-memory session, and
     appends a ``compaction`` marker to the display transcript.
 
@@ -860,6 +865,9 @@ async def compact_conversation(
         conversation_dir / archive_name,
     )
     _write_sdk_history_file(conversation_id, new_history, provider_name)
+    # The summary may drop a delivered doc notes block, so the record of
+    # what the model was shown no longer holds (doc_reads.json is kept).
+    ChatStorage.clear_doc_notes_seen(conversation_id)
 
     compacted_at = datetime.now(timezone.utc).isoformat()
     archives = list(prior_meta.get("archives", []))

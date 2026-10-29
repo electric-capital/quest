@@ -1825,12 +1825,15 @@ class ChatStorage:
 
         Called whenever the model-facing history is rebuilt from less than
         the full sdk_history.json: ``compact_conversation()``
-        (chat/compaction.py), whose summary may drop a delivered notes
-        block, and the cross-provider branch of ``get_or_create_chat()``
-        (chat/gemini_api/session.py), which starts the history fresh. A
-        thinking-effort change rebuilds the session from the old history
-        and keeps the record. Touches no other file (doc_reads.json
-        survives both).
+        (chat/compaction.py), right after the new history is written,
+        since its summary may drop a delivered notes block; and
+        ``get_or_create_chat()`` (chat/gemini_api/session.py) whenever it
+        creates a session with no history (a cross-provider switch with no
+        compatible disk copy, also after a restart, or a failed
+        ``save_history`` with none). A thinking-effort or same-provider
+        rebuild, and a session seeded from compatible disk history, carry
+        the history over and keep the record. Touches no other file
+        (doc_reads.json survives both).
 
         A missing file is a no-op; an ``OSError`` is logged and swallowed.
 
