@@ -329,9 +329,10 @@ class TestRegistry:
         assert "max 1,000 characters" in content and "max 4,000 characters" in content
 
     def test_descriptions_are_prompt_safe_and_compact(self):
-        # The public prompt, which has no skill tier, inlines both in full
-        # while its notes flag is on: no internal-only tool or skill may be
-        # named (tests/test_public_projects.py::test_no_internal_tool_docs).
+        # The public prompt inlines every offered tool not documented by a
+        # public system skill, so both in full while its notes flag is on:
+        # no internal-only tool or skill may be named
+        # (tests/test_public_projects.py::test_no_internal_tool_docs).
         from chat.llm.tool_schemas import TOOL_CALL_REGISTRY, format_tool_call_doc
 
         rendered = "\n".join(

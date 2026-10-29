@@ -11,17 +11,17 @@ documents them:
    top-level prompt (standalone, project and Slack runs), only
    ``list_doc_notes`` in a routine run and in the read-only tiers
    (sub-agents, cross-user subagents, inference API runs). While the key is
-   false or missing, neither name appears in any prompt; an unknown context
+   false or missing, no regular prompt builder names either tool or the
+   ``system:doc_notes`` skill anywhere; an unknown context
    (``connected_services=None``) shows everything, as for every gated tool.
    Both are skill-documented: every regular prompt names them only on the
    ``system:doc_notes`` enumeration line (``list_doc_notes`` alone where
    ``suggest_doc_note`` is excluded, which such a prompt then names
-   nowhere), never as a Dynamic Tools bullet or on another skill's line,
-   and no regular prompt names the skill while the key is false or missing.
-3. The public-project prompt's ``doc_notes_enabled`` flag: having no skill
-   tier, it inlines both tools in full while the flag is on, names neither
-   while it is off, never names ``system:doc_notes``, and a public routine
-   run reads only.
+   nowhere), never as a Dynamic Tools bullet or on another skill's line.
+3. The public-project prompt's ``doc_notes_enabled`` flag: with no regular
+   skill tier, it inlines both tools in full while the flag is on, names
+   neither while it is off, never names ``system:doc_notes``, and a public
+   routine run reads only.
 4. ``run_conversation_turn`` passes ``doc_notes_enabled_for()`` (which folds
    in the Quest Docs gate) into the public prompt.
 5. The ``system:doc_notes`` skill: its registration, listed and enumerated
@@ -218,11 +218,6 @@ class TestTopLevel:
         prompt = _top_level(OPEN, has_project=has_project)
         assert _offered(prompt) == set(NOTE_TOOLS)
 
-    @pytest.mark.parametrize("services", CLOSED_MAPS, ids=CLOSED_IDS)
-    @pytest.mark.parametrize("has_project", [False, True])
-    def test_none_when_closed(self, services, has_project):
-        _assert_none_named(_top_level(services, has_project=has_project))
-
     @pytest.mark.parametrize("has_project", [False, True])
     def test_routine_reads_but_never_suggests(self, has_project):
         prompt = _top_level(OPEN, has_project=has_project, is_routine=True)
@@ -232,11 +227,6 @@ class TestTopLevel:
         # Slack runs suggest too; the user reviews in the web UI or inbox.
         prompt = _top_level(OPEN, is_slack=True)
         assert _offered(prompt) == set(NOTE_TOOLS)
-
-    @pytest.mark.parametrize("services", CLOSED_MAPS, ids=CLOSED_IDS)
-    def test_routine_and_slack_closed(self, services):
-        _assert_none_named(_top_level(services, is_routine=True))
-        _assert_none_named(_top_level(services, is_slack=True))
 
     def test_unknown_context_shows_everything(self):
         # connected_services=None keeps the show-everything behaviour.
@@ -251,22 +241,23 @@ class TestReadOnlyTiers:
         prompt = _sub_agent(OPEN, has_project=has_project, can_nest=can_nest)
         assert _offered(prompt) == {LIST}
 
-    @pytest.mark.parametrize("services", CLOSED_MAPS, ids=CLOSED_IDS)
-    @pytest.mark.parametrize("has_project", [False, True])
-    def test_sub_agent_none_when_closed(self, services, has_project):
-        _assert_none_named(_sub_agent(services, has_project=has_project))
-
     @pytest.mark.parametrize("build", [_user_subagent, _inference],
                              ids=["user_subagent", "inference"])
     def test_headless_tiers_read_only(self, build):
         assert _offered(build(OPEN)) == {LIST}
         assert _offered(build(None)) == {LIST}
 
-    @pytest.mark.parametrize("services", CLOSED_MAPS, ids=CLOSED_IDS)
-    @pytest.mark.parametrize("build", [_user_subagent, _inference],
-                             ids=["user_subagent", "inference"])
-    def test_headless_tiers_none_when_closed(self, build, services):
-        _assert_none_named(build(services))
+
+@pytest.mark.parametrize("services", CLOSED_MAPS + DOCS_ONLY_MAPS[1:],
+                         ids=CLOSED_IDS + DOCS_ONLY_IDS[1:])
+@pytest.mark.parametrize("kind", list(PROMPT_KINDS))
+def test_hidden_from_every_builder_when_closed(kind, services):
+    # Spec section 9: neither tool nor the skill is named anywhere in the
+    # prompt, not even in another tool's or skill's description.
+    build, _ = PROMPT_KINDS[kind]
+    prompt = build(services)
+    _assert_none_named(prompt)
+    assert SKILL not in prompt
 
 
 class TestSkillTier:
@@ -298,13 +289,6 @@ class TestSkillTier:
         build, expected = PROMPT_KINDS[kind]
         assert skill_tools(build(None), SKILL) == expected
 
-    @pytest.mark.parametrize("services", CLOSED_MAPS + DOCS_ONLY_MAPS[1:],
-                             ids=CLOSED_IDS + DOCS_ONLY_IDS[1:])
-    @pytest.mark.parametrize("kind", list(PROMPT_KINDS))
-    def test_skill_absent_when_closed(self, kind, services):
-        build, _ = PROMPT_KINDS[kind]
-        assert SKILL not in build(services)
-
 
 # ---------------------------------------------------------------------------
 # 3. The public-project prompt (explicit gate flag)
@@ -314,7 +298,8 @@ class TestSkillTier:
 class TestPublicPrompt:
     def test_both_inlined_when_open(self):
         # Skill-documented in the registry, yet bulleted in full: the
-        # public prompt has no skill tier and inlines what it offers.
+        # public prompt inlines every offered tool not documented by a
+        # public system skill.
         prompt = _public(docs_enabled=True, doc_notes_enabled=True)
         for name in NOTE_TOOLS:
             assert TOOL_CALL_REGISTRY[name]["skill"] == SKILL, name
