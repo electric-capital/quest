@@ -21,6 +21,9 @@ The module owns:
   below so they can be reviewed in one place, together with the write
   refusal's message (:data:`DOC_NOTES_UNSEEN_MESSAGE`) and the approve-time
   instructions-changed error (:data:`DOC_INSTRUCTIONS_CHANGED_MESSAGE`).
+- The ``suggest_doc_note`` copy (the ``DOC_NOTE_*`` constants): the
+  ``message`` of each result status and the text of each refusal that
+  chat/docs/note_suggestions.py returns to the model.
 
 Callers load ``get_notes_state()`` BEFORE ``list_doc_memories()``: a memory
 change between the two reads then shows the model memories at least as new
@@ -94,6 +97,74 @@ DOC_NOTES_UNSEEN_MESSAGE = (
 DOC_INSTRUCTIONS_CHANGED_MESSAGE = (
     "The doc's instructions changed after this was proposed; read them and "
     "propose the change again."
+)
+
+# suggest_doc_note (chat/docs/note_suggestions.py). Result messages: a
+# registered suggestion (the second when it replaced the user's earlier
+# pending instructions suggestion for the doc), and the two guards that
+# answer with a status instead of an error.
+DOC_NOTE_SUGGESTED_MESSAGE = (
+    "Registered for the user's review in the doc note suggestions panel; "
+    "nothing is saved until they accept it. Keep going."
+)
+DOC_NOTE_SUGGESTED_SUPERSEDED_MESSAGE = (
+    "Registered for the user's review in the doc note suggestions panel, in "
+    "place of the earlier instructions suggestion for this doc that was "
+    "still waiting for their review; nothing is saved until they accept it. "
+    "Keep going."
+)
+DOC_NOTE_ALREADY_SAVED_MEMORY_MESSAGE = (
+    "This doc already has a memory with exactly this text; nothing to suggest."
+)
+DOC_NOTE_ALREADY_SAVED_INSTRUCTIONS_MESSAGE = (
+    "The doc's instructions already read exactly like this; nothing to suggest."
+)
+DOC_NOTE_ALREADY_SUGGESTED_MESSAGE = (
+    "A suggestion with exactly this text is already waiting for the user's "
+    "review; do not suggest it again."
+)
+
+# suggest_doc_note refusals. The unseen-notes message is the ``message`` of
+# the ``doc_notes_unseen`` result, followed by the notes block.
+DOC_NOTE_SUGGEST_UNSEEN_MESSAGE = (
+    "Doc '{title}' has notes you have not seen. Read them below, then suggest "
+    "the change again if it is still needed."
+)
+DOC_NOTE_INSTRUCTIONS_OWNER_ONLY_MESSAGE = (
+    "Only the doc's owner can change its instructions, and this conversation's "
+    "user is not the owner. Put the proposed rule in your reply so the user "
+    "can pass it to the owner."
+)
+DOC_NOTE_MEMORY_NOT_FOUND_MESSAGE = (
+    "Memory '{memory_id}' is not a memory of this doc. Call list_doc_notes for "
+    "the ids of its memories."
+)
+DOC_NOTE_EMPTY_INSTRUCTIONS_MESSAGE = (
+    "An instructions suggestion is the complete new instructions text, so it "
+    "cannot be empty. Only the user can clear the instructions, in the doc's "
+    "Notes panel."
+)
+DOC_NOTE_CONVERSATION_CAP_MESSAGE = (
+    "This conversation already has {count} doc note suggestions waiting for "
+    "the user's review. Do not suggest more until they have reviewed them."
+)
+DOC_NOTE_DOC_CAP_MESSAGE = (
+    "The user already has {count} note suggestions for this doc waiting for "
+    "their review. Do not suggest more for it until they have reviewed them."
+)
+DOC_NOTE_MEMORIES_CAP_MESSAGE = (
+    "This doc already has the maximum of {max_memories} memories. Suggest "
+    "replacing an outdated one with replaces_memory_id instead."
+)
+DOC_NOTE_INVALID_KIND_MESSAGE = 'kind must be "instructions" or "memory".'
+DOC_NOTE_INVALID_CONTENT_MESSAGE = "content must be a string."
+DOC_NOTE_INVALID_REASONING_MESSAGE = "reasoning must be a string."
+DOC_NOTE_INVALID_REPLACES_MESSAGE = (
+    "replaces_memory_id must be the id of one of the doc's memories, a string."
+)
+DOC_NOTE_REPLACES_WITH_INSTRUCTIONS_MESSAGE = (
+    "replaces_memory_id applies to memory suggestions only; an instructions "
+    "suggestion carries the complete new text of the instructions."
 )
 
 
