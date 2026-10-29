@@ -641,11 +641,11 @@ async def publish_notes_changed(doc_id: str, state: Mapping[str, Any]) -> None:
     The one publisher of that event: an accepted note suggestion
     (chat/docs/note_suggestions.py) calls it, and every other writer of the
     instructions or the memories must call it after its store write. Loads
-    the doc with its
-    shares for the audience (owner, direct share recipients, every
-    connected user for an everyone share; ``events.doc_audience()``) and
-    sends the two versions of ``state``, the ``get_notes_state()`` dict
-    after the change. A doc gone meanwhile publishes nothing.
+    the doc with its shares for the audience (owner, direct share
+    recipients, every connected user for an everyone share;
+    ``events.doc_audience()``) and sends the two versions of ``state``, the
+    ``get_notes_state()`` dict after the change. A doc gone meanwhile
+    publishes nothing.
 
     Best-effort: a failure is logged and never fails the write.
     """

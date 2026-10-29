@@ -48,8 +48,10 @@ Content is normalized by the notes stores' own functions
 (``doc_memory_store.normalize_memory_content``,
 ``doc_store.normalize_instructions``), not the twins' ``normalize_content``:
 the doc caps (``DOC_MEMORY_MAX_CHARS``, ``DOC_INSTRUCTIONS_MAX_CHARS``)
-count characters, not bytes, and instructions may be empty (a proposal to
-clear them).
+count characters, not bytes. The store accepts empty instructions text,
+the field's own rule; chat/docs/note_suggestions.py refuses an empty
+instructions suggestion at registration, so ``""`` reaches the notes only
+as a reviewer's accept override, which clears the field.
 
 No access checks: chat/docs/note_suggestions.py resolves the doc's access,
 ownership and the pending caps before calling in. Same session pattern as
@@ -124,8 +126,8 @@ def normalize_suggestion_content(kind: str, content) -> str:
     ``memory``: ``doc_memory_store.normalize_memory_content`` (stripped,
     1..``DOC_MEMORY_MAX_CHARS`` characters). ``instructions``:
     ``doc_store.normalize_instructions`` (stripped,
-    0..``DOC_INSTRUCTIONS_MAX_CHARS`` characters; ``""`` proposes clearing
-    the field).
+    0..``DOC_INSTRUCTIONS_MAX_CHARS`` characters, the field's own rule;
+    the service refuses ``""`` at registration).
 
     Raises:
         ValueError: ``kind`` is not one of ``DOC_NOTE_SUGGESTION_KINDS``.

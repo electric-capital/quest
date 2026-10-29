@@ -124,7 +124,7 @@ INVALID_EXPECTED_VERSION_MESSAGE = (
     "expected_instructions_version must be a non-negative integer."
 )
 
-# Review error codes -> HTTP status (spec section 7), for the A6 routes.
+# Review error codes -> HTTP status, for the suggestion routes.
 HTTP_STATUS: dict[str, int] = {
     "suggestion_not_found": 404,
     "suggestion_resolved": 409,
@@ -306,6 +306,17 @@ def _check_arguments(kind: Any, content: Any, reasoning: Any, replaces_memory_id
     return replaces
 
 
+# Longest model-supplied memory id echoed back in a refusal.
+_ECHO_MAX_CHARS = 100
+
+
+def _memory_not_found(memory_id: str) -> NoteSuggestionError:
+    shown = memory_id if len(memory_id) <= _ECHO_MAX_CHARS else memory_id[:_ECHO_MAX_CHARS] + "..."
+    return NoteSuggestionError(
+        "memory_not_found", doc_notes.DOC_NOTE_MEMORY_NOT_FOUND_MESSAGE.format(memory_id=shown),
+    )
+
+
 def _normalize(kind: str, content: str) -> str:
     """The stored form of the proposed text (character caps per kind).
 
@@ -327,18 +338,21 @@ def _normalize(kind: str, content: str) -> str:
     return text
 
 
-async def _refuse_unseen_notes(caller: Caller, doc: dict) -> None:
+async def _refuse_unseen_notes(
+    caller: Caller, doc: dict, current: Optional[Mapping[str, Any]] = None,
+) -> None:
     """Check 3: raise ``DocNotesUnseen`` (block form) when this conversation
     has not seen the doc's current notes (``needs_delivery()``), after
     recording the delivery it carries, so the identical retry passes.
 
     Mirrors ``service._refuse_unseen_notes`` but with ``needs_delivery()``:
     a model proposing a change must have seen every current note, memories
-    included. Decides on the row first (no notes query for a current
-    record or a doc without notes), then on the freshly loaded state.
+    included. Decides on ``current`` (a notes state read since the row) or
+    else the row first (no notes query for a current record or a doc
+    without notes), then on the freshly loaded state.
     """
     seen = service.notes_seen(caller, doc["id"])
-    if not doc_notes.needs_delivery(doc, seen):
+    if not doc_notes.needs_delivery(current if current is not None else doc, seen):
         return
     state, block = await service.load_notes(doc["id"])
     if not doc_notes.needs_delivery(state, seen):
@@ -441,16 +455,19 @@ async def register_suggestion(
         if replaces is not None and await doc_memory_store.get_doc_memory(
             doc["id"], replaces,
         ) is None:
-            raise NoteSuggestionError(
-                "memory_not_found",
-                doc_notes.DOC_NOTE_MEMORY_NOT_FOUND_MESSAGE.format(memory_id=replaces),
-            )
+            raise _memory_not_found(replaces)
 
         # 5. The text, then the guards in the spec's order.
         text = _normalize(kind, content)
         state = await doc_store.get_notes_state(doc["id"])
         if state is None:
             raise DocError(doc_not_found_message(doc_id))
+        # Check 3 again on this state, which the guards and the base version
+        # come from: notes changed since the row was read (an owner saving
+        # the instructions meanwhile) must reach the model first, or the
+        # suggestion would claim a base it never saw and a default accept
+        # would overwrite that change unseen.
+        await _refuse_unseen_notes(caller, doc, state)
         if kind == KIND_MEMORY:
             memories = await doc_memory_store.list_doc_memories(doc["id"])
             saved = next((m for m in memories if m["content"] == text), None)
@@ -526,10 +543,7 @@ async def register_suggestion(
             if replaces is not None and await doc_memory_store.get_doc_memory(
                 doc["id"], replaces,
             ) is None:
-                raise NoteSuggestionError(
-                    "memory_not_found",
-                    doc_notes.DOC_NOTE_MEMORY_NOT_FOUND_MESSAGE.format(memory_id=replaces),
-                ) from None
+                raise _memory_not_found(replaces) from None
             raise
 
     pending_count = await publish_changed(user_id, conversation_id)
@@ -562,6 +576,19 @@ def _not_found() -> NoteSuggestionError:
 
 def _resolved() -> NoteSuggestionError:
     return NoteSuggestionError("suggestion_resolved", SUGGESTION_RESOLVED_MESSAGE)
+
+
+async def _publish_changed_quietly(user_id: int, conversation_id: str) -> None:
+    """:func:`publish_changed` after a landed accept or dismiss: a failure
+    (its count queries included) is logged, never raised."""
+    try:
+        await publish_changed(user_id, conversation_id)
+    except Exception:
+        logger.warning(
+            "[doc-notes] could not publish doc_note_suggestions_changed "
+            "(user=%s, conversation=%s)",
+            user_id, conversation_id, exc_info=True,
+        )
 
 
 def _advance_seen(
@@ -673,7 +700,8 @@ async def accept_suggestion(
 
     accepted = result["suggestion"]
     before, after = result["notes_before"], result["notes_after"]
-    await publish_changed(user_id, accepted["conversation_id"])
+    # The accept has landed: nothing below may fail it.
+    await _publish_changed_quietly(user_id, accepted["conversation_id"])
     if (
         before["instructions_version"] != after["instructions_version"]
         or before["memories_version"] != after["memories_version"]
@@ -709,7 +737,7 @@ async def dismiss_suggestion(user: dict, suggestion_id: str) -> dict:
         raise _resolved() from None
     if row is None:
         raise _not_found()
-    await publish_changed(user_id, row["conversation_id"])
+    await _publish_changed_quietly(user_id, row["conversation_id"])
     return row
 
 
@@ -722,7 +750,10 @@ async def review_rows(user_id: int, rows: Iterable[Mapping[str, Any]]) -> list[d
     instructions row, or the memory is gone, like the twins' rows).
     Instructions rows also gain ``current_instructions`` (the field now)
     and ``instructions_moved`` (the field moved past the version the
-    proposal was written against).
+    proposal was written against). Those notes-derived fields describe
+    what an accept would change, so only pending rows get them; a
+    resolved row has ``None`` / False (an accepted instructions row would
+    otherwise always read as moved).
 
     Each distinct doc is looked up once and resolved with the UI verdict.
     For a doc the user can no longer see (or that is gone) the doc's
@@ -740,16 +771,21 @@ async def review_rows(user_id: int, rows: Iterable[Mapping[str, Any]]) -> list[d
             visible[doc_id] = None
             continue
         visible[doc_id] = doc
-        if any(r["doc_id"] == doc_id and r["kind"] == KIND_INSTRUCTIONS for r in rows):
+        if any(
+            r["doc_id"] == doc_id and r["kind"] == KIND_INSTRUCTIONS
+            and r["status"] == "pending"
+            for r in rows
+        ):
             states[doc_id] = await doc_store.get_notes_state(doc_id)
 
     out: list[dict] = []
     for row in rows:
         doc = visible[row["doc_id"]]
         item = {**row, "doc_title": doc["title"] if doc is not None else ""}
+        is_pending = row["status"] == "pending"
         replaces_content = None
         if row["kind"] == KIND_INSTRUCTIONS:
-            state = states.get(row["doc_id"]) if doc is not None else None
+            state = states.get(row["doc_id"]) if doc is not None and is_pending else None
             base = row["base_instructions_version"]
             item["current_instructions"] = state["instructions"] if state else None
             item["instructions_moved"] = bool(
@@ -757,7 +793,7 @@ async def review_rows(user_id: int, rows: Iterable[Mapping[str, Any]]) -> list[d
                 and base is not None
                 and base < state["instructions_version"]
             )
-        elif doc is not None and row["replaces_memory_id"]:
+        elif doc is not None and is_pending and row["replaces_memory_id"]:
             memory = await doc_memory_store.get_doc_memory(
                 row["doc_id"], row["replaces_memory_id"],
             )

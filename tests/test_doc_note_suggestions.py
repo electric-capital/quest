@@ -62,7 +62,14 @@ Covers:
     affected conversation's new count) to every user with pending rows on
     the deleted docs, after the doc events; the deleted account's own user
     gets none; nothing extra without pending rows; the helpers are
-    best-effort.
+    best-effort; the account delete captures before the project cascade.
+12. Review follow-ups: instructions saved between the seen check and the
+    state the base version comes from refuse with the new notes; the
+    registration lock is per user across conversations; the replaced
+    memory is checked before the guards; a long memory id is cut in the
+    refusal; notes emptied before the fresh load do not refuse; resolved
+    rows get no notes-derived review fields; a failed publish never fails
+    a landed accept or dismiss.
 """
 
 import asyncio
@@ -1485,3 +1492,159 @@ def test_delete_account_publishes_to_other_users_only(request, monkeypatch):
     # Bob's row went with Alice's doc; Alice (deleted) hears nothing.
     assert published == [(bob, changed(bob_cid, 0, 1))]
     assert _run(store.count_pending_for_user(bob)) == 1
+
+
+def test_delete_account_captures_before_the_project_cascade(request, monkeypatch):
+    """The capture runs before any row delete: pending rows on the deleted
+    user's PROJECT docs, which go with the project delete before the user
+    row, are captured too. (Only the owner's conversations reach a project
+    doc, and their pairs are skipped; this row is inserted through the
+    store to pin the order.)"""
+    from chat.realtime import bus
+    from db import conversation_store
+
+    env = request.getfixturevalue("account_env")
+    published: list = []
+    monkeypatch.setattr(bus, "publish_to_user", lambda u, ev: published.append((u, ev)))
+    monkeypatch.setattr(bus, "connected_user_ids", lambda: [])
+    alice, bob = env["users"]["alice"]["id"], env["users"]["bob"]["id"]
+    project = _run(env["project_store"].create_project(alice, "Research"))
+    project_doc = seed_account_doc(env, "alice", "Log", project_id=project["id"])
+    bob_cid = str(uuid.uuid4())
+    _run(conversation_store.create_conversation(bob, bob_cid, datetime.now(timezone.utc)))
+    _run(store.create_suggestion(bob, project_doc, bob_cid, "memory", "A fact."))
+
+    import chat.routes.user as user_routes
+
+    response = _run(user_routes.delete_account(request=None, user=env["users"]["alice"]))
+    assert response.status_code == 200
+    assert published == [(bob, changed(bob_cid, 0, 0))]
+
+
+# ---------------------------------------------------------------------------
+# 12. Review follow-ups
+# ---------------------------------------------------------------------------
+
+
+class TestReviewFollowUps:
+    def test_instructions_saved_after_the_seen_check_reach_the_model_first(
+        self, env, monkeypatch,
+    ):
+        """The owner saves the instructions between check 3 (on the row) and
+        the state the base version comes from: the suggestion is refused with
+        the new notes instead of claiming a base the model never saw."""
+        doc = new_doc(env)
+        set_instructions(env, doc["id"], "Rule A.")
+        caller = conv(env)
+        mark_seen(env, caller, doc["id"])
+        real = env.doc_store.get_notes_state
+        saved: list[int] = []
+
+        async def owner_saves_first(doc_id):
+            if not saved:
+                current = await real(doc_id)
+                await env.doc_store.update_doc_instructions(
+                    doc_id, "Rule A.\nOwner's new rule.",
+                    expected_version=current["instructions_version"],
+                    user_id=uid(env),
+                )
+                saved.append(1)
+            return await real(doc_id)
+
+        monkeypatch.setattr(env.doc_store, "get_notes_state", owner_saves_first)
+        with pytest.raises(DocNotesUnseen) as info:
+            suggest(caller, doc["id"], "instructions", "Rule B.")
+        assert info.value.notes_block["instructions"] == "Rule A.\nOwner's new rule."
+        assert info.value.notes_block["instructions_version"] == 2
+        assert seen(caller, doc["id"]).instructions == 2
+        assert pending(env, caller) == []
+
+        result = suggest(caller, doc["id"], "instructions", "Rule B.")
+        assert result["status"] == "suggested"
+        [row] = pending(env, caller)
+        assert row["base_instructions_version"] == 2
+
+    def test_the_lock_is_per_user_across_conversations(self, env):
+        doc = new_doc(env)
+        one, two = conv(env), conv(env)
+
+        async def both():
+            return await asyncio.gather(
+                ns.register_suggestion(one, doc["id"], "memory", "Same fact."),
+                ns.register_suggestion(two, doc["id"], "memory", "Same fact."),
+            )
+
+        statuses = sorted(r["status"] for r in _run(both()))
+        assert statuses == ["already_suggested", "suggested"]
+
+    def test_the_replaced_memory_is_checked_before_the_guards(self, env):
+        doc = new_doc(env)
+        add_memory(env, doc["id"], "A fact.")
+        other = new_doc(env)
+        foreign = add_memory(env, other["id"], "Elsewhere.")
+        caller = conv(env)
+        mark_seen(env, caller, doc["id"])
+        error = refused(
+            caller, doc["id"], "memory", "A fact.", replaces_memory_id=foreign["id"],
+        )
+        assert error.code == "memory_not_found"
+
+    def test_a_long_memory_id_is_cut_in_the_refusal(self, env):
+        doc = new_doc(env)
+        caller = conv(env)
+        error = refused(caller, doc["id"], "memory", "A fact.", replaces_memory_id="x" * 500)
+        assert error.code == "memory_not_found"
+        assert "x" * 100 + "..." in str(error)
+        assert "x" * 101 not in str(error)
+
+    def test_notes_emptied_before_the_fresh_load_do_not_refuse(self, env, monkeypatch):
+        """No record and a noted row, but the notes are gone by the fresh
+        load: nothing to deliver, so the suggestion registers."""
+        doc = new_doc(env)
+        memory = add_memory(env, doc["id"], "Old fact.")
+        row = _run(env.doc_store.get_doc(doc["id"], with_shares=True))
+        assert row["memory_count"] == 1
+        caller = conv(env)
+        real = service.load_notes
+
+        async def emptied_first(doc_id, **kw):
+            await doc_memory_store.delete_doc_memory(doc_id, memory["id"])
+            return await real(doc_id, **kw)
+
+        monkeypatch.setattr(service, "load_notes", emptied_first)
+        assert suggest(caller, doc["id"], "memory", "New fact.")["status"] == "suggested"
+        assert seen(caller, doc["id"]) is None
+
+    def test_resolved_rows_get_no_notes_derived_fields(self, env):
+        doc = new_doc(env)
+        memory = add_memory(env, doc["id"], "Old fact.")
+        caller = conv(env)
+        mark_seen(env, caller, doc["id"])
+        suggest(caller, doc["id"], "instructions", "Rule.")
+        suggest(caller, doc["id"], "memory", "New fact.", replaces_memory_id=memory["id"])
+        instructions_row, memory_row = pending(env, caller)
+        accept(env, instructions_row["id"])
+        dismiss(env, memory_row["id"])
+        rows = _run(ns.review_rows(uid(env), [
+            get_row(env, instructions_row["id"]), get_row(env, memory_row["id"]),
+        ]))
+        assert [r["doc_title"] for r in rows] == [doc["title"], doc["title"]]
+        assert rows[0]["current_instructions"] is None
+        assert rows[0]["instructions_moved"] is False
+        assert rows[1]["replaces_content"] is None
+
+    def test_a_failed_publish_never_fails_a_landed_accept_or_dismiss(self, env, monkeypatch):
+        doc = new_doc(env)
+        caller = conv(env)
+        suggest(caller, doc["id"], "memory", "One.")
+        suggest(caller, doc["id"], "memory", "Two.")
+        one, two = pending(env, caller)
+
+        async def broken(user_id, conversation_id):
+            raise RuntimeError("database gone")
+
+        monkeypatch.setattr(ns, "publish_changed", broken)
+        result = accept(env, one["id"])
+        assert result["suggestion"]["status"] == "accepted"
+        assert [m["content"] for m in memories(doc["id"])] == ["One."]
+        assert dismiss(env, two["id"])["status"] == "dismissed"
