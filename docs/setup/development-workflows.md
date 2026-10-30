@@ -2,7 +2,7 @@
 
 ## Overview
 
-Development workflow for the Quest project: branching and PRs, pytest, frontend checks, and browser end-to-end testing.
+Development workflow for the Quest project: branching and PRs, pytest, frontend checks, browser end-to-end testing, and dependency audits.
 
 ## Branching & Pull Requests
 
@@ -11,7 +11,7 @@ All work lands on `main` through pull requests -- never commit directly to `main
 1. Branch from up-to-date `origin/main` (e.g. `feat/<topic>` or `fix/<topic>`).
 2. Develop and verify in local mode (`python3 run.py`; see [Run Modes](../architecture/run-modes.md)) and run the test suite before committing.
 3. Push the branch and open a PR against `main` (`gh pr create`).
-4. CI (`.github/workflows/ci.yml`) runs on every PR and push to `main`: backend pytest, frontend checks, and Playwright browser tests run in separate jobs. Fix a red check before asking for review.
+4. CI (`.github/workflows/ci.yml`) runs on every PR and push to `main`: backend pytest, frontend checks, and Playwright browser tests run in separate jobs. A PR that touches a dependency manifest or lockfile also gets the dependency audit (see "Dependency Audits" below). Fix a red check before asking for review.
 5. A human reviews and merges. Agents open PRs; they do not merge them.
 
 ## Key Files
@@ -122,6 +122,21 @@ From `frontend/`, `npm run test:e2e` builds the app and runs the suite. Playwrig
 The launcher (`frontend/e2e/server.py`) snapshots tracked source and non-ignored additions into a temporary runtime with its own database, files, configuration, and home directory. It excludes developer credentials and sanitizes the process environment, then runs real migrations and local seeding. It bypasses `run.py` to avoid shared dev-config imports and container builds; shutdown removes the runtime. Ignored source files are not staged. `QUEST_E2E_PORT` selects a dedicated loopback port (with its adjacent sandbox port); Playwright refuses to reuse an existing server.
 
 Mutation fixtures use unique accounts; seeded content supports transcript/search tests. The launcher's fixed per-user gates let enabled and denied Docs/Tables tests run concurrently without changing global settings. Tests exercise persistence through reloads and real API requests rather than intercepting them. They do not validate Google OAuth, live model generation, external connectors, or sandbox execution; those require a separate credentialed integration environment.
+
+## Dependency Audits
+
+`.github/workflows/audit.yml` checks both locked dependency sets against the public advisory databases: [pip-audit](https://pypi.org/project/pip-audit/) over the export of `uv.lock` (all groups) and `npm audit` over `frontend/package-lock.json` (dev dependencies included, failing at moderate or above). It runs on PRs and pushes to `main` that change `pyproject.toml`, `uv.lock`, `frontend/package.json` or `frontend/package-lock.json`, and every Monday regardless, so an advisory published against unchanged pins still turns `main` red. Locally:
+
+```bash
+uv export --frozen --all-groups --no-emit-project --no-hashes -o /tmp/req.txt && uvx pip-audit -r /tmp/req.txt --no-deps
+cd frontend && npm audit --audit-level=moderate
+```
+
+Pins do not move on their own. `uv lock` keeps every existing pin, and the `exclude-newer` quarantine in `pyproject.toml` only holds back releases younger than a week, so a transitive package stays where it was first locked until someone bumps it. To clear a finding:
+
+- Python: `uv lock --upgrade-package <name>` for each flagged package, then `uv sync --locked --all-groups` and the test suite. Prefer that over `uv lock --upgrade`, which moves everything at once. If the fix is younger than the quarantine, add the package to `exclude-newer-package` in `pyproject.toml` with the date it needs, and delete the entry once the fix is a week old.
+- Node: `npm audit fix` in `frontend/` when it resolves without a major bump; otherwise bump the dependency in `package.json`.
+- Unreachable or already mitigated: add the advisory's GHSA id to the `--ignore-vuln` list in the workflow, with a comment saying why and pointing at the mitigation. An ignore needs a reason a reviewer can check; "no fix yet" alone is not one, since the audit is what tracks that.
 
 ## Releases
 
