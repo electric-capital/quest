@@ -215,6 +215,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
     clearExpensiveResume,
     pendingMemorySuggestions,
     pendingProjectMemorySuggestions,
+    pendingDocNoteSuggestions,
     customName,
     setCustomName,
     archived,
@@ -844,11 +845,18 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
 
       {/* Stream errors are now shown inline as error bubbles in the chat */}
 
-      {/* Suggested-memories bubbles (the model's non-blocking suggest_memory
-          and suggest_project_memory proposals awaiting review), side by side;
-          click opens the kind's review panel over the conversation. Each is
-          hidden while nothing of its kind is pending. */}
-      {(pendingMemorySuggestions > 0 || pendingProjectMemorySuggestions > 0) && (
+      {/* Suggestion bubbles (the model's non-blocking suggest_memory,
+          suggest_project_memory and suggest_doc_note proposals awaiting
+          review), side by side: personal memories, project memories, doc
+          notes. Click opens the kind's review panel over the conversation.
+          Each is hidden while nothing of its kind is pending. The doc notes
+          bubble is not gated by the doc notes feature: rows already filed
+          stay reviewable with the gate closed. */}
+      {(
+        pendingMemorySuggestions > 0
+        || pendingProjectMemorySuggestions > 0
+        || pendingDocNoteSuggestions > 0
+      ) && (
         <div className="memory-suggestions-bar">
           <MemorySuggestions
             conversationId={conversationId}
@@ -858,6 +866,11 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
             conversationId={conversationId}
             pendingCount={pendingProjectMemorySuggestions}
             kind="project"
+          />
+          <MemorySuggestions
+            conversationId={conversationId}
+            pendingCount={pendingDocNoteSuggestions}
+            kind="doc"
           />
         </div>
       )}
