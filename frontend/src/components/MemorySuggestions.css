@@ -191,8 +191,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* No padding: the global button padding would leave the 28px box no
+     room for the icon. */
+  flex-shrink: 0;
   width: 28px;
   height: 28px;
+  padding: 0;
   border: none;
   border-radius: 6px;
   background: none;
