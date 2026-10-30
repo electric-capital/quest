@@ -1,6 +1,7 @@
 // usePendingSuggestionCounts: the REST seed, each kind's event replacing its
-// own count, an event without a numeric total re-fetching, and a fetch never
-// overwriting a kind that an event (or a newer fetch) set after it started.
+// own count, an event without a numeric total re-fetching, a fetch never
+// overwriting a kind that an event (or a newer fetch) set after it started,
+// a failed re-fetch keeping the counts, and an unmount before the seed lands.
 // Also the event-to-kind mapping the inbox filters its re-reads with.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
@@ -124,12 +125,41 @@ describe('usePendingSuggestionCounts', () => {
     expect(result.current).toEqual({ user: 0, project: 3, doc: 4 });
   });
 
-  it('keeps its last values when the fetch fails', async () => {
-    mocks.fetchMemoryInboxCounts.mockRejectedValue(new Error('offline'));
+  it('keeps its last values when a re-fetch fails', async () => {
+    mocks.fetchMemoryInboxCounts.mockResolvedValueOnce(counts(1, 2, 3));
     const { result } = renderHook(() => usePendingSuggestionCounts());
-    await waitFor(() => expect(mocks.fetchMemoryInboxCounts).toHaveBeenCalledTimes(1));
-    emit({ type: 'doc_note_suggestions_changed', conversation_id: 'c', pending_count: 1, total_pending: 1 });
-    expect(result.current).toEqual({ user: 0, project: 0, doc: 1 });
+    await waitFor(() => expect(result.current).toEqual({ user: 1, project: 2, doc: 3 }));
+
+    const refetch = deferred<MemoryInboxCountsResponse>();
+    mocks.fetchMemoryInboxCounts.mockImplementationOnce(() => refetch.promise.then(() => {
+      throw new Error('offline');
+    }));
+    emit({ type: 'doc_note_suggestions_changed', conversation_id: 'c', pending_count: 1 });
+    expect(mocks.fetchMemoryInboxCounts).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      refetch.resolve(counts(0, 0, 0));
+    });
+    expect(result.current).toEqual({ user: 1, project: 2, doc: 3 });
+  });
+
+  it('does nothing once unmounted before the seed lands', async () => {
+    const seed = deferred<MemoryInboxCountsResponse>();
+    mocks.fetchMemoryInboxCounts.mockImplementationOnce(() => seed.promise);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { result, unmount } = renderHook(() => usePendingSuggestionCounts());
+      expect(mocks.globalHandlers.size).toBe(1);
+      unmount();
+      // The event subscription is gone with it.
+      expect(mocks.globalHandlers.size).toBe(0);
+      await act(async () => {
+        seed.resolve(counts(1, 2, 3));
+      });
+      expect(result.current).toEqual({ user: 0, project: 0, doc: 0 });
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });
 

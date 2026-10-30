@@ -6,7 +6,9 @@
    --suggestion-* variables below. The suggestion rows
    (MemorySuggestionRow.tsx) are shared with the inbox's Memories tab and
    (doc rows) the doc viewer's Notes panel, which carry the same variables
-   on .memory-suggestion-row--<kind>. */
+   on .memory-suggestion-row--<kind>; the inbox's reviewed doc rows
+   (.memory-inbox-reviewed--doc, MemoryInbox.css) take the doc rose here
+   too. */
 
 /* Row holding the bubbles side by side; the panels position against it so
    any one spans the chat column. */
@@ -50,7 +52,8 @@
 }
 
 .memory-suggestions--doc,
-.memory-suggestion-row--doc {
+.memory-suggestion-row--doc,
+.memory-inbox-reviewed--doc {
   --suggestion-rgb: 236 72 153;
   --suggestion-solid: #db2777;
   --suggestion-contrast: #fff;
@@ -59,7 +62,8 @@
 
 @media (prefers-color-scheme: light) {
   .memory-suggestions--doc,
-  .memory-suggestion-row--doc {
+  .memory-suggestion-row--doc,
+  .memory-inbox-reviewed--doc {
     --suggestion-solid: #be185d;
     --suggestion-text: #9d174d;
   }

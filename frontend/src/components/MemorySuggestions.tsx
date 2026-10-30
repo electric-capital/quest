@@ -255,6 +255,10 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
   // Rows accepted or dismissed here: every list fetch leaves them out, so a
   // fetch that started before the accept cannot bring the row back.
   const resolvedIdsRef = useRef(new Set<string>());
+  // Bumped by an accept conflict: a fetch started before it is dropped when
+  // it lands, even before the re-run that the conflict's reload starts has
+  // cancelled it, so an older list never undoes the re-base.
+  const readSeqRef = useRef(0);
 
   // A new conversation starts closed.
   useEffect(() => {
@@ -272,11 +276,13 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
+    const seq = readSeqRef.current;
+    const superseded = () => cancelled || seq !== readSeqRef.current;
     setIsLoading(true);
     setLoadError(null);
     config.fetchList(conversationId)
       .then((resp) => {
-        if (cancelled) return;
+        if (superseded()) return;
         const resolvedIds = resolvedIdsRef.current;
         const rows = resp.suggestions.filter((s) => !resolvedIds.has(s.id));
         // The list is the source of truth for the count too: it reconciles
@@ -297,7 +303,7 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
         });
       })
       .catch((err) => {
-        if (cancelled) return;
+        if (superseded()) return;
         setLoadError(errorMessage(err, 'Failed to load suggestions'));
       })
       .finally(() => {
@@ -381,9 +387,10 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
       }
       // Still pending but changed underneath (doc: the instructions moved):
       // re-base the row now in state, keeping the draft, show why, and
-      // re-fetch (the re-run cancels a fetch already in flight).
+      // re-fetch, dropping a fetch already in flight.
       const conflict = action === 'accept' && config.conflict ? config.conflict(err) : null;
       if (conflict) {
+        readSeqRef.current += 1;
         const { rebase } = conflict;
         if (rebase) {
           setSuggestions((prev) => prev.map((s) => (s.id === suggestion.id ? rebase(s) : s)));

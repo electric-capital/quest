@@ -202,7 +202,7 @@ describe('MemorySuggestions', () => {
     expect(screen.queryByRole('button', { name: /suggested/ })).toBeNull();
   });
 
-  it('reconciles the store count from the list and ignores a stale in-flight fetch', async () => {
+  it('reconciles the store count from the list, keeping a late fetch minus the row resolved here', async () => {
     serve([suggestion('s1', 'A'), suggestion('s2', 'B')]);
     const { rerender } = render(<MemorySuggestions conversationId="c-stale" pendingCount={1} />);
     fireEvent.click(screen.getByRole('button', { name: /suggested memory/ }));
@@ -526,6 +526,45 @@ describe('MemorySuggestions kind="doc"', () => {
       .toHaveBeenLastCalledWith('d1', { expectedInstructionsVersion: 5 }));
   });
 
+  it('drops a fetch in flight that lands right after the 409, before its re-fetch starts', async () => {
+    serveDoc([docNote('d1')]);
+    const accept = deferred<unknown>();
+    mocks.acceptDocNoteSuggestion.mockImplementationOnce(() => accept.promise);
+    const { rerender } = await openDocPanel('c-doc-gap', 1);
+    await screen.findByDisplayValue('Prices are in EUR.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(mocks.acceptDocNoteSuggestion).toHaveBeenCalledTimes(1));
+    const stale = deferred<DocList>();
+    mocks.fetchConversationDocNoteSuggestions.mockImplementationOnce(() => stale.promise);
+    rerender(<MemorySuggestions conversationId="c-doc-gap" pendingCount={2} kind="doc" />);
+    await waitFor(() => expect(mocks.fetchConversationDocNoteSuggestions).toHaveBeenCalledTimes(2));
+
+    const refetch = deferred<DocList>();
+    mocks.fetchConversationDocNoteSuggestions.mockImplementationOnce(() => refetch.promise);
+    // The 409 and the older list land together, before React re-renders
+    // and its effect cleanup cancels that fetch.
+    await act(async () => {
+      accept.reject(staleError({ instructions: 'Prices are in GBP.', instructions_version: 4 }));
+      await Promise.resolve();
+      await Promise.resolve();
+      stale.resolve({ suggestions: [docNote('d1')], pending_count: 1 });
+      await Promise.resolve();
+    });
+    expect((await screen.findByRole('alert')).textContent).toBe(STALE_MESSAGE);
+    expect(diffBodies()[0].querySelector('.memory-suggestion-diff-del')!.textContent).toBe('GBP.');
+    await waitFor(() => expect(mocks.fetchConversationDocNoteSuggestions).toHaveBeenCalledTimes(3));
+
+    // The re-fetch failing leaves the re-base standing.
+    await act(async () => {
+      refetch.reject(new Error('offline'));
+    });
+    expect(diffBodies()[0].querySelector('.memory-suggestion-diff-del')!.textContent).toBe('GBP.');
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(mocks.acceptDocNoteSuggestion)
+      .toHaveBeenLastCalledWith('d1', { expectedInstructionsVersion: 4 }));
+  });
+
   it("keeps the fetch the accept's own event starts, re-basing a second instructions row", async () => {
     // Two instructions proposals for one doc, both diffed against version 3.
     serveDoc([docNote('d1'), docNote('d2', { doc_id: 'doc-d1', content: 'Prices are in GBP.' })]);
@@ -567,6 +606,7 @@ describe('MemorySuggestions kind="doc"', () => {
     expect(body.querySelector('.memory-suggestion-diff-del')!.textContent).toBe('EUR.');
     expect(body.querySelector('.memory-suggestion-diff-add')!.textContent).toBe('GBP.');
     expect(container.querySelector('.memory-suggestion-moved')).not.toBeNull();
+    expect(conversationStore.getConversation('c-doc-event').pendingDocNoteSuggestions).toBe(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
     await waitFor(() => expect(mocks.acceptDocNoteSuggestion)

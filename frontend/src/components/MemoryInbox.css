@@ -77,7 +77,7 @@
 }
 
 .memory-inbox .memory-suggestion-row--doc {
-  border-color: rgb(236 72 153 / 0.4);
+  border-color: rgb(var(--suggestion-rgb) / 0.4);
 }
 
 .memory-inbox-status,
@@ -119,10 +119,10 @@
   color: #fbbf24;
 }
 
-/* Doc note rows draw in the doc rose through the --suggestion-* variables:
-   an open row gets them from .memory-suggestion-row--doc
-   (MemorySuggestions.css), a reviewed one from .memory-inbox-reviewed--doc
-   below. */
+/* Doc note rows draw in the doc rose through the --suggestion-* variables,
+   which MemorySuggestions.css sets on an open row
+   (.memory-suggestion-row--doc) and on a reviewed one
+   (.memory-inbox-reviewed--doc). */
 .memory-inbox-kind--doc {
   border-color: rgb(var(--suggestion-rgb) / 0.45);
   color: var(--suggestion-text);
@@ -215,12 +215,6 @@
   opacity: 0.75;
 }
 
-.memory-inbox-reviewed--doc {
-  --suggestion-rgb: 236 72 153;
-  --suggestion-solid: #db2777;
-  --suggestion-text: #f472b6;
-}
-
 .memory-inbox-reviewed-header {
   display: flex;
   align-items: center;
@@ -249,8 +243,9 @@
 
 /* A reviewed doc note's Instructions / Memory pill (the row's pill from
    MemorySuggestions.css), sized to the status pill beside it. */
-.memory-inbox-note-pill {
+.memory-inbox-reviewed-header .memory-inbox-note-pill {
   font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
 }
 
 .memory-inbox-time {
@@ -312,7 +307,7 @@
   }
 
   .memory-inbox .memory-suggestion-row--doc {
-    border-color: rgb(236 72 153 / 0.5);
+    border-color: rgb(var(--suggestion-rgb) / 0.5);
   }
 
   .memory-inbox-reviewed--accepted {
@@ -330,11 +325,6 @@
 
   .memory-inbox-kind--project {
     color: #a3540a;
-  }
-
-  .memory-inbox-reviewed--doc {
-    --suggestion-solid: #be185d;
-    --suggestion-text: #9d174d;
   }
 
   .memory-inbox-project {
