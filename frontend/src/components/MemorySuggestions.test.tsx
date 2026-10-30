@@ -313,7 +313,8 @@ describe('MemorySuggestions focus', () => {
     const view = render(<MemorySuggestions conversationId="c-focus" pendingCount={rows.length} />);
     const bubble = screen.getByRole('button', { name: /suggested memor/ });
     press(bubble);
-    await screen.findByDisplayValue(rows[0].content);
+    // A conversation's suggestion always has text (only a dream's can be archive-only).
+    await screen.findByDisplayValue(rows[0].content ?? '');
     return { ...view, bubble };
   }
 
