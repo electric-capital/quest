@@ -87,7 +87,7 @@ The response also carries `pending_wait_handles` -- a list projected from `tool_
 
 It additionally carries `expensive_resume` -- the verdict from `check_expensive_resume()` in `chat/expensive_resume.py` (`null` == no warning) -- so the FE can block the composer behind the expensive-resume warning card on load. See [Expensive-Resume Warning](../architecture/expensive-resume.md).
 
-It also carries `pending_memory_suggestions` (model-proposed memories awaiting review; the suggestion and `/app/api/memory-inbox/*` routes are in `chat/memory_routes.py`, see [Memory Suggestions](../architecture/memory-suggestions.md)) and its twins `pending_project_memory_suggestions` and `pending_doc_note_suggestions` ([Doc Notes](../architecture/doc-notes.md#ui-routes-inbox-and-report)).
+It also carries `pending_memory_suggestions` (model-proposed memories awaiting review; the suggestion and `/app/api/memory-inbox/*` routes are in `chat/memory_routes.py`, see [Memory Suggestions](../architecture/memory-suggestions.md)) and its twins `pending_project_memory_suggestions` and `pending_doc_note_suggestions` ([Doc Note Suggestions](../architecture/doc-notes-review.md#counts-inbox-and-report)).
 
 Returns `404 Not Found` with error code `conversation_not_found` when the conversation does not exist or does not belong to the authenticated user.
 

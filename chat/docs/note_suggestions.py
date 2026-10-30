@@ -1,5 +1,5 @@
 """Doc note suggestions: the ``suggest_doc_note`` body and the review path
-(docs/architecture/doc-notes.md).
+(docs/architecture/doc-notes-review.md).
 
 The doc-notes twin of chat/project_memories.py. A model proposes a change
 to a Quest Doc's notes with the non-blocking ``suggest_doc_note`` tool:

@@ -1,6 +1,6 @@
 """Doc note suggestion review routes (chat/docs/note_suggestion_routes.py)
 and the ``pending_doc_note_suggestions`` key of ``GET /conversations/{id}``,
-phase A6 of spec 00011 (docs/architecture/doc-notes.md, Review).
+phase A6 of spec 00011 (docs/architecture/doc-notes-review.md, Review).
 
 Runs against the isolated ``docs_env`` of tests/test_docs_service.py with
 the ``doc_notes`` gate open (``env``; foreign keys are on, so every row

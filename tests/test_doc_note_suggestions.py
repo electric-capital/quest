@@ -1,5 +1,5 @@
 """Doc note suggestions service (chat/docs/note_suggestions.py), phase A4 of
-spec 00011 (docs/architecture/doc-notes.md), with
+spec 00011 (docs/architecture/doc-notes-review.md), with
 ``service.publish_notes_changed()`` and the suggestion events of the doc,
 project and account delete paths.
 

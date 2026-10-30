@@ -1,4 +1,4 @@
-"""Doc note suggestion data access layer (docs/architecture/doc-notes.md).
+"""Doc note suggestion data access layer (docs/architecture/doc-notes-review.md).
 
 Rows in ``doc_note_suggestions``: changes to a Quest Doc's notes that a
 model proposed through the non-blocking ``suggest_doc_note`` tool, waiting

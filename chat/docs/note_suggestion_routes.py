@@ -1,5 +1,5 @@
 """HTTP routes for reviewing doc note suggestions
-(docs/architecture/doc-notes.md, Review; docs/api/quest-docs-api.md).
+(docs/architecture/doc-notes-review.md, Review; docs/api/quest-docs-api.md).
 
 The doc-notes twin of the suggestion half of chat/project_memory_routes.py.
 A model proposes a change to a Quest Doc's notes with ``suggest_doc_note``

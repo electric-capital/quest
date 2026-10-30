@@ -51,7 +51,7 @@ The inbox (`RequestsView`) has a URL per tab so the reminder DM can land the use
 ## Constraints
 
 - `_last_notified` is per-process state. A restart forgets it; the age gate still applies, so the worst case is one reminder arriving early after a redeploy. Nothing is persisted per notification.
-- Reminders count **open action requests** (`action_requests.status == "open"`) and **pending suggestions** of every inbox kind, doc note suggestions included whatever the user's `docs` and `doc_notes` gates ([Doc Notes -- Design Decisions](doc-notes.md#design-decisions)); the DM calls them all suggested memories. Pending `slack_reply` wait handles are answered in Slack itself and are deliberately not included.
+- Reminders count **open action requests** (`action_requests.status == "open"`) and **pending suggestions** of every inbox kind, doc note suggestions included whatever the user's `docs` and `doc_notes` gates ([Doc Note Suggestions -- Design Decisions](doc-notes-review.md#design-decisions)); the DM calls them all suggested memories. Pending `slack_reply` wait handles are answered in Slack itself and are deliberately not included.
 - The DM is sent from the shared bot (no user attribution) because it is a system notification, not a user-authored message -- unlike `send_slack_message` action requests, which carry the Quest attribution footer from `plugins/slack/handlers.py`.
 - The notifier lives in core `chat/` and does not import the Slack plugin; it uses `slack_sdk.AsyncWebClient` + `load_slack_bot_token()` like the Socket Mode worker and reads the oauth_blob shape directly (core stays plugin-agnostic).
 
