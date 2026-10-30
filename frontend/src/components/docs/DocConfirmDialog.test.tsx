@@ -1,9 +1,12 @@
 // DocConfirmDialog: named by its title, focuses Cancel on open (unless a
 // child already took focus), returns focus to the opener on close, cannot
 // be closed while busy, keeps Tab inside it while open (wrapping at both
-// ends, re-entering from outside) and gives focus back after a failed
-// confirm. jsdom has no Tab navigation: the trap is driven by dispatching
-// the keydown and checking whether it was prevented and where focus went.
+// ends, re-entering from outside or from a control that is not a tab stop,
+// leaving a modal opened on top alone) and gives focus back after a failed
+// confirm, with the confirm button described by the error; a confirm that
+// succeeds returns focus to the opener. jsdom has no Tab navigation: the
+// trap is driven by dispatching the keydown and checking whether it was
+// prevented and where focus went.
 // A browser drops focus from a button as it becomes disabled; jsdom keeps
 // it there, so `drop()` blurs it just before the busy commit.
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +20,8 @@ interface HarnessProps {
   error?: string | null;
   confirmDisabled?: boolean;
   secondaryLabel?: string;
+  /** A body paragraph that takes focus from script only (tabindex -1). */
+  focusableNote?: boolean;
 }
 
 function Harness({
@@ -25,6 +30,7 @@ function Harness({
   error = null,
   confirmDisabled = false,
   secondaryLabel,
+  focusableNote = false,
 }: HarnessProps) {
   const [open, setOpen] = useState(false);
   return (
@@ -45,9 +51,47 @@ function Harness({
         onClose={() => setOpen(false)}
       >
         {autoFocusChild ? <input aria-label="Title" autoFocus /> : <p>This cannot be undone.</p>}
+        {focusableNote && <p tabIndex={-1}>Note</p>}
       </DocConfirmDialog>
     </>
   );
+}
+
+/** The dialog's open and busy states driven from outside, as a caller does. */
+function Controlled({ open, busy = false }: { open: boolean; busy?: boolean }) {
+  return (
+    <>
+      <button type="button">Open</button>
+      <DocConfirmDialog
+        isOpen={open}
+        title="Delete 'Plan'?"
+        confirmLabel="Delete"
+        busy={busy}
+        error={null}
+        onConfirm={vi.fn()}
+        onClose={vi.fn()}
+      >
+        <p>This cannot be undone.</p>
+      </DocConfirmDialog>
+    </>
+  );
+}
+
+// Other modal dialogs added by a test, removed after it.
+const others: HTMLElement[] = [];
+
+/** Another modal dialog with a field, portaled before or after the confirm. */
+function otherModal(where: 'above' | 'beneath'): HTMLInputElement {
+  const overlay = document.createElement('div');
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  const input = document.createElement('input');
+  input.setAttribute('aria-label', 'Search');
+  overlay.appendChild(input);
+  if (where === 'above') document.body.appendChild(overlay);
+  else document.body.insertBefore(overlay, document.body.firstChild);
+  others.push(overlay);
+  return input;
 }
 
 const button = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement;
@@ -71,7 +115,10 @@ function drop() {
 }
 
 describe('DocConfirmDialog', () => {
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    for (const el of others.splice(0)) el.remove();
+  });
 
   it('is named by its title and focuses Cancel, then returns focus to the opener', () => {
     render(<Harness />);
@@ -144,6 +191,49 @@ describe('DocConfirmDialog', () => {
       expect(document.activeElement).toBe(button('Delete'));
     });
 
+    it('from a control inside that is not a tab stop, Tab enters at the first and Shift+Tab at the last', () => {
+      render(<Harness focusableNote />);
+      openDialog();
+      const note = screen.getByText('Note');
+      act(() => note.focus());
+      expect(tab()).toBe(false);
+      expect(document.activeElement).toBe(button('Cancel'));
+
+      act(() => note.focus());
+      expect(tab(true)).toBe(false);
+      expect(document.activeElement).toBe(button('Delete'));
+    });
+
+    it('from a confirm button disabled under focus (kept there by the browser), Tab wraps to the first', () => {
+      const { rerender } = render(<Harness secondaryLabel="Download Original..." />);
+      openDialog();
+      act(() => button('Delete').focus());
+      // jsdom, like some browsers, keeps focus on the button as it is disabled.
+      rerender(<Harness secondaryLabel="Download Original..." confirmDisabled />);
+      expect(document.activeElement).toBe(button('Delete'));
+      expect(tab()).toBe(false);
+      expect(document.activeElement).toBe(button('Cancel'));
+    });
+
+    it('leaves focus in a modal opened on top alone', () => {
+      render(<Harness />);
+      openDialog();
+      const search = otherModal('above');
+      act(() => search.focus());
+      expect(tab()).toBe(true);
+      expect(tab(true)).toBe(true);
+      expect(document.activeElement).toBe(search);
+    });
+
+    it('pulls focus in from a modal beneath it', () => {
+      render(<Harness />);
+      openDialog();
+      const beneath = otherModal('beneath');
+      act(() => beneath.focus());
+      expect(tab()).toBe(false);
+      expect(document.activeElement).toBe(button('Cancel'));
+    });
+
     it('lets Tab go once the dialog is closed', () => {
       render(<Harness />);
       const opener = openDialog();
@@ -164,15 +254,25 @@ describe('DocConfirmDialog', () => {
   });
 
   describe('after a failed confirm', () => {
-    it('gives focus back to the confirm button the browser dropped it from', () => {
+    it('gives focus back to the confirm button the browser dropped it from, described by the error', () => {
       const { rerender } = render(<Harness />);
       openDialog();
+      expect(button('Delete').hasAttribute('aria-describedby')).toBe(false);
       act(() => button('Delete').focus());
       drop();
       rerender(<Harness busy />);
       rerender(<Harness error="Server exploded" />);
-      expect(screen.getByRole('alert').textContent).toBe('Server exploded');
+      const alert = screen.getByRole('alert');
+      expect(alert.textContent).toBe('Server exploded');
       expect(document.activeElement).toBe(button('Delete'));
+      expect(button('Delete').getAttribute('aria-describedby')).toBe(alert.id);
+      expect(screen.getByRole('button', { name: 'Delete', description: 'Server exploded' })).toBe(
+        button('Delete'),
+      );
+
+      // The error cleared: no description.
+      rerender(<Harness />);
+      expect(button('Delete').hasAttribute('aria-describedby')).toBe(false);
     });
 
     it('gives it to Cancel while the confirm stays disabled', () => {
@@ -183,6 +283,25 @@ describe('DocConfirmDialog', () => {
       rerender(<Harness busy />);
       rerender(<Harness error="Server exploded" confirmDisabled />);
       expect(document.activeElement).toBe(button('Cancel'));
+    });
+
+    it('a confirm that succeeds closes and returns focus to the opener, not the confirm button', () => {
+      for (const closing of ['with busy', 'after busy'] as const) {
+        const { rerender, unmount } = render(<Controlled open={false} />);
+        const opener = button('Open');
+        act(() => opener.focus());
+        rerender(<Controlled open />);
+        expect(document.activeElement).toBe(button('Cancel'));
+        act(() => button('Delete').focus());
+        drop();
+        rerender(<Controlled open busy />);
+        // The caller closes in the commit that ends busy, or in the next one.
+        if (closing === 'after busy') rerender(<Controlled open />);
+        rerender(<Controlled open={false} />);
+        expect(screen.queryByRole('dialog')).toBeNull();
+        expect(document.activeElement).toBe(opener);
+        unmount();
+      }
     });
 
     it('leaves focus that is still on a control alone', () => {
