@@ -1,9 +1,9 @@
-/* Doc viewer "Notes" panel (DocNotesPanel): the doc's instructions and
- * memories. The `card` variant borrows the chat RightPanel's floating-card
- * chrome (.right-panel-card in RightPanel.css) and the Assets card's
- * uppercase heading; the `details` variant is the phone's collapsed section
- * under the document. Design tokens only; the error tone is literal,
- * dark-first with a light block. */
+/* Doc viewer "Notes" panel (DocNotesPanel): the viewer's suggestions for
+ * the doc, its instructions and memories. The `card` variant borrows the
+ * chat RightPanel's floating-card chrome (.right-panel-card in
+ * RightPanel.css) and the Assets card's uppercase heading; the `details`
+ * variant is the phone's collapsed section under the document. Design
+ * tokens only; the error tone is literal, dark-first with a light block. */
 
 /* A row of the viewer's aside grid (DocViewer.css: `grid-auto-rows:
    minmax(0, auto)`), which it fills: as tall as its contents while they
@@ -282,6 +282,15 @@
   font-size: 0.75rem;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+/* --- Suggestions for you --------------------------------------------------- */
+/* The rows are the shared MemorySuggestionRow, whose look (the doc rose, the
+   diff, the counter) comes from MemorySuggestions.css; only the spacing is
+   the panel's. A row's padding tightens so its text and diff keep their
+   width in the 280px card. */
+.doc-notes-suggestions .memory-suggestion-row {
+  padding: 0.5rem;
 }
 
 /* --- Instructions conflict (409 stale_instructions) ------------------------ */

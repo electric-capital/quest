@@ -4,13 +4,20 @@
 // open, the 409 merge view, other errors, the character counter at the
 // cap); the memories' add / edit / delete with their inline errors and the
 // 50-memory cap; focus after saves, failures and deletes; drafts dropped
-// with a lost right; and the card vs details variants. The panel is
-// presentational over `view`, so each test passes a fake DocNotesView.
+// with a lost right; the "Suggestions for you" block (its rows, accept and
+// dismiss through the view, the 409 re-base, inline errors, read shares);
+// and the card vs details variants. The panel is presentational over
+// `view`, so each test passes a fake DocNotesView.
 // The clock is fixed (vi.setSystemTime), so the relative times are stable.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ApiClientError } from '../../api/request';
-import type { DocMemory, DocNotes } from '../../api/types';
+import type {
+  AcceptDocNoteSuggestionResponse,
+  DocMemory,
+  DocNotes,
+  DocNoteSuggestion,
+} from '../../api/types';
 import type { DocNotesView } from '../../hooks/useDocNotes';
 import { DocNotesPanel, docNotesPanelShown, type DocNotesPanelProps } from './DocNotesPanel';
 
@@ -133,6 +140,59 @@ function duplicateError(memoryId: string) {
   });
 }
 
+const SUGGESTIONS_HINT = 'From your conversations. Nothing changes until you accept.';
+const ACCEPT_STALE_MESSAGE =
+  'The instructions changed since this was suggested. Review the current text and accept again.';
+
+function makeSuggestion(overrides: Partial<DocNoteSuggestion> = {}): DocNoteSuggestion {
+  return {
+    id: 's1',
+    user_id: 7,
+    doc_id: 'd1',
+    conversation_id: 'c1',
+    note_kind: 'instructions',
+    content: 'Keep the tone friendly.\nCite every source.',
+    reasoning: 'The user asked for a lighter tone.',
+    base_instructions_version: 3,
+    replaces_memory_id: null,
+    status: 'pending',
+    memory_id: null,
+    created_at: minutesAgo(30),
+    resolved_at: null,
+    doc_title: 'Quarterly plan',
+    replaces_content: null,
+    current_instructions: 'Keep the tone formal.\nCite every source.',
+    current_instructions_version: 3,
+    instructions_moved: false,
+    ...overrides,
+  };
+}
+
+const INSTRUCTIONS_SUGGESTION = makeSuggestion();
+const MEMORY_SUGGESTION = makeSuggestion({
+  id: 's2',
+  note_kind: 'memory',
+  content: 'The board meets weekly.',
+  reasoning: null,
+  base_instructions_version: null,
+  current_instructions: null,
+  current_instructions_version: null,
+});
+
+function acceptResponse(suggestion: DocNoteSuggestion): AcceptDocNoteSuggestionResponse {
+  return {
+    suggestion: { ...suggestion, status: 'accepted' },
+    memory: null,
+    notes: {
+      doc_id: 'd1',
+      instructions_version: 4,
+      memories_version: 2,
+      has_instructions: true,
+      memory_count: 2,
+    },
+  };
+}
+
 const NEW_META = 'Added by you · 10m ago';
 const OLD_META = 'Suggested in a conversation · 3h ago';
 
@@ -148,6 +208,23 @@ const editButtonOf = (meta: string) =>
   within(memoryItem(meta)).getByRole('button', { name: 'Edit memory' }) as HTMLButtonElement;
 const deleteButtonOf = (meta: string) =>
   within(memoryItem(meta)).getByRole('button', { name: 'Delete memory' }) as HTMLButtonElement;
+// The "Suggestions for you" block and its rows.
+const suggestionsBlock = () =>
+  screen.getByRole('heading', { name: 'Suggestions for you' }).closest(
+    '.doc-notes-suggestions',
+  ) as HTMLElement;
+const suggestionRows = () =>
+  [...suggestionsBlock().querySelectorAll<HTMLElement>('.memory-suggestion-row')];
+const suggestionRow = (textLabel: 'Doc instructions text' | 'Doc memory text') =>
+  screen.getByRole('textbox', { name: textLabel }).closest('.memory-suggestion-row') as HTMLElement;
+const rowButton = (row: HTMLElement, name: 'Accept' | 'Dismiss') =>
+  within(row).getByRole('button', { name }) as HTMLButtonElement;
+const rowText = (row: HTMLElement) => within(row).getByRole('textbox') as HTMLTextAreaElement;
+const rowDiffBody = (row: HTMLElement) => {
+  const bodies = row.querySelectorAll('.memory-suggestion-diff-body');
+  expect(bodies).toHaveLength(1);
+  return bodies[0] as HTMLElement;
+};
 
 function openInstructionsEditor() {
   fireEvent.click(button('Edit instructions'));
@@ -924,6 +1001,294 @@ describe('DocNotesPanel', () => {
       confirm();
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
       expect(document.activeElement).toBe(editButtonOf(OLD_META));
+    });
+  });
+
+  describe('suggestions for you', () => {
+    const withSuggestions = (
+      suggestions: DocNoteSuggestion[],
+      notes: Partial<DocNotes> = {},
+    ): DocNotesView => viewWith(notes, { suggestions });
+
+    it('is not shown without suggestions', () => {
+      const { container } = renderPanel(makeView());
+      expect(screen.queryByRole('heading', { name: 'Suggestions for you' })).toBeNull();
+      expect(container.querySelector('.doc-notes-suggestions')).toBeNull();
+      expect(container.querySelector('.memory-suggestion-row')).toBeNull();
+    });
+
+    it('shows the count, the hint and one row per suggestion, above the empty line and Instructions', () => {
+      renderPanel(withSuggestions([INSTRUCTIONS_SUGGESTION, MEMORY_SUGGESTION], EMPTY));
+      const block = suggestionsBlock();
+      expect(block.querySelector('.doc-notes-count')?.textContent).toBe('2');
+      expect(within(block).getByText(SUGGESTIONS_HINT)).toBeTruthy();
+      expect(suggestionRows()).toHaveLength(2);
+
+      // The instructions row: its pill, the proposal and the diff from the
+      // doc's current instructions.
+      const instructions = suggestionRow('Doc instructions text');
+      expect(instructions.classList.contains('memory-suggestion-row--doc')).toBe(true);
+      expect(instructions.querySelector('.memory-suggestion-pill')?.textContent).toBe('Instructions');
+      expect(rowText(instructions).value).toBe('Keep the tone friendly.\nCite every source.');
+      expect(within(instructions).getByText('Changes to the instructions')).toBeTruthy();
+      const diff = rowDiffBody(instructions);
+      expect(diff.querySelector('.memory-suggestion-diff-del')?.textContent).toBe('formal.');
+      expect(diff.querySelector('.memory-suggestion-diff-add')?.textContent).toBe('friendly.');
+      expect(within(instructions).getByText('The user asked for a lighter tone.')).toBeTruthy();
+      expect(within(instructions).getByText('42 / 4,000')).toBeTruthy();
+
+      // The memory row: its pill and text, no diff.
+      const memory = suggestionRow('Doc memory text');
+      expect(memory.querySelector('.memory-suggestion-pill')?.textContent).toBe('Memory');
+      expect(rowText(memory).value).toBe('The board meets weekly.');
+      expect(memory.querySelector('.memory-suggestion-diff')).toBeNull();
+
+      // The panel is the doc: no link or title inside it.
+      expect(within(block).queryByRole('link')).toBeNull();
+      expect(block.querySelector('.memory-suggestion-doc-link')).toBeNull();
+      expect(block.querySelector('.memory-suggestion-doc-unavailable')).toBeNull();
+      expect(within(block).queryByText('Quarterly plan')).toBeNull();
+
+      // Above the empty line, which still says the doc has no notes yet,
+      // then Instructions.
+      const emptyLine = screen.getByText(EDITOR_LINE);
+      const heading = screen.getByRole('heading', { name: 'Instructions' });
+      expect(block.compareDocumentPosition(emptyLine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(emptyLine.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('accept sends the listed version unedited, and the edited text with it when changed', async () => {
+      const view = withSuggestions([INSTRUCTIONS_SUGGESTION, MEMORY_SUGGESTION]);
+      const accept = vi.mocked(view.acceptSuggestion);
+      accept.mockResolvedValue(acceptResponse(INSTRUCTIONS_SUGGESTION));
+      renderPanel(view);
+
+      fireEvent.click(rowButton(suggestionRow('Doc instructions text'), 'Accept'));
+      expect(accept).toHaveBeenLastCalledWith('s1', { expectedInstructionsVersion: 3 });
+      await waitFor(() =>
+        expect(rowButton(suggestionRow('Doc instructions text'), 'Accept').disabled).toBe(false),
+      );
+
+      // Edited: the trimmed text, still with the version.
+      const instructions = suggestionRow('Doc instructions text');
+      fireEvent.change(rowText(instructions), {
+        target: { value: '  Keep the tone warm.\nCite every source.  ' },
+      });
+      fireEvent.click(rowButton(instructions, 'Accept'));
+      expect(accept).toHaveBeenLastCalledWith('s1', {
+        content: 'Keep the tone warm.\nCite every source.',
+        expectedInstructionsVersion: 3,
+      });
+      await waitFor(() => expect(rowButton(instructions, 'Accept').disabled).toBe(false));
+
+      // A memory row has no version to send.
+      const memory = suggestionRow('Doc memory text');
+      fireEvent.click(rowButton(memory, 'Accept'));
+      expect(accept).toHaveBeenLastCalledWith('s2', {});
+      await waitFor(() => expect(rowButton(memory, 'Accept').disabled).toBe(false));
+      fireEvent.change(rowText(memory), { target: { value: 'The board meets monthly.' } });
+      fireEvent.click(rowButton(memory, 'Accept'));
+      expect(accept).toHaveBeenLastCalledWith('s2', { content: 'The board meets monthly.' });
+      await waitFor(() => expect(rowButton(memory, 'Accept').disabled).toBe(false));
+      expect(view.dismissSuggestion).not.toHaveBeenCalled();
+    });
+
+    it('a row is busy while its call is in flight, and its draft goes with it when it leaves', async () => {
+      const view = withSuggestions([INSTRUCTIONS_SUGGESTION, MEMORY_SUGGESTION]);
+      const pending = deferred<AcceptDocNoteSuggestionResponse>();
+      vi.mocked(view.acceptSuggestion).mockReturnValue(pending.promise);
+      const { rerenderView } = renderPanel(view);
+
+      const memory = suggestionRow('Doc memory text');
+      fireEvent.change(rowText(memory), { target: { value: 'The board meets monthly.' } });
+      fireEvent.click(rowButton(memory, 'Accept'));
+      expect(rowButton(memory, 'Accept').disabled).toBe(true);
+      expect(rowButton(memory, 'Dismiss').disabled).toBe(true);
+      expect(rowText(memory).disabled).toBe(true);
+      // The other row stays live.
+      expect(rowButton(suggestionRow('Doc instructions text'), 'Accept').disabled).toBe(false);
+
+      // As the hook does: the row leaves the list, then the call resolves.
+      rerenderView({ ...view, suggestions: [INSTRUCTIONS_SUGGESTION] });
+      await act(async () => {
+        pending.resolve(acceptResponse(MEMORY_SUGGESTION));
+      });
+      expect(screen.queryByRole('textbox', { name: 'Doc memory text' })).toBeNull();
+      expect(suggestionsBlock().querySelector('.doc-notes-count')?.textContent).toBe('1');
+
+      // Listed again (say, a re-fetch raced the accept): the proposal, not the old draft.
+      rerenderView({ ...view, suggestions: [INSTRUCTIONS_SUGGESTION, MEMORY_SUGGESTION] });
+      expect(rowText(suggestionRow('Doc memory text')).value).toBe('The board meets weekly.');
+      expect(rowButton(suggestionRow('Doc memory text'), 'Accept').disabled).toBe(false);
+
+      // The last row gone: no block.
+      rerenderView({ ...view, suggestions: [] });
+      expect(screen.queryByRole('heading', { name: 'Suggestions for you' })).toBeNull();
+    });
+
+    it('dismiss calls view.dismissSuggestion', async () => {
+      const view = withSuggestions([INSTRUCTIONS_SUGGESTION, MEMORY_SUGGESTION]);
+      vi.mocked(view.dismissSuggestion).mockResolvedValue({ ...MEMORY_SUGGESTION, status: 'dismissed' });
+      renderPanel(view);
+
+      const memory = suggestionRow('Doc memory text');
+      fireEvent.click(rowButton(memory, 'Dismiss'));
+      expect(view.dismissSuggestion).toHaveBeenCalledWith('s2');
+      expect(view.acceptSuggestion).not.toHaveBeenCalled();
+      await waitFor(() => expect(rowButton(memory, 'Dismiss').disabled).toBe(false));
+      expect(within(suggestionsBlock()).queryByRole('alert')).toBeNull();
+    });
+
+    it('a stale 409 re-bases the diff on its current text until the listed row is as new', async () => {
+      const view = withSuggestions([INSTRUCTIONS_SUGGESTION]);
+      const accept = vi.mocked(view.acceptSuggestion);
+      accept.mockRejectedValueOnce(
+        staleError(
+          { instructions: 'Keep the tone casual.\nCite every source.', instructions_version: 5 },
+          ACCEPT_STALE_MESSAGE,
+        ),
+      );
+      const { container, rerenderView } = renderPanel(view);
+      const draft = 'Keep the tone friendly, always.\nCite every source.';
+      fireEvent.change(rowText(suggestionRow('Doc instructions text')), { target: { value: draft } });
+      fireEvent.click(rowButton(suggestionRow('Doc instructions text'), 'Accept'));
+      expect(accept).toHaveBeenLastCalledWith('s1', { content: draft, expectedInstructionsVersion: 3 });
+
+      const alert = await within(suggestionsBlock()).findByRole('alert');
+      expect(alert.textContent).toBe(ACCEPT_STALE_MESSAGE);
+      // The draft is kept; the diff now starts from the current text, and the
+      // instructions moved past the proposal's base.
+      let row = suggestionRow('Doc instructions text');
+      expect(rowText(row).value).toBe(draft);
+      expect(rowDiffBody(row).querySelector('.memory-suggestion-diff-del')?.textContent).toBe('casual.');
+      expect(row.querySelector('.memory-suggestion-moved')?.textContent).toBe(
+        'The instructions changed since this was suggested',
+      );
+      // Only the row's text: the notes' own instructions are the hook's.
+      expect(container.querySelector('.doc-notes-instructions-text')?.textContent).toBe(
+        'Keep the tone formal.\nCite every source.',
+      );
+
+      // A listed row older than the 409 does not undo the re-base.
+      rerenderView({ ...view, suggestions: [makeSuggestion()] });
+      row = suggestionRow('Doc instructions text');
+      expect(rowDiffBody(row).querySelector('.memory-suggestion-diff-del')?.textContent).toBe('casual.');
+
+      accept.mockReturnValueOnce(new Promise(() => {}));
+      fireEvent.click(rowButton(row, 'Accept'));
+      expect(accept).toHaveBeenLastCalledWith('s1', { content: draft, expectedInstructionsVersion: 5 });
+      cleanup();
+
+      // The hook's re-fetched row, as new or newer, takes over.
+      const refetched = makeSuggestion({
+        current_instructions: 'Keep the tone serious.\nCite every source.',
+        current_instructions_version: 6,
+        instructions_moved: true,
+      });
+      const next = withSuggestions([INSTRUCTIONS_SUGGESTION]);
+      vi.mocked(next.acceptSuggestion)
+        .mockRejectedValueOnce(
+          staleError({ instructions: 'Keep the tone casual.\nCite every source.', instructions_version: 5 }),
+        )
+        .mockReturnValueOnce(new Promise(() => {}));
+      const second = renderPanel(next);
+      fireEvent.click(rowButton(suggestionRow('Doc instructions text'), 'Accept'));
+      await within(suggestionsBlock()).findByRole('alert');
+      second.rerenderView({ ...next, suggestions: [refetched] });
+      row = suggestionRow('Doc instructions text');
+      expect(rowDiffBody(row).querySelector('.memory-suggestion-diff-del')?.textContent).toBe('serious.');
+      // The message stays until the next action.
+      expect(within(row).getByRole('alert').textContent).toBe(STALE_MESSAGE);
+      fireEvent.click(rowButton(row, 'Accept'));
+      expect(next.acceptSuggestion).toHaveBeenLastCalledWith('s1', { expectedInstructionsVersion: 6 });
+      expect(within(row).queryByRole('alert')).toBeNull();
+    });
+
+    it('a stale 409 without a current text keeps the listed row and shows the message', async () => {
+      const view = withSuggestions([INSTRUCTIONS_SUGGESTION]);
+      vi.mocked(view.acceptSuggestion)
+        .mockRejectedValueOnce(staleError(null, ACCEPT_STALE_MESSAGE))
+        .mockReturnValueOnce(new Promise(() => {}));
+      const { rerenderView } = renderPanel(view);
+      fireEvent.click(rowButton(suggestionRow('Doc instructions text'), 'Accept'));
+      expect((await within(suggestionsBlock()).findByRole('alert')).textContent).toBe(
+        ACCEPT_STALE_MESSAGE,
+      );
+      const row = suggestionRow('Doc instructions text');
+      expect(rowDiffBody(row).querySelector('.memory-suggestion-diff-del')?.textContent).toBe('formal.');
+
+      // The hook re-fetches the suggestions after a 409; its row carries the version.
+      rerenderView({
+        ...view,
+        suggestions: [makeSuggestion({ current_instructions_version: 8, current_instructions: 'New.' })],
+      });
+      fireEvent.click(rowButton(suggestionRow('Doc instructions text'), 'Accept'));
+      expect(view.acceptSuggestion).toHaveBeenLastCalledWith('s1', { expectedInstructionsVersion: 8 });
+    });
+
+    it.each([
+      ['accept', 'suggestion_resolved', 409],
+      ['accept', 'suggestion_not_found', 404],
+      ['dismiss', 'suggestion_resolved', 409],
+      ['dismiss', 'suggestion_not_found', 404],
+    ] as const)('%s answered %s shows no error (the hook drops the row)', async (action, code, status) => {
+      const view = withSuggestions([MEMORY_SUGGESTION]);
+      const err = new ApiClientError('Gone', status, code);
+      if (action === 'accept') vi.mocked(view.acceptSuggestion).mockRejectedValueOnce(err);
+      else vi.mocked(view.dismissSuggestion).mockRejectedValueOnce(err);
+      renderPanel(view);
+      const row = suggestionRow('Doc memory text');
+      fireEvent.click(rowButton(row, action === 'accept' ? 'Accept' : 'Dismiss'));
+      await waitFor(() => expect(rowButton(row, 'Accept').disabled).toBe(false));
+      expect(within(row).queryByRole('alert')).toBeNull();
+    });
+
+    it('shows other errors on the row, with a fallback, and keeps the draft', async () => {
+      const view = withSuggestions([INSTRUCTIONS_SUGGESTION, MEMORY_SUGGESTION]);
+      vi.mocked(view.acceptSuggestion)
+        .mockRejectedValueOnce(
+          new ApiClientError('Only the doc owner can change its instructions.', 403, 'forbidden'),
+        )
+        .mockRejectedValueOnce(new ApiClientError('', 500));
+      vi.mocked(view.dismissSuggestion).mockRejectedValueOnce(new ApiClientError('', 500));
+      renderPanel(view);
+
+      const instructions = suggestionRow('Doc instructions text');
+      fireEvent.change(rowText(instructions), { target: { value: 'Keep the tone warm.' } });
+      fireEvent.click(rowButton(instructions, 'Accept'));
+      expect((await within(instructions).findByRole('alert')).textContent).toBe(
+        'Only the doc owner can change its instructions.',
+      );
+      expect(rowText(instructions).value).toBe('Keep the tone warm.');
+      expect(rowButton(instructions, 'Accept').disabled).toBe(false);
+
+      const memory = suggestionRow('Doc memory text');
+      fireEvent.click(rowButton(memory, 'Dismiss'));
+      expect((await within(memory).findByRole('alert')).textContent).toBe('Failed to dismiss');
+      // Each row keeps its own error.
+      expect(within(instructions).getByRole('alert')).toBeTruthy();
+
+      fireEvent.click(rowButton(memory, 'Accept'));
+      await waitFor(() =>
+        expect(within(memory).getByRole('alert').textContent).toBe('Failed to save doc note'),
+      );
+    });
+
+    it('read share: the block shows the viewer\'s own rows, with the no-notes line', () => {
+      const { container } = renderPanel(withSuggestions([MEMORY_SUGGESTION], { ...EMPTY, ...READ_SHARE }));
+      expect(suggestionRows()).toHaveLength(1);
+      expect(rowButton(suggestionRow('Doc memory text'), 'Accept')).toBeTruthy();
+      expect(screen.getByText('This doc has no notes.')).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Instructions' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Memories' })).toBeNull();
+      // The rows are focusable: the scroller is no tab stop of its own.
+      expect(container.querySelector('.doc-notes-scroll')?.hasAttribute('tabindex')).toBe(false);
+    });
+
+    it('details: the block is inside the collapsed section', () => {
+      const { container } = renderPanel(withSuggestions([MEMORY_SUGGESTION]), { variant: 'details' });
+      const body = container.querySelector('details > .doc-notes-details-body') as HTMLElement;
+      expect(body.querySelector('.doc-notes-suggestions .memory-suggestion-row--doc')).not.toBeNull();
     });
   });
 

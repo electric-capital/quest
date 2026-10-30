@@ -4,8 +4,22 @@
  * from useDocNotes (DocViewer owns the hook and passes its `view`; the panel
  * never calls the API itself).
  *
- * Who can do what, always from the live `view.notes` rights (an editor
- * whose right drops closes with it and its draft is dropped):
+ * Contents, top to bottom. Who can do what always follows the live
+ * `view.notes` rights (an editor whose right drops closes with it and its
+ * draft is dropped):
+ * - Suggestions for you: only while the viewer has pending suggestions for
+ *   this doc (`view.suggestions`, their own rows, so for every viewer, read
+ *   shares too). Each is the shared MemorySuggestionRow (kind `doc`, no doc
+ *   link: the panel is the doc) with its editable text, Accept and Dismiss
+ *   through the hook, which drops the row (and after an accept reloads the
+ *   notes). An
+ *   instructions accept sends the version its diff was rendered against
+ *   (docNoteReview.ts); a 409 `stale_instructions` keeps the draft, shows
+ *   the server's message and re-bases the row's diff on the current text it
+ *   carries until the hook's re-fetched row is at least as new, so the next
+ *   Accept is against what the user sees. A row resolved elsewhere just
+ *   leaves; other errors show on the row. Above the empty-state line, which
+ *   stays about the notes.
  * - Instructions: plain text with its line breaks. The owner (`is_owner`)
  *   gets Edit ("Add instructions" while there are none), a textarea with a
  *   character counter and Save / Cancel, and an "Edited by <name>, <time>"
@@ -26,11 +40,11 @@
  *
  * The caps (DOC_INSTRUCTIONS_MAX_CHARS, DOC_MEMORY_MAX_CHARS) count like the
  * server: code points of the trimmed text. Over a cap the counter turns red
- * and Save / Add is disabled; nothing is truncated. All three text fields
- * share CappedTextEditor. Focus stays in the panel: on a failed save it
- * returns to the field, after Save / Cancel to the button that opened the
- * editor, and after a memory delete to a neighbouring memory's Edit button
- * (or the Add field).
+ * and Save / Add is disabled; nothing is truncated. The notes' three text
+ * fields share CappedTextEditor (a suggestion row has its own counter).
+ * Focus stays in the panel: on a failed save it returns to the field, after
+ * Save / Cancel to the button that opened the editor, and after a memory
+ * delete to a neighbouring memory's Edit button (or the Add field).
  *
  * Two presentations of the same contents: `card` is the desktop aside's
  * floating card (the chat RightPanel's `.right-panel-card` chrome and
@@ -51,17 +65,28 @@ import {
   staleInstructionsCurrent,
 } from '../../api/docsApi';
 import { ApiClientError } from '../../api/request';
-import type { DocMemory, DocNotes, StaleInstructionsCurrent } from '../../api/types';
+import type {
+  DocMemory,
+  DocNotes,
+  DocNoteSuggestion,
+  StaleInstructionsCurrent,
+} from '../../api/types';
 import type { DocNotesView } from '../../hooks/useDocNotes';
 import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatters';
+import { MemorySuggestionRow } from '../MemorySuggestionRow';
+import { docNoteAcceptOptions, withCurrentInstructions } from '../docNoteReview';
 import { DocConfirmDialog } from './DocConfirmDialog';
 import '../RightPanel.css';
+import '../MemorySuggestions.css';
 import './DocNotesPanel.css';
 
 const STALE_MESSAGE =
   'The instructions changed since you started editing. Review the current text and save again.';
 const DUPLICATE_MESSAGE = 'This doc already has that memory.';
 const MEMORY_GONE_MESSAGE = 'This memory was deleted.';
+const SUGGESTIONS_HINT = 'From your conversations. Nothing changes until you accept.';
+const SUGGESTION_ACCEPT_ERROR = 'Failed to save doc note';
+const SUGGESTION_DISMISS_ERROR = 'Failed to dismiss';
 // How long the memory a duplicate points at stays highlighted.
 const HIGHLIGHT_MS = 2000;
 // Code points of a memory quoted in the delete confirm.
@@ -218,6 +243,137 @@ function CappedTextEditor({
           {error}
         </p>
       )}
+    </div>
+  );
+}
+
+// --- Suggestions for you ------------------------------------------------------
+
+/** A suggestion accepted, dismissed or deleted elsewhere: the hook drops its row. */
+function isSuggestionGone(err: unknown): boolean {
+  return (
+    err instanceof ApiClientError &&
+    (err.errorCode === 'suggestion_resolved' || err.errorCode === 'suggestion_not_found')
+  );
+}
+
+/** `record` without the keys `keep` refuses (the same object when it keeps all). */
+function filterRecord<T>(
+  record: Record<string, T>,
+  keep: (id: string, value: T) => boolean,
+): Record<string, T> {
+  const entries = Object.entries(record);
+  if (entries.every(([id, value]) => keep(id, value))) return record;
+  return Object.fromEntries(entries.filter(([id, value]) => keep(id, value)));
+}
+
+function withoutKey<T>(record: Record<string, T>, id: string): Record<string, T> {
+  return id in record ? filterRecord(record, (key) => key !== id) : record;
+}
+
+/** Whether the hook's row is at least as new as a 409's current instructions. */
+function caughtUp(row: DocNoteSuggestion, current: StaleInstructionsCurrent): boolean {
+  const listed = row.current_instructions_version;
+  return typeof listed === 'number' && listed >= current.instructions_version;
+}
+
+/**
+ * The viewer's pending suggestions for this doc, each reviewed in place.
+ * Mounted with the notes and empty (null) while there are none, so the
+ * per-row drafts, busy flags, errors and 409 re-bases live here, keyed by
+ * suggestion id, and are dropped as their rows leave `view.suggestions`.
+ */
+function SuggestionsSection({ view }: { view: DocNotesView }) {
+  const { suggestions, acceptSuggestion, dismissSuggestion } = view;
+  // Edited text per row (absent = the proposed content untouched).
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  // A 409 stale_instructions's current instructions per row: its diff and
+  // next Accept use them until the hook's re-fetched row is as new.
+  const [rebases, setRebases] = useState<Record<string, StaleInstructionsCurrent>>({});
+
+  useEffect(() => {
+    const live = new Map(suggestions.map((s) => [s.id, s]));
+    setDrafts((prev) => filterRecord(prev, (id) => live.has(id)));
+    setRowErrors((prev) => filterRecord(prev, (id) => live.has(id)));
+    setRebases((prev) =>
+      filterRecord(prev, (id, current) => {
+        const row = live.get(id);
+        return row !== undefined && !caughtUp(row, current);
+      }),
+    );
+  }, [suggestions]);
+
+  if (suggestions.length === 0) return null;
+
+  const setBusy = (id: string, busy: boolean) => {
+    setBusyIds((prev) => {
+      if (prev.has(id) === busy) return prev;
+      const next = new Set(prev);
+      if (busy) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
+  const resolve = async (row: DocNoteSuggestion, action: 'accept' | 'dismiss') => {
+    const { id } = row;
+    if (busyIds.has(id)) return;
+    setBusy(id, true);
+    setRowErrors((prev) => withoutKey(prev, id));
+    try {
+      if (action === 'accept') {
+        await acceptSuggestion(id, docNoteAcceptOptions(row, drafts[id]));
+      } else {
+        await dismissSuggestion(id);
+      }
+    } catch (err) {
+      // Resolved elsewhere: what the user wanted gone is gone.
+      if (isSuggestionGone(err)) return;
+      // Without a current text the hook's re-fetch carries the new version.
+      const current = action === 'accept' ? staleInstructionsCurrent(err) : null;
+      if (current) setRebases((prev) => ({ ...prev, [id]: current }));
+      setRowErrors((prev) => ({
+        ...prev,
+        [id]: errorMessage(
+          err,
+          action === 'accept' ? SUGGESTION_ACCEPT_ERROR : SUGGESTION_DISMISS_ERROR,
+        ),
+      }));
+    } finally {
+      setBusy(id, false);
+    }
+  };
+
+  return (
+    <div className="doc-notes-section doc-notes-suggestions">
+      <div className="doc-notes-section-header">
+        <h4 className="doc-notes-section-heading">Suggestions for you</h4>
+        <span className="doc-notes-count">{suggestions.length}</span>
+      </div>
+      <p className="doc-notes-hint">{SUGGESTIONS_HINT}</p>
+      {suggestions.map((suggestion) => {
+        const rebase = rebases[suggestion.id];
+        const row =
+          rebase && !caughtUp(suggestion, rebase)
+            ? withCurrentInstructions(suggestion, rebase)
+            : suggestion;
+        return (
+          <MemorySuggestionRow
+            key={row.id}
+            kind="doc"
+            suggestion={row}
+            showDocLink={false}
+            draft={drafts[row.id] ?? row.content}
+            onDraftChange={(text) => setDrafts((prev) => ({ ...prev, [row.id]: text }))}
+            busy={busyIds.has(row.id)}
+            error={rowErrors[row.id]}
+            onAccept={() => void resolve(row, 'accept')}
+            onDismiss={() => void resolve(row, 'dismiss')}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -831,8 +987,7 @@ function NotesContent({
   const panelEmpty = notes.instructions === '' && notes.memories.length === 0;
   return (
     <div className="doc-notes-body">
-      {/* "Suggestions for you" (phase B3) mounts here, above Instructions:
-          the viewer's pending suggestions for this doc (view.suggestions). */}
+      <SuggestionsSection view={view} />
       {panelEmpty && (
         <p className="doc-notes-status">
           {notes.can_edit
@@ -905,9 +1060,10 @@ export function DocNotesPanel({ view, variant = 'card', viewerEmail = null }: Do
     );
   }
 
-  // Read-only viewers have nothing focusable in a long card: the scroller
-  // takes focus so the keyboard can scroll it.
-  const keyboardScroll = view.notes !== null && !view.notes.can_edit;
+  // Read-only viewers without suggestion rows have nothing focusable in a
+  // long card: the scroller takes focus so the keyboard can scroll it.
+  const keyboardScroll =
+    view.notes !== null && !view.notes.can_edit && view.suggestions.length === 0;
   return (
     <section className="right-panel-card doc-notes-panel" aria-label="Notes">
       <div className="doc-notes-header">
