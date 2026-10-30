@@ -161,6 +161,14 @@ describe('MemorySuggestionRow kind="doc": instructions row', () => {
     expect(screen.getByTestId('memory-suggestion-diff').textContent).toContain('(same text)');
   });
 
+  it('shows no "removed" chip for current instructions that only end in whitespace', () => {
+    renderDocRow({
+      suggestion: docNote({ current_instructions: 'Prices are in USD.\n', content: 'Prices are in USD. Always.' }),
+    });
+    expect(legendChips()).toEqual(['added']);
+    expect(diffBody().textContent).toBe('Prices are in USD. Always.');
+  });
+
   it('shows no diff when the current instructions are unknown', () => {
     renderDocRow({ suggestion: docNote({ current_instructions: null }) });
     expect(screen.queryAllByTestId('memory-suggestion-diff')).toHaveLength(0);
@@ -179,6 +187,19 @@ describe('MemorySuggestionRow kind="doc": instructions row', () => {
 });
 
 describe('MemorySuggestionRow kind="doc": memory row', () => {
+  it('ignores whitespace around the replaced text in the diff and its chips', () => {
+    renderDocRow({
+      suggestion: memoryRow({
+        replaces_memory_id: 'm1',
+        replaces_content: 'The board meets weekly.  \n',
+        content: 'The board meets weekly. On Mondays.',
+      }),
+    });
+    expect(diffBody().querySelector('.memory-suggestion-diff-del')).toBeNull();
+    expect(diffBody().querySelector('.memory-suggestion-diff-add')!.textContent).toBe('On Mondays.');
+    expect(legendChips()).toEqual(['added']);
+  });
+
   it('shows only the "removed" chip for a replacement that only drops words', () => {
     renderDocRow({
       suggestion: memoryRow({

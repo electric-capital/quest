@@ -115,8 +115,9 @@ function AutoGrowTextarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
 /**
  * What accepting a replacement changes: the replaced text with the words
  * the draft drops struck through on red and the words it adds on green.
- * Follows the draft as the user edits it. The legend shows only the chips
- * of the changes the diff has (new instructions remove nothing).
+ * Follows the draft as the user edits it. Both sides are trimmed, as the
+ * saved text is, and the legend shows only the chips of the changes the
+ * diff has (new instructions remove nothing; spacing alone is no change).
  */
 function ReplacementDiff({
   before,
@@ -124,9 +125,10 @@ function ReplacementDiff({
   label,
   title,
 }: { before: string; after: string; label: string; title: string }) {
-  const segments = useMemo(() => wordDiff(before, after.trim()), [before, after]);
-  const removes = segments.some((s) => s.type === 'del');
-  const adds = segments.some((s) => s.type === 'add');
+  const segments = useMemo(() => wordDiff(before.trim(), after.trim()), [before, after]);
+  const changes = (type: 'del' | 'add') => segments.some((s) => s.type === type && /\S/.test(s.text));
+  const removes = changes('del');
+  const adds = changes('add');
   return (
     <div className="memory-suggestion-diff" data-testid="memory-suggestion-diff">
       <div className="memory-suggestion-diff-label">
