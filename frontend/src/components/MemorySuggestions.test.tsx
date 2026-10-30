@@ -361,11 +361,11 @@ describe('MemorySuggestions focus', () => {
     expect(screen.getByRole('dialog')).not.toBeNull();
     const title = screen.getByRole('heading', { name: 'Suggested memories' });
     expect(title.getAttribute('tabindex')).toBe('-1');
-    expect(document.activeElement).toBe(title);
+    await waitFor(() => expect(document.activeElement).toBe(title));
 
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(document.activeElement).toBe(bubble);
+    await waitFor(() => expect(document.activeElement).toBe(bubble));
   });
 
   it("moves focus to the panel's title, not the bubble, when the row being typed in leaves remotely", async () => {
@@ -378,8 +378,8 @@ describe('MemorySuggestions focus', () => {
     serve([suggestion('s2', 'Likes rain')]);
     rerender(<MemorySuggestions conversationId="c-remote" pendingCount={1} />);
     await waitFor(() => expect(screen.queryByDisplayValue('Likes tea')).toBeNull());
-    expect(document.activeElement)
-      .toBe(screen.getByRole('heading', { name: 'Suggested memories' }));
+    await waitFor(() => expect(document.activeElement)
+      .toBe(screen.getByRole('heading', { name: 'Suggested memories' })));
     expect(screen.getByRole('dialog')).not.toBeNull();
   });
 
@@ -388,13 +388,13 @@ describe('MemorySuggestions focus', () => {
     act(() => screen.getByDisplayValue('Likes tea').focus());
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(document.activeElement).toBe(bubble);
+    await waitFor(() => expect(document.activeElement).toBe(bubble));
 
     press(bubble);
     await screen.findByDisplayValue('Likes tea');
     press(screen.getByRole('button', { name: 'Close suggested memories' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(document.activeElement).toBe(bubble);
+    await waitFor(() => expect(document.activeElement).toBe(bubble));
 
     press(bubble);
     act(() => screen.getByDisplayValue('Likes tea').focus());
@@ -409,7 +409,7 @@ describe('MemorySuggestions focus', () => {
     act(() => (document.activeElement as HTMLElement).blur());
     fireEvent.click(backdrop);
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(document.activeElement).toBe(bubble);
+    await waitFor(() => expect(document.activeElement).toBe(bubble));
   });
 
   it('leaves focus where it is when the panel closes with focus outside it', async () => {
@@ -426,7 +426,7 @@ describe('MemorySuggestions focus', () => {
     act(() => composer.focus());
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(document.activeElement).toBe(composer);
+    await waitFor(() => expect(document.activeElement).toBe(composer));
   });
 });
 
@@ -578,7 +578,7 @@ describe('MemorySuggestions kind="doc"', () => {
     act(() => accept.focus());
     fireEvent.click(accept);
     await waitFor(() => expect(screen.queryByDisplayValue('Prices are in EUR.')).toBeNull());
-    expect(document.activeElement).toBe(screen.getByDisplayValue('The board meets monthly.'));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByDisplayValue('The board meets monthly.')));
   });
 
   it('dismisses a row', async () => {

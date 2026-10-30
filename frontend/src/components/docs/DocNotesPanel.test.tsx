@@ -632,7 +632,7 @@ describe('DocNotesPanel', () => {
       // Shown whole, not a scroll box of its own, so not a tab stop.
       expect(within(current).getByText('Server text').hasAttribute('tabindex')).toBe(false);
       const box = instructionsBox();
-      expect(document.activeElement).toBe(box);
+      await waitFor(() => expect(document.activeElement).toBe(box));
       expect(box.value).toBe('My draft');
       expect(box.readOnly).toBe(false);
       expect(current.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -715,7 +715,7 @@ describe('DocNotesPanel', () => {
         'Instructions cannot contain NUL characters.',
       );
       expect(instructionsBox().value).toBe('Bad draft');
-      expect(document.activeElement).toBe(instructionsBox());
+      await waitFor(() => expect(document.activeElement).toBe(instructionsBox()));
       expect(screen.queryByRole('group', { name: 'Current instructions' })).toBeNull();
       expect(button('Save').disabled).toBe(false);
     });
@@ -785,7 +785,7 @@ describe('DocNotesPanel', () => {
       });
       expect(addBox().value).toBe('');
       expect(addBox().readOnly).toBe(false);
-      expect(document.activeElement).toBe(addBox());
+      await waitFor(() => expect(document.activeElement).toBe(addBox()));
     });
 
     it('a duplicate shows inline, keeps the draft and refocuses it, and highlights the existing memory', async () => {
@@ -808,7 +808,7 @@ describe('DocNotesPanel', () => {
           'This doc already has that memory.',
         );
         expect(addBox().value).toBe('The audience is\nthe board.');
-        expect(document.activeElement).toBe(addBox());
+        await waitFor(() => expect(document.activeElement).toBe(addBox()));
         expect(memoryItem(OLD_META).className).toContain('doc-notes-memory--highlight');
         expect(memoryItem(NEW_META).className).not.toContain('doc-notes-memory--highlight');
         expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
@@ -920,7 +920,7 @@ describe('DocNotesPanel', () => {
       fireEvent.click(button('Save'));
       expect((await screen.findByRole('alert')).textContent).toBe('This doc already has that memory.');
       expect(editBox().value).toBe('The audience is\nthe board.');
-      expect(document.activeElement).toBe(editBox());
+      await waitFor(() => expect(document.activeElement).toBe(editBox()));
       expect(memoryItem(OLD_META).className).toContain('doc-notes-memory--highlight');
 
       fireEvent.click(button('Save'));
@@ -1013,7 +1013,7 @@ describe('DocNotesPanel', () => {
         pending.resolve();
       });
       expect(screen.queryByRole('dialog')).toBeNull();
-      expect(document.activeElement).toBe(editButtonOf(OLD_META));
+      await waitFor(() => expect(document.activeElement).toBe(editButtonOf(OLD_META)));
     });
 
     it('focuses the previous memory after deleting the last one', async () => {
@@ -1023,7 +1023,7 @@ describe('DocNotesPanel', () => {
       fireEvent.click(deleteButtonOf(OLD_META));
       confirm();
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-      expect(document.activeElement).toBe(editButtonOf(NEW_META));
+      await waitFor(() => expect(document.activeElement).toBe(editButtonOf(NEW_META)));
     });
 
     it('focuses the Add field after deleting the only memory', async () => {
@@ -1033,7 +1033,7 @@ describe('DocNotesPanel', () => {
       fireEvent.click(deleteButtonOf(NEW_META));
       confirm();
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-      expect(document.activeElement).toBe(addBox());
+      await waitFor(() => expect(document.activeElement).toBe(addBox()));
     });
 
     it('truncates a long memory in the quote', () => {
@@ -1063,7 +1063,7 @@ describe('DocNotesPanel', () => {
       fireEvent.click(deleteButtonOf(NEW_META));
       confirm();
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-      expect(document.activeElement).toBe(editButtonOf(OLD_META));
+      await waitFor(() => expect(document.activeElement).toBe(editButtonOf(OLD_META)));
     });
   });
 
@@ -1465,7 +1465,7 @@ describe('DocNotesPanel', () => {
         await act(async () => {
           pending.resolve(acceptResponse(INSTRUCTIONS_SUGGESTION));
         });
-        expect(document.activeElement).toBe(next);
+        await waitFor(() => expect(document.activeElement).toBe(next));
       });
 
       it.each(['card', 'details'] as const)(
@@ -1489,7 +1489,7 @@ describe('DocNotesPanel', () => {
           });
 
           expect(screen.queryByRole('heading', { name: 'Suggestions for you' })).toBeNull();
-          expect(document.activeElement).toBe(variant === 'card' ? cardHeading() : summary);
+          await waitFor(() => expect(document.activeElement).toBe(variant === 'card' ? cardHeading() : summary));
         },
       );
     });
@@ -1585,9 +1585,9 @@ describe('DocNotesPanel', () => {
           await act(async () => {
             pending.resolve();
           });
-          expect(document.activeElement).toBe(
+          await waitFor(() => expect(document.activeElement).toBe(
             suggestions.length > 0 ? rowText(suggestionRow('Doc memory text')) : cardHeading(),
-          );
+          ));
           unmount();
         }
       });
@@ -1693,7 +1693,7 @@ describe('DocNotesPanel', () => {
       focus(button('Save'));
       fireEvent.click(button('Save'));
       expect((await screen.findByRole('alert')).textContent).toBe('Server exploded');
-      expect(document.activeElement).toBe(instructionsBox());
+      await waitFor(() => expect(document.activeElement).toBe(instructionsBox()));
 
       save.mockResolvedValueOnce(makeNotes());
       focus(button('Save'));
@@ -1729,7 +1729,7 @@ describe('DocNotesPanel', () => {
       focus(button('Add'));
       fireEvent.click(button('Add'));
       await waitFor(() => expect(addBox().value).toBe(''));
-      expect(document.activeElement).toBe(addBox());
+      await waitFor(() => expect(document.activeElement).toBe(addBox()));
     });
 
     it('Add memory reaching the cap: the max line replaces the field, so focus goes to the new memory\'s pencil', async () => {
@@ -1756,9 +1756,9 @@ describe('DocNotesPanel', () => {
       });
       const newest = screen.getAllByRole('listitem')[0];
       expect(newest.textContent).toContain('Fact 49');
-      expect(document.activeElement).toBe(
+      await waitFor(() => expect(document.activeElement).toBe(
         within(newest).getByRole('button', { name: 'Edit memory' }),
-      );
+      ));
     });
 
     it('memory edit: the pencil, the textarea, Cancel, Save; focus back on the pencil after Cancel and Save', async () => {
@@ -1832,7 +1832,7 @@ describe('DocNotesPanel', () => {
       fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }));
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
       expect(view.deleteMemory).toHaveBeenCalledWith('m2');
-      expect(document.activeElement).toBe(editButtonOf(OLD_META));
+      await waitFor(() => expect(document.activeElement).toBe(editButtonOf(OLD_META)));
     });
 
     it('delete: a failed delete keeps the confirm open with focus back on Delete', async () => {
@@ -1852,7 +1852,7 @@ describe('DocNotesPanel', () => {
         pending.reject(new ApiClientError('Server exploded', 500));
       });
       expect(within(screen.getByRole('dialog')).getByRole('alert').textContent).toBe('Server exploded');
-      expect(document.activeElement).toBe(del);
+      await waitFor(() => expect(document.activeElement).toBe(del));
     });
 
     it("suggestions: each row's text, Accept and Dismiss in turn, before the notes", () => {
@@ -1937,7 +1937,7 @@ describe('DocNotesPanel', () => {
       fireEvent.change(addBox(), { target: { value: 'Another fact' } });
       tapAdd();
       expect((await screen.findByRole('alert')).textContent).toBe('Server exploded');
-      expect(document.activeElement).toBe(button('Add'));
+      await waitFor(() => expect(document.activeElement).toBe(button('Add')));
     });
 
     it('a save that settles after the user went elsewhere leaves focus there', async () => {
@@ -1955,7 +1955,7 @@ describe('DocNotesPanel', () => {
         pending.resolve(makeNotes({ instructions: 'Be brief.', instructions_version: 4 }));
       });
       expect(screen.queryByRole('textbox', { name: 'Instructions' })).toBeNull();
-      expect(document.activeElement).toBe(field);
+      await waitFor(() => expect(document.activeElement).toBe(field));
     });
 
     it('a failed save after a tap goes back to Save, not the draft', async () => {
@@ -1973,14 +1973,14 @@ describe('DocNotesPanel', () => {
       fireEvent.change(openInstructionsEditor(), { target: { value: 'Be brief.' } });
       tapSave();
       expect((await screen.findByRole('alert')).textContent).toBe('Server exploded');
-      expect(document.activeElement).toBe(button('Save'));
+      await waitFor(() => expect(document.activeElement).toBe(button('Save')));
       fireEvent.click(button('Cancel'));
 
       fireEvent.click(editButtonOf(NEW_META));
       fireEvent.change(editBox(), { target: { value: 'Prices are in EUR.' } });
       tapSave();
       expect((await screen.findByRole('alert')).textContent).toBe('Server exploded');
-      expect(document.activeElement).toBe(button('Save'));
+      await waitFor(() => expect(document.activeElement).toBe(button('Save')));
     });
 
     it.each(['card', 'details'] as const)(
@@ -2003,7 +2003,7 @@ describe('DocNotesPanel', () => {
           pending.resolve();
         });
         expect(screen.queryByRole('dialog')).toBeNull();
-        expect(document.activeElement).toBe(variant === 'card' ? cardHeading() : summary);
+        await waitFor(() => expect(document.activeElement).toBe(variant === 'card' ? cardHeading() : summary));
       },
     );
 
@@ -2026,7 +2026,7 @@ describe('DocNotesPanel', () => {
         await act(async () => {
           first.resolve();
         });
-        expect(document.activeElement).toBe(button('Retry'));
+        await waitFor(() => expect(document.activeElement).toBe(button('Retry')));
 
         drop();
         fireEvent.click(button('Retry'));
@@ -2036,7 +2036,7 @@ describe('DocNotesPanel', () => {
           second.resolve();
         });
         expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
-        expect(document.activeElement).toBe(variant === 'card' ? cardHeading() : summary);
+        await waitFor(() => expect(document.activeElement).toBe(variant === 'card' ? cardHeading() : summary));
       },
     );
 
@@ -2134,7 +2134,7 @@ describe('DocNotesPanel', () => {
       await act(async () => {
         dismissed.resolve({ ...MEMORY_SUGGESTION, status: 'dismissed' });
       });
-      expect(document.activeElement).toBe(cardHeading());
+      await waitFor(() => expect(document.activeElement).toBe(cardHeading()));
     });
   });
 });

@@ -1195,7 +1195,7 @@ describe('MemoryInbox', () => {
     act(() => first.focus());
     fireEvent.click(first);
     await waitFor(() => expect(screen.queryByDisplayValue('Prices are in EUR.')).toBeNull());
-    expect(document.activeElement).toBe(screen.getByDisplayValue('Uses metric units'));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByDisplayValue('Uses metric units')));
 
     const last = within(openRegion()).getByRole('button', { name: 'Accept' });
     act(() => last.focus());
@@ -1203,7 +1203,7 @@ describe('MemoryInbox', () => {
     await screen.findByText(/No open suggestions/);
     const heading = within(openRegion()).getByRole('heading', { name: /Open suggestions/ });
     expect(heading.getAttribute('tabindex')).toBe('-1');
-    expect(document.activeElement).toBe(heading);
+    await waitFor(() => expect(document.activeElement).toBe(heading));
   });
 
   it('leaves focus alone when the user clicked elsewhere while an accept was in flight', async () => {
@@ -1253,7 +1253,7 @@ describe('MemoryInbox', () => {
     await waitFor(() => expect(screen.queryByDisplayValue('Likes tea')).toBeNull());
     const block = within(openRegion()).getByRole('group', { name: 'Archives this memory Prefers tea' });
     expect(block.getAttribute('tabindex')).toBe('-1');
-    expect(document.activeElement).toBe(block);
+    await waitFor(() => expect(document.activeElement).toBe(block));
 
     // Dismissed in turn: on to the next row's text field, and reviewed as a
     // proposal that was not taken.
@@ -1263,7 +1263,7 @@ describe('MemoryInbox', () => {
     fireEvent.click(dismiss);
     await waitFor(() => expect(screen.queryByTestId('memory-suggestion-archive')).toBeNull());
     expect(mocks.dismissMemorySuggestion.mock.calls.map(([id]) => id)).toEqual(['s1', 'a1']);
-    expect(document.activeElement).toBe(screen.getByDisplayValue('Likes rain'));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByDisplayValue('Likes rain')));
     expect(reviewedContents()).toEqual(['Proposed archiving a memory', 'Likes tea']);
   });
 });

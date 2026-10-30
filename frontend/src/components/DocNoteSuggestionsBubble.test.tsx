@@ -317,7 +317,7 @@ describe('suggestions bar focus', () => {
     focus(bubble()!);
     docNoteEvent(id, 0);
     expect(bar()).toBeNull();
-    expect(document.activeElement).toBe(composer());
+    await waitFor(() => expect(document.activeElement).toBe(composer()));
   });
 
   it('focuses the bubble left in the bar', async () => {
@@ -325,7 +325,7 @@ describe('suggestions bar focus', () => {
     focus(bubble()!);
     docNoteEvent(id, 0);
     expect(bubble()).toBeNull();
-    expect(document.activeElement).toBe(personalBubble());
+    await waitFor(() => expect(document.activeElement).toBe(personalBubble()));
   });
 
   it('skips a disabled composer field', async () => {
@@ -349,7 +349,7 @@ describe('suggestions bar focus', () => {
     pointerDown(bubble()!, 'touch');
     focus(bubble()!);
     docNoteEvent(id2, 0);
-    expect(document.activeElement).toBe(personalBubble());
+    await waitFor(() => expect(document.activeElement).toBe(personalBubble()));
   });
 
   it('leaves focus alone after a press outside the bar', async () => {
@@ -368,7 +368,7 @@ describe('suggestions bar focus', () => {
     focus(bubble()!);
     focus(composer());
     docNoteEvent(id, 0);
-    expect(document.activeElement).toBe(composer());
+    await waitFor(() => expect(document.activeElement).toBe(composer()));
   });
 
   it('hands focus on when the open panel closes itself at zero', async () => {
@@ -390,11 +390,11 @@ describe('suggestions bar focus', () => {
       fireEvent.click(dismiss);
       await waitFor(() => expect(screen.queryByDisplayValue('Note d1')).toBeNull());
       // The panel stays open until the count drops; focus waits on its title.
-      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Suggested doc notes' }));
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Suggested doc notes' })));
 
       docNoteEvent(id, 0);
       await waitFor(() => expect(bubble()).toBeNull());
-      expect(document.activeElement).toBe(others ? personalBubble() : composer());
+      await waitFor(() => expect(document.activeElement).toBe(others ? personalBubble() : composer()));
       cleanup();
     }
   });
