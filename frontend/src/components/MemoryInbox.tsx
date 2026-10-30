@@ -15,8 +15,8 @@
  * instructions accept sends the version its diff was rendered against
  * (docNoteReview.ts); when the instructions changed meanwhile, the 409
  * ``stale_instructions`` re-bases the row on the current text it carries
- * (re-reading the open list when it carries none), keeps the draft and
- * shows the server's message, as the composer bubble does.
+ * (unless the row in state is already as new), keeps the draft, shows the
+ * server's message and re-reads the open list, as the composer bubble does.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -44,6 +44,7 @@ import type {
   MemoryInboxRow,
   MemoryInboxSuggestion,
   MemorySuggestion,
+  StaleInstructionsCurrent,
 } from '../api/types';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
 import { docViewerPath } from '../utils/docsRoute';
@@ -273,9 +274,9 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
   const loadingMoreRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
-  // Bumped on every local accept / dismiss / re-base so a pending-list fetch
-  // already in flight cannot resurrect the row just removed (or undo the
-  // re-base).
+  // Bumped on every local accept / dismiss so a pending-list fetch already
+  // in flight cannot resurrect the row just removed, and before the re-read
+  // after an accept conflict so one in flight cannot land after it.
   const generationRef = useRef(0);
 
   const loadPending = useCallback(async () => {
@@ -385,10 +386,23 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
     });
   }, []);
 
-  const replacePending = useCallback((row: MemoryInboxRow) => {
+  // A doc instructions accept refused with 409 stale_instructions: re-base
+  // the row as it is in state now on the current text the 409 carries
+  // (unless a list read during the accept already brought it as new), so
+  // the diff shows what accepting now replaces; then re-read the list,
+  // superseding a read already in flight.
+  const rebaseStaleRow = useCallback((id: string, current: StaleInstructionsCurrent | null) => {
+    if (current) {
+      setPending((prev) => prev && prev.map((s) => {
+        if (s.id !== id || s.kind !== 'doc') return s;
+        const asNew = typeof s.current_instructions_version === 'number'
+          && s.current_instructions_version >= current.instructions_version;
+        return asNew ? s : { ...s, ...withCurrentInstructions(s, current) };
+      }));
+    }
     generationRef.current += 1;
-    setPending((prev) => (prev ? prev.map((s) => (s.id === row.id ? row : s)) : prev));
-  }, []);
+    void loadPending();
+  }, [loadPending]);
 
   const resolveOne = useCallback(async (
     suggestion: MemoryInboxRow,
@@ -431,14 +445,10 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
         removePending(suggestion.id);
         return true;
       }
-      // A doc instructions accept against instructions that changed since
-      // its diff was rendered: re-base the row on the current text so the
-      // diff shows what accepting now replaces (no text in the 409: re-read
-      // the list). The draft stays, and the next Accept sends the new version.
+      // The instructions changed since the diff was rendered: the draft
+      // stays, and the next Accept sends the version the row re-bases on.
       if (action === 'accept' && suggestion.kind === 'doc' && isStaleInstructionsError(err)) {
-        const current = staleInstructionsCurrent(err);
-        if (current) replacePending({ ...suggestion, ...withCurrentInstructions(suggestion, current) });
-        else void loadPending();
+        rebaseStaleRow(suggestion.id, staleInstructionsCurrent(err));
       }
       setRowErrors((prev) => ({
         ...prev,
@@ -451,7 +461,7 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
     } finally {
       setBusy(suggestion.id, false);
     }
-  }, [drafts, removePending, replacePending, loadPending, setBusy]);
+  }, [drafts, removePending, rebaseStaleRow, setBusy]);
 
   const resolveAll = useCallback(async (action: 'accept' | 'dismiss') => {
     if (isBulkBusy || !pending) return;
