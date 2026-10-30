@@ -57,7 +57,7 @@ Every doc-notes cap and budget is a constant in the doc-notes section of `chat/d
 
 ## Access
 
-The stores, the suggestion store included, make no access decisions; callers resolve `resolve_doc_access()` in `chat/docs/access.py` first, as for every `db/doc_store.py` function. Who may suggest and review is in [Doc Note Suggestions](doc-notes-review.md#registration).
+The stores, the suggestion store included, make no access decisions; callers resolve `resolve_doc_access()` in `chat/docs/access.py` first, as for every `db/doc_store.py` function. Who may suggest is in [Doc Note Suggestions -- Registration](doc-notes-review.md#registration), who may review in [Doc Note Suggestions -- Review](doc-notes-review.md#review).
 
 ## Seen Record
 

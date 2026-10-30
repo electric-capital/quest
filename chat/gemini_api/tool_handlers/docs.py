@@ -216,7 +216,7 @@ async def _handle_add_doc_image(caller: Caller, args: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Doc notes (docs/architecture/doc-notes.md)
+# Doc notes (docs/architecture/doc-notes-tools.md)
 # ---------------------------------------------------------------------------
 
 

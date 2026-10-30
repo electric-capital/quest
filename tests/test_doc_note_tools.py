@@ -1,5 +1,5 @@
 """Doc notes model tools ``list_doc_notes`` and ``suggest_doc_note``, phase
-A5 of spec 00011 (docs/architecture/doc-notes.md): the registry specs, the
+A5 of spec 00011 (docs/architecture/doc-notes-tools.md): the registry specs, the
 handlers (chat/gemini_api/tool_handlers/docs.py), the dispatch wiring and
 backstop (chat/gemini_api/tool_dispatch.py), ``service.list_doc_notes()``
 and the script bridge (chat/gemini_api/script_tool_call.py).

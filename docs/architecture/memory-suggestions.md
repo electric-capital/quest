@@ -27,6 +27,7 @@ The review UI serves all three kinds (personal memories, project memories, doc n
 - `frontend/src/components/MemorySuggestions.tsx` -- the bubble and the review panel of one kind; the header comment gives each kind's endpoints and wording, and why rows resolved in the panel are left out of every later list read. `MemorySuggestionsBar` renders the three bubbles side by side, each hidden while its count is zero; `ChatPanel.tsx` renders the bar as a direct child of `.chat-panel` (the phone rule in `MemorySuggestions.css` relies on it), above the expensive-resume card and the composer.
 - `frontend/src/components/MemoryInbox.tsx` + `MemoryInbox.css` -- the inbox's Memories tab (below).
 - `frontend/src/hooks/usePendingSuggestionCounts.ts` -- the per-kind pending counts behind the tab label and the inbox badge (below).
+- `frontend/src/hooks/useSuggestionListFocus.ts` -- where keyboard focus goes when a reviewed row leaves or is busy, used by the bubble, the inbox and the Notes panel alike so focus never falls to the page; the header comment gives the rule.
 - `frontend/src/store/conversationStore.ts` / `frontend/src/hooks/useConversation.ts` -- `pendingMemorySuggestions` and its project and doc note twins, seeded from the GET payload and replaced by every event's count; the open panel re-fetches its list when the count changes.
 
 ## Flow

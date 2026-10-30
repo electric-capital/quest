@@ -2243,7 +2243,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "required": ["doc_id", "workspace_path"],
         },
     },
-    # -- Quest Doc notes (docs/architecture/doc-notes.md): list_doc_notes
+    # -- Quest Doc notes (docs/architecture/doc-notes-tools.md): list_doc_notes
     # (chat/docs/service.py list_doc_notes) and suggest_doc_note
     # (chat/docs/note_suggestions.py register_suggestion). Both carry
     # requires_service=DOC_NOTES_SERVICE_KEY: the "doc_notes"
