@@ -1,12 +1,14 @@
 // MemorySuggestionRow's doc kind: the Instructions / Memory pill and the doc
-// link (or "Unavailable doc" with Accept disabled, or neither with
-// showDocLink={false}), the
-// instructions diff from the current text with its labels and the moved
-// notice, the doc-memory replacement diff and orphan pill, the cap counter
-// (code points of the trimmed draft, " characters" for screen readers) that
-// disables Accept over the cap, and the textarea labels. A personal row keeps none of the doc additions. The
-// row is presentational, so a small harness owns the draft. DocTitleLink,
-// shared with the inbox, takes its classes from a prefix and its icon on request.
+// link (or "Unavailable doc" with Accept disabled and described by the
+// line explaining why, or neither with showDocLink={false}), the
+// instructions diff from the current text with its labels, the legend
+// chips of the changes it has and the moved notice, the doc-memory
+// replacement diff and orphan pill, the cap counter (code points of the
+// trimmed draft, " characters" for screen readers) that disables Accept
+// over the cap, the over-cap line in a polite live region, and the textarea
+// labels. A personal row keeps none of the doc additions. The row is
+// presentational, so a small harness owns the draft. DocTitleLink, shared
+// with the inbox, takes its classes from a prefix and its icon on request.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
@@ -92,6 +94,15 @@ function diffBody(): Element {
   return diffs[0].querySelector('.memory-suggestion-diff-body')!;
 }
 
+/** The diff legend's chips, in order (none: "(same text)" or no diff). */
+function legendChips(): string[] {
+  return Array.from(document.querySelectorAll('.memory-suggestion-diff-legend > span'))
+    .map((chip) => chip.textContent ?? '');
+}
+
+const UNAVAILABLE_NOTICE = 'This doc was deleted or you no longer have access to it. '
+  + 'You can only dismiss this suggestion.';
+
 afterEach(cleanup);
 
 describe('MemorySuggestionRow kind="doc": instructions row', () => {
@@ -124,12 +135,29 @@ describe('MemorySuggestionRow kind="doc": instructions row', () => {
     expect(screen.getByTestId('memory-suggestion-diff').textContent).toContain('(same text)');
   });
 
-  it('labels new instructions when the doc has none', () => {
+  it('labels new instructions when the doc has none, with only the "added" chip', () => {
     renderDocRow({ suggestion: docNote({ current_instructions: '' }) });
     expect(screen.getByTestId('memory-suggestion-diff').textContent)
       .toContain('New instructions (the doc has none)');
     expect(diffBody().querySelector('.memory-suggestion-diff-add')!.textContent)
       .toBe('Prices are in EUR.');
+    expect(legendChips()).toEqual(['added']);
+  });
+
+  it('shows the legend chips of the changes the diff has', () => {
+    renderDocRow({ suggestion: docNote() });
+    expect(legendChips()).toEqual(['removed', 'added']);
+    const textarea = screen.getByLabelText('Doc instructions text');
+    // A pure deletion.
+    fireEvent.change(textarea, { target: { value: 'Prices are' } });
+    expect(legendChips()).toEqual(['removed']);
+    // A pure addition.
+    fireEvent.change(textarea, { target: { value: 'Prices are in USD. Always.' } });
+    expect(legendChips()).toEqual(['added']);
+    // No change: no legend, the note instead.
+    fireEvent.change(textarea, { target: { value: 'Prices are in USD.' } });
+    expect(legendChips()).toEqual([]);
+    expect(screen.getByTestId('memory-suggestion-diff').textContent).toContain('(same text)');
   });
 
   it('shows no diff when the current instructions are unknown', () => {
@@ -150,6 +178,18 @@ describe('MemorySuggestionRow kind="doc": instructions row', () => {
 });
 
 describe('MemorySuggestionRow kind="doc": memory row', () => {
+  it('shows only the "removed" chip for a replacement that only drops words', () => {
+    renderDocRow({
+      suggestion: memoryRow({
+        replaces_memory_id: 'm1',
+        replaces_content: 'The board meets weekly, on Mondays.',
+        content: 'The board meets weekly,',
+      }),
+    });
+    expect(diffBody().querySelector('.memory-suggestion-diff-add')).toBeNull();
+    expect(legendChips()).toEqual(['removed']);
+  });
+
   it('shows the pill and the diff from the doc memory it replaces', () => {
     const { container } = renderDocRow({
       suggestion: memoryRow({ replaces_memory_id: 'm1', replaces_content: 'The board meets monthly.' }),
@@ -183,7 +223,7 @@ describe('MemorySuggestionRow kind="doc": memory row', () => {
 });
 
 describe('MemorySuggestionRow kind="doc": doc link', () => {
-  it('names an unavailable doc without a link and only lets it be dismissed', () => {
+  it('names an unavailable doc without a link, says why and only lets it be dismissed', () => {
     const onDismiss = vi.fn();
     const { container } = renderDocRow({ suggestion: docNote({ doc_title: '' }), onDismiss });
     expect(screen.queryByRole('link')).toBeNull();
@@ -191,20 +231,33 @@ describe('MemorySuggestionRow kind="doc": doc link', () => {
     expect(label.textContent).toBe('Unavailable doc');
     expect(label.getAttribute('title'))
       .toBe('This doc was deleted or you no longer have access to it');
+    const notice = screen.getByText(UNAVAILABLE_NOTICE);
+    expect(notice.className).toBe('memory-suggestion-unavailable');
     const accept = screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement;
     expect(accept.disabled).toBe(true);
-    expect(accept.getAttribute('title'))
-      .toBe('This doc was deleted or you no longer have access to it');
+    expect(accept.getAttribute('aria-describedby')).toBe(notice.id);
+    expect(accept.getAttribute('title')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it('gives an available doc an Accept without a title', () => {
+  it('explains an unavailable doc where the row names no doc', () => {
+    renderDocRow({ suggestion: memoryRow({ doc_title: '' }), showDocLink: false });
+    expect(screen.queryByText('Unavailable doc')).toBeNull();
+    const notice = screen.getByText(UNAVAILABLE_NOTICE);
+    expect(screen.getByRole('button', { name: 'Accept' }).getAttribute('aria-describedby'))
+      .toBe(notice.id);
+  });
+
+  it('gives an available doc an Accept without a title or description', () => {
     renderDocRow({ suggestion: docNote() });
     const accept = screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement;
     expect(accept.disabled).toBe(false);
     expect(accept.getAttribute('title')).toBeNull();
+    expect(accept.getAttribute('aria-describedby')).toBeNull();
+    expect(screen.queryByText(UNAVAILABLE_NOTICE)).toBeNull();
   });
+
 
   it('shows neither link nor label with showDocLink={false}', () => {
     for (const docTitle of ['Quarterly plan', '']) {
@@ -309,6 +362,31 @@ describe('MemorySuggestionRow kind="doc": cap counter', () => {
     expect(accept.disabled).toBe(false);
   });
 
+  it('announces the over-cap line through a polite live region kept in the DOM', () => {
+    const { container } = renderDocRow({ suggestion: memoryRow() });
+    const textarea = screen.getByLabelText('Doc memory text');
+    const regions = container.querySelectorAll('[aria-live]');
+    expect(regions).toHaveLength(1);
+    const region = regions[0];
+    expect(region.getAttribute('aria-live')).toBe('polite');
+    expect(region.childElementCount).toBe(0);
+    expect(region.textContent).toBe('');
+
+    fireEvent.change(textarea, { target: { value: 'x'.repeat(1001) } });
+    expect(container.querySelector('[aria-live]')).toBe(region);
+    expect(region.textContent).toBe('Use at most 1,000 characters.');
+    const line = region.querySelector('p.memory-suggestion-over-cap')!;
+    expect(textarea.getAttribute('aria-describedby')!.split(' ')).toContain(line.id);
+
+    // Further keystrokes over the cap leave the region's text as it is.
+    fireEvent.change(textarea, { target: { value: 'x'.repeat(1002) } });
+    expect(region.textContent).toBe('Use at most 1,000 characters.');
+
+    fireEvent.change(textarea, { target: { value: 'x'.repeat(10) } });
+    expect(container.querySelector('[aria-live]')).toBe(region);
+    expect(region.childElementCount).toBe(0);
+  });
+
   it('counts code points, so an emoji is one character', () => {
     const { container } = renderDocRow({ suggestion: memoryRow(), draft: '😀'.repeat(1000) });
     const counter = container.querySelector('.memory-suggestion-counter')!;
@@ -377,6 +455,8 @@ describe('MemorySuggestionRow kind="user"', () => {
     expect(textarea.getAttribute('aria-describedby')).toBeNull();
     expect(container.querySelector('.memory-suggestion-doc-header')).toBeNull();
     expect(container.querySelector('.memory-suggestion-counter')).toBeNull();
+    expect(container.querySelector('[aria-live]')).toBeNull();
+    expect(container.querySelector('.memory-suggestion-unavailable')).toBeNull();
     expect((screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement).disabled).toBe(false);
   });
 });

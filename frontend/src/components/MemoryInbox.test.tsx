@@ -515,6 +515,13 @@ describe('MemoryInbox', () => {
     expect(unavailable.getAttribute('title')).toBe('This doc was deleted or you no longer have access to it');
     expect(within(open).queryAllByRole('link')).toHaveLength(0);
     expect(within(open).getByRole('button', { name: 'Chat d1' })).not.toBeNull();
+    // The row says why only Dismiss works.
+    const notice = within(open).getByText(
+      'This doc was deleted or you no longer have access to it. You can only dismiss this suggestion.',
+    );
+    const accept = within(open).getByRole('button', { name: 'Accept' }) as HTMLButtonElement;
+    expect(accept.disabled).toBe(true);
+    expect(accept.getAttribute('aria-describedby')).toBe(notice.id);
   });
 
   it('calls onOpenDoc on a plain click of the doc link, which then opens the doc', async () => {

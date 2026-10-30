@@ -7,6 +7,7 @@
 // (against the row in state, then a re-fetch), the fetch the accept's own
 // count event starts kept (it re-bases a second instructions row on the
 // same doc), and an Accept all that skips a row its own Accept refuses.
+// The panel's loading and empty lines.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -228,6 +229,23 @@ describe('MemorySuggestions', () => {
     expect(screen.getByDisplayValue('B')).not.toBeNull();
     // Its count leaves out the row dismissed here too.
     expect(conversationStore.getConversation('c-stale').pendingMemorySuggestions).toBe(1);
+  });
+
+  it('says it is loading, then that nothing is open', async () => {
+    let resolveList: (value: { suggestions: MemorySuggestion[]; pending_count: number }) => void = () => {};
+    mocks.fetchMemorySuggestions.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveList = resolve; }),
+    );
+    render(<MemorySuggestions conversationId="c1" pendingCount={1} />);
+    fireEvent.click(screen.getByRole('button', { name: /suggested memory/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.querySelector('.memory-suggestions-empty')!.textContent).toBe('Loading suggestions...');
+    // Resolved elsewhere before the list came back.
+    await act(async () => {
+      resolveList({ suggestions: [], pending_count: 0 });
+    });
+    await waitFor(() => expect(dialog.querySelector('.memory-suggestions-empty')!.textContent)
+      .toBe('No open suggestions.'));
   });
 
   it('closes on Escape and on the backdrop', async () => {

@@ -15,7 +15,11 @@
  * since the proposal, and an ``n / max`` counter against the server's cap.
  * A doc row's Accept follows canAcceptDocNote (docNoteReview.ts): disabled
  * over the cap, on a blank text and while the doc is unavailable; Dismiss
- * always works.
+ * always works. An unavailable doc (deleted or no longer visible) also gets
+ * a line above the buttons saying so, which describes the disabled Accept.
+ * The over-cap line sits in a polite live region that stays in the DOM
+ * (empty under the cap), so a screen reader hears it once as the text
+ * crosses the cap and not on every keystroke.
  *
  * Styled by MemorySuggestions.css: ``.memory-suggestion-row--<kind>`` sets
  * the colour (the accent for ``user``, the project amber, the doc rose).
@@ -80,6 +84,7 @@ export const DOC_NOTE_LABELS = {
 
 const UNAVAILABLE_DOC_LABEL = 'Unavailable doc';
 const UNAVAILABLE_DOC_TITLE = 'This doc was deleted or you no longer have access to it';
+const UNAVAILABLE_DOC_NOTICE = `${UNAVAILABLE_DOC_TITLE}. You can only dismiss this suggestion.`;
 
 function formatCount(n: number): string {
   return n.toLocaleString('en-US');
@@ -107,7 +112,8 @@ function AutoGrowTextarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
 /**
  * What accepting a replacement changes: the replaced text with the words
  * the draft drops struck through on red and the words it adds on green.
- * Follows the draft as the user edits it.
+ * Follows the draft as the user edits it. The legend shows only the chips
+ * of the changes the diff has (new instructions remove nothing).
  */
 function ReplacementDiff({
   before,
@@ -116,18 +122,19 @@ function ReplacementDiff({
   title,
 }: { before: string; after: string; label: string; title: string }) {
   const segments = useMemo(() => wordDiff(before, after.trim()), [before, after]);
-  const unchanged = segments.every((s) => s.type === 'equal');
+  const removes = segments.some((s) => s.type === 'del');
+  const adds = segments.some((s) => s.type === 'add');
   return (
     <div className="memory-suggestion-diff" data-testid="memory-suggestion-diff">
       <div className="memory-suggestion-diff-label">
         <span title={title}>{label}</span>
-        {unchanged ? (
-          <span className="memory-suggestion-diff-note">(same text)</span>
-        ) : (
+        {removes || adds ? (
           <span className="memory-suggestion-diff-legend" aria-hidden="true">
-            <span className="memory-suggestion-diff-del">removed</span>
-            <span className="memory-suggestion-diff-add">added</span>
+            {removes && <span className="memory-suggestion-diff-del">removed</span>}
+            {adds && <span className="memory-suggestion-diff-add">added</span>}
           </span>
+        ) : (
+          <span className="memory-suggestion-diff-note">(same text)</span>
         )}
       </div>
       <div className="memory-suggestion-diff-body">
@@ -295,6 +302,7 @@ export function MemorySuggestionRow(props: MemorySuggestionRowProps) {
   const overCap = maxChars !== null && charCount > maxChars;
   const counterId = `${ids}-counter`;
   const overCapId = `${ids}-over`;
+  const unavailableId = `${ids}-unavailable`;
   const docUnavailable = docNote !== null && !isDocNoteDocAvailable(docNote);
   // An archive-only row has no text: Accept just archives the memory.
   const acceptDisabled = busy || (docNote
@@ -339,10 +347,14 @@ export function MemorySuggestionRow(props: MemorySuggestionRowProps) {
           aria-invalid={overCap || undefined}
         />
       )}
-      {overCap && (
-        <p id={overCapId} className="memory-suggestion-over-cap">
-          Use at most {formatCount(maxChars)} characters.
-        </p>
+      {maxChars !== null && (
+        <div className="memory-suggestion-over-cap-live" aria-live="polite">
+          {overCap && (
+            <p id={overCapId} className="memory-suggestion-over-cap">
+              Use at most {formatCount(maxChars)} characters.
+            </p>
+          )}
+        </div>
       )}
       {instructions?.instructions_moved && (
         <div className="memory-suggestion-moved">
@@ -381,6 +393,11 @@ export function MemorySuggestionRow(props: MemorySuggestionRowProps) {
         </div>
       )}
       {children}
+      {docUnavailable && (
+        <p id={unavailableId} className="memory-suggestion-unavailable">
+          {UNAVAILABLE_DOC_NOTICE}
+        </p>
+      )}
       {error && (
         <div className="memory-suggestions-error" role="alert">{error}</div>
       )}
@@ -401,7 +418,7 @@ export function MemorySuggestionRow(props: MemorySuggestionRowProps) {
           className="memory-suggestion-accept"
           onClick={onAccept}
           disabled={acceptDisabled}
-          title={docUnavailable ? UNAVAILABLE_DOC_TITLE : undefined}
+          aria-describedby={docUnavailable ? unavailableId : undefined}
         >
           {busy ? (
             <LoaderCircle size={14} className="memory-suggestions-spinner" aria-hidden="true" />

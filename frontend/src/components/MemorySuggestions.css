@@ -366,6 +366,17 @@
   font-style: italic;
 }
 
+/* A doc row whose doc was deleted or is no longer visible: why Accept is
+   disabled, above the buttons (it describes Accept). Muted like the meta
+   line; it wraps in the Notes panel's 280px card. */
+.memory-suggestion-unavailable {
+  margin: 0;
+  padding: 0 0.5rem;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
 .memory-suggestion-replaces {
   padding: 0.05rem 0.45rem;
   border-radius: 999px;
@@ -426,6 +437,12 @@
   padding: 0 0.5rem;
   font-size: 0.76rem;
   line-height: 1.4;
+}
+
+/* The over-cap line's live region stays in the DOM under the cap; empty,
+   it leaves the row's flex flow so it adds no gap. */
+.memory-suggestion-over-cap-live:empty {
+  position: absolute;
 }
 
 @media (prefers-color-scheme: light) {

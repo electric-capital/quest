@@ -497,11 +497,11 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
               {isLoading && suggestions.length === 0 && !loadError && (
                 <div className="memory-suggestions-empty">
                   <LoaderCircle size={16} className="memory-suggestions-spinner" aria-hidden="true" />
-                  Loading…
+                  Loading suggestions...
                 </div>
               )}
               {!isLoading && !loadError && suggestions.length === 0 && (
-                <div className="memory-suggestions-empty">No pending suggestions.</div>
+                <div className="memory-suggestions-empty">No open suggestions.</div>
               )}
               {suggestions.map((suggestion) => (
                 <Fragment key={suggestion.id}>
