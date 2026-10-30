@@ -36,7 +36,7 @@ DEFAULT_WORD_BUDGET = 6000
 OVER_BUDGET_CEILINGS = {
     "docs/architecture/action-requests.md": 10473,
     "docs/architecture/database.md": 10856,
-    "docs/architecture/quest-docs.md": 8487,
+    "docs/architecture/quest-docs.md": 8439,
     "docs/architecture/realtime.md": 7314,
     "docs/architecture/llm-providers.md": 7500,
     "docs/architecture/skill-library.md": 7000,
