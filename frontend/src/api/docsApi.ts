@@ -52,6 +52,14 @@ export const DOCS_FEATURE = 'docs';
  */
 export const DOC_NOTES_FEATURE = 'doc_notes';
 
+/**
+ * Server caps on doc notes (chat/docs/constants.py). The character caps count
+ * code points of the text after stripping surrounding whitespace.
+ */
+export const DOC_INSTRUCTIONS_MAX_CHARS = 4_000;
+export const DOC_MEMORY_MAX_CHARS = 1_000;
+export const DOC_MAX_MEMORIES = 50;
+
 /** Server-side cap on a list page (`limit` must be 1..200). */
 export const DOCS_MAX_PAGE_SIZE = 200;
 
