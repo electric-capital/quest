@@ -31,6 +31,10 @@ on:
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
+# The jobs only read the checkout and query public advisory feeds.
+permissions:
+  contents: read
+
 concurrency:
   group: audit-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
