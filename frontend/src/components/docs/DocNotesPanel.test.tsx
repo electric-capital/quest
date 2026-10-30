@@ -3,9 +3,11 @@
 // owner's instructions editor (save, cancel, clear, the version captured at
 // open, the 409 merge view, other errors, the character counter at the
 // cap); the memories' add / edit / delete with their inline errors and the
-// 50-memory cap; and the card vs details variants. The panel is
+// 50-memory cap; focus after saves, failures and deletes; drafts dropped
+// with a lost right; and the card vs details variants. The panel is
 // presentational over `view`, so each test passes a fake DocNotesView.
-import { afterEach, describe, expect, it, vi } from 'vitest';
+// The clock is fixed (vi.setSystemTime), so the relative times are stable.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ApiClientError } from '../../api/request';
 import type { DocMemory, DocNotes } from '../../api/types';
@@ -19,8 +21,10 @@ const EDITOR_LINE =
   "Models follow this doc's instructions and read its memories before they change it.";
 const OWNER_ONLY_NOTE = "Only the doc's owner can change the instructions.";
 
+const NOW = new Date('2026-10-29T12:00:00Z');
+
 function minutesAgo(n: number): string {
-  return new Date(Date.now() - n * 60_000).toISOString();
+  return new Date(NOW.getTime() - n * 60_000).toISOString();
 }
 
 const MEM_NEW: DocMemory = {
@@ -129,9 +133,18 @@ function duplicateError(memoryId: string) {
   });
 }
 
+const NEW_META = 'Added by you · 10m ago';
+const OLD_META = 'Suggested in a conversation · 3h ago';
+
 const instructionsBox = () => screen.getByRole('textbox', { name: 'Instructions' }) as HTMLTextAreaElement;
+const addBox = () => screen.getByRole('textbox', { name: 'New memory' }) as HTMLTextAreaElement;
+const editBox = () => screen.getByRole('textbox', { name: 'Edit memory' }) as HTMLTextAreaElement;
 const button = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement;
-const memoryItem = (text: string) => screen.getByText(text).closest('li') as HTMLElement;
+const memoryItem = (meta: string) => screen.getByText(meta).closest('li') as HTMLElement;
+const editButtonOf = (meta: string) =>
+  within(memoryItem(meta)).getByRole('button', { name: 'Edit memory' }) as HTMLButtonElement;
+const deleteButtonOf = (meta: string) =>
+  within(memoryItem(meta)).getByRole('button', { name: 'Delete memory' }) as HTMLButtonElement;
 
 function openInstructionsEditor() {
   fireEvent.click(button('Edit instructions'));
@@ -139,8 +152,13 @@ function openInstructionsEditor() {
 }
 
 describe('DocNotesPanel', () => {
+  beforeEach(() => {
+    vi.setSystemTime(NOW);
+  });
+
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
   });
 
   describe('rights', () => {
@@ -164,9 +182,18 @@ describe('DocNotesPanel', () => {
         'Prices are in USD.',
         'The audience is\nthe board.',
       ]);
-      expect(within(items[0]).getByText('Added by you · 10m ago')).toBeTruthy();
-      expect(within(items[1]).getByText('Suggested in a conversation · 3h ago')).toBeTruthy();
+      expect(within(items[0]).getByText(NEW_META)).toBeTruthy();
+      expect(within(items[1]).getByText(OLD_META)).toBeTruthy();
       expect(container.querySelector('.doc-notes-count')?.textContent).toBe('2');
+
+      // The per-memory buttons are described by the memory they act on.
+      const content = items[0].querySelector('.doc-notes-memory-content') as HTMLElement;
+      for (const name of ['Edit memory', 'Delete memory']) {
+        const btn = within(items[0]).getByRole('button', { name });
+        expect(btn.getAttribute('aria-describedby')).toBe(content.id);
+      }
+      // Editors have focusable controls; the scroller is not a tab stop.
+      expect(container.querySelector('.doc-notes-scroll')?.hasAttribute('tabindex')).toBe(false);
     });
 
     it('owner: names the last editor when the email differs or is unknown', () => {
@@ -193,7 +220,14 @@ describe('DocNotesPanel', () => {
     });
 
     it('write share: instructions read-only with the owner-only note, memories editable', () => {
-      const { container } = renderPanel(viewWith(WRITE_SHARE), { viewerEmail: 'ada@example.com' });
+      // The editor's identity is the owner's to see, even if a payload carried it.
+      const { container } = renderPanel(
+        viewWith({
+          ...WRITE_SHARE,
+          instructions_updated_by: { id: 7, name: 'Ada Lovelace', email: 'ada@example.com' },
+        }),
+        { viewerEmail: 'ada@example.com' },
+      );
 
       expect(container.querySelector('.doc-notes-instructions-text')?.textContent).toBe(
         'Keep the tone formal.\nCite every source.',
@@ -208,6 +242,13 @@ describe('DocNotesPanel', () => {
       expect(screen.getAllByRole('button', { name: 'Delete memory' })).toHaveLength(2);
     });
 
+    it('write share: a doc with memories but no instructions says so', () => {
+      renderPanel(viewWith({ ...WRITE_SHARE, instructions: '', instructions_updated_at: null }));
+      expect(screen.getByRole('heading', { name: 'Instructions' })).toBeTruthy();
+      expect(screen.getByText('No instructions.')).toBeTruthy();
+      expect(screen.getByText(OWNER_ONLY_NOTE)).toBeTruthy();
+    });
+
     it('read share: everything read-only, no buttons and no owner-only note', () => {
       const { container } = renderPanel(viewWith(READ_SHARE));
 
@@ -218,6 +259,8 @@ describe('DocNotesPanel', () => {
       expect(screen.queryByText(OWNER_ONLY_NOTE)).toBeNull();
       expect(screen.queryByRole('textbox')).toBeNull();
       expect(screen.queryAllByRole('button')).toHaveLength(0);
+      // Nothing focusable inside: the scroller is a tab stop.
+      expect(container.querySelector('.doc-notes-scroll')?.getAttribute('tabindex')).toBe('0');
     });
 
     it('read share: an empty memory list says so', () => {
@@ -225,12 +268,38 @@ describe('DocNotesPanel', () => {
       expect(screen.getByText('No memories.')).toBeTruthy();
     });
 
-    it('closes the instructions editor when the owner right drops', () => {
-      const { rerenderView } = renderPanel(makeView());
-      openInstructionsEditor();
+    it('closes the instructions editor when the owner right drops, for good', () => {
+      const view = makeView();
+      const { rerenderView } = renderPanel(view);
+      fireEvent.change(openInstructionsEditor(), { target: { value: 'Old draft' } });
       rerenderView(viewWith(WRITE_SHARE));
       expect(screen.queryByRole('textbox', { name: 'Instructions' })).toBeNull();
       expect(screen.getByText(OWNER_ONLY_NOTE)).toBeTruthy();
+
+      // Re-granted: no old draft comes back.
+      rerenderView(view);
+      expect(screen.queryByRole('textbox', { name: 'Instructions' })).toBeNull();
+      expect(openInstructionsEditor().value).toBe('Keep the tone formal.\nCite every source.');
+    });
+
+    it('drops the memory editor, the delete dialog and the Add draft when can_edit drops, for good', () => {
+      const view = makeView();
+      const { rerenderView } = renderPanel(view);
+      fireEvent.change(addBox(), { target: { value: 'Unsent' } });
+      fireEvent.click(editButtonOf(NEW_META));
+      fireEvent.change(editBox(), { target: { value: 'Half-edited' } });
+      fireEvent.click(deleteButtonOf(OLD_META));
+      expect(screen.getByRole('dialog')).toBeTruthy();
+
+      rerenderView(viewWith(READ_SHARE));
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(screen.queryByRole('textbox')).toBeNull();
+      expect(screen.getByText('Prices are in USD.')).toBeTruthy();
+
+      rerenderView(view);
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(screen.queryByRole('textbox', { name: 'Edit memory' })).toBeNull();
+      expect(addBox().value).toBe('');
     });
   });
 
@@ -277,13 +346,22 @@ describe('DocNotesPanel', () => {
       expect(screen.getByText('Loading notes...')).toBeTruthy();
     });
 
-    it('shows a load error with Retry calling reload', () => {
+    it('shows a load error with Retry calling reload, disabled until it settles', async () => {
+      const pending = deferred<void>();
       const view = makeView({ notes: null, error: new ApiClientError('Server exploded', 500) });
+      vi.mocked(view.reload).mockReturnValue(pending.promise);
       expect(docNotesPanelShown(view)).toBe(true);
       renderPanel(view);
       expect(screen.getByText('Server exploded')).toBeTruthy();
+
       fireEvent.click(button('Retry'));
       expect(view.reload).toHaveBeenCalledTimes(1);
+      expect(button('Retrying...').disabled).toBe(true);
+
+      await act(async () => {
+        pending.resolve();
+      });
+      expect(button('Retry').disabled).toBe(false);
     });
 
     it('falls back to a generic load error message', () => {
@@ -402,10 +480,14 @@ describe('DocNotesPanel', () => {
       fireEvent.change(openInstructionsEditor(), { target: { value: 'My draft' } });
       fireEvent.click(button('Save'));
 
-      expect((await screen.findByRole('alert')).textContent).toBe(STALE_MESSAGE);
+      const firstNotice = await screen.findByRole('alert');
+      expect(firstNotice.textContent).toBe(STALE_MESSAGE);
       const current = screen.getByRole('group', { name: 'Current instructions' });
       expect(within(current).getByText('Server text')).toBeTruthy();
+      // The capped box scrolls; it has nothing focusable, so it takes focus itself.
+      expect(within(current).getByText('Server text').getAttribute('tabindex')).toBe('0');
       const box = instructionsBox();
+      expect(document.activeElement).toBe(box);
       expect(box.value).toBe('My draft');
       expect(box.readOnly).toBe(false);
       expect(current.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -420,6 +502,9 @@ describe('DocNotesPanel', () => {
         ).toBeTruthy(),
       );
       expect(screen.queryByText('Server text')).toBeNull();
+      // A new notice element, so the second 409 is announced again.
+      expect(screen.getByRole('alert')).not.toBe(firstNotice);
+      expect(firstNotice.isConnected).toBe(false);
 
       save.mockResolvedValueOnce(makeNotes({ instructions: 'My draft', instructions_version: 9 }));
       fireEvent.click(button('Save'));
@@ -470,19 +555,22 @@ describe('DocNotesPanel', () => {
       expect(save).toHaveBeenLastCalledWith('My draft', 11);
     });
 
-    it('shows other errors inline and keeps the editor open', async () => {
+    it('shows other errors inline, keeps the editor open and refocuses the draft', async () => {
       const view = makeView();
       vi.mocked(view.saveInstructions).mockRejectedValueOnce(
         new ApiClientError('Instructions cannot contain NUL characters.', 400, 'invalid_instructions'),
       );
       renderPanel(view);
       fireEvent.change(openInstructionsEditor(), { target: { value: 'Bad draft' } });
+      // The pressed Save is disabled while saving.
+      button('Save').focus();
       fireEvent.click(button('Save'));
 
       expect((await screen.findByRole('alert')).textContent).toBe(
         'Instructions cannot contain NUL characters.',
       );
       expect(instructionsBox().value).toBe('Bad draft');
+      expect(document.activeElement).toBe(instructionsBox());
       expect(screen.queryByRole('group', { name: 'Current instructions' })).toBeNull();
       expect(button('Save').disabled).toBe(false);
     });
@@ -498,12 +586,14 @@ describe('DocNotesPanel', () => {
         expect(screen.getByText('4,000 / 4,000')).toBeTruthy();
         expect(button('Save').disabled).toBe(false);
         expect(screen.queryByText('Use at most 4,000 characters.')).toBeNull();
+        expect(box.hasAttribute('aria-invalid')).toBe(false);
 
         fireEvent.change(box, { target: { value: 'a'.repeat(4001) } });
         expect(screen.getByText('4,001 / 4,000')).toBeTruthy();
         expect(button('Save').disabled).toBe(true);
         const over = screen.getByText('Use at most 4,000 characters.');
         expect(box.getAttribute('aria-describedby')?.split(' ')).toContain(over.id);
+        expect(box.getAttribute('aria-invalid')).toBe('true');
 
         // Surrounding whitespace is not counted.
         fireEvent.change(box, { target: { value: `  \n${'a'.repeat(4000)}\n  ` } });
@@ -522,8 +612,6 @@ describe('DocNotesPanel', () => {
   });
 
   describe('memories: add', () => {
-    const addBox = () => screen.getByRole('textbox', { name: 'New memory' }) as HTMLTextAreaElement;
-
     it('Add is disabled for empty or blank text and the counter appears once there is text', () => {
       renderPanel(makeView());
       expect(button('Add').disabled).toBe(true);
@@ -555,21 +643,67 @@ describe('DocNotesPanel', () => {
       expect(document.activeElement).toBe(addBox());
     });
 
-    it('a duplicate shows inline, keeps the draft and highlights the existing memory', async () => {
-      const view = makeView();
-      vi.mocked(view.addMemory).mockRejectedValueOnce(duplicateError('m1'));
-      renderPanel(view);
-      fireEvent.change(addBox(), { target: { value: 'The audience is\nthe board.' } });
-      fireEvent.click(button('Add'));
+    it('a duplicate shows inline, keeps the draft and refocuses it, and highlights the existing memory', async () => {
+      const scrollIntoView = vi.fn();
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+        value: scrollIntoView,
+        configurable: true,
+        writable: true,
+      });
+      try {
+        const view = makeView();
+        vi.mocked(view.addMemory).mockRejectedValueOnce(duplicateError('m1'));
+        renderPanel(view);
+        fireEvent.change(addBox(), { target: { value: 'The audience is\nthe board.' } });
+        // The pressed Add is disabled while adding.
+        button('Add').focus();
+        fireEvent.click(button('Add'));
 
-      expect((await screen.findByRole('alert')).textContent).toBe('This doc already has that memory.');
-      expect(addBox().value).toBe('The audience is\nthe board.');
-      expect(memoryItem('Suggested in a conversation · 3h ago').className).toContain(
-        'doc-notes-memory--highlight',
-      );
-      expect(memoryItem('Added by you · 10m ago').className).not.toContain(
-        'doc-notes-memory--highlight',
-      );
+        expect((await screen.findByRole('alert')).textContent).toBe(
+          'This doc already has that memory.',
+        );
+        expect(addBox().value).toBe('The audience is\nthe board.');
+        expect(document.activeElement).toBe(addBox());
+        expect(memoryItem(OLD_META).className).toContain('doc-notes-memory--highlight');
+        expect(memoryItem(NEW_META).className).not.toContain('doc-notes-memory--highlight');
+        expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+        expect(scrollIntoView.mock.contexts[0]).toBe(memoryItem(OLD_META));
+      } finally {
+        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      }
+    });
+
+    it('the highlight clears after its timeout, restarted by a repeat duplicate', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      const view = makeView();
+      vi.mocked(view.addMemory).mockRejectedValue(duplicateError('m1'));
+      renderPanel(view);
+      const highlighted = () =>
+        memoryItem(OLD_META).classList.contains('doc-notes-memory--highlight');
+      const addDuplicate = async () => {
+        await act(async () => {
+          fireEvent.click(button('Add'));
+        });
+      };
+
+      fireEvent.change(addBox(), { target: { value: 'The audience is\nthe board.' } });
+      await addDuplicate();
+      expect(highlighted()).toBe(true);
+      act(() => {
+        vi.advanceTimersByTime(1500);
+      });
+      expect(highlighted()).toBe(true);
+
+      // The same duplicate again: the 2 s start over.
+      await addDuplicate();
+      act(() => {
+        vi.advanceTimersByTime(1500);
+      });
+      expect(highlighted()).toBe(true);
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(highlighted()).toBe(false);
     });
 
     it('the memory cap error shows the server message inline', async () => {
@@ -610,16 +744,12 @@ describe('DocNotesPanel', () => {
   });
 
   describe('memories: edit', () => {
-    const editBox = () => screen.getByRole('textbox', { name: 'Edit memory' }) as HTMLTextAreaElement;
-    const editButtonOf = (meta: string) =>
-      within(memoryItem(meta)).getByRole('button', { name: 'Edit memory' });
-
     it('saves the edited text and returns focus to the memory\'s Edit button', async () => {
       const view = makeView();
       vi.mocked(view.updateMemory).mockResolvedValue({ ...MEM_NEW, content: 'Prices are in EUR.' });
       renderPanel(view);
 
-      fireEvent.click(editButtonOf('Added by you · 10m ago'));
+      fireEvent.click(editButtonOf(NEW_META));
       const box = editBox();
       expect(box.value).toBe('Prices are in USD.');
       expect(document.activeElement).toBe(box);
@@ -629,21 +759,24 @@ describe('DocNotesPanel', () => {
       fireEvent.click(button('Save'));
       expect(view.updateMemory).toHaveBeenCalledWith('m2', 'Prices are in EUR.');
       await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Edit memory' })).toBeNull());
-      await waitFor(() => expect(document.activeElement).toBe(editButtonOf('Added by you · 10m ago')));
+      await waitFor(() => expect(document.activeElement).toBe(editButtonOf(NEW_META)));
     });
 
-    it('shows duplicate and not-found errors inline under the editor', async () => {
+    it('shows duplicate and not-found errors inline under the editor, refocusing the draft', async () => {
       const view = makeView();
       vi.mocked(view.updateMemory)
         .mockRejectedValueOnce(duplicateError('m1'))
         .mockRejectedValueOnce(new ApiClientError('Doc memory not found.', 404, 'memory_not_found'));
       renderPanel(view);
-      fireEvent.click(editButtonOf('Added by you · 10m ago'));
+      fireEvent.click(editButtonOf(NEW_META));
       fireEvent.change(editBox(), { target: { value: 'The audience is\nthe board.' } });
 
+      button('Save').focus();
       fireEvent.click(button('Save'));
       expect((await screen.findByRole('alert')).textContent).toBe('This doc already has that memory.');
       expect(editBox().value).toBe('The audience is\nthe board.');
+      expect(document.activeElement).toBe(editBox());
+      expect(memoryItem(OLD_META).className).toContain('doc-notes-memory--highlight');
 
       fireEvent.click(button('Save'));
       await waitFor(() =>
@@ -655,21 +788,21 @@ describe('DocNotesPanel', () => {
     it('Cancel restores the memory unchanged', () => {
       const view = makeView();
       renderPanel(view);
-      fireEvent.click(editButtonOf('Added by you · 10m ago'));
+      fireEvent.click(editButtonOf(NEW_META));
       fireEvent.change(editBox(), { target: { value: 'Something else' } });
       fireEvent.click(button('Cancel'));
 
       expect(screen.queryByRole('textbox', { name: 'Edit memory' })).toBeNull();
       expect(screen.getByText('Prices are in USD.')).toBeTruthy();
       expect(view.updateMemory).not.toHaveBeenCalled();
-      expect(document.activeElement).toBe(editButtonOf('Added by you · 10m ago'));
+      expect(document.activeElement).toBe(editButtonOf(NEW_META));
     });
 
     it('keeps one editor open at a time and closes it when its memory disappears', () => {
       const view = makeView();
       const { rerenderView } = renderPanel(view);
-      fireEvent.click(editButtonOf('Added by you · 10m ago'));
-      fireEvent.click(editButtonOf('Suggested in a conversation · 3h ago'));
+      fireEvent.click(editButtonOf(NEW_META));
+      fireEvent.click(editButtonOf(OLD_META));
       expect(screen.getAllByRole('textbox', { name: 'Edit memory' })).toHaveLength(1);
       expect(editBox().value).toBe('The audience is\nthe board.');
 
@@ -677,9 +810,33 @@ describe('DocNotesPanel', () => {
       expect(screen.queryByRole('textbox', { name: 'Edit memory' })).toBeNull();
     });
 
+    it('ignores starting another memory edit while a save is in flight', async () => {
+      const view = makeView();
+      const pending = deferred<DocMemory>();
+      vi.mocked(view.updateMemory).mockReturnValue(pending.promise);
+      renderPanel(view);
+      fireEvent.click(editButtonOf(NEW_META));
+      fireEvent.change(editBox(), { target: { value: 'Prices are in EUR.' } });
+      fireEvent.click(button('Save'));
+
+      const other = editButtonOf(OLD_META);
+      expect(other.disabled).toBe(true);
+      fireEvent.click(other);
+      expect(editBox().value).toBe('Prices are in EUR.');
+      expect(button('Saving...')).toBeTruthy();
+
+      // The failing save's error is still shown where it belongs.
+      await act(async () => {
+        pending.reject(new ApiClientError('Server exploded', 500));
+      });
+      expect(screen.getByRole('alert').textContent).toBe('Server exploded');
+      expect(editBox().value).toBe('Prices are in EUR.');
+      expect(editButtonOf(OLD_META).disabled).toBe(false);
+    });
+
     it('disables Save for blank or over-cap text', () => {
       renderPanel(makeView());
-      fireEvent.click(editButtonOf('Added by you · 10m ago'));
+      fireEvent.click(editButtonOf(NEW_META));
       fireEvent.change(editBox(), { target: { value: '  ' } });
       expect(button('Save').disabled).toBe(true);
       fireEvent.change(editBox(), { target: { value: 'y'.repeat(1001) } });
@@ -689,22 +846,49 @@ describe('DocNotesPanel', () => {
   });
 
   describe('memories: delete', () => {
-    const deleteButtonOf = (meta: string) =>
-      within(memoryItem(meta)).getByRole('button', { name: 'Delete memory' });
+    const confirm = () =>
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }));
 
-    it('confirms with the memory quoted, then deletes it', async () => {
+    it('confirms with the memory quoted, deletes it and focuses the next memory', async () => {
       const view = makeView();
-      vi.mocked(view.deleteMemory).mockResolvedValue(undefined);
-      renderPanel(view);
+      const pending = deferred<void>();
+      vi.mocked(view.deleteMemory).mockReturnValue(pending.promise);
+      const { rerenderView } = renderPanel(view);
 
-      fireEvent.click(deleteButtonOf('Added by you · 10m ago'));
+      fireEvent.click(deleteButtonOf(NEW_META));
       const dialog = screen.getByRole('dialog', { name: 'Delete this memory?' });
       expect(within(dialog).getByText('“Prices are in USD.”')).toBeTruthy();
       expect(view.deleteMemory).not.toHaveBeenCalled();
 
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+      confirm();
       expect(view.deleteMemory).toHaveBeenCalledWith('m2');
+      // As the hook does: the list loses the memory, then the call resolves.
+      rerenderView({ ...view, notes: makeNotes({ memories: [MEM_OLD] }) });
+      await act(async () => {
+        pending.resolve();
+      });
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(document.activeElement).toBe(editButtonOf(OLD_META));
+    });
+
+    it('focuses the previous memory after deleting the last one', async () => {
+      const view = makeView();
+      vi.mocked(view.deleteMemory).mockResolvedValue(undefined);
+      renderPanel(view);
+      fireEvent.click(deleteButtonOf(OLD_META));
+      confirm();
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(document.activeElement).toBe(editButtonOf(NEW_META));
+    });
+
+    it('focuses the Add field after deleting the only memory', async () => {
+      const view = viewWith({ memories: [MEM_NEW] });
+      vi.mocked(view.deleteMemory).mockResolvedValue(undefined);
+      renderPanel(view);
+      fireEvent.click(deleteButtonOf(NEW_META));
+      confirm();
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(document.activeElement).toBe(addBox());
     });
 
     it('truncates a long memory in the quote', () => {
@@ -718,22 +902,23 @@ describe('DocNotesPanel', () => {
       const view = makeView();
       vi.mocked(view.deleteMemory).mockRejectedValue(new ApiClientError('Server exploded', 500));
       renderPanel(view);
-      fireEvent.click(deleteButtonOf('Added by you · 10m ago'));
-      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }));
+      fireEvent.click(deleteButtonOf(NEW_META));
+      confirm();
 
       const alert = await within(screen.getByRole('dialog')).findByRole('alert');
       expect(alert.textContent).toBe('Server exploded');
     });
 
-    it('closes the dialog when the memory is already gone', async () => {
+    it('closes the dialog when the memory is already gone, focusing the next memory', async () => {
       const view = makeView();
       vi.mocked(view.deleteMemory).mockRejectedValue(
         new ApiClientError('Doc memory not found.', 404, 'memory_not_found'),
       );
       renderPanel(view);
-      fireEvent.click(deleteButtonOf('Added by you · 10m ago'));
-      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }));
+      fireEvent.click(deleteButtonOf(NEW_META));
+      confirm();
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(document.activeElement).toBe(editButtonOf(OLD_META));
     });
   });
 
@@ -746,21 +931,24 @@ describe('DocNotesPanel', () => {
       expect(container.querySelector('details')).toBeNull();
     });
 
-    it('details: a closed section titled "Notes" with the same contents', () => {
+    it('details: a closed section titled "Notes" with the same contents inside it', () => {
       const { container } = renderPanel(makeView(), { variant: 'details' });
       const details = container.querySelector('details') as HTMLDetailsElement;
-      expect(details.open).toBe(false);
+      expect(details.hasAttribute('open')).toBe(false);
       expect(details.querySelector('summary')?.textContent).toBe('Notes');
       expect(container.querySelector('.right-panel-card')).toBeNull();
       expect(screen.queryByRole('region', { name: 'Notes' })).toBeNull();
 
-      details.open = true;
-      expect(details.querySelector('.doc-notes-instructions-text')?.textContent).toBe(
+      // Everything is rendered inside the <details>, under the summary.
+      const body = details.querySelector(':scope > .doc-notes-details-body') as HTMLElement;
+      expect(body.querySelector('.doc-notes-instructions-text')?.textContent).toBe(
         'Keep the tone formal.\nCite every source.',
       );
-      expect(within(details).getByRole('button', { name: 'Edit instructions' })).toBeTruthy();
-      expect(within(details).getByRole('textbox', { name: 'New memory' })).toBeTruthy();
-      expect(within(details).getAllByRole('button', { name: 'Delete memory' })).toHaveLength(2);
+      const hidden = { hidden: true };
+      expect(within(body).getByRole('button', { name: 'Edit instructions', ...hidden })).toBeTruthy();
+      expect(within(body).getByRole('textbox', { name: 'New memory', ...hidden })).toBeTruthy();
+      expect(within(body).getAllByRole('button', { name: 'Delete memory', ...hidden })).toHaveLength(2);
+      expect(container.querySelectorAll('.doc-notes-body')).toHaveLength(1);
     });
   });
 });

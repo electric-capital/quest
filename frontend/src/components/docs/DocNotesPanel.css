@@ -31,11 +31,24 @@
   color: var(--text-muted);
 }
 
-/* The contents scroll inside the card when they outgrow the viewport. */
+/* The contents scroll inside the card when they outgrow the viewport. For
+   read-only viewers (nothing focusable inside) it takes focus itself, so the
+   keyboard can scroll it. */
 .doc-notes-scroll {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+}
+
+.doc-notes-scroll:focus:not(:focus-visible),
+.doc-notes-current-text:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.doc-notes-scroll:focus-visible,
+.doc-notes-current-text:focus-visible {
+  outline: 2px solid rgb(var(--accent-rgb) / 0.6);
+  outline-offset: -2px;
 }
 
 .doc-notes-body {
@@ -135,6 +148,12 @@
   transition: background-color 0.15s, color 0.15s;
 }
 
+/* index.css's global `button:hover` paints the border in the accent; keep
+   ours (disabled too). The primary variant resets it to transparent below. */
+.doc-notes-button:hover {
+  border-color: var(--border-strong);
+}
+
 .doc-notes-button:hover:not(:disabled) {
   background-color: var(--hover);
   color: var(--text);
@@ -146,6 +165,7 @@
 }
 
 .doc-notes-button--primary,
+.doc-notes-button--primary:hover,
 .doc-notes-button--primary:hover:not(:disabled) {
   border-color: transparent;
   color: var(--accent-contrast);
@@ -383,13 +403,21 @@
   transition: background-color 0.12s, color 0.12s, opacity 0.12s;
 }
 
-.doc-notes-icon-button:hover {
+/* `border: none` above, so index.css's global `button:hover` border colour
+   never shows. */
+.doc-notes-icon-button:hover:not(:disabled) {
   background-color: var(--hover);
   color: var(--text);
 }
 
-.doc-notes-icon-button--danger:hover {
+.doc-notes-icon-button--danger:hover:not(:disabled) {
   color: #ff6b6b;
+}
+
+/* Edit, while another memory's save is in flight. */
+.doc-notes-icon-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .doc-notes-icon-button:focus-visible {
@@ -405,6 +433,11 @@
   .doc-notes-memory:hover .doc-notes-icon-button,
   .doc-notes-memory:focus-within .doc-notes-icon-button {
     opacity: 1;
+  }
+
+  .doc-notes-memory:hover .doc-notes-icon-button:disabled,
+  .doc-notes-memory:focus-within .doc-notes-icon-button:disabled {
+    opacity: 0.4;
   }
 }
 
@@ -470,7 +503,7 @@
   .doc-notes-counter--over,
   .doc-notes-over-cap,
   .doc-notes-error,
-  .doc-notes-icon-button--danger:hover {
+  .doc-notes-icon-button--danger:hover:not(:disabled) {
     color: #d32f2f;
   }
 }

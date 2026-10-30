@@ -5,7 +5,7 @@
  * never calls the API itself).
  *
  * Who can do what, always from the live `view.notes` rights (an editor
- * whose right drops closes with it):
+ * whose right drops closes with it and its draft is dropped):
  * - Instructions: plain text with its line breaks. The owner (`is_owner`)
  *   gets Edit ("Add instructions" while there are none), a textarea with a
  *   character counter and Save / Cancel, and an "Edited by <name>, <time>"
@@ -15,7 +15,8 @@
  * - Memories (newest first): editors (`can_edit`: the owner and write
  *   shares) get an Add row, inline edit and a delete through
  *   DocConfirmDialog. Errors (a duplicate, the 50-memory cap, a vanished
- *   memory) show inline under the row that caused them.
+ *   memory) show inline under the row that caused them; a duplicate also
+ *   highlights the memory that already has the text.
  *
  * Save sends the `instructions_version` the editor opened with. When the
  * instructions changed meanwhile, the 409 `stale_instructions` keeps the
@@ -25,7 +26,11 @@
  *
  * The caps (DOC_INSTRUCTIONS_MAX_CHARS, DOC_MEMORY_MAX_CHARS) count like the
  * server: code points of the trimmed text. Over a cap the counter turns red
- * and Save / Add is disabled; nothing is truncated.
+ * and Save / Add is disabled; nothing is truncated. All three text fields
+ * share CappedTextEditor. Focus stays in the panel: on a failed save it
+ * returns to the field, after Save / Cancel to the button that opened the
+ * editor, and after a memory delete to a neighbouring memory's Edit button
+ * (or the Add field).
  *
  * Two presentations of the same contents: `card` is the desktop aside's
  * floating card (the chat RightPanel's `.right-panel-card` chrome and
@@ -35,7 +40,7 @@
  * `doc_notes_disabled`).
  */
 
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode, type Ref } from 'react';
 import { ChevronRight, Pencil, Plus, Trash2 } from 'lucide-react';
 import {
   DOC_INSTRUCTIONS_MAX_CHARS,
@@ -84,6 +89,10 @@ function charCount(text: string): number {
   return [...text.trim()].length;
 }
 
+function isOverCap(text: string, max: number): boolean {
+  return charCount(text) > max;
+}
+
 function formatCount(n: number): string {
   return n.toLocaleString('en-US');
 }
@@ -92,7 +101,7 @@ function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
 }
 
-/** The inline message for a failed memory add / edit / delete. */
+/** The inline message for a failed memory add / edit. */
 function memoryErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof ApiClientError) {
     if (err.errorCode === 'duplicate_memory') return DUPLICATE_MESSAGE;
@@ -121,22 +130,95 @@ function quote(text: string): string {
     : text;
 }
 
-/** `n / max` under a textarea; red once over the cap. */
-function CapCounter({ id, count, max }: { id: string; count: number; max: number }) {
-  const over = count > max;
-  return (
-    <span id={id} className={over ? 'doc-notes-counter doc-notes-counter--over' : 'doc-notes-counter'}>
-      {formatCount(count)} / {formatCount(max)}
-    </span>
-  );
+// --- Capped text editor -------------------------------------------------------
+
+interface CappedTextEditorProps {
+  /** The textarea's accessible name. */
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  /** The server's cap, counted like charCount. */
+  max: number;
+  rows: number;
+  placeholder?: string;
+  /** A save is in flight: the textarea is read-only (the actions disable themselves). */
+  busy: boolean;
+  /** `when-text`: no counter while the field is empty (the Add row). */
+  counter?: 'always' | 'when-text';
+  /** Above the textarea (the instructions' 409 merge view). */
+  header?: ReactNode;
+  /** The footer's buttons. */
+  actions: ReactNode;
+  /** Shown under the footer as an alert. */
+  error: string | null;
+  className?: string;
+  textareaRef: Ref<HTMLTextAreaElement>;
 }
 
-/** Under the textarea while it is over the cap (nothing is truncated). */
-function OverCapLine({ id, max }: { id: string; max: number }) {
+/**
+ * A textarea with its `n / max` counter, an over-cap line, the footer
+ * buttons and an inline error. Over the cap the field is `aria-invalid`
+ * and described by the over-cap line as well as the counter.
+ */
+function CappedTextEditor({
+  label,
+  value,
+  onChange,
+  max,
+  rows,
+  placeholder,
+  busy,
+  counter = 'always',
+  header,
+  actions,
+  error,
+  className = 'doc-notes-editor',
+  textareaRef,
+}: CappedTextEditorProps) {
+  const ids = useId();
+  const counterId = `${ids}-counter`;
+  const overId = `${ids}-over`;
+  const count = charCount(value);
+  const overCap = count > max;
+  const showCounter = counter === 'always' || value !== '';
+  const describedBy = [showCounter && counterId, overCap && overId].filter(Boolean).join(' ');
   return (
-    <p id={id} className="doc-notes-over-cap">
-      Use at most {formatCount(max)} characters.
-    </p>
+    <div className={className}>
+      {header}
+      <textarea
+        ref={textareaRef}
+        className="doc-notes-input"
+        aria-label={label}
+        aria-describedby={describedBy || undefined}
+        aria-invalid={overCap || undefined}
+        placeholder={placeholder}
+        rows={rows}
+        value={value}
+        readOnly={busy}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {overCap && (
+        <p id={overId} className="doc-notes-over-cap">
+          Use at most {formatCount(max)} characters.
+        </p>
+      )}
+      <div className="doc-notes-editor-footer">
+        {showCounter && (
+          <span
+            id={counterId}
+            className={overCap ? 'doc-notes-counter doc-notes-counter--over' : 'doc-notes-counter'}
+          >
+            {formatCount(count)} / {formatCount(max)}
+          </span>
+        )}
+        <div className="doc-notes-actions">{actions}</div>
+      </div>
+      {error && (
+        <p className="doc-notes-error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -146,18 +228,23 @@ interface InstructionsEditorState {
   draft: string;
   /** The version Save sends: the one the editor opened with, then a 409's current one. */
   baseVersion: number;
-  /** Set by a 409 stale_instructions: its notice and the server's current text. */
-  conflict: { message: string; current: StaleInstructionsCurrent | null } | null;
+  /**
+   * Set by a 409 stale_instructions: its notice, the server's current text,
+   * and a count of the 409s (it keys the notice, so each one is announced).
+   */
+  conflict: { message: string; current: StaleInstructionsCurrent | null; n: number } | null;
   saving: boolean;
   error: string | null;
 }
 
 function InstructionsSection({
   notes,
+  panelEmpty,
   saveInstructions,
   viewerEmail,
 }: {
   notes: DocNotes;
+  panelEmpty: boolean;
   saveInstructions: DocNotesView['saveInstructions'];
   viewerEmail: string | null;
 }) {
@@ -167,13 +254,15 @@ function InstructionsSection({
   const openButtonRef = useRef<HTMLButtonElement>(null);
   // Set when Save or Cancel closes the editor: focus goes back to the opener.
   const refocusOpenerRef = useRef(false);
-  const ids = useId();
-  const counterId = `${ids}-counter`;
-  const overId = `${ids}-over`;
-  const currentLabelId = `${ids}-current`;
+  const currentLabelId = useId();
 
   const isOwner = notes.is_owner;
   const editorOpen = editor !== null && isOwner;
+
+  // Losing the owner right drops the draft, so a re-grant starts afresh.
+  useEffect(() => {
+    if (!isOwner) setEditor(null);
+  }, [isOwner]);
 
   useEffect(() => {
     if (editorOpen) {
@@ -206,8 +295,7 @@ function InstructionsSection({
     setEditor(null);
   };
 
-  const count = editor ? charCount(editor.draft) : 0;
-  const overCap = count > DOC_INSTRUCTIONS_MAX_CHARS;
+  const overCap = editor ? isOverCap(editor.draft, DOC_INSTRUCTIONS_MAX_CHARS) : false;
 
   const save = async () => {
     if (!editor || editor.saving || overCap) return;
@@ -228,7 +316,11 @@ function InstructionsSection({
               saving: false,
               error: null,
               baseVersion: current ? current.instructions_version : prev.baseVersion,
-              conflict: { message: err.message || STALE_MESSAGE, current },
+              conflict: {
+                message: err.message || STALE_MESSAGE,
+                current,
+                n: (prev.conflict?.n ?? 0) + 1,
+              },
             },
         );
       } else {
@@ -241,55 +333,56 @@ function InstructionsSection({
             },
         );
       }
+      // The pressed Save was disabled while saving; go back to the draft.
+      textareaRef.current?.focus();
     }
   };
 
-  const editedBy = hasText ? instructionsEditor(notes, viewerEmail) : null;
+  const editedBy = isOwner && hasText ? instructionsEditor(notes, viewerEmail) : null;
 
   let body: ReactNode;
   if (editorOpen && editor) {
-    const conflictText = editor.conflict
-      ? (editor.conflict.current?.instructions ?? notes.instructions)
-      : null;
-    body = (
-      <div className="doc-notes-editor">
-        {editor.conflict && (
-          <>
-            <p className="doc-notes-notice" role="alert">
-              {editor.conflict.message}
-            </p>
-            <div className="doc-notes-current" role="group" aria-labelledby={currentLabelId}>
-              <div id={currentLabelId} className="doc-notes-current-label">
-                Current instructions
-              </div>
-              {conflictText ? (
-                <div className="doc-notes-current-text">{conflictText}</div>
-              ) : (
-                <div className="doc-notes-current-text doc-notes-current-text--empty">
-                  The instructions were removed.
-                </div>
-              )}
+    let header: ReactNode = null;
+    if (editor.conflict) {
+      const conflictText = editor.conflict.current?.instructions ?? notes.instructions;
+      header = (
+        <>
+          <p key={editor.conflict.n} className="doc-notes-notice" role="alert">
+            {editor.conflict.message}
+          </p>
+          <div className="doc-notes-current" role="group" aria-labelledby={currentLabelId}>
+            <div id={currentLabelId} className="doc-notes-current-label">
+              Current instructions
             </div>
-          </>
-        )}
-        <textarea
-          ref={textareaRef}
-          className="doc-notes-input"
-          aria-label="Instructions"
-          aria-describedby={overCap ? `${counterId} ${overId}` : counterId}
-          placeholder="How models should work on this doc"
-          rows={8}
-          value={editor.draft}
-          readOnly={editor.saving}
-          onChange={(e) => {
-            const draft = e.target.value;
-            setEditor((prev) => prev && { ...prev, draft });
-          }}
-        />
-        {overCap && <OverCapLine id={overId} max={DOC_INSTRUCTIONS_MAX_CHARS} />}
-        <div className="doc-notes-editor-footer">
-          <CapCounter id={counterId} count={count} max={DOC_INSTRUCTIONS_MAX_CHARS} />
-          <div className="doc-notes-actions">
+            {/* Capped height with nothing focusable inside: focusable to scroll. */}
+            <div
+              className={
+                conflictText
+                  ? 'doc-notes-current-text'
+                  : 'doc-notes-current-text doc-notes-current-text--empty'
+              }
+              tabIndex={0}
+            >
+              {conflictText || 'The instructions were removed.'}
+            </div>
+          </div>
+        </>
+      );
+    }
+    body = (
+      <CappedTextEditor
+        label="Instructions"
+        value={editor.draft}
+        onChange={(draft) => setEditor((prev) => prev && { ...prev, draft })}
+        max={DOC_INSTRUCTIONS_MAX_CHARS}
+        rows={8}
+        placeholder="How models should work on this doc"
+        busy={editor.saving}
+        header={header}
+        error={editor.error}
+        textareaRef={textareaRef}
+        actions={
+          <>
             <button
               type="button"
               className="doc-notes-button"
@@ -306,14 +399,9 @@ function InstructionsSection({
             >
               {editor.saving ? 'Saving...' : 'Save'}
             </button>
-          </div>
-        </div>
-        {editor.error && (
-          <p className="doc-notes-error" role="alert">
-            {editor.error}
-          </p>
-        )}
-      </div>
+          </>
+        }
+      />
     );
   } else {
     body = (
@@ -337,6 +425,9 @@ function InstructionsSection({
             <Plus size={14} aria-hidden="true" />
             Add instructions
           </button>
+        )}
+        {!isOwner && !hasText && !panelEmpty && (
+          <p className="doc-notes-status">No instructions.</p>
         )}
         {!isOwner && notes.can_edit && (
           <p className="doc-notes-hint">Only the doc's owner can change the instructions.</p>
@@ -394,19 +485,41 @@ function MemoriesSection({
   const [deleteTarget, setDeleteTarget] = useState<DocMemory | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  // The memory a duplicate error points at, highlighted for a moment.
-  const [highlightId, setHighlightId] = useState<string | null>(null);
+  // The memory a duplicate error points at, highlighted for a moment; `n`
+  // makes a repeat of the same duplicate restart the timer.
+  const [highlight, setHighlight] = useState<{ id: string; n: number } | null>(null);
 
+  const listRef = useRef<HTMLUListElement>(null);
   const addInputRef = useRef<HTMLTextAreaElement>(null);
   const editInputRef = useRef<HTMLTextAreaElement>(null);
   const editButtonsRef = useRef(new Map<string, HTMLButtonElement>());
   // Set when Save or Cancel closes a memory editor: focus goes back to its Edit button.
   const refocusEditOfRef = useRef<string | null>(null);
+  // Set when a delete closes the dialog: the memories whose Edit button
+  // takes focus (the next one, else the previous one), else the Add field.
+  const refocusAfterDeleteRef = useRef<string[] | null>(null);
+  const highlightSeqRef = useRef(0);
   const ids = useId();
+
+  // Losing the right to edit drops every draft and the delete dialog, so a
+  // re-grant starts afresh.
+  useEffect(() => {
+    if (canEdit) return;
+    setEdit(null);
+    setDeleteTarget(null);
+    setDeleting(false);
+    setDeleteError(null);
+    setAddDraft('');
+    setAddError(null);
+    refocusAfterDeleteRef.current = null;
+  }, [canEdit]);
 
   // The open editor, unless its memory is gone or the right to edit dropped.
   const editingId =
     edit && canEdit && memories.some((m) => m.id === edit.id) ? edit.id : null;
+  // No other memory editor opens while a memory save is in flight, so its
+  // error cannot be dropped.
+  const memorySaving = edit?.saving === true;
 
   useEffect(() => {
     if (editingId) {
@@ -421,14 +534,43 @@ function MemoriesSection({
     }
   }, [editingId]);
 
+  // After a delete closed the dialog. Runs after the dialog's own focus
+  // return (child cleanups run first), whose opener is gone with the memory.
   useEffect(() => {
-    if (!highlightId) return;
-    const timer = window.setTimeout(() => setHighlightId(null), HIGHLIGHT_MS);
-    return () => window.clearTimeout(timer);
-  }, [highlightId]);
+    if (deleteTarget !== null) return;
+    const candidates = refocusAfterDeleteRef.current;
+    if (!candidates) return;
+    refocusAfterDeleteRef.current = null;
+    for (const id of candidates) {
+      const button = editButtonsRef.current.get(id);
+      if (button?.isConnected) {
+        button.focus();
+        return;
+      }
+    }
+    addInputRef.current?.focus();
+  }, [deleteTarget]);
 
-  const addCount = charCount(addDraft);
-  const addOverCap = addCount > DOC_MEMORY_MAX_CHARS;
+  useEffect(() => {
+    if (!highlight) return;
+    const item = [...(listRef.current?.querySelectorAll<HTMLElement>('[data-memory-id]') ?? [])].find(
+      (el) => el.dataset.memoryId === highlight.id,
+    );
+    // Optional: jsdom has no scrollIntoView.
+    item?.scrollIntoView?.({ block: 'nearest' });
+    const timer = window.setTimeout(() => setHighlight(null), HIGHLIGHT_MS);
+    return () => window.clearTimeout(timer);
+  }, [highlight]);
+
+  const flashDuplicate = (err: unknown) => {
+    const id = duplicateMemoryId(err);
+    if (id) {
+      highlightSeqRef.current += 1;
+      setHighlight({ id, n: highlightSeqRef.current });
+    }
+  };
+
+  const addOverCap = isOverCap(addDraft, DOC_MEMORY_MAX_CHARS);
   const atCap = memories.length >= DOC_MAX_MEMORIES;
 
   const add = async () => {
@@ -439,17 +581,18 @@ function MemoriesSection({
     try {
       await view.addMemory(text);
       setAddDraft('');
-      addInputRef.current?.focus();
     } catch (err) {
       setAddError(memoryErrorMessage(err, 'Failed to add the memory.'));
-      const duplicate = duplicateMemoryId(err);
-      if (duplicate) setHighlightId(duplicate);
+      flashDuplicate(err);
     } finally {
       setAdding(false);
     }
+    // Back to the field: to add another, or to fix the draft.
+    addInputRef.current?.focus();
   };
 
   const startEdit = (memory: DocMemory) => {
+    if (memorySaving) return;
     setEdit({ id: memory.id, draft: memory.content, saving: false, error: null });
   };
 
@@ -458,8 +601,7 @@ function MemoriesSection({
     setEdit((prev) => (prev?.id === id ? null : prev));
   };
 
-  const editCount = edit ? charCount(edit.draft) : 0;
-  const editOverCap = editCount > DOC_MEMORY_MAX_CHARS;
+  const editOverCap = edit ? isOverCap(edit.draft, DOC_MEMORY_MAX_CHARS) : false;
 
   const saveEdit = async () => {
     if (!edit || edit.saving || editOverCap) return;
@@ -476,36 +618,41 @@ function MemoriesSection({
           ? { ...prev, saving: false, error: memoryErrorMessage(err, 'Failed to save the memory.') }
           : prev,
       );
-      const duplicate = duplicateMemoryId(err);
-      if (duplicate) setHighlightId(duplicate);
+      flashDuplicate(err);
+      // The pressed Save was disabled while saving; go back to the draft.
+      editInputRef.current?.focus();
     }
   };
 
   const openDelete = (memory: DocMemory) => {
+    refocusAfterDeleteRef.current = null;
     setDeleteError(null);
     setDeleteTarget(memory);
   };
 
   const confirmDelete = async () => {
     if (!deleteTarget) return;
+    const { id } = deleteTarget;
+    // Neighbours as listed when the delete was confirmed.
+    const index = memories.findIndex((m) => m.id === id);
+    const neighbours = [memories[index + 1]?.id, index > 0 ? memories[index - 1].id : undefined];
+    const closeAfterDelete = () => {
+      refocusAfterDeleteRef.current = neighbours.filter((n): n is string => Boolean(n));
+      setDeleteTarget(null);
+    };
     setDeleting(true);
     setDeleteError(null);
     try {
-      await view.deleteMemory(deleteTarget.id);
+      await view.deleteMemory(id);
       setDeleting(false);
-      setDeleteTarget(null);
+      closeAfterDelete();
     } catch (err) {
       setDeleting(false);
       // Already gone: what the user asked for.
-      if (isMemoryNotFound(err)) setDeleteTarget(null);
+      if (isMemoryNotFound(err)) closeAfterDelete();
       else setDeleteError(errorMessage(err, 'Failed to delete the memory.'));
     }
   };
-
-  const addCounterId = `${ids}-add-counter`;
-  const addOverId = `${ids}-add-over`;
-  const editCounterId = `${ids}-edit-counter`;
-  const editOverId = `${ids}-edit-over`;
 
   let addRow: ReactNode = null;
   if (canEdit && atCap) {
@@ -515,73 +662,55 @@ function MemoriesSection({
       </p>
     );
   } else if (canEdit) {
-    const describedBy = [addDraft !== '' && addCounterId, addOverCap && addOverId]
-      .filter(Boolean)
-      .join(' ');
     addRow = (
-      <div className="doc-notes-add">
-        <textarea
-          ref={addInputRef}
-          className="doc-notes-input"
-          aria-label="New memory"
-          aria-describedby={describedBy || undefined}
-          placeholder="Add a memory"
-          rows={2}
-          value={addDraft}
-          readOnly={adding}
-          onChange={(e) => setAddDraft(e.target.value)}
-        />
-        {addOverCap && <OverCapLine id={addOverId} max={DOC_MEMORY_MAX_CHARS} />}
-        <div className="doc-notes-editor-footer">
-          {addDraft !== '' && (
-            <CapCounter id={addCounterId} count={addCount} max={DOC_MEMORY_MAX_CHARS} />
-          )}
-          <div className="doc-notes-actions">
-            <button
-              type="button"
-              className="doc-notes-button doc-notes-button--primary"
-              onClick={() => void add()}
-              disabled={adding || addOverCap || addDraft.trim() === ''}
-            >
-              {adding ? 'Adding...' : 'Add'}
-            </button>
-          </div>
-        </div>
-        {addError && (
-          <p className="doc-notes-error" role="alert">
-            {addError}
-          </p>
-        )}
-      </div>
+      <CappedTextEditor
+        className="doc-notes-add"
+        label="New memory"
+        value={addDraft}
+        onChange={setAddDraft}
+        max={DOC_MEMORY_MAX_CHARS}
+        rows={2}
+        placeholder="Add a memory"
+        busy={adding}
+        counter="when-text"
+        error={addError}
+        textareaRef={addInputRef}
+        actions={
+          <button
+            type="button"
+            className="doc-notes-button doc-notes-button--primary"
+            onClick={() => void add()}
+            disabled={adding || addOverCap || addDraft.trim() === ''}
+          >
+            {adding ? 'Adding...' : 'Add'}
+          </button>
+        }
+      />
     );
   }
 
   const renderMemory = (memory: DocMemory) => {
     const classes = ['doc-notes-memory'];
-    if (canEdit) classes.push('doc-notes-memory--editable');
-    if (memory.id === highlightId) classes.push('doc-notes-memory--highlight');
+    if (memory.id === highlight?.id) classes.push('doc-notes-memory--highlight');
+    const contentId = `${ids}-memory-${memory.id}`;
 
     if (edit && memory.id === editingId) {
+      classes.push('doc-notes-memory--editing');
       return (
-        <li key={memory.id} className={`${classes.join(' ')} doc-notes-memory--editing`}>
-          <div className="doc-notes-editor">
-            <textarea
-              ref={editInputRef}
-              className="doc-notes-input"
-              aria-label="Edit memory"
-              aria-describedby={editOverCap ? `${editCounterId} ${editOverId}` : editCounterId}
-              rows={3}
-              value={edit.draft}
-              readOnly={edit.saving}
-              onChange={(e) => {
-                const draft = e.target.value;
-                setEdit((prev) => (prev?.id === memory.id ? { ...prev, draft } : prev));
-              }}
-            />
-            {editOverCap && <OverCapLine id={editOverId} max={DOC_MEMORY_MAX_CHARS} />}
-            <div className="doc-notes-editor-footer">
-              <CapCounter id={editCounterId} count={editCount} max={DOC_MEMORY_MAX_CHARS} />
-              <div className="doc-notes-actions">
+        <li key={memory.id} className={classes.join(' ')} data-memory-id={memory.id}>
+          <CappedTextEditor
+            label="Edit memory"
+            value={edit.draft}
+            onChange={(draft) =>
+              setEdit((prev) => (prev?.id === memory.id ? { ...prev, draft } : prev))
+            }
+            max={DOC_MEMORY_MAX_CHARS}
+            rows={3}
+            busy={edit.saving}
+            error={edit.error}
+            textareaRef={editInputRef}
+            actions={
+              <>
                 <button
                   type="button"
                   className="doc-notes-button"
@@ -598,22 +727,19 @@ function MemoriesSection({
                 >
                   {edit.saving ? 'Saving...' : 'Save'}
                 </button>
-              </div>
-            </div>
-            {edit.error && (
-              <p className="doc-notes-error" role="alert">
-                {edit.error}
-              </p>
-            )}
-          </div>
+              </>
+            }
+          />
         </li>
       );
     }
 
     return (
-      <li key={memory.id} className={classes.join(' ')}>
+      <li key={memory.id} className={classes.join(' ')} data-memory-id={memory.id}>
         <div className="doc-notes-memory-main">
-          <div className="doc-notes-memory-content">{memory.content}</div>
+          <div id={contentId} className="doc-notes-memory-content">
+            {memory.content}
+          </div>
           <div
             className="doc-notes-memory-meta"
             title={parseUTCTimestamp(memory.updated_at).toLocaleString()}
@@ -631,7 +757,9 @@ function MemoriesSection({
               type="button"
               className="doc-notes-icon-button"
               onClick={() => startEdit(memory)}
+              disabled={memorySaving}
               aria-label="Edit memory"
+              aria-describedby={contentId}
               title="Edit memory"
             >
               <Pencil size={14} aria-hidden="true" />
@@ -641,6 +769,7 @@ function MemoriesSection({
               className="doc-notes-icon-button doc-notes-icon-button--danger"
               onClick={() => openDelete(memory)}
               aria-label="Delete memory"
+              aria-describedby={contentId}
               title="Delete memory"
             >
               <Trash2 size={14} aria-hidden="true" />
@@ -662,7 +791,11 @@ function MemoriesSection({
       </div>
       {addRow}
       {memories.length === 0 && !canEdit && <p className="doc-notes-status">No memories.</p>}
-      {memories.length > 0 && <ul className="doc-notes-memory-list">{memories.map(renderMemory)}</ul>}
+      {memories.length > 0 && (
+        <ul ref={listRef} className="doc-notes-memory-list">
+          {memories.map(renderMemory)}
+        </ul>
+      )}
       {canEdit && (
         <DocConfirmDialog
           isOpen={deleteTarget !== null}
@@ -708,10 +841,37 @@ function NotesContent({
       )}
       <InstructionsSection
         notes={notes}
+        panelEmpty={panelEmpty}
         saveInstructions={view.saveInstructions}
         viewerEmail={viewerEmail}
       />
       <MemoriesSection notes={notes} panelEmpty={panelEmpty} view={view} />
+    </div>
+  );
+}
+
+/** The failed first load, with Retry (disabled until the reload settles). */
+function LoadError({ view }: { view: DocNotesView }) {
+  const [retrying, setRetrying] = useState(false);
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      await view.reload();
+    } finally {
+      setRetrying(false);
+    }
+  };
+  return (
+    <div className="doc-notes-body doc-notes-load-error">
+      <p className="doc-notes-status">{view.error?.message || 'Failed to load notes.'}</p>
+      <button
+        type="button"
+        className="doc-notes-button"
+        onClick={() => void retry()}
+        disabled={retrying}
+      >
+        {retrying ? 'Retrying...' : 'Retry'}
+      </button>
     </div>
   );
 }
@@ -729,14 +889,7 @@ export function DocNotesPanel({ view, variant = 'card', viewerEmail = null }: Do
       </div>
     );
   } else {
-    content = (
-      <div className="doc-notes-body doc-notes-load-error">
-        <p className="doc-notes-status">{view.error?.message || 'Failed to load notes.'}</p>
-        <button type="button" className="doc-notes-button" onClick={() => void view.reload()}>
-          Retry
-        </button>
-      </div>
-    );
+    content = <LoadError view={view} />;
   }
 
   if (variant === 'details') {
@@ -751,12 +904,17 @@ export function DocNotesPanel({ view, variant = 'card', viewerEmail = null }: Do
     );
   }
 
+  // Read-only viewers have nothing focusable in a long card: the scroller
+  // takes focus so the keyboard can scroll it.
+  const keyboardScroll = view.notes !== null && !view.notes.can_edit;
   return (
     <section className="right-panel-card doc-notes-panel" aria-label="Notes">
       <div className="doc-notes-header">
         <h3 className="doc-notes-heading">Notes</h3>
       </div>
-      <div className="doc-notes-scroll">{content}</div>
+      <div className="doc-notes-scroll" tabIndex={keyboardScroll ? 0 : undefined}>
+        {content}
+      </div>
     </section>
   );
 }
