@@ -2,7 +2,7 @@
 isolated database of ``docs_env`` (tests/test_docs_service.py), whose
 connections turn foreign keys on.
 
-Covers the store of phase A4 of spec 00011 (docs/architecture/doc-notes.md):
+Covers the store of phase A4 of spec 00011 (docs/architecture/doc-notes-review.md):
 
 1. ``create_suggestion`` for both kinds: the row dict, stored values,
    content normalized per kind with character caps, and every ValueError

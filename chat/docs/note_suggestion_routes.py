@@ -1,5 +1,5 @@
 """HTTP routes for reviewing doc note suggestions
-(docs/architecture/doc-notes.md, Review; docs/api/quest-docs-api.md).
+(docs/architecture/doc-notes-review.md, Review; docs/api/quest-docs-api.md).
 
 The doc-notes twin of the suggestion half of chat/project_memory_routes.py.
 A model proposes a change to a Quest Doc's notes with ``suggest_doc_note``
@@ -35,8 +35,9 @@ Check order and errors:
   ``conversation_not_found`` for a conversation the user does not own or
   that does not exist (``require_owned_conversation``). Rows on a doc the
   user can no longer see stay listed, its fields blanked by
-  ``review_rows()`` (``doc_title`` ``""``, ``current_instructions`` null,
-  ``instructions_moved`` false, ``replaces_content`` null).
+  ``review_rows()`` (``doc_title`` ``""``, ``current_instructions`` and
+  ``current_instructions_version`` null, ``instructions_moved`` false,
+  ``replaces_content`` null).
 - ``POST .../accept``: ``accept_suggestion()`` checks, in order, the row
   (404 ``suggestion_not_found`` for a missing id, another user's row or a
   row whose doc is gone,
@@ -63,7 +64,8 @@ Shapes (chat/docs/note_payloads.py):
 - Lists: ``{"suggestions": [row, ...], "pending_count": n}``; each row is a
   ``review_rows()`` row through ``public_suggestion()``: the store row with
   ``kind`` renamed ``note_kind``, plus ``doc_title``, ``replaces_content``,
-  ``current_instructions`` and ``instructions_moved``.
+  ``current_instructions``, ``current_instructions_version`` (the version
+  to send as ``expected_instructions_version``) and ``instructions_moved``.
 - Accept body (optional): ``{"content"?, "expected_instructions_version"?}``.
   Both are typed loosely so a malformed value gets this API's own 400 code
   from the service; a body that is not a JSON object, or not JSON at all,

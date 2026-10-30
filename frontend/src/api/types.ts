@@ -1402,8 +1402,8 @@ export type DocNoteKind = 'instructions' | 'memory';
 /**
  * A note the model proposed via `suggest_doc_note`, reviewed by the user
  * who ran the conversation (the composer bubble, the doc's Notes panel, the
- * inbox). The accept and dismiss responses return the row without the four
- * review fields at the end.
+ * inbox). The accept and dismiss responses return the row without the
+ * review fields at the end (`doc_title` onward).
  */
 export interface DocNoteSuggestion {
   id: string;
@@ -1430,6 +1430,8 @@ export interface DocNoteSuggestion {
   replaces_content?: string | null;
   /** The doc's current instructions (instructions rows). List rows only. */
   current_instructions?: string | null;
+  /** The `instructions_version` of `current_instructions`; an instructions accept sends it as `expected_instructions_version`. List rows only. */
+  current_instructions_version?: number | null;
   /** The instructions changed since the proposal was written. List rows only. */
   instructions_moved?: boolean;
 }

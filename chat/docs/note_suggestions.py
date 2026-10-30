@@ -1,5 +1,5 @@
 """Doc note suggestions: the ``suggest_doc_note`` body and the review path
-(docs/architecture/doc-notes.md).
+(docs/architecture/doc-notes-review.md).
 
 The doc-notes twin of chat/project_memories.py. A model proposes a change
 to a Quest Doc's notes with the non-blocking ``suggest_doc_note`` tool:
@@ -745,19 +745,22 @@ async def review_rows(user_id: int, rows: Iterable[Mapping[str, Any]]) -> list[d
     Each row gains ``doc_title``, and ``replaces_content`` (the replaced
     memory's current text; None when the row replaces nothing, is an
     instructions row, or the memory is gone, like the twins' rows).
-    Instructions rows also gain ``current_instructions`` (the field now)
-    and ``instructions_moved`` (the field moved past the version the
-    proposal was written against). Those notes-derived fields describe
-    what an accept would change, so only pending rows get them; a
-    resolved row has ``None`` / False (an accepted instructions row would
+    Instructions rows also gain ``current_instructions`` (the field now),
+    ``current_instructions_version`` (its ``instructions_version``, the
+    token an accept sends as ``expected_instructions_version``) and
+    ``instructions_moved`` (the field moved past the version the proposal
+    was written against). Those notes-derived fields describe what an
+    accept would change, so only pending rows get them; a resolved row has
+    ``None`` / ``None`` / False (an accepted instructions row would
     otherwise always read as moved).
 
     Each distinct doc is looked up once and resolved with the UI verdict.
     For a doc the user can no longer see (or that is gone) the doc's
-    fields are blanked: ``doc_title`` ``""``, ``current_instructions``
-    None, ``instructions_moved`` False, ``replaces_content`` None, so a
-    hidden doc's notes never leak (invariant 3). The row's own text stays:
-    the user's own conversation wrote it.
+    fields are blanked: ``doc_title`` ``""``, ``current_instructions`` and
+    ``current_instructions_version`` None, ``instructions_moved`` False,
+    ``replaces_content`` None, so a hidden doc's notes never leak
+    (invariant 3). The row's own text stays: the user's own conversation
+    wrote it.
     """
     rows = [dict(r) for r in rows]
     visible: dict[str, Optional[dict]] = {}
@@ -785,6 +788,9 @@ async def review_rows(user_id: int, rows: Iterable[Mapping[str, Any]]) -> list[d
             state = states.get(row["doc_id"]) if doc is not None and is_pending else None
             base = row["base_instructions_version"]
             item["current_instructions"] = state["instructions"] if state else None
+            item["current_instructions_version"] = (
+                int(state["instructions_version"]) if state else None
+            )
             item["instructions_moved"] = bool(
                 state is not None
                 and base is not None

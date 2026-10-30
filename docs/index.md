@@ -13,7 +13,7 @@
 | [data-paths.md](architecture/data-paths.md) | Data directory layout, the id-to-path resolvers for conversations, projects and docs, and ownership guards for routes |
 | [encryption-at-rest.md](architecture/encryption-at-rest.md) | Encryption of stored secrets: password-wrapped data key, encrypted columns and credential files, startup unlock |
 | [expensive-resume.md](architecture/expensive-resume.md) | Warning before resuming a long-idle, long-context conversation: rules, cost estimate, send gate, warning card |
-| [memory-suggestions.md](architecture/memory-suggestions.md) | Non-blocking `suggest_memory` tool, the review bubble/panel above the composer, and the guidance on what the model should suggest |
+| [memory-suggestions.md](architecture/memory-suggestions.md) | Non-blocking `suggest_memory` tool, the review row, bubbles and inbox Memories tab shared with project memories and doc notes, and model guidance |
 | [project-memories.md](architecture/project-memories.md) | Project-scoped memories (public projects too): the store, read/suggest tools, the project suggestions bubble and Project Settings table |
 | [feature-gates.md](architecture/feature-gates.md) | Admin on/off switches for optional features, per-user access lists, and how each gate is enforced |
 | [database.md](architecture/database.md) | SQLite schema via SQLAlchemy and Alembic: tables, store modules, migrations, encrypted columns, LLM call analytics |
@@ -33,7 +33,8 @@
 | [public-projects.md](architecture/public-projects.md) | Public projects: internet-enabled sandbox with internal resources cut off, enforcement layers, public prompt and image |
 | [public-browser.md](architecture/public-browser.md) | Browser for public projects: one headless Chromium container per conversation, agent protocol, session manager and reaping, browser tools and gate |
 | [quest-docs.md](architecture/quest-docs.md) | Quest Docs (in-app markdown docs): storage, access rule, sharing, editing, history, model tools, approvals, frontend |
-| [doc-notes.md](architecture/doc-notes.md) | Quest Doc notes (per-doc instructions and memories): gate, data model, seen record, delivery, write refusal, write_doc pin, suggestions, events |
+| [doc-notes.md](architecture/doc-notes.md) | Quest Doc notes (per-doc instructions and memories): gate, data model, seen record, delivery, write refusal, write_doc pin, routes, events |
+| [doc-notes-review.md](architecture/doc-notes-review.md) | Doc note suggestions (model-proposed notes changes): store, registration checks, review, events, inbox and counts, review UI, lifecycle |
 | [doc-notes-tools.md](architecture/doc-notes-tools.md) | Doc notes tools (`list_doc_notes`, `suggest_doc_note`): gate, run kinds, paging, can_suggest, backstop, the `system:doc_notes` skill and public line |
 | [dreaming.md](architecture/dreaming.md) | Dreaming: offline reviews of each user's saved memories proposed as inbox suggestions; daemon, pacing, model choice, run ledger |
 | [quest-tables.md](architecture/quest-tables.md) | Quest Tables (in-app typed tables): metadata, columns, table.db, change log and restore, access, service layer, events, prompting, gate |

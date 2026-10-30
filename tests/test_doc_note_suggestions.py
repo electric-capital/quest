@@ -1,5 +1,5 @@
 """Doc note suggestions service (chat/docs/note_suggestions.py), phase A4 of
-spec 00011 (docs/architecture/doc-notes.md), with
+spec 00011 (docs/architecture/doc-notes-review.md), with
 ``service.publish_notes_changed()`` and the suggestion events of the doc,
 project and account delete paths.
 
@@ -37,9 +37,10 @@ Covers:
    memories-only change refuses too; a doc without notes and no record
    passes and records nothing.
 6. Supersede across two conversations, publishing to both, and within one.
-7. ``review_rows``: ``doc_title``, ``current_instructions``,
-   ``instructions_moved`` false then true, ``replaces_content``, and the
-   blanked fields once the doc is invisible (share revoked) or gone.
+7. ``review_rows``: ``doc_title``, ``current_instructions`` and
+   ``current_instructions_version``, ``instructions_moved`` false then
+   true, ``replaces_content``, and the blanked fields once the doc is
+   invisible (share revoked) or gone.
 8. Accept and dismiss: both kinds with and without an override, the
    memory row and its source, replace in place and the replaced-memory-gone
    fallback, the cap and ``duplicate_memory`` at accept,
@@ -917,8 +918,8 @@ class TestReviewRows:
         rows, out = review()
         assert out == {
             instr: {**rows[instr], "doc_title": doc["title"],
-                    "current_instructions": "Rule A.", "instructions_moved": False,
-                    "replaces_content": None},
+                    "current_instructions": "Rule A.", "current_instructions_version": 1,
+                    "instructions_moved": False, "replaces_content": None},
             replace: {**rows[replace], "doc_title": doc["title"],
                       "replaces_content": "Old fact."},
             plain: {**rows[plain], "doc_title": doc["title"], "replaces_content": None},
@@ -929,9 +930,11 @@ class TestReviewRows:
             doc_id, memory["id"], "Old fact, edited.", user_id=alice,
         ))
         _rows, out = review()
-        assert (out[instr]["current_instructions"], out[instr]["instructions_moved"]) == (
-            "Rule A, revised.", True,
-        )
+        assert (
+            out[instr]["current_instructions"],
+            out[instr]["current_instructions_version"],
+            out[instr]["instructions_moved"],
+        ) == ("Rule A, revised.", 2, True)
         assert out[replace]["replaces_content"] == "Old fact, edited."
         # The replaced memory is gone.
         _run(doc_memory_store.delete_doc_memory(doc_id, memory["id"]))
@@ -957,7 +960,8 @@ class TestReviewRows:
         def extras(out):
             return [
                 {k: r[k] for k in ("content", "doc_title", "current_instructions",
-                                   "instructions_moved", "replaces_content") if k in r}
+                                   "current_instructions_version", "instructions_moved",
+                                   "replaces_content") if k in r}
                 for r in out
             ]
 
@@ -965,13 +969,14 @@ class TestReviewRows:
         assert extras(visible) == [
             {"content": "Bob's fact.", "doc_title": doc["title"], "replaces_content": "Shared fact."},
             {"content": "Bob's rule.", "doc_title": doc["title"],
-             "current_instructions": "The owner's rule.", "instructions_moved": True,
-             "replaces_content": None},
+             "current_instructions": "The owner's rule.", "current_instructions_version": 1,
+             "instructions_moved": True, "replaces_content": None},
         ]
         blanked = [
             {"content": "Bob's fact.", "doc_title": "", "replaces_content": None},
             {"content": "Bob's rule.", "doc_title": "", "current_instructions": None,
-             "instructions_moved": False, "replaces_content": None},
+             "current_instructions_version": None, "instructions_moved": False,
+             "replaces_content": None},
         ]
         _run(env.doc_store.remove_share(doc_id, share_id(env, doc_id, "bob")))
         assert extras(_run(ns.review_rows(uid(env, "bob"), rows))) == blanked
@@ -1634,6 +1639,7 @@ class TestReviewFollowUps:
         ]))
         assert [r["doc_title"] for r in rows] == [doc["title"], doc["title"]]
         assert rows[0]["current_instructions"] is None
+        assert rows[0]["current_instructions_version"] is None
         assert rows[0]["instructions_moved"] is False
         assert rows[1]["replaces_content"] is None
 

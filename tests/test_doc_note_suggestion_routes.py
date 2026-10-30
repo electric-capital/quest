@@ -1,6 +1,6 @@
 """Doc note suggestion review routes (chat/docs/note_suggestion_routes.py)
 and the ``pending_doc_note_suggestions`` key of ``GET /conversations/{id}``,
-phase A6 of spec 00011 (docs/architecture/doc-notes.md, Review).
+phase A6 of spec 00011 (docs/architecture/doc-notes-review.md, Review).
 
 Runs against the isolated ``docs_env`` of tests/test_docs_service.py with
 the ``doc_notes`` gate open (``env``; foreign keys are on, so every row
@@ -25,15 +25,17 @@ Covers:
    ``pending_count``, only that conversation's pending rows; 404 for a
    missing and a foreign conversation; a revoked recipient's rows stay
    listed with the doc's fields blanked; ``instructions_moved`` false, then
-   true after the owner saves the field.
+   true after the owner saves the field, ``current_instructions_version``
+   following it.
 5. Accept: a memory by the owner and by a write-share recipient (label,
    counters, the events the service sent and no more, no editor id or raw
    source anywhere), the content override, the labels of a replaced Notes
-   panel memory per viewer, instructions with the default version and the
-   ``""`` override; every refusal (404, 409 resolved, 403 forbidden after a
-   revoke, a downgrade and for a non-owner's instructions row, the FLAT 409
-   ``stale_instructions`` then a successful re-accept, 400
-   ``invalid_memory`` / ``invalid_instructions``, 409
+   panel memory per viewer, instructions with the default version, with
+   the listed ``current_instructions_version`` after the field moved, and
+   with the ``""`` override; every refusal (404, 409 resolved, 403
+   forbidden after a revoke, a downgrade and for a non-owner's instructions
+   row, the FLAT 409 ``stale_instructions`` then a successful re-accept,
+   400 ``invalid_memory`` / ``invalid_instructions``, 409
    ``memories_cap_reached``, 409 ``duplicate_memory`` with ``memory_id``)
    leaves the row pending.
 6. Dismiss: the owner, a read-share and a revoked recipient; 404 / 409.
@@ -199,7 +201,7 @@ def revoke(env, doc_id, who):
 
 
 def listed(row, doc_title, *, replaces_content=None, current_instructions=None,
-           instructions_moved=False):
+           current_instructions_version=None, instructions_moved=False):
     """A pending store row as the review lists send it."""
     return {
         "id": row["id"],
@@ -218,6 +220,7 @@ def listed(row, doc_title, *, replaces_content=None, current_instructions=None,
         "doc_title": doc_title,
         "replaces_content": replaces_content,
         "current_instructions": current_instructions,
+        "current_instructions_version": current_instructions_version,
         "instructions_moved": instructions_moved,
     }
 
@@ -393,7 +396,8 @@ class TestDocList:
         assert resp.json() == {
             "suggestions": [
                 listed(replacing, doc["title"], replaces_content="Old fact."),
-                listed(instructions, doc["title"], current_instructions="Rule A."),
+                listed(instructions, doc["title"], current_instructions="Rule A.",
+                       current_instructions_version=1),
                 listed(plain, doc["title"]),
             ],
             "pending_count": 3,
@@ -484,7 +488,8 @@ class TestConversationList:
         assert resp.json() == {
             "suggestions": [
                 listed(one, first_doc["title"]),
-                listed(two, second_doc["title"], current_instructions=""),
+                listed(two, second_doc["title"], current_instructions="",
+                       current_instructions_version=0),
                 listed(three, first_doc["title"]),
             ],
             "pending_count": 3,
@@ -520,15 +525,18 @@ class TestConversationList:
             "suggestions": [
                 listed(replacing, doc["title"], replaces_content="Shared fact."),
                 listed(instructions, doc["title"],
-                       current_instructions="The owner's rule.", instructions_moved=True),
+                       current_instructions="The owner's rule.",
+                       current_instructions_version=1, instructions_moved=True),
             ],
             "pending_count": 2,
         }
         revoke(env, doc_id, "bob")
-        assert conv_list(env, bob_cid, "bob").json() == {
+        blank = conv_list(env, bob_cid, "bob").json()
+        assert blank == {
             "suggestions": [listed(replacing, ""), listed(instructions, "")],
             "pending_count": 2,
         }
+        assert blank["suggestions"][1]["current_instructions_version"] is None
 
     def test_instructions_moved_after_the_owner_saves(self, env):
         doc = new_doc(env)
@@ -538,13 +546,18 @@ class TestConversationList:
         row = make_row(env, doc_id, cid, "instructions", "Rule A.\nRule B.")
         assert row["base_instructions_version"] == 1
         assert conv_list(env, cid).json()["suggestions"] == [
-            listed(row, doc["title"], current_instructions="Rule A."),
+            listed(row, doc["title"], current_instructions="Rule A.",
+                   current_instructions_version=1),
         ]
         set_instructions(env, doc_id, "Rule A, revised.")
         assert conv_list(env, cid).json()["suggestions"] == [
             listed(row, doc["title"], current_instructions="Rule A, revised.",
-                   instructions_moved=True),
+                   current_instructions_version=2, instructions_moved=True),
         ]
+        # The doc's own list carries the same version.
+        assert doc_list(env, doc_id).json()["suggestions"][0][
+            "current_instructions_version"
+        ] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -732,6 +745,42 @@ class TestAccept:
         assert resp.status_code == 200
         assert resp.json()["notes"]["instructions_version"] == 3
         assert state(env, doc_id)["instructions"] == "Rule A.\nRule B."
+
+    def test_the_listed_version_accepts_after_the_instructions_moved(self, env):
+        # The review surfaces' flow: list, then accept with the row's
+        # current_instructions_version as expected_instructions_version.
+        doc_id = new_doc(env)["id"]
+        set_instructions(env, doc_id, "Rule A.")
+        cid = conversation(env)
+        sid = make_row(env, doc_id, cid, "instructions", "Rule A.\nRule B.")["id"]
+        set_instructions(env, doc_id, "Rule A, revised.")
+        [row] = conv_list(env, cid).json()["suggestions"]
+        assert (row["base_instructions_version"], row["current_instructions_version"],
+                row["instructions_moved"]) == (1, 2, True)
+        # The field moves again after the list was read: the listed version
+        # is now stale, and a re-list carries the new one.
+        set_instructions(env, doc_id, "Rule A, revised twice.")
+        resp = accept(env, sid, body={
+            "expected_instructions_version": row["current_instructions_version"],
+        })
+        assert (resp.status_code, resp.json()) == (409, {
+            "error": "stale_instructions",
+            "message": STALE_MESSAGE,
+            "current": {"instructions": "Rule A, revised twice.", "instructions_version": 3},
+        })
+        assert get_row(env, sid)["status"] == "pending"
+        [row] = conv_list(env, cid).json()["suggestions"]
+        assert (row["current_instructions"], row["current_instructions_version"]) == (
+            "Rule A, revised twice.", 3,
+        )
+        resp = accept(env, sid, body={
+            "expected_instructions_version": row["current_instructions_version"],
+        })
+        assert resp.status_code == 200
+        assert resp.json()["suggestion"] == resolved(env, sid)
+        assert resp.json()["notes"]["instructions_version"] == 4
+        assert state(env, doc_id)["instructions"] == "Rule A.\nRule B."
+        assert conv_list(env, cid).json() == {"suggestions": [], "pending_count": 0}
 
     def test_invalid_memory(self, env):
         doc_id = new_doc(env)["id"]

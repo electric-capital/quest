@@ -249,7 +249,7 @@ describe('Save', () => {
     // Not remounted: Status stays open, and the saved column's card follows it to its key.
     expect(screen.getByRole('button', { name: 'Collapse Status' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Collapse Owner' })).toBeTruthy();
-    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Columns' }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Columns' })));
   });
 
   it('stale_schema: banner, then "Reload and keep my edits" re-bases and saves against the new version', async () => {

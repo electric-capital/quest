@@ -2,7 +2,7 @@
 
 ## Overview
 
-A **Quest Doc** is a markdown document that lives entirely inside Quest, owned by a user (a **user doc**) or by a project (a **project doc**, owned by the project owner). Each doc is a `docs` row plus a directory holding `doc.md`, embedded raster images and revision snapshots. Models reach docs only through seven dynamic tools (list, search, read, create, search/replace edit, append, add image) and the `write_doc` action request. One access function decides, for each conversation, whether a write is approval-free, needs a `write_doc` card, or is impossible. People browse, create, share, edit and restore docs in the UI at `/docs` ([Frontend](#frontend)); the HTTP surface is [Quest Docs API](../api/quest-docs-api.md). The feature sits behind the off-by-default, per-user `docs` [feature gate](feature-gates.md). A doc can also carry notes (instructions and memories) outside its body ([Doc Notes](doc-notes.md)). Google Docs is a separate feature ([Docs API](../api/docs-api.md), `system:docs`).
+A **Quest Doc** is a markdown document that lives entirely inside Quest, owned by a user (a **user doc**) or by a project (a **project doc**, owned by the project owner). Each doc is a `docs` row plus a directory holding `doc.md`, embedded raster images and revision snapshots. Models reach docs only through seven dynamic tools ([Model-Facing Tools](#model-facing-tools)) and the `write_doc` action request. One access function decides, for each conversation, whether a write is approval-free, needs a `write_doc` card, or is impossible. People browse, create, share, edit and restore docs in the UI at `/docs` ([Frontend](#frontend)); the HTTP surface is [Quest Docs API](../api/quest-docs-api.md). The feature sits behind the off-by-default, per-user `docs` [feature gate](feature-gates.md). A doc can also carry notes (instructions and memories) outside its body ([Doc Notes](doc-notes.md)). Google Docs is a separate feature ([Docs API](../api/docs-api.md), `system:docs`).
 
 Docs come in two **modes** that mirror [public projects](public-projects.md). **Private** docs may hold internal information: only private conversations read or write them, and public conversations are never told they exist. **Public** docs hold only content from the internet-enabled public sandbox or typed by a person in the UI. Public conversations read and write them; the conversations of a private project may read, never write, the public docs of the public projects listed in its Project Access setting ([Projects -- Project Access](projects.md#project-access-doc-sources)). So internal data cannot flow into a doc that a public conversation could later exfiltrate. Only the docs of a public project are public ([Mode is fixed at creation](#mode-is-fixed-at-creation)).
 
@@ -71,7 +71,7 @@ Two backstops: `resolve_doc_access()` evaluates any doc with `project_id` NULL a
 
 ### On-disk layout
 
-Everything for one doc lives under `DOCS_DIR/<doc_id>/`: `doc.md`, `doc.meta.json`, `assets/` and `revisions/` (snapshot `.md` files with `.json` sidecars). The layout and the safety rules every file call keeps (`O_NOFOLLOW` plus an `S_ISREG` re-check on the descriptor, `O_NONBLOCK` reads so a planted FIFO never blocks, atomic writes) are in the `chat/docs/files.py` module docstring. `doc.md` carries no front matter, since all metadata is in the DB, so a download is clean. An asset's extension always comes from `sniff_image_type()` (magic bytes), never from the caller's file name, and the body references images relatively as `![alt](assets/<name>)`. Only `init_doc()` creates a doc root, so a write racing a delete fails instead of resurrecting a directory whose row is gone. A doc directory is never mounted into a sandbox.
+Everything for one doc lives under `DOCS_DIR/<doc_id>/`: `doc.md`, `doc.meta.json`, `assets/` and `revisions/` (snapshot `.md` files with `.json` sidecars). The layout and the safety rules every file call keeps are in the `chat/docs/files.py` module docstring. `doc.md` carries no front matter, since all metadata is in the DB, so a download is clean. An asset's extension always comes from `sniff_image_type()` (magic bytes), never from the caller's file name, and the body references images relatively as `![alt](assets/<name>)`. Only `init_doc()` creates a doc root, so a write racing a delete fails instead of resurrecting a directory whose row is gone. A doc directory is never mounted into a sandbox.
 
 Concurrency uses two process-local locks, each table holding weak values. `files.doc_lock()` is a per-doc `threading.Lock` held for one file call, and `modify_body()` reads, transforms and writes `doc.md` in one critical section, because two separate calls would let concurrent writers clobber each other. The service additionally holds a per-doc `asyncio.Lock` across a whole write ([Write path](#write-path)) and the UI delete ([UI mutations](#ui-mutations)).
 
@@ -85,7 +85,7 @@ Concurrency uses two process-local locks, each table holding weak values. `files
 
 A version is a body. Creation takes no snapshot, metadata and share changes touch no files, and asset-only writes (`add_doc_image` with `placement: "none"`, a UI image upload or delete) change only `assets/`, which every version shares ([Known Limitations](#known-limitations)).
 
-**Attribution.** `doc.meta.json` records when the current body was written, by which write source (the forms of the row's `last_write_source`, see [Tables](#tables)) and its size (`_body_meta()`). Before a body write, the snapshot's `.json` sidecar is a copy of the replaced body's `doc.meta.json`; that is what [History](#history) reads. Asset-only writes never touch it, so it can differ from the row's `last_write_source`, which also names a model's image add (UI image uploads and deletes leave the row's source unchanged). When the meta is missing, unreadable or its size disagrees with the body, `_snapshot_meta()` falls back to the file's mtime and an unknown source; a failed meta write never fails the save.
+**Attribution.** `doc.meta.json` records when the current body was written, by which write source (the forms of the row's `last_write_source`, see [Tables](#tables)) and its size (`_body_meta()`). Before a body write, the snapshot's `.json` sidecar is a copy of the replaced body's `doc.meta.json`; that is what [History](#history) reads. Asset-only writes never touch it, so it can differ from the row's `last_write_source`, which also names a model's image add. `_snapshot_meta()` gives the fallback for a missing or stale meta; a failed meta write never fails the save.
 
 ### Tables
 
@@ -103,7 +103,7 @@ A version is a body. Creation takes no snapshot, metadata and share changes touc
 
 `resolve_doc_access()` in `chat/docs/access.py` returns a `DocAccess` whose `write` is one of `WRITE_VERDICTS` (free / approval / denied). The matrix (the doc's mode and share state x who asks from which conversation kind, with cells Free / Approval / Read / Hidden) and the seven rules layered on it are written down once, in the module docstring; this doc refers to its rows, cells and rules by those names. What spans other files:
 
-- The procedure that applies the matrix is `resolve_core()` in `chat/artifact_access.py`, shared with [Quest Tables](quest-tables.md#access) so both artifacts follow one rule. It returns a wording-free `CoreVerdict`: a denied verdict carries a machine cause from `DENY_CAUSES`, and each resolver maps every cause to its own text (`_DENY_TEXT`, asserted complete at import). Only `resolve_doc_access()` and `resolve_table_access()` call it. `DocAccess` keeps the cause as `deny_cause` for the [note suggestion gate](doc-notes.md#registration).
+- The procedure that applies the matrix is `resolve_core()` in `chat/artifact_access.py`, shared with [Quest Tables](quest-tables.md#access) so both artifacts follow one rule. It returns a wording-free `CoreVerdict`: a denied verdict carries a machine cause from `DENY_CAUSES`, and each resolver maps every cause to its own text (`_DENY_TEXT`, asserted complete at import). Only `resolve_doc_access()` and `resolve_table_access()` call it. `DocAccess` keeps the cause as `deny_cause` for the [note suggestion gate](doc-notes-review.md#registration).
 
 - `doc` must carry its `shares` list; a dict fetched without shares raises instead of being read as unshared. `doc_source_project_ids` are loaded by the service from `project_doc_sources` for a private project's conversations and are empty for every other caller.
 - Rule 2 (project docs outside their project): the owner's standalone conversations (`project_id` None, not public) see the docs of all of the owner's projects read-only, with `DENY_OUTSIDE_PROJECT` on a private doc and `DENY_PUBLIC_DOC_FROM_PRIVATE` on a public one; the service's `_reaches_own_projects()` is the listing-side counterpart, and `doc_store.list_accessible_docs(include_owned_project_docs=True)` supplies the candidates. Ownership is the only reach: a project doc shared with the caller stays Hidden outside its project. A sandbox script carries the project and mode of the conversation that launched it, so it reaches exactly what that conversation reaches ([Script Bridge](#script-bridge)).
@@ -124,7 +124,7 @@ A version is a body. Creation takes no snapshot, metadata and share changes touc
 ### Read side
 
 - `list_docs`: candidates come from `doc_store.list_accessible_docs()` (owner or share, keyset-paged on `(updated_at, id)` descending). Every row still passes the access rule, and the store is paged past hidden rows so they never use up `limit`. A public caller adds a SQL `mode = 'public'` filter, so it lists only its own project's docs. Scope `project` is this project's docs inside a project and, from a standalone conversation, the read-only docs of all of the user's own projects (rule 2). Rows carry a `shared` flag but never the share roster.
-- `search_docs`: case-insensitive substring match on title, description and body. Bodies of visible docs are read newest-first until the next one would push the scanned total past `DOC_SEARCH_MAX_SCAN_BYTES`; after that only titles and descriptions are matched and `truncated` is true. Snippets carry 1-based line numbers, and a metadata-only hit has `matches: []`.
+- `search_docs`: case-insensitive substring match on title, description and body. Bodies of visible docs are read newest-first until the next one would push the scanned total past `DOC_SEARCH_MAX_SCAN_BYTES`; after that only titles and descriptions are matched and `truncated` is true. Snippets carry 1-based line numbers.
 - `read_doc`: the whole body or a 1-based inclusive line range, capped at `DOC_READ_MAX_CHARS` and cut at a line boundary (`truncated` plus a paging `note`). Lines split on LF only, so they agree with search's line numbers. Records the read.
 - [Doc notes](doc-notes.md#delivery-on-reads): with their gate open, all three carry counts, and `read_doc` delivers the notes block.
 
@@ -145,11 +145,11 @@ A version is a body. Creation takes no snapshot, metadata and share changes touc
 
 ### UI mutations
 
-`delete_doc_from_ui()` serves `DELETE /docs/{id}`: visibility as `ui`, then ownership (`forbidden`), then the row delete and a best-effort directory removal under the per-doc `asyncio.Lock` and `_shielded()`. It therefore waits for any in-flight model write and re-reads the row with its shares under the lock to capture the audience, and who has [pending note suggestions](doc-notes.md#lifecycle) on it, before the cascade removes them. Rename is a plain metadata update in the route (`doc_store.update_doc_metadata`). Share changes, body saves, restores and asset changes all take the same per-doc lock.
+`delete_doc_from_ui()` serves `DELETE /docs/{id}`: visibility as `ui`, then ownership (`forbidden`), then the row delete and a best-effort directory removal under the per-doc `asyncio.Lock` and `_shielded()`. It therefore waits for any in-flight model write and re-reads the row with its shares under the lock to capture the audience, and who has [pending note suggestions](doc-notes-review.md#lifecycle) on it, before the cascade removes them. Rename is a plain metadata update in the route (`doc_store.update_doc_metadata`). Share changes, body saves, restores and asset changes all take the same per-doc lock.
 
 ## Sharing
 
-The owner shares a doc as `read` or `write` with one Quest user, named by email, or with everyone on the install; the routes, their check order and errors are in the `chat/docs/share_routes.py` module docstring. Grants upsert, so sharing again changes the permission. Both routes run under the per-doc write lock, shielded, so a model write queued behind a share change re-resolves its verdict with the new roster. The email lookup (`find_user_by_email_ci`) prefers an exact match, then an ASCII case-insensitive one, and refuses an ambiguous set of case-variant accounts rather than guessing.
+The owner shares a doc as `read` or `write` with one Quest user, named by email, or with everyone on the install; the routes, their check order and errors are in the `chat/docs/share_routes.py` module docstring. Grants upsert, so sharing again changes the permission. Both routes run under the per-doc write lock, shielded, so a model write queued behind a share change re-resolves its verdict with the new roster. The email lookup's matching rules are in the `find_user_by_email_ci()` docstring.
 
 What a share grants in the UI (a direct and an everyone row combine, the higher permission winning, `effective_share()`):
 
@@ -164,7 +164,7 @@ Sharing only makes the access rule's share cells reachable. Consequences:
 
 - **The owner's first share on a private doc turns the owner's own conversation writes into `write_doc` approval cards** (matrix row "Private, shared"). Removing the last share makes them free again, unless the owner's require-approval switch (rule 7) is on. The Share dialog says so (`shareDialogNotes()` in `frontend/src/utils/docSharing.ts`).
 - **Recipients' conversations reach shared user docs only.** From the recipient's private conversations a shared user doc is readable (read share) or writable through a `write_doc` card the recipient approves in their own conversation (write share). A shared project doc stays Hidden to all of the recipient's conversations, because outside its project a project doc is reached only by its owner's standalone conversations (rule 2), projects are not shared, and only the owner's own public projects can be a Project Access source. **Project-doc shares are therefore UI-only for recipients**, and since every public doc is a project doc, so are shares of public docs.
-- **Revocation is immediate.** A `write_doc` card the recipient proposed is refused at Approve, because execute re-resolves access. The recipient's editor, History view and viewer lose access on their next request; an open viewer re-fetches on the `doc_changed {updated_at: null}` the revocation sends.
+- **Revocation is immediate.** A `write_doc` card the recipient proposed is refused at Approve, because execute re-resolves access. The recipient's editor, History view and viewer lose access on their next request ([Realtime consumers](#realtime-consumers)).
 
 **UI rows.** `GET /docs` serves three independent keyset streams: the caller's own user docs, one project's docs, and the docs shared with the caller (`doc_store.list_docs_shared_with()`), so a user doc shared with the caller appears only in the shared stream. `_ui_row()` / `_ui_rows()` build every row with at most one batched user lookup per response; non-owners never receive the share roster, the raw `last_write_source` or the writer's identity. Shapes: [Quest Docs API -- Response Shapes](../api/quest-docs-api.md#response-shapes).
 
@@ -233,7 +233,7 @@ Enforcement outside the access rule:
 
 ## Prompting
 
-- **`system:quest_docs`** (`_quest_docs_content`; `system:docs` is Google Docs) is the model's guide to the tools, modes, verdicts, read-before-edit, revising in place, the `approval_required` -> `write_doc` handoff and the routine pattern: one doc appended to under a dated heading per run. Its caps and History window come from `chat/docs/constants.py`; its "Read before edit" ends with a pointer to `system:doc_notes`.
+- **`system:quest_docs`** (`_quest_docs_content`; `system:docs` is Google Docs) is the model's guide to the tools, the `approval_required` -> `write_doc` handoff and the routine pattern: one doc appended to under a dated heading per run. Its caps and History window come from `chat/docs/constants.py`; its "Read before edit" ends with a pointer to `system:doc_notes`.
 - **Revise in place**: History keeps every replaced body ([Revision policy](#revision-policy)), so the skill, the `create_doc` / `edit_doc` descriptions and `_PUBLIC_DOCS_SECTION` tell the model to change an existing doc, not create a copy, unless the user asks for one.
 - **Public prompt**: `_PUBLIC_DOCS_SECTION` follows the Boundaries block only while `docs_enabled`, and stands in for the skill (only this project's public docs, always created with `create_doc(target="project")`), followed by the [notes line](doc-notes-tools.md#prompting) while `doc_notes_enabled` too. It may not name internal-only tools or skills (`tests/test_public_projects.py::test_no_internal_tool_docs`), which is why the write-tool descriptions say "write_doc action request" rather than spelling out `create_action_request(`.
 - No doc titles are ever injected into a prompt. Discovery is tools-only.
@@ -257,13 +257,13 @@ The UI at `/docs`: browse, read, create empty docs, rename, download and delete;
 
 | File | Role |
 |------|------|
-| `api/docsApi.ts` | Client for `/app/api/docs*` and the doc-note suggestion routes, the cookie-authed asset and download URL builders, `DOCS_FEATURE` and `DOC_NOTES_FEATURE`, and the helpers for the flat 409s `stale_update` and `stale_instructions` |
+| `api/docsApi.ts` | Client for `/app/api/docs*` (the notes part: [Doc Notes -- Frontend](doc-notes.md#frontend)), the cookie-authed asset and download URL builders, `DOCS_FEATURE` and the helper for the flat 409 `stale_update` |
 | `api/types.ts` | `Doc`, `DocDetail` and the share, editing and history types; `CreateDocRequest` has no `mode` |
 | `utils/docsRoute.ts` | `parseDocsRoute()` and the docs path builders |
 | `hooks/useDocs.ts` / `hooks/useProjectDocsIndex.ts` / `hooks/useDoc.ts` / `hooks/useDocNotes.ts` | One keyset-paged list; the per-project fan-out for All Docs; one doc (row + body) for the viewer; one doc's notes ([Doc Notes -- Frontend](doc-notes.md#frontend)) |
 | `components/sidebar/DocsSection.tsx` + `utils/sidebarDocs.ts` | The sidebar Docs blocks (main panel and project drill-down) |
 | `components/docs/DocsListView.tsx` + `utils/allDocsGrouping.ts`, `components/docs/NewDocModal.tsx` | All Docs and New Doc |
-| `components/docs/DocViewer.tsx`, `DocHeader.tsx`, `DocAssetsPanel.tsx`, `DocImageLightbox.tsx` | The viewer, its title unit and its Assets list |
+| `components/docs/DocViewer.tsx`, `DocHeader.tsx`, `DocNotesPanel.tsx`, `DocAssetsPanel.tsx`, `DocImageLightbox.tsx` | The viewer, its title unit, and its Notes and Assets panels |
 | `components/docs/DocEditor.tsx` + `utils/markdownFormatting.ts`, `hooks/useUnsavedChangesGuard.ts`, `utils/docDraftBackup.ts`, `components/docs/DocDraftRecovery.tsx` | The body editor, its formatting edits, its leave guard and the per-user draft backup |
 | `components/docs/DocHistory.tsx` | The History view |
 | `components/docs/DocShareDialog.tsx` + `utils/docSharing.ts` | The owner's Share dialog and the sharing texts |
@@ -288,11 +288,12 @@ The sidebar shows the user's own user docs and, while drilled into a project, th
 
 `DocViewer.tsx` (`useDoc`) swaps its body between three modes kept per doc id: `view`, `edit` ([Editor](#editor)) and `history` ([History view](#history-view)). Rules that span its parts:
 
-- **Header actions follow the row's `access` flags** (`DocHeader.tsx`), and `access.can_switch_mode` is ignored. The require-approval checkbox PUTs through the rename endpoint without `expected_updated_at`, because a body edit landing meanwhile is no reason to refuse a settings flip.
+- **Header actions follow the row's `access` flags** (`DocHeader.tsx`). The require-approval checkbox PUTs through the rename endpoint without `expected_updated_at`, because a body edit landing meanwhile is no reason to refuse a settings flip.
 - **Doc images.** With `MarkdownWorkspaceContext.assetBase` set, `MarkdownImage` resolves only `assets/<name>` (one segment, no leading dot) to the cookie-authed asset route; every other relative src renders the missing-image chip, external srcs stay click-through links that are never auto-fetched, and SVG never renders because the asset store and route hold only magic-byte-sniffed raster types.
 - **Row and body merges.** `useDoc.applyRow()` (rename, share, a 409's `current`) re-fetches whenever the row's `updated_at` is newer than the shown one, so a new token never pairs with a body this tab has not seen; `applyContent()` takes a save or restore response that carries its body.
 - **Footer.** `lastWriter()` derives "Last written by" from `last_write_source`, `last_write_user` and `last_write_conversation`. The viewer is matched to `last_write_user` by email because `GET /me` exposes no user id, and a non-owner sees no writer because the API blanks those fields.
 - **Saved drafts.** A draft backup that differs from the doc is offered back in view mode or, once the doc 404s or edit access is gone, shown read-only in `DocDraftRecovery`, so the text is never silently lost.
+- **Notes.** `DocNotesPanel.tsx` renders the `useDocNotes` view DocViewer owns, only while `docNotesPanelShown()` holds; its header comment gives the rights and the handling of a `stale_instructions` 409, and [Doc Notes](doc-notes.md#ui-routes) the rules behind them. It stays in the aside in every mode, while Assets shows in view mode only, because the instructions matter most while the body is being edited.
 - **Assets.** `DocAssetsPanel.tsx` lists the detail's `assets`, which ride on the detail rather than their own endpoint because `DOC_MAX_ASSETS` keeps the list small and the viewer always needs both. Only the owner in view mode can delete an image: while editing, the draft may be about to reference it.
 
 ### Editor
@@ -315,7 +316,7 @@ Both card renderers go through `ActionRequestPreviewFields.tsx`. `DocImagePrevie
 
 ### Realtime consumers
 
-`useDocs` and `useProjectDocsIndex` re-fetch on `doc_list_changed` behind a trailing debounce (`DOCS_REFRESH_DEBOUNCE_MS`, and the longer `REFRESH_DEBOUNCE_MS` for the per-project fan-out), so a burst of writes to a doc shared with everyone costs one re-fetch per list. `useDoc` re-fetches only on a `doc_changed` for its own doc whose `updated_at` differs from the shown one, which a null always does: that is how a delete, a revoked share or a project delete reaches an open viewer as its not-found state. Share recipients get the same events as the owner.
+`useDocs` and `useProjectDocsIndex` re-fetch on `doc_list_changed` behind a trailing debounce (`DOCS_REFRESH_DEBOUNCE_MS`, and the longer `REFRESH_DEBOUNCE_MS` for the per-project fan-out), so a burst of writes to a doc shared with everyone costs one re-fetch per list. `useDoc` re-fetches only on a `doc_changed` for its own doc whose `updated_at` differs from the shown one, which a null always does: that is how a delete, a revoked share or a project delete reaches an open viewer as its not-found state.
 
 ## Lifecycle
 
@@ -356,7 +357,7 @@ Public containers get no sandbox token and so have no bridge at all, so `is_publ
 
 **Why files on disk instead of DB rows?** A doc is a portable artifact: `doc.md` plus `assets/` downloads as-is (md or zip) with working relative image links, and revisions are plain files.
 
-**Why do Swagger UI and ReDoc live outside `/docs`?** `/docs` and `/docs/<id>` are the user-facing deep links, and FastAPI registers its docs routes in the constructor, ahead of every `@app.get`, so its default `docs_url` would shadow the SPA route (comment above the `FastAPI(...)` call in `quest.py`). Giving the docs UI another path was rejected: `/docs` is the natural link to share, and relocating Swagger UI cost only the `run.py` banner line.
+**Why do Swagger UI and ReDoc live outside `/docs`?** `/docs` and `/docs/<id>` are the user-facing deep links, which FastAPI's default `docs_url` would shadow (comment above the `FastAPI(...)` call in `quest.py`). Giving the docs UI another path was rejected: `/docs` is the natural link to share, and relocating Swagger UI cost only the `run.py` banner line.
 
 **Why is the URL the only docs state?** A `NavigationContext` field with a URL-to-context sync effect, the pattern of `showRequestsView` behind `/inbox`, was rejected: with the URL as the only state, deep links, reload and back/forward work without sync code.
 

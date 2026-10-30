@@ -1,0 +1,583 @@
+/* Doc viewer "Notes" panel (DocNotesPanel): the viewer's suggestions for
+ * the doc, its instructions and memories. The `card` variant borrows the
+ * chat RightPanel's floating-card chrome (.right-panel-card in
+ * RightPanel.css) and the Assets card's uppercase heading; the `details`
+ * variant is the phone's collapsed section under the document. Design
+ * tokens only; the error tone is literal, dark-first with a light block. */
+
+/* A row of the viewer's aside grid (DocViewer.css: `grid-auto-rows:
+   minmax(0, auto)`), which it fills: as tall as its contents while they
+   fit, and with min-height 0 it can be held shorter, the body scrolling
+   inside (.doc-notes-scroll). */
+.doc-notes-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.doc-notes-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  padding: 0.75rem 1rem 0.5rem;
+}
+
+/* Same as .doc-assets-heading. */
+.doc-notes-heading {
+  margin: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* The contents scroll inside the card when they outgrow the viewport. For
+   read-only viewers (nothing focusable inside) it takes focus itself, so the
+   keyboard can scroll it. */
+.doc-notes-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.doc-notes-scroll:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.doc-notes-scroll:focus-visible {
+  outline: 2px solid rgb(var(--accent-rgb) / 0.6);
+  outline-offset: -2px;
+}
+
+.doc-notes-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0 1rem 0.875rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+/* Muted one-liners: loading, the empty panel, "No memories yet.". */
+.doc-notes-status {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+/* A failed load's message with Retry under it: the notes' (in place of the
+   body) and the suggestions' (above their rows). */
+.doc-notes-load-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+/* --- Sections ------------------------------------------------------------ */
+
+.doc-notes-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.doc-notes-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1.5rem;
+}
+
+.doc-notes-section-heading {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* The section's Edit button sits at the header's right edge. */
+.doc-notes-section-header .doc-notes-button {
+  margin-left: auto;
+}
+
+/* Same as .doc-assets-count. */
+.doc-notes-count {
+  padding: 0 0.375rem;
+  min-width: 1.125rem;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background-color: var(--hover);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.125rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.doc-notes-instructions-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* "Edited by ...", the write share's owner-only note, the memory cap. */
+.doc-notes-meta,
+.doc-notes-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+/* --- Buttons (outlined like .doc-history-button) --------------------------- */
+
+.doc-notes-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.3rem 0.625rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+/* index.css's global `button:hover` paints the border in the accent; keep
+   ours (disabled too). The primary variant resets it to transparent below. */
+.doc-notes-button:hover {
+  border-color: var(--border-strong);
+}
+
+.doc-notes-button:hover:not(:disabled) {
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+.doc-notes-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.doc-notes-button--primary,
+.doc-notes-button--primary:hover,
+.doc-notes-button--primary:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--accent-contrast);
+}
+
+.doc-notes-button--primary {
+  background-color: var(--accent);
+}
+
+.doc-notes-button--primary:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+}
+
+/* The header's Edit: one step smaller than the editor's buttons. */
+.doc-notes-button--small {
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.doc-notes-button--add {
+  align-self: flex-start;
+}
+
+.doc-notes-button svg {
+  flex-shrink: 0;
+}
+
+/* The card's heading takes focus (from script) once the last suggestion row
+   has left; like the controls, it shows a ring for the keyboard only. */
+.doc-notes-button:focus:not(:focus-visible),
+.doc-notes-icon-button:focus:not(:focus-visible),
+.doc-notes-summary:focus:not(:focus-visible),
+.doc-notes-heading:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.doc-notes-button:focus-visible,
+.doc-notes-summary:focus-visible,
+.doc-notes-heading:focus-visible {
+  outline: 2px solid rgb(var(--accent-rgb) / 0.6);
+  outline-offset: 2px;
+}
+
+.doc-notes-heading:focus-visible {
+  border-radius: 4px;
+}
+
+/* --- Editors (instructions, a memory, the Add row) ------------------------- */
+
+.doc-notes-editor,
+.doc-notes-add {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.doc-notes-input {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0.5rem 0.625rem;
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.doc-notes-input:focus {
+  border-color: rgb(var(--accent-rgb) / 0.55);
+  box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / 0.15);
+  /* Invisible normally; forced-colors mode drops the box-shadow and paints
+     this outline in the system focus colour instead. */
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+.doc-notes-input::placeholder {
+  color: var(--text-muted);
+}
+
+.doc-notes-input[readonly] {
+  cursor: progress;
+}
+
+/* Counter on the left, the buttons on the right. */
+.doc-notes-editor-footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.doc-notes-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.doc-notes-counter {
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.doc-notes-counter--over,
+.doc-notes-over-cap,
+.doc-notes-error {
+  color: #ff6b6b;
+}
+
+.doc-notes-over-cap,
+.doc-notes-error {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* The over-cap line's live region stays in the DOM under the cap; empty,
+   it leaves the editor's flex flow so it adds no gap. */
+.doc-notes-over-cap-live:empty {
+  position: absolute;
+}
+
+/* --- Suggestions for you --------------------------------------------------- */
+/* The area holds the suggestions' load error and the block of rows; it is
+   always in the DOM (focus is kept in it as rows leave) and takes no room,
+   nor a gap of the body, while empty. The rows are the shared
+   MemorySuggestionRow, whose look (the doc rose, the diff, the counter)
+   comes from MemorySuggestions.css; only the spacing is the panel's. A
+   row's padding tightens so its text and diff keep their width in the
+   280px card. */
+.doc-notes-suggestions-area {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.doc-notes-suggestions-area:empty {
+  display: none;
+}
+
+.doc-notes-suggestions .memory-suggestion-row {
+  padding: 0.5rem;
+}
+
+/* --- Instructions conflict (409 stale_instructions) ------------------------ */
+/* The current text is shown whole (the card or the page scrolls): what
+   changed is often a line at its end. */
+
+/* Like .doc-history-notice. */
+.doc-notes-notice {
+  margin: 0;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: var(--hover);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.doc-notes-current {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.625rem;
+  border-left: 3px solid rgb(var(--accent-rgb) / 0.45);
+  border-radius: 0 6px 6px 0;
+  background-color: var(--accent-soft);
+}
+
+.doc-notes-current-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+
+.doc-notes-current-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.doc-notes-current-text--empty {
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+/* --- Memories -------------------------------------------------------------- */
+
+.doc-notes-memory-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.doc-notes-memory {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+  min-width: 0;
+  margin: 0 -0.5rem;
+  padding: 0.375rem 0.5rem;
+  border-radius: 8px;
+  transition: background-color 0.3s, box-shadow 0.3s;
+}
+
+.doc-notes-memory--editing {
+  display: block;
+}
+
+/* The memory a duplicate error points at, for a moment. */
+.doc-notes-memory--highlight {
+  background-color: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px rgb(var(--accent-rgb) / 0.45);
+}
+
+.doc-notes-memory-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.doc-notes-memory-content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.doc-notes-memory-meta {
+  margin-top: 0.125rem;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* "· 3h ago" stays whole: a narrow card wraps before it, never inside. */
+.doc-notes-memory-time {
+  white-space: nowrap;
+}
+
+.doc-notes-memory-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+/* Editors' per-memory Edit / Delete. Space is always reserved; on
+   hover-capable devices the icons show while the memory is hovered or
+   focused, touch screens always show them (as .doc-asset-delete). */
+.doc-notes-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color 0.12s, color 0.12s, opacity 0.12s;
+}
+
+/* `border: none` above, so index.css's global `button:hover` border colour
+   never shows. */
+.doc-notes-icon-button:hover:not(:disabled) {
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+.doc-notes-icon-button--danger:hover:not(:disabled) {
+  color: #ff6b6b;
+}
+
+/* Edit, while another memory's save is in flight. */
+.doc-notes-icon-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.doc-notes-icon-button:focus-visible {
+  outline: 2px solid rgb(var(--accent-rgb) / 0.6);
+  outline-offset: -2px;
+}
+
+@media (hover: hover) {
+  .doc-notes-icon-button {
+    opacity: 0;
+  }
+
+  .doc-notes-memory:hover .doc-notes-icon-button,
+  .doc-notes-memory:focus-within .doc-notes-icon-button {
+    opacity: 1;
+  }
+
+  .doc-notes-memory:hover .doc-notes-icon-button:disabled,
+  .doc-notes-memory:focus-within .doc-notes-icon-button:disabled {
+    opacity: 0.4;
+  }
+}
+
+/* The memory quoted in the delete confirm (inside .doc-dialog-body). */
+.doc-notes-dialog-quote {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.doc-dialog-body p.doc-notes-dialog-quote {
+  color: var(--text);
+}
+
+/* --- Phone: a collapsed section under the document ------------------------- */
+
+/* Same look as .doc-assets-details. */
+.doc-notes-details {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background-color: var(--surface-raised);
+}
+
+.doc-notes-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: 10px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.doc-notes-summary::-webkit-details-marker {
+  display: none;
+}
+
+.doc-notes-summary-chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+
+.doc-notes-details[open] .doc-notes-summary-chevron {
+  transform: rotate(90deg);
+}
+
+/* The viewer's pending suggestions for the doc, so they are seen while the
+   section is closed: a pill in the doc rose of their rows, whose
+   --suggestion-* values (and their light-scheme override)
+   MemorySuggestions.css sets on this class; shaped like .doc-notes-count. */
+.doc-notes-summary-count {
+  padding: 0 0.375rem;
+  min-width: 1.125rem;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background-color: rgb(var(--suggestion-rgb) / 0.16);
+  color: var(--suggestion-text);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.125rem;
+  text-align: center;
+}
+
+/* The pill's spoken text ("2 pending suggestions"). */
+.doc-notes-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.doc-notes-details-body .doc-notes-body {
+  padding: 0.125rem 0.75rem 0.75rem;
+}
+
+/* 16px text keeps iOS Safari from zooming in on focus. */
+@media (max-width: 768px) {
+  .doc-notes-input {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  .doc-notes-counter--over,
+  .doc-notes-over-cap,
+  .doc-notes-error,
+  .doc-notes-icon-button--danger:hover:not(:disabled) {
+    color: #d32f2f;
+  }
+}

@@ -7,8 +7,10 @@
 
 /* While History is open (DocViewer root .doc-viewer--history; its base
    layout lives in DocViewer.css): the column widens to hold the list beside
-   a full reading column, and the Assets aside -- the CURRENT doc's images --
-   steps out. */
+   a full reading column, and the aside steps out -- its Assets list is the
+   CURRENT doc's images. While the Notes panel is shown, DocViewer.css keeps
+   the aside for Notes alone, beside or below History (its rules out-rank
+   these). */
 .doc-viewer--history .doc-viewer-aside {
   display: none;
 }

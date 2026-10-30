@@ -16,9 +16,9 @@ A doc row is the review row of chat/docs/note_suggestions.py
 (``review_rows()``) as ``chat.docs.note_payloads.public_suggestion()``
 sends it: the store's own ``kind`` renamed ``note_kind`` (``instructions``
 / ``memory``), plus ``doc_title`` (``""`` for a doc the user can no longer
-see), ``replaces_content``, ``current_instructions`` and
-``instructions_moved``. Its ``project_id`` is the conversation's, since a
-doc suggestion carries none.
+see), ``replaces_content``, ``current_instructions``,
+``current_instructions_version`` and ``instructions_moved``. Its
+``project_id`` is the conversation's, since a doc suggestion carries none.
 
 Never gated: a doc row stays counted and listed while the ``docs`` or
 ``doc_notes`` gate is closed for the user (reviewing is a person acting),

@@ -3,22 +3,31 @@
  * 2rem gutters on desktop, 16px on phones, never a horizontal page scroll.
  *
  * Wide desktop (> 1024px): a two-track grid -- the centered column (header +
- * body, then the footer) beside the Assets aside, which takes the chat
- * RightPanel's footprint: 280px from the right edge including its 0.75rem
- * gutter, card 0.75rem from the top, sticky while the doc scrolls, the list
- * scrolling inside the card. <= 1024px: one track, the aside drops below the
- * body (above the footer). <= 768px (phone): the aside holds the collapsed
- * "Assets (N)" <details> instead of the card (DocViewer picks the variant).
- * In view mode the header sticks to the top of the pane while the doc
- * scrolls under it. Edit mode (`.doc-viewer--edit`, at the end of the file)
- * drops the aside and gives the editor the pane's width and height. */
+ * body, then the footer) beside the aside, which takes the chat RightPanel's
+ * footprint: 280px from the right edge including its 0.75rem gutter, cards
+ * 0.75rem from the top, sticky while the doc scrolls. The aside holds the
+ * Assets card, and while the Notes panel is shown (`.doc-viewer--notes`)
+ * the Notes card above it, 0.75rem apart; the cards share the aside's
+ * viewport-capped height and scroll inside themselves. <= 1024px: one
+ * track, the aside drops below the body (above the footer). <= 768px
+ * (phone): the aside holds collapsed <details> sections ("Notes",
+ * "Assets (N)") instead of the cards (DocViewer picks the variant). In view
+ * mode the header sticks to the top of the pane while the doc scrolls under
+ * it.
+ *
+ * Edit mode (`.doc-viewer--edit`) gives the editor the pane's width and
+ * height; History (DocHistory.css) widens the column. Both drop the Assets
+ * list. Without Notes the aside goes too and the grid keeps one track; with
+ * Notes the aside stays for the Notes card alone -- beside the editor or
+ * History on wide desktops, below it at <= 1024px (the end of the file). */
 
 .doc-viewer {
   --doc-viewer-aside-gutter: 0.75rem;
+  --doc-viewer-aside-track: calc(280px - var(--doc-viewer-aside-gutter));
 
   flex: 1 0 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) calc(280px - var(--doc-viewer-aside-gutter));
+  grid-template-columns: minmax(0, 1fr) var(--doc-viewer-aside-track);
   grid-template-rows: auto auto;
   align-content: start;
   column-gap: 2rem;
@@ -52,6 +61,42 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+}
+
+/* With Notes the aside stacks its cards in a grid (it stays in every mode:
+   the specificity beats the edit and History rules that hide it). Stretched
+   to its grid area, the aside has a definite height (capped as above), so
+   its rows -- from zero toward each card's content, in equal steps -- share
+   it fairly: a card that fits keeps its full height, and two that do not
+   split the aside evenly, each scrolling inside. (A flex column shrinks
+   cards in proportion to their content, which can squeeze a short Notes
+   card under a long Assets list to less than its header.) */
+.doc-viewer.doc-viewer--notes .doc-viewer-aside {
+  align-self: stretch;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: minmax(0, auto);
+  align-content: start;
+  row-gap: var(--doc-viewer-aside-gutter);
+}
+
+/* Wide desktop with Notes: the aside also spans a third, `1fr` row that
+   takes the pane height left under the footer, so the rows of the column
+   and the footer are sized without it -- a Notes card taller than a short
+   doc does not push the footer down. Stretched, the aside on a long doc is
+   as tall as its cap (the viewport less the gutters) even when its cards
+   are short; its negative bottom margin lets it reach into the viewer's
+   bottom padding (down to the gutter), so at the end of the scroll it stays
+   pinned instead of being pushed up by that padding. */
+@media (min-width: 1025px) {
+  .doc-viewer.doc-viewer--notes {
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .doc-viewer.doc-viewer--notes .doc-viewer-aside {
+    grid-row: 1 / span 3;
+    margin-bottom: calc(var(--doc-viewer-aside-gutter) - 3rem);
+  }
 }
 
 .doc-viewer-body {
@@ -290,16 +335,21 @@
   .doc-viewer-aside {
     margin-top: 2rem;
   }
+
+  .doc-viewer.doc-viewer--notes .doc-viewer-aside {
+    row-gap: 0.5rem;
+  }
 }
 
 /* Edit mode (DocEditor): the textarea and its preview need room, so the
- * Assets aside steps out (images are added from the editor's toolbar;
- * deleting one is a view-mode action) and the column takes the pane's width
- * up to 1440px. The viewer also takes the pane's height (at least 30rem --
- * a shorter window scrolls the pane instead of squashing the editor), so
- * the editor fills the column under the header and its panes scroll inside
- * themselves; the footer stays under it. After the breakpoint blocks above,
- * which these rules override. */
+ * Assets list steps out (images are added from the editor's toolbar;
+ * deleting one is a view-mode action), and with it the aside unless it
+ * holds Notes (below). The column takes the pane's width up to 1440px. The
+ * viewer also takes the pane's height (at least 30rem -- a shorter window
+ * scrolls the pane instead of squashing the editor), so the editor fills
+ * the column under the header and its panes scroll inside themselves; the
+ * footer stays under it. After the breakpoint blocks above, which these
+ * rules override. */
 .doc-viewer.doc-viewer--edit {
   flex: 1 0 0;
   min-height: 30rem;
@@ -331,5 +381,96 @@
 
   .doc-viewer--edit .doc-viewer-footer {
     margin-top: 0.75rem;
+  }
+}
+
+/* Edit and History keep the aside only for Notes (`.doc-viewer--notes`
+ * re-shows it, above); the Assets list stays out. Wide desktop: the two
+ * tracks and the view mode's right gutter come back, the Notes card beside
+ * the editor or History (in edit mode the stretched aside is the pane's
+ * height less the gutters, the card scrolling inside). <= 1024px: the card
+ * sits below the editor or History, above the footer, as wide as the
+ * column. History's own viewer rules are in DocHistory.css, a later-loaded
+ * chunk: the History overrides here out-rank them by specificity, not by
+ * order. */
+.doc-viewer--notes.doc-viewer--edit .doc-viewer-aside .doc-assets-panel,
+.doc-viewer--notes.doc-viewer--edit .doc-viewer-aside .doc-assets-details,
+.doc-viewer--notes.doc-viewer--history .doc-viewer-aside .doc-assets-panel,
+.doc-viewer--notes.doc-viewer--history .doc-viewer-aside .doc-assets-details {
+  display: none;
+}
+
+@media (min-width: 1025px) {
+  .doc-viewer.doc-viewer--notes.doc-viewer--edit,
+  .doc-viewer.doc-viewer--notes.doc-viewer--history {
+    grid-template-columns: minmax(0, 1fr) var(--doc-viewer-aside-track);
+    padding-right: var(--doc-viewer-aside-gutter);
+  }
+
+  /* Beside the card the editor is often narrow enough to stack its panes:
+     the same floor as below. */
+  .doc-viewer.doc-viewer--notes.doc-viewer--edit {
+    min-height: auto;
+    grid-template-rows: minmax(31rem, 1fr) auto;
+  }
+
+  /* The edit-mode grid has two rows and a 1.25rem bottom padding. */
+  .doc-viewer.doc-viewer--notes.doc-viewer--edit .doc-viewer-aside {
+    grid-row: 1 / span 2;
+    margin-bottom: calc(var(--doc-viewer-aside-gutter) - 1.25rem);
+  }
+}
+
+/* <= 1024px edit mode: the viewer stays pane-height with the editor
+ * filling the first row, so the aside gets a row of its own between the
+ * editor and the footer, and a cap. The editor row has a floor -- 31rem,
+ * what the stacked editor needs (header, toolbars and two panes over the
+ * textarea's 10rem minimum); 19rem on phones, which show one pane at a
+ * time -- and the viewer's minimum height is its content's (`auto`), so a
+ * pane too short for both scrolls instead of squashing the editor. That
+ * also holds on a phone whose keyboard shrinks the shell, which vh does not
+ * see. The cap is 40vh, less on short windows so that on a full-height pane
+ * the editor keeps its floor without a scroll, never under 8rem. On phones
+ * the collapsed section's body scrolls under the cap instead (a <details>
+ * does not shrink). */
+@media (max-width: 1024px) {
+  .doc-viewer.doc-viewer--notes.doc-viewer--edit {
+    --doc-viewer-notes-cap: clamp(8rem, 100vh - 38rem, 40vh);
+
+    min-height: auto;
+    grid-template-rows: minmax(31rem, 1fr) auto auto;
+  }
+
+  .doc-viewer.doc-viewer--notes.doc-viewer--edit .doc-viewer-aside {
+    max-width: 1440px;
+    max-height: var(--doc-viewer-notes-cap);
+    margin-top: 1rem;
+  }
+
+  .doc-viewer.doc-viewer--notes.doc-viewer--edit .doc-viewer-footer {
+    grid-row: 3;
+  }
+
+  .doc-viewer.doc-viewer--notes.doc-viewer--history .doc-viewer-aside {
+    max-width: 1140px;
+  }
+}
+
+@media (max-width: 768px) {
+  .doc-viewer.doc-viewer--notes.doc-viewer--edit {
+    --doc-viewer-notes-cap: clamp(8rem, 100vh - 28rem, 40vh);
+
+    grid-template-rows: minmax(19rem, 1fr) auto auto;
+  }
+
+  .doc-viewer.doc-viewer--notes.doc-viewer--edit .doc-viewer-aside {
+    max-height: none;
+    margin-top: 0.75rem;
+  }
+
+  /* Minus the summary row. */
+  .doc-viewer.doc-viewer--notes.doc-viewer--edit .doc-notes-details-body {
+    max-height: calc(var(--doc-viewer-notes-cap) - 2.75rem);
+    overflow-y: auto;
   }
 }

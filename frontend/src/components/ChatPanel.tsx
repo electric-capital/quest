@@ -22,7 +22,7 @@ import { Composer } from './Composer';
 import { ConvertToProjectModal } from './ConvertToProjectModal';
 import { ExpensiveResumeWarning } from './ExpensiveResumeWarning';
 import { UploadProgress, describeUpload, uploadPercent, type UploadStatus } from './UploadProgress';
-import { MemorySuggestions } from './MemorySuggestions';
+import { MemorySuggestionsBar } from './MemorySuggestions';
 import { ConversationHeader } from './ConversationHeader';
 import { LazyFileViewerModal } from './LazyFileViewerModal';
 import { uploadFiles } from '../api/fileApi';
@@ -215,6 +215,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
     clearExpensiveResume,
     pendingMemorySuggestions,
     pendingProjectMemorySuggestions,
+    pendingDocNoteSuggestions,
     customName,
     setCustomName,
     archived,
@@ -844,23 +845,19 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
 
       {/* Stream errors are now shown inline as error bubbles in the chat */}
 
-      {/* Suggested-memories bubbles (the model's non-blocking suggest_memory
-          and suggest_project_memory proposals awaiting review), side by side;
-          click opens the kind's review panel over the conversation. Each is
-          hidden while nothing of its kind is pending. */}
-      {(pendingMemorySuggestions > 0 || pendingProjectMemorySuggestions > 0) && (
-        <div className="memory-suggestions-bar">
-          <MemorySuggestions
-            conversationId={conversationId}
-            pendingCount={pendingMemorySuggestions}
-          />
-          <MemorySuggestions
-            conversationId={conversationId}
-            pendingCount={pendingProjectMemorySuggestions}
-            kind="project"
-          />
-        </div>
-      )}
+      {/* Suggestion bubbles (the model's non-blocking suggest_memory,
+          suggest_project_memory and suggest_doc_note proposals awaiting
+          review), side by side; click opens the kind's review panel over
+          the conversation. Must stay a direct child of .chat-panel (the
+          phone rule in MemorySuggestions.css positions it by that). */}
+      <MemorySuggestionsBar
+        conversationId={conversationId}
+        pending={{
+          user: pendingMemorySuggestions,
+          project: pendingProjectMemorySuggestions,
+          doc: pendingDocNoteSuggestions,
+        }}
+      />
 
       {/* Expensive-resume warning: blocks the composer on a long-idle,
           long-context conversation until the user picks an alternative or

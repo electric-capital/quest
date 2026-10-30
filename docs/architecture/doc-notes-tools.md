@@ -2,7 +2,7 @@
 
 ## Overview
 
-The two `tool_call` tools through which a model reaches [doc notes](doc-notes.md): `list_doc_notes` returns a doc's notes block, and `suggest_doc_note` files a proposed change for the user to review. This doc covers their registry specs and gate, which run kinds and prompts get each, the `list_doc_notes` result (the block, `can_suggest`, what it records), the `suggest_doc_note` dispatch order and backstop, public conversations, and the prompting: the `system:doc_notes` skill, the public prompt's notes line and the rule for the copy that tool results carry. The notes block, the seen record and the registration checks the tools rest on are in [Doc Notes](doc-notes.md).
+The two `tool_call` tools through which a model reaches [doc notes](doc-notes.md): `list_doc_notes` returns a doc's notes block, and `suggest_doc_note` files a proposed change for the user to review. This doc covers their registry specs and gate, which run kinds and prompts get each, the `list_doc_notes` result (the block, `can_suggest`, what it records), the `suggest_doc_note` dispatch order and backstop, public conversations, and the prompting: the `system:doc_notes` skill, the public prompt's notes line and the rule for the copy that tool results carry. The notes block and the seen record the tools rest on are in [Doc Notes](doc-notes.md), the registration checks in [Doc Note Suggestions](doc-notes-review.md).
 
 ## Key Files
 
@@ -13,7 +13,7 @@ The two `tool_call` tools through which a model reaches [doc notes](doc-notes.md
 | `chat/gemini_api/tool_handlers/docs.py` | The two handlers behind the gate check; the module docstring lists every error shape of the doc and notes tools |
 | `chat/docs/service.py` | `list_doc_notes()`, the `list_doc_notes` body, and `DocNotesDisabled` |
 | `chat/docs/notes.py` | `suggestion_allowed()` with `SLACK_DENY_CAUSES`, the taint rule `can_suggest` shares with registration, `DOC_NOTE_SUGGEST_NOT_AVAILABLE_MESSAGE`, and the copy constants, whose rules are in the comment above them |
-| `chat/docs/note_suggestions.py` | `register_suggestion()`, the `suggest_doc_note` body ([Doc Notes -- Registration](doc-notes.md#registration)) |
+| `chat/docs/note_suggestions.py` | `register_suggestion()`, the `suggest_doc_note` body ([Doc Note Suggestions -- Registration](doc-notes-review.md#registration)) |
 | `chat/gemini_api/script_tool_call.py` | `SCRIPT_TOOL_CALL_ALLOWLIST`, which holds `list_doc_notes` and not `suggest_doc_note` |
 | `chat/system_skills/catalog.py`, `chat/system_skills/loader.py` | The `system:doc_notes` skill (`_doc_notes_content` and its registration), the notes pointer in `_quest_docs_content`, and the skill's gate-closed load in `load_system_skills()` |
 | `chat/gemini_api/system_prompt.py` | `_doc_note_tool_names()`, the per-prompt exclusions of `suggest_doc_note`, and the public notes line (`_public_doc_notes_line()` over the `_PUBLIC_DOC_NOTES_*` constants) |
@@ -48,7 +48,7 @@ While the gate is closed for the caller (also when Quest Docs is closed), the to
 
 ## suggest_doc_note
 
-`_tool_suggest_doc_note()` checks the gate, then the run kind, then hands over to `register_suggestion()`, whose checks follow ([Doc Notes -- Registration](doc-notes.md#registration)).
+`_tool_suggest_doc_note()` checks the gate, then the run kind, then hands over to `register_suggestion()`, whose checks follow ([Doc Note Suggestions -- Registration](doc-notes-review.md#registration)).
 
 - **Backstop**: `_may_suggest_doc_notes()` admits a top-level or Slack conversation with a conversation id that is not a routine run. Sub-agent, cross-user subagent, inference-API, script and routine runs, and a call without a conversation, get `{"error": "suggest_not_available", "message"}` before any argument or visibility check, and nothing is registered. The script bridge does not list the tool, so a script never reaches the backstop.
 - **Results**: the `register_suggestion()` dict unchanged; a `NoteSuggestionError` as `{"error": code, "message"}`; notes the conversation has not seen as `doc_notes_unseen` with the block, the shape of the [write refusal](doc-notes.md#write-refusal) with its own message; a hidden or missing doc, and a write verdict `suggestion_allowed()` refuses, as `{"error": "<text>"}`, exactly as the doc tools answer.
