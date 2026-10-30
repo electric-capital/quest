@@ -19,7 +19,7 @@ The full tool call flow is orchestrated by `execute_tool_call()` in `chat/route_
    - Parse URL, enforce localhost with allowed port (8000 + proxy port from get_proxy_port()), enforce /api/* path prefix
    - Extract query parameters
 4. resolve_route(app, method, path)
-   - Iterate app.routes, use Starlette route.matches() for matching
+   - Iterate the flat route table from iter_app_routes(app), use Starlette route.matches() for matching
    - Return (endpoint_callable, path_params)
 5. build_handler_kwargs(endpoint, path_params, query_params, user, body_str)
    - Introspect handler signature with inspect.signature()
@@ -39,7 +39,9 @@ All functions are in `chat/route_dispatch.py`. See the source file for full sign
 
 **`validate_url(url)`** -- Parses and validates a tool call URL. Enforces that the host is `localhost`, the port is `8000`, the configured proxy port from `get_proxy_port()`, or the sandbox tool API port from `get_sandbox_port()` (the model sees the sandbox port in the script-sandbox docs and may echo it), and the path starts with `/api/`. Returns the URL path and parsed query parameters.
 
-**`resolve_route(app, method, path)`** -- Matches a method + path against the FastAPI app's registered routes using Starlette's `route.matches()` mechanism. Returns the endpoint callable and path parameters.
+**`iter_app_routes(app)`** (in `chat/route_table.py`) -- The flat view of the app's route table, in registration order. Since FastAPI 0.137 `include_router` appends a node holding the router instead of copying its path operations, so `app.routes` is a tree; this wraps FastAPI's `iter_route_contexts`, whose `RouteContext` items carry `path`, `methods`, `endpoint`, `matches()` and `dependant` as they take effect (include-time prefixes and dependencies merged in), and `original_route` for the `APIRoute` as declared. Anything that introspects the route table (the dispatcher, the route-table tests) goes through it rather than looping over `app.routes`.
+
+**`resolve_route(app, method, path)`** -- Matches a method + path against the flat route table using Starlette's `route.matches()` mechanism. Returns the endpoint callable and path parameters.
 
 **`build_handler_kwargs(endpoint, ...)`** -- Introspects the handler's signature using `inspect.signature()` and resolves each parameter from path params, query params, `Depends` injection, Pydantic body models, or defaults. Unwraps FastAPI `FieldInfo` metadata objects (e.g., `Query()`, `Path()`) to extract actual default values. Supports `conversation_id` auto-injection into Pydantic body models and scalar parameters.
 

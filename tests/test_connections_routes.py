@@ -503,8 +503,9 @@ def test_quest_app_mounts_connection_routes():
 
     script = (
         "import json, quest\n"
-        "routes = sorted({(m, r.path) for r in quest.app.routes"
-        " if hasattr(r, 'methods') for m in r.methods})\n"
+        "from chat.route_table import iter_app_routes\n"
+        "routes = sorted({(m, r.path) for r in iter_app_routes(quest.app)"
+        " if r.methods for m in r.methods})\n"
         "print(json.dumps(routes))\n"
     )
     proc = subprocess.run(
