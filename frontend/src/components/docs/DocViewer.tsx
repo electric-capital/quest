@@ -13,8 +13,9 @@
  * which draws the header's bottom hairline (DocViewer.css).
  *
  * Beside the column, an aside holds the doc's Notes panel (DocNotesPanel,
- * the instructions and memories from useDocNotes; only while the doc_notes
- * gate is open and the notes were not refused) above its Assets list
+ * the instructions and memories from useDocNotes; only while
+ * docNotesPanelShown: the doc_notes gate is open and the notes are neither
+ * gone (404) nor refused with doc_notes_disabled) above its Assets list
  * (DocAssetsPanel, from the detail's `assets`). Notes stays in every mode,
  * since its instructions matter most while editing; Assets shows in view
  * mode only. DocViewer.css lays the aside out: 280px right gutter cards on
@@ -416,7 +417,7 @@ export function DocViewer({ docId }: { docId: string }) {
       <aside className="doc-viewer-aside">
         {notesShown && (
           <DocNotesPanel
-            // Per doc, like Assets, which already takes plain doc.id.
+            // Prefixed: the sibling DocAssetsPanel is keyed by plain doc.id.
             key={`notes:${doc.id}`}
             view={notesView}
             variant={isMobile ? 'details' : 'card'}

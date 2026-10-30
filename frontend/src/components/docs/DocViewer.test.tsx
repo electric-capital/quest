@@ -4,7 +4,8 @@
 // only, refreshing the doc), the Notes panel (useDocNotes for the viewer's
 // doc; nothing while the gate is closed or the notes are gone or refused,
 // else above Assets in the aside -- card on desktop, collapsed section on
-// phones -- and kept in edit mode and History), the empty-doc line per
+// phones -- while loading or failed too, kept in edit mode and History, and
+// remounted per doc), the empty-doc line per
 // reach / edit access, the footer's "Last written by" subject per
 // `last_write_source`, the editor wiring (save -> applyContent + view,
 // cancel -> view, 409 -> refresh, focus back on the title), and unsaved
@@ -363,6 +364,52 @@ describe('DocViewer', () => {
       expect(root.classList.contains('doc-viewer--history')).toBe(true);
       expect(root.classList.contains('doc-viewer--notes')).toBe(true);
       expect(within(asideOf(container)).getByRole('region', { name: 'Notes' })).toBeTruthy();
+    });
+
+    it('shows while the notes load', () => {
+      mocks.notesView = notesView({ enabled: true, loading: true });
+      setView({ doc: doc() });
+      const { container } = renderViewer();
+
+      const notes = within(asideOf(container)).getByRole('region', { name: 'Notes' });
+      expect(within(notes).getByText('Loading notes...')).toBeTruthy();
+      expect(viewerRoot(container).classList.contains('doc-viewer--notes')).toBe(true);
+    });
+
+    it('shows a failed load with a Retry that reloads the notes', async () => {
+      mocks.notesView = notesView({ enabled: true, error: new ApiClientError('Server exploded', 500) });
+      setView({ doc: doc() });
+      const { container } = renderViewer();
+
+      expect(viewerRoot(container).classList.contains('doc-viewer--notes')).toBe(true);
+      const notes = within(asideOf(container)).getByRole('region', { name: 'Notes' });
+      expect(within(notes).getByText('Server exploded')).toBeTruthy();
+      fireEvent.click(within(notes).getByRole('button', { name: 'Retry' }));
+      expect(mocks.notesView.reload).toHaveBeenCalledTimes(1);
+      // Retry is disabled until the reload settles.
+      await waitFor(() =>
+        expect(within(notes).getByRole<HTMLButtonElement>('button', { name: 'Retry' }).disabled).toBe(false),
+      );
+    });
+
+    it("remounts per doc: another doc's panel starts with the editor closed", () => {
+      mocks.notesView = notesOn();
+      setView({ doc: doc() });
+      const { container, rerender } = renderViewer();
+
+      const notes = within(asideOf(container)).getByRole('region', { name: 'Notes' });
+      fireEvent.click(within(notes).getByRole('button', { name: 'Edit instructions' }));
+      expect(screen.getByRole('textbox', { name: 'Instructions' })).toBeTruthy();
+
+      setView({ doc: doc({ id: 'd2', title: 'Budget' }) });
+      rerender(
+        <MemoryRouter initialEntries={['/docs/d2']}>
+          <DocViewer docId="d2" />
+        </MemoryRouter>,
+      );
+      expect(mocks.notesDocId).toBe('d2');
+      expect(screen.getByRole('region', { name: 'Notes' })).toBeTruthy();
+      expect(screen.queryByRole('textbox', { name: 'Instructions' })).toBeNull();
     });
 
     it('stays out when the notes are gone (404) or refused with doc_notes_disabled', () => {

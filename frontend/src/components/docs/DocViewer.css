@@ -83,8 +83,9 @@
 /* Wide desktop with Notes: the aside also spans a third, `1fr` row that
    takes the pane height left under the footer, so the rows of the column
    and the footer are sized without it -- a Notes card taller than a short
-   doc does not push the footer down. Stretched, the aside is full height
-   on a long doc; its negative bottom margin lets it reach into the viewer's
+   doc does not push the footer down. Stretched, the aside on a long doc is
+   as tall as its cap (the viewport less the gutters) even when its cards
+   are short; its negative bottom margin lets it reach into the viewer's
    bottom padding (down to the gutter), so at the end of the scroll it stays
    pinned instead of being pushed up by that padding. */
 @media (min-width: 1025px) {
@@ -389,17 +390,13 @@
  * the editor or History (in edit mode the stretched aside is the pane's
  * height less the gutters, the card scrolling inside). <= 1024px: the card
  * sits below the editor or History, above the footer, as wide as the
- * column. The edit-mode viewer stays pane-height with the editor filling
- * `1fr`, so there the aside gets its own row and a cap: 40vh, less on short
- * windows so the column keeps about 25rem (what a 30rem viewer leaves it
- * without Notes), never under 10rem. On phones the collapsed section's body
- * scrolls under that cap instead (a <details> does not shrink). History's
- * own viewer rules are in DocHistory.css, a later-loaded chunk: the History
- * overrides here out-rank them by specificity, not by order. */
-.doc-viewer--edit .doc-viewer-aside .doc-assets-panel,
-.doc-viewer--edit .doc-viewer-aside .doc-assets-details,
-.doc-viewer--history .doc-viewer-aside .doc-assets-panel,
-.doc-viewer--history .doc-viewer-aside .doc-assets-details {
+ * column. History's own viewer rules are in DocHistory.css, a later-loaded
+ * chunk: the History overrides here out-rank them by specificity, not by
+ * order. */
+.doc-viewer--notes.doc-viewer--edit .doc-viewer-aside .doc-assets-panel,
+.doc-viewer--notes.doc-viewer--edit .doc-viewer-aside .doc-assets-details,
+.doc-viewer--notes.doc-viewer--history .doc-viewer-aside .doc-assets-panel,
+.doc-viewer--notes.doc-viewer--history .doc-viewer-aside .doc-assets-details {
   display: none;
 }
 
@@ -410,6 +407,13 @@
     padding-right: var(--doc-viewer-aside-gutter);
   }
 
+  /* Beside the card the editor is often narrow enough to stack its panes:
+     the same floor as below. */
+  .doc-viewer.doc-viewer--notes.doc-viewer--edit {
+    min-height: auto;
+    grid-template-rows: minmax(31rem, 1fr) auto;
+  }
+
   /* The edit-mode grid has two rows and a 1.25rem bottom padding. */
   .doc-viewer.doc-viewer--notes.doc-viewer--edit .doc-viewer-aside {
     grid-row: 1 / span 2;
@@ -417,11 +421,24 @@
   }
 }
 
+/* <= 1024px edit mode: the viewer stays pane-height with the editor
+ * filling the first row, so the aside gets a row of its own between the
+ * editor and the footer, and a cap. The editor row has a floor -- 31rem,
+ * what the stacked editor needs (header, toolbars and two panes over the
+ * textarea's 10rem minimum); 19rem on phones, which show one pane at a
+ * time -- and the viewer's minimum height is its content's (`auto`), so a
+ * pane too short for both scrolls instead of squashing the editor. That
+ * also holds on a phone whose keyboard shrinks the shell, which vh does not
+ * see. The cap is 40vh, less on short windows so that on a full-height pane
+ * the editor keeps its floor without a scroll, never under 8rem. On phones
+ * the collapsed section's body scrolls under the cap instead (a <details>
+ * does not shrink). */
 @media (max-width: 1024px) {
   .doc-viewer.doc-viewer--notes.doc-viewer--edit {
-    --doc-viewer-notes-cap: clamp(10rem, 100vh - 32rem, 40vh);
+    --doc-viewer-notes-cap: clamp(8rem, 100vh - 38rem, 40vh);
 
-    grid-template-rows: minmax(0, 1fr) auto auto;
+    min-height: auto;
+    grid-template-rows: minmax(31rem, 1fr) auto auto;
   }
 
   .doc-viewer.doc-viewer--notes.doc-viewer--edit .doc-viewer-aside {
@@ -440,6 +457,12 @@
 }
 
 @media (max-width: 768px) {
+  .doc-viewer.doc-viewer--notes.doc-viewer--edit {
+    --doc-viewer-notes-cap: clamp(8rem, 100vh - 28rem, 40vh);
+
+    grid-template-rows: minmax(19rem, 1fr) auto auto;
+  }
+
   .doc-viewer.doc-viewer--notes.doc-viewer--edit .doc-viewer-aside {
     max-height: none;
     margin-top: 0.75rem;
