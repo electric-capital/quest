@@ -1402,8 +1402,8 @@ export type DocNoteKind = 'instructions' | 'memory';
 /**
  * A note the model proposed via `suggest_doc_note`, reviewed by the user
  * who ran the conversation (the composer bubble, the doc's Notes panel, the
- * inbox). The accept and dismiss responses return the row without the four
- * review fields at the end.
+ * inbox). The accept and dismiss responses return the row without the
+ * review fields at the end (`doc_title` onward).
  */
 export interface DocNoteSuggestion {
   id: string;

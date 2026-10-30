@@ -757,12 +757,28 @@ class TestAccept:
         [row] = conv_list(env, cid).json()["suggestions"]
         assert (row["base_instructions_version"], row["current_instructions_version"],
                 row["instructions_moved"]) == (1, 2, True)
+        # The field moves again after the list was read: the listed version
+        # is now stale, and a re-list carries the new one.
+        set_instructions(env, doc_id, "Rule A, revised twice.")
+        resp = accept(env, sid, body={
+            "expected_instructions_version": row["current_instructions_version"],
+        })
+        assert (resp.status_code, resp.json()) == (409, {
+            "error": "stale_instructions",
+            "message": STALE_MESSAGE,
+            "current": {"instructions": "Rule A, revised twice.", "instructions_version": 3},
+        })
+        assert get_row(env, sid)["status"] == "pending"
+        [row] = conv_list(env, cid).json()["suggestions"]
+        assert (row["current_instructions"], row["current_instructions_version"]) == (
+            "Rule A, revised twice.", 3,
+        )
         resp = accept(env, sid, body={
             "expected_instructions_version": row["current_instructions_version"],
         })
         assert resp.status_code == 200
         assert resp.json()["suggestion"] == resolved(env, sid)
-        assert resp.json()["notes"]["instructions_version"] == 3
+        assert resp.json()["notes"]["instructions_version"] == 4
         assert state(env, doc_id)["instructions"] == "Rule A.\nRule B."
         assert conv_list(env, cid).json() == {"suggestions": [], "pending_count": 0}
 
