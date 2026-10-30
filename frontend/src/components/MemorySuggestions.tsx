@@ -78,6 +78,7 @@ import { MemorySuggestionRow } from './MemorySuggestionRow';
 import type { MemorySuggestionKind, MemorySuggestionRowStateProps } from './MemorySuggestionRow';
 import {
   canAcceptDocNote,
+  canAcceptMemory,
   docNoteAcceptOptions,
   editedText,
   rebaseOnStale,
@@ -141,6 +142,7 @@ const KIND_CONFIG: {
     accept: (s, draft) => acceptMemorySuggestion(s.id, editedText(s, draft)),
     dismiss: dismissMemorySuggestion,
     setCount: (id: string, n: number) => conversationStore.setPendingMemorySuggestions(id, n),
+    canAccept: canAcceptMemory,
     renderRow: (s, state) => <MemorySuggestionRow kind="user" suggestion={s} {...state} />,
   },
   project: {
@@ -157,6 +159,7 @@ const KIND_CONFIG: {
     accept: (s, draft) => acceptProjectMemorySuggestion(s.id, editedText(s, draft)),
     dismiss: dismissProjectMemorySuggestion,
     setCount: (id: string, n: number) => conversationStore.setPendingProjectMemorySuggestions(id, n),
+    canAccept: canAcceptMemory,
     renderRow: (s, state) => <MemorySuggestionRow kind="project" suggestion={s} {...state} />,
   },
   doc: {

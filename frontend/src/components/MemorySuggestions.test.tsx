@@ -1,7 +1,8 @@
 // Suggested-memories bubble + panel: hidden at zero, opens on click and
 // lists the conversation's pending suggestions, accept sends the edited
 // text only when it changed, dismiss removes the row, a 409 from another
-// tab drops the row silently, and a count change while open re-fetches.
+// tab drops the row silently, a count change while open re-fetches, and
+// Accept all (personal and project) skips a row whose draft is blank.
 // The doc kind adds its icon, wording and store count, the accept options
 // with the instructions version, the re-base on a 409 stale_instructions
 // (against the row in state, then a re-fetch), the fetch the accept's own
@@ -298,6 +299,41 @@ describe('MemorySuggestions kind="project"', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     await waitFor(() => expect(mocks.dismissProjectMemorySuggestion).toHaveBeenCalledWith('p2'));
     expect(mocks.acceptMemorySuggestion).not.toHaveBeenCalled();
+  });
+});
+
+describe('MemorySuggestions Accept all', () => {
+  it('skips a personal or project row whose draft is blank', async () => {
+    const kinds = [
+      { kind: 'user', fetch: mocks.fetchMemorySuggestions, accept: mocks.acceptMemorySuggestion, label: 'Memory text' },
+      { kind: 'project', fetch: mocks.fetchProjectMemorySuggestions, accept: mocks.acceptProjectMemorySuggestion, label: 'Project memory text' },
+    ] as const;
+    for (const { kind, fetch, accept, label } of kinds) {
+      fetch.mockResolvedValue({
+        suggestions: [
+          suggestion('s1', 'Likes tea'),
+          suggestion('s2', 'Likes rain'),
+          suggestion('s3', 'Works in UTC'),
+        ],
+        pending_count: 3,
+      });
+      render(<MemorySuggestions conversationId={`c-bulk-${kind}`} pendingCount={3} kind={kind} />);
+      fireEvent.click(screen.getByRole('button', { name: /3 suggested/ }));
+      await screen.findByDisplayValue('Works in UTC');
+      // A blank draft would save an empty memory: its own Accept is
+      // disabled, and Accept all leaves it too.
+      fireEvent.change(screen.getByDisplayValue('Likes rain'), { target: { value: ' \n ' } });
+      const accepts = screen.getAllByRole('button', { name: 'Accept' }) as HTMLButtonElement[];
+      expect(accepts.map((b) => b.disabled)).toEqual([false, true, false]);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Accept all' }));
+      await waitFor(() => expect(screen.queryByDisplayValue('Works in UTC')).toBeNull());
+      expect(accept.mock.calls).toEqual([['s1', undefined], ['s3', undefined]]);
+      expect(screen.getAllByLabelText(label).map((el) => (el as HTMLTextAreaElement).value))
+        .toEqual([' \n ']);
+      expect(screen.queryByRole('alert')).toBeNull();
+      cleanup();
+    }
   });
 });
 

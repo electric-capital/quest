@@ -2,9 +2,10 @@
  * Review helpers for suggestions, shared by every surface that accepts them
  * (the composer bubble in MemorySuggestions.tsx, the doc viewer's Notes
  * panel, the inbox's Memories tab): the edited text an Accept sends for any
- * kind, and for doc notes the caps as the server counts them, when Accept is
- * allowed and what it sends, and how a row is re-based on the current
- * instructions a 409 `stale_instructions` carries.
+ * kind, when a personal or project memory row may be accepted, and for doc
+ * notes the caps as the server counts them, when Accept is allowed and what
+ * it sends, and how a row is re-based on the current instructions a 409
+ * `stale_instructions` carries.
  */
 
 import {
@@ -15,7 +16,6 @@ import {
 import type {
   DocNoteKind,
   DocNoteSuggestion,
-  MemorySuggestion,
   StaleInstructionsCurrent,
 } from '../api/types';
 
@@ -35,11 +35,17 @@ export function editedText(
   return draft.trim();
 }
 
-/** A doc note row (it has `note_kind`), not a personal or project memory row. */
-export function isDocNoteSuggestion(
-  s: MemorySuggestion | DocNoteSuggestion,
-): s is DocNoteSuggestion {
-  return 'note_kind' in s;
+/**
+ * Whether Accept may send this draft of a personal or project memory row
+ * (undefined = the proposed text): an archive-only row (`content` null)
+ * always, as it saves no text; any other only while the text is not blank.
+ * The row's Accept and every Accept all follow it.
+ */
+export function canAcceptMemory(
+  s: { content: string | null },
+  draft: string | undefined,
+): boolean {
+  return s.content === null || !!(draft ?? s.content).trim();
 }
 
 /** The server's character cap for one kind of doc note. */

@@ -104,7 +104,8 @@
 }
 
 /* What a suggestion is and where it came from: kind pill, a doc note's
-   doc, conversation link. */
+   doc, then the conversation link, or for a dream's suggestion the memory
+   review that proposed it (.memory-inbox-from--dream). */
 .memory-inbox-source {
   display: flex;
   flex-wrap: wrap;

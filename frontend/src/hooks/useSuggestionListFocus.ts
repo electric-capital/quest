@@ -20,19 +20,23 @@
  * - Focus was in a row that is still there (a failed accept or dismiss):
  *   while nothing in it is enabled (busy), wait; then back to the element
  *   that had focus if it is enabled again (unless it is the text field and
- *   the last input was a tap), else the row's text field.
+ *   the last input was a tap), else the row's target (below).
  * - Focus was on another control of the surface (Accept all, Dismiss all,
  *   a close button): back to it while it is still there (waiting while it
  *   is disabled), else the first row, else the fallback.
  *
- * In a row the target is its text field (`.memory-suggestion-content`)
- * when enabled, else its first enabled action button
- * (`.memory-suggestion-actions button`); a row with neither is busy, and
- * the rule waits for it. After a touch or pen tap the target is the action
- * button instead: focusing a text field from script opens the on-screen
- * keyboard. A target that does not take focus (hidden, e.g. a phone-only
- * fallback on a wide screen) passes to the next one; when none does, a
- * later commit tries again. Rows are found by `data-suggestion-id` (set by
+ * In a row the target is its field when enabled, else its first enabled
+ * action button (`.memory-suggestion-actions button`); a row with neither
+ * is busy, and the rule waits for it. The field is the text field
+ * (`.memory-suggestion-content`) or, in an archive-only row, the block
+ * showing the memory it retires (`.memory-suggestion-archive`, a named
+ * group that is `aria-disabled` while busy), so a screen reader hears what
+ * accepting does before it reaches Accept. After a touch or pen tap a text
+ * field gives way to the action button: focusing it from script opens the
+ * on-screen keyboard (an archive block opens none and stays the target).
+ * A target that does not take focus (hidden, e.g. a phone-only fallback on
+ * a wide screen) passes to the next one; when none does, a later commit
+ * tries again. Rows are found by `data-suggestion-id` (set by
  * MemorySuggestionRow) and ordered by `rowIds`.
  *
  * The hook runs from the calling component's layout effect, so the commits
@@ -85,14 +89,18 @@ interface FocusRecord {
 }
 
 const ROW_SELECTOR = '[data-suggestion-id]';
+/** A row's text field: typing lands here, and focusing it opens a keyboard. */
 const TEXT_FIELD_SELECTOR = '.memory-suggestion-content';
+/** A row's field: its text field, or an archive-only row's archive block. */
+const FIELD_SELECTOR = `${TEXT_FIELD_SELECTOR}, .memory-suggestion-archive`;
 
 function isFocusLost(active: Element | null): boolean {
   return !active || active === active.ownerDocument.body || !active.isConnected;
 }
 
+/** Not disabled; the archive block, not a form control, uses aria-disabled. */
 function isEnabled(el: Element): boolean {
-  return !el.matches(':disabled');
+  return !el.matches(':disabled, [aria-disabled="true"]');
 }
 
 /** A tap rather than a mouse click: pen counts as touch. */
@@ -109,14 +117,16 @@ function findRow(container: HTMLElement, id: string): HTMLElement | null {
 }
 
 /**
- * A row's text field when enabled (its first enabled action after a tap),
- * else its first enabled action; null while busy.
+ * A row's field when enabled (after a tap, its first enabled action comes
+ * before a text field), else its first enabled action; null while busy.
  */
 function rowTarget(row: HTMLElement, touch: boolean): HTMLElement | null {
   const action = row.querySelector<HTMLElement>('.memory-suggestion-actions button:not(:disabled)');
-  const field = row.querySelector<HTMLElement>(TEXT_FIELD_SELECTOR);
+  const field = row.querySelector<HTMLElement>(FIELD_SELECTOR);
   const enabledField = field && isEnabled(field) ? field : null;
-  return touch ? action ?? enabledField : enabledField ?? action;
+  return touch && enabledField?.matches(TEXT_FIELD_SELECTOR)
+    ? action ?? enabledField
+    : enabledField ?? action;
 }
 
 /**

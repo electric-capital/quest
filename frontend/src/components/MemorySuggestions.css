@@ -512,6 +512,17 @@
   font-style: italic;
 }
 
+/* The block is the row's focus target (from script, as rows leave); the
+   ring shows only for the keyboard. */
+.memory-suggestion-archive:focus {
+  outline: none;
+}
+
+.memory-suggestion-archive:focus-visible {
+  outline: 2px solid var(--suggestion-solid);
+  outline-offset: 2px;
+}
+
 .memory-suggestion-diff-label {
   display: flex;
   align-items: center;

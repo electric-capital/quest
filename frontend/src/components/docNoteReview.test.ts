@@ -1,20 +1,22 @@
-// Suggestion review helpers: the edited text an Accept sends for any kind;
-// for doc notes what an Accept sends (the edited text only when it changed,
-// the instructions version only for an instructions row that has one), the
+// Suggestion review helpers: the edited text an Accept sends for any kind
+// (never for an archive-only row); when a memory row may be accepted (an
+// archive-only one always, any other unless its text is blank); for doc
+// notes what an Accept sends (the edited text only when it changed, the
+// instructions version only for an instructions row that has one), the
 // re-base on a 409's current instructions (never rolling a newer row back),
-// the caps counted like the server (code points of the trimmed text), when
-// Accept is allowed (never for an unavailable doc) and the row guard.
+// the caps counted like the server (code points of the trimmed text) and
+// when Accept is allowed (never for an unavailable doc).
 import { describe, expect, it } from 'vitest';
-import type { DocNoteSuggestion, MemorySuggestion } from '../api/types';
+import type { DocNoteSuggestion } from '../api/types';
 import {
   canAcceptDocNote,
+  canAcceptMemory,
   docNoteAcceptOptions,
   docNoteCharCount,
   docNoteMaxChars,
   editedText,
   instructionsCaughtUp,
   isDocNoteDocAvailable,
-  isDocNoteSuggestion,
   rebaseOnStale,
   withCurrentInstructions,
 } from './docNoteReview';
@@ -56,6 +58,28 @@ describe('editedText', () => {
     expect(editedText({ content: 'Likes tea' }, ' Likes tea\n')).toBeUndefined();
     expect(editedText({ content: 'Likes tea' }, ' Likes green tea ')).toBe('Likes green tea');
     expect(editedText({ content: 'Likes tea' }, '   ')).toBe('');
+  });
+
+  it('is never sent for an archive-only row, whatever the draft', () => {
+    expect(editedText({ content: null }, undefined)).toBeUndefined();
+    expect(editedText({ content: null }, 'typed')).toBeUndefined();
+  });
+});
+
+describe('canAcceptMemory', () => {
+  it('accepts the proposed or edited text unless it is blank', () => {
+    expect(canAcceptMemory({ content: 'Likes tea' }, undefined)).toBe(true);
+    expect(canAcceptMemory({ content: 'Likes tea' }, ' Likes green tea ')).toBe(true);
+    expect(canAcceptMemory({ content: 'Likes tea' }, '')).toBe(false);
+    expect(canAcceptMemory({ content: 'Likes tea' }, ' \n ')).toBe(false);
+    // A blank proposal (never served, but never sent either).
+    expect(canAcceptMemory({ content: '  ' }, undefined)).toBe(false);
+  });
+
+  it('always accepts an archive-only row, which sends no text', () => {
+    expect(canAcceptMemory({ content: null }, undefined)).toBe(true);
+    expect(canAcceptMemory({ content: null }, '')).toBe(true);
+    expect(canAcceptMemory({ content: null }, '   ')).toBe(true);
   });
 });
 
@@ -179,24 +203,5 @@ describe('caps and guards', () => {
       expect(isDocNoteDocAvailable(memoryRow({ doc_title: docTitle }))).toBe(false);
       expect(canAcceptDocNote(memoryRow({ doc_title: docTitle }), undefined)).toBe(false);
     }
-  });
-
-  it('tells a doc note row from a memory suggestion', () => {
-    const memory: MemorySuggestion = {
-      id: 's1',
-      user_id: 1,
-      conversation_id: 'c1',
-      source: 'conversation',
-      dream_run_id: null,
-      content: 'Likes tea',
-      reasoning: null,
-      replaces_memory_id: null,
-      status: 'pending',
-      memory_id: null,
-      created_at: null,
-      resolved_at: null,
-    };
-    expect(isDocNoteSuggestion(docNote())).toBe(true);
-    expect(isDocNoteSuggestion(memory)).toBe(false);
   });
 });

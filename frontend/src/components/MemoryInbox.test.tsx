@@ -3,14 +3,19 @@
 // moving the row into the reviewed list, a 409 dropping the row silently,
 // the reviewed list paging in through the scroll sentinel (and the Load
 // more fallback), a per-user global re-reading the open list, and rows of
-// a kind this tab does not know left out of both lists. Doc rows add their
+// a kind this tab does not know left out of both lists. A dream's row
+// names the memory review instead of a chat, open (an archive-only row
+// shows the memory it retires and accepts with no text) and reviewed
+// ("Archived a memory" / "Proposed archiving a memory"). Doc rows add their
 // doc link (or "Unavailable doc"), the instructions version on accept, the
 // re-base on a 409 stale_instructions, the read the accept's own event
 // starts kept (it re-bases a second instructions row on the same doc), the
 // server's message on any other refusal, the Instructions / Memory pill on
-// reviewed rows, and an Accept all that skips a doc row its own Accept
-// refuses. Focus stays in the open list as rows leave: the next row's text
-// field, else the "Open suggestions" heading; not after a click elsewhere.
+// reviewed rows, and an Accept all that skips a row its own Accept refuses
+// (a blank memory draft, an unavailable doc) while it accepts an
+// archive-only row as it is. Focus stays in the open list as rows leave:
+// the next row's text field (an archive-only row's archive block, not its
+// Accept), else the "Open suggestions" heading; not after a click elsewhere.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -84,6 +89,28 @@ function row(
 
 function reviewed(id: string, content: string, status: 'accepted' | 'dismissed', extra: Partial<MemoryInboxSuggestion> = {}) {
   return row(id, content, { status, resolved_at: '2026-10-14T12:00:00', ...extra });
+}
+
+/** A dream's archive-only row: no text, no conversation, the memory it retires. */
+function dreamArchive(id: string, retires: string, extra: Partial<MemoryInboxSuggestion> = {}) {
+  return row(id, '', {
+    content: null,
+    source: 'dream',
+    dream_run_id: 'run-1',
+    conversation_id: null,
+    conversation_title: null,
+    replaces_memory_id: `m-${id}`,
+    replaces_content: retires,
+    ...extra,
+  });
+}
+
+/** A personal row as the accept / dismiss routes return it. */
+function resolvedMemory(s: MemoryInboxSuggestion, status: 'accepted' | 'dismissed') {
+  return {
+    suggestion: { ...s, status, resolved_at: '2026-10-29T00:00:00' },
+    memory: null,
+  };
 }
 
 /** A doc note suggestion as the inbox lists it (``kind: 'doc'``). */
@@ -340,6 +367,34 @@ describe('MemoryInbox', () => {
     const done = screen.getByRole('region', { name: 'Recently reviewed' });
     await waitFor(() => expect(done.textContent).toContain('Archived a memory'));
     expect(goTo).not.toHaveBeenCalled();
+  });
+
+  it("renders a dream's reviewed rows with the memory review as their source", async () => {
+    servePending([]);
+    serveResolved([
+      dreamArchive('d1', 'Prefers tea', { status: 'dismissed', resolved_at: '2026-10-29T12:00:00' }),
+      dreamArchive('d2', 'Works in UTC', { status: 'accepted', resolved_at: '2026-10-29T11:00:00' }),
+      row('d3', 'Lives in Lisbon since March 2026', {
+        source: 'dream', dream_run_id: 'run-1', conversation_id: null, conversation_title: null,
+        status: 'accepted', resolved_at: '2026-10-29T10:00:00',
+      }),
+    ]);
+    const goTo = vi.fn();
+    renderInbox(<MemoryInbox onGoToConversation={goTo} />);
+    await waitFor(() => expect(reviewedContents()).toEqual([
+      'Proposed archiving a memory',
+      'Archived a memory',
+      'Lives in Lisbon since March 2026',
+    ]));
+
+    const items = Array.from(reviewedRegion().querySelectorAll<HTMLElement>('.memory-inbox-reviewed'));
+    expect(items.map((el) => el.querySelector('.memory-inbox-status-pill')?.textContent))
+      .toEqual(['Dismissed', 'Accepted', 'Accepted']);
+    expect(items.map((el) => el.querySelector('.memory-inbox-from')?.textContent))
+      .toEqual(['From a memory review', 'From a memory review', 'From a memory review']);
+    expect(items.every((el) => el.querySelector('.memory-inbox-from--dream'))).toBe(true);
+    // No chat to link to.
+    expect(within(reviewedRegion()).queryAllByRole('button')).toHaveLength(0);
   });
 
   it('shows the empty states', async () => {
@@ -984,6 +1039,32 @@ describe('MemoryInbox', () => {
     expect(mocks.dismissDocNoteSuggestion).toHaveBeenCalledWith('d3');
   });
 
+  it('accept all accepts an archive-only dream row as it is, skipping rows their own Accept refuses', async () => {
+    const d1 = docRow('d1', 'Uses metric units');
+    const a1 = dreamArchive('a1', 'Prefers tea');
+    const d2 = docRow('d2', 'Q3 ends in September.', { doc_title: '' });
+    servePending([d1, a1, d2, row('s1', 'Likes rain')]);
+    mocks.acceptDocNoteSuggestion.mockResolvedValue(resolvedDoc(d1, 'accepted'));
+    mocks.acceptMemorySuggestion.mockResolvedValue(resolvedMemory(a1, 'accepted'));
+    renderInbox(<MemoryInbox onGoToConversation={vi.fn()} />);
+    await screen.findByDisplayValue('Likes rain');
+    // A blank memory draft would save an empty memory, and a doc that is
+    // gone or hidden takes no note: their own Accept is disabled, and
+    // Accept all leaves both.
+    fireEvent.change(screen.getByDisplayValue('Likes rain'), { target: { value: ' \n ' } });
+    const accepts = within(openRegion()).getAllByRole('button', { name: 'Accept' }) as HTMLButtonElement[];
+    expect(accepts.map((b) => b.disabled)).toEqual([false, false, true, true]);
+
+    fireEvent.click(within(openRegion()).getByRole('button', { name: 'Accept all' }));
+    await waitFor(() => expect(screen.queryByTestId('memory-suggestion-archive')).toBeNull());
+    expect(mocks.acceptDocNoteSuggestion.mock.calls.map(([id]) => id)).toEqual(['d1']);
+    // The archive-only row sends no text.
+    expect(mocks.acceptMemorySuggestion.mock.calls).toEqual([['a1', undefined]]);
+    expect(textboxValues(openRegion())).toEqual(['Q3 ends in September.', ' \n ']);
+    expect(reviewedContents()).toEqual(['Archived a memory', 'Uses metric units']);
+    expect(screen.queryAllByRole('alert')).toHaveLength(0);
+  });
+
   it('renders reviewed doc rows with their status, text and source line', async () => {
     servePending([]);
     serveResolved([
@@ -1150,5 +1231,39 @@ describe('MemoryInbox', () => {
     });
     await waitFor(() => expect(screen.queryByDisplayValue('Uses metric units')).toBeNull());
     expect(document.activeElement).toBe(document.body);
+  });
+
+  it("moves focus to an archive-only row's archive block, not its Accept, when the row above leaves", async () => {
+    const s1 = row('s1', 'Likes tea');
+    const a1 = dreamArchive('a1', 'Prefers tea');
+    servePending([s1, a1, row('s2', 'Likes rain')]);
+    mocks.dismissMemorySuggestion
+      .mockResolvedValueOnce(resolvedMemory(s1, 'dismissed'))
+      .mockResolvedValueOnce(resolvedMemory(a1, 'dismissed'));
+    renderInbox(<MemoryInbox onGoToConversation={vi.fn()} />);
+    await screen.findByDisplayValue('Likes rain');
+
+    // Dismissed from the keyboard: the next row's target is its archive
+    // block, named by what accepting retires, so a second Enter does not
+    // archive a memory the user has not heard.
+    const first = within(openRegion()).getAllByRole('button', { name: 'Dismiss' })[0];
+    act(() => first.focus());
+    fireEvent.keyDown(first, { key: 'Enter' });
+    fireEvent.click(first);
+    await waitFor(() => expect(screen.queryByDisplayValue('Likes tea')).toBeNull());
+    const block = within(openRegion()).getByRole('group', { name: 'Archives this memory Prefers tea' });
+    expect(block.getAttribute('tabindex')).toBe('-1');
+    expect(document.activeElement).toBe(block);
+
+    // Dismissed in turn: on to the next row's text field, and reviewed as a
+    // proposal that was not taken.
+    const dismiss = within(openRegion()).getAllByRole('button', { name: 'Dismiss' })[0];
+    act(() => dismiss.focus());
+    fireEvent.keyDown(dismiss, { key: 'Enter' });
+    fireEvent.click(dismiss);
+    await waitFor(() => expect(screen.queryByTestId('memory-suggestion-archive')).toBeNull());
+    expect(mocks.dismissMemorySuggestion.mock.calls.map(([id]) => id)).toEqual(['s1', 'a1']);
+    expect(document.activeElement).toBe(screen.getByDisplayValue('Likes rain'));
+    expect(reviewedContents()).toEqual(['Proposed archiving a memory', 'Likes tea']);
   });
 });

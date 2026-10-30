@@ -6,10 +6,15 @@
 // replacement diff and orphan pill, the cap counter (code points of the
 // trimmed draft, " characters" for screen readers) that disables Accept
 // over the cap, the over-cap line in a polite live region, and the textarea
-// labels. A personal row keeps none of the doc additions. Every row carries
-// its id for useSuggestionListFocus. The row is presentational, so a small
-// harness owns the draft. DocTitleLink, shared with the inbox, takes its
-// classes from a prefix and its icon on request.
+// labels. A personal row keeps none of the doc additions, and a personal or
+// project row's Accept is disabled on a blank text. An archive-only
+// personal or project row (a dream retiring a memory) shows the memory it
+// retires (struck through, or a line saying it is already gone) in a group
+// named by its label and that text, the row's focus target, instead of a
+// textarea, with Accept enabled; while busy the group is aria-disabled.
+// Every row carries its id for useSuggestionListFocus. The row is
+// presentational, so a small harness owns the draft. DocTitleLink, shared
+// with the inbox, takes its classes from a prefix and its icon on request.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
@@ -487,5 +492,132 @@ describe('MemorySuggestionRow kind="user"', () => {
     expect(container.querySelector('.memory-suggestion-row')!.getAttribute('data-suggestion-id'))
       .toBe('s1');
     expect((screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+/** A personal or project memory suggestion; by default a conversation's. */
+const memorySuggestion = (extra: Partial<MemorySuggestion> = {}): MemorySuggestion => ({
+  id: 's1',
+  user_id: 1,
+  conversation_id: 'c1',
+  source: 'conversation',
+  dream_run_id: null,
+  content: 'Likes tea',
+  reasoning: null,
+  replaces_memory_id: null,
+  status: 'pending',
+  memory_id: null,
+  created_at: null,
+  resolved_at: null,
+  ...extra,
+});
+
+/** A dream's archive-only suggestion: no text of its own, no conversation. */
+const archiveOnly = (extra: Partial<MemorySuggestion> = {}): MemorySuggestion => memorySuggestion({
+  id: 'a1',
+  conversation_id: null,
+  source: 'dream',
+  dream_run_id: 'run-1',
+  content: null,
+  reasoning: 'Superseded by a newer memory.',
+  replaces_memory_id: 'm1',
+  replaces_content: 'Prefers tea',
+  ...extra,
+});
+
+function renderMemoryRow(
+  kind: 'user' | 'project',
+  suggestion: MemorySuggestion,
+  { draft = suggestion.content ?? '', busy = false, onAccept = () => {} } = {},
+) {
+  return render(
+    <MemorySuggestionRow
+      kind={kind}
+      suggestion={suggestion}
+      draft={draft}
+      onDraftChange={() => {}}
+      busy={busy}
+      onAccept={onAccept}
+      onDismiss={() => {}}
+    />,
+  );
+}
+
+const ARCHIVE_LABELS = {
+  user: {
+    label: 'Archives this memory',
+    title: 'Accepting archives this memory; nothing new is saved',
+  },
+  project: {
+    label: 'Archives this project memory',
+    title: 'Accepting archives this project memory; nothing new is saved',
+  },
+} as const;
+
+const GONE_LINE = 'This memory is already gone; accepting changes nothing.';
+
+describe('MemorySuggestionRow kind="user" / "project": Accept', () => {
+  it('is disabled on a blank text', () => {
+    for (const kind of ['user', 'project'] as const) {
+      const { unmount } = renderMemoryRow(kind, memorySuggestion(), { draft: ' \n ' });
+      expect((screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement).disabled).toBe(true);
+      unmount();
+    }
+  });
+});
+
+describe('MemorySuggestionRow kind="user" / "project": archive-only', () => {
+  it('shows the memory it retires, struck through, instead of a textarea, with Accept enabled', () => {
+    for (const kind of ['user', 'project'] as const) {
+      const { label, title } = ARCHIVE_LABELS[kind];
+      const onAccept = vi.fn();
+      const { container, unmount } = renderMemoryRow(kind, archiveOnly(), { onAccept });
+      expect(container.querySelector(`.memory-suggestion-row--${kind}`)).not.toBeNull();
+      expect(screen.queryByRole('textbox')).toBeNull();
+
+      // A group named by its label and the memory's text: the row's focus
+      // target, out of the Tab order.
+      const block = screen.getByRole('group', { name: `${label} Prefers tea` });
+      expect(block).toBe(screen.getByTestId('memory-suggestion-archive'));
+      expect(block.getAttribute('tabindex')).toBe('-1');
+      expect(block.getAttribute('aria-disabled')).toBeNull();
+      expect(screen.getByText(label).getAttribute('title')).toBe(title);
+      // The body is struck through (MemorySuggestions.css); "gone" is not.
+      const body = block.querySelector('.memory-suggestion-archive-body')!;
+      expect(body.textContent).toBe('Prefers tea');
+      expect(body.classList.contains('memory-suggestion-archive-gone')).toBe(false);
+
+      // Nothing new is saved: no replacement diff or pill, just the reason.
+      expect(screen.queryByTestId('memory-suggestion-diff')).toBeNull();
+      expect(container.querySelector('.memory-suggestion-replaces')).toBeNull();
+      expect(container.textContent).toContain('Superseded by a newer memory.');
+
+      const accept = screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement;
+      expect(accept.disabled).toBe(false);
+      fireEvent.click(accept);
+      expect(onAccept).toHaveBeenCalledTimes(1);
+      unmount();
+    }
+  });
+
+  it('says when the memory it retires is already gone, Accept still enabled', () => {
+    for (const kind of ['user', 'project'] as const) {
+      const { unmount } = renderMemoryRow(kind, archiveOnly({ replaces_content: null }));
+      const block = screen.getByRole('group', { name: `${ARCHIVE_LABELS[kind].label} ${GONE_LINE}` });
+      const body = block.querySelector('.memory-suggestion-archive-body')!;
+      expect(body.textContent).toBe(GONE_LINE);
+      expect(body.classList.contains('memory-suggestion-archive-gone')).toBe(true);
+      expect(screen.queryByRole('textbox')).toBeNull();
+      expect(document.querySelector('.memory-suggestion-replaces')).toBeNull();
+      expect((screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement).disabled).toBe(false);
+      unmount();
+    }
+  });
+
+  it('marks the block aria-disabled and disables both buttons while busy', () => {
+    renderMemoryRow('user', archiveOnly(), { busy: true });
+    expect(screen.getByTestId('memory-suggestion-archive').getAttribute('aria-disabled')).toBe('true');
+    expect((screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Dismiss' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

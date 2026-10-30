@@ -21,6 +21,16 @@
  * (empty under the cap), so a screen reader hears it once as the text
  * crosses the cap and not on every keystroke.
  *
+ * A personal or project row's Accept follows canAcceptMemory
+ * (docNoteReview.ts): disabled on a blank text. An archive-only row
+ * (``content`` null: a dream's proposal to retire a memory) has no text of
+ * its own, so it shows the memory it retires (struck through, or a line
+ * saying it is already gone) under "Archives this memory" instead of a
+ * textarea, and its Accept is always enabled. That block is the row's focus
+ * target in useSuggestionListFocus: a group named by its label and the
+ * memory's text, ``aria-disabled`` while busy, so a screen reader hears
+ * what accepting retires before it reaches Accept.
+ *
  * The root carries ``data-suggestion-id`` for useSuggestionListFocus, which
  * every surface uses to keep focus in its list as rows leave.
  *
@@ -40,6 +50,7 @@ import { docViewerPath } from '../utils/docsRoute';
 import { wordDiff } from '../utils/wordDiff';
 import {
   canAcceptDocNote,
+  canAcceptMemory,
   docNoteCharCount,
   docNoteMaxChars,
   isDocNoteDocAvailable,
@@ -308,11 +319,13 @@ export function MemorySuggestionRow(props: MemorySuggestionRowProps) {
   const counterId = `${ids}-counter`;
   const overCapId = `${ids}-over`;
   const unavailableId = `${ids}-unavailable`;
+  const archiveLabelId = `${ids}-archive-label`;
+  const archiveBodyId = `${ids}-archive-body`;
   const docUnavailable = docNote !== null && !isDocNoteDocAvailable(docNote);
   // An archive-only row has no text: Accept just archives the memory.
   const acceptDisabled = busy || (docNote
     ? !canAcceptDocNote(docNote, draft)
-    : !archiveOnly && !draft.trim());
+    : !canAcceptMemory(suggestion, draft));
   const describedBy = maxChars !== null
     ? [counterId, overCap && overCapId].filter(Boolean).join(' ')
     : undefined;
@@ -330,14 +343,25 @@ export function MemorySuggestionRow(props: MemorySuggestionRowProps) {
         />
       )}
       {archive ? (
-        <div className="memory-suggestion-archive" data-testid="memory-suggestion-archive">
+        // The row's focus target in useSuggestionListFocus; not a Tab stop.
+        <div
+          className="memory-suggestion-archive"
+          data-testid="memory-suggestion-archive"
+          role="group"
+          tabIndex={-1}
+          aria-labelledby={`${archiveLabelId} ${archiveBodyId}`}
+          aria-disabled={busy || undefined}
+        >
           <div className="memory-suggestion-diff-label">
-            <span title={archive.archiveTitle}>{archive.archiveLabel}</span>
+            <span id={archiveLabelId} title={archive.archiveTitle}>{archive.archiveLabel}</span>
           </div>
           {replacedText !== null ? (
-            <div className="memory-suggestion-archive-body">{replacedText}</div>
+            <div id={archiveBodyId} className="memory-suggestion-archive-body">{replacedText}</div>
           ) : (
-            <div className="memory-suggestion-archive-body memory-suggestion-archive-gone">
+            <div
+              id={archiveBodyId}
+              className="memory-suggestion-archive-body memory-suggestion-archive-gone"
+            >
               This memory is already gone; accepting changes nothing.
             </div>
           )}

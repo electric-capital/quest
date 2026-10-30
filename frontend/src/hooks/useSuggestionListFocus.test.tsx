@@ -10,11 +10,14 @@
 // button; a target that does not take focus passes to the next one, and
 // none taking it leaves the next commit to retry; focus elsewhere on the
 // page, lost from a control that is still there, or followed by a press
-// outside the list is never moved. A browser drops focus to <body> when
-// the focused button becomes disabled; jsdom keeps it there and cannot
-// blur a disabled element, so `drop()` blurs it just before the commit
-// that disables it, and `fixUp()` reproduces the browser's order (disabled
-// while focused, then dropped).
+// outside the list is never moved. An archive-only row (an archive block
+// in place of the text field) is targeted at its block, after a tap too,
+// never while it is busy (aria-disabled), and a row whose block had focus
+// hands it to the next row however it left. A browser drops focus to
+// <body> when the focused button becomes disabled; jsdom keeps it there
+// and cannot blur a disabled element, so `drop()` blurs it just before the
+// commit that disables it, and `fixUp()` reproduces the browser's order
+// (disabled while focused, then dropped).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useRef } from 'react';
@@ -23,12 +26,14 @@ import { useSuggestionListFocus } from './useSuggestionListFocus';
 interface ListProps {
   rows: string[];
   busy?: string[];
+  /** Archive-only rows: an archive block in place of the text field. */
+  archive?: string[];
   bulk?: 'enabled' | 'disabled' | 'hidden';
   /** Render the fallback heading outside the container. */
   fallbackOutside?: boolean;
 }
 
-function List({ rows, busy = [], bulk = 'hidden', fallbackOutside = false }: ListProps) {
+function List({ rows, busy = [], archive = [], bulk = 'hidden', fallbackOutside = false }: ListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fallbackRef = useRef<HTMLHeadingElement>(null);
   useSuggestionListFocus({ containerRef, rowIds: rows, fallbackRef });
@@ -43,11 +48,21 @@ function List({ rows, busy = [], bulk = 'hidden', fallbackOutside = false }: Lis
         )}
         {rows.map((id) => (
           <div key={id} data-suggestion-id={id}>
-            <textarea
-              className="memory-suggestion-content"
-              aria-label={`Text ${id}`}
-              disabled={busy.includes(id)}
-            />
+            {archive.includes(id) ? (
+              <div
+                className="memory-suggestion-archive"
+                role="group"
+                tabIndex={-1}
+                aria-label={`Archive ${id}`}
+                aria-disabled={busy.includes(id) || undefined}
+              />
+            ) : (
+              <textarea
+                className="memory-suggestion-content"
+                aria-label={`Text ${id}`}
+                disabled={busy.includes(id)}
+              />
+            )}
             <div className="memory-suggestion-actions">
               <button type="button" disabled={busy.includes(id)}>Accept {id}</button>
               <button type="button" disabled={busy.includes(id)}>Dismiss {id}</button>
@@ -98,6 +113,7 @@ function pointerDown(el: Element, pointerType: 'mouse' | 'touch' | 'pen') {
 
 const button = (name: string) => screen.getByRole('button', { name });
 const field = (id: string) => screen.getByLabelText(`Text ${id}`);
+const archiveBlock = (id: string) => screen.getByRole('group', { name: `Archive ${id}` });
 
 afterEach(cleanup);
 
@@ -347,5 +363,50 @@ describe('useSuggestionListFocus', () => {
     hiddenHeading.mockRestore();
     rerender(<List rows={[]} />);
     expect(document.activeElement).toBe(heading);
+  });
+
+  it("targets an archive-only row's archive block, not its Accept, after a key or a tap", () => {
+    for (const pointerType of [null, 'touch', 'pen'] as const) {
+      const { rerender, unmount } = render(<List rows={['a', 'b']} archive={['b']} />);
+      if (pointerType) pointerDown(button('Dismiss a'), pointerType);
+      focus(button('Dismiss a'));
+      drop();
+      rerender(<List rows={['a', 'b']} busy={['a']} archive={['b']} />);
+      rerender(<List rows={['b']} archive={['b']} />);
+      expect(document.activeElement).toBe(archiveBlock('b'));
+      unmount();
+    }
+  });
+
+  it('waits while an archive-only row is busy, its block included', () => {
+    const { rerender } = render(<List rows={['a', 'b']} archive={['a']} />);
+    focus(button('Accept a'));
+    drop();
+    rerender(<List rows={['a', 'b']} busy={['a']} archive={['a']} />);
+    expect(archiveBlock('a').getAttribute('aria-disabled')).toBe('true');
+    expect(document.activeElement).toBe(document.body);
+    // The accept failed: back to the re-enabled button.
+    rerender(<List rows={['a', 'b']} archive={['a']} />);
+    expect(document.activeElement).toBe(button('Accept a'));
+
+    // It succeeded: on to the next row.
+    drop();
+    rerender(<List rows={['a', 'b']} busy={['a']} archive={['a']} />);
+    rerender(<List rows={['b']} archive={['a']} />);
+    expect(document.activeElement).toBe(field('b'));
+  });
+
+  it('hands focus on its archive block to the next row however the row leaves', () => {
+    // Busy first (a click on Accept that left focus on the block)...
+    const { rerender } = render(<List rows={['a', 'b', 'c']} archive={['a', 'b']} />);
+    focus(archiveBlock('a'));
+    rerender(<List rows={['a', 'b', 'c']} busy={['a']} archive={['a', 'b']} />);
+    expect(document.activeElement).toBe(archiveBlock('a'));
+    rerender(<List rows={['b', 'c']} archive={['a', 'b']} />);
+    expect(document.activeElement).toBe(archiveBlock('b'));
+    // ...or dropped by a re-read (resolved elsewhere): no draft to type into,
+    // so not the fallback.
+    rerender(<List rows={['c']} archive={['a', 'b']} />);
+    expect(document.activeElement).toBe(field('c'));
   });
 });

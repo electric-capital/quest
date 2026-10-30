@@ -3,18 +3,21 @@
  * one place.
  *
  * Open suggestions (personal ``suggest_memory``, project
- * ``suggest_project_memory`` and doc note ``suggest_doc_note`` proposals,
- * across all conversations) come first, each with the same editable row as
- * the composer panel plus a line saying what kind it is, which conversation
- * it came from and, for a doc note, which doc it is for. Below them, the
- * recently reviewed (accepted / dismissed) suggestions, newest first, paged
- * in as the user scrolls. The lists come from ``/app/api/memory-inbox``
- * (chat/memory_inbox.py); accept and dismiss go through each kind's own
- * endpoints (``KIND_API``): api/client.ts for the two memory kinds, the doc
- * note suggestion endpoints of api/docsApi.ts for doc rows. A doc
- * instructions accept sends the version its diff was rendered against
- * (docNoteReview.ts); when the instructions changed meanwhile, the 409
- * ``stale_instructions`` re-bases the row on the current text it carries
+ * ``suggest_project_memory`` and doc note ``suggest_doc_note`` proposals
+ * across all conversations, and a dream's clean-ups of saved memories)
+ * come first, each with the same row as the composer panel plus a line
+ * saying what kind it is, for a doc note which doc it is for, and which
+ * conversation it came from; a dream's row has no conversation and names
+ * the memory review instead. Below them, the recently reviewed (accepted /
+ * dismissed) suggestions, newest first, paged in as the user scrolls. The
+ * lists come from ``/app/api/memory-inbox`` (chat/memory_inbox.py); accept
+ * and dismiss go through each kind's own endpoints (``KIND_API``):
+ * api/client.ts for the two memory kinds, the doc note suggestion endpoints
+ * of api/docsApi.ts for doc rows. Accept all skips a row its own Accept
+ * refuses (the kind's ``canAccept``). A doc instructions accept sends the
+ * version its diff was rendered against (docNoteReview.ts); when the
+ * instructions changed meanwhile, the 409 ``stale_instructions`` (the doc
+ * kind's ``conflict``) re-bases the row on the current text it carries
  * (unless the row in state is already as new), keeps the draft, shows the
  * server's message and re-reads the open list, as the composer bubble does.
  *
@@ -54,7 +57,6 @@ import type {
   MemoryInboxRow,
   MemoryInboxSuggestion,
   MemorySuggestion,
-  StaleInstructionsCurrent,
 } from '../api/types';
 import { suggestionCountKind } from '../hooks/usePendingSuggestionCounts';
 import { useSuggestionListFocus } from '../hooks/useSuggestionListFocus';
@@ -64,6 +66,7 @@ import { DOC_NOTE_LABELS, DocTitleLink, MemorySuggestionRow } from './MemorySugg
 import type { MemorySuggestionRowStateProps } from './MemorySuggestionRow';
 import {
   canAcceptDocNote,
+  canAcceptMemory,
   docNoteAcceptOptions,
   editedText,
   rebaseOnStale,
@@ -77,6 +80,16 @@ export const RESOLVED_PAGE_SIZE = 20;
 /** What an accept or dismiss response says about the row it resolved. */
 type ResolvedFields = Pick<MemorySuggestion, 'status' | 'resolved_at' | 'memory_id'>;
 
+/**
+ * A failed accept that is a conflict (the row stays pending but changed
+ * underneath): ``rebase`` maps the row as it is in state when the error
+ * lands (null: the error carries no data). The row in state is typed as
+ * any row, so ``rebase`` checks its kind.
+ */
+interface Conflict {
+  rebase: ((row: MemoryInboxRow) => MemoryInboxRow) | null;
+}
+
 /** One kind's endpoints and wording, for its rows of type ``R``. */
 interface KindApi<R extends MemoryInboxRow> {
   /** Accept with the row's draft (undefined = the proposed text, never edited). */
@@ -85,6 +98,12 @@ interface KindApi<R extends MemoryInboxRow> {
   saveError: string;
   /** Accept all skips a row this refuses (absent = every row is tried). */
   canAccept?: (row: R, draft: string | undefined) => boolean;
+  /**
+   * The conflict a failed accept is, or null for an ordinary failure
+   * (absent = never a conflict). A conflict always re-reads the open list
+   * too, past every read in flight.
+   */
+  conflict?: (err: unknown) => Conflict | null;
 }
 
 const KIND_API: {
@@ -96,11 +115,13 @@ const KIND_API: {
     accept: (row, draft) => acceptMemorySuggestion(row.id, editedText(row, draft)),
     dismiss: dismissMemorySuggestion,
     saveError: 'Failed to save memory',
+    canAccept: canAcceptMemory,
   },
   project: {
     accept: (row, draft) => acceptProjectMemorySuggestion(row.id, editedText(row, draft)),
     dismiss: dismissProjectMemorySuggestion,
     saveError: 'Failed to save project memory',
+    canAccept: canAcceptMemory,
   },
   doc: {
     accept: (row, draft) => acceptDocNoteSuggestion(row.id, docNoteAcceptOptions(row, draft)),
@@ -108,6 +129,16 @@ const KIND_API: {
     saveError: 'Failed to save doc note',
     // A blank draft would clear a doc's instructions; one over the cap is refused.
     canAccept: canAcceptDocNote,
+    // The instructions changed since the diff was rendered: re-base on the
+    // current text the 409 carries, unless a list read during the accept
+    // already brought the row as new, so the diff shows what accepting
+    // now replaces.
+    conflict: (err) => {
+      if (!isStaleInstructionsError(err)) return null;
+      const current = staleInstructionsCurrent(err);
+      if (!current) return { rebase: null };
+      return { rebase: (row) => (row.kind === 'doc' ? rebaseOnStale(row, current) : row) };
+    },
   },
 };
 
@@ -117,6 +148,7 @@ interface RowApi {
   dismiss: () => Promise<{ suggestion: ResolvedFields }>;
   saveError: string;
   canAccept: (draft: string | undefined) => boolean;
+  conflict: (err: unknown) => Conflict | null;
 }
 
 function bindRow<R extends MemoryInboxRow>(api: KindApi<R>, row: R): RowApi {
@@ -125,6 +157,7 @@ function bindRow<R extends MemoryInboxRow>(api: KindApi<R>, row: R): RowApi {
     dismiss: () => api.dismiss(row.id),
     saveError: api.saveError,
     canAccept: (draft) => api.canAccept?.(row, draft) ?? true,
+    conflict: (err) => api.conflict?.(err) ?? null,
   };
 }
 
@@ -363,16 +396,13 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
     });
   }, []);
 
-  // A doc instructions accept refused with 409 stale_instructions: re-base
-  // the row as it is in state now on the current text the 409 carries
-  // (unless a list read during the accept already brought it as new), so
-  // the diff shows what accepting now replaces; then re-read the list,
-  // superseding every read already in flight.
-  const rebaseStaleRow = useCallback((id: string, current: StaleInstructionsCurrent | null) => {
-    if (current) {
-      setPending((prev) => prev && prev.map((s) => (
-        s.id === id && s.kind === 'doc' ? rebaseOnStale(s, current) : s
-      )));
+  // An accept refused as a conflict (the kind's ``conflict``, e.g. a doc
+  // instructions accept's 409 stale_instructions): re-base the row as it is
+  // in state now, then re-read the list, superseding every read already in
+  // flight.
+  const applyConflict = useCallback((id: string, { rebase }: Conflict) => {
+    if (rebase) {
+      setPending((prev) => prev && prev.map((s) => (s.id === id ? rebase(s) : s)));
     }
     readFloorRef.current = readSeqRef.current + 1;
     void loadPending();
@@ -397,19 +427,19 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
         : await api.dismiss();
       removePending(suggestion.id);
       // The row moves to the top of the reviewed list right away, showing
-      // the text as saved (the edited draft on an accept). The response is
-      // the bare suggestion, so the inbox-only fields (and a doc row's doc)
-      // stay from the row.
+      // exactly what was sent: the edited text an accept sent, else the
+      // proposal (an archive-only row has none and never takes a draft).
+      // The response is the bare suggestion, so the inbox-only fields (and
+      // a doc row's doc) stay from the row.
       const fields = {
         status: outcome.status,
         resolved_at: outcome.resolved_at,
         memory_id: outcome.memory_id,
       };
-      const saved = action === 'accept' && draft !== undefined ? draft.trim() : undefined;
-      // Narrowed per kind: a memory row's content may be null (archive-only).
-      const reviewed: MemoryInboxRow = suggestion.kind === 'doc'
-        ? { ...suggestion, ...fields, content: saved ?? suggestion.content }
-        : { ...suggestion, ...fields, content: saved ?? suggestion.content };
+      const saved = action === 'accept' ? editedText(suggestion, draft) : undefined;
+      const reviewed: MemoryInboxRow = saved === undefined
+        ? { ...suggestion, ...fields }
+        : { ...suggestion, ...fields, content: saved };
       setResolved((prev) => [reviewed, ...prev.filter((s) => s.id !== suggestion.id)]);
       return true;
     } catch (err) {
@@ -419,11 +449,10 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
         removePending(suggestion.id);
         return true;
       }
-      // The instructions changed since the diff was rendered: the draft
-      // stays, and the next Accept sends the version the row re-bases on.
-      if (action === 'accept' && suggestion.kind === 'doc' && isStaleInstructionsError(err)) {
-        rebaseStaleRow(suggestion.id, staleInstructionsCurrent(err));
-      }
+      // Still pending but changed underneath (doc: the instructions moved):
+      // the draft stays, and the next Accept goes against the re-based row.
+      const conflict = action === 'accept' ? api.conflict(err) : null;
+      if (conflict) applyConflict(suggestion.id, conflict);
       setRowErrors((prev) => ({
         ...prev,
         [suggestion.id]: errorMessage(
@@ -435,7 +464,7 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
     } finally {
       setBusy(suggestion.id, false);
     }
-  }, [drafts, removePending, rebaseStaleRow, setBusy]);
+  }, [drafts, removePending, applyConflict, setBusy]);
 
   const resolveAll = useCallback(async (action: 'accept' | 'dismiss') => {
     if (isBulkBusy || !pending) return;
