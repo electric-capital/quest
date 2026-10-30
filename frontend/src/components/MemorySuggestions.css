@@ -92,6 +92,13 @@
   outline-offset: 2px;
 }
 
+/* A click or tap focuses the bubble too; without this, index.css's global
+   button:focus ring (the browser's colour, not the kind's) circles the open
+   bubble. The keyboard keeps the ring above. */
+.memory-suggestions-bubble:focus:not(:focus-visible) {
+  outline: none;
+}
+
 /* Click-away layer over the whole window, composer included, under the
    card. Fixed, so it escapes the bar; it still paints inside the bar's
    stacking context, beneath the panel. */
@@ -600,6 +607,10 @@
      so the bubble leaves the flex flow too and floats just above the
      collapsed input pill; the panel then opens over the composer. */
   .chat-panel > .memory-suggestions-bar {
+    /* Bubble rows the open panel must clear: one per bubble (a phone fits
+       one bubble per row; a wider screen that fits two only gets a shorter
+       panel). Three without :has() support. */
+    --suggestion-bar-rows: 3;
     position: absolute;
     left: 0;
     right: 0;
@@ -608,10 +619,33 @@
     z-index: 11;
   }
 
+  .chat-panel > .memory-suggestions-bar:not(:has(> :nth-child(3))) {
+    --suggestion-bar-rows: 2;
+  }
+
+  .chat-panel > .memory-suggestions-bar:not(:has(> :nth-child(2))) {
+    --suggestion-bar-rows: 1;
+  }
+
+  /* The panel rises from the bubbles, so its height is capped to the room
+     between them and the conversation header (z-index 20, which would draw
+     over the panel's top): the window less the mobile top bar (48px + 1px
+     border, MobileShell.css) and the conversation header (~2.75rem,
+     ConversationHeader.css) with a 0.5rem gap, the composer offset above,
+     the bubble rows (2.5rem each, a 28px bubble plus its gap with room to
+     spare) and the panel's own 0.5rem margin. */
   .memory-suggestions-panel {
     left: 0.5rem;
     right: 0.5rem;
     max-height: 70vh;
+    max-height: min(
+      70vh,
+      calc(
+        100dvh - 49px - 3.25rem
+        - 4.4rem - env(safe-area-inset-bottom, 0px)
+        - var(--suggestion-bar-rows, 3) * 2.5rem - 0.5rem
+      )
+    );
   }
 
   .memory-suggestions-header {
