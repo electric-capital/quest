@@ -127,6 +127,17 @@ FEATURE_TABLES = "tables"
 # users (PER_USER_ACCESS_FEATURES).
 FEATURE_BROWSER = "browser"
 
+# Dreaming (see docs/architecture/dreaming.md): a background daemon that
+# periodically reviews each user's saved memories with the admin-chosen
+# model and proposes hygiene changes (merge duplicates, archive stale or
+# contradicted facts, absolutise dates, shorten over-long entries) as
+# memory suggestions in the user's inbox. Nothing changes until the user
+# accepts. Closed = the daemon skips every user and the admin run-now
+# endpoint refuses; the Settings > Dreaming section (model, thinking
+# level, recent runs) stays reachable so an admin can configure it first.
+# Access can be restricted to specific users (PER_USER_ACCESS_FEATURES).
+FEATURE_DREAMING = "dreaming"
+
 # All admin-gateable features. Extend this tuple (and FEATURE_LABELS) when a
 # new optional feature gets a gate. Every feature is off until an admin
 # enables it.
@@ -138,6 +149,7 @@ KNOWN_FEATURES = (
     FEATURE_DOC_NOTES,
     FEATURE_TABLES,
     FEATURE_BROWSER,
+    FEATURE_DREAMING,
 )
 
 # Features whose gate can be narrowed to specific users via
@@ -151,6 +163,7 @@ PER_USER_ACCESS_FEATURES = frozenset({
     FEATURE_DOC_NOTES,
     FEATURE_TABLES,
     FEATURE_BROWSER,
+    FEATURE_DREAMING,
 })
 
 # Gates that depend on another gate: ``{feature: required feature}``. A
@@ -246,7 +259,28 @@ FEATURE_LABELS: dict[str, dict[str, str]] = {
             "users or only to specific users."
         ),
     },
+    FEATURE_DREAMING: {
+        "label": "Dreaming",
+        "description": (
+            "Periodically reviews each user's saved memories in the "
+            "background with the model chosen under Settings > Dreaming "
+            "and proposes clean-ups -- merging duplicates, archiving stale "
+            "or contradicted facts, fixing relative dates, shortening long "
+            "entries -- as suggestions in the user's inbox. Nothing changes "
+            "until the user accepts a suggestion. Access can be granted to "
+            "all users or only to specific users."
+        ),
+    },
 }
+
+
+def dreaming_enabled_for(user_email: str) -> bool:
+    """Whether dreaming is on for this user.
+
+    Convenience wrapper over :func:`is_feature_enabled_for_user` for the
+    dreaming daemon's per-user check and the admin run-now endpoint.
+    """
+    return is_feature_enabled_for_user(FEATURE_DREAMING, user_email)
 
 
 def docs_enabled_for(user_email: str) -> bool:

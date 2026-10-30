@@ -207,7 +207,7 @@ export function MemorySuggestions({
     try {
       if (action === 'accept') {
         const draft = drafts[suggestion.id];
-        const edited = draft !== undefined && draft.trim() !== suggestion.content.trim();
+        const edited = draft !== undefined && draft.trim() !== (suggestion.content ?? '').trim();
         await config.accept(suggestion.id, edited ? draft.trim() : undefined);
       } else {
         await config.dismiss(suggestion.id);
@@ -325,7 +325,7 @@ export function MemorySuggestions({
                   key={suggestion.id}
                   suggestion={suggestion}
                   kind={kind}
-                  draft={drafts[suggestion.id] ?? suggestion.content}
+                  draft={drafts[suggestion.id] ?? suggestion.content ?? ''}
                   onDraftChange={(text) => setDrafts((prev) => ({ ...prev, [suggestion.id]: text }))}
                   busy={busyIds.has(suggestion.id)}
                   error={rowErrors[suggestion.id]}

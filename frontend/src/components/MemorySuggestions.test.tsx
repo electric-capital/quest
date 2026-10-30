@@ -31,6 +31,8 @@ const suggestion = (id: string, content: string, extra: Partial<MemorySuggestion
   id,
   user_id: 1,
   conversation_id: 'c1',
+  source: 'conversation',
+  dream_run_id: null,
   content,
   reasoning: null,
   replaces_memory_id: null,

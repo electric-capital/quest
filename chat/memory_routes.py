@@ -392,7 +392,9 @@ async def accept_memory_suggestion(
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
     """Accept a pending suggestion: creates the memory (optionally with
-    edited text) and archives the memory it replaces, if any."""
+    edited text) and archives the memory it replaces, if any. An
+    archive-only suggestion (no proposed text) creates no memory and
+    rejects an edit (400 ``invalid_memory``); ``memory`` is then null."""
     user_id = user["id"]
     content = body.content if body is not None else None
     try:
@@ -409,7 +411,7 @@ async def accept_memory_suggestion(
     suggestion, memory = result
     logger.info(
         "[memory] Accepted suggestion %s -> memory %s for user_id %s",
-        suggestion_id, memory["id"], user_id,
+        suggestion_id, memory["id"] if memory else "(archive only)", user_id,
     )
     return {"suggestion": suggestion, "memory": memory}
 

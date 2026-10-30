@@ -2,7 +2,7 @@
 
 ## Overview
 
-Feature gates are **server-global, admin-controlled on/off switches for optional features**. Every gated feature is off by default; an admin turns it on for the whole instance from the desktop-only **Settings > Features** section. Gated features: `user_subagents` (cross-user subagents, [user-subagents.md](user-subagents.md)), `guides` (the deprecated legacy Guides feature kept alive for installs still migrating to skills, [guides.md](guides.md)), `voice_input` (dictated prompts transcribed server-side on Vertex, [voice-input.md](voice-input.md)), `docs` (Quest Docs, [quest-docs.md](quest-docs.md)), `doc_notes` (per-doc instructions and memories, [doc-notes.md](doc-notes.md)), `tables` (Quest Tables, [quest-tables.md](quest-tables.md)), and `browser` (the headless browser for public projects, [public-browser.md](public-browser.md)).
+Feature gates are **server-global, admin-controlled on/off switches for optional features**. Every gated feature is off by default; an admin turns it on for the whole instance from the desktop-only **Settings > Features** section. Gated features: `user_subagents` (cross-user subagents, [user-subagents.md](user-subagents.md)), `guides` (the deprecated legacy Guides feature kept alive for installs still migrating to skills, [guides.md](guides.md)), `voice_input` (dictated prompts transcribed server-side on Vertex, [voice-input.md](voice-input.md)), `docs` (Quest Docs, [quest-docs.md](quest-docs.md)), `doc_notes` (per-doc instructions and memories, [doc-notes.md](doc-notes.md)), `tables` (Quest Tables, [quest-tables.md](quest-tables.md)), `browser` (the headless browser for public projects, [public-browser.md](public-browser.md)), and `dreaming` (offline reviews of users' saved memories, [dreaming.md](dreaming.md)).
 
 Features in `PER_USER_ACCESS_FEATURES` (`config/feature_gates.py`) additionally support **per-user access**: an enabled gate can be open to all users or restricted to an `allowed_users` email list (case-insensitive). For a user outside the list the gate behaves exactly as if it were closed, at every enforcement point. `user_subagents` deliberately stays all-or-nothing — a run involves two users (caller and target) and a per-user list would be ambiguous about which side it restricts.
 
@@ -32,6 +32,16 @@ For features that ride on a per-conversation flag ([conversation-flags.md](conve
 2. Check the gate wherever the feature activates server-side (off must be fully inert). Enforcement points acting for a user call `is_feature_enabled_for_user(FEATURE_*, email)` or a `*_enabled_for()` wrapper with the acting user, which applies the allowed-user list and `FEATURE_REQUIRES`; the raw `is_feature_enabled()` fits only an all-or-nothing gate with no requirement, such as `user_subagents`.
 3. If the feature rides on a conversation flag, name the feature key the same as the flag — `filter_gated_flags()` and the FE `feature` link then work without changes beyond `constants/flags.ts` gaining `feature: '<key>'` on the flag entry.
 4. If the feature depends on server configuration the admin might not have (a credential, a provider, a container image), add a branch to `_feature_availability()` in `chat/routes/admin.py` returning `(False, reason)` while it is missing. The PUT then refuses to enable the gate and the Settings toggle explains why; `config/feature_gates.py` itself stays stdlib-only and knows nothing about availability.
+
+## Enforcement Layers (dreaming)
+
+`dreaming` gates a background daemon and one admin action ([dreaming.md](dreaming.md)); it supports per-user access:
+
+1. **Daemon** — `chat/dreaming.py` `_poll_once()` returns at once while `is_feature_enabled(FEATURE_DREAMING)` is false and skips every user for whom `dreaming_enabled_for(email)` is false, so a closed or narrowed gate costs no model calls.
+2. **Run-now** — `POST /app/api/admin/dreaming/run` (`chat/routes/dreaming.py`) answers 403 `feature_disabled` unless the gate is open for the requesting admin. The settings routes themselves (`GET` / `PUT /app/api/admin/dreaming`) stay open so the model can be chosen before the gate is.
+3. **UI** — Settings > Dreaming shows the gate state and disables the run-now button while the gate is closed for the admin; the gate itself is flipped under Settings > Features.
+
+Suggestions a dream already registered stay reviewable after the gate closes, like every other memory suggestion.
 
 ## Enforcement Layers (voice input)
 

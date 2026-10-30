@@ -35,6 +35,7 @@
 | [quest-docs.md](architecture/quest-docs.md) | Quest Docs (in-app markdown docs): storage, access rule, sharing, editing, history, model tools, approvals, frontend |
 | [doc-notes.md](architecture/doc-notes.md) | Quest Doc notes (per-doc instructions and memories): gate, data model, seen record, delivery, write refusal, write_doc pin, suggestions, events |
 | [doc-notes-tools.md](architecture/doc-notes-tools.md) | Doc notes tools (`list_doc_notes`, `suggest_doc_note`): gate, run kinds, paging, can_suggest, backstop, the `system:doc_notes` skill and public line |
+| [dreaming.md](architecture/dreaming.md) | Dreaming: offline reviews of each user's saved memories proposed as inbox suggestions; daemon, pacing, model choice, run ledger |
 | [quest-tables.md](architecture/quest-tables.md) | Quest Tables (in-app typed tables): metadata, columns, table.db, change log and restore, access, service layer, events, prompting, gate |
 | [quest-tables-frontend.md](architecture/quest-tables-frontend.md) | Quest Tables UI: routes and gate, sidebar blocks, All Tables, viewer and grid, filters, schema editor, History drawer, card previews, phone layouts |
 | [plugins.md](architecture/plugins.md) | Plugin system: discovery, manifest validation, atomic registration, what a plugin can register, in-tree plugins |

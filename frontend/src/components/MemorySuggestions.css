@@ -291,6 +291,30 @@
   line-height: 1.45;
 }
 
+/* An archive-only suggestion (no new text): the memory it retires, struck
+   through, in the diff's frame. */
+.memory-suggestion-archive {
+  margin: 0 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.memory-suggestion-archive-body {
+  padding: 0.4rem 0.5rem;
+  color: var(--text-secondary);
+  text-decoration: line-through;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-suggestion-archive-gone {
+  text-decoration: none;
+  font-style: italic;
+}
+
 .memory-suggestion-diff-label {
   display: flex;
   align-items: center;

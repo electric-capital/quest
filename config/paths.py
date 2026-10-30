@@ -83,6 +83,7 @@ OPENAI_CATALOG_FILE: Path = DATA_DIR / "openai_catalog.json"
 MODEL_HEALTH_FILE: Path = DATA_DIR / "model_health.json"
 FEATURE_GATES_FILE: Path = DATA_DIR / "feature_gates.json"
 MODEL_SELECTION_FILE: Path = DATA_DIR / "model_selection.json"
+DREAMING_SETTINGS_FILE: Path = DATA_DIR / "dreaming.json"
 LIMITS_FILE: Path = DATA_DIR / "limits.json"
 
 

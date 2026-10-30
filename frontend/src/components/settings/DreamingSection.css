@@ -1,0 +1,91 @@
+/* Settings > Dreaming (admin). Card chrome comes from
+   ServiceCredentialsSection.css; colours from the design tokens in index.css. */
+
+.dreaming-field {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.dreaming-field-label {
+  flex: 0 0 4.5rem;
+  color: var(--text-secondary);
+}
+
+.dreaming-select {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.dreaming-warning {
+  margin: 0.5rem 0 0;
+  font-size: 0.8125rem;
+  color: #fbbf24;
+}
+
+.dreaming-run-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.dreaming-spinner {
+  animation: dreaming-spin 1s linear infinite;
+}
+
+@keyframes dreaming-spin {
+  to { transform: rotate(360deg); }
+}
+
+.dreaming-hint,
+.dreaming-result {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.dreaming-result {
+  margin: 0.5rem 0 0;
+}
+
+.dreaming-runs {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.dreaming-runs th,
+.dreaming-runs td {
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.dreaming-runs th {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.dreaming-runs tr:last-child td {
+  border-bottom: none;
+}
+
+.dreaming-runs-cost {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.dreaming-run-trigger {
+  margin-left: 0.4rem;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.dreaming-run--failed td {
+  color: var(--text-secondary);
+}

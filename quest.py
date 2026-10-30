@@ -199,6 +199,13 @@ async def lifespan(app: FastAPI):
     slack_notifier_task = asyncio.create_task(notifier_loop())
     logger.info("Slack pending-request notifier background task started")
 
+    # Start the dreaming daemon (offline reviews of users' saved memories,
+    # proposing clean-ups as inbox suggestions). Inert while the
+    # ``dreaming`` feature gate is closed.
+    from chat.dreaming import dreaming_loop
+    dreaming_task = asyncio.create_task(dreaming_loop())
+    logger.info("Dreaming background task started")
+
     # Start the wait-handle expiry sweep: times out pending wait handles
     # whose persisted expires_at has passed (once now, then on an interval)
     # and wakes their conversations -- the fallback for in-memory wait
@@ -391,6 +398,14 @@ async def lifespan(app: FastAPI):
     slack_notifier_task.cancel()
     try:
         await slack_notifier_task
+    except asyncio.CancelledError:
+        pass
+
+    # Shutdown: cancel the dreaming daemon (a dream mid-call marks its run
+    # row failed on the way out)
+    dreaming_task.cancel()
+    try:
+        await dreaming_task
     except asyncio.CancelledError:
         pass
 

@@ -239,5 +239,8 @@ export const endpoints = {
 
   adminModelSelection: () => `${API_BASE_URL}/admin/model-selection`,
 
+  adminDreaming: () => `${API_BASE_URL}/admin/dreaming`,
+  adminDreamingRun: () => `${API_BASE_URL}/admin/dreaming/run`,
+
   version: () => `${API_BASE_URL}/version`,
 };

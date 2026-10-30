@@ -36,6 +36,9 @@ import type {
   MemorySuggestion,
   MemorySuggestionsListResponse,
   AcceptMemorySuggestionResponse,
+  DreamingAdminResponse,
+  DreamingSettings,
+  DreamNowResponse,
   MemoryInboxCountsResponse,
   MemoryInboxPendingResponse,
   MemoryInboxResolvedResponse,
@@ -1164,6 +1167,21 @@ export function updateFeatureGate(
   update: FeatureGateUpdate,
 ): Promise<FeatureGate> {
   return apiPut(endpoints.adminFeatureGate(feature), { body: update });
+}
+
+// Settings > Dreaming (admin)
+
+export function fetchDreamingSettings(): Promise<DreamingAdminResponse> {
+  return apiGet(endpoints.adminDreaming());
+}
+
+export function updateDreamingSettings(update: DreamingSettings): Promise<DreamingAdminResponse> {
+  return apiPut(endpoints.adminDreaming(), { body: update });
+}
+
+/** Dream for the requesting admin now (skips the scheduler's pacing). */
+export function runDreamNow(): Promise<DreamNowResponse> {
+  return apiPost(endpoints.adminDreamingRun());
 }
 
 export function fetchAdminLimits(): Promise<AdminLimits> {

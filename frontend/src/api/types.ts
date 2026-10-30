@@ -916,8 +916,14 @@ export interface Memory {
 export interface MemorySuggestion {
   id: string;
   user_id: number;
-  conversation_id: string;
-  content: string;
+  /** The proposing conversation; null for a dream's suggestion (inbox only). */
+  conversation_id: string | null;
+  /** Where it came from: the suggest_memory tool, or a dream (chat/dreaming.py). */
+  source: 'conversation' | 'dream';
+  dream_run_id: string | null;
+  /** Proposed memory text; null = archive-only (accepting just archives
+   *  ``replaces_memory_id``, creating no memory). */
+  content: string | null;
   /** The model's one-line justification, or null. */
   reasoning: string | null;
   /** Existing memory archived when this suggestion is accepted, or null. */
@@ -974,7 +980,8 @@ export interface MemoryInboxResolvedResponse {
 
 export interface AcceptMemorySuggestionResponse {
   suggestion: MemorySuggestion;
-  memory: Memory;
+  /** The memory created; null when the suggestion was archive-only. */
+  memory: Memory | null;
 }
 
 export interface MemoriesListResponse {
@@ -2505,6 +2512,61 @@ export interface TranscribeResponse {
 
 // PUT /admin/feature-gates/{feature} body. Omit allowed_users to keep the
 // stored list; pass null to open the gate to all users.
+// Settings > Dreaming (admin): chat/routes/dreaming.py
+
+export interface DreamingSettings {
+  /** Pinned model id; null = automatic. */
+  model: string | null;
+  /** Thinking level; null = the model's default. */
+  thinking_effort: string | null;
+}
+
+export interface DreamingModelRow {
+  id: string;
+  display_name: string;
+  provider_label: string;
+  thinking_efforts: string[];
+  default_thinking_effort: string | null;
+  /** Whether a dream may run on it (available and allowed privately). */
+  dreamable: boolean;
+  unavailable_reason: 'not_allowed_private' | 'not_configured' | 'failing' | null;
+}
+
+export interface DreamRun {
+  id: string;
+  user_id: number;
+  user_email: string | null;
+  trigger: 'scheduled' | 'manual';
+  status: 'running' | 'completed' | 'failed';
+  model: string | null;
+  thinking_effort: string | null;
+  memories_read: number;
+  suggestions_created: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cached_tokens: number | null;
+  estimated_cost_usd: number | null;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface DreamingAdminResponse {
+  settings: DreamingSettings;
+  /** What the next dream would run on, or null with unavailable_reason set. */
+  resolved: { model: string; thinking_effort: string | null; automatic: boolean } | null;
+  unavailable_reason: string | null;
+  /** The feature gate's own switch, and whether it is open for this admin. */
+  enabled: boolean;
+  enabled_for_me: boolean;
+  models: DreamingModelRow[];
+  recent_runs: DreamRun[];
+}
+
+export type DreamNowResponse =
+  | { status: 'skipped'; reason: string }
+  | { status: 'completed' | 'failed'; run: DreamRun };
+
 export interface FeatureGateUpdate {
   enabled: boolean;
   allowed_users?: string[] | null;

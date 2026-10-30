@@ -1,11 +1,15 @@
 """Memory suggestion data access layer.
 
-A suggestion is a memory the model proposed via the non-blocking
-``suggest_memory`` tool (chat/memory_suggestions.py). Rows live in
-``memory_suggestions`` (db/models.py) and move from ``pending`` to
-``accepted`` -- which creates the ``memories`` row in the same transaction
-and archives the optional ``replaces_memory_id`` memory -- or
-``dismissed``. Every function is scoped to the owning user.
+A suggestion is a memory change proposed for the user's review: by the
+non-blocking ``suggest_memory`` tool mid-conversation
+(chat/memory_suggestions.py, ``source == "conversation"``), or by a dream,
+the offline review of the memory store (chat/dreaming.py, ``source ==
+"dream"``, no conversation). Rows live in ``memory_suggestions``
+(db/models.py) and move from ``pending`` to ``accepted`` -- which creates
+the ``memories`` row from ``content`` in the same transaction and archives
+the optional ``replaces_memory_id`` memory; a row without ``content`` is
+archive-only and just archives it -- or ``dismissed``. Every function is
+scoped to the owning user.
 """
 
 from datetime import datetime, timezone
@@ -19,6 +23,7 @@ from db.models import (
     Conversation,
     Memory,
     MemorySuggestion,
+    MemorySuggestionSource,
     MemorySuggestionStatus,
     Project,
 )
@@ -102,19 +107,27 @@ def _normalize_reasoning(reasoning: object) -> Optional[str]:
 
 async def create_suggestion(
     user_id: int,
-    conversation_id: str,
-    content: str,
+    conversation_id: Optional[str],
+    content: Optional[str],
     reasoning: Optional[str] = None,
     replaces_memory_id: Optional[str] = None,
+    source: str = MemorySuggestionSource.CONVERSATION,
+    dream_run_id: Optional[str] = None,
 ) -> dict:
     """Register a pending suggestion.
 
-    Raises ValueError on empty / oversized content, or when
+    ``content`` None makes an archive-only row, which must name the memory
+    it archives. Raises ValueError on empty / oversized content, on an
+    archive-only row without ``replaces_memory_id``, or when
     ``replaces_memory_id`` is not one of the user's active memories.
     """
-    content = normalize_content(content)
-    reasoning = _normalize_reasoning(reasoning)
     replaces_memory_id = (replaces_memory_id or "").strip() or None
+    if content is None:
+        if replaces_memory_id is None:
+            raise ValueError("An archive-only suggestion must name the memory it archives.")
+    else:
+        content = normalize_content(content)
+    reasoning = _normalize_reasoning(reasoning)
 
     async with AsyncSessionLocal() as db:
         if replaces_memory_id is not None:
@@ -127,6 +140,8 @@ async def create_suggestion(
         row = MemorySuggestion(
             user_id=user_id,
             conversation_id=conversation_id,
+            source=source,
+            dream_run_id=dream_run_id,
             content=content,
             reasoning=reasoning,
             replaces_memory_id=replaces_memory_id,
@@ -183,10 +198,11 @@ async def count_pending(user_id: int, conversation_id: str) -> int:
         return int(result.scalar_one())
 
 
-async def count_pending_for_user(user_id: int) -> int:
-    """Pending suggestions across all of the user's conversations."""
+async def count_pending_for_user(user_id: int, source: Optional[str] = None) -> int:
+    """Pending suggestions of the user across all conversations and dreams,
+    or of one ``source`` only."""
     async with AsyncSessionLocal() as db:
-        result = await db.execute(
+        stmt = (
             select(func.count())
             .select_from(MemorySuggestion)
             .where(
@@ -194,6 +210,9 @@ async def count_pending_for_user(user_id: int) -> int:
                 MemorySuggestion.status == MemorySuggestionStatus.PENDING,
             )
         )
+        if source is not None:
+            stmt = stmt.where(MemorySuggestion.source == source)
+        result = await db.execute(stmt)
         return int(result.scalar_one())
 
 
@@ -264,7 +283,9 @@ async def conversation_context(conversation_ids: list[str]) -> dict[str, dict]:
     """``{conversation_id: {"conversation_title", "project_id",
     "project_name"}}`` for the inbox rows' "from" line. The title follows
     the sidebar's rule (custom name, else the cached auto title, else None);
-    conversations deleted meanwhile are simply absent."""
+    conversations deleted meanwhile are simply absent, and so is the None
+    of a dream's suggestions."""
+    conversation_ids = [cid for cid in conversation_ids if cid]
     if not conversation_ids:
         return {}
     async with AsyncSessionLocal() as db:
@@ -328,10 +349,12 @@ async def accept_suggestion(
     panel). The claim (``pending`` -> ``accepted``), the memory insert and
     the archive of ``replaces_memory_id`` happen in one transaction, so two
     tabs accepting at once produce one memory: the loser gets
-    SuggestionAlreadyResolvedError.
+    SuggestionAlreadyResolvedError. An archive-only row (no ``content``)
+    creates no memory and takes no override.
 
-    Returns ``(suggestion, memory)``, or None when the suggestion is not
-    the user's. Raises ValueError on bad override content.
+    Returns ``(suggestion, memory)`` -- ``memory`` None for an archive-only
+    row -- or None when the suggestion is not the user's. Raises ValueError
+    on bad override content.
     """
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as db:
@@ -341,11 +364,17 @@ async def accept_suggestion(
         if row.status != MemorySuggestionStatus.PENDING:
             raise SuggestionAlreadyResolvedError(row.status)
 
-        text = normalize_content(content if content is not None else row.content)
-
-        memory = Memory(user_id=user_id, content=text)
-        db.add(memory)
-        await db.flush()
+        memory = None
+        if row.content is None:
+            if content is not None:
+                raise ValueError(
+                    "This suggestion only archives a memory; it has no text to edit."
+                )
+        else:
+            text = normalize_content(content if content is not None else row.content)
+            memory = Memory(user_id=user_id, content=text)
+            db.add(memory)
+            await db.flush()
 
         claimed = await db.execute(
             update(MemorySuggestion)
@@ -355,7 +384,7 @@ async def accept_suggestion(
             )
             .values(
                 status=MemorySuggestionStatus.ACCEPTED,
-                memory_id=memory.id,
+                memory_id=memory.id if memory is not None else None,
                 resolved_at=now,
             )
         )
@@ -371,6 +400,8 @@ async def accept_suggestion(
 
         await db.commit()
         await db.refresh(row)
+        if memory is None:
+            return _to_dict(row), None
         await db.refresh(memory)
         from db.memory_store import _memory_to_dict
         return _to_dict(row), _memory_to_dict(memory)
@@ -406,6 +437,8 @@ def _to_dict(row: MemorySuggestion) -> dict:
         "id": row.id,
         "user_id": row.user_id,
         "conversation_id": row.conversation_id,
+        "source": row.source,
+        "dream_run_id": row.dream_run_id,
         "content": row.content,
         "reasoning": row.reasoning,
         "replaces_memory_id": row.replaces_memory_id,

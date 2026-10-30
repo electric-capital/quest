@@ -12,7 +12,8 @@ This doc is the map: where each piece lives, how a turn moves through them, and 
       ▼
  FastAPI app, one process, one port (quest.py)
       │  lifespan daemons: routine scheduler, Slack Socket Mode,
-      │  Slack request notifier, replay-buffer eviction, model health checks
+      │  Slack request notifier, dreaming, replay-buffer eviction,
+      │  model health checks
       ▼
  Conversation loop (chat/gemini_api) ──► LLM providers (chat/llm):
       │                                   Vertex Gemini · Vertex Claude ·
@@ -48,6 +49,7 @@ This doc is the map: where each piece lives, how a turn moves through them, and 
 | `chat/artifact_access.py` | The access procedure shared by Quest Docs and Quest Tables | [Quest Docs -- Access Rule](quest-docs.md#access-rule) |
 | `chat/scheduler.py`, `chat/routine_runs.py` | Scheduled and one-click routine runs | [Scheduling](scheduling.md), [Routines](routines.md) |
 | `chat/slack_socket_mode.py`, `chat/slack_driven_runtime.py`, `chat/slack_notifier.py` | Slack-driven conversations, pending-request DMs | [Slack Socket Mode](slack-socket-mode.md), [Slack Pending-Request Notifier](slack-pending-request-notifier.md) |
+| `chat/dreaming.py`, `config/dreaming.py` | Offline reviews of users' saved memories, proposed as inbox suggestions | [Dreaming](dreaming.md) |
 | `chat/sandbox_api.py`, `chat/sandbox_tokens.py` | Loopback tool API for sandbox scripts and its per-run tokens | [Script Runner](script-runner.md) |
 | `chat/route_dispatch.py` | In-process dispatch of `curl_proxy_*` tool calls to `/api/*` handlers | [Route Dispatch](route-dispatch.md) |
 | `chat/user_subagent.py`, `chat/inference_api.py` | Headless run kinds: cross-user subagents, the inference endpoint | [User Subagents](user-subagents.md), [Inference API](../api/inference-api.md) |
