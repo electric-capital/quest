@@ -2,9 +2,14 @@
 // lists the conversation's pending suggestions, accept sends the edited
 // text only when it changed, dismiss removes the row, a 409 from another
 // tab drops the row silently, and a count change while open re-fetches.
+// The doc kind adds its wording and store count, the accept options with
+// the instructions version, the re-base on a 409 stale_instructions, and
+// an Accept all that skips a row its own Accept refuses.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { MemorySuggestion } from '../api/types';
+import type { ReactElement } from 'react';
+import { MemoryRouter } from 'react-router-dom';
+import type { DocNoteSuggestion, MemorySuggestion } from '../api/types';
 import { ApiClientError } from '../api/request';
 import { conversationStore } from '../store/conversationStore';
 import { MemorySuggestions } from './MemorySuggestions';
@@ -16,6 +21,9 @@ const mocks = vi.hoisted(() => ({
   fetchProjectMemorySuggestions: vi.fn(),
   acceptProjectMemorySuggestion: vi.fn(),
   dismissProjectMemorySuggestion: vi.fn(),
+  fetchConversationDocNoteSuggestions: vi.fn(),
+  acceptDocNoteSuggestion: vi.fn(),
+  dismissDocNoteSuggestion: vi.fn(),
 }));
 
 vi.mock('../api/client', () => ({
@@ -25,6 +33,14 @@ vi.mock('../api/client', () => ({
   fetchProjectMemorySuggestions: mocks.fetchProjectMemorySuggestions,
   acceptProjectMemorySuggestion: mocks.acceptProjectMemorySuggestion,
   dismissProjectMemorySuggestion: mocks.dismissProjectMemorySuggestion,
+}));
+
+// Only the doc note calls are faked; the conflict helpers and caps stay real.
+vi.mock('../api/docsApi', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/docsApi')>()),
+  fetchConversationDocNoteSuggestions: mocks.fetchConversationDocNoteSuggestions,
+  acceptDocNoteSuggestion: mocks.acceptDocNoteSuggestion,
+  dismissDocNoteSuggestion: mocks.dismissDocNoteSuggestion,
 }));
 
 const suggestion = (id: string, content: string, extra: Partial<MemorySuggestion> = {}): MemorySuggestion => ({
@@ -54,6 +70,9 @@ beforeEach(() => {
   mocks.fetchProjectMemorySuggestions.mockReset();
   mocks.acceptProjectMemorySuggestion.mockReset().mockResolvedValue({});
   mocks.dismissProjectMemorySuggestion.mockReset().mockResolvedValue({});
+  mocks.fetchConversationDocNoteSuggestions.mockReset();
+  mocks.acceptDocNoteSuggestion.mockReset().mockResolvedValue({});
+  mocks.dismissDocNoteSuggestion.mockReset().mockResolvedValue({});
 });
 
 afterEach(cleanup);
@@ -255,5 +274,235 @@ describe('MemorySuggestions kind="project"', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     await waitFor(() => expect(mocks.dismissProjectMemorySuggestion).toHaveBeenCalledWith('p2'));
     expect(mocks.acceptMemorySuggestion).not.toHaveBeenCalled();
+  });
+});
+
+const STALE_MESSAGE = 'The instructions changed since this was suggested. Review the current text and accept again.';
+
+const docNote = (id: string, extra: Partial<DocNoteSuggestion> = {}): DocNoteSuggestion => ({
+  id,
+  user_id: 1,
+  doc_id: `doc-${id}`,
+  conversation_id: 'c-doc',
+  note_kind: 'instructions',
+  content: 'Prices are in EUR.',
+  reasoning: null,
+  base_instructions_version: 3,
+  replaces_memory_id: null,
+  status: 'pending',
+  memory_id: null,
+  created_at: '2026-10-29T00:00:00Z',
+  resolved_at: null,
+  doc_title: `Doc ${id}`,
+  replaces_content: null,
+  current_instructions: 'Prices are in USD.',
+  current_instructions_version: 3,
+  instructions_moved: false,
+  ...extra,
+});
+
+const docMemory = (id: string, content: string): DocNoteSuggestion => docNote(id, {
+  note_kind: 'memory',
+  content,
+  base_instructions_version: null,
+  current_instructions: null,
+  current_instructions_version: null,
+});
+
+function serveDoc(list: DocNoteSuggestion[]) {
+  mocks.fetchConversationDocNoteSuggestions.mockResolvedValue({
+    suggestions: list,
+    pending_count: list.length,
+  });
+}
+
+/** The flat 409 stale_instructions as request.ts maps it. */
+function staleError(current: { instructions: string; instructions_version: number } | null) {
+  const body: Record<string, unknown> = { error: 'stale_instructions', message: STALE_MESSAGE };
+  if (current) body.current = current;
+  return new ApiClientError(STALE_MESSAGE, 409, 'stale_instructions', undefined, body);
+}
+
+// Doc rows link to their doc, so they render inside a router.
+function renderInRouter(ui: ReactElement) {
+  const result = render(<MemoryRouter>{ui}</MemoryRouter>);
+  return {
+    ...result,
+    rerender: (next: ReactElement) => result.rerender(<MemoryRouter>{next}</MemoryRouter>),
+  };
+}
+
+async function openDocPanel(conversationId = 'c-doc', pendingCount = 1) {
+  const view = renderInRouter(
+    <MemorySuggestions conversationId={conversationId} pendingCount={pendingCount} kind="doc" />,
+  );
+  fireEvent.click(screen.getByRole('button', { name: /suggested doc note/ }));
+  await screen.findByRole('dialog', { name: 'Suggested doc notes' });
+  return view;
+}
+
+function diffBodies(): Element[] {
+  return screen.getAllByTestId('memory-suggestion-diff')
+    .map((diff) => diff.querySelector('.memory-suggestion-diff-body')!);
+}
+
+describe('MemorySuggestions kind="doc"', () => {
+  it('uses the doc note endpoint, wording and store count', async () => {
+    serveDoc([docNote('d1'), docMemory('d2', 'The board meets monthly.')]);
+    const { container, rerender } = renderInRouter(
+      <MemorySuggestions conversationId="c-doc-count" pendingCount={1} kind="doc" />,
+    );
+    expect(container.querySelector('.memory-suggestions--doc')).not.toBeNull();
+    expect(screen.getByRole('button', { name: /^1 suggested doc note$/ })).not.toBeNull();
+    rerender(<MemorySuggestions conversationId="c-doc-count" pendingCount={2} kind="doc" />);
+    fireEvent.click(screen.getByRole('button', { name: /^2 suggested doc notes$/ }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Suggested doc notes' });
+    expect(mocks.fetchConversationDocNoteSuggestions).toHaveBeenCalledWith('c-doc-count');
+    expect(mocks.fetchMemorySuggestions).not.toHaveBeenCalled();
+    expect(mocks.fetchProjectMemorySuggestions).not.toHaveBeenCalled();
+    await screen.findByDisplayValue('The board meets monthly.');
+    expect(dialog.textContent).toContain('instructions or memories for docs in this chat');
+    expect(screen.getByLabelText('Doc instructions text')).not.toBeNull();
+    expect(screen.getByRole('link', { name: 'Doc d1' }).getAttribute('href')).toBe('/docs/doc-d1');
+    expect(container.querySelectorAll('.memory-suggestion-row--doc')).toHaveLength(2);
+    // The list reconciles the doc note count, never the other two.
+    await waitFor(() => expect(
+      conversationStore.getConversation('c-doc-count').pendingDocNoteSuggestions,
+    ).toBe(2));
+    expect(conversationStore.getConversation('c-doc-count').pendingMemorySuggestions).toBe(0);
+    expect(conversationStore.getConversation('c-doc-count').pendingProjectMemorySuggestions).toBe(0);
+  });
+
+  it('accepts with the instructions version, adding the edited text when changed', async () => {
+    serveDoc([
+      docNote('d1'),
+      docNote('d2', { current_instructions_version: 5 }),
+      docMemory('d3', 'The board meets monthly.'),
+    ]);
+    await openDocPanel('c-doc', 3);
+    await screen.findByDisplayValue('The board meets monthly.');
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Accept' })[0]);
+    await waitFor(() => expect(mocks.acceptDocNoteSuggestion)
+      .toHaveBeenCalledWith('d1', { expectedInstructionsVersion: 3 }));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Accept' })).toHaveLength(2));
+
+    fireEvent.change(screen.getAllByLabelText('Doc instructions text')[0], {
+      target: { value: 'Prices are in GBP. ' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Accept' })[0]);
+    await waitFor(() => expect(mocks.acceptDocNoteSuggestion).toHaveBeenCalledWith(
+      'd2',
+      { content: 'Prices are in GBP.', expectedInstructionsVersion: 5 },
+    ));
+
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Accept' })).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(mocks.acceptDocNoteSuggestion).toHaveBeenCalledWith('d3', {}));
+  });
+
+  it('dismisses a row', async () => {
+    serveDoc([docNote('d1')]);
+    await openDocPanel();
+    await screen.findByDisplayValue('Prices are in EUR.');
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    await waitFor(() => expect(mocks.dismissDocNoteSuggestion).toHaveBeenCalledWith('d1'));
+    await waitFor(() => expect(screen.queryByDisplayValue('Prices are in EUR.')).toBeNull());
+    expect(mocks.acceptDocNoteSuggestion).not.toHaveBeenCalled();
+  });
+
+  it('re-bases an instructions row on the current text of a 409 stale_instructions', async () => {
+    serveDoc([docNote('d1')]);
+    mocks.acceptDocNoteSuggestion
+      .mockRejectedValueOnce(staleError({ instructions: 'Prices are in GBP.', instructions_version: 4 }))
+      .mockResolvedValueOnce({});
+    const { container } = await openDocPanel();
+    const textarea = await screen.findByDisplayValue('Prices are in EUR.');
+    expect(diffBodies()[0].textContent).toBe('Prices are in USD. EUR.');
+    fireEvent.change(textarea, { target: { value: 'Prices are in EUR, always.' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    expect((await screen.findByRole('alert')).textContent).toBe(STALE_MESSAGE);
+    expect(mocks.acceptDocNoteSuggestion).toHaveBeenLastCalledWith(
+      'd1',
+      { content: 'Prices are in EUR, always.', expectedInstructionsVersion: 3 },
+    );
+    // The diff now starts from the current text, the draft is kept, and the
+    // row says the instructions moved past the proposal's base.
+    const body = diffBodies()[0];
+    expect(body.querySelector('.memory-suggestion-diff-del')!.textContent).toBe('GBP.');
+    expect(body.querySelector('.memory-suggestion-diff-add')!.textContent).toBe('EUR, always.');
+    expect(screen.getByDisplayValue('Prices are in EUR, always.')).not.toBeNull();
+    expect(container.querySelector('.memory-suggestion-moved')!.textContent)
+      .toBe('The instructions changed since this was suggested');
+    expect(mocks.fetchConversationDocNoteSuggestions).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(mocks.acceptDocNoteSuggestion).toHaveBeenLastCalledWith(
+      'd1',
+      { content: 'Prices are in EUR, always.', expectedInstructionsVersion: 4 },
+    ));
+    await waitFor(() => expect(screen.queryByDisplayValue('Prices are in EUR, always.')).toBeNull());
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('re-fetches the list when a 409 stale_instructions carries no current text', async () => {
+    serveDoc([docNote('d1')]);
+    mocks.acceptDocNoteSuggestion.mockRejectedValueOnce(staleError(null));
+    await openDocPanel();
+    await screen.findByDisplayValue('Prices are in EUR.');
+
+    serveDoc([docNote('d1', {
+      current_instructions: 'Prices are in GBP.',
+      current_instructions_version: 6,
+    })]);
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    expect((await screen.findByRole('alert')).textContent).toBe(STALE_MESSAGE);
+    await waitFor(() => expect(mocks.fetchConversationDocNoteSuggestions).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(
+      diffBodies()[0].querySelector('.memory-suggestion-diff-del')!.textContent,
+    ).toBe('GBP.'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(mocks.acceptDocNoteSuggestion)
+      .toHaveBeenLastCalledWith('d1', { expectedInstructionsVersion: 6 }));
+  });
+
+  it('drops a row resolved from another tab without an error', async () => {
+    serveDoc([docNote('d1')]);
+    mocks.acceptDocNoteSuggestion.mockRejectedValueOnce(
+      new ApiClientError('already resolved', 409, 'suggestion_resolved'),
+    );
+    await openDocPanel();
+    await screen.findByDisplayValue('Prices are in EUR.');
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(screen.queryByDisplayValue('Prices are in EUR.')).toBeNull());
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('accepts and dismisses all in turn, skipping a row its own Accept refuses', async () => {
+    serveDoc([
+      docNote('d1'),
+      docMemory('d2', 'The board meets monthly.'),
+      docMemory('d3', 'Q3 ends in September.'),
+    ]);
+    await openDocPanel('c-doc', 3);
+    await screen.findByDisplayValue('Q3 ends in September.');
+    // A blank draft would clear the instructions; Accept all leaves it.
+    fireEvent.change(screen.getByLabelText('Doc instructions text'), { target: { value: '  ' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept all' }));
+    await waitFor(() => expect(screen.queryByDisplayValue('Q3 ends in September.')).toBeNull());
+    expect(mocks.acceptDocNoteSuggestion.mock.calls.map(([id]) => id)).toEqual(['d2', 'd3']);
+    expect(screen.getByLabelText('Doc instructions text')).not.toBeNull();
+
+    cleanup();
+    serveDoc([docNote('d1'), docMemory('d4', 'Figures are unaudited.')]);
+    await openDocPanel('c-doc-2', 2);
+    await screen.findByDisplayValue('Figures are unaudited.');
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss all' }));
+    await waitFor(() => expect(mocks.dismissDocNoteSuggestion.mock.calls.map(([id]) => id))
+      .toEqual(['d1', 'd4']));
   });
 });

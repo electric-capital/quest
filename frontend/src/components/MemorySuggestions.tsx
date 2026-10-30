@@ -14,10 +14,22 @@
  * ``suggest_project_memory`` proposals (chat/project_memories.py): same
  * mechanics against the project-memory endpoints, but its own amber colour,
  * folder icon and wording, so the two bubbles never read as one.
+ *
+ * ``kind="doc"`` is the doc-note twin for ``suggest_doc_note`` proposals
+ * (instructions or memories of one doc each): its endpoints are in
+ * api/docsApi.ts, its colour a fixed rose, its icon the sidebar's Docs icon
+ * (FileText), and its count ``pendingDocNoteSuggestions``. An instructions
+ * accept sends the version its diff was rendered against
+ * (docNoteReview.ts); when the instructions changed meanwhile, the 409
+ * ``stale_instructions`` re-bases the row on the current text it carries
+ * (re-fetching the list when it carries none), keeps the draft and shows
+ * the server's message, so the next Accept is against what the user sees.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Brain, ChevronDown, ChevronUp, FolderBookmark, LoaderCircle, X } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { Brain, ChevronDown, ChevronUp, FileText, FolderBookmark, LoaderCircle, X } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import {
   acceptMemorySuggestion,
   acceptProjectMemorySuggestion,
@@ -26,11 +38,19 @@ import {
   fetchMemorySuggestions,
   fetchProjectMemorySuggestions,
 } from '../api/client';
+import {
+  acceptDocNoteSuggestion,
+  dismissDocNoteSuggestion,
+  fetchConversationDocNoteSuggestions,
+  isStaleInstructionsError,
+  staleInstructionsCurrent,
+} from '../api/docsApi';
 import { ApiClientError } from '../api/request';
-import type { MemorySuggestion } from '../api/types';
+import type { DocNoteSuggestion, MemorySuggestion } from '../api/types';
 import { conversationStore } from '../store/conversationStore';
 import { MemorySuggestionRow } from './MemorySuggestionRow';
-import type { MemorySuggestionKind } from './MemorySuggestionRow';
+import type { MemorySuggestionKind, MemorySuggestionRowStateProps } from './MemorySuggestionRow';
+import { canAcceptDocNote, docNoteAcceptOptions, withCurrentInstructions } from './docNoteReview';
 import './MemorySuggestions.css';
 
 export type { MemorySuggestionKind };
@@ -39,12 +59,47 @@ interface MemorySuggestionsProps {
   conversationId: string;
   /** Pending count from the store; the bubble hides at zero. */
   pendingCount: number;
-  /** Personal memories (default) or the conversation's project memories. */
+  /** Personal memories (default), the conversation's project memories, or doc notes. */
   kind?: MemorySuggestionKind;
 }
 
-/** Everything that differs between the two kinds. */
-const KIND_CONFIG = {
+/** Everything that differs between the kinds, for rows of type ``S``. */
+interface KindConfig<S extends MemorySuggestion | DocNoteSuggestion> {
+  Icon: LucideIcon;
+  title: string;
+  countLabel: (n: number) => string;
+  hint: string;
+  saveError: string;
+  fetchList: (conversationId: string) => Promise<{ suggestions: S[]; pending_count: number }>;
+  /** Accept with the row's draft (undefined = the proposed text, never edited). */
+  accept: (suggestion: S, draft: string | undefined) => Promise<unknown>;
+  dismiss: (suggestionId: string) => Promise<unknown>;
+  setCount: (conversationId: string, n: number) => void;
+  /** Accept all skips a row this refuses (absent = every row is tried). */
+  canAccept?: (suggestion: S, draft: string | undefined) => boolean;
+  /**
+   * A failed accept that leaves the row pending but changed: the re-based
+   * row, ``'refetch'`` to reload the list, or null for an ordinary failure.
+   */
+  rebase?: (suggestion: S, err: unknown) => S | 'refetch' | null;
+  renderRow: (suggestion: S, state: MemorySuggestionRowStateProps) => ReactNode;
+}
+
+/**
+ * The edited text to send, or undefined while the draft keeps the proposal.
+ * An archive-only row (no content) has no text to edit, so it never sends one.
+ */
+function editedText(suggestion: MemorySuggestion, draft: string | undefined): string | undefined {
+  if (suggestion.content === null) return undefined;
+  const edited = draft !== undefined && draft.trim() !== suggestion.content.trim();
+  return edited ? draft.trim() : undefined;
+}
+
+const KIND_CONFIG: {
+  user: KindConfig<MemorySuggestion>;
+  project: KindConfig<MemorySuggestion>;
+  doc: KindConfig<DocNoteSuggestion>;
+} = {
   user: {
     Icon: Brain,
     title: 'Suggested memories',
@@ -54,9 +109,10 @@ const KIND_CONFIG = {
       + 'Nothing is saved until you accept.',
     saveError: 'Failed to save memory',
     fetchList: fetchMemorySuggestions,
-    accept: acceptMemorySuggestion,
+    accept: (s, draft) => acceptMemorySuggestion(s.id, editedText(s, draft)),
     dismiss: dismissMemorySuggestion,
     setCount: (id: string, n: number) => conversationStore.setPendingMemorySuggestions(id, n),
+    renderRow: (s, state) => <MemorySuggestionRow kind="user" suggestion={s} {...state} />,
   },
   project: {
     Icon: FolderBookmark,
@@ -69,11 +125,32 @@ const KIND_CONFIG = {
       + 'to the project\'s memories or dismiss it. Nothing is saved until you accept.',
     saveError: 'Failed to save project memory',
     fetchList: fetchProjectMemorySuggestions,
-    accept: acceptProjectMemorySuggestion,
+    accept: (s, draft) => acceptProjectMemorySuggestion(s.id, editedText(s, draft)),
     dismiss: dismissProjectMemorySuggestion,
     setCount: (id: string, n: number) => conversationStore.setPendingProjectMemorySuggestions(id, n),
+    renderRow: (s, state) => <MemorySuggestionRow kind="project" suggestion={s} {...state} />,
   },
-} as const;
+  doc: {
+    Icon: FileText,
+    title: 'Suggested doc notes',
+    countLabel: (n: number) => (n === 1 ? '1 suggested doc note' : `${n} suggested doc notes`),
+    hint: 'The assistant suggested instructions or memories for docs in this chat. '
+      + 'Edit the text if you like, then accept to save it to the doc\'s notes or '
+      + 'dismiss it. Nothing is saved until you accept.',
+    saveError: 'Failed to save doc note',
+    fetchList: fetchConversationDocNoteSuggestions,
+    accept: (s, draft) => acceptDocNoteSuggestion(s.id, docNoteAcceptOptions(s, draft)),
+    dismiss: dismissDocNoteSuggestion,
+    setCount: (id: string, n: number) => conversationStore.setPendingDocNoteSuggestions(id, n),
+    canAccept: canAcceptDocNote,
+    rebase: (s, err) => {
+      if (!isStaleInstructionsError(err)) return null;
+      const current = staleInstructionsCurrent(err);
+      return current ? withCurrentInstructions(s, current) : 'refetch';
+    },
+    renderRow: (s, state) => <MemorySuggestionRow kind="doc" suggestion={s} {...state} />,
+  },
+};
 
 function errorMessage(err: unknown, fallback: string): string {
   if (err instanceof Error && err.message) return err.message;
@@ -85,21 +162,56 @@ export function MemorySuggestions({
   pendingCount,
   kind = 'user',
 }: MemorySuggestionsProps) {
-  const config = KIND_CONFIG[kind];
+  // Keyed by kind: the list state of one kind never meets the other's rows.
+  return kind === 'doc' ? (
+    <SuggestionsReview
+      key={kind}
+      conversationId={conversationId}
+      pendingCount={pendingCount}
+      kind={kind}
+      config={KIND_CONFIG.doc}
+    />
+  ) : (
+    <SuggestionsReview
+      key={kind}
+      conversationId={conversationId}
+      pendingCount={pendingCount}
+      kind={kind}
+      config={KIND_CONFIG[kind]}
+    />
+  );
+}
+
+interface SuggestionsReviewProps<S extends MemorySuggestion | DocNoteSuggestion> {
+  conversationId: string;
+  pendingCount: number;
+  kind: MemorySuggestionKind;
+  config: KindConfig<S>;
+}
+
+function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
+  conversationId,
+  pendingCount,
+  kind,
+  config,
+}: SuggestionsReviewProps<S>) {
   const { Icon } = config;
   const titleId = `memory-suggestions-title-${kind}`;
   const [isOpen, setIsOpen] = useState(false);
-  const [suggestions, setSuggestions] = useState<MemorySuggestion[]>([]);
+  const [suggestions, setSuggestions] = useState<S[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Bumped to re-fetch the list while open (a conflict without its data).
+  const [reloadTick, setReloadTick] = useState(0);
   // Per-suggestion edited text (absent = the proposed content untouched).
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set());
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [isBulkBusy, setIsBulkBusy] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
-  // Bumped on every local accept / dismiss so a list fetch that was already
-  // in flight cannot land afterwards and resurrect the row just removed.
+  // Bumped on every local accept / dismiss / re-base so a list fetch that
+  // was already in flight cannot land afterwards and resurrect the row just
+  // removed (or undo the re-base).
   const listGenerationRef = useRef(0);
 
   // A new conversation starts closed.
@@ -146,7 +258,7 @@ export function MemorySuggestions({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, conversationId, pendingCount, config]);
+  }, [isOpen, conversationId, pendingCount, config, reloadTick]);
 
   // Close once the last suggestion is gone (accepted / dismissed here or
   // elsewhere); the bubble disappears with it.
@@ -184,6 +296,11 @@ export function MemorySuggestions({
     });
   }, []);
 
+  const replaceRow = useCallback((row: S) => {
+    listGenerationRef.current += 1;
+    setSuggestions((prev) => prev.map((s) => (s.id === row.id ? row : s)));
+  }, []);
+
   const setBusy = useCallback((id: string, busy: boolean) => {
     setBusyIds((prev) => {
       const next = new Set(prev);
@@ -194,7 +311,7 @@ export function MemorySuggestions({
   }, []);
 
   const resolveOne = useCallback(async (
-    suggestion: MemorySuggestion,
+    suggestion: S,
     action: 'accept' | 'dismiss',
   ): Promise<boolean> => {
     setBusy(suggestion.id, true);
@@ -206,9 +323,7 @@ export function MemorySuggestions({
     });
     try {
       if (action === 'accept') {
-        const draft = drafts[suggestion.id];
-        const edited = draft !== undefined && draft.trim() !== (suggestion.content ?? '').trim();
-        await config.accept(suggestion.id, edited ? draft.trim() : undefined);
+        await config.accept(suggestion, drafts[suggestion.id]);
       } else {
         await config.dismiss(suggestion.id);
       }
@@ -221,6 +336,13 @@ export function MemorySuggestions({
         removeRow(suggestion.id);
         return true;
       }
+      // Still pending but changed underneath (doc: the instructions moved):
+      // re-base the row, keeping the draft, and show why.
+      const rebased = action === 'accept' && config.rebase
+        ? config.rebase(suggestion, err)
+        : null;
+      if (rebased === 'refetch') setReloadTick((n) => n + 1);
+      else if (rebased) replaceRow(rebased);
       setRowErrors((prev) => ({
         ...prev,
         [suggestion.id]: errorMessage(
@@ -232,7 +354,7 @@ export function MemorySuggestions({
     } finally {
       setBusy(suggestion.id, false);
     }
-  }, [drafts, removeRow, setBusy, config]);
+  }, [drafts, removeRow, replaceRow, setBusy, config]);
 
   const resolveAll = useCallback(async (action: 'accept' | 'dismiss') => {
     if (isBulkBusy) return;
@@ -241,12 +363,19 @@ export function MemorySuggestions({
       // Sequential so a failure leaves the rest intact for a retry.
       for (const suggestion of suggestions) {
         if (busyIds.has(suggestion.id)) continue;
+        if (
+          action === 'accept'
+          && config.canAccept
+          && !config.canAccept(suggestion, drafts[suggestion.id])
+        ) {
+          continue;
+        }
         await resolveOne(suggestion, action);
       }
     } finally {
       setIsBulkBusy(false);
     }
-  }, [isBulkBusy, suggestions, busyIds, resolveOne]);
+  }, [isBulkBusy, suggestions, busyIds, drafts, config, resolveOne]);
 
   if (pendingCount <= 0 && !isOpen) return null;
 
@@ -321,17 +450,16 @@ export function MemorySuggestions({
                 <div className="memory-suggestions-empty">No pending suggestions.</div>
               )}
               {suggestions.map((suggestion) => (
-                <MemorySuggestionRow
-                  key={suggestion.id}
-                  suggestion={suggestion}
-                  kind={kind}
-                  draft={drafts[suggestion.id] ?? suggestion.content ?? ''}
-                  onDraftChange={(text) => setDrafts((prev) => ({ ...prev, [suggestion.id]: text }))}
-                  busy={busyIds.has(suggestion.id)}
-                  error={rowErrors[suggestion.id]}
-                  onAccept={() => resolveOne(suggestion, 'accept')}
-                  onDismiss={() => resolveOne(suggestion, 'dismiss')}
-                />
+                <Fragment key={suggestion.id}>
+                  {config.renderRow(suggestion, {
+                    draft: drafts[suggestion.id] ?? suggestion.content ?? '',
+                    onDraftChange: (text) => setDrafts((prev) => ({ ...prev, [suggestion.id]: text })),
+                    busy: busyIds.has(suggestion.id),
+                    error: rowErrors[suggestion.id],
+                    onAccept: () => resolveOne(suggestion, 'accept'),
+                    onDismiss: () => resolveOne(suggestion, 'dismiss'),
+                  })}
+                </Fragment>
               ))}
             </div>
           </div>

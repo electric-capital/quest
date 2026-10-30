@@ -1,13 +1,15 @@
 /* Suggested-memories bubbles above the composer plus the review panel that
    pops up over the conversation. Personal memories use the accent family;
-   project memories (.memory-suggestions--project) swap in a fixed amber so
-   the two bubbles read apart under every colour theme. Both kinds draw
-   through the --suggestion-* variables below. The suggestion rows
-   (MemorySuggestionRow.tsx) are shared with the inbox's Memories tab,
-   which carries the same variables on .memory-suggestion-row--<kind>. */
+   project memories (.memory-suggestions--project) swap in a fixed amber and
+   doc notes (.memory-suggestions--doc) a fixed rose, so the three bubbles
+   read apart under every colour theme. All kinds draw through the
+   --suggestion-* variables below. The suggestion rows
+   (MemorySuggestionRow.tsx) are shared with the inbox's Memories tab and
+   (doc rows) the doc viewer's Notes panel, which carry the same variables
+   on .memory-suggestion-row--<kind>. */
 
-/* Row holding the personal and project bubbles side by side; the panels
-   position against it so either one spans the chat column. */
+/* Row holding the bubbles side by side; the panels position against it so
+   any one spans the chat column. */
 .memory-suggestions-bar {
   position: relative;
   display: flex;
@@ -44,6 +46,22 @@
   .memory-suggestion-row--project {
     --suggestion-solid: #b45309;
     --suggestion-text: #a3540a;
+  }
+}
+
+.memory-suggestions--doc,
+.memory-suggestion-row--doc {
+  --suggestion-rgb: 236 72 153;
+  --suggestion-solid: #db2777;
+  --suggestion-contrast: #fff;
+  --suggestion-text: #f472b6;
+}
+
+@media (prefers-color-scheme: light) {
+  .memory-suggestions--doc,
+  .memory-suggestion-row--doc {
+    --suggestion-solid: #be185d;
+    --suggestion-text: #9d174d;
   }
 }
 
@@ -231,6 +249,69 @@
   opacity: 0.7;
 }
 
+/* Doc note rows: the Instructions / Memory pill, then the doc's title as a
+   link (or the neutral "Unavailable doc"), truncated to one line so the row
+   also fits the Notes panel's 280px card. */
+.memory-suggestion-doc-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0 0.5rem;
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.memory-suggestion-pill {
+  flex-shrink: 0;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: rgb(var(--suggestion-rgb) / 0.16);
+  color: var(--suggestion-text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.memory-suggestion-doc-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  border-radius: 3px;
+  color: var(--suggestion-text);
+  font-weight: 500;
+}
+
+.memory-suggestion-doc-link:hover {
+  color: var(--suggestion-text);
+}
+
+.memory-suggestion-doc-link:hover .memory-suggestion-doc-title {
+  text-decoration: underline;
+}
+
+.memory-suggestion-doc-link:focus-visible {
+  outline: 2px solid var(--suggestion-solid);
+  outline-offset: 2px;
+}
+
+.memory-suggestion-doc-link > svg {
+  flex-shrink: 0;
+}
+
+.memory-suggestion-doc-title,
+.memory-suggestion-doc-unavailable {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-suggestion-doc-unavailable {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
 .memory-suggestion-content {
   width: 100%;
   resize: none;
@@ -276,6 +357,65 @@
   color: var(--suggestion-text);
   font-style: normal;
   white-space: nowrap;
+}
+
+/* An instructions row whose instructions changed after the proposal. The
+   amber "changed" status token (index.css, tuned per scheme) rather than
+   the row colour, so it reads as a warning under every kind and theme. */
+.memory-suggestion-moved {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  padding: 0 0.5rem;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: var(--diff-changed-text);
+}
+
+.memory-suggestion-moved > svg {
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+/* Doc rows: the n / max counter at the left of the actions, and the line
+   under the text once it is over the cap. The counter grows into the space
+   left of the buttons; in an actions row narrower than 17rem (the Notes
+   panel card) its basis turns huge, so it takes a line of its own above
+   both buttons instead of pushing Dismiss onto a line alone. */
+.memory-suggestion-counter {
+  flex: 1 1 calc((17rem - 100%) * 999);
+  align-self: center;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.memory-suggestion-counter--over,
+.memory-suggestion-over-cap {
+  color: #e05d5d;
+}
+
+.memory-suggestion-over-cap {
+  margin: 0;
+  padding: 0 0.5rem;
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+@media (prefers-color-scheme: light) {
+  .memory-suggestion-counter--over,
+  .memory-suggestion-over-cap {
+    color: #d32f2f;
+  }
+}
+
+/* A narrow container (the Notes panel card) wraps the doc row's diff
+   legend and actions instead of overflowing. */
+.memory-suggestion-row--doc .memory-suggestion-diff-label,
+.memory-suggestion-row--doc .memory-suggestion-actions {
+  flex-wrap: wrap;
+  row-gap: 0.3rem;
 }
 
 /* Word diff from the replaced memory to the draft: removed words on red,
