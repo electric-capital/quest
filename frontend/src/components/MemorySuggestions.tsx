@@ -36,10 +36,19 @@
  *
  * ``MemorySuggestionsBar`` is the row ChatPanel renders above the composer:
  * the three bubbles side by side, personal, project, doc.
+ *
+ * Focus: inside a bubble (the panel with its rows, and the bubble button)
+ * useSuggestionListFocus keeps focus in the list as rows are accepted or
+ * dismissed, with the bubble button as the fallback; closing the panel
+ * (Escape, the X button, a backdrop click) unmounts the focused control,
+ * so the same rule returns focus to the bubble button. A bubble that goes
+ * away with focus inside it (nothing of its kind pending) hands focus to
+ * the bar, which sends it to another bubble, else to the conversation's
+ * composer field; see MemorySuggestionsBar.
  */
 
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { FocusEvent as ReactFocusEvent, ReactNode } from 'react';
 import { Brain, ChevronDown, ChevronUp, FileText, FolderBookmark, LoaderCircle, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -60,6 +69,7 @@ import {
 import { ApiClientError } from '../api/request';
 import type { DocNoteSuggestion, MemorySuggestion } from '../api/types';
 import type { PendingSuggestionCounts } from '../hooks/usePendingSuggestionCounts';
+import { useSuggestionListFocus } from '../hooks/useSuggestionListFocus';
 import { conversationStore } from '../store/conversationStore';
 import { MemorySuggestionRow } from './MemorySuggestionRow';
 import type { MemorySuggestionKind, MemorySuggestionRowStateProps } from './MemorySuggestionRow';
@@ -79,6 +89,12 @@ interface MemorySuggestionsProps {
   pendingCount: number;
   /** Personal memories (default), the conversation's project memories, or doc notes. */
   kind?: MemorySuggestionKind;
+  /**
+   * Called after the commit in which the bubble stops rendering (its kind
+   * has nothing pending and the panel is closed); the bar passes its focus
+   * hand-off, as a bubble that closes itself does not re-render the bar.
+   */
+  onHide?: () => void;
 }
 
 /** Everything that differs between the kinds, for rows of type ``S``. */
@@ -173,6 +189,7 @@ export function MemorySuggestions({
   conversationId,
   pendingCount,
   kind = 'user',
+  onHide,
 }: MemorySuggestionsProps) {
   // Keyed by kind: the list state of one kind never meets the other's rows.
   return kind === 'doc' ? (
@@ -182,6 +199,7 @@ export function MemorySuggestions({
       pendingCount={pendingCount}
       kind={kind}
       config={KIND_CONFIG.doc}
+      onHide={onHide}
     />
   ) : (
     <SuggestionsReview
@@ -190,6 +208,7 @@ export function MemorySuggestions({
       pendingCount={pendingCount}
       kind={kind}
       config={KIND_CONFIG[kind]}
+      onHide={onHide}
     />
   );
 }
@@ -200,6 +219,21 @@ interface MemorySuggestionsBarProps {
   pending: PendingSuggestionCounts;
 }
 
+/** Where focus was in the bar: its bubble, and where to send it if that goes. */
+interface BarFocus {
+  /** The ``.memory-suggestions`` wrapper (bubble and panel) that had focus. */
+  bubble: Element;
+  /** Its index among the bar's bubbles then. */
+  index: number;
+  /** The conversation's composer field, captured while the bar is mounted. */
+  composer: HTMLTextAreaElement | null;
+}
+
+function isFocusLost(): boolean {
+  const active = document.activeElement;
+  return !active || active === document.body || !active.isConnected;
+}
+
 /**
  * The bubbles above the composer, side by side in a fixed order: personal
  * memories, project memories, doc notes, each hidden at zero; nothing at
@@ -208,18 +242,78 @@ interface MemorySuggestionsBarProps {
  * (``.chat-panel > .memory-suggestions-bar``) positions over the composer.
  * The doc bubble is not gated by the doc notes feature: rows already filed
  * stay reviewable with the gate closed.
+ *
+ * A bubble that goes away while focus is inside it would drop focus to
+ * <body>. The bar stays mounted while it renders nothing, so it keeps the
+ * hand-off: its focusin records which bubble holds focus (and captures the
+ * ``.composer-input`` of its ``.chat-panel``), focus landing outside the bar
+ * forgets it, and once that bubble is gone with focus lost, focus goes to
+ * the bubble now at its place (the next one), else the last one, else the
+ * composer field unless it is disabled. The check runs after each commit
+ * of the bar (the counts drop the bubble, or the whole bar) and from each
+ * bubble's ``onHide`` (a bubble whose panel closes itself at zero).
  */
 export function MemorySuggestionsBar({ conversationId, pending }: MemorySuggestionsBarProps) {
+  const barRef = useRef<HTMLDivElement>(null);
+  const focusRef = useRef<BarFocus | null>(null);
+
+  const handOffFocus = useCallback(() => {
+    const record = focusRef.current;
+    if (!record || record.bubble.isConnected) return;
+    focusRef.current = null;
+    if (!isFocusLost()) return;
+    const bubbles = barRef.current
+      ? Array.from(barRef.current.querySelectorAll<HTMLElement>('.memory-suggestions-bubble'))
+      : [];
+    const { composer } = record;
+    const target = bubbles.length > 0
+      ? bubbles[Math.min(record.index, bubbles.length - 1)]
+      : composer && composer.isConnected && !composer.disabled ? composer : null;
+    target?.focus();
+  }, []);
+
+  useLayoutEffect(() => handOffFocus());
+
+  // Focus landing outside the bar, wherever it came from, forgets it.
+  useEffect(() => {
+    const onFocusIn = (e: FocusEvent) => {
+      if (!(e.target instanceof Node) || !barRef.current?.contains(e.target)) focusRef.current = null;
+    };
+    document.addEventListener('focusin', onFocusIn);
+    return () => document.removeEventListener('focusin', onFocusIn);
+  }, []);
+
+  const onFocus = (e: ReactFocusEvent<HTMLDivElement>) => {
+    const bar = e.currentTarget;
+    const bubble = e.target.closest('.memory-suggestions');
+    if (!bubble || bubble.parentElement !== bar) return;
+    focusRef.current = {
+      bubble,
+      index: Array.from(bar.children).indexOf(bubble),
+      composer: bar.closest('.chat-panel')?.querySelector<HTMLTextAreaElement>('.composer-input') ?? null,
+    };
+  };
+
   if (pending.user <= 0 && pending.project <= 0 && pending.doc <= 0) return null;
   return (
-    <div className="memory-suggestions-bar">
-      <MemorySuggestions conversationId={conversationId} pendingCount={pending.user} />
+    <div ref={barRef} className="memory-suggestions-bar" onFocus={onFocus}>
+      <MemorySuggestions
+        conversationId={conversationId}
+        pendingCount={pending.user}
+        onHide={handOffFocus}
+      />
       <MemorySuggestions
         conversationId={conversationId}
         pendingCount={pending.project}
         kind="project"
+        onHide={handOffFocus}
       />
-      <MemorySuggestions conversationId={conversationId} pendingCount={pending.doc} kind="doc" />
+      <MemorySuggestions
+        conversationId={conversationId}
+        pendingCount={pending.doc}
+        kind="doc"
+        onHide={handOffFocus}
+      />
     </div>
   );
 }
@@ -229,6 +323,7 @@ interface SuggestionsReviewProps<S extends MemorySuggestion | DocNoteSuggestion>
   pendingCount: number;
   kind: MemorySuggestionKind;
   config: KindConfig<S>;
+  onHide?: () => void;
 }
 
 function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
@@ -236,6 +331,7 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
   pendingCount,
   kind,
   config,
+  onHide,
 }: SuggestionsReviewProps<S>) {
   const { Icon } = config;
   const titleId = `memory-suggestions-title-${kind}`;
@@ -252,6 +348,8 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [isBulkBusy, setIsBulkBusy] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const bubbleRef = useRef<HTMLButtonElement>(null);
   // Rows accepted or dismissed here: every list fetch leaves them out, so a
   // fetch that started before the accept cannot bring the row back.
   const resolvedIdsRef = useRef(new Set<string>());
@@ -431,12 +529,26 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
     }
   }, [isBulkBusy, suggestions, busyIds, drafts, config, resolveOne]);
 
-  if (pendingCount <= 0 && !isOpen) return null;
+  const shown = pendingCount > 0 || isOpen;
+
+  // Rows are only rendered while the panel is open; with none left (or the
+  // panel closed) focus falls back to the bubble button.
+  useSuggestionListFocus({
+    containerRef: wrapperRef,
+    rowIds: isOpen ? suggestions.map((s) => s.id) : [],
+    fallbackRef: bubbleRef,
+  });
+
+  useLayoutEffect(() => {
+    if (!shown) onHide?.();
+  }, [shown, onHide]);
+
+  if (!shown) return null;
 
   const countLabel = config.countLabel(pendingCount);
 
   return (
-    <div className={`memory-suggestions memory-suggestions--${kind}`}>
+    <div ref={wrapperRef} className={`memory-suggestions memory-suggestions--${kind}`}>
       {isOpen && (
         <>
           <div
@@ -520,6 +632,7 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
         </>
       )}
       <button
+        ref={bubbleRef}
         type="button"
         className={`memory-suggestions-bubble${isOpen ? ' is-open' : ''}`}
         onClick={() => setIsOpen((open) => !open)}

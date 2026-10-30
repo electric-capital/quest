@@ -5,14 +5,17 @@
  * hidden at 0. The doc bubble's count is seeded from the GET payload's
  * ``pending_doc_note_suggestions`` and replaced by
  * ``doc_note_suggestions_changed`` globals for this conversation; another
- * conversation's event and the other kinds' events leave it alone. The API
- * client and the realtime singletons are mocked as in
- * useConversation.test.tsx; the store is real.
+ * conversation's event and the other kinds' events leave it alone. A
+ * bubble that goes away with focus inside it hands focus to the bubble left
+ * in the bar, else to the composer field of its ``.chat-panel`` (unless
+ * disabled), both when the counts drop it and when its open panel closes
+ * itself at zero; focus elsewhere stays. The API client and the realtime
+ * singletons are mocked as in useConversation.test.tsx; the store is real.
  */
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import type { ConversationDetail } from '../api/types';
+import type { ConversationDetail, DocNoteSuggestion } from '../api/types';
 import { useConversation } from '../hooks/useConversation';
 import { MemorySuggestionsBar } from './MemorySuggestions';
 
@@ -25,6 +28,7 @@ const mocks = vi.hoisted(() => {
     globals,
     fetchConversation: vi.fn<(id: string) => Promise<ConversationDetail>>(),
     fetchConversationDocNoteSuggestions: vi.fn(),
+    dismissDocNoteSuggestion: vi.fn(),
     emitGlobal(event: Envelope) {
       for (const h of Array.from(globals)) h(event);
     },
@@ -45,10 +49,11 @@ vi.mock('../api/client', () => ({
   dismissProjectMemorySuggestion: vi.fn(),
 }));
 
-// The bubble lists nothing until it is opened; fake the network call anyway.
+// The bubble lists nothing until it is opened; fake the network calls anyway.
 vi.mock('../api/docsApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/docsApi')>()),
   fetchConversationDocNoteSuggestions: mocks.fetchConversationDocNoteSuggestions,
+  dismissDocNoteSuggestion: mocks.dismissDocNoteSuggestion,
 }));
 
 vi.mock('../services/PersistentWebSocket', () => ({
@@ -75,8 +80,8 @@ vi.mock('../services/WebSocketManager', () => ({
   },
 }));
 
-/** ChatPanel's bar and its wiring, without the rest of the panel. */
-function Harness({ conversationId }: { conversationId: string }) {
+/** ChatPanel's bar and its wiring, and its composer field, without the rest of the panel. */
+function Harness({ conversationId, composerDisabled }: { conversationId: string; composerDisabled: boolean }) {
   const {
     isLoaded,
     pendingMemorySuggestions,
@@ -84,7 +89,7 @@ function Harness({ conversationId }: { conversationId: string }) {
     pendingDocNoteSuggestions,
   } = useConversation(conversationId);
   return (
-    <div data-testid="harness" data-loaded={String(isLoaded)}>
+    <div className="chat-panel" data-testid="harness" data-loaded={String(isLoaded)}>
       <MemorySuggestionsBar
         conversationId={conversationId}
         pending={{
@@ -93,6 +98,11 @@ function Harness({ conversationId }: { conversationId: string }) {
           doc: pendingDocNoteSuggestions,
         }}
       />
+      <textarea
+        className="message-input composer-input"
+        aria-label="Message"
+        disabled={composerDisabled}
+      />
     </div>
   );
 }
@@ -100,7 +110,7 @@ function Harness({ conversationId }: { conversationId: string }) {
 let counter = 0;
 
 /** Mount the harness on a fresh conversation whose GET carries the counts. */
-async function mountBar(counts: Partial<ConversationDetail> = {}) {
+async function mountBar(counts: Partial<ConversationDetail> = {}, composerDisabled = false) {
   counter += 1;
   const id = `bubble-conv-${counter}`;
   mocks.fetchConversation.mockResolvedValueOnce({
@@ -113,7 +123,7 @@ async function mountBar(counts: Partial<ConversationDetail> = {}) {
   });
   render(
     <MemoryRouter>
-      <Harness conversationId={id} />
+      <Harness conversationId={id} composerDisabled={composerDisabled} />
     </MemoryRouter>,
   );
   await waitFor(() =>
@@ -251,5 +261,104 @@ describe('doc note suggestions bubble', () => {
 
     docNoteEvent(id, 1);
     expect(bubble()?.textContent).toBe('1 suggested doc note');
+  });
+});
+
+const docNote = (id: string): DocNoteSuggestion => ({
+  id,
+  user_id: 1,
+  doc_id: `doc-${id}`,
+  conversation_id: 'c',
+  note_kind: 'memory',
+  content: `Note ${id}`,
+  reasoning: null,
+  base_instructions_version: null,
+  replaces_memory_id: null,
+  status: 'pending',
+  memory_id: null,
+  created_at: '2026-10-30T00:00:00Z',
+  resolved_at: null,
+  doc_title: `Doc ${id}`,
+  replaces_content: null,
+  current_instructions: null,
+  current_instructions_version: null,
+  instructions_moved: false,
+});
+
+describe('suggestions bar focus', () => {
+  beforeEach(() => {
+    mocks.fetchConversation.mockReset();
+    mocks.fetchConversationDocNoteSuggestions.mockReset();
+    mocks.dismissDocNoteSuggestion.mockReset().mockResolvedValue({});
+    mocks.globals.clear();
+  });
+
+  afterEach(cleanup);
+
+  const composer = () => screen.getByLabelText('Message');
+  const personalBubble = () => screen.getByRole('button', { name: /suggested memory/ });
+
+  function focus(el: HTMLElement) {
+    act(() => el.focus());
+  }
+
+  it('focuses the composer field when the last bubble goes with focus inside it', async () => {
+    const id = await mountBar({ pending_doc_note_suggestions: 1 });
+    focus(bubble()!);
+    docNoteEvent(id, 0);
+    expect(bar()).toBeNull();
+    expect(document.activeElement).toBe(composer());
+  });
+
+  it('focuses the bubble left in the bar', async () => {
+    const id = await mountBar({ pending_memory_suggestions: 1, pending_doc_note_suggestions: 1 });
+    focus(bubble()!);
+    docNoteEvent(id, 0);
+    expect(bubble()).toBeNull();
+    expect(document.activeElement).toBe(personalBubble());
+  });
+
+  it('skips a disabled composer field', async () => {
+    const id = await mountBar({ pending_doc_note_suggestions: 1 }, true);
+    focus(bubble()!);
+    docNoteEvent(id, 0);
+    expect(bar()).toBeNull();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('leaves focus that moved out of the bar alone', async () => {
+    const id = await mountBar({ pending_memory_suggestions: 1, pending_doc_note_suggestions: 1 });
+    focus(bubble()!);
+    focus(composer());
+    docNoteEvent(id, 0);
+    expect(document.activeElement).toBe(composer());
+  });
+
+  it('hands focus on when the open panel closes itself at zero', async () => {
+    for (const others of [1, 0]) {
+      mocks.fetchConversationDocNoteSuggestions.mockResolvedValue({
+        suggestions: [docNote('d1')],
+        pending_count: 1,
+      });
+      const id = await mountBar({
+        pending_memory_suggestions: others,
+        pending_doc_note_suggestions: 1,
+      });
+      const docBubble = bubble()!;
+      focus(docBubble);
+      fireEvent.click(docBubble);
+      await screen.findByDisplayValue('Note d1');
+      const dismiss = screen.getByRole('button', { name: 'Dismiss' });
+      focus(dismiss);
+      fireEvent.click(dismiss);
+      await waitFor(() => expect(screen.queryByDisplayValue('Note d1')).toBeNull());
+      // The panel stays open until the count drops; focus waits on its bubble.
+      expect(document.activeElement).toBe(docBubble);
+
+      docNoteEvent(id, 0);
+      await waitFor(() => expect(bubble()).toBeNull());
+      expect(document.activeElement).toBe(others ? personalBubble() : composer());
+      cleanup();
+    }
   });
 });

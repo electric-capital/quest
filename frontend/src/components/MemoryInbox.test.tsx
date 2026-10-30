@@ -9,7 +9,8 @@
 // starts kept (it re-bases a second instructions row on the same doc), the
 // server's message on any other refusal, the Instructions / Memory pill on
 // reviewed rows, and an Accept all that skips a doc row its own Accept
-// refuses.
+// refuses. Focus stays in the open list as rows leave: the next row's text
+// field, else the "Open suggestions" heading.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -1097,5 +1098,30 @@ describe('MemoryInbox', () => {
     fireEvent.click(loadMore);
     await screen.findByText('Nothing reviewed yet.');
     expect(screen.queryByText('Old unknown')).toBeNull();
+  });
+
+  it("moves focus to the next row's text field, then to the heading once no row is left", async () => {
+    const d1 = docInstructions('d1', 'Prices are in EUR.');
+    const d2 = docRow('d2', 'Uses metric units');
+    servePending([d1, d2]);
+    mocks.acceptDocNoteSuggestion
+      .mockResolvedValueOnce(resolvedDoc(d1, 'accepted'))
+      .mockResolvedValueOnce(resolvedDoc(d2, 'accepted'));
+    renderInbox(<MemoryInbox onGoToConversation={vi.fn()} />);
+    await screen.findByDisplayValue('Uses metric units');
+
+    const first = within(openRegion()).getAllByRole('button', { name: 'Accept' })[0];
+    act(() => first.focus());
+    fireEvent.click(first);
+    await waitFor(() => expect(screen.queryByDisplayValue('Prices are in EUR.')).toBeNull());
+    expect(document.activeElement).toBe(screen.getByDisplayValue('Uses metric units'));
+
+    const last = within(openRegion()).getByRole('button', { name: 'Accept' });
+    act(() => last.focus());
+    fireEvent.click(last);
+    await screen.findByText(/No open suggestions/);
+    const heading = within(openRegion()).getByRole('heading', { name: /Open suggestions/ });
+    expect(heading.getAttribute('tabindex')).toBe('-1');
+    expect(document.activeElement).toBe(heading);
   });
 });

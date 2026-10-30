@@ -7,7 +7,9 @@
 // (against the row in state, then a re-fetch), the fetch the accept's own
 // count event starts kept (it re-bases a second instructions row on the
 // same doc), and an Accept all that skips a row its own Accept refuses.
-// The panel's loading and empty lines.
+// Focus stays in the panel as rows leave (the next row's text field, else
+// the bubble button) and comes back to the bubble button when the panel
+// closes; the panel's loading and empty lines.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -299,6 +301,70 @@ describe('MemorySuggestions kind="project"', () => {
   });
 });
 
+describe('MemorySuggestions focus', () => {
+  /** Focus a button and click it, as a browser does on a click. */
+  function press(button: HTMLElement) {
+    act(() => button.focus());
+    fireEvent.click(button);
+  }
+
+  async function openPanel(rows: MemorySuggestion[]) {
+    serve(rows);
+    const view = render(<MemorySuggestions conversationId="c-focus" pendingCount={rows.length} />);
+    const bubble = screen.getByRole('button', { name: /suggested memor/ });
+    press(bubble);
+    await screen.findByDisplayValue(rows[0].content);
+    return { ...view, bubble };
+  }
+
+  it('moves focus to the bubble button when the only row is dismissed', async () => {
+    const { bubble } = await openPanel([suggestion('s1', 'Likes tea')]);
+    press(screen.getByRole('button', { name: 'Dismiss' }));
+    await waitFor(() => expect(screen.queryByDisplayValue('Likes tea')).toBeNull());
+    expect(screen.getByRole('dialog')).not.toBeNull();
+    expect(document.activeElement).toBe(bubble);
+  });
+
+  it('returns focus to the bubble button on Escape, the X button and the backdrop', async () => {
+    const { bubble, container } = await openPanel([suggestion('s1', 'Likes tea')]);
+    act(() => screen.getByDisplayValue('Likes tea').focus());
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(document.activeElement).toBe(bubble);
+
+    press(bubble);
+    await screen.findByDisplayValue('Likes tea');
+    press(screen.getByRole('button', { name: 'Close suggested memories' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(document.activeElement).toBe(bubble);
+
+    press(bubble);
+    act(() => screen.getByDisplayValue('Likes tea').focus());
+    // A click on the backdrop drops focus to <body> before it closes the panel.
+    act(() => (document.activeElement as HTMLElement).blur());
+    fireEvent.click(container.querySelector('.memory-suggestions-backdrop')!);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(document.activeElement).toBe(bubble);
+  });
+
+  it('leaves focus where it is when the panel closes with focus outside it', async () => {
+    serve([suggestion('s1', 'Likes tea')]);
+    render(
+      <>
+        <MemorySuggestions conversationId="c-focus" pendingCount={1} />
+        <textarea aria-label="Composer" />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /suggested memory/ }));
+    await screen.findByDisplayValue('Likes tea');
+    const composer = screen.getByLabelText('Composer');
+    act(() => composer.focus());
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(document.activeElement).toBe(composer);
+  });
+});
+
 const STALE_MESSAGE = "The doc's instructions changed since this suggestion was shown. "
   + 'Review it against the current text and accept again.';
 
@@ -437,6 +503,17 @@ describe('MemorySuggestions kind="doc"', () => {
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Accept' })).toHaveLength(1));
     fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
     await waitFor(() => expect(mocks.acceptDocNoteSuggestion).toHaveBeenCalledWith('d3', {}));
+  });
+
+  it("moves focus to the next row's text field when a row is accepted", async () => {
+    serveDoc([docNote('d1'), docMemory('d2', 'The board meets monthly.')]);
+    await openDocPanel('c-doc-focus', 2);
+    await screen.findByDisplayValue('The board meets monthly.');
+    const accept = screen.getAllByRole('button', { name: 'Accept' })[0];
+    act(() => accept.focus());
+    fireEvent.click(accept);
+    await waitFor(() => expect(screen.queryByDisplayValue('Prices are in EUR.')).toBeNull());
+    expect(document.activeElement).toBe(screen.getByDisplayValue('The board meets monthly.'));
   });
 
   it('dismisses a row', async () => {

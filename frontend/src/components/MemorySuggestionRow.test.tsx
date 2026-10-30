@@ -6,9 +6,10 @@
 // replacement diff and orphan pill, the cap counter (code points of the
 // trimmed draft, " characters" for screen readers) that disables Accept
 // over the cap, the over-cap line in a polite live region, and the textarea
-// labels. A personal row keeps none of the doc additions. The row is
-// presentational, so a small harness owns the draft. DocTitleLink, shared
-// with the inbox, takes its classes from a prefix and its icon on request.
+// labels. A personal row keeps none of the doc additions. Every row carries
+// its id for useSuggestionListFocus. The row is presentational, so a small
+// harness owns the draft. DocTitleLink, shared with the inbox, takes its
+// classes from a prefix and its icon on request.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
@@ -258,6 +259,11 @@ describe('MemorySuggestionRow kind="doc": doc link', () => {
     expect(screen.queryByText(UNAVAILABLE_NOTICE)).toBeNull();
   });
 
+  it('carries the suggestion id for the list focus hook', () => {
+    const { container } = renderDocRow({ suggestion: docNote() });
+    expect(container.querySelector('.memory-suggestion-row')!.getAttribute('data-suggestion-id'))
+      .toBe('dn1');
+  });
 
   it('shows neither link nor label with showDocLink={false}', () => {
     for (const docTitle of ['Quarterly plan', '']) {
@@ -457,6 +463,8 @@ describe('MemorySuggestionRow kind="user"', () => {
     expect(container.querySelector('.memory-suggestion-counter')).toBeNull();
     expect(container.querySelector('[aria-live]')).toBeNull();
     expect(container.querySelector('.memory-suggestion-unavailable')).toBeNull();
+    expect(container.querySelector('.memory-suggestion-row')!.getAttribute('data-suggestion-id'))
+      .toBe('s1');
     expect((screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement).disabled).toBe(false);
   });
 });

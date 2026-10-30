@@ -21,6 +21,9 @@
  * (empty under the cap), so a screen reader hears it once as the text
  * crosses the cap and not on every keystroke.
  *
+ * The root carries ``data-suggestion-id`` for useSuggestionListFocus, which
+ * every surface uses to keep focus in its list as rows leave.
+ *
  * Styled by MemorySuggestions.css: ``.memory-suggestion-row--<kind>`` sets
  * the colour (the accent for ``user``, the project amber, the doc rose).
  *
@@ -315,6 +318,7 @@ export function MemorySuggestionRow(props: MemorySuggestionRowProps) {
   return (
     <div
       className={`memory-suggestion-row memory-suggestion-row--${kind}${busy ? ' is-busy' : ''}`}
+      data-suggestion-id={suggestion.id}
     >
       {props.kind === 'doc' && (
         <DocNoteHeader

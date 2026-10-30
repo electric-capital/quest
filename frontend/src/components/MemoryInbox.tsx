@@ -24,6 +24,11 @@
  * the accept cannot bring the row back while the one the accept's own event
  * starts (often before the accept's response) still lands, with the other
  * rows as the accept left them.
+ *
+ * Focus stays in the open list as rows are accepted or dismissed, one at a
+ * time or all at once: useSuggestionListFocus over the "Open suggestions"
+ * section, with its heading (focusable from script only) as the fallback
+ * once no row is left.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -52,6 +57,7 @@ import type {
   StaleInstructionsCurrent,
 } from '../api/types';
 import { suggestionCountKind } from '../hooks/usePendingSuggestionCounts';
+import { useSuggestionListFocus } from '../hooks/useSuggestionListFocus';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
 import { formatRelativeTimestamp } from '../utils/formatters';
 import { DOC_NOTE_LABELS, DocTitleLink, MemorySuggestionRow } from './MemorySuggestionRow';
@@ -239,6 +245,8 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
   const [loadingMore, setLoadingMore] = useState(false);
   const loadingMoreRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const openSectionRef = useRef<HTMLElement>(null);
+  const openTitleRef = useRef<HTMLHeadingElement>(null);
 
   // Open-list reads are numbered as they start; one numbered below the floor
   // is dropped when it lands. Applying a read raises the floor to it (older
@@ -446,11 +454,26 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
 
   const pendingCount = pending?.length ?? 0;
 
+  useSuggestionListFocus({
+    containerRef: openSectionRef,
+    rowIds: pending ? pending.map((s) => s.id) : [],
+    fallbackRef: openTitleRef,
+  });
+
   return (
     <div className="memory-inbox">
-      <section className="memory-inbox-section" aria-labelledby="memory-inbox-open-title">
+      <section
+        ref={openSectionRef}
+        className="memory-inbox-section"
+        aria-labelledby="memory-inbox-open-title"
+      >
         <div className="memory-inbox-section-header">
-          <h3 id="memory-inbox-open-title" className="memory-inbox-section-title">
+          <h3
+            ref={openTitleRef}
+            id="memory-inbox-open-title"
+            className="memory-inbox-section-title"
+            tabIndex={-1}
+          >
             Open suggestions
             <span className="memory-inbox-section-count">{pendingCount}</span>
           </h3>

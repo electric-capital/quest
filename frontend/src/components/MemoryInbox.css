@@ -34,6 +34,18 @@
   color: rgba(255, 255, 255, 0.9);
 }
 
+/* The open list's heading takes focus (from script) once its last row is
+   reviewed; the ring shows only for the keyboard. */
+.memory-inbox-section-title:focus {
+  outline: none;
+}
+
+.memory-inbox-section-title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 .memory-inbox-section-count {
   padding: 0.05rem 0.45rem;
   border-radius: 999px;
