@@ -317,11 +317,27 @@ export interface DocImagePreview {
  *  of the live body against this edit applied alone (old-side line numbers
  *  are the doc's). */
 export interface DocEditGroupEntry {
+  /** 1-based, as the card numbers the changes ("Change 2 of 5"); the
+   *  resolve body's `skipped_items` use `index - 1`. */
   index: number;
   note: string;
   replace_all: boolean;
   replaced: number;
   diff: SkillContentDiff;
+}
+
+/** One unticked change of a partial approval: the 0-based position in
+ *  the request's `edits` and the user's optional reason for the model. */
+export interface SkippedItem {
+  index: number;
+  reason?: string;
+}
+
+/** A skipped change as the executed card's `result.skipped` reports it. */
+export interface SkippedItemResult {
+  index: number;
+  note: string;
+  reason: string;
 }
 
 /** One workspace file listed on a subagent_return approval card. `path` is

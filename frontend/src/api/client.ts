@@ -62,6 +62,7 @@ import type {
   RoutinesListResponse,
   RoutineSchedule,
   ActionRequest,
+  SkippedItem,
   EnrichedActionRequestsListResponse,
   ActionRequestCountsResponse,
   SearchResponse,
@@ -959,15 +960,23 @@ export function resolveActionRequest(
   requestId: number,
   action: 'execute' | 'deny' | 'stop',
   feedback?: string,
+  options: { skippedItems?: SkippedItem[] } = {},
 ): Promise<ActionRequest> {
   // Strip whitespace and only send `feedback` when there's actual text
   // and the action is "deny" (Revise) -- the backend ignores feedback on
   // execute and stop, but keeping the wire shape clean avoids future
-  // ambiguity.
+  // ambiguity. `skippedItems` (a partial approval of a card with
+  // separately skippable items) likewise rides only on execute.
   const trimmed = feedback?.trim();
-  const body: { action: string; feedback?: string } = { action };
+  const body: { action: string; feedback?: string; skipped_items?: SkippedItem[] } = { action };
   if (action === 'deny' && trimmed) {
     body.feedback = trimmed;
+  }
+  if (action === 'execute' && options.skippedItems && options.skippedItems.length > 0) {
+    body.skipped_items = options.skippedItems.map((item) => {
+      const reason = item.reason?.trim();
+      return reason ? { index: item.index, reason } : { index: item.index };
+    });
   }
   return apiPost(endpoints.actionRequestResolve(requestId), { body });
 }

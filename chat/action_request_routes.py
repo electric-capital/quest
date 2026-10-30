@@ -39,6 +39,8 @@ REQUEST_ID_TYPES = frozenset({
 # explanation; truncate (with a debug log) rather than 400 so the deny
 # itself never fails on a long rant.
 _MAX_FEEDBACK_LEN = 4000
+# A skipped item's reason (partial approval) is one short line to the model.
+_MAX_SKIP_REASON_LEN = 500
 
 router = APIRouter(
     prefix="/app/api",
@@ -61,6 +63,22 @@ async def _enrich_with_preview(request_dict: dict, user: dict | None = None) -> 
     return request_dict
 
 
+class SkippedItem(BaseModel):
+    """One unticked item of a partial approval (``ResolveRequestBody``)."""
+    index: int
+    reason: Optional[str] = None
+
+    @field_validator("reason")
+    @classmethod
+    def _normalize_reason(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        stripped = v.strip()
+        if not stripped:
+            return None
+        return stripped[:_MAX_SKIP_REASON_LEN]
+
+
 class ResolveRequestBody(BaseModel):
     """Request body for executing, revising, or stopping an action request.
 
@@ -78,9 +96,19 @@ class ResolveRequestBody(BaseModel):
       next message arrives (see :func:`_stop_action_request`).
 
     ``feedback`` is silently ignored on ``execute`` and ``stop``.
+
+    ``skipped_items`` is the partial approval of a card whose handler
+    lists independently skippable items (``selectable_items()``, today
+    only ``write_doc`` ``multi_edit``: one per edit): the 0-based
+    positions the user unticked, each with an optional ``reason`` the
+    model reads in the result. Only meaningful on ``execute`` (ignored on
+    ``deny`` / ``stop``); a position out of range, a duplicate, a card
+    without items or a selection that skips every item is a 400
+    ``invalid_selection`` (skipping everything is a Revise).
     """
     action: str  # "execute", "deny", or "stop"
     feedback: Optional[str] = None
+    skipped_items: Optional[list["SkippedItem"]] = None
 
     @field_validator("feedback")
     @classmethod
@@ -408,6 +436,47 @@ async def resolve_user_action_request(
         return await _resolve_locked(request_id, body, request, user)
 
 
+def _validate_skipped_items(body: ResolveRequestBody, handler, params: dict) -> list[dict]:
+    """The partial approval of ``body`` as ``execute``'s ``skipped_items``
+    (``[]`` when nothing was skipped), checked against the handler's
+    ``selectable_items(params)``: every position in range, no duplicates,
+    at least one item kept.
+
+    Raises:
+        HTTPException: 400 ``invalid_selection``.
+    """
+    if not body.skipped_items:
+        return []
+
+    def _bad(message: str) -> HTTPException:
+        return HTTPException(status_code=400, detail={
+            "error": "invalid_selection", "message": message,
+        })
+
+    total = handler.selectable_items(params)
+    if total <= 0:
+        raise _bad("This request has no separately skippable items.")
+    seen: set[int] = set()
+    out: list[dict] = []
+    for item in body.skipped_items:
+        if item.index < 0 or item.index >= total:
+            raise _bad(
+                f"skipped_items index {item.index} is out of range "
+                f"(this request has {total} items, positions 0 to {total - 1})."
+            )
+        if item.index in seen:
+            raise _bad(f"skipped_items lists position {item.index} twice.")
+        seen.add(item.index)
+        out.append({"index": item.index, "reason": item.reason or ""})
+    if len(out) >= total:
+        raise _bad(
+            "Every item is skipped: use Revise (with your reason) or Stop "
+            "instead of applying nothing."
+        )
+    out.sort(key=lambda it: it["index"])
+    return out
+
+
 def _already_resolved(request_id: int, status: Optional[str] = None) -> HTTPException:
     return HTTPException(status_code=400, detail={
         "error": "already_resolved",
@@ -571,6 +640,9 @@ async def _resolve_locked(
     execute_kwargs: dict = {}
     if req["request_type"] in REQUEST_ID_TYPES:
         execute_kwargs["request_id"] = request_id
+    skipped = _validate_skipped_items(body, handler, req["params"])
+    if skipped:
+        execute_kwargs["skipped_items"] = skipped
 
     try:
         # Pass conversation_id so handlers that need workspace access

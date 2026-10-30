@@ -57,3 +57,55 @@
 .doc-edit-group-item .skill-diff-scroll {
   margin-top: 0.35rem;
 }
+
+/* Partial approval (open card): the Apply checkbox, the dimmed unticked
+   change and its reason input. */
+.doc-edit-group-apply {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 0.1rem;
+  cursor: pointer;
+}
+
+.doc-edit-group-apply input {
+  margin: 0;
+  width: 0.95rem;
+  height: 0.95rem;
+  cursor: pointer;
+  accent-color: #2ea043;
+}
+
+.doc-edit-group-skip-flag {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.doc-edit-group-item.skipped .doc-edit-group-note,
+.doc-edit-group-item.skipped .skill-diff-scroll {
+  opacity: 0.45;
+}
+
+.doc-edit-group-reason {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+}
+
+.doc-edit-group-reason:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* The collapsed card's "Skipped: change 2 (note) — reason" line reuses the
+   feedback line's italic style (ReviseFeedbackForm.css). */
+.doc-edit-group-skipped-item {
+  white-space: normal;
+}

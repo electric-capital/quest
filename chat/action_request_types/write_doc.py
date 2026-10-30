@@ -12,7 +12,11 @@ covers the four operations:
   replace_all?, note?}, ...]}`` -- ``edit_doc(edits=[...])``'s grouped
   form: up to ``DOC_MAX_EDITS_PER_CALL`` edits, each matched against the
   same starting body, applied as one write. The card shows one hunk per
-  edit (the pre-card's ``edit_previews``) under the edit's ``note``.
+  edit (the pre-card's ``edit_previews``) under the edit's ``note``, and
+  the user may untick some: the resolve route passes them to ``execute``
+  as ``skipped_items`` (:meth:`WriteDocHandler.selectable_items`), the
+  kept edits land as the one write and the result's ``skipped`` lists
+  each dropped edit with the user's reason for the model.
 - ``append``: ``{operation, doc_id, content, ensure_blank_line?}``
 - ``add_image``: ``{operation, doc_id, workspace_path, alt?, placement?}``
 
@@ -45,6 +49,7 @@ are an internal Quest store.
 """
 
 import logging
+import re
 
 from chat.action_request_types._param_validation import reject_unknown_params
 from chat.action_request_types.base import ActionRequestHandler
@@ -254,6 +259,28 @@ def _change_count(params: dict) -> str:
     return f"{n} change" if n == 1 else f"{n} changes"
 
 
+_EDIT_POSITION = re.compile(r"edits\[(\d+)\]")
+
+
+def _card_change_error(message: str, kept: list[int], n_edits: int) -> str:
+    """A failed multi_edit approve, worded for the card: the service names
+    a failing edit by its position in the list it was given (``edits[1]``),
+    which is the position among the *kept* edits; map that back to the
+    card's numbering ("Change 2") and, with more than one change on the
+    card, say how to apply the rest."""
+    def _change(match: re.Match) -> str:
+        i = int(match.group(1))
+        return f"Change {kept[i] + 1}" if i < len(kept) else match.group(0)
+
+    text = _EDIT_POSITION.sub(_change, message)
+    if n_edits > 1:
+        text += (
+            "\nUntick a change that no longer fits to apply the others, "
+            "or Revise."
+        )
+    return text
+
+
 class WriteDocHandler(ActionRequestHandler):
     """Edit / append to / add an image to a shared private doc after approval."""
 
@@ -431,6 +458,13 @@ class WriteDocHandler(ActionRequestHandler):
     # Execute
     # ------------------------------------------------------------------
 
+    def selectable_items(self, params: dict) -> int:
+        """A multi_edit's edits can be unticked one by one on the card."""
+        if params.get("operation") != "multi_edit":
+            return 0
+        edits = params.get("edits")
+        return len(edits) if isinstance(edits, list) else 0
+
     async def execute(
         self,
         params: dict,
@@ -439,11 +473,14 @@ class WriteDocHandler(ActionRequestHandler):
         conversation_id: str | None = None,
         project_id: str | None = None,
         request_id: int | None = None,
+        skipped_items: list[dict] | None = None,
     ) -> dict:
         operation = params.get("operation")
         doc_id = params.get("doc_id")
         if operation not in WRITE_OPERATIONS or not isinstance(doc_id, str) or not doc_id:
             raise RuntimeError("Malformed write_doc request (operation / doc_id).")
+        if skipped_items and operation != "multi_edit":
+            raise RuntimeError("Only a grouped edit can be applied in part.")
 
         caller = doc_service.Caller(
             user=user,
@@ -462,6 +499,29 @@ class WriteDocHandler(ActionRequestHandler):
             # since the proposal still refuse; the doc notes seen record is
             # not consulted.
             op_params = operation_params(params)
+            skipped: list[dict] = []
+            kept: list[int] = []
+            if operation == "multi_edit":
+                # Partial approval: the unticked edits are left out of the
+                # write (the kept ones still land as one write) and
+                # reported, with the user's reasons, for the model.
+                edits = list(op_params["edits"])
+                skipped_at = {
+                    int(item["index"]): str(item.get("reason") or "")
+                    for item in (skipped_items or [])
+                }
+                for i, item in enumerate(edits):
+                    if i in skipped_at:
+                        skipped.append({
+                            "index": i,
+                            "note": str(item.get("note") or ""),
+                            "reason": skipped_at[i],
+                        })
+                    else:
+                        kept.append(i)
+                if not kept:
+                    raise RuntimeError("Every change was skipped; nothing to apply.")
+                op_params["edits"] = [edits[i] for i in kept]
             if operation == "add_image":
                 # Server-injected at pre-card time (model copies are
                 # stripped by validate_params): the stored asset must be
@@ -485,8 +545,13 @@ class WriteDocHandler(ActionRequestHandler):
                 bypass_approval=True,
             )
         except doc_service.DocError as e:
-            raise RuntimeError(str(e)) from None
+            message = str(e)
+            if operation == "multi_edit":
+                message = _card_change_error(message, kept, self.selectable_items(params))
+            raise RuntimeError(message) from None
 
+        if operation == "multi_edit":
+            result = {**result, "skipped": skipped}
         title = params.get("current_title") or doc_id
         try:
             from db import doc_store

@@ -18,7 +18,11 @@ Covers:
    prefixed errors, ``edit_previews`` dropped when the model echoes it.
 5. ``execute``: all edits land as one write attributed to the request; a
    stale edit fails the approve naming its position, body untouched.
-6. ``render_preview`` / ``summary_snippet`` and the skill text.
+6. Partial approval: ``skipped_items`` leaves the unticked edits out of
+   the write and reports them (with the user's reason) in the result;
+   the resolve route checks the selection (range, duplicates, at least
+   one kept, a card without items) and ignores it on Revise.
+7. ``render_preview`` / ``summary_snippet`` and the skill text.
 """
 
 import asyncio
@@ -34,7 +38,9 @@ from tests.test_docs_service import (  # noqa: F401  (docs_env is a fixture)
     seed_doc,
     svc,
 )
-from tests.test_write_doc_action_request import (
+from tests.test_write_doc_action_request import (  # noqa: F401  (ar_env is a fixture)
+    _arm,
+    ar_env,
     execute,
     handler,
     propose,
@@ -322,9 +328,186 @@ class TestExecute:
         files.write_body(doc["id"], BODY.replace("omega", "OMEGA already"), write_source="ui")
         with pytest.raises(RuntimeError) as exc:
             execute(params, caller, request_id=52)
-        assert "edits[1]: old_string not found" in str(exc.value)
+        # Worded for the card: the change's number as the card shows it,
+        # and how to apply the rest.
+        lines = str(exc.value).split("\n")
+        assert lines[0].startswith("Change 2: old_string not found")
+        assert lines[-1] == "Untick a change that no longer fits to apply the others, or Revise."
         assert "omega" not in body(doc["id"]) or "OMEGA already" in body(doc["id"])
         assert "GAMMA" not in body(doc["id"])
+
+
+# ---------------------------------------------------------------------------
+# Partial approval
+# ---------------------------------------------------------------------------
+
+
+def _skipped(*items):
+    return [{"index": i, "reason": r} for i, r in items]
+
+
+class TestPartialApproval:
+    def test_handler_lists_the_edits_as_its_items(self):
+        h = handler()
+        assert h.selectable_items(multi_params("d")) == 3
+        assert h.selectable_items({"operation": "edit", "doc_id": "d"}) == 0
+        assert h.selectable_items({"operation": "multi_edit", "doc_id": "d"}) == 0
+
+    def test_skipped_edits_are_left_out_and_reported(self, docs_env):
+        from chat.docs import files
+
+        doc = shared(docs_env)
+        caller = make_caller(docs_env)
+        read(caller, doc["id"])
+        params = propose(caller, multi_params(doc["id"]))
+        result = execute(
+            params, caller, request_id=53,
+            skipped_items=_skipped((1, "omega stays"), (0, "")),
+        )
+        # Only the replace_all edit (edits[2]) landed, as one write.
+        assert body(doc["id"]) == "# Title\n\nA beta\ngamma\ndelta A\n\nomega\n"
+        assert result["edits_applied"] == 1 and result["replaced"] == 2
+        assert result["skipped"] == [
+            {"index": 0, "note": "Shout gamma", "reason": ""},
+            {"index": 1, "note": "", "reason": "omega stays"},
+        ]
+        assert len(files.list_revisions(doc["id"])) == 1
+        # Nothing skipped: the result still says so.
+        other = shared(docs_env, title="Other")
+        read(caller, other["id"])
+        params = propose(caller, multi_params(other["id"]))
+        assert execute(params, caller, request_id=54)["skipped"] == []
+
+    def test_stale_error_counts_the_cards_changes_not_the_kept_ones(self, docs_env):
+        from chat.docs import files
+
+        doc = shared(docs_env)
+        caller = make_caller(docs_env)
+        read(caller, doc["id"])
+        params = propose(caller, multi_params(doc["id"]))
+        files.write_body(doc["id"], BODY.replace("omega", "OMEGA already"), write_source="ui")
+        # With edits[0] skipped, the stale edits[1] is the service's
+        # edits[0]; the card still calls it Change 2.
+        with pytest.raises(RuntimeError) as exc:
+            execute(params, caller, request_id=55, skipped_items=_skipped((0, "")))
+        assert str(exc.value).startswith("Change 2: old_string not found")
+
+    def test_only_a_grouped_edit_can_be_applied_in_part(self, docs_env):
+        doc = shared(docs_env)
+        caller = make_caller(docs_env)
+        read(caller, doc["id"])
+        params = propose(caller, {
+            "operation": "edit", "doc_id": doc["id"],
+            "old_string": "gamma", "new_string": "x",
+        })
+        with pytest.raises(RuntimeError, match="Only a grouped edit"):
+            execute(params, caller, skipped_items=_skipped((0, "")))
+        params = propose(caller, multi_params(doc["id"]))
+        with pytest.raises(RuntimeError, match="Every change was skipped"):
+            execute(params, caller, skipped_items=_skipped((0, ""), (1, ""), (2, "")))
+        assert body(doc["id"]) == BODY
+
+
+def _open_card(env, params):
+    """A shared doc's card through the create_action_request arm:
+    ``(caller, request_id, handle_id)``."""
+    from chat.gemini_api.turn_tools import SuspendForActionRequest
+    from datetime import datetime, timezone
+    from db import conversation_store
+
+    caller = make_caller(env)
+    _run(conversation_store.create_conversation(
+        user_id=caller.user["id"], conversation_id=caller.conversation_id,
+        created_at=datetime.now(timezone.utc),
+    ))
+    if params["operation"] == "multi_edit":
+        read(caller, params["doc_id"])
+    with pytest.raises(SuspendForActionRequest) as suspended:
+        _arm(caller, params)
+    return caller, suspended.value.request_id, suspended.value.handle_id
+
+
+def _resolve(caller, request_id, **body):
+    from chat.action_request_routes import ResolveRequestBody, resolve_user_action_request
+
+    class _Req:
+        app = None
+
+    return _run(resolve_user_action_request(
+        request_id, ResolveRequestBody(**body), _Req(), caller.user,
+    ))
+
+
+class TestResolveRouteSelection:
+    def test_approve_part_of_the_card(self, ar_env):
+        from db import tool_wait_handle_store
+
+        doc = shared(ar_env)
+        caller, request_id, handle_id = _open_card(ar_env, multi_params(doc["id"]))
+        resolved = _resolve(
+            caller, request_id, action="execute",
+            skipped_items=[{"index": 2, "reason": "  keep alpha  "}, {"index": 0}],
+        )
+        assert resolved["status"] == "executed"
+        assert resolved["result"]["edits_applied"] == 1
+        assert resolved["result"]["skipped"] == [
+            {"index": 0, "note": "Shout gamma", "reason": ""},
+            {"index": 2, "note": "", "reason": "keep alpha"},
+        ]
+        assert body(doc["id"]) == BODY.replace("omega", "OMEGA")
+        # The model reads the same list off the wait handle's response.
+        handle = _run(tool_wait_handle_store.get_handle(handle_id))
+        assert handle["response"]["verdict"] == "executed"
+        assert handle["response"]["result"]["skipped"] == resolved["result"]["skipped"]
+
+    @pytest.mark.parametrize("skipped, message", [
+        ([{"index": 0}, {"index": 1}, {"index": 2}], "Every item is skipped"),
+        ([{"index": 3}], "index 3 is out of range (this request has 3 items"),
+        ([{"index": -1}], "index -1 is out of range"),
+        ([{"index": 1}, {"index": 1}], "lists position 1 twice"),
+    ])
+    def test_bad_selections_are_rejected_before_anything_runs(self, ar_env, skipped, message):
+        from fastapi import HTTPException
+
+        doc = shared(ar_env)
+        caller, request_id, _ = _open_card(ar_env, multi_params(doc["id"]))
+        with pytest.raises(HTTPException) as exc:
+            _resolve(caller, request_id, action="execute", skipped_items=skipped)
+        assert exc.value.status_code == 400
+        assert exc.value.detail["error"] == "invalid_selection"
+        assert message in exc.value.detail["message"]
+        row = _run(ar_env.action_request_store.get_action_request(caller.user["id"], request_id))
+        assert row["status"] == "open" and body(doc["id"]) == BODY
+
+    def test_a_card_without_items_takes_no_selection(self, ar_env):
+        from fastapi import HTTPException
+
+        doc = shared(ar_env)
+        caller, request_id, _ = _open_card(ar_env, {
+            "operation": "append", "doc_id": doc["id"], "content": "more",
+        })
+        with pytest.raises(HTTPException) as exc:
+            _resolve(caller, request_id, action="execute", skipped_items=[{"index": 0}])
+        assert exc.value.detail["message"] == "This request has no separately skippable items."
+        # An empty selection is a plain Approve.
+        assert _resolve(caller, request_id, action="execute", skipped_items=[])["status"] == "executed"
+
+    def test_selection_is_ignored_on_revise(self, ar_env):
+        doc = shared(ar_env)
+        caller, request_id, _ = _open_card(ar_env, multi_params(doc["id"]))
+        resolved = _resolve(
+            caller, request_id, action="deny", feedback="later",
+            skipped_items=[{"index": 0}, {"index": 1}, {"index": 2}],
+        )
+        assert resolved["status"] == "denied"
+        assert resolved["result"] == {"denied": True, "feedback": "later"}
+
+    def test_long_reason_is_cut(self):
+        from chat.action_request_routes import _MAX_SKIP_REASON_LEN, SkippedItem
+
+        item = SkippedItem(index=0, reason="x" * (_MAX_SKIP_REASON_LEN + 5))
+        assert len(item.reason) == _MAX_SKIP_REASON_LEN
+        assert SkippedItem(index=0, reason="   ").reason is None
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +563,7 @@ class TestPreviewAndLabels:
         assert "edit_doc(doc_id, edits=[...])" in content
         assert f"up to {DOC_MAX_EDITS_PER_CALL} objects" in content
         assert '"operation": "multi_edit"' in content
+        assert "the result's `skipped` lists each" in content
         spec = TOOL_CALL_REGISTRY["edit_doc"]
         assert "edits" in spec["description"]
         assert spec["parameters"]["required"] == ["doc_id"]

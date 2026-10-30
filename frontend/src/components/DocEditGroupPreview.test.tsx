@@ -3,10 +3,17 @@
 // the `doc_edit_group` branch of ActionRequestPreviewFields that mounts it
 // in both card renderers.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { DocEditGroupEntry, PreviewField, SkillContentDiff } from '../api/types';
-import { ActionRequestPreviewFields } from './ActionRequestPreviewFields';
-import { DocEditGroupPreview, changeLocation } from './DocEditGroupPreview';
+import { ActionRequestPreviewFields, selectableChanges } from './ActionRequestPreviewFields';
+import {
+  DocEditGroupPreview,
+  SkippedChangesLine,
+  approveLabelFor,
+  changeLocation,
+  skippedItemsOf,
+  skippedResultsOf,
+} from './DocEditGroupPreview';
 
 // Not under test here; keeps FileBrowser's import graph out of the run.
 vi.mock('./SubagentReturnFilesPreview', () => ({
@@ -116,5 +123,101 @@ describe('ActionRequestPreviewFields doc_edit_group branch', () => {
     expect(container.querySelector('.action-request-preview-value')?.textContent).toBe(
       '2 changes, +2 / -2 line(s)',
     );
+  });
+});
+
+describe('partial approval', () => {
+  it('renders read-only without a selection', () => {
+    const { container } = render(<DocEditGroupPreview edits={EDITS} />);
+    expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(container.querySelector('.doc-edit-group-reason')).toBeNull();
+  });
+
+  it('ticks every change, and an unticked one dims and takes a reason', () => {
+    const onToggle = vi.fn();
+    const onReason = vi.fn();
+    const { container, rerender } = render(
+      <DocEditGroupPreview
+        edits={EDITS}
+        selection={{ skipped: {}, onToggle, onReason }}
+      />,
+    );
+    const boxes = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+    expect(boxes).toHaveLength(2);
+    expect(boxes[0].checked && boxes[1].checked).toBe(true);
+    expect(container.querySelector('.doc-edit-group-item.skipped')).toBeNull();
+
+    // Unticking change 2 reports its 0-based position.
+    fireEvent.click(boxes[1]);
+    expect(onToggle).toHaveBeenCalledWith(1);
+
+    rerender(
+      <DocEditGroupPreview
+        edits={EDITS}
+        selection={{ skipped: { 1: 'keep Alice' }, onToggle, onReason }}
+      />,
+    );
+    const items = container.querySelectorAll('.doc-edit-group-item');
+    expect(items[0].classList.contains('skipped')).toBe(false);
+    expect(items[1].classList.contains('skipped')).toBe(true);
+    expect(items[1].querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(false);
+    expect(items[1].querySelector('.doc-edit-group-skip-flag')?.textContent).toBe('skipped');
+    const reason = items[1].querySelector<HTMLInputElement>('.doc-edit-group-reason');
+    expect(reason?.value).toBe('keep Alice');
+    expect(items[0].querySelector('.doc-edit-group-reason')).toBeNull();
+    fireEvent.change(reason!, { target: { value: 'keep Alice as owner' } });
+    expect(onReason).toHaveBeenCalledWith(1, 'keep Alice as owner');
+  });
+
+  it('reaches the group through the preview fields host', () => {
+    const onToggle = vi.fn();
+    const { container } = render(
+      <ActionRequestPreviewFields
+        previewFields={[FIELD]}
+        params={{}}
+        conversationId="c1"
+        classPrefix="action-request-preview"
+        editSelection={{ skipped: {}, onToggle, onReason: () => {} }}
+      />,
+    );
+    fireEvent.click(container.querySelectorAll('input[type="checkbox"]')[0]);
+    expect(onToggle).toHaveBeenCalledWith(0);
+    expect(selectableChanges([FIELD])).toBe(2);
+    expect(selectableChanges([{ key: 'Doc', value: 'Notes' }])).toBe(0);
+    expect(selectableChanges(undefined)).toBe(0);
+  });
+
+  it('builds the resolve body from the selection, sorted by position', () => {
+    expect(skippedItemsOf({ 3: 'later', 0: '' })).toEqual([
+      { index: 0, reason: '' },
+      { index: 3, reason: 'later' },
+    ]);
+  });
+
+  it('labels the Apply button by the kept count and disables an empty selection', () => {
+    expect(approveLabelFor('Apply', 5, 0)).toEqual({ label: 'Apply', disabled: false });
+    expect(approveLabelFor('Apply', 5, 2)).toEqual({ label: 'Apply 3 of 5', disabled: false });
+    expect(approveLabelFor('Apply', 5, 5).disabled).toBe(true);
+    expect(approveLabelFor('Apply', 5, 5).title).toMatch(/Revise or Stop/);
+    // A card without skippable changes keeps its label whatever is passed.
+    expect(approveLabelFor('Send', 0, 0)).toEqual({ label: 'Send', disabled: false });
+  });
+
+  it('lists what an executed card left out', () => {
+    expect(skippedResultsOf(null)).toEqual([]);
+    expect(skippedResultsOf({ edits_applied: 3 })).toEqual([]);
+    const skipped = skippedResultsOf({
+      skipped: [
+        { index: 1, note: 'Add the design owner', reason: 'Jordan left' },
+        { index: 3, note: '', reason: '' },
+        'junk',
+      ],
+    });
+    expect(skipped).toHaveLength(2);
+    const { container } = render(<SkippedChangesLine skipped={skipped} classPrefix="action-request" />);
+    expect(container.querySelector('.action-request-feedback')?.textContent).toBe(
+      'Skipped:change 2 (Add the design owner) — Jordan left; change 4',
+    );
+    expect(render(<SkippedChangesLine skipped={[]} classPrefix="request" />).container.innerHTML).toBe('');
   });
 });

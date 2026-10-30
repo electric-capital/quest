@@ -1351,7 +1351,10 @@ Writes:
   max {note_cap} characters: "Fix the launch date"). Prefer this over a
   series of single `edit_doc` calls or several parallel `write_doc`
   cards; if an edit fails, the error lists every failing edit by its
-  position (`edits[2]: ...`) so one retry can fix them all.
+  position (`edits[2]: ...`) so one retry can fix them all. The user may
+  apply only some of a card's changes: the result's `skipped` lists each
+  dropped edit by position with their `reason`; respect it rather than
+  proposing that change again.
 - **append_to_doc(doc_id, content, ensure_blank_line?)** -- appends to the
   end; `ensure_blank_line` (default true) separates the new block with a
   blank line.
