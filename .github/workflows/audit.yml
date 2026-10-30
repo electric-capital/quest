@@ -54,22 +54,13 @@ jobs:
 
       - name: Audit
         # --no-deps: the export is already the fully resolved set; nothing to
-        # install. Ignored ids, each by its GHSA alias:
+        # install. Ignored ids, by GHSA alias:
         #   GHSA-g4r7-86gm-pgqc  sqlitedict pickle deserialization, no fixed
         #     release exists; api/gmail/helpers.py replaces the pickle codec
         #     with JSON (tests/test_gmail_url_cache_security.py).
-        #   GHSA-86qp-5c8j-p5mr, GHSA-wqp7-x3pw-xc5r, GHSA-x746-7m8f-x49c,
-        #   GHSA-82w8-qh3p-5jfq, GHSA-jp82-jpqv-5vv3  starlette: the fixed
-        #     release needs the FastAPI 0.161 / Starlette 1.x bump, which is
-        #     its own PR. Remove these when that lands.
         run: >
           uvx pip-audit -r requirements-audit.txt --no-deps --desc on
           --ignore-vuln GHSA-g4r7-86gm-pgqc
-          --ignore-vuln GHSA-86qp-5c8j-p5mr
-          --ignore-vuln GHSA-wqp7-x3pw-xc5r
-          --ignore-vuln GHSA-x746-7m8f-x49c
-          --ignore-vuln GHSA-82w8-qh3p-5jfq
-          --ignore-vuln GHSA-jp82-jpqv-5vv3
 
   node:
     name: Node (npm audit over package-lock.json)

@@ -52,6 +52,7 @@ This doc is the map: where each piece lives, how a turn moves through them, and 
 | `chat/dreaming.py`, `config/dreaming.py` | Offline reviews of users' saved memories, proposed as inbox suggestions | [Dreaming](dreaming.md) |
 | `chat/sandbox_api.py`, `chat/sandbox_tokens.py` | Loopback tool API for sandbox scripts and its per-run tokens | [Script Runner](script-runner.md) |
 | `chat/route_dispatch.py` | In-process dispatch of `curl_proxy_*` tool calls to `/api/*` handlers | [Route Dispatch](route-dispatch.md) |
+| `chat/route_table.py` | Flat, in-order view of the app's route table (`iter_app_routes`) for the dispatcher and route-table tests | [Route Dispatch](route-dispatch.md) |
 | `chat/user_subagent.py`, `chat/inference_api.py` | Headless run kinds: cross-user subagents, the inference endpoint | [User Subagents](user-subagents.md), [Inference API](../api/inference-api.md) |
 | `api/` | Instruction text for the core connectors (Google services, Airtable, Ramp and others), the Gmail endpoint functions, and `get_user_connected_services()` | the service docs in `docs/api/`, e.g. [Gmail API](../api/gmail-api.md) |
 | `plugins/` | Filesystem-discovered integrations | [Plugins](plugins.md) and each plugin's own `docs/` |
