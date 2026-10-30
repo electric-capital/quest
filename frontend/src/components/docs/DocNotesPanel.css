@@ -535,9 +535,9 @@
 }
 
 /* The viewer's pending suggestions for the doc, so they are seen while the
-   section is closed: a pill in the doc rose of their rows (the
-   --suggestion-* values of .memory-suggestions--doc, MemorySuggestions.css,
-   with its light-scheme override), shaped like .doc-notes-count. */
+   section is closed: a pill in the doc rose of their rows, whose
+   --suggestion-* values (and their light-scheme override)
+   MemorySuggestions.css sets on this class; shaped like .doc-notes-count. */
 .doc-notes-summary-count {
   padding: 0 0.375rem;
   min-width: 1.125rem;

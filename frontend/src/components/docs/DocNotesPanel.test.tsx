@@ -8,15 +8,18 @@
 // "Suggestions for you" block (its rows, accept and dismiss through the
 // view, the 409 re-base, inline errors, read shares, focus as rows leave,
 // the suggestions load error); the card vs details variants and the phone
-// summary's count of pending suggestions; and the keyboard paths through
-// the panel. The panel is presentational over `view`, so each test passes
-// a fake DocNotesView.
+// summary's count of pending suggestions; the keyboard paths through the
+// panel; and focus after actions that settle later (never taken back from
+// where the user went meanwhile, no text field focused after a tap). The
+// panel is presentational over `view`, so each test passes a fake
+// DocNotesView.
 // The clock is fixed (vi.setSystemTime), so the relative times are stable.
 // jsdom has no Tab navigation: tab order is the document order of the
 // enabled controls (tabOrder; the panel sets no positive tabindex), Enter
 // on a button is a click and Escape a keydown. A browser drops focus from a
 // button as it becomes disabled; jsdom keeps it there and cannot blur a
 // disabled element, so focus tests blur it just before the busy commit.
+// jsdom has no PointerEvent either: pointerDown sets the type by hand.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ApiClientError } from '../../api/request';
@@ -269,6 +272,25 @@ function drop() {
   expect(document.activeElement).toBe(document.body);
 }
 
+/** A pointer press of the given type (a press does not move focus in jsdom). */
+function pointerDown(el: Element, pointerType: 'mouse' | 'touch' | 'pen') {
+  const event = new Event('pointerdown', { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'pointerType', { value: pointerType });
+  act(() => {
+    el.dispatchEvent(event);
+  });
+}
+
+// Controls outside the panel (the doc editor, say), removed after each test.
+const outsideFields: HTMLElement[] = [];
+function outsideField(): HTMLTextAreaElement {
+  const el = document.createElement('textarea');
+  el.setAttribute('aria-label', 'Elsewhere');
+  document.body.appendChild(el);
+  outsideFields.push(el);
+  return el;
+}
+
 describe('DocNotesPanel', () => {
   beforeEach(() => {
     vi.setSystemTime(NOW);
@@ -276,6 +298,7 @@ describe('DocNotesPanel', () => {
 
   afterEach(() => {
     cleanup();
+    for (const el of outsideFields.splice(0)) el.remove();
     vi.useRealTimers();
   });
 
@@ -1504,6 +1527,24 @@ describe('DocNotesPanel', () => {
         expect(suggestionRows()).toHaveLength(2);
       });
 
+      it('is an alert, announced again for each failure', () => {
+        const view = withSuggestions([MEMORY_SUGGESTION]);
+        const { rerenderView } = renderPanel({ ...view, suggestionsError: failed });
+        const alert = screen.getByRole('alert');
+        expect(alert.textContent).toBe(SUGGESTIONS_LOAD_ERROR);
+        // The same failure rendered again: the same element, nothing new to say.
+        rerenderView({ ...view, suggestionsError: failed });
+        expect(screen.getByRole('alert')).toBe(alert);
+        // Another failure (a Retry that failed again): a new alert.
+        rerenderView({ ...view, suggestionsError: new ApiClientError('Server exploded', 500) });
+        const again = screen.getByRole('alert');
+        expect(again).not.toBe(alert);
+        expect(alert.isConnected).toBe(false);
+        expect(again.textContent).toBe(SUGGESTIONS_LOAD_ERROR);
+        // The Retry button stays the same element (focus on it is kept).
+        expect(button('Retry')).toBeTruthy();
+      });
+
       it('without rows sits above the empty line and Instructions', () => {
         renderPanel(viewWith(EMPTY, { suggestionsError: failed }));
         const line = screen.getByText(SUGGESTIONS_LOAD_ERROR);
@@ -1592,8 +1633,9 @@ describe('DocNotesPanel', () => {
       expect(summary.textContent).toBe('Notes');
 
       rerenderView(viewWith({}, { suggestions: [MEMORY_SUGGESTION] }));
-      // The doc rose of the suggestion rows.
-      expect(pill()?.classList.contains('memory-suggestions--doc')).toBe(true);
+      // Its own class, which MemorySuggestions.css gives the doc rose; not the bubble's.
+      expect(pill()?.className).toBe('doc-notes-summary-count');
+      expect(container.querySelector('.memory-suggestions--doc')).toBeNull();
       expect(shown()).toBe('1');
       expect(spoken()).toBe(', 1 pending suggestion');
 
@@ -1831,6 +1873,223 @@ describe('DocNotesPanel', () => {
       expect(details.open).toBe(true);
       fireEvent.click(summary);
       expect(details.open).toBe(false);
+    });
+  });
+
+  describe('focus after actions that settle later', () => {
+    const failedLoad = () => new ApiClientError('Server exploded', 500);
+
+    it('an add that settles after the user went elsewhere leaves focus there', async () => {
+      for (const elsewhere of ['focus', 'press'] as const) {
+        const view = makeView();
+        const pending = deferred<DocMemory>();
+        vi.mocked(view.addMemory).mockReturnValue(pending.promise);
+        const { unmount } = renderPanel(view);
+        fireEvent.change(addBox(), { target: { value: 'Use metric units.' } });
+        focus(button('Add'));
+        drop();
+        fireEvent.click(button('Add'));
+
+        // Typed in the doc, or clicked its text (focus stays on <body>).
+        const field = outsideField();
+        if (elsewhere === 'focus') focus(field);
+        else pointerDown(field, 'mouse');
+        await act(async () => {
+          pending.resolve({ ...MEM_NEW, id: 'm3', content: 'Use metric units.' });
+        });
+        expect(addBox().value).toBe('');
+        expect(document.activeElement).toBe(elsewhere === 'focus' ? field : document.body);
+        unmount();
+      }
+    });
+
+    it('an add after a tap never focuses the field: a success leaves focus alone, a failure goes to Add', async () => {
+      const view = makeView();
+      vi.mocked(view.addMemory)
+        .mockResolvedValueOnce({ ...MEM_NEW, id: 'm3', content: 'Use metric units.' })
+        .mockRejectedValueOnce(new ApiClientError('Server exploded', 500));
+      renderPanel(view);
+      const tapAdd = () => {
+        pointerDown(button('Add'), 'touch');
+        focus(button('Add'));
+        drop();
+        fireEvent.click(button('Add'));
+      };
+
+      fireEvent.change(addBox(), { target: { value: 'Use metric units.' } });
+      tapAdd();
+      await waitFor(() => expect(addBox().value).toBe(''));
+      expect(document.activeElement).toBe(document.body);
+
+      fireEvent.change(addBox(), { target: { value: 'Another fact' } });
+      tapAdd();
+      expect((await screen.findByRole('alert')).textContent).toBe('Server exploded');
+      expect(document.activeElement).toBe(button('Add'));
+    });
+
+    it('a save that settles after the user went elsewhere leaves focus there', async () => {
+      const view = makeView();
+      const pending = deferred<DocNotes>();
+      vi.mocked(view.saveInstructions).mockReturnValue(pending.promise);
+      renderPanel(view);
+      fireEvent.change(openInstructionsEditor(), { target: { value: 'Be brief.' } });
+      focus(button('Save'));
+      drop();
+      fireEvent.click(button('Save'));
+      const field = outsideField();
+      focus(field);
+      await act(async () => {
+        pending.resolve(makeNotes({ instructions: 'Be brief.', instructions_version: 4 }));
+      });
+      expect(screen.queryByRole('textbox', { name: 'Instructions' })).toBeNull();
+      expect(document.activeElement).toBe(field);
+    });
+
+    it('a failed save after a tap goes back to Save, not the draft', async () => {
+      const view = makeView();
+      vi.mocked(view.saveInstructions).mockRejectedValueOnce(failedLoad());
+      vi.mocked(view.updateMemory).mockRejectedValueOnce(failedLoad());
+      renderPanel(view);
+      const tapSave = () => {
+        pointerDown(button('Save'), 'touch');
+        focus(button('Save'));
+        drop();
+        fireEvent.click(button('Save'));
+      };
+
+      fireEvent.change(openInstructionsEditor(), { target: { value: 'Be brief.' } });
+      tapSave();
+      expect((await screen.findByRole('alert')).textContent).toBe('Server exploded');
+      expect(document.activeElement).toBe(button('Save'));
+      fireEvent.click(button('Cancel'));
+
+      fireEvent.click(editButtonOf(NEW_META));
+      fireEvent.change(editBox(), { target: { value: 'Prices are in EUR.' } });
+      tapSave();
+      expect((await screen.findByRole('alert')).textContent).toBe('Server exploded');
+      expect(document.activeElement).toBe(button('Save'));
+    });
+
+    it.each(['card', 'details'] as const)(
+      'deleting the last memory after a tap focuses the heading, not the Add field (%s)',
+      async (variant) => {
+        const view = viewWith({ memories: [MEM_NEW] });
+        const pending = deferred<void>();
+        vi.mocked(view.deleteMemory).mockReturnValue(pending.promise);
+        const { container, rerenderView } = renderPanel(view, { variant });
+        const summary = container.querySelector('details > summary') as HTMLElement | null;
+        if (summary) fireEvent.click(summary);
+
+        fireEvent.click(deleteButtonOf(NEW_META));
+        const del = within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' });
+        pointerDown(del, 'touch');
+        fireEvent.click(del);
+        // As the hook does: the memory leaves, then the call resolves.
+        rerenderView({ ...view, notes: makeNotes({ memories: [] }) });
+        await act(async () => {
+          pending.resolve();
+        });
+        expect(screen.queryByRole('dialog')).toBeNull();
+        expect(document.activeElement).toBe(variant === 'card' ? cardHeading() : summary);
+      },
+    );
+
+    it.each(['card', 'details'] as const)(
+      'the notes\' Retry: back on Retry while the load fails, to the heading once the notes replace it (%s)',
+      async (variant) => {
+        const failed = makeView({ notes: null, error: failedLoad() });
+        const first = deferred<void>();
+        const second = deferred<void>();
+        vi.mocked(failed.reload)
+          .mockReturnValueOnce(first.promise)
+          .mockReturnValueOnce(second.promise);
+        const { container, rerenderView } = renderPanel(failed, { variant });
+        const summary = container.querySelector('details > summary') as HTMLElement | null;
+        if (summary) fireEvent.click(summary);
+
+        focus(button('Retry'));
+        drop();
+        fireEvent.click(button('Retry'));
+        await act(async () => {
+          first.resolve();
+        });
+        expect(document.activeElement).toBe(button('Retry'));
+
+        drop();
+        fireEvent.click(button('Retry'));
+        // As the hook does: the notes land, then the reload resolves.
+        rerenderView(makeView());
+        await act(async () => {
+          second.resolve();
+        });
+        expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+        expect(document.activeElement).toBe(variant === 'card' ? cardHeading() : summary);
+      },
+    );
+
+    it('the notes\' Retry settling after the user went elsewhere leaves focus there', async () => {
+      for (const elsewhere of ['focus', 'press'] as const) {
+        const failed = makeView({ notes: null, error: failedLoad() });
+        const pending = deferred<void>();
+        vi.mocked(failed.reload).mockReturnValue(pending.promise);
+        const { rerenderView, unmount } = renderPanel(failed);
+        focus(button('Retry'));
+        drop();
+        fireEvent.click(button('Retry'));
+        const field = outsideField();
+        if (elsewhere === 'focus') focus(field);
+        else pointerDown(field, 'mouse');
+        rerenderView(makeView());
+        await act(async () => {
+          pending.resolve();
+        });
+        expect(document.activeElement).toBe(elsewhere === 'focus' ? field : document.body);
+        unmount();
+      }
+    });
+
+    it('a suggestions Retry settling after the user went elsewhere leaves focus there', async () => {
+      for (const elsewhere of ['focus', 'press'] as const) {
+        const view = viewWith({}, { suggestions: [MEMORY_SUGGESTION] });
+        const pending = deferred<void>();
+        vi.mocked(view.reload).mockReturnValue(pending.promise);
+        const { rerenderView, unmount } = renderPanel({ ...view, suggestionsError: failedLoad() });
+        focus(button('Retry'));
+        drop();
+        fireEvent.click(button('Retry'));
+        const field = outsideField();
+        if (elsewhere === 'focus') focus(field);
+        else pointerDown(field, 'mouse');
+        rerenderView(view);
+        await act(async () => {
+          pending.resolve();
+        });
+        expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+        expect(document.activeElement).toBe(elsewhere === 'focus' ? field : document.body);
+        unmount();
+      }
+    });
+
+    it('the last suggestion leaving after the user went elsewhere leaves focus there', async () => {
+      for (const elsewhere of ['focus', 'press'] as const) {
+        const view = viewWith({}, { suggestions: [MEMORY_SUGGESTION] });
+        const pending = deferred<DocNoteSuggestion>();
+        vi.mocked(view.dismissSuggestion).mockReturnValue(pending.promise);
+        const { rerenderView, unmount } = renderPanel(view);
+        const dismiss = rowButton(suggestionRow('Doc memory text'), 'Dismiss');
+        focus(dismiss);
+        drop();
+        fireEvent.click(dismiss);
+        const field = outsideField();
+        if (elsewhere === 'focus') focus(field);
+        else pointerDown(field, 'mouse');
+        rerenderView({ ...view, suggestions: [] });
+        await act(async () => {
+          pending.resolve({ ...MEMORY_SUGGESTION, status: 'dismissed' });
+        });
+        expect(document.activeElement).toBe(elsewhere === 'focus' ? field : document.body);
+        unmount();
+      }
     });
   });
 });

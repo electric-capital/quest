@@ -21,8 +21,11 @@
  *   useSuggestionListFocus (the next row, else the previous one, else the
  *   panel's heading: the card's "Notes" heading, the phone section's
  *   summary). A failed suggestions load (`view.suggestionsError`) shows a
- *   line with Retry (`view.reload`) above the rows, which stay listed. All
- *   of it sits above the empty-state line, which stays about the notes.
+ *   line with Retry (`view.reload`) above the rows, which stay listed; the
+ *   line is an alert, announced again for each failure, and a Retry that
+ *   clears it hands focus (by the same hook) to the first row, else the
+ *   heading. All of it sits above the empty-state line, which stays about
+ *   the notes.
  * - Instructions: plain text with its line breaks. The owner (`is_owner`)
  *   gets Edit ("Add instructions" while there are none), a textarea with a
  *   character counter and Save / Cancel, and an "Edited by <name>, <time>"
@@ -55,9 +58,17 @@
  * Save / Cancel to the button that opened the editor, after an add to the
  * Add field (or, when the new memory reached the cap and the max line
  * replaced the field, to its Edit button), after a memory delete to a
- * neighbouring memory's Edit button (or the Add field), and when the delete
+ * neighbouring memory's Edit button (or the Add field), when the delete
  * confirm is dismissed to the memory's Delete button (DocConfirmDialog,
- * which keeps Tab inside it while open).
+ * which keeps Tab inside it while open), and after the notes' Retry to
+ * Retry while the load still fails, else to the panel's heading. A save,
+ * add or Retry that settles after the user went elsewhere (focus, or a
+ * pointer press, outside the editor, Add row or panel it started in)
+ * leaves focus where the user put it. After a touch or pen tap no text
+ * field is focused from script, as that opens the on-screen keyboard: a
+ * failed save goes back to Save and a failed add to Add, a successful add
+ * leaves focus where it is, and deleting the last memory focuses the
+ * heading instead of the Add field.
  *
  * Two presentations of the same contents: `card` is the desktop aside's
  * floating card (the chat RightPanel's `.right-panel-card` chrome and
@@ -70,6 +81,7 @@
  */
 
 import {
+  useCallback,
   useEffect,
   useId,
   useRef,
@@ -95,7 +107,7 @@ import type {
   StaleInstructionsCurrent,
 } from '../../api/types';
 import type { DocNotesView } from '../../hooks/useDocNotes';
-import { useSuggestionListFocus } from '../../hooks/useSuggestionListFocus';
+import { isTouchPointer, useSuggestionListFocus } from '../../hooks/useSuggestionListFocus';
 import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatters';
 import { MemorySuggestionRow } from '../MemorySuggestionRow';
 import { docNoteAcceptOptions, instructionsCaughtUp, rebaseOnStale } from '../docNoteReview';
@@ -186,6 +198,98 @@ function quote(text: string): string {
     : text;
 }
 
+// A number per error object: each failed load brings a new one, so its line
+// re-mounts and is announced again.
+const errorKeys = new WeakMap<object, number>();
+let lastErrorKey = 0;
+function errorKey(err: object): number {
+  let key = errorKeys.get(err);
+  if (key === undefined) {
+    lastErrorKey += 1;
+    key = lastErrorKey;
+    errorKeys.set(err, key);
+  }
+  return key;
+}
+
+// --- Focus after an action ------------------------------------------------------
+
+/**
+ * The user's last input, kept by capture-phase listeners on the document
+ * (useInputState): whether it was a touch or pen tap (not a mouse click or
+ * a key), and the pointer presses (a count and the last one's target), so
+ * an action that settles later can tell the user went elsewhere meanwhile.
+ */
+interface InputState {
+  touch: boolean;
+  presses: number;
+  pressTarget: EventTarget | null;
+}
+
+function useInputState(): RefObject<InputState> {
+  const ref = useRef<InputState>({ touch: false, presses: 0, pressTarget: null });
+  useEffect(() => {
+    const onPointerDown = (e: PointerEvent) => {
+      ref.current = {
+        touch: isTouchPointer(e),
+        presses: ref.current.presses + 1,
+        pressTarget: e.target,
+      };
+    };
+    const onKeyDown = () => {
+      ref.current = { ...ref.current, touch: false };
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, []);
+  return ref;
+}
+
+/** Where an action started: the presses so far and the part of the panel it belongs to. */
+interface FocusMark {
+  presses: number;
+  scope: HTMLElement | null;
+}
+
+function focusMark(input: InputState, scope: HTMLElement | null): FocusMark {
+  return { presses: input.presses, scope };
+}
+
+/** Focus dropped to <body> (or nowhere), as when the focused button was disabled or removed. */
+function isFocusLost(): boolean {
+  const active = document.activeElement;
+  return !active || active === document.body || !active.isConnected;
+}
+
+/**
+ * Focus the first of `targets` that is there, enabled and takes it, unless
+ * the user went elsewhere since `mark`: focus has to be lost or still in
+ * the mark's scope (which may have left the page since), and the last
+ * pointer press since the mark, if any, in that scope too. After a tap,
+ * text fields are skipped: focusing one from script opens the on-screen
+ * keyboard.
+ */
+function restoreFocus(
+  input: InputState,
+  mark: FocusMark,
+  targets: readonly (HTMLElement | null | undefined)[],
+): void {
+  const inScope = (node: unknown) =>
+    mark.scope !== null && node instanceof Node && mark.scope.contains(node);
+  if (!isFocusLost() && !inScope(document.activeElement)) return;
+  if (input.presses !== mark.presses && !inScope(input.pressTarget)) return;
+  for (const target of targets) {
+    if (!target?.isConnected || target.matches(':disabled')) continue;
+    if (input.touch && target.matches('textarea, input')) continue;
+    target.focus();
+    if (document.activeElement === target) return;
+  }
+}
+
 // --- Capped text editor -------------------------------------------------------
 
 interface CappedTextEditorProps {
@@ -208,6 +312,8 @@ interface CappedTextEditorProps {
   /** Shown under the footer as an alert. */
   error: string | null;
   className?: string;
+  /** The editor's root: the scope its focus marks are taken in. */
+  rootRef?: Ref<HTMLDivElement>;
   textareaRef: Ref<HTMLTextAreaElement>;
 }
 
@@ -232,6 +338,7 @@ function CappedTextEditor({
   actions,
   error,
   className = 'doc-notes-editor',
+  rootRef,
   textareaRef,
 }: CappedTextEditorProps) {
   const ids = useId();
@@ -242,7 +349,7 @@ function CappedTextEditor({
   const showCounter = counter === 'always' || value !== '';
   const describedBy = [showCounter && counterId, overCap && overId].filter(Boolean).join(' ');
   return (
-    <div className={className}>
+    <div ref={rootRef} className={className}>
       {header}
       <textarea
         ref={textareaRef}
@@ -398,6 +505,7 @@ function SuggestionsSection({
         <LoadFailure
           className="doc-notes-load-error"
           message={SUGGESTIONS_LOAD_ERROR}
+          announceKey={errorKey(suggestionsError)}
           retrying={retrying}
           onRetry={() => void retry()}
         />
@@ -453,18 +561,24 @@ function InstructionsSection({
   panelEmpty,
   saveInstructions,
   viewerEmail,
+  input,
 }: {
   notes: DocNotes;
   panelEmpty: boolean;
   saveInstructions: DocNotesView['saveInstructions'];
   viewerEmail: string | null;
+  input: RefObject<InputState>;
 }) {
   const [editor, setEditor] = useState<InstructionsEditorState | null>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const saveButtonRef = useRef<HTMLButtonElement>(null);
   // The Edit / "Add instructions" button (only one of them is rendered).
   const openButtonRef = useRef<HTMLButtonElement>(null);
   // Set when Save or Cancel closes the editor: focus goes back to the opener.
-  const refocusOpenerRef = useRef(false);
+  const refocusOpenerRef = useRef<FocusMark | null>(null);
+  // Set when a save fails: focus goes back to the draft (to Save after a tap).
+  const refocusDraftRef = useRef<FocusMark | null>(null);
   const currentLabelId = useId();
 
   const isOwner = notes.is_owner;
@@ -482,10 +596,20 @@ function InstructionsSection({
       el.focus();
       el.setSelectionRange(el.value.length, el.value.length);
     } else if (refocusOpenerRef.current) {
-      refocusOpenerRef.current = false;
-      openButtonRef.current?.focus();
+      const mark = refocusOpenerRef.current;
+      refocusOpenerRef.current = null;
+      restoreFocus(input.current, mark, [openButtonRef.current]);
     }
-  }, [editorOpen]);
+  }, [editorOpen, input]);
+
+  // After a failed save, once the editor is enabled again.
+  const saving = editor?.saving === true;
+  useEffect(() => {
+    const mark = refocusDraftRef.current;
+    if (saving || !mark) return;
+    refocusDraftRef.current = null;
+    restoreFocus(input.current, mark, [textareaRef.current, saveButtonRef.current]);
+  }, [saving, input]);
 
   const hasText = notes.instructions !== '';
   // Read shares see nothing here while there are no instructions.
@@ -501,8 +625,9 @@ function InstructionsSection({
     });
   };
 
-  const close = () => {
-    refocusOpenerRef.current = true;
+  /** Close the editor; `mark` is where the save that closes it started. */
+  const close = (mark?: FocusMark) => {
+    refocusOpenerRef.current = mark ?? focusMark(input.current, editorRef.current);
     setEditor(null);
   };
 
@@ -513,11 +638,13 @@ function InstructionsSection({
     // A 409 without a usable `current` falls back to the live notes.
     const expected =
       editor.conflict && !editor.conflict.current ? notes.instructions_version : editor.baseVersion;
+    const mark = focusMark(input.current, editorRef.current);
     setEditor({ ...editor, saving: true, error: null });
     try {
       await saveInstructions(editor.draft.trim(), expected);
-      close();
+      close(mark);
     } catch (err) {
+      refocusDraftRef.current = mark;
       if (isStaleInstructionsError(err)) {
         const current = staleInstructionsCurrent(err);
         setEditor(
@@ -544,8 +671,6 @@ function InstructionsSection({
             },
         );
       }
-      // The pressed Save was disabled while saving; go back to the draft.
-      textareaRef.current?.focus();
     }
   };
 
@@ -589,18 +714,20 @@ function InstructionsSection({
         busy={editor.saving}
         header={header}
         error={editor.error}
+        rootRef={editorRef}
         textareaRef={textareaRef}
         actions={
           <>
             <button
               type="button"
               className="doc-notes-button"
-              onClick={close}
+              onClick={() => close()}
               disabled={editor.saving}
             >
               Cancel
             </button>
             <button
+              ref={saveButtonRef}
               type="button"
               className="doc-notes-button doc-notes-button--primary"
               onClick={() => void save()}
@@ -679,10 +806,15 @@ function MemoriesSection({
   notes,
   panelEmpty,
   view,
+  input,
+  headingRef,
 }: {
   notes: DocNotes;
   panelEmpty: boolean;
   view: DocNotesView;
+  input: RefObject<InputState>;
+  /** The panel's heading: focused after a tap deletes the last memory. */
+  headingRef: RefObject<HTMLElement | null>;
 }) {
   const canEdit = notes.can_edit;
   const memories = notes.memories;
@@ -699,16 +831,22 @@ function MemoriesSection({
   const [highlight, setHighlight] = useState<{ id: string; n: number } | null>(null);
 
   const listRef = useRef<HTMLUListElement>(null);
+  const addRowRef = useRef<HTMLDivElement>(null);
   const addInputRef = useRef<HTMLTextAreaElement>(null);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
+  const editRowRef = useRef<HTMLDivElement>(null);
   const editInputRef = useRef<HTMLTextAreaElement>(null);
+  const editSaveRef = useRef<HTMLButtonElement>(null);
   const editButtonsRef = useRef(new Map<string, HTMLButtonElement>());
   // Set when Save or Cancel closes a memory editor: focus goes back to its Edit button.
-  const refocusEditOfRef = useRef<string | null>(null);
+  const refocusEditOfRef = useRef<{ id: string; mark: FocusMark } | null>(null);
+  // Set when a memory save fails: focus goes back to the draft (to Save after a tap).
+  const refocusEditDraftRef = useRef<FocusMark | null>(null);
   // Set when a delete closes the dialog: the memories whose Edit button
   // takes focus (the next one, else the previous one), else the Add field.
   const refocusAfterDeleteRef = useRef<string[] | null>(null);
   // Set when an add settles, with the new memory's id when it succeeded.
-  const refocusAfterAddRef = useRef<{ addedId: string | null } | null>(null);
+  const refocusAfterAddRef = useRef<{ addedId: string | null; mark: FocusMark } | null>(null);
   const highlightSeqRef = useRef(0);
   const ids = useId();
 
@@ -739,11 +877,19 @@ function MemoriesSection({
       el.focus();
       el.setSelectionRange(el.value.length, el.value.length);
     } else if (refocusEditOfRef.current) {
-      const id = refocusEditOfRef.current;
+      const { id, mark } = refocusEditOfRef.current;
       refocusEditOfRef.current = null;
-      editButtonsRef.current.get(id)?.focus();
+      restoreFocus(input.current, mark, [editButtonsRef.current.get(id)]);
     }
-  }, [editingId]);
+  }, [editingId, input]);
+
+  // After a failed memory save, once the editor is enabled again.
+  useEffect(() => {
+    const mark = refocusEditDraftRef.current;
+    if (memorySaving || !mark) return;
+    refocusEditDraftRef.current = null;
+    restoreFocus(input.current, mark, [editInputRef.current, editSaveRef.current]);
+  }, [memorySaving, input]);
 
   // After a delete closed the dialog. Runs after the dialog's own focus
   // return (child cleanups run first), whose opener is gone with the memory.
@@ -759,21 +905,25 @@ function MemoriesSection({
         return;
       }
     }
-    addInputRef.current?.focus();
-  }, [deleteTarget]);
+    // No memory left: the Add field, or after a tap (no on-screen keyboard
+    // from script) the panel's heading.
+    (input.current.touch ? headingRef.current : addInputRef.current)?.focus();
+  }, [deleteTarget, input, headingRef]);
 
   // After an add settled, with the list showing its result: back to the
-  // field, to add another or to fix the draft. The memory that reached the
+  // field, to add another or to fix the draft (after a tap, to Add while it
+  // is enabled, which a cleared draft is not). The memory that reached the
   // cap took the field away (the max line replaces the Add row): its Edit
   // button instead.
   useEffect(() => {
-    const target = refocusAfterAddRef.current;
-    if (adding || !target) return;
+    const settled = refocusAfterAddRef.current;
+    if (adding || !settled) return;
     refocusAfterAddRef.current = null;
-    const field = addInputRef.current;
-    if (field) field.focus();
-    else if (target.addedId) editButtonsRef.current.get(target.addedId)?.focus();
-  }, [adding]);
+    const targets = addInputRef.current
+      ? [addInputRef.current, addButtonRef.current]
+      : [settled.addedId ? editButtonsRef.current.get(settled.addedId) : null];
+    restoreFocus(input.current, settled.mark, targets);
+  }, [adding, input]);
 
   useEffect(() => {
     if (!highlight) return;
@@ -800,6 +950,7 @@ function MemoriesSection({
   const add = async () => {
     const text = addDraft.trim();
     if (!text || adding || addOverCap) return;
+    const mark = focusMark(input.current, addRowRef.current);
     setAdding(true);
     setAddError(null);
     let addedId: string | null = null;
@@ -810,7 +961,7 @@ function MemoriesSection({
       setAddError(memoryErrorMessage(err, 'Failed to add the memory.'));
       flashDuplicate(err);
     } finally {
-      refocusAfterAddRef.current = { addedId };
+      refocusAfterAddRef.current = { addedId, mark };
       setAdding(false);
     }
   };
@@ -820,8 +971,9 @@ function MemoriesSection({
     setEdit({ id: memory.id, draft: memory.content, saving: false, error: null });
   };
 
-  const closeEdit = (id: string) => {
-    refocusEditOfRef.current = id;
+  /** Close memory `id`'s editor; `mark` is where the save that closes it started. */
+  const closeEdit = (id: string, mark?: FocusMark) => {
+    refocusEditOfRef.current = { id, mark: mark ?? focusMark(input.current, editRowRef.current) };
     setEdit((prev) => (prev?.id === id ? null : prev));
   };
 
@@ -832,19 +984,19 @@ function MemoriesSection({
     const text = edit.draft.trim();
     if (!text) return;
     const { id } = edit;
+    const mark = focusMark(input.current, editRowRef.current);
     setEdit({ ...edit, saving: true, error: null });
     try {
       await view.updateMemory(id, text);
-      closeEdit(id);
+      closeEdit(id, mark);
     } catch (err) {
+      refocusEditDraftRef.current = mark;
       setEdit((prev) =>
         prev?.id === id
           ? { ...prev, saving: false, error: memoryErrorMessage(err, 'Failed to save the memory.') }
           : prev,
       );
       flashDuplicate(err);
-      // The pressed Save was disabled while saving; go back to the draft.
-      editInputRef.current?.focus();
     }
   };
 
@@ -898,9 +1050,11 @@ function MemoriesSection({
         busy={adding}
         counter="when-text"
         error={addError}
+        rootRef={addRowRef}
         textareaRef={addInputRef}
         actions={
           <button
+            ref={addButtonRef}
             type="button"
             className="doc-notes-button doc-notes-button--primary"
             onClick={() => void add()}
@@ -932,6 +1086,7 @@ function MemoriesSection({
             rows={3}
             busy={edit.saving}
             error={edit.error}
+            rootRef={editRowRef}
             textareaRef={editInputRef}
             actions={
               <>
@@ -944,6 +1099,7 @@ function MemoriesSection({
                   Cancel
                 </button>
                 <button
+                  ref={editSaveRef}
                   type="button"
                   className="doc-notes-button doc-notes-button--primary"
                   onClick={() => void saveEdit()}
@@ -1050,12 +1206,14 @@ function NotesContent({
   notes,
   viewerEmail,
   headingRef,
+  input,
 }: {
   view: DocNotesView;
   notes: DocNotes;
   viewerEmail: string | null;
   /** The panel's heading (the card's "Notes", the phone section's summary). */
   headingRef: RefObject<HTMLElement | null>;
+  input: RefObject<InputState>;
 }) {
   const panelEmpty = notes.instructions === '' && notes.memories.length === 0;
   return (
@@ -1069,8 +1227,15 @@ function NotesContent({
         panelEmpty={panelEmpty}
         saveInstructions={view.saveInstructions}
         viewerEmail={viewerEmail}
+        input={input}
       />
-      <MemoriesSection notes={notes} panelEmpty={panelEmpty} view={view} />
+      <MemoriesSection
+        notes={notes}
+        panelEmpty={panelEmpty}
+        view={view}
+        input={input}
+        headingRef={headingRef}
+      />
     </div>
   );
 }
@@ -1089,38 +1254,45 @@ function useRetry(reload: DocNotesView['reload']) {
   return { retrying, retry };
 }
 
-/** A failed load's message with Retry (disabled while `retrying`). */
+/**
+ * A failed load's message with Retry (disabled while `retrying`). With an
+ * `announceKey` the message is an alert, re-mounted (so announced again)
+ * whenever the key changes.
+ */
 function LoadFailure({
   message,
   retrying,
   onRetry,
   className,
+  announceKey,
+  buttonRef,
 }: {
   message: string;
   retrying: boolean;
   onRetry: () => void;
   className: string;
+  announceKey?: number;
+  buttonRef?: Ref<HTMLButtonElement>;
 }) {
   return (
     <div className={className}>
-      <p className="doc-notes-status">{message}</p>
-      <button type="button" className="doc-notes-button" onClick={onRetry} disabled={retrying}>
+      <p
+        key={announceKey}
+        className="doc-notes-status"
+        role={announceKey === undefined ? undefined : 'alert'}
+      >
+        {message}
+      </p>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="doc-notes-button"
+        onClick={onRetry}
+        disabled={retrying}
+      >
         {retrying ? 'Retrying...' : 'Retry'}
       </button>
     </div>
-  );
-}
-
-/** The failed first load of the notes, in place of the panel's contents. */
-function LoadError({ view }: { view: DocNotesView }) {
-  const { retrying, retry } = useRetry(view.reload);
-  return (
-    <LoadFailure
-      className="doc-notes-body doc-notes-load-error"
-      message={view.error?.message || 'Failed to load notes.'}
-      retrying={retrying}
-      onRetry={() => void retry()}
-    />
   );
 }
 
@@ -1129,8 +1301,32 @@ export function DocNotesPanel({ view, variant = 'card', viewerEmail = null }: Do
   // left: the card's "Notes" heading, the phone section's summary.
   const cardHeadingRef = useRef<HTMLHeadingElement>(null);
   const summaryRef = useRef<HTMLElement>(null);
-  if (!docNotesPanelShown(view)) return null;
   const headingRef = variant === 'details' ? summaryRef : cardHeadingRef;
+  // The card or the phone section.
+  const rootRef = useRef<HTMLElement | null>(null);
+  const setRoot = useCallback((el: HTMLElement | null) => {
+    rootRef.current = el;
+  }, []);
+  const input = useInputState();
+  // The notes' failed first load: Retry, its state here so that focus can
+  // be put back once the reload settles, when the notes may have replaced it.
+  const notesRetry = useRetry(view.reload);
+  const retryButtonRef = useRef<HTMLButtonElement>(null);
+  const retryMarkRef = useRef<FocusMark | null>(null);
+
+  useEffect(() => {
+    const mark = retryMarkRef.current;
+    if (notesRetry.retrying || !mark) return;
+    retryMarkRef.current = null;
+    restoreFocus(input.current, mark, [retryButtonRef.current, headingRef.current]);
+  }, [notesRetry.retrying, input, headingRef]);
+
+  if (!docNotesPanelShown(view)) return null;
+
+  const retryNotes = () => {
+    retryMarkRef.current = focusMark(input.current, rootRef.current);
+    void notesRetry.retry();
+  };
 
   let content: ReactNode;
   if (view.notes) {
@@ -1140,6 +1336,7 @@ export function DocNotesPanel({ view, variant = 'card', viewerEmail = null }: Do
         notes={view.notes}
         viewerEmail={viewerEmail}
         headingRef={headingRef}
+        input={input}
       />
     );
   } else if (view.loading) {
@@ -1149,21 +1346,28 @@ export function DocNotesPanel({ view, variant = 'card', viewerEmail = null }: Do
       </div>
     );
   } else {
-    content = <LoadError view={view} />;
+    content = (
+      <LoadFailure
+        className="doc-notes-body doc-notes-load-error"
+        message={view.error?.message || 'Failed to load notes.'}
+        retrying={notesRetry.retrying}
+        onRetry={retryNotes}
+        buttonRef={retryButtonRef}
+      />
+    );
   }
 
   if (variant === 'details') {
     // Counted while the block that lists them is shown (with the notes).
     const pending = view.notes ? view.suggestions.length : 0;
     return (
-      <details className="doc-notes-details">
+      <details ref={setRoot} className="doc-notes-details">
         <summary ref={summaryRef} className="doc-notes-summary">
           <ChevronRight size={14} className="doc-notes-summary-chevron" aria-hidden="true" />
           <span>Notes</span>
           {pending > 0 && (
-            // The doc rose of the suggestion rows (--suggestion-* of
-            // .memory-suggestions--doc, MemorySuggestions.css).
-            <span className="doc-notes-summary-count memory-suggestions--doc">
+            // In the doc rose of the suggestion rows (MemorySuggestions.css).
+            <span className="doc-notes-summary-count">
               <span aria-hidden="true">{formatCount(pending)}</span>
               <span className="doc-notes-sr-only">{`, ${pendingSuggestionsLabel(pending)}`}</span>
             </span>
@@ -1179,7 +1383,7 @@ export function DocNotesPanel({ view, variant = 'card', viewerEmail = null }: Do
   // top): the scroller takes focus so the keyboard can scroll it.
   const keyboardScroll = view.notes !== null && !view.notes.can_edit;
   return (
-    <section className="right-panel-card doc-notes-panel" aria-label="Notes">
+    <section ref={setRoot} className="right-panel-card doc-notes-panel" aria-label="Notes">
       <div className="doc-notes-header">
         <h3 ref={cardHeadingRef} className="doc-notes-heading" tabIndex={-1}>
           Notes
