@@ -65,10 +65,11 @@
  * add or Retry that settles after the user went elsewhere (focus, or a
  * pointer press, outside the editor, Add row or panel it started in)
  * leaves focus where the user put it. After a touch or pen tap no text
- * field is focused from script, as that opens the on-screen keyboard: a
- * failed save goes back to Save and a failed add to Add, a successful add
- * leaves focus where it is, and deleting the last memory focuses the
- * heading instead of the Add field.
+ * field is focused from script when an action settles, as that opens the
+ * on-screen keyboard: a failed save goes back to Save and a failed add to
+ * Add, a successful add leaves focus where it is, and deleting the last
+ * memory focuses the heading instead of the Add field. (Opening an editor
+ * with a tap still focuses its textarea: the user asked to type.)
  *
  * Two presentations of the same contents: `card` is the desktop aside's
  * floating card (the chat RightPanel's `.right-panel-card` chrome and
@@ -217,20 +218,31 @@ function errorKey(err: object): number {
 /**
  * The user's last input, kept by capture-phase listeners on the document
  * (useInputState): whether it was a touch or pen tap (not a mouse click or
- * a key), and the pointer presses (a count and the last one's target), so
- * an action that settles later can tell the user went elsewhere meanwhile.
+ * a key), the pointer presses and the focus moves (each a count and the
+ * last one's target), so an action that settles later can tell the user
+ * went elsewhere meanwhile, even when focus was then lost there (a
+ * suggestion's Dismiss that disabled itself).
  */
 interface InputState {
   touch: boolean;
   presses: number;
   pressTarget: EventTarget | null;
+  focuses: number;
+  focusTarget: EventTarget | null;
 }
 
 function useInputState(): RefObject<InputState> {
-  const ref = useRef<InputState>({ touch: false, presses: 0, pressTarget: null });
+  const ref = useRef<InputState>({
+    touch: false,
+    presses: 0,
+    pressTarget: null,
+    focuses: 0,
+    focusTarget: null,
+  });
   useEffect(() => {
     const onPointerDown = (e: PointerEvent) => {
       ref.current = {
+        ...ref.current,
         touch: isTouchPointer(e),
         presses: ref.current.presses + 1,
         pressTarget: e.target,
@@ -239,24 +251,33 @@ function useInputState(): RefObject<InputState> {
     const onKeyDown = () => {
       ref.current = { ...ref.current, touch: false };
     };
+    const onFocusIn = (e: FocusEvent) => {
+      ref.current = { ...ref.current, focuses: ref.current.focuses + 1, focusTarget: e.target };
+    };
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKeyDown, true);
+    document.addEventListener('focusin', onFocusIn, true);
     return () => {
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('keydown', onKeyDown, true);
+      document.removeEventListener('focusin', onFocusIn, true);
     };
   }, []);
   return ref;
 }
 
-/** Where an action started: the presses so far and the part of the panel it belongs to. */
+/**
+ * Where an action started: the presses and focus moves so far and the part
+ * of the panel it belongs to.
+ */
 interface FocusMark {
   presses: number;
+  focuses: number;
   scope: HTMLElement | null;
 }
 
 function focusMark(input: InputState, scope: HTMLElement | null): FocusMark {
-  return { presses: input.presses, scope };
+  return { presses: input.presses, focuses: input.focuses, scope };
 }
 
 /** Focus dropped to <body> (or nowhere), as when the focused button was disabled or removed. */
@@ -269,9 +290,9 @@ function isFocusLost(): boolean {
  * Focus the first of `targets` that is there, enabled and takes it, unless
  * the user went elsewhere since `mark`: focus has to be lost or still in
  * the mark's scope (which may have left the page since), and the last
- * pointer press since the mark, if any, in that scope too. After a tap,
- * text fields are skipped: focusing one from script opens the on-screen
- * keyboard.
+ * focus move and the last pointer press since the mark, if any, in that
+ * scope too. After a tap, text fields are skipped: focusing one from
+ * script opens the on-screen keyboard.
  */
 function restoreFocus(
   input: InputState,
@@ -281,6 +302,7 @@ function restoreFocus(
   const inScope = (node: unknown) =>
     mark.scope !== null && node instanceof Node && mark.scope.contains(node);
   if (!isFocusLost() && !inScope(document.activeElement)) return;
+  if (input.focuses !== mark.focuses && !inScope(input.focusTarget)) return;
   if (input.presses !== mark.presses && !inScope(input.pressTarget)) return;
   for (const target of targets) {
     if (!target?.isConnected || target.matches(':disabled')) continue;
@@ -843,7 +865,8 @@ function MemoriesSection({
   // Set when a memory save fails: focus goes back to the draft (to Save after a tap).
   const refocusEditDraftRef = useRef<FocusMark | null>(null);
   // Set when a delete closes the dialog: the memories whose Edit button
-  // takes focus (the next one, else the previous one), else the Add field.
+  // takes focus (the next one, else the previous one), else the Add field
+  // (after a tap, the panel's heading or summary).
   const refocusAfterDeleteRef = useRef<string[] | null>(null);
   // Set when an add settles, with the new memory's id when it succeeded.
   const refocusAfterAddRef = useRef<{ addedId: string | null; mark: FocusMark } | null>(null);
@@ -1255,9 +1278,10 @@ function useRetry(reload: DocNotesView['reload']) {
 }
 
 /**
- * A failed load's message with Retry (disabled while `retrying`). With an
- * `announceKey` the message is an alert, re-mounted (so announced again)
- * whenever the key changes.
+ * A failed load's message with Retry (disabled while `retrying`), which the
+ * message describes, so Retry taking focus back still says what failed.
+ * With an `announceKey` the message is an alert, re-mounted (so announced
+ * again) whenever the key changes.
  */
 function LoadFailure({
   message,
@@ -1274,10 +1298,12 @@ function LoadFailure({
   announceKey?: number;
   buttonRef?: Ref<HTMLButtonElement>;
 }) {
+  const messageId = useId();
   return (
     <div className={className}>
       <p
         key={announceKey}
+        id={messageId}
         className="doc-notes-status"
         role={announceKey === undefined ? undefined : 'alert'}
       >
@@ -1289,6 +1315,7 @@ function LoadFailure({
         className="doc-notes-button"
         onClick={onRetry}
         disabled={retrying}
+        aria-describedby={messageId}
       >
         {retrying ? 'Retrying...' : 'Retry'}
       </button>

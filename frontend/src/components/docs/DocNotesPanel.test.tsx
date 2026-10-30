@@ -1545,6 +1545,19 @@ describe('DocNotesPanel', () => {
         expect(button('Retry')).toBeTruthy();
       });
 
+      it('Retry is described by the error, for the suggestions and for the notes', () => {
+        const { unmount } = renderPanel(viewWith({}, { suggestionsError: failed }));
+        expect(
+          screen.getByRole('button', { name: 'Retry', description: SUGGESTIONS_LOAD_ERROR }),
+        ).toBeTruthy();
+        unmount();
+
+        renderPanel(makeView({ notes: null, error: failed }));
+        expect(
+          screen.getByRole('button', { name: 'Retry', description: 'Server exploded' }),
+        ).toBeTruthy();
+      });
+
       it('without rows sits above the empty line and Instructions', () => {
         renderPanel(viewWith(EMPTY, { suggestionsError: failed }));
         const line = screen.getByText(SUGGESTIONS_LOAD_ERROR);
@@ -2090,6 +2103,38 @@ describe('DocNotesPanel', () => {
         expect(document.activeElement).toBe(elsewhere === 'focus' ? field : document.body);
         unmount();
       }
+    });
+
+    it('an add that settles after the keyboard moved on to a suggestion (whose focus was then lost) leaves focus alone', async () => {
+      const view = viewWith({}, { suggestions: [MEMORY_SUGGESTION] });
+      const added = deferred<DocMemory>();
+      const dismissed = deferred<DocNoteSuggestion>();
+      vi.mocked(view.addMemory).mockReturnValue(added.promise);
+      vi.mocked(view.dismissSuggestion).mockReturnValue(dismissed.promise);
+      const { rerenderView } = renderPanel(view);
+      fireEvent.change(addBox(), { target: { value: 'Use metric units.' } });
+      focus(button('Add'));
+      drop();
+      fireEvent.click(button('Add'));
+
+      // Shift+Tab up to the suggestion's Dismiss, Enter: it disables and the
+      // browser drops focus.
+      const dismiss = rowButton(suggestionRow('Doc memory text'), 'Dismiss');
+      focus(dismiss);
+      drop();
+      fireEvent.click(dismiss);
+      await act(async () => {
+        added.resolve({ ...MEM_NEW, id: 'm3', content: 'Use metric units.' });
+      });
+      expect(addBox().value).toBe('');
+      expect(document.activeElement).toBe(document.body);
+
+      // The suggestion leaves: the list's own rule takes it to the heading.
+      rerenderView({ ...view, suggestions: [] });
+      await act(async () => {
+        dismissed.resolve({ ...MEMORY_SUGGESTION, status: 'dismissed' });
+      });
+      expect(document.activeElement).toBe(cardHeading());
     });
   });
 });
