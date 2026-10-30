@@ -257,7 +257,7 @@ The UI at `/docs`: browse, read, create empty docs, rename, download and delete;
 
 | File | Role |
 |------|------|
-| `api/docsApi.ts` | Client for `/app/api/docs*` and the doc-note suggestion routes, the cookie-authed asset and download URL builders, `DOCS_FEATURE` and `DOC_NOTES_FEATURE`, and the helpers for the flat 409s `stale_update` and `stale_instructions` |
+| `api/docsApi.ts` | Client for `/app/api/docs*` (the notes part: [Doc Notes -- Frontend](doc-notes.md#frontend)), the cookie-authed asset and download URL builders, `DOCS_FEATURE` and the helper for the flat 409 `stale_update` |
 | `api/types.ts` | `Doc`, `DocDetail` and the share, editing and history types; `CreateDocRequest` has no `mode` |
 | `utils/docsRoute.ts` | `parseDocsRoute()` and the docs path builders |
 | `hooks/useDocs.ts` / `hooks/useProjectDocsIndex.ts` / `hooks/useDoc.ts` / `hooks/useDocNotes.ts` | One keyset-paged list; the per-project fan-out for All Docs; one doc (row + body) for the viewer; one doc's notes ([Doc Notes -- Frontend](doc-notes.md#frontend)) |
