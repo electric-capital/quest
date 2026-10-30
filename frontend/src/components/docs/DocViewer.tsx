@@ -12,11 +12,15 @@
  * above it sets `doc-viewer--scrolled` once the doc has scrolled under it,
  * which draws the header's bottom hairline (DocViewer.css).
  *
- * Beside the column, an aside holds the doc's Assets list (DocAssetsPanel,
- * from the detail's `assets`). DocViewer.css lays it out: a 280px right
- * gutter card on wide desktops (the chat RightPanel's footprint), below the
- * body at <= 1024px, and on phones (useIsMobile, <= 768px) a collapsed
- * "Assets (N)" section so the document stays first.
+ * Beside the column, an aside holds the doc's Notes panel (DocNotesPanel,
+ * the instructions and memories from useDocNotes; only while the doc_notes
+ * gate is open and the notes were not refused) above its Assets list
+ * (DocAssetsPanel, from the detail's `assets`). Notes stays in every mode,
+ * since its instructions matter most while editing; Assets shows in view
+ * mode only. DocViewer.css lays the aside out: 280px right gutter cards on
+ * wide desktops (the chat RightPanel's footprint), below the body (or the
+ * editor / History) at <= 1024px, and on phones (useIsMobile, <= 768px)
+ * collapsed "Notes" and "Assets (N)" sections so the document stays first.
  *
  * The body area has three modes, chosen from the header menu and kept per
  * doc (opening another doc starts in `view`): `view` (the rendered doc or
@@ -42,6 +46,7 @@ import { docAssetBase } from '../../api/docsApi';
 import type { Doc, DocContentResponse, DocDetail, DocUserRef, DocWriteConversation } from '../../api/types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useDoc } from '../../hooks/useDoc';
+import { useDocNotes } from '../../hooks/useDocNotes';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import {
   DOC_DRAFT_KEY_PREFIX,
@@ -58,6 +63,7 @@ import { MarkdownWorkspaceContext, markdownComponents } from '../Message';
 import { DocAssetsPanel } from './DocAssetsPanel';
 import { DocDraftRecovery } from './DocDraftRecovery';
 import { DocHeader, type DocViewerMode } from './DocHeader';
+import { DocNotesPanel, docNotesPanelShown } from './DocNotesPanel';
 import { DocShareDialog } from './DocShareDialog';
 import { LazyBoundary, lazyNamed } from '../LazyBoundary';
 import './DocViewer.css';
@@ -157,6 +163,8 @@ function DocFooter({ doc, viewerEmail }: { doc: DocDetail; viewerEmail: string |
 
 export function DocViewer({ docId }: { docId: string }) {
   const { doc, loading, error, notFound, refresh, applyRow, applyContent } = useDoc(docId);
+  const notesView = useDocNotes(docId);
+  const notesShown = docNotesPanelShown(notesView);
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const { userEmail } = useAuth();
@@ -337,7 +345,7 @@ export function DocViewer({ docId }: { docId: string }) {
   return (
     <div
       ref={viewerRef}
-      className={`doc-viewer doc-viewer--${mode}${scrolled ? ' doc-viewer--scrolled' : ''}`}
+      className={`doc-viewer doc-viewer--${mode}${notesShown ? ' doc-viewer--notes' : ''}${scrolled ? ' doc-viewer--scrolled' : ''}`}
     >
       <div className="doc-viewer-column">
         <div ref={sentinelRef} className="doc-viewer-scroll-sentinel" aria-hidden="true" />
@@ -406,6 +414,15 @@ export function DocViewer({ docId }: { docId: string }) {
         />
       )}
       <aside className="doc-viewer-aside">
+        {notesShown && (
+          <DocNotesPanel
+            // Per doc, like Assets, which already takes plain doc.id.
+            key={`notes:${doc.id}`}
+            view={notesView}
+            variant={isMobile ? 'details' : 'card'}
+            viewerEmail={userEmail}
+          />
+        )}
         <DocAssetsPanel
           key={doc.id}
           docId={doc.id}

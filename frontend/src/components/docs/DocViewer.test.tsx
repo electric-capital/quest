@@ -1,22 +1,29 @@
 // DocViewer: the loading / not-found / error states, the rendered body with
 // doc asset resolution and the Show source toggle, the Assets panel (card on
 // desktop, collapsed section on phones; Delete for the owner in view mode
-// only, refreshing the doc), the empty-doc line per reach / edit access, the
-// footer's "Last written by" subject per `last_write_source`, the editor
-// wiring (save -> applyContent + view, cancel -> view, 409 -> refresh, focus
-// back on the title), and unsaved drafts (the view-mode notice, the
-// read-only recovery panel for a vanished doc or lost edit access, the
-// owner's delete dropping the draft).
+// only, refreshing the doc), the Notes panel (useDocNotes for the viewer's
+// doc; nothing while the gate is closed or the notes are gone or refused,
+// else above Assets in the aside -- card on desktop, collapsed section on
+// phones -- and kept in edit mode and History), the empty-doc line per
+// reach / edit access, the footer's "Last written by" subject per
+// `last_write_source`, the editor wiring (save -> applyContent + view,
+// cancel -> view, 409 -> refresh, focus back on the title), and unsaved
+// drafts (the view-mode notice, the read-only recovery panel for a vanished
+// doc or lost edit access, the owner's delete dropping the draft).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ApiClientError } from '../../api/request';
-import type { DocDetail } from '../../api/types';
+import type { DocDetail, DocNotes } from '../../api/types';
 import type { DocView } from '../../hooks/useDoc';
+import type { DocNotesView } from '../../hooks/useDocNotes';
 import { DocViewer } from './DocViewer';
 
 const mocks = vi.hoisted(() => ({
   view: null as unknown as DocView,
+  notesView: null as unknown as DocNotesView,
+  // The doc id DocViewer last passed to useDocNotes.
+  notesDocId: null as string | null,
   isMobile: false,
   deleteDocAsset: vi.fn(),
   deleteDoc: vi.fn(),
@@ -43,6 +50,13 @@ vi.mock('../../contexts/AuthContext', () => ({
 
 vi.mock('../../hooks/useDoc', () => ({
   useDoc: () => mocks.view,
+}));
+
+vi.mock('../../hooks/useDocNotes', () => ({
+  useDocNotes: (docId: string) => {
+    mocks.notesDocId = docId;
+    return mocks.notesView;
+  },
 }));
 
 vi.mock('../../hooks/useIsMobile', () => ({
@@ -95,6 +109,48 @@ function setView(view: Partial<DocView>) {
   };
 }
 
+function notesData(overrides: Partial<DocNotes> = {}): DocNotes {
+  return {
+    doc_id: 'd1',
+    instructions: 'Keep the tone formal.',
+    instructions_version: 2,
+    instructions_updated_at: '2026-10-06T09:00:00',
+    instructions_updated_by: null,
+    memories: [],
+    memories_version: 0,
+    can_edit: true,
+    is_owner: true,
+    ...overrides,
+  };
+}
+
+/** The useDocNotes result; by default the gate is closed (as in production
+ *  until an admin opens it), so the Notes panel stays out. */
+function notesView(overrides: Partial<DocNotesView> = {}): DocNotesView {
+  return {
+    enabled: false,
+    notes: null,
+    suggestions: [],
+    loading: false,
+    error: null,
+    notFound: false,
+    suggestionsError: null,
+    reload: vi.fn().mockResolvedValue(undefined),
+    saveInstructions: vi.fn(),
+    addMemory: vi.fn(),
+    updateMemory: vi.fn(),
+    deleteMemory: vi.fn(),
+    acceptSuggestion: vi.fn(),
+    dismissSuggestion: vi.fn(),
+    ...overrides,
+  };
+}
+
+/** The gate open and the doc's notes loaded. */
+function notesOn(overrides: Partial<DocNotesView> = {}): DocNotesView {
+  return notesView({ enabled: true, notes: notesData(), ...overrides });
+}
+
 const DRAFT_KEY = 'quest_doc_draft:me%40example.com:d1';
 
 const viewerUi = () => (
@@ -140,9 +196,19 @@ function footerText(container: HTMLElement): string {
   return container.querySelector('.doc-viewer-footer')?.textContent ?? '';
 }
 
+function viewerRoot(container: HTMLElement): HTMLElement {
+  return container.querySelector('.doc-viewer') as HTMLElement;
+}
+
+function asideOf(container: HTMLElement): HTMLElement {
+  return container.querySelector('aside.doc-viewer-aside') as HTMLElement;
+}
+
 describe('DocViewer', () => {
   beforeEach(() => {
     mocks.isMobile = false;
+    mocks.notesView = notesView();
+    mocks.notesDocId = null;
     mocks.updateDocContent.mockReset();
     mocks.fetchDoc.mockReset();
     mocks.deleteDoc.mockReset();
@@ -227,6 +293,94 @@ describe('DocViewer', () => {
     expect(details.open).toBe(false);
     expect(details.querySelector('summary')?.textContent).toBe('Assets (1)');
     expect(container.querySelector('.right-panel-card')).toBeNull();
+  });
+
+  describe('Notes panel', () => {
+    it('stays out while the doc_notes gate is closed', () => {
+      setView({ doc: doc() });
+      const { container } = renderViewer();
+
+      expect(mocks.notesDocId).toBe('d1');
+      expect(screen.queryByRole('region', { name: 'Notes' })).toBeNull();
+      expect(container.querySelector('[class*="doc-notes-"]')).toBeNull();
+      expect(viewerRoot(container).classList.contains('doc-viewer--notes')).toBe(false);
+      expect(within(asideOf(container)).getByRole('region', { name: 'Assets' })).toBeTruthy();
+    });
+
+    it("sits above Assets in the aside on desktop, with the doc's notes", () => {
+      mocks.notesView = notesOn();
+      setView({ doc: doc() });
+      const { container } = renderViewer();
+
+      expect(mocks.notesDocId).toBe('d1');
+      expect(viewerRoot(container).classList.contains('doc-viewer--notes')).toBe(true);
+      const aside = asideOf(container);
+      const notes = within(aside).getByRole('region', { name: 'Notes' });
+      const assets = within(aside).getByRole('region', { name: 'Assets' });
+      expect(notes.classList.contains('right-panel-card')).toBe(true);
+      expect(notes.compareDocumentPosition(assets) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(within(notes).getByText('Keep the tone formal.')).toBeTruthy();
+      expect(aside.querySelector('details')).toBeNull();
+    });
+
+    it('collapses into a "Notes" section before "Assets (N)" on phones', () => {
+      mocks.isMobile = true;
+      mocks.notesView = notesOn();
+      setView({ doc: doc() });
+      const { container } = renderViewer();
+
+      const sections = [...asideOf(container).querySelectorAll('details')];
+      expect(sections.map((el) => el.querySelector('summary')?.textContent)).toEqual([
+        'Notes',
+        'Assets (1)',
+      ]);
+      expect(sections[0].open).toBe(false);
+      expect(container.querySelector('.right-panel-card')).toBeNull();
+      expect(viewerRoot(container).classList.contains('doc-viewer--notes')).toBe(true);
+    });
+
+    it('stays in edit mode', async () => {
+      mocks.notesView = notesOn();
+      setView({ doc: doc() });
+      const { container } = renderViewer();
+
+      await clickEdit();
+      const root = viewerRoot(container);
+      expect(root.classList.contains('doc-viewer--edit')).toBe(true);
+      expect(root.classList.contains('doc-viewer--notes')).toBe(true);
+      expect(within(asideOf(container)).getByRole('region', { name: 'Notes' })).toBeTruthy();
+    });
+
+    it('stays in History', async () => {
+      mocks.notesView = notesOn();
+      setView({ doc: doc() });
+      const { container } = renderViewer();
+
+      openMenuItem(/History/);
+      // DocHistory is a lazy chunk.
+      await screen.findByRole('button', { name: /Back to doc/ });
+      const root = viewerRoot(container);
+      expect(root.classList.contains('doc-viewer--history')).toBe(true);
+      expect(root.classList.contains('doc-viewer--notes')).toBe(true);
+      expect(within(asideOf(container)).getByRole('region', { name: 'Notes' })).toBeTruthy();
+    });
+
+    it('stays out when the notes are gone (404) or refused with doc_notes_disabled', () => {
+      const refused = new ApiClientError('Doc notes are not available', 403, 'doc_notes_disabled');
+      for (const view of [
+        notesView({ enabled: true, notFound: true }),
+        notesView({ enabled: true, error: refused }),
+      ]) {
+        mocks.notesView = view;
+        setView({ doc: doc() });
+        const { container } = renderViewer();
+        expect(screen.queryByRole('region', { name: 'Notes' })).toBeNull();
+        expect(container.querySelector('[class*="doc-notes-"]')).toBeNull();
+        expect(viewerRoot(container).classList.contains('doc-viewer--notes')).toBe(false);
+        expect(within(asideOf(container)).getByRole('region', { name: 'Assets' })).toBeTruthy();
+        cleanup();
+      }
+    });
   });
 
   describe('empty doc', () => {
