@@ -119,36 +119,46 @@
   color: #fbbf24;
 }
 
+/* Doc note rows draw in the doc rose through the --suggestion-* variables:
+   an open row gets them from .memory-suggestion-row--doc
+   (MemorySuggestions.css), a reviewed one from .memory-inbox-reviewed--doc
+   below. */
 .memory-inbox-kind--doc {
-  border-color: rgb(236 72 153 / 0.45);
-  color: #f472b6;
+  border-color: rgb(var(--suggestion-rgb) / 0.45);
+  color: var(--suggestion-text);
 }
 
-/* A doc note's doc title, in the doc rose, cut to one line. */
-.memory-inbox-doc-link,
+/* A doc note's doc (DocTitleLink): its title as a link, cut to one line. */
+.memory-inbox-doc-link {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  border-radius: 3px;
+  color: var(--suggestion-text);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.memory-inbox-doc-link:hover {
+  color: var(--suggestion-text);
+}
+
+.memory-inbox-doc-link:hover .memory-inbox-doc-title {
+  text-decoration: underline;
+}
+
+.memory-inbox-doc-link:focus-visible {
+  outline: 2px solid var(--suggestion-solid);
+  outline-offset: 2px;
+}
+
+.memory-inbox-doc-title,
 .memory-inbox-doc-unavailable {
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.memory-inbox-doc-link {
-  border-radius: 3px;
-  color: #f472b6;
-  font-weight: 500;
-  text-decoration: none;
-}
-
-.memory-inbox-doc-link:hover {
-  color: #f472b6;
-  text-decoration: underline;
-}
-
-.memory-inbox-doc-link:focus-visible {
-  outline: 2px solid #db2777;
-  outline-offset: 2px;
 }
 
 .memory-inbox-doc-unavailable {
@@ -205,6 +215,12 @@
   opacity: 0.75;
 }
 
+.memory-inbox-reviewed--doc {
+  --suggestion-rgb: 236 72 153;
+  --suggestion-solid: #db2777;
+  --suggestion-text: #f472b6;
+}
+
 .memory-inbox-reviewed-header {
   display: flex;
   align-items: center;
@@ -229,6 +245,12 @@
 .memory-inbox-status-pill--dismissed {
   background-color: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.55);
+}
+
+/* A reviewed doc note's Instructions / Memory pill (the row's pill from
+   MemorySuggestions.css), sized to the status pill beside it. */
+.memory-inbox-note-pill {
+  font-size: 0.7rem;
 }
 
 .memory-inbox-time {
@@ -303,21 +325,16 @@
   }
 
   .memory-inbox-source {
-    color: rgba(0, 0, 0, 0.5);
+    color: rgba(0, 0, 0, 0.6);
   }
 
   .memory-inbox-kind--project {
     color: #a3540a;
   }
 
-  .memory-inbox-kind--doc,
-  .memory-inbox-doc-link,
-  .memory-inbox-doc-link:hover {
-    color: #9d174d;
-  }
-
-  .memory-inbox-doc-link:focus-visible {
-    outline-color: #be185d;
+  .memory-inbox-reviewed--doc {
+    --suggestion-solid: #be185d;
+    --suggestion-text: #9d174d;
   }
 
   .memory-inbox-project {

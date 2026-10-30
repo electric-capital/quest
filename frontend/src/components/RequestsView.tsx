@@ -4,7 +4,8 @@
  * each with its own URL: Requests (/inbox) lists every action request;
  * Memories (/inbox/memories) is the MemoryInbox of suggestions awaiting
  * review (personal and project memories, doc notes). The tab labels carry
- * the unanswered counts.
+ * the unanswered counts (the Memories one from usePendingSuggestionCounts,
+ * like the sidebar badge).
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -12,11 +13,14 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import {
   fetchActionRequestsEnriched,
   fetchActionRequestCounts,
-  fetchMemoryInboxCounts,
   resolveActionRequest,
 } from '../api/client';
 import type { EnrichedActionRequest, ActionRequestCountsResponse } from '../api/types';
 import { useNavigationState } from '../contexts/NavigationContext';
+import {
+  totalPendingSuggestions,
+  usePendingSuggestionCounts,
+} from '../hooks/usePendingSuggestionCounts';
 import { onRequestCountChange } from '../services/requestEvents';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
 import { ReviseFeedbackForm } from './ReviseFeedbackForm';
@@ -33,47 +37,6 @@ export const INBOX_TAB_PATHS: Record<InboxTab, string> = {
   requests: '/inbox',
   memories: '/inbox/memories',
 };
-
-/** The suggestion kind whose ``total_pending`` a per-user global carries, if any. */
-function suggestionCountKind(type: string | undefined): 'user' | 'project' | 'doc' | null {
-  switch (type) {
-    case 'memory_suggestions_changed': return 'user';
-    case 'project_memory_suggestions_changed': return 'project';
-    case 'doc_note_suggestions_changed': return 'doc';
-    default: return null;
-  }
-}
-
-/**
- * The user's pending suggestions of all three kinds (personal and project
- * memories, doc notes), for the Memories tab label: fetched once, then
- * followed through the per-user globals' ``total_pending``.
- */
-function usePendingMemoryCount(): number {
-  const [counts, setCounts] = useState({ user: 0, project: 0, doc: 0 });
-  useEffect(() => {
-    let cancelled = false;
-    fetchMemoryInboxCounts()
-      .then((resp) => {
-        if (!cancelled) setCounts({ user: resp.user, project: resp.project, doc: resp.doc });
-      })
-      .catch(() => {
-        // The label just keeps its last value.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  useEffect(() => {
-    return persistentWebSocket.onGlobalEvent((event) => {
-      const kind = suggestionCountKind(event.type);
-      const total = event.total_pending;
-      if (!kind || typeof total !== 'number') return;
-      setCounts((prev) => ({ ...prev, [kind]: total }));
-    });
-  }, []);
-  return counts.user + counts.project + counts.doc;
-}
 
 /** Format a timestamp as a relative or absolute string. */
 function formatTimestamp(isoTimestamp: string): string {
@@ -105,7 +68,7 @@ export function RequestsView() {
   const location = useLocation();
   // The URL picks the tab (App.tsx keeps the view open on both paths).
   const tab: InboxTab = location.pathname === INBOX_TAB_PATHS.memories ? 'memories' : 'requests';
-  const pendingMemoryCount = usePendingMemoryCount();
+  const pendingMemoryCount = totalPendingSuggestions(usePendingSuggestionCounts());
 
   const [requests, setRequests] = useState<EnrichedActionRequest[]>([]);
   const [loading, setLoading] = useState(true);

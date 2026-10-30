@@ -73,7 +73,7 @@ import type {
 import type { DocNotesView } from '../../hooks/useDocNotes';
 import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatters';
 import { MemorySuggestionRow } from '../MemorySuggestionRow';
-import { docNoteAcceptOptions, withCurrentInstructions } from '../docNoteReview';
+import { docNoteAcceptOptions, instructionsCaughtUp, rebaseOnStale } from '../docNoteReview';
 import { DocConfirmDialog } from './DocConfirmDialog';
 import '../RightPanel.css';
 import '../MemorySuggestions.css';
@@ -270,12 +270,6 @@ function withoutKey<T>(record: Record<string, T>, id: string): Record<string, T>
   return id in record ? filterRecord(record, (key) => key !== id) : record;
 }
 
-/** Whether the hook's row is at least as new as a 409's current instructions. */
-function caughtUp(row: DocNoteSuggestion, current: StaleInstructionsCurrent): boolean {
-  const listed = row.current_instructions_version;
-  return typeof listed === 'number' && listed >= current.instructions_version;
-}
-
 /**
  * The viewer's pending suggestions for this doc, each reviewed in place.
  * Mounted with the notes and empty (null) while there are none, so the
@@ -299,7 +293,7 @@ function SuggestionsSection({ view }: { view: DocNotesView }) {
     setRebases((prev) =>
       filterRecord(prev, (id, current) => {
         const row = live.get(id);
-        return row !== undefined && !caughtUp(row, current);
+        return row !== undefined && !instructionsCaughtUp(row, current);
       }),
     );
   }, [suggestions]);
@@ -354,10 +348,7 @@ function SuggestionsSection({ view }: { view: DocNotesView }) {
       <p className="doc-notes-hint">{SUGGESTIONS_HINT}</p>
       {suggestions.map((suggestion) => {
         const rebase = rebases[suggestion.id];
-        const row =
-          rebase && !caughtUp(suggestion, rebase)
-            ? withCurrentInstructions(suggestion, rebase)
-            : suggestion;
+        const row = rebase ? rebaseOnStale(suggestion, rebase) : suggestion;
         return (
           <MemorySuggestionRow
             key={row.id}

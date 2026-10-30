@@ -26,6 +26,14 @@
  * server's message and re-fetches the list, so the next Accept is against
  * what the user sees and the count matches the list again.
  *
+ * A list fetch runs on open and whenever the count changes while open; a
+ * newer fetch cancels an older one. Rows accepted or dismissed here are
+ * left out of every fetch (and of the count it reports) rather than the
+ * fetch being dropped: the server publishes the count event inside the
+ * accept, so the fetch it starts often lands around the accept's response
+ * and carries the other rows as the accept left them (a second
+ * instructions row on the same doc, re-based on the new instructions).
+ *
  * ``MemorySuggestionsBar`` is the row ChatPanel renders above the composer:
  * the three bubbles side by side, personal, project, doc.
  */
@@ -51,10 +59,16 @@ import {
 } from '../api/docsApi';
 import { ApiClientError } from '../api/request';
 import type { DocNoteSuggestion, MemorySuggestion } from '../api/types';
+import type { PendingSuggestionCounts } from '../hooks/usePendingSuggestionCounts';
 import { conversationStore } from '../store/conversationStore';
 import { MemorySuggestionRow } from './MemorySuggestionRow';
 import type { MemorySuggestionKind, MemorySuggestionRowStateProps } from './MemorySuggestionRow';
-import { canAcceptDocNote, docNoteAcceptOptions, withCurrentInstructions } from './docNoteReview';
+import {
+  canAcceptDocNote,
+  docNoteAcceptOptions,
+  editedText,
+  rebaseOnStale,
+} from './docNoteReview';
 import './MemorySuggestions.css';
 
 export type { MemorySuggestionKind };
@@ -89,16 +103,6 @@ interface KindConfig<S extends MemorySuggestion | DocNoteSuggestion> {
    */
   conflict?: (err: unknown) => { rebase: ((row: S) => S) | null } | null;
   renderRow: (suggestion: S, state: MemorySuggestionRowStateProps) => ReactNode;
-}
-
-/**
- * The edited text to send, or undefined while the draft keeps the proposal.
- * An archive-only row (no content) has no text to edit, so it never sends one.
- */
-function editedText(suggestion: MemorySuggestion, draft: string | undefined): string | undefined {
-  if (suggestion.content === null) return undefined;
-  const edited = draft !== undefined && draft.trim() !== suggestion.content.trim();
-  return edited ? draft.trim() : undefined;
 }
 
 const KIND_CONFIG: {
@@ -153,15 +157,8 @@ const KIND_CONFIG: {
       if (!isStaleInstructionsError(err)) return null;
       const current = staleInstructionsCurrent(err);
       if (!current) return { rebase: null };
-      return {
-        // A list fetch that landed during the accept may already be as new.
-        rebase: (row) => (
-          typeof row.current_instructions_version === 'number'
-          && row.current_instructions_version >= current.instructions_version
-            ? row
-            : withCurrentInstructions(row, current)
-        ),
-      };
+      // A list fetch that landed during the accept may already be as new.
+      return { rebase: (row) => rebaseOnStale(row, current) };
     },
     renderRow: (s, state) => <MemorySuggestionRow kind="doc" suggestion={s} {...state} />,
   },
@@ -197,15 +194,9 @@ export function MemorySuggestions({
   );
 }
 
-/** A conversation's pending suggestion counts, one per kind (useConversation). */
-export interface PendingSuggestionCounts {
-  user: number;
-  project: number;
-  doc: number;
-}
-
 interface MemorySuggestionsBarProps {
   conversationId: string;
+  /** The conversation's pending counts, one per kind (useConversation). */
   pending: PendingSuggestionCounts;
 }
 
@@ -261,9 +252,9 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [isBulkBusy, setIsBulkBusy] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
-  // Bumped on every local accept / dismiss so a list fetch that was already
-  // in flight cannot land afterwards and resurrect the row just removed.
-  const listGenerationRef = useRef(0);
+  // Rows accepted or dismissed here: every list fetch leaves them out, so a
+  // fetch that started before the accept cannot bring the row back.
+  const resolvedIdsRef = useRef(new Set<string>());
 
   // A new conversation starts closed.
   useEffect(() => {
@@ -271,6 +262,7 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
     setSuggestions([]);
     setDrafts({});
     setRowErrors({});
+    resolvedIdsRef.current = new Set();
   }, [conversationId]);
 
   // Load on open and whenever the count changes while open (the count is
@@ -280,18 +272,23 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
-    const generation = listGenerationRef.current;
     setIsLoading(true);
     setLoadError(null);
     config.fetchList(conversationId)
       .then((resp) => {
-        if (cancelled || generation !== listGenerationRef.current) return;
+        if (cancelled) return;
+        const resolvedIds = resolvedIdsRef.current;
+        const rows = resp.suggestions.filter((s) => !resolvedIds.has(s.id));
         // The list is the source of truth for the count too: it reconciles
-        // the bubble after a dropped socket missed an event.
-        config.setCount(conversationId, resp.pending_count);
-        setSuggestions(resp.suggestions);
+        // the bubble after a dropped socket missed an event. A row resolved
+        // here that the fetch still listed is not counted.
+        config.setCount(
+          conversationId,
+          Math.max(0, resp.pending_count - (resp.suggestions.length - rows.length)),
+        );
+        setSuggestions(rows);
         setDrafts((prev) => {
-          const live = new Set(resp.suggestions.map((s) => s.id));
+          const live = new Set(rows.map((s) => s.id));
           const next: Record<string, string> = {};
           for (const [id, text] of Object.entries(prev)) {
             if (live.has(id)) next[id] = text;
@@ -331,7 +328,7 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
   }, [isOpen]);
 
   const removeRow = useCallback((id: string) => {
-    listGenerationRef.current += 1;
+    resolvedIdsRef.current.add(id);
     setSuggestions((prev) => prev.filter((s) => s.id !== id));
     setDrafts((prev) => {
       if (!(id in prev)) return prev;

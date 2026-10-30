@@ -5,8 +5,11 @@
 // more fallback), a per-user global re-reading the open list, and rows of
 // a kind this tab does not know left out of both lists. Doc rows add their
 // doc link (or "Unavailable doc"), the instructions version on accept, the
-// re-base on a 409 stale_instructions, and an Accept all that skips a doc
-// row its own Accept refuses.
+// re-base on a 409 stale_instructions, the read the accept's own event
+// starts kept (it re-bases a second instructions row on the same doc), the
+// server's message on any other refusal, the Instructions / Memory pill on
+// reviewed rows, and an Accept all that skips a doc row its own Accept
+// refuses.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -152,7 +155,8 @@ function resolvedDoc(s: DocNoteInboxSuggestion, status: 'accepted' | 'dismissed'
   };
 }
 
-const STALE_MESSAGE = 'The instructions changed since this was suggested. Review the current text and accept again.';
+const STALE_MESSAGE = "The doc's instructions changed since this suggestion was shown. "
+  + 'Review it against the current text and accept again.';
 
 /** The flat 409 stale_instructions as request.ts maps it. */
 function staleError(current: { instructions: string; instructions_version: number } | null) {
@@ -573,6 +577,8 @@ describe('MemoryInbox', () => {
     const done = reviewedRegion();
     expect(within(done).getAllByText('Accepted')).toHaveLength(3);
     expect(within(done).getAllByText('Doc note')).toHaveLength(2);
+    expect(Array.from(done.querySelectorAll('.memory-inbox-note-pill')).map((el) => el.textContent))
+      .toEqual(['Memory', 'Instructions']);
     expect(within(done).getByRole('link', { name: 'Doc d1' }).getAttribute('href')).toBe('/docs/doc-d1');
     expect(within(done).getByRole('link', { name: 'Doc d2' }).getAttribute('href')).toBe('/docs/doc-d2');
     expect(within(done).getByRole('button', { name: 'Chat d2' })).not.toBeNull();
@@ -699,6 +705,42 @@ describe('MemoryInbox', () => {
       .toHaveBeenLastCalledWith('d1', { expectedInstructionsVersion: 5 }));
   });
 
+  it('drops a read in flight when the 409 lands, even one landing before the re-read', async () => {
+    servePending([docInstructions('d1', 'Prices are in EUR.')]);
+    const accept = deferred<unknown>();
+    mocks.acceptDocNoteSuggestion.mockImplementationOnce(() => accept.promise);
+    renderInbox(<MemoryInbox onGoToConversation={vi.fn()} />);
+    await screen.findByDisplayValue('Prices are in EUR.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(mocks.acceptDocNoteSuggestion).toHaveBeenCalledTimes(1));
+    const stale = deferred<PendingList>();
+    mocks.fetchMemoryInboxPending.mockImplementationOnce(() => stale.promise);
+    emit({ type: 'doc_note_suggestions_changed', conversation_id: 'x', pending_count: 1, total_pending: 1 });
+    await waitFor(() => expect(mocks.fetchMemoryInboxPending).toHaveBeenCalledTimes(2));
+
+    const fresh = deferred<PendingList>();
+    mocks.fetchMemoryInboxPending.mockImplementationOnce(() => fresh.promise);
+    await act(async () => {
+      accept.reject(staleError({ instructions: 'Prices are in GBP.', instructions_version: 4 }));
+    });
+    await waitFor(() => expect(mocks.fetchMemoryInboxPending).toHaveBeenCalledTimes(3));
+    // The read from before the 409 lands first, with the old row: dropped.
+    await act(async () => {
+      stale.resolve({ suggestions: [docInstructions('d1', 'Prices are in EUR.')], pending_count: 1 });
+    });
+    expect(diffBodies()[0].querySelector('.memory-suggestion-diff-del')!.textContent).toBe('GBP.');
+    await act(async () => {
+      fresh.resolve({
+        suggestions: [docInstructions('d1', 'Prices are in EUR.', {
+          current_instructions: 'Prices are in GBP.', current_instructions_version: 4,
+        })],
+        pending_count: 1,
+      });
+    });
+    expect(diffBodies()[0].querySelector('.memory-suggestion-diff-del')!.textContent).toBe('GBP.');
+  });
+
   it('keeps a newer row that a list read brought in during the accept', async () => {
     servePending([docInstructions('d1', 'Prices are in EUR.')]);
     const accept = deferred<unknown>();
@@ -751,6 +793,110 @@ describe('MemoryInbox', () => {
       'd1',
       { content: 'Prices are in EUR, always.', expectedInstructionsVersion: 6 },
     ));
+  });
+
+  it("keeps the read the accept's own event starts, re-basing a second instructions row", async () => {
+    // Two instructions proposals for one doc, both diffed against version 3.
+    const d1 = docInstructions('d1', 'Prices are in EUR.');
+    const d2 = docInstructions('d2', 'Prices are in GBP.', { doc_id: 'doc-d1' });
+    servePending([d1, d2]);
+    const accept = deferred<unknown>();
+    mocks.acceptDocNoteSuggestion
+      .mockImplementationOnce(() => accept.promise)
+      .mockResolvedValueOnce(resolvedDoc(d2, 'accepted'));
+    renderInbox(<MemoryInbox onGoToConversation={vi.fn()} />);
+    await screen.findByDisplayValue('Prices are in GBP.');
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Accept' })[0]);
+    await waitFor(() => expect(mocks.acceptDocNoteSuggestion)
+      .toHaveBeenCalledWith('d1', { expectedInstructionsVersion: 3 }));
+    // The server publishes the event inside the accept: the read it starts
+    // is still in flight when the accept's response lands...
+    const eventRead = deferred<PendingList>();
+    mocks.fetchMemoryInboxPending.mockImplementationOnce(() => eventRead.promise);
+    emit({ type: 'doc_note_suggestions_changed', conversation_id: 'conv-d1', pending_count: 1, total_pending: 1 });
+    await waitFor(() => expect(mocks.fetchMemoryInboxPending).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      accept.resolve(resolvedDoc(d1, 'accepted'));
+    });
+    await waitFor(() => expect(screen.queryByDisplayValue('Prices are in EUR.')).toBeNull());
+    expect(reviewedContents()).toEqual(['Prices are in EUR.']);
+
+    // ...and still lands: the second row's diff starts from the accepted text.
+    await act(async () => {
+      eventRead.resolve({
+        suggestions: [docInstructions('d2', 'Prices are in GBP.', {
+          doc_id: 'doc-d1',
+          current_instructions: 'Prices are in EUR.',
+          current_instructions_version: 4,
+          instructions_moved: true,
+        })],
+        pending_count: 1,
+      });
+    });
+    const body = diffBodies()[0];
+    expect(body.querySelector('.memory-suggestion-diff-del')!.textContent).toBe('EUR.');
+    expect(body.querySelector('.memory-suggestion-diff-add')!.textContent).toBe('GBP.');
+    expect(document.querySelector('.memory-suggestion-moved')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(mocks.acceptDocNoteSuggestion)
+      .toHaveBeenLastCalledWith('d2', { expectedInstructionsVersion: 4 }));
+    expect(mocks.fetchMemoryInboxPending).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not bring back a row resolved here when an older read lands', async () => {
+    servePending([row('s1', 'Likes tea'), docRow('d1', 'Uses metric units')]);
+    mocks.dismissMemorySuggestion.mockResolvedValue({
+      suggestion: { ...row('s1', 'Likes tea'), status: 'dismissed', resolved_at: '2026-10-15T00:00:00' },
+    });
+    renderInbox(<MemoryInbox onGoToConversation={vi.fn()} />);
+    await screen.findByDisplayValue('Likes tea');
+
+    // A read starts before the dismiss and lands after it.
+    const older = deferred<PendingList>();
+    mocks.fetchMemoryInboxPending.mockImplementationOnce(() => older.promise);
+    emit({ type: 'memory_suggestions_changed', conversation_id: 'conv-s1', pending_count: 1, total_pending: 1 });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss' })[0]);
+    await waitFor(() => expect(screen.queryByDisplayValue('Likes tea')).toBeNull());
+    await act(async () => {
+      older.resolve({
+        suggestions: [row('s1', 'Likes tea'), docRow('d1', 'Uses metric units'), docRow('d2', 'Q3 ends in September.')],
+        pending_count: 3,
+      });
+    });
+    expect(screen.queryByDisplayValue('Likes tea')).toBeNull();
+    expect(textboxValues(openRegion())).toEqual(['Uses metric units', 'Q3 ends in September.']);
+  });
+
+  it.each([
+    ['forbidden', 403, "Only the doc's owner can change its instructions."],
+    ['duplicate_memory', 409, 'This doc already has a memory with exactly this text.'],
+    ['memories_cap_reached', 409, 'This doc already has the maximum of 50 memories. Delete or edit one instead.'],
+  ])('keeps the doc row and shows the server message on %s', async (code, status, message) => {
+    servePending([docInstructions('d1', 'Prices are in EUR.'), docRow('d2', 'Uses metric units')]);
+    mocks.acceptDocNoteSuggestion.mockRejectedValueOnce(new ApiClientError(message, status, code));
+    renderInbox(<MemoryInbox onGoToConversation={vi.fn()} />);
+    await screen.findByDisplayValue('Uses metric units');
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Accept' })[code === 'forbidden' ? 0 : 1]);
+    expect((await screen.findByRole('alert')).textContent).toBe(message);
+    expect(textboxValues(openRegion())).toEqual(['Prices are in EUR.', 'Uses metric units']);
+    expect(reviewedContents()).toEqual([]);
+    // Not a conflict: no re-base and no re-read.
+    expect(diffBodies()[0].textContent).toBe('Prices are in USD. EUR.');
+    expect(mocks.fetchMemoryInboxPending).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to "Failed to save doc note" for an error without a message', async () => {
+    servePending([docRow('d1', 'Uses metric units')]);
+    mocks.acceptDocNoteSuggestion.mockRejectedValueOnce(new ApiClientError('', 500, 'server_error'));
+    renderInbox(<MemoryInbox onGoToConversation={vi.fn()} />);
+    await screen.findByDisplayValue('Uses metric units');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    expect((await screen.findByRole('alert')).textContent).toBe('Failed to save doc note');
+    expect(screen.getByDisplayValue('Uses metric units')).not.toBeNull();
   });
 
   it('drops a doc row resolved elsewhere without an error', async () => {
@@ -848,6 +994,13 @@ describe('MemoryInbox', () => {
       .toEqual(['Accepted', 'Accepted', 'Dismissed']);
     expect(items.map((el) => el.querySelector('.memory-inbox-kind')?.textContent))
       .toEqual(['Doc note', 'Memory', 'Doc note']);
+    // A doc note's header says which note it was; a memory's has no such pill.
+    const notePills = items.map((el) => el.querySelector('.memory-inbox-reviewed-header .memory-inbox-note-pill'));
+    expect(notePills.map((el) => el?.textContent ?? null)).toEqual(['Memory', null, 'Instructions']);
+    expect(notePills[0]!.getAttribute('title')).toBe('A doc memory: a fact models read before they change the doc');
+    expect(notePills[2]!.getAttribute('title'))
+      .toBe("Instructions: the doc's rules, which models follow before they change it");
+    expect(items.map((el) => el.classList.contains('memory-inbox-reviewed--doc'))).toEqual([true, false, true]);
     expect(within(items[0]).getByRole('link', { name: 'Doc d1' }).getAttribute('href')).toBe('/docs/doc-d1');
     expect(within(items[0]).getByRole('button', { name: 'Chat d1' })).not.toBeNull();
     expect(within(items[2]).getByText('Unavailable doc')).not.toBeNull();
@@ -856,6 +1009,30 @@ describe('MemoryInbox', () => {
 
     fireEvent.click(within(items[0]).getByRole('link', { name: 'Doc d1' }));
     expect(onOpenDoc).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops an older read that lands after a newer one', async () => {
+    servePending([row('s1', 'A')]);
+    renderInbox(<MemoryInbox onGoToConversation={vi.fn()} />);
+    await screen.findByDisplayValue('A');
+
+    const older = deferred<PendingList>();
+    const newer = deferred<PendingList>();
+    mocks.fetchMemoryInboxPending
+      .mockImplementationOnce(() => older.promise)
+      .mockImplementationOnce(() => newer.promise);
+    emit({ type: 'memory_suggestions_changed', conversation_id: 'x', pending_count: 2, total_pending: 2 });
+    emit({ type: 'doc_note_suggestions_changed', conversation_id: 'x', pending_count: 1, total_pending: 1 });
+    await waitFor(() => expect(mocks.fetchMemoryInboxPending).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      newer.resolve({ suggestions: [row('s1', 'A'), docRow('d1', 'Uses metric units')], pending_count: 2 });
+    });
+    await screen.findByDisplayValue('Uses metric units');
+    await act(async () => {
+      older.resolve({ suggestions: [row('s1', 'A')], pending_count: 1 });
+    });
+    expect(textboxValues(openRegion())).toEqual(['A', 'Uses metric units']);
   });
 
   it('re-reads the open list on a doc note suggestions event', async () => {

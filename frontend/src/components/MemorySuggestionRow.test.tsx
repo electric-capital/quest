@@ -5,13 +5,14 @@
 // notice, the doc-memory replacement diff and orphan pill, the cap counter
 // (code points of the trimmed draft, " characters" for screen readers) that
 // disables Accept over the cap, and the textarea labels. A personal row keeps none of the doc additions. The
-// row is presentational, so a small harness owns the draft.
+// row is presentational, so a small harness owns the draft. DocTitleLink,
+// shared with the inbox, takes its classes from a prefix and its icon on request.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import type { DocNoteSuggestion, MemorySuggestion } from '../api/types';
-import { MemorySuggestionRow } from './MemorySuggestionRow';
+import { DocTitleLink, MemorySuggestionRow } from './MemorySuggestionRow';
 
 const docNote = (extra: Partial<DocNoteSuggestion> = {}): DocNoteSuggestion => ({
   id: 'dn1',
@@ -230,6 +231,39 @@ describe('MemorySuggestionRow kind="doc": doc link', () => {
     expect(onOpenDoc).not.toHaveBeenCalled();
     fireEvent.click(link);
     expect(onOpenDoc).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DocTitleLink', () => {
+  it('links the title with classes from the prefix, the icon only on request', () => {
+    const { container, rerender } = render(
+      <MemoryRouter>
+        <DocTitleLink suggestion={docNote()} classPrefix="memory-inbox-doc" />
+      </MemoryRouter>,
+    );
+    const link = screen.getByRole('link', { name: 'Quarterly plan' });
+    expect(link.getAttribute('href')).toBe('/docs/doc-1');
+    expect(link.className).toBe('memory-inbox-doc-link');
+    expect(link.getAttribute('title')).toBe('Quarterly plan');
+    expect(link.querySelector('.memory-inbox-doc-title')?.textContent).toBe('Quarterly plan');
+    expect(link.querySelector('svg')).toBeNull();
+
+    rerender(
+      <MemoryRouter>
+        <DocTitleLink suggestion={docNote()} classPrefix="memory-suggestion-doc" icon />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('link', { name: 'Quarterly plan' }).querySelector('svg')).not.toBeNull();
+
+    rerender(
+      <MemoryRouter>
+        <DocTitleLink suggestion={docNote({ doc_title: '' })} classPrefix="memory-inbox-doc" />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole('link')).toBeNull();
+    const label = container.querySelector('.memory-inbox-doc-unavailable')!;
+    expect(label.textContent).toBe('Unavailable doc');
+    expect(label.getAttribute('title')).toBe('This doc was deleted or you no longer have access to it');
   });
 });
 

@@ -17,11 +17,16 @@
  * ``stale_instructions`` re-bases the row on the current text it carries
  * (unless the row in state is already as new), keeps the draft, shows the
  * server's message and re-reads the open list, as the composer bubble does.
+ *
+ * The open list is re-read on every suggestion event. The newest read to
+ * start wins (an older one landing later is dropped), and rows accepted or
+ * dismissed here are left out of every read, so a read that started before
+ * the accept cannot bring the row back while the one the accept's own event
+ * starts (often before the accept's response) still lands, with the other
+ * rows as the accept left them.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { MouseEvent } from 'react';
-import { Link } from 'react-router-dom';
 import { Brain, FileText, FolderBookmark, LoaderCircle, Moon } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -46,12 +51,17 @@ import type {
   MemorySuggestion,
   StaleInstructionsCurrent,
 } from '../api/types';
+import { suggestionCountKind } from '../hooks/usePendingSuggestionCounts';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
-import { docViewerPath } from '../utils/docsRoute';
 import { formatRelativeTimestamp } from '../utils/formatters';
-import { MemorySuggestionRow } from './MemorySuggestionRow';
+import { DOC_NOTE_LABELS, DocTitleLink, MemorySuggestionRow } from './MemorySuggestionRow';
 import type { MemorySuggestionRowStateProps } from './MemorySuggestionRow';
-import { canAcceptDocNote, docNoteAcceptOptions, withCurrentInstructions } from './docNoteReview';
+import {
+  canAcceptDocNote,
+  docNoteAcceptOptions,
+  editedText,
+  rebaseOnStale,
+} from './docNoteReview';
 import './MemorySuggestions.css';
 import './MemoryInbox.css';
 
@@ -69,16 +79,6 @@ interface KindApi<R extends MemoryInboxRow> {
   saveError: string;
   /** Accept all skips a row this refuses (absent = every row is tried). */
   canAccept?: (row: R, draft: string | undefined) => boolean;
-}
-
-/**
- * The edited text to send, or undefined while the draft keeps the proposal.
- * An archive-only row (no content) has no text to edit, so it never sends one.
- */
-function editedText(row: MemoryInboxSuggestion, draft: string | undefined): string | undefined {
-  if (row.content === null) return undefined;
-  const edited = draft !== undefined && draft.trim() !== row.content.trim();
-  return edited ? draft.trim() : undefined;
 }
 
 const KIND_API: {
@@ -154,9 +154,6 @@ const KIND_LABELS: Record<MemoryInboxRow['kind'], { Icon: LucideIcon; label: str
   },
 };
 
-const UNAVAILABLE_DOC_LABEL = 'Unavailable doc';
-const UNAVAILABLE_DOC_TITLE = 'This doc was deleted or you no longer have access to it';
-
 interface MemoryInboxProps {
   onGoToConversation: (conversationId: string, projectId?: string | null) => void;
   /** Called on a plain click of a doc row's doc link, before the navigation. */
@@ -166,39 +163,6 @@ interface MemoryInboxProps {
 function errorMessage(err: unknown, fallback: string): string {
   if (err instanceof Error && err.message) return err.message;
   return fallback;
-}
-
-/**
- * A doc row's doc: its title linking to the doc viewer, or a neutral
- * "Unavailable doc" when the doc is gone or no longer visible to the user.
- */
-function DocSource({
-  suggestion,
-  onOpenDoc,
-}: { suggestion: DocNoteInboxSuggestion; onOpenDoc?: () => void }) {
-  const docTitle = suggestion.doc_title ?? '';
-  if (!docTitle) {
-    return (
-      <span className="memory-inbox-doc-unavailable" title={UNAVAILABLE_DOC_TITLE}>
-        {UNAVAILABLE_DOC_LABEL}
-      </span>
-    );
-  }
-  const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
-    // A modified click opens a new tab; the inbox stays where it is.
-    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    onOpenDoc?.();
-  };
-  return (
-    <Link
-      to={docViewerPath(suggestion.doc_id)}
-      className="memory-inbox-doc-link"
-      title={docTitle}
-      onClick={onClick}
-    >
-      {docTitle}
-    </Link>
-  );
 }
 
 /**
@@ -225,7 +189,9 @@ function SuggestionSource({
         <Icon size={12} aria-hidden="true" />
         {label}
       </span>
-      {suggestion.kind === 'doc' && <DocSource suggestion={suggestion} onOpenDoc={onOpenDoc} />}
+      {suggestion.kind === 'doc' && (
+        <DocTitleLink suggestion={suggestion} classPrefix="memory-inbox-doc" onOpenDoc={onOpenDoc} />
+      )}
       {fromReview || conversationId === null ? (
         <span
           className="memory-inbox-from memory-inbox-from--dream"
@@ -274,17 +240,24 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
   const loadingMoreRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
-  // Bumped on every local accept / dismiss so a pending-list fetch already
-  // in flight cannot resurrect the row just removed, and before the re-read
-  // after an accept conflict so one in flight cannot land after it.
-  const generationRef = useRef(0);
+  // Open-list reads are numbered as they start; one numbered below the floor
+  // is dropped when it lands. Applying a read raises the floor to it (older
+  // reads still in flight are stale), and an accept conflict raises it past
+  // every read started so far before it re-reads.
+  const readSeqRef = useRef(0);
+  const readFloorRef = useRef(0);
+  // Rows accepted or dismissed here, left out of every read.
+  const resolvedIdsRef = useRef(new Set<string>());
 
   const loadPending = useCallback(async () => {
-    const generation = generationRef.current;
+    const seq = ++readSeqRef.current;
     try {
       const resp = await fetchMemoryInboxPending();
-      if (generation !== generationRef.current) return;
-      const rows = resp.suggestions.filter(isReviewableRow);
+      if (seq < readFloorRef.current) return;
+      readFloorRef.current = seq;
+      const rows = resp.suggestions.filter(
+        (row) => isReviewableRow(row) && !resolvedIdsRef.current.has(row.id),
+      );
       setPending(rows);
       setPendingError(null);
       setDrafts((prev) => {
@@ -296,7 +269,7 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
         return next;
       });
     } catch (err) {
-      if (generation !== generationRef.current) return;
+      if (seq < readFloorRef.current) return;
       setPendingError(errorMessage(err, 'Failed to load suggestions'));
       setPending((prev) => prev ?? []);
     }
@@ -336,11 +309,7 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
   // per-user globals carry the user's new totals, so re-read the open list.
   useEffect(() => {
     return persistentWebSocket.onGlobalEvent((event) => {
-      if (
-        event.type !== 'memory_suggestions_changed'
-        && event.type !== 'project_memory_suggestions_changed'
-        && event.type !== 'doc_note_suggestions_changed'
-      ) return;
+      if (!suggestionCountKind(event.type)) return;
       void loadPending();
     });
   }, [loadPending]);
@@ -370,7 +339,7 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
   }, []);
 
   const removePending = useCallback((id: string) => {
-    generationRef.current += 1;
+    resolvedIdsRef.current.add(id);
     setPending((prev) => (prev ? prev.filter((s) => s.id !== id) : prev));
     setDrafts((prev) => {
       if (!(id in prev)) return prev;
@@ -390,17 +359,14 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
   // the row as it is in state now on the current text the 409 carries
   // (unless a list read during the accept already brought it as new), so
   // the diff shows what accepting now replaces; then re-read the list,
-  // superseding a read already in flight.
+  // superseding every read already in flight.
   const rebaseStaleRow = useCallback((id: string, current: StaleInstructionsCurrent | null) => {
     if (current) {
-      setPending((prev) => prev && prev.map((s) => {
-        if (s.id !== id || s.kind !== 'doc') return s;
-        const asNew = typeof s.current_instructions_version === 'number'
-          && s.current_instructions_version >= current.instructions_version;
-        return asNew ? s : { ...s, ...withCurrentInstructions(s, current) };
-      }));
+      setPending((prev) => prev && prev.map((s) => (
+        s.id === id && s.kind === 'doc' ? rebaseOnStale(s, current) : s
+      )));
     }
-    generationRef.current += 1;
+    readFloorRef.current = readSeqRef.current + 1;
     void loadPending();
   }, [loadPending]);
 
@@ -594,12 +560,21 @@ export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps)
             {resolved.map((suggestion) => (
               <div
                 key={suggestion.id}
-                className={`memory-inbox-reviewed memory-inbox-reviewed--${suggestion.status}`}
+                className={`memory-inbox-reviewed memory-inbox-reviewed--${suggestion.status}`
+                  + ` memory-inbox-reviewed--${suggestion.kind}`}
               >
                 <div className="memory-inbox-reviewed-header">
                   <span className={`memory-inbox-status-pill memory-inbox-status-pill--${suggestion.status}`}>
                     {suggestion.status === 'accepted' ? 'Accepted' : 'Dismissed'}
                   </span>
+                  {suggestion.kind === 'doc' && (
+                    <span
+                      className="memory-suggestion-pill memory-inbox-note-pill"
+                      title={DOC_NOTE_LABELS[suggestion.note_kind].pillTitle}
+                    >
+                      {DOC_NOTE_LABELS[suggestion.note_kind].pill}
+                    </span>
+                  )}
                   {suggestion.resolved_at && (
                     <span className="memory-inbox-time" title={suggestion.resolved_at}>
                       {formatRelativeTimestamp(suggestion.resolved_at)}

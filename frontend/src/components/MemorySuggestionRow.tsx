@@ -19,6 +19,9 @@
  *
  * Styled by MemorySuggestions.css: ``.memory-suggestion-row--<kind>`` sets
  * the colour (the accent for ``user``, the project amber, the doc rose).
+ *
+ * ``DocTitleLink`` (a doc note's title linking to its viewer, or
+ * "Unavailable doc") is shared with the inbox's source line.
  */
 
 import { useId, useLayoutEffect, useMemo, useRef } from 'react';
@@ -144,6 +147,50 @@ function ReplacementDiff({
   );
 }
 
+interface DocTitleLinkProps {
+  suggestion: DocNoteSuggestion;
+  /**
+   * Class prefix: the link is ``<prefix>-link``, the title inside it
+   * ``<prefix>-title`` and the unavailable label ``<prefix>-unavailable``.
+   */
+  classPrefix: string;
+  /** Show the sidebar's Docs icon (FileText) before the title. */
+  icon?: boolean;
+  /** Called on a plain left click of the link, before the navigation. */
+  onOpenDoc?: () => void;
+}
+
+/**
+ * A doc note's doc: its title as a link to the doc viewer, or a neutral
+ * "Unavailable doc" (no link) when the doc was deleted or is no longer
+ * visible to the user. ``onOpenDoc`` fires only on a plain left click; a
+ * modified click opens a new tab and the current view stays.
+ */
+export function DocTitleLink({ suggestion, classPrefix, icon = false, onOpenDoc }: DocTitleLinkProps) {
+  if (!isDocNoteDocAvailable(suggestion)) {
+    return (
+      <span className={`${classPrefix}-unavailable`} title={UNAVAILABLE_DOC_TITLE}>
+        {UNAVAILABLE_DOC_LABEL}
+      </span>
+    );
+  }
+  const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    onOpenDoc?.();
+  };
+  return (
+    <Link
+      to={docViewerPath(suggestion.doc_id)}
+      className={`${classPrefix}-link`}
+      title={suggestion.doc_title}
+      onClick={onClick}
+    >
+      {icon && <FileText size={13} aria-hidden="true" />}
+      <span className={`${classPrefix}-title`}>{suggestion.doc_title}</span>
+    </Link>
+  );
+}
+
 /**
  * A doc row's header line: the Instructions / Memory pill, then the doc's
  * title as a link to its viewer ("Unavailable doc" when the doc is gone or
@@ -155,30 +202,17 @@ function DocNoteHeader({
   onOpenDoc,
 }: { suggestion: DocNoteSuggestion; showDocLink: boolean; onOpenDoc?: () => void }) {
   const labels = DOC_NOTE_LABELS[suggestion.note_kind];
-  const docTitle = isDocNoteDocAvailable(suggestion) ? suggestion.doc_title : '';
-  const onLinkClick = (e: MouseEvent<HTMLAnchorElement>) => {
-    // A modified click opens a new tab; this view stays where it is.
-    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    onOpenDoc?.();
-  };
   return (
     <div className="memory-suggestion-doc-header">
       <span className="memory-suggestion-pill" title={labels.pillTitle}>{labels.pill}</span>
-      {showDocLink && (docTitle ? (
-        <Link
-          to={docViewerPath(suggestion.doc_id)}
-          className="memory-suggestion-doc-link"
-          title={docTitle}
-          onClick={onLinkClick}
-        >
-          <FileText size={13} aria-hidden="true" />
-          <span className="memory-suggestion-doc-title">{docTitle}</span>
-        </Link>
-      ) : (
-        <span className="memory-suggestion-doc-unavailable" title={UNAVAILABLE_DOC_TITLE}>
-          {UNAVAILABLE_DOC_LABEL}
-        </span>
-      ))}
+      {showDocLink && (
+        <DocTitleLink
+          suggestion={suggestion}
+          classPrefix="memory-suggestion-doc"
+          icon
+          onOpenDoc={onOpenDoc}
+        />
+      )}
     </div>
   );
 }

@@ -1,9 +1,10 @@
 /**
- * Review helpers for doc note suggestions, shared by every surface that
- * accepts them (the composer bubble in MemorySuggestions.tsx, the doc
- * viewer's Notes panel, the inbox's Memories tab): the caps as the server
- * counts them, when Accept is allowed and what it sends, and how a row is
- * re-based on the current instructions a 409 `stale_instructions` carries.
+ * Review helpers for suggestions, shared by every surface that accepts them
+ * (the composer bubble in MemorySuggestions.tsx, the doc viewer's Notes
+ * panel, the inbox's Memories tab): the edited text an Accept sends for any
+ * kind, and for doc notes the caps as the server counts them, when Accept is
+ * allowed and what it sends, and how a row is re-based on the current
+ * instructions a 409 `stale_instructions` carries.
  */
 
 import {
@@ -17,6 +18,22 @@ import type {
   MemorySuggestion,
   StaleInstructionsCurrent,
 } from '../api/types';
+
+/**
+ * The edited text an Accept sends: the trimmed draft once it differs from
+ * the proposal, else undefined (the draft is untouched or only re-spaced,
+ * so the proposed text is saved as it is). An archive-only memory row
+ * (`content` null, a dream's proposal to retire a memory) has no text to
+ * edit, so it never sends one.
+ */
+export function editedText(
+  s: { content: string | null },
+  draft: string | undefined,
+): string | undefined {
+  if (s.content === null) return undefined;
+  if (draft === undefined || draft.trim() === s.content.trim()) return undefined;
+  return draft.trim();
+}
 
 /** A doc note row (it has `note_kind`), not a personal or project memory row. */
 export function isDocNoteSuggestion(
@@ -68,9 +85,8 @@ export function docNoteAcceptOptions(
   draft: string | undefined,
 ): AcceptDocNoteSuggestionOptions {
   const opts: AcceptDocNoteSuggestionOptions = {};
-  if (draft !== undefined && draft.trim() !== s.content.trim()) {
-    opts.content = draft.trim();
-  }
+  const content = editedText(s, draft);
+  if (content !== undefined) opts.content = content;
   if (s.note_kind === 'instructions' && typeof s.current_instructions_version === 'number') {
     opts.expectedInstructionsVersion = s.current_instructions_version;
   }
@@ -83,10 +99,10 @@ export function docNoteAcceptOptions(
  * and `instructions_moved` says whether the instructions moved past the
  * version the proposal was written against.
  */
-export function withCurrentInstructions(
-  s: DocNoteSuggestion,
+export function withCurrentInstructions<S extends DocNoteSuggestion>(
+  s: S,
   current: StaleInstructionsCurrent,
-): DocNoteSuggestion {
+): S {
   return {
     ...s,
     current_instructions: current.instructions,
@@ -95,4 +111,29 @@ export function withCurrentInstructions(
       s.base_instructions_version !== null
       && s.base_instructions_version < current.instructions_version,
   };
+}
+
+/**
+ * Whether the row already carries instructions at least as new as a 409's
+ * `current` (a list read that landed after the refused accept), so a
+ * re-base on that 409 would roll it back.
+ */
+export function instructionsCaughtUp(
+  s: DocNoteSuggestion,
+  current: StaleInstructionsCurrent,
+): boolean {
+  const listed = s.current_instructions_version;
+  return typeof listed === 'number' && listed >= current.instructions_version;
+}
+
+/**
+ * The row re-based on a 409 `stale_instructions`'s `current`
+ * (withCurrentInstructions), or the row itself when it is already as new
+ * (instructionsCaughtUp).
+ */
+export function rebaseOnStale<S extends DocNoteSuggestion>(
+  s: S,
+  current: StaleInstructionsCurrent,
+): S {
+  return instructionsCaughtUp(s, current) ? s : withCurrentInstructions(s, current);
 }

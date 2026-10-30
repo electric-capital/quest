@@ -1,8 +1,9 @@
-// Doc note review helpers: what an Accept sends (the edited text only when
-// it changed, the instructions version only for an instructions row that
-// has one), the re-base on a 409's current instructions, the caps counted
-// like the server (code points of the trimmed text), when Accept is allowed
-// (never for an unavailable doc) and the row guard.
+// Suggestion review helpers: the edited text an Accept sends for any kind;
+// for doc notes what an Accept sends (the edited text only when it changed,
+// the instructions version only for an instructions row that has one), the
+// re-base on a 409's current instructions (never rolling a newer row back),
+// the caps counted like the server (code points of the trimmed text), when
+// Accept is allowed (never for an unavailable doc) and the row guard.
 import { describe, expect, it } from 'vitest';
 import type { DocNoteSuggestion, MemorySuggestion } from '../api/types';
 import {
@@ -10,8 +11,11 @@ import {
   docNoteAcceptOptions,
   docNoteCharCount,
   docNoteMaxChars,
+  editedText,
+  instructionsCaughtUp,
   isDocNoteDocAvailable,
   isDocNoteSuggestion,
+  rebaseOnStale,
   withCurrentInstructions,
 } from './docNoteReview';
 
@@ -44,6 +48,15 @@ const memoryRow = (extra: Partial<DocNoteSuggestion> = {}): DocNoteSuggestion =>
   current_instructions: null,
   current_instructions_version: null,
   ...extra,
+});
+
+describe('editedText', () => {
+  it('is the trimmed draft once it differs from the proposal', () => {
+    expect(editedText({ content: 'Likes tea' }, undefined)).toBeUndefined();
+    expect(editedText({ content: 'Likes tea' }, ' Likes tea\n')).toBeUndefined();
+    expect(editedText({ content: 'Likes tea' }, ' Likes green tea ')).toBe('Likes green tea');
+    expect(editedText({ content: 'Likes tea' }, '   ')).toBe('');
+  });
 });
 
 describe('docNoteAcceptOptions', () => {
@@ -107,6 +120,39 @@ describe('withCurrentInstructions', () => {
       ...current,
       instructions_version: 9,
     }).instructions_moved).toBe(false);
+  });
+});
+
+describe('rebaseOnStale', () => {
+  const current = { instructions: 'Prices are in GBP.', instructions_version: 4 };
+
+  it("re-bases a row listed before the 409's version", () => {
+    const row = docNote({ current_instructions_version: 3 });
+    expect(instructionsCaughtUp(row, current)).toBe(false);
+    expect(rebaseOnStale(row, current)).toEqual(withCurrentInstructions(row, current));
+  });
+
+  it('keeps a row a later read brought to the same or a newer version', () => {
+    for (const version of [4, 5]) {
+      const row = docNote({ current_instructions: 'Prices are in CHF.', current_instructions_version: version });
+      expect(instructionsCaughtUp(row, current)).toBe(true);
+      expect(rebaseOnStale(row, current)).toBe(row);
+    }
+  });
+
+  it('re-bases a row without a listed version', () => {
+    for (const version of [null, undefined]) {
+      const row = docNote({ current_instructions_version: version });
+      expect(instructionsCaughtUp(row, current)).toBe(false);
+      expect(rebaseOnStale(row, current).current_instructions_version).toBe(4);
+    }
+  });
+
+  it("keeps the row's own type", () => {
+    const inboxRow = { ...docNote(), kind: 'doc' as const, conversation_title: 'Chat' };
+    const rebased = rebaseOnStale(inboxRow, current);
+    expect(rebased.kind).toBe('doc');
+    expect(rebased.conversation_title).toBe('Chat');
   });
 });
 

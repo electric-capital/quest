@@ -4,8 +4,9 @@
 // tab drops the row silently, and a count change while open re-fetches.
 // The doc kind adds its icon, wording and store count, the accept options
 // with the instructions version, the re-base on a 409 stale_instructions
-// (against the row in state, then a re-fetch), and an Accept all that skips
-// a row its own Accept refuses.
+// (against the row in state, then a re-fetch), the fetch the accept's own
+// count event starts kept (it re-bases a second instructions row on the
+// same doc), and an Accept all that skips a row its own Accept refuses.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -225,6 +226,8 @@ describe('MemorySuggestions', () => {
     });
     expect(screen.queryByDisplayValue('A')).toBeNull();
     expect(screen.getByDisplayValue('B')).not.toBeNull();
+    // Its count leaves out the row dismissed here too.
+    expect(conversationStore.getConversation('c-stale').pendingMemorySuggestions).toBe(1);
   });
 
   it('closes on Escape and on the backdrop', async () => {
@@ -521,6 +524,54 @@ describe('MemorySuggestions kind="doc"', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Accept' })[0]);
     await waitFor(() => expect(mocks.acceptDocNoteSuggestion)
       .toHaveBeenLastCalledWith('d1', { expectedInstructionsVersion: 5 }));
+  });
+
+  it("keeps the fetch the accept's own event starts, re-basing a second instructions row", async () => {
+    // Two instructions proposals for one doc, both diffed against version 3.
+    serveDoc([docNote('d1'), docNote('d2', { doc_id: 'doc-d1', content: 'Prices are in GBP.' })]);
+    const accept = deferred<unknown>();
+    mocks.acceptDocNoteSuggestion
+      .mockImplementationOnce(() => accept.promise)
+      .mockResolvedValueOnce({});
+    const { rerender, container } = await openDocPanel('c-doc-event', 2);
+    await screen.findByDisplayValue('Prices are in GBP.');
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Accept' })[0]);
+    await waitFor(() => expect(mocks.acceptDocNoteSuggestion)
+      .toHaveBeenCalledWith('d1', { expectedInstructionsVersion: 3 }));
+    // The server publishes the count event inside the accept: the fetch it
+    // starts is still in flight when the accept's response lands...
+    const eventFetch = deferred<DocList>();
+    mocks.fetchConversationDocNoteSuggestions.mockImplementationOnce(() => eventFetch.promise);
+    rerender(<MemorySuggestions conversationId="c-doc-event" pendingCount={1} kind="doc" />);
+    await waitFor(() => expect(mocks.fetchConversationDocNoteSuggestions).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      accept.resolve({});
+    });
+    await waitFor(() => expect(screen.queryByDisplayValue('Prices are in EUR.')).toBeNull());
+
+    // ...and still lands: the second row's diff starts from the accepted text.
+    await act(async () => {
+      eventFetch.resolve({
+        suggestions: [docNote('d2', {
+          doc_id: 'doc-d1',
+          content: 'Prices are in GBP.',
+          current_instructions: 'Prices are in EUR.',
+          current_instructions_version: 4,
+          instructions_moved: true,
+        })],
+        pending_count: 1,
+      });
+    });
+    const body = diffBodies()[0];
+    expect(body.querySelector('.memory-suggestion-diff-del')!.textContent).toBe('EUR.');
+    expect(body.querySelector('.memory-suggestion-diff-add')!.textContent).toBe('GBP.');
+    expect(container.querySelector('.memory-suggestion-moved')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(mocks.acceptDocNoteSuggestion)
+      .toHaveBeenLastCalledWith('d2', { expectedInstructionsVersion: 4 }));
+    expect(mocks.fetchConversationDocNoteSuggestions).toHaveBeenCalledTimes(2);
   });
 
   it('keeps a newer row that a list fetch brought in during the accept', async () => {

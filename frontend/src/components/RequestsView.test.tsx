@@ -1,6 +1,7 @@
 // The inbox view's Memories tab label counts pending suggestions of all
-// three kinds (REST seed, then each per-user global's total_pending), and a
-// doc link in the Memories tab closes the inbox before it opens the doc.
+// three kinds (usePendingSuggestionCounts: REST seed, then each per-user
+// global's total_pending, a re-fetch for an event without one), and a doc
+// link in the Memories tab closes the inbox before it opens the doc.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -105,7 +106,9 @@ afterEach(cleanup);
 
 describe('RequestsView', () => {
   it('counts pending suggestions of all three kinds on the Memories tab', async () => {
-    mocks.fetchMemoryInboxCounts.mockResolvedValue({ user: 1, project: 2, doc: 3, pending_count: 6 });
+    mocks.fetchMemoryInboxCounts
+      .mockResolvedValueOnce({ user: 1, project: 2, doc: 3, pending_count: 6 })
+      .mockResolvedValueOnce({ user: 1, project: 0, doc: 0, pending_count: 1 });
     renderView('/inbox');
     await waitFor(() => expect(memoriesTabCount()).toBe('6'));
 
@@ -114,11 +117,11 @@ describe('RequestsView', () => {
     expect(memoriesTabCount()).toBe('4');
     emit({ type: 'project_memory_suggestions_changed', conversation_id: 'c', pending_count: 0, total_pending: 0 });
     expect(memoriesTabCount()).toBe('2');
-    // No numeric total: the label keeps its value.
+    // No numeric total: the counts are fetched again, as for the badge.
     emit({ type: 'doc_note_suggestions_changed', conversation_id: 'c', pending_count: 0 });
-    expect(memoriesTabCount()).toBe('2');
+    await waitFor(() => expect(mocks.fetchMemoryInboxCounts).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(memoriesTabCount()).toBe('1'));
     emit({ type: 'memory_suggestions_changed', conversation_id: 'c', pending_count: 0, total_pending: 0 });
-    emit({ type: 'doc_note_suggestions_changed', conversation_id: 'c', pending_count: 0, total_pending: 0 });
     expect(memoriesTabCount()).toBeNull();
   });
 
