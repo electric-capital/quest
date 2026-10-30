@@ -82,14 +82,21 @@ function formatCount(n: number): string {
   return n.toLocaleString('en-US');
 }
 
-/** Textarea that grows with its (wrapped) content instead of clipping it. */
+/**
+ * Textarea that grows with its (wrapped) content instead of clipping it.
+ * The field is `box-sizing: border-box` (MemorySuggestions.css), so its
+ * height is the content plus padding (`scrollHeight`) plus the borders.
+ */
 function AutoGrowTextarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight}px`;
+    const style = getComputedStyle(el);
+    const borders = (parseFloat(style.borderTopWidth) || 0)
+      + (parseFloat(style.borderBottomWidth) || 0);
+    el.style.height = `${el.scrollHeight + borders}px`;
   }, [props.value]);
   return <textarea ref={ref} rows={1} {...props} />;
 }

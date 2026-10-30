@@ -289,6 +289,27 @@ describe('MemorySuggestionRow kind="doc": cap counter', () => {
   });
 });
 
+describe('MemorySuggestionRow textarea', () => {
+  it('grows to the text plus padding and borders (border-box)', () => {
+    const scrollHeight = vi.spyOn(HTMLTextAreaElement.prototype, 'scrollHeight', 'get')
+      .mockReturnValue(60);
+    const realStyle = window.getComputedStyle.bind(window);
+    const computed = vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+      const style = realStyle(el, pseudo);
+      if (!(el instanceof HTMLTextAreaElement)) return style;
+      return { ...style, borderTopWidth: '1px', borderBottomWidth: '1.5px' } as CSSStyleDeclaration;
+    });
+    try {
+      renderDocRow({ suggestion: memoryRow() });
+      expect((screen.getByLabelText('Doc memory text') as HTMLTextAreaElement).style.height)
+        .toBe('62.5px');
+    } finally {
+      scrollHeight.mockRestore();
+      computed.mockRestore();
+    }
+  });
+});
+
 describe('MemorySuggestionRow kind="user"', () => {
   it('has none of the doc additions', () => {
     const suggestion: MemorySuggestion = {

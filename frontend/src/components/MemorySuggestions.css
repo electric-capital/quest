@@ -313,6 +313,7 @@
 }
 
 .memory-suggestion-content {
+  box-sizing: border-box;
   width: 100%;
   resize: none;
   overflow: hidden;
@@ -615,5 +616,10 @@
 
   .memory-suggestions-hint {
     display: none;
+  }
+
+  /* 16px text keeps iOS Safari from zooming in on focus. */
+  .memory-suggestion-content {
+    font-size: 16px;
   }
 }
