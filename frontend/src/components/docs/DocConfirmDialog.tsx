@@ -9,11 +9,35 @@
  * unless something inside the dialog already took it (a child input that
  * autofocuses runs its effect first); on close, focus returns to whatever
  * had it before the dialog opened, when that element is still on the page.
+ * While open, focus is trapped: Tab from the last enabled control wraps to
+ * the first and Shift+Tab from the first to the last (`aria-modal` alone
+ * does not stop Tab reaching the page behind), and from outside the dialog
+ * (focus dropped to <body>) they bring it back in. A browser drops focus
+ * from a button as it is disabled, so when a confirm fails (busy ends with
+ * the dialog still open) and focus was lost, it goes back to the confirm
+ * button, or Cancel while that stays disabled.
  */
 
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { ModalShell } from '../ModalShell';
 import './DocConfirmDialog.css';
+
+const FOCUSABLE = 'a[href], button, input, select, textarea, summary, [tabindex]';
+
+/** The dialog's tab stops in order: enabled and not taken out with tabindex -1. */
+function tabStops(root: HTMLElement): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+    (el) =>
+      !el.matches(':disabled') &&
+      el.getAttribute('tabindex') !== '-1' &&
+      !(el instanceof HTMLInputElement && el.type === 'hidden'),
+  );
+}
+
+function isFocusLost(): boolean {
+  const active = document.activeElement;
+  return !active || active === document.body || !active.isConnected;
+}
 
 export type DocConfirmTone = 'default' | 'danger';
 
@@ -58,6 +82,8 @@ export function DocConfirmDialog({
   const titleId = useId();
   const modalRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const wasBusyRef = useRef(busy);
 
   // Initial focus on open, focus return on close.
   useEffect(() => {
@@ -74,6 +100,41 @@ export function DocConfirmDialog({
       }
     };
   }, [isOpen]);
+
+  // The focus trap: Tab and Shift+Tab wrap at the ends and re-enter from
+  // outside; between the ends the browser moves focus as usual.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      const modal = modalRef.current;
+      if (e.key !== 'Tab' || e.defaultPrevented || !modal) return;
+      const stops = tabStops(modal);
+      const active = document.activeElement;
+      const inside = active !== null && modal.contains(active);
+      if (stops.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const target = e.shiftKey ? stops[stops.length - 1] : stops[0];
+      const atEnd = active === (e.shiftKey ? stops[0] : stops[stops.length - 1]);
+      if (!inside || atEnd) {
+        e.preventDefault();
+        target.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [isOpen]);
+
+  // A failed confirm leaves the dialog open: focus, dropped from the button
+  // disabled while busy, goes back to the confirm button (else Cancel).
+  useEffect(() => {
+    const wasBusy = wasBusyRef.current;
+    wasBusyRef.current = busy;
+    if (!isOpen || busy || !wasBusy || !isFocusLost()) return;
+    const confirm = confirmRef.current;
+    (confirm && !confirm.disabled ? confirm : cancelRef.current)?.focus();
+  }, [isOpen, busy]);
 
   // A request in flight cannot be called back: keep the dialog up until it
   // settles instead of letting Escape / a backdrop click hide it.
@@ -115,6 +176,7 @@ export function DocConfirmDialog({
           </button>
         )}
         <button
+          ref={confirmRef}
           type="button"
           className={`doc-dialog-button doc-dialog-confirm doc-dialog-confirm--${tone}`}
           onClick={onConfirm}
