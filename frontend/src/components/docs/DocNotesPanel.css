@@ -5,11 +5,13 @@
  * under the document. Design tokens only; the error tone is literal,
  * dark-first with a light block. */
 
-/* Shrinks to the (sticky, viewport-capped) aside; the body scrolls. */
+/* A row of the viewer's aside grid (DocViewer.css: `grid-auto-rows:
+   minmax(0, auto)`), which it fills: as tall as its contents while they
+   fit, and with min-height 0 it can be held shorter, the body scrolling
+   inside (.doc-notes-scroll). */
 .doc-notes-panel {
   display: flex;
   flex-direction: column;
-  flex: 0 1 auto;
   min-height: 0;
 }
 
@@ -40,13 +42,11 @@
   overflow-y: auto;
 }
 
-.doc-notes-scroll:focus:not(:focus-visible),
-.doc-notes-current-text:focus:not(:focus-visible) {
+.doc-notes-scroll:focus:not(:focus-visible) {
   outline: none;
 }
 
-.doc-notes-scroll:focus-visible,
-.doc-notes-current-text:focus-visible {
+.doc-notes-scroll:focus-visible {
   outline: 2px solid rgb(var(--accent-rgb) / 0.6);
   outline-offset: -2px;
 }
@@ -285,6 +285,8 @@
 }
 
 /* --- Instructions conflict (409 stale_instructions) ------------------------ */
+/* The current text is shown whole (the card or the page scrolls): what
+   changed is often a line at its end. */
 
 /* Like .doc-history-notice. */
 .doc-notes-notice {
@@ -318,8 +320,6 @@
 }
 
 .doc-notes-current-text {
-  max-height: 12rem;
-  overflow-y: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--text);
@@ -377,6 +377,11 @@
   font-size: 0.6875rem;
   color: var(--text-muted);
   overflow-wrap: anywhere;
+}
+
+/* "· 3h ago" stays whole: a narrow card wraps before it, never inside. */
+.doc-notes-memory-time {
+  white-space: nowrap;
 }
 
 .doc-notes-memory-actions {

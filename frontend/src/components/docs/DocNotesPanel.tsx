@@ -354,14 +354,12 @@ function InstructionsSection({
             <div id={currentLabelId} className="doc-notes-current-label">
               Current instructions
             </div>
-            {/* Capped height with nothing focusable inside: focusable to scroll. */}
             <div
               className={
                 conflictText
                   ? 'doc-notes-current-text'
                   : 'doc-notes-current-text doc-notes-current-text--empty'
               }
-              tabIndex={0}
             >
               {conflictText || 'The instructions were removed.'}
             </div>
@@ -744,7 +742,10 @@ function MemoriesSection({
             className="doc-notes-memory-meta"
             title={parseUTCTimestamp(memory.updated_at).toLocaleString()}
           >
-            {memory.source_label} · {formatRelativeTimestamp(memory.updated_at)}
+            {memory.source_label}{' '}
+            <span className="doc-notes-memory-time">
+              · {formatRelativeTimestamp(memory.updated_at)}
+            </span>
           </div>
         </div>
         {canEdit && (

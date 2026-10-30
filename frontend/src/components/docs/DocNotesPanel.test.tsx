@@ -140,7 +140,10 @@ const instructionsBox = () => screen.getByRole('textbox', { name: 'Instructions'
 const addBox = () => screen.getByRole('textbox', { name: 'New memory' }) as HTMLTextAreaElement;
 const editBox = () => screen.getByRole('textbox', { name: 'Edit memory' }) as HTMLTextAreaElement;
 const button = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement;
-const memoryItem = (meta: string) => screen.getByText(meta).closest('li') as HTMLElement;
+// A memory's meta line ("<source> · <time>"; the time is in its own span).
+const metaLine = (meta: string) => (_: string, el: Element | null) =>
+  !!el?.classList.contains('doc-notes-memory-meta') && el.textContent === meta;
+const memoryItem = (meta: string) => screen.getByText(metaLine(meta)).closest('li') as HTMLElement;
 const editButtonOf = (meta: string) =>
   within(memoryItem(meta)).getByRole('button', { name: 'Edit memory' }) as HTMLButtonElement;
 const deleteButtonOf = (meta: string) =>
@@ -182,8 +185,10 @@ describe('DocNotesPanel', () => {
         'Prices are in USD.',
         'The audience is\nthe board.',
       ]);
-      expect(within(items[0]).getByText(NEW_META)).toBeTruthy();
-      expect(within(items[1]).getByText(OLD_META)).toBeTruthy();
+      expect(within(items[0]).getByText(metaLine(NEW_META))).toBeTruthy();
+      expect(within(items[1]).getByText(metaLine(OLD_META))).toBeTruthy();
+      // The time never wraps inside itself.
+      expect(items[0].querySelector('.doc-notes-memory-time')?.textContent).toBe('· 10m ago');
       expect(container.querySelector('.doc-notes-count')?.textContent).toBe('2');
 
       // The per-memory buttons are described by the memory they act on.
@@ -484,8 +489,8 @@ describe('DocNotesPanel', () => {
       expect(firstNotice.textContent).toBe(STALE_MESSAGE);
       const current = screen.getByRole('group', { name: 'Current instructions' });
       expect(within(current).getByText('Server text')).toBeTruthy();
-      // The capped box scrolls; it has nothing focusable, so it takes focus itself.
-      expect(within(current).getByText('Server text').getAttribute('tabindex')).toBe('0');
+      // Shown whole, not a scroll box of its own, so not a tab stop.
+      expect(within(current).getByText('Server text').hasAttribute('tabindex')).toBe(false);
       const box = instructionsBox();
       expect(document.activeElement).toBe(box);
       expect(box.value).toBe('My draft');
