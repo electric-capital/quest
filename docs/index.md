@@ -13,7 +13,7 @@
 | [data-paths.md](architecture/data-paths.md) | Data directory layout, the id-to-path resolvers for conversations, projects and docs, and ownership guards for routes |
 | [encryption-at-rest.md](architecture/encryption-at-rest.md) | Encryption of stored secrets: password-wrapped data key, encrypted columns and credential files, startup unlock |
 | [expensive-resume.md](architecture/expensive-resume.md) | Warning before resuming a long-idle, long-context conversation: rules, cost estimate, send gate, warning card |
-| [memory-suggestions.md](architecture/memory-suggestions.md) | Non-blocking `suggest_memory` tool, the review bubble/panel above the composer, and the guidance on what the model should suggest |
+| [memory-suggestions.md](architecture/memory-suggestions.md) | Non-blocking `suggest_memory` tool, the review row, bubbles and inbox Memories tab shared with project memories and doc notes, and model guidance |
 | [project-memories.md](architecture/project-memories.md) | Project-scoped memories (public projects too): the store, read/suggest tools, the project suggestions bubble and Project Settings table |
 | [feature-gates.md](architecture/feature-gates.md) | Admin on/off switches for optional features, per-user access lists, and how each gate is enforced |
 | [database.md](architecture/database.md) | SQLite schema via SQLAlchemy and Alembic: tables, store modules, migrations, encrypted columns, LLM call analytics |

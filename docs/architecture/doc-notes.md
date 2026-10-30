@@ -63,7 +63,7 @@ Every doc-notes cap and budget is a constant in the doc-notes section of `chat/d
 
 ## Access
 
-The stores, the suggestion store included, make no access decisions; callers resolve `resolve_doc_access()` in `chat/docs/access.py` first, as for every `db/doc_store.py` function. Who may suggest and who may review is in [Suggestions](#suggestions).
+The stores, the suggestion store included, make no access decisions; callers resolve `resolve_doc_access()` in `chat/docs/access.py` first, as for every `db/doc_store.py` function. Who may suggest and review is in [Suggestions](#suggestions).
 
 ## Seen Record
 
@@ -158,18 +158,18 @@ A registration publishes `doc_note_suggestions_changed` for its conversation and
 
 ### Review
 
-`accept_suggestion()`, `dismiss_suggestion()` and `review_rows()` in `chat/docs/note_suggestions.py` serve only the suggestion's own user, and none is gated, by `doc_notes` or by `docs`, nor are their routes.
+`accept_suggestion()`, `dismiss_suggestion()` and `review_rows()` in `chat/docs/note_suggestions.py` serve only the suggestion's own user; neither they nor their routes are gated, by `doc_notes` or `docs`.
 
 - **Accept re-checks access** on a freshly loaded doc row: a memory needs the UI verdict `free` (`can_edit`), instructions need ownership; anything else is `forbidden`. **Dismiss** needs nothing but ownership of the suggestion, so a recipient whose share was revoked or downgraded can still clear their rows.
 - **One transaction, claim first**: the store's `accept_suggestion()` claims the row (`pending` -> `accepted`), which takes the write lock, then writes the notes through the `*_in_session` writers ([Concurrency](#concurrency)). Any refusal rolls the claim back with the write, so the row stays pending and the notes unchanged; an accept or dismiss that lost the claim gets `suggestion_resolved`.
-- **Instructions** are written behind `expected_instructions_version`: the version the reviewer's diff was rendered against or, without one, the version the proposal was written against. A moved field answers `stale_instructions` with the current text and version, so the reviewer can compare again and re-accept. A reviewer's override of `""` clears the field.
+- **Instructions** are written behind `expected_instructions_version`: the version the reviewer's diff was rendered against or, without one, the version the proposal was written against. A moved field answers `stale_instructions` with the current text and version, so the reviewer can compare and re-accept. A reviewer's override of `""` clears the field.
 - **Memories**: a replacing suggestion overwrites that memory in place, or inserts when it was deleted meanwhile; the row records the memory in `memory_id`.
 - **Seen advance**: an unedited accept advances the proposing conversation's seen record to the versions after the accept, but only from a record that was current just before it.
 - After the commit, `doc_note_suggestions_changed` goes to the user and, when a version moved, `doc_notes_changed` to the doc's audience ([Realtime](#realtime)).
 
-Review refusals are `NoteSuggestionError` codes too; `HTTP_STATUS` maps them to HTTP statuses, and the class docstring says which carry `current` or `memory_id`.
+Review refusals are `NoteSuggestionError` codes too; `HTTP_STATUS` maps them to statuses, and the class docstring says which carry `current` or `memory_id`.
 
-`review_rows()` adds what a review list shows beside a row: the doc's title and, for a pending row, the replaced memory's current text and, for instructions, the current field and whether it moved past the proposal's version (a resolved row gets none of these, since an accepted instructions row would always read as moved). For a doc the user can no longer see, or one that is gone, it blanks those doc-derived fields, so hidden notes never leak.
+`review_rows()` adds what a review list shows beside a row: the doc's title and, for a pending row, the replaced memory's current text and, for instructions, the current field, its version (`current_instructions_version`, which an accept sends as `expected_instructions_version`) and whether it moved past the proposal's version (a resolved row gets none of these, since an accepted instructions row would always read as moved). For a doc hidden from the user or gone, it blanks those doc-derived fields so its notes never leak.
 
 ## Realtime
 
@@ -186,11 +186,11 @@ The routes, their shapes and their errors are in [Quest Docs API -- Notes](../ap
 - **Gates**: the notes routes answer `doc_notes_disabled` first; the review routes check no gate ([Review](#review)).
 - **Identities**: a memory goes out with a `source_label` instead of its `source` and editor ids, naming a person to the doc owner only (`source_label()` in `chat/docs/note_payloads.py`), and `instructions_updated_by` is the owner's alone.
 
-`GET /conversations/{id}` carries `pending_doc_note_suggestions`. The inbox routes list the user's suggestions as the `doc` kind, which the Memories tab leaves out ([Memory Suggestions -- The Inbox's Memories Tab](memory-suggestions.md#the-inboxs-memories-tab)), and the [Slack reminder](slack-pending-request-notifier.md) counts them with the rest. The admin Memories report counts doc memories per doc owner and doc note suggestions per reviewer ([Admin System Reports -- Docs, Tables and Memories Sections](admin-system-monitor.md#docs-tables-and-memories-sections)).
+`GET /conversations/{id}` carries `pending_doc_note_suggestions`. The inbox routes list the user's suggestions as the `doc` kind, which the [Memories tab](memory-suggestions.md#the-inboxs-memories-tab) also lists, and the [Slack reminder](slack-pending-request-notifier.md) counts them with the rest. The admin Memories report counts doc memories per doc owner and doc note suggestions per reviewer ([Admin System Reports -- Docs, Tables and Memories Sections](admin-system-monitor.md#docs-tables-and-memories-sections)).
 
 ## Frontend
 
-`frontend/src/api/docsApi.ts` holds the notes and review calls, the gate name `DOC_NOTES_FEATURE` and the helpers for the `stale_instructions` and `duplicate_memory` conflicts. `frontend/src/hooks/useDocNotes.ts` serves one doc's notes and the viewer's own pending suggestions for it, gated inside the hook; its header comment gives the events it follows and the stale-payload guard. The doc viewer's Notes panel shows and edits the notes through it ([Quest Docs -- Viewer](quest-docs.md#viewer)). `frontend/src/store/conversationStore.ts` keeps `pendingDocNoteSuggestions`, fed by `pending_doc_note_suggestions` and `doc_note_suggestions_changed`.
+`frontend/src/api/docsApi.ts` holds the notes and review calls, the gate name `DOC_NOTES_FEATURE` and the helpers for the `stale_instructions` and `duplicate_memory` conflicts. `frontend/src/hooks/useDocNotes.ts` serves one doc's notes and the viewer's own pending suggestions for it, gated inside the hook; its header comment gives the events it follows and the stale-payload guard. The doc viewer's Notes panel shows and edits the notes through it ([Quest Docs -- Viewer](quest-docs.md#viewer)). `frontend/src/store/conversationStore.ts` keeps `pendingDocNoteSuggestions`, fed by `pending_doc_note_suggestions` and `doc_note_suggestions_changed`. The composer bubble, the Notes panel's "Suggestions for you" and the inbox share `MemorySuggestionRow` ([Memory Suggestions](memory-suggestions.md)).
 
 ## Lifecycle
 
