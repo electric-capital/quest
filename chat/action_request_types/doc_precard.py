@@ -25,7 +25,9 @@ size caps) and only interprets the verdict:
   ``write_doc.SERVER_INJECTED_KEYS``): ``current_title``, ``doc_mode``,
   ``doc_scope``, ``share_summary``, ``content_diff`` (the edit_skill line
   diff of the live body vs the result; for ``add_image`` only when the body
-  changes), for ``add_image`` ``image_preview``, and, while the
+  changes; for ``multi_edit`` instead ``edit_previews``, one bounded diff
+  per edit of the live body vs that edit alone, so the card shows the
+  group change by change), for ``add_image`` ``image_preview``, and, while the
   ``doc_notes`` gate is open for the proposer, ``instructions_version``
   (the live row's; execute refuses when it moved).
 
@@ -37,14 +39,49 @@ record: there only the pinned ``instructions_version`` counts.
 
 import asyncio
 
-from chat.action_request_types._skill_content_edit import build_bounded_content_diff
+from chat.action_request_types._skill_content_edit import (
+    apply_content_edit,
+    build_bounded_content_diff,
+)
 from chat.action_request_types.write_doc import (
     OPERATION_TOOLS,
     operation_params,
     project_is_public,
 )
+from chat.docs import constants as doc_constants
 from chat.docs import notes as doc_notes
 from chat.docs import service as doc_service
+
+# Line cap of each per-edit diff window on a multi_edit card (the group
+# holds up to DOC_MAX_EDITS_PER_CALL of them).
+EDIT_PREVIEW_MAX_LINES = 200
+
+
+def edit_previews(current_body: str, edits: list[dict]) -> list[dict]:
+    """One card entry per edit of a multi_edit: ``{index, note,
+    replace_all, replaced, diff}`` with ``diff`` the bounded diff of
+    ``current_body`` against that edit applied ALONE. The group has been
+    dry-run already, so every edit matches; line numbers on the old side
+    are the live body's (as ``read_doc`` numbers them).
+    """
+    previews: list[dict] = []
+    for i, edit in enumerate(edits, start=1):
+        single, replaced = apply_content_edit(
+            current_body, edit["old_string"], edit["new_string"],
+            bool(edit.get("replace_all")),
+            max_size=doc_constants.DOC_MAX_CONTENT_SIZE, noun="doc",
+            reread_hint="re-read it with read_doc",
+        )
+        previews.append({
+            "index": i,
+            "note": str(edit.get("note") or ""),
+            "replace_all": bool(edit.get("replace_all")),
+            "replaced": replaced,
+            "diff": build_bounded_content_diff(
+                current_body, single, max_lines=EDIT_PREVIEW_MAX_LINES,
+            ),
+        })
+    return previews
 
 
 def share_summary(shares: list) -> str:
@@ -130,7 +167,11 @@ async def doc_precard_check(
 
     current_body = preview["current_body"]
     new_body = preview["new_body"]
-    if operation != "add_image" or new_body != current_body:
+    if operation == "multi_edit":
+        validated_params["edit_previews"] = await asyncio.to_thread(
+            edit_previews, current_body, validated_params["edits"],
+        )
+    elif operation != "add_image" or new_body != current_body:
         # Bounded (prefix/suffix-trimmed, line-capped) and off the event
         # loop: a doc body is up to 1 MB, and the full-body SequenceMatcher
         # diff edit_skill uses is quadratic on it.

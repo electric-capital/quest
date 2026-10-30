@@ -33,6 +33,7 @@
 | [public-projects.md](architecture/public-projects.md) | Public projects: internet-enabled sandbox with internal resources cut off, enforcement layers, public prompt and image |
 | [public-browser.md](architecture/public-browser.md) | Browser for public projects: one headless Chromium container per conversation, agent protocol, session manager and reaping, browser tools and gate |
 | [quest-docs.md](architecture/quest-docs.md) | Quest Docs (in-app markdown docs): storage, access rule, sharing, editing, history, model tools, approvals, frontend |
+| [write-doc-request.md](architecture/write-doc-request.md) | The write_doc action request: operations incl. grouped edits, pre-card and per-edit card diffs, approve-time re-check, attribution, card rendering |
 | [doc-notes.md](architecture/doc-notes.md) | Quest Doc notes (per-doc instructions and memories): gate, data model, seen record, delivery, write refusal, write_doc pin, routes, events |
 | [doc-notes-review.md](architecture/doc-notes-review.md) | Doc note suggestions (model-proposed notes changes): store, registration checks, review, events, inbox and counts, review UI, lifecycle |
 | [doc-notes-tools.md](architecture/doc-notes-tools.md) | Doc notes tools (`list_doc_notes`, `suggest_doc_note`): gate, run kinds, paging, can_suggest, backstop, the `system:doc_notes` skill and public line |

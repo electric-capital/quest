@@ -81,12 +81,13 @@ def propose(caller, params):
     return precard(handler().validate_params(params), caller)
 
 
-def execute(params, caller, request_id=7):
+def execute(params, caller, request_id=7, **kwargs):
     return _run(handler().execute(
         params, caller.user,
         conversation_id=caller.conversation_id,
         project_id=caller.project_id,
         request_id=request_id,
+        **kwargs,
     ))
 
 

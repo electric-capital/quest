@@ -116,7 +116,8 @@ class TestRegistry:
         assert required("read_doc") == ["doc_id"]
         assert required("create_doc") == ["title", "content"]
         assert props("create_doc")["target"]["enum"] == ["user", "project"]
-        assert required("edit_doc") == ["doc_id", "old_string", "new_string"]
+        assert required("edit_doc") == ["doc_id"]
+        assert props("edit_doc")["edits"]["type"] == "array"
         assert props("edit_doc")["replace_all"]["type"] == "boolean"
         assert required("append_to_doc") == ["doc_id", "content"]
         assert props("append_to_doc")["ensure_blank_line"]["default"] is True

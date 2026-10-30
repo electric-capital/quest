@@ -2090,7 +2090,13 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
         "description": (
             "Change a Quest Doc with an exact string replacement: old_string "
             "must match the current body exactly (whitespace included) and "
-            "appear exactly once unless replace_all is true. The doc must "
+            "appear exactly once unless replace_all is true. To change "
+            "several places of one doc, pass them together as edits (up to "
+            "10 {old_string, new_string} objects) instead of old_string / "
+            "new_string: every old_string is matched against the doc as it "
+            "is now (not against an earlier edit's result), the matched "
+            "texts may not overlap, and they are applied as one change "
+            "(one version, one approval card). The doc must "
             "have been read with read_doc (or created) earlier in this "
             "conversation. There is no whole-body replace: make targeted "
             "edits, or add content with append_to_doc. Every change is kept "
@@ -2129,6 +2135,27 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                     "default": False,
                     "description": "Replace every occurrence instead of requiring a unique match. Defaults to false.",
                 },
+                "edits": {
+                    "type": "array",
+                    "description": (
+                        "Several replacements in one call, instead of "
+                        "old_string / new_string (not both). At most 10, "
+                        "each matched against the current doc, no overlaps."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "old_string": {"type": "string", "description": "The exact text to replace."},
+                            "new_string": {"type": "string", "description": "The replacement (may be empty)."},
+                            "replace_all": {"type": "boolean", "description": "Replace every occurrence of this old_string."},
+                            "note": {
+                                "type": "string",
+                                "description": "Optional, max 120 characters: what this change does, shown as its heading on the approval card.",
+                            },
+                        },
+                        "required": ["old_string", "new_string"],
+                    },
+                },
                 "intent_message": {
                     "type": "string",
                     "description": (
@@ -2137,7 +2164,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                     ),
                 },
             },
-            "required": ["doc_id", "old_string", "new_string"],
+            "required": ["doc_id"],
         },
     },
     "append_to_doc": {

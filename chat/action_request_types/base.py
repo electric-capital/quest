@@ -121,6 +121,20 @@ class ActionRequestHandler(ABC):
         """
         return None
 
+    def selectable_items(self, params: dict) -> int:
+        """How many independently skippable items this request has.
+
+        0 (the default) means the request is all-or-nothing. A handler
+        whose card lists separate items the user can untick (write_doc's
+        ``multi_edit``: one per edit) returns their count; the resolve
+        route then accepts ``skipped_items`` on Approve, checks the
+        positions against this count (at least one item must stay), and
+        passes them to :meth:`execute` as ``skipped_items`` -- a list of
+        ``{"index": <0-based position>, "reason": <str>}`` the handler
+        leaves out of the write and reports back in its result.
+        """
+        return 0
+
     @abstractmethod
     async def execute(
         self,
@@ -131,6 +145,9 @@ class ActionRequestHandler(ABC):
         project_id: str | None = None,
     ) -> dict:
         """Execute the action.
+
+        A handler with :meth:`selectable_items` also takes the keyword
+        ``skipped_items`` (only passed when the user unticked something).
 
         Args:
             params: Validated parameter dict.

@@ -18,6 +18,13 @@ approve-time executes (`chat/action_request_types/edit_skill.py`,
   proposal and execute time closes the TOCTOU window -- if the skill (or
   doc) changed while the card sat open, the stale ``old_string`` no longer
   matches and the approve fails instead of clobbering the newer content.
+- :func:`apply_content_edits` applies a GROUP of such replacements, every
+  ``old_string`` matched against the same starting content (never against
+  the result of an earlier edit of the group), so the edits are
+  independent of each other and of their order: any subset applies
+  cleanly, which is what lets an approval card apply some of them. The
+  matched spans may not overlap. Quest Docs' ``edit_doc(edits=[...])`` and
+  ``write_doc`` ``operation: "multi_edit"`` use it.
 - :func:`build_content_diff` turns the old/new content pair into the
   line-diff structure the approval card renders (a changed-hunks snippet
   expandable to the whole body). The full line list is injected into
@@ -84,7 +91,11 @@ def apply_content_edit(
     new_content = current_content.replace(
         old_string, new_string, -1 if replace_all else 1
     )
+    _check_result(new_content, max_size=max_size, noun=noun)
+    return new_content, replacements
 
+
+def _check_result(new_content: str, *, max_size: int, noun: str) -> None:
     if not new_content.strip():
         raise ValueError(
             f"The edit would leave the {noun} content empty. "
@@ -95,7 +106,108 @@ def apply_content_edit(
             f"The edited {noun} content exceeds the maximum size of "
             f"{max_size} bytes."
         )
-    return new_content, replacements
+
+
+def _match_spans(
+    current_content: str, old_string: str, replace_all: bool, *,
+    noun: str, reread_hint: str,
+) -> list[tuple[int, int]]:
+    """The ``(start, end)`` spans one edit replaces, or ``ValueError`` with
+    the same not-found / ambiguous wording as :func:`apply_content_edit`."""
+    occurrences = current_content.count(old_string) if old_string else 0
+    if occurrences == 0:
+        raise ValueError(
+            f"old_string not found in the {noun} content. The {noun} may have "
+            f"changed -- {reread_hint} and retry with the exact "
+            "current text."
+        )
+    if occurrences > 1 and not replace_all:
+        raise ValueError(
+            f"old_string appears {occurrences} times in the {noun} content. "
+            "Include more surrounding context to make the match unique, or "
+            "pass replace_all: true to replace every occurrence."
+        )
+    spans: list[tuple[int, int]] = []
+    start = current_content.find(old_string)
+    while start != -1 and (replace_all or not spans):
+        spans.append((start, start + len(old_string)))
+        start = current_content.find(old_string, start + len(old_string))
+    return spans
+
+
+def apply_content_edits(
+    current_content: str,
+    edits: list[dict],
+    *,
+    max_size: int = MAX_SKILL_CONTENT_SIZE,
+    noun: str = "skill",
+    reread_hint: str = "re-read it with get_skill",
+) -> tuple[str, list[int]]:
+    """Apply a group of exact replacements to one body, all matched against
+    ``current_content`` as it is now.
+
+    Each edit is ``{"old_string", "new_string", "replace_all"?}`` with the
+    rules of :func:`apply_content_edit` (a unique match unless
+    ``replace_all``). Because every ``old_string`` is looked up in the
+    starting content, an edit never sees another edit's result: the group
+    is order-independent and any subset of it applies the same way. Two
+    edits whose matched spans overlap (the same text twice, or one inside
+    another) are refused; the model merges them into one edit.
+
+    Every failing edit is reported at once, one line per edit prefixed with
+    its ``edits[i]`` position, so one retry can fix them all. The result
+    then gets the empty / size checks of the single edit.
+
+    Returns:
+        Tuple of (new content, per-edit replacement counts, in input order).
+
+    Raises:
+        ValueError: one or more edits failed to match, two edits overlap,
+            or the result is empty / over the size cap.
+    """
+    errors: list[str] = []
+    # (start, end, edit index) of every span to replace.
+    spans: list[tuple[int, int, int]] = []
+    counts: list[int] = []
+    for i, edit in enumerate(edits):
+        try:
+            found = _match_spans(
+                current_content, edit["old_string"], bool(edit.get("replace_all")),
+                noun=noun, reread_hint=reread_hint,
+            )
+        except ValueError as exc:
+            errors.append(f"edits[{i}]: {exc}")
+            counts.append(0)
+            continue
+        counts.append(len(found))
+        spans.extend((start, end, i) for start, end in found)
+
+    spans.sort()
+    reported: set[tuple[int, int]] = set()
+    for (_, prev_end, prev_i), (start, _, i) in zip(spans, spans[1:]):
+        if start < prev_end and prev_i != i:
+            pair = (min(prev_i, i), max(prev_i, i))
+            if pair not in reported:
+                reported.add(pair)
+                errors.append(
+                    f"edits[{pair[0]}] and edits[{pair[1]}] match overlapping "
+                    "text: every edit of a group is matched against the "
+                    f"{noun} as it is now, so merge the two into one edit."
+                )
+    if errors:
+        raise ValueError("\n".join(errors))
+
+    # Replace from the end so earlier offsets stay valid.
+    pieces: list[str] = []
+    cursor = len(current_content)
+    for start, end, i in reversed(spans):
+        pieces.append(current_content[end:cursor])
+        pieces.append(edits[i]["new_string"])
+        cursor = start
+    pieces.append(current_content[:cursor])
+    new_content = "".join(reversed(pieces))
+    _check_result(new_content, max_size=max_size, noun=noun)
+    return new_content, counts
 
 
 def build_content_diff(old_content: str, new_content: str) -> dict:

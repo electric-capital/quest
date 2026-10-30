@@ -5,7 +5,13 @@ import type { ActionRequestMessage as ActionRequestMessageType, PreviewField } f
 import { emitRequestCountChange } from '../services/requestEvents';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
 import { ReviseFeedbackForm } from './ReviseFeedbackForm';
-import { ActionRequestPreviewFields } from './ActionRequestPreviewFields';
+import { ActionRequestPreviewFields, selectableChanges } from './ActionRequestPreviewFields';
+import {
+  SkippedChangesLine,
+  approveLabelFor,
+  skippedItemsOf,
+  skippedResultsOf,
+} from './DocEditGroupPreview';
 import { AnimatedWidthButton } from './AnimatedWidthButton';
 import './ActionRequestMessage.css';
 
@@ -51,6 +57,14 @@ export const ActionRequestMessage = React.memo(function ActionRequestMessage({ m
   // Resolved cards collapse to a one-line summary; this re-expands them so
   // the reasoning and preview fields stay accessible after a decision.
   const [expanded, setExpanded] = useState(false);
+  // Partial approval of a card with separately skippable changes (a
+  // write_doc multi_edit): the unticked changes by position, with the
+  // reason typed for each. Sent as the resolve body's skipped_items.
+  const [skippedEdits, setSkippedEdits] = useState<Record<number, string>>({});
+  // What the executed card left out (result.skipped), for the collapsed
+  // line; from the message, the resolve response, the WS event or the
+  // mount refetch.
+  const [skippedResults, setSkippedResults] = useState(() => skippedResultsOf(message.result));
 
   // On mount, if the stored status is 'open', check the database for the current status.
   // Also fetch preview_fields from the server for old messages that lack them.
@@ -89,6 +103,7 @@ export const ActionRequestMessage = React.memo(function ActionRequestMessage({ m
                 ? (result.feedback as string | undefined)
                 : undefined;
               if (fb) setFeedback(fb);
+              if (result) setSkippedResults(skippedResultsOf(result));
             }
           })
           .catch(() => {
@@ -117,6 +132,8 @@ export const ActionRequestMessage = React.memo(function ActionRequestMessage({ m
       // collapse it).
       if (eventStatus === 'accepted') {
         setStatus('executed');
+        const response = event.response as Record<string, unknown> | undefined;
+        if (response?.result) setSkippedResults(skippedResultsOf(response.result));
       } else if (eventStatus === 'stopped') {
         setStatus('stopped');
       } else if (
@@ -138,8 +155,12 @@ export const ActionRequestMessage = React.memo(function ActionRequestMessage({ m
     setPendingAction('approve');
     setError(null);
     try {
-      const result = await resolveActionRequest(message.request_id, 'execute');
+      const result = await resolveActionRequest(
+        message.request_id, 'execute', undefined,
+        { skippedItems: skippedItemsOf(skippedEdits) },
+      );
       setStatus(result.status as 'executed');
+      setSkippedResults(skippedResultsOf(result.result));
       emitRequestCountChange();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to execute request');
@@ -208,12 +229,29 @@ export const ActionRequestMessage = React.memo(function ActionRequestMessage({ m
     }
   };
 
-  const renderPreview = () => (
+  const toggleEdit = (position: number) => {
+    setSkippedEdits((prev) => {
+      const next = { ...prev };
+      if (position in next) delete next[position];
+      else next[position] = '';
+      return next;
+    });
+  };
+  const setEditReason = (position: number, reason: string) => {
+    setSkippedEdits((prev) => ({ ...prev, [position]: reason }));
+  };
+  const selectable = selectableChanges(previewFields);
+  const approve = approveLabelFor(approveLabel, selectable, Object.keys(skippedEdits).length);
+
+  const renderPreview = (selectableNow: boolean) => (
     <ActionRequestPreviewFields
       previewFields={previewFields}
       params={message.params}
       conversationId={conversationId}
       classPrefix="action-request-preview"
+      editSelection={selectableNow && selectable > 0
+        ? { skipped: skippedEdits, onToggle: toggleEdit, onReason: setEditReason }
+        : undefined}
     />
   );
 
@@ -247,6 +285,9 @@ export const ActionRequestMessage = React.memo(function ActionRequestMessage({ m
                   {feedback}
                 </div>
               )}
+              {status === 'executed' && (
+                <SkippedChangesLine skipped={skippedResults} classPrefix="action-request" />
+              )}
             </div>
             <button
               className="action-request-expand-toggle"
@@ -264,7 +305,7 @@ export const ActionRequestMessage = React.memo(function ActionRequestMessage({ m
               {message.reasoning && (
                 <div className="action-request-reasoning">{message.reasoning}</div>
               )}
-              {renderPreview()}
+              {renderPreview(false)}
             </div>
           )}
         </div>
@@ -291,7 +332,7 @@ export const ActionRequestMessage = React.memo(function ActionRequestMessage({ m
           <div className="action-request-reasoning">{message.reasoning}</div>
         )}
 
-        {renderPreview()}
+        {renderPreview(!reviseMode)}
 
         {error && (
           <div className="action-request-error">{error}</div>
@@ -308,9 +349,10 @@ export const ActionRequestMessage = React.memo(function ActionRequestMessage({ m
             <AnimatedWidthButton
               className="action-request-btn approve"
               onClick={handleApprove}
-              disabled={isProcessing}
+              disabled={isProcessing || approve.disabled}
+              title={approve.title}
             >
-              {pendingAction === 'approve' ? 'Processing...' : approveLabel}
+              {pendingAction === 'approve' ? 'Processing...' : approve.label}
             </AnimatedWidthButton>
             <button
               className="action-request-btn revise"

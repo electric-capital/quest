@@ -30,10 +30,12 @@ from chat.docs import access as doc_access
 from chat.docs import notes as doc_notes
 from chat.tables import access as table_access
 from chat.docs.constants import (
+    DOC_EDIT_NOTE_MAX_LEN,
     DOC_INSTRUCTIONS_MAX_CHARS,
     DOC_MAX_ASSETS,
     DOC_MAX_ASSETS_TOTAL_BYTES,
     DOC_MAX_CONTENT_SIZE,
+    DOC_MAX_EDITS_PER_CALL,
     DOC_MAX_IMAGE_SIZE,
     DOC_MAX_MEMORIES,
     DOC_MEMORY_MAX_CHARS,
@@ -1287,6 +1289,8 @@ def _quest_docs_content(_base_url: str, _api_key: str) -> str:
     image_cap = f"{DOC_MAX_IMAGE_SIZE // mb} MB"
     assets_cap = f"{DOC_MAX_ASSETS} images / {DOC_MAX_ASSETS_TOTAL_BYTES // mb} MB"
     read_cap = f"{DOC_READ_MAX_CHARS:,}"
+    edits_cap = DOC_MAX_EDITS_PER_CALL
+    note_cap = DOC_EDIT_NOTE_MAX_LEN
     history_window = (
         f"the last {DOC_REVISION_RETENTION_DAYS} days of versions, "
         f"up to {DOC_REVISION_MAX_COUNT} per doc"
@@ -1336,6 +1340,21 @@ Writes:
 - **edit_doc(doc_id, old_string, new_string, replace_all?)** -- exact string
   replacement (whitespace included); `old_string` must be unique unless
   `replace_all` is true; an empty `new_string` deletes the match.
+  **Several places in one doc: `edit_doc(doc_id, edits=[...])`** instead
+  of `old_string` / `new_string`, up to {edits_cap} objects
+  `{{"old_string", "new_string", "replace_all"?, "note"?}}`. Every
+  `old_string` is matched against the doc as it is NOW, never against the
+  result of an earlier edit in the list, so the edits must not overlap
+  (merge two changes to the same passage into one edit). They land as one
+  change: one History version and, on a shared doc, ONE approval card
+  that shows each edit as its own hunk under its `note` (a short phrase,
+  max {note_cap} characters: "Fix the launch date"). Prefer this over a
+  series of single `edit_doc` calls or several parallel `write_doc`
+  cards; if an edit fails, the error lists every failing edit by its
+  position (`edits[2]: ...`) so one retry can fix them all. The user may
+  apply only some of a card's changes: the result's `skipped` lists each
+  dropped edit by position with their `reason`; respect it rather than
+  proposing that change again.
 - **append_to_doc(doc_id, content, ensure_blank_line?)** -- appends to the
   end; `ensure_blank_line` (default true) separates the new block with a
   blank line.
@@ -1446,17 +1465,19 @@ create_action_request(
 )
 ```
 
-The three `params` shapes, for reference (always forward what the tool
+The four `params` shapes, for reference (always forward what the tool
 returned rather than rebuilding it):
 
 ```
 {{"operation": "edit", "doc_id": "<id>", "old_string": "...", "new_string": "...", "replace_all": false}}
+{{"operation": "multi_edit", "doc_id": "<id>", "edits": [{{"old_string": "...", "new_string": "...", "replace_all": false, "note": "..."}}, ...]}}
 {{"operation": "append", "doc_id": "<id>", "content": "...", "ensure_blank_line": true}}
 {{"operation": "add_image", "doc_id": "<id>", "workspace_path": "chart.png", "alt": "Q3 revenue", "placement": "append"}}
 ```
 
 The card shows the user the doc, how many people it is shared with, and a
-line diff (or the image). Like every action request the call blocks until
+line diff (one per edit for `multi_edit`, or the image). Like every action
+request the call blocks until
 the user resolves it and returns the verdict (shapes in
 `system:action_requests`). At Approve the change is re-applied to the doc
 as it is then: if the text (or the image file) changed meanwhile the

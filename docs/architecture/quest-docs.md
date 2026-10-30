@@ -33,7 +33,7 @@ Docs come in two **modes** that mirror [public projects](public-projects.md). **
 | `chat/llm/tool_schemas.py` | The seven `TOOL_CALL_REGISTRY` specs (`requires_service: "docs"`, writes `mutating`) and their `PUBLIC_TOOL_CALL_ALLOWLIST` entries |
 | `chat/gemini_api/script_tool_call.py` | `SCRIPT_TOOL_CALL_ALLOWLIST`, which holds the three reads |
 | `chat/action_request_types/write_doc.py` / `doc_precard.py` | The `write_doc` handler and its pre-card check |
-| `chat/action_request_types/_skill_content_edit.py` | `apply_content_edit()` (shared with `edit_skill`) and `build_bounded_content_diff()` (the bounded card diff) |
+| `chat/action_request_types/_skill_content_edit.py` | `apply_content_edit()` (shared with `edit_skill`), `apply_content_edits()` (a [grouped edit](#grouped-edits)) and `build_bounded_content_diff()` (the bounded card diff) |
 | `config/feature_gates.py` / `api/instructions.py` | `FEATURE_DOCS`, `docs_enabled_for()`; the `docs` pseudo-key in `get_user_connected_services()` and `PSEUDO_SERVICE_KEYS` |
 | `chat/system_skills/catalog.py` / `chat/system_skills/loader.py` | The `system:quest_docs` skill (`_quest_docs_content`) and its gate-closed load in `load_system_skills()` |
 | `chat/gemini_api/system_prompt.py` | `_PUBLIC_DOCS_SECTION`, and `_doc_tool_names()` / `_doc_write_tool_names()` for the tier prompts |
@@ -57,7 +57,7 @@ Invariants the code keeps (code comments cite them by number):
 2. **Invisibility.** In every tool, a doc the caller may not see behaves exactly like a nonexistent id. The text is the same (`doc_not_found_message`) and so is the work: `doc_store.get_doc` runs its shares query for a missing id too, so both cost two queries and neither touches the files. Hidden docs never appear in list or search output, and title uniqueness is scoped per mode so a `create_doc` collision cannot reveal a private title to a public conversation ([Tables](#tables)).
 3. **Single rule.** Every read/write decision goes through `resolve_doc_access()`. Tools, routes, the pre-card, the approve-time execute, `list_docs` / `search_docs` and the UI `access` object consume its `DocAccess`; none re-derive the rule.
 4. **Paths.** `ChatStorage.get_doc_dir()` is the only id-to-path resolver (canonical id + containment check, see [Data Paths](data-paths.md)). `chat/docs/files.py` gets every path through `doc_paths()`.
-5. **No full replace.** No model-facing path replaces a whole body in one call. Edits are exact search/replace (`apply_content_edit`), plus append and image add. `files.write_body()` has one production caller, `ui_writes.replace_body_from_ui()` (the editor's save and History's restore), which only the `/app/api` routes reach; no model-driven channel can address them ([Human Editing](#human-editing)).
+5. **No full replace.** No model-facing path replaces a whole body in one call. Edits are exact search/replace (`apply_content_edit`), singly or as a [group](#grouped-edits) of up to `DOC_MAX_EDITS_PER_CALL` matched against one starting body (`apply_content_edits`), plus append and image add. `files.write_body()` has one production caller, `ui_writes.replace_body_from_ui()` (the editor's save and History's restore), which only the `/app/api` routes reach; no model-driven channel can address them ([Human Editing](#human-editing)).
 
 ### Mode is fixed at creation
 
@@ -97,7 +97,7 @@ A version is a body. Creation takes no snapshot, metadata and share changes touc
 
 ### Read sidecar
 
-`CHATS_DIR/<conversation_id>/doc_reads.json` (`ChatStorage.get_doc_read_ids` / `add_doc_read_ids`) lists the docs this conversation has read, the read-before-edit gate for `edit_doc` and for `write_doc` with `operation: "edit"`. `read_doc` and `create_doc` feed it; `search_docs` snippets do not count. The service writes it on the event loop, under the workspace and skill sidecars' single-event-loop guarantee. A sub-agent's `read_doc` counts for the parent, whose `conversation_id` it shares; scripts have no conversation and record nothing. The [doc notes seen record](doc-notes.md#seen-record) never credits a sub-agent and is deleted on model history rebuilds.
+`CHATS_DIR/<conversation_id>/doc_reads.json` (`ChatStorage.get_doc_read_ids` / `add_doc_read_ids`) lists the docs this conversation has read, the read-before-edit gate for `edit_doc` and for `write_doc` with `operation: "edit"` or `"multi_edit"`. `read_doc` and `create_doc` feed it; `search_docs` snippets do not count. The service writes it on the event loop, under the workspace and skill sidecars' single-event-loop guarantee. A sub-agent's `read_doc` counts for the parent, whose `conversation_id` it shares; scripts have no conversation and record nothing. The [doc notes seen record](doc-notes.md#seen-record) never credits a sub-agent and is deleted on model history rebuilds.
 
 ## Access Rule
 
@@ -134,12 +134,20 @@ A version is a body. Creation takes no snapshot, metadata and share changes touc
 
 ### Write path
 
-`apply_write_operation()` serves every `WRITE_OPERATIONS` member (edit, append, image add) for both the tools and the action request:
+`apply_write_operation()` serves every `WRITE_OPERATIONS` member (edit, multi_edit, append, image add) for both the tools and the action request:
 
-1. **First pass, outside any lock** (`_resolve_write`): gate, parameter normalization, visibility (hidden == missing), `denied` -> `deny_reason`, then the read-sidecar check for `edit`, the conversation requirement for `add_image` and, with the `doc_notes` gate open, the [notes step](doc-notes.md#write-refusal). None of these refusals takes or creates a lock.
+1. **First pass, outside any lock** (`_resolve_write`): gate, parameter normalization, visibility (hidden == missing), `denied` -> `deny_reason`, then the read-sidecar check for `edit` and `multi_edit` (`_READ_FIRST_OPERATIONS`), the conversation requirement for `add_image` and, with the `doc_notes` gate open, the [notes step](doc-notes.md#write-refusal). None of these refusals takes or creates a lock.
 2. **Approval**: unless `bypass_approval`, an `approval` verdict first dry-runs the operation (`_compute_preview`), so a stale `old_string`, a bad image or an oversized body fails now. It then raises `DocApprovalRequired` carrying `suggested_request`.
 3. **Locked write**: under the per-doc `asyncio.Lock`, access is resolved again, so a share added or revoked while this write queued changes the verdict. The writer then runs (`files.modify_body` for edit and append; `add_asset` followed by an optional body append for images), and `update_after_write` bumps `content_size` / `asset_count` / `last_write_source` / `updated_at` in write order. Finally `doc_changed` + `doc_list_changed` go to the doc's audience ([Realtime](#realtime)).
 4. **Shielded**: the locked part runs via `_shielded()`, so a cancelled turn (Stop mid-write) cannot strand a landed file write without its DB bump and events. A late failure is logged.
+
+### Grouped edits
+
+`edit_doc(doc_id, edits=[...])` changes several places of one doc in one call: the `multi_edit` operation, whose `edits` are 1 to `DOC_MAX_EDITS_PER_CALL` objects `{old_string, new_string, replace_all?, note?}` (`_normalize_edits()`; the `note`, capped at `DOC_EDIT_NOTE_MAX_LEN`, heads the change on the card). `edits` together with `old_string` / `new_string` is refused.
+
+`apply_content_edits()` in `chat/action_request_types/_skill_content_edit.py` applies the group. Every `old_string` is matched against the body as it is now, never against an earlier edit's result, so the edits are independent and order-free and any subset applies the same way; each follows the single edit's rules, and the matched spans may not overlap (the model merges two edits to one passage). Every failing edit is reported at once, prefixed with its position (`edits[2]: ...`). The replacements are made from the end of the body backwards and the result gets the single edit's empty and size checks.
+
+A group is one write (one revision snapshot, one `updated_at` bump, one pair of events; a failing edit fails the call) whose result carries `edits_applied` and the summed `replaced`. Under an `approval` verdict the dry run and `suggested_request` carry the group as `operation: "multi_edit"`: one card, on which the user may untick changes ([The write_doc Request](write-doc-request.md)).
 
 `add_image` reads the image only from the calling conversation's own workspace, never the project workspace (a project file is copied in first with `copy_file` from `proj://` to `chat://`, and a not-found error in a project conversation says so). The read goes through `resolve_workspace_file()` in `chat/action_request_types/_io_attachments.py` plus an `O_NOFOLLOW` / `S_ISREG` descriptor read capped at `DOC_MAX_IMAGE_SIZE`, then a magic-byte check. With `placement: "append"` the body cap is pre-checked before the asset is stored; if the append still fails, the asset count is recorded anyway (assets are additive). The `write_doc` execute refuses a file whose hash differs from the card's `image_preview.sha256`, because the user (through the Chat Files card) and the model can both change it while the card sits open.
 
@@ -199,7 +207,7 @@ The seven tools are the `TOOL_CALL_REGISTRY` entries in Key Files, dispatched th
 | `list_docs`, `search_docs`, `read_doc` (the reads) | every tier incl. scripts |
 | `create_doc`, `edit_doc`, `append_to_doc`, `add_doc_image` (the writes) | top-level conversations (private, public, routine) and Slack |
 
-Parameters are the registry specs, and success results are the dicts the service functions return (`chat/docs/service.py`). The list / search `scope` values are `DOC_SCOPES` there (`public` means the doc sources' public docs from a private project, and a public conversation's own docs).
+Parameters are the registry specs (`edit_doc` takes either `old_string` / `new_string` or `edits`, [Grouped edits](#grouped-edits)), and success results are the dicts the service functions return (`chat/docs/service.py`). The list / search `scope` values are `DOC_SCOPES` there (`public` means the doc sources' public docs from a private project, and a public conversation's own docs).
 
 Error results come in four shapes:
 
@@ -216,16 +224,7 @@ Enforcement outside the access rule:
 
 ## The write_doc Action Request
 
-`WriteDocHandler` (`chat/action_request_types/write_doc.py`, registered in `chat/action_request_types/__init__.py`) is the approval form of the three write tools: one type whose `operation` is a `WRITE_OPERATIONS` member. `create_doc` has no action-request form. The pipeline follows `edit_skill`:
-
-- **`validate_params`** checks shape only. It rejects unknown keys and keys of another operation (`OPERATION_PARAM_KEYS`), fills the optional defaults, and drops any model-supplied copy of a server-injected key (`SERVER_INJECTED_KEYS`).
-- **Pre-card** (`doc_precard_check()` in `doc_precard.py`, called from the `create_action_request` arm in `chat/gemini_api/turn_tools.py` after the skill and routine pre-cards) delegates to `service.preview_write_operation()`: the same access, read-sidecar, live-body dry-run and cap checks as the tool. A `free` verdict is rejected ("call the tool instead"), a denied, hidden, unread, stale or gate-closed case gets the service's own text, and unseen doc notes the refusal followed by the notes as text, all as same-turn `Invalid parameters` with no card. On `approval` it injects the `SERVER_INJECTED_KEYS` preview: the share summary carries counts only, never names, an `add_image` card gets an `image_preview` whose `sha256` pins the file, and with the `doc_notes` gate open for the proposer the doc's `instructions_version` pins its instructions.
-- **Card diff**: `build_bounded_content_diff()` of the live body vs the result, computed in `asyncio.to_thread`, because the full-body `build_content_diff()` that `edit_skill` uses is quadratic on a large doc (the function's docstring gives the bounding steps and its keyword defaults the thresholds). Line numbers match `read_doc`'s, and `total_old_lines` / `total_new_lines` let the renderer mark what the window leaves out ([write_doc card](#write_doc-card)).
-- **`execute`**: the resolve route in `chat/action_request_routes.py` passes `request_id=` to the types in `REQUEST_ID_TYPES`, this one and the [table cards](../api/tables-api.md#action-requests). `execute` calls `apply_write_operation(..., bypass_approval=True, write_source="action_request:<id>")` with the pinned `expected_sha256` for `add_image` and the instructions pin as `expected_instructions_version`. That re-resolves access (a hidden doc refuses, a doc whose shares were all removed is written), re-checks the read sidecar and re-applies against the live body: the TOCTOU close, so a stale `old_string`, or instructions changed since the proposal ([Doc Notes](doc-notes.md#instructions-pin-on-write_doc-cards)), fails the Approve and the request stays open. The service publishes the realtime events.
-- **Attribution**: a card is proposed and approved in its proposer's own conversation. `get_action_request_owners()` credits a write-share recipient's card to them in the owner's row (`last_write_user`) and [History](#history); the owner's own card links that conversation (`get_action_request_conversations()`).
-- **Fail closed on a missing project**: `project_is_public()` raises `RuntimeError` when the conversation has a `project_id` but `project_store.get_project` finds no row for the user, rather than treating the conversation as private. The pre-card turns it into `Invalid parameters`; at Approve it is the resolve route's 500 `execution_failed` with the request left open.
-
-`render_preview`, the labels and `summary_snippet` are on `WriteDocHandler`, with their rationale in the code comments; the diff reuses the `skill_content_diff` field type and the image preview is the `doc_image` type.
+`WriteDocHandler` is the approval form of the three write tools: one type whose `operation` is a `WRITE_OPERATIONS` member (`edit`, `multi_edit` for `edit_doc`'s grouped form, `append`, `add_image`); `create_doc` has no action-request form. Its pre-card, card diff, approve-time re-check, attribution and card rendering are in [The write_doc Request](write-doc-request.md).
 
 ## Feature Gate
 
@@ -233,7 +232,7 @@ Enforcement outside the access rule:
 
 ## Prompting
 
-- **`system:quest_docs`** (`_quest_docs_content`; `system:docs` is Google Docs) is the model's guide to the tools, the `approval_required` -> `write_doc` handoff and the routine pattern: one doc appended to under a dated heading per run. Its caps and History window come from `chat/docs/constants.py`; its "Read before edit" ends with a pointer to `system:doc_notes`.
+- **`system:quest_docs`** (`_quest_docs_content`; `system:docs` is Google Docs) is the model's guide to the tools, the `approval_required` -> `write_doc` handoff, grouping several changes to one doc into one `edit_doc(edits=[...])` call (one card, each edit under its `note`) and the routine pattern: one doc appended to under a dated heading per run. Its caps and History window come from `chat/docs/constants.py`; its "Read before edit" ends with a pointer to `system:doc_notes`.
 - **Revise in place**: History keeps every replaced body ([Revision policy](#revision-policy)), so the skill, the `create_doc` / `edit_doc` descriptions and `_PUBLIC_DOCS_SECTION` tell the model to change an existing doc, not create a copy, unless the user asks for one.
 - **Public prompt**: `_PUBLIC_DOCS_SECTION` follows the Boundaries block only while `docs_enabled`, and stands in for the skill (only this project's public docs, always created with `create_doc(target="project")`), followed by the [notes line](doc-notes-tools.md#prompting) while `doc_notes_enabled` too. It may not name internal-only tools or skills (`tests/test_public_projects.py::test_no_internal_tool_docs`), which is why the write-tool descriptions say "write_doc action request" rather than spelling out `create_action_request(`.
 - No doc titles are ever injected into a prompt. Discovery is tools-only.
@@ -271,7 +270,7 @@ The UI at `/docs`: browse, read, create empty docs, rename, download and delete;
 | `components/docs/DocModeBadge.tsx` + `utils/docMode.ts` | The mode pill; `shouldShowDocModeBadge()` shows it on public docs only |
 | `components/docs/DocsGateClosed.tsx` | Shown on a `/docs*` URL while the gate is closed |
 | `components/Message.tsx` | `MarkdownWorkspaceContext.assetBase` and the doc branch of `MarkdownImage` |
-| `components/ActionRequestPreviewFields.tsx`, `components/DocImagePreview.tsx`, `components/SkillContentDiffPreview.tsx` | `write_doc` card rendering |
+| `components/ActionRequestPreviewFields.tsx`, `components/DocImagePreview.tsx`, `components/SkillContentDiffPreview.tsx`, `components/DocEditGroupPreview.tsx` | `write_doc` card rendering |
 | `components/settings/SignOutSection.tsx` | Clears every draft backup on each sign-out path |
 | `App.tsx`, `components/MobileShell.tsx`, `components/Sidebar.tsx`, `components/sidebar/ProjectPanel.tsx` | Route rendering and sidebar mounting |
 | `quest.py` (repo root) | `serve_spa_docs` |
@@ -312,7 +311,7 @@ Under a plain `BrowserRouter`, browser back / forward and button-driven `navigat
 
 ### write_doc card
 
-Both card renderers go through `ActionRequestPreviewFields.tsx`. `DocImagePreview.tsx` renders the `doc_image` field, loading the thumbnail from the proposing conversation's own workspace (`add_image` reads only that workspace, so the card's conversation id always resolves it). `SkillContentDiffPreview.tsx` recognizes the bounded diff window by `total_old_lines` / `total_new_lines` and marks the lines outside it; whole-body skill and routine diffs carry no totals.
+Both card renderers go through `ActionRequestPreviewFields.tsx`; the `write_doc` field types and their components are in [The write_doc Request -- Card rendering](write-doc-request.md#card-rendering).
 
 ### Realtime consumers
 
@@ -354,6 +353,8 @@ Public containers get no sandbox token and so have no bridge at all, so `is_publ
 **Why are sub-agents, inference runs, cross-user subagents and scripts read-only?** Writes stay with the run that owns the conversation and its approval surface. Sub-agents cannot open action requests, so they return content to the top-level agent, which writes it. Inference and cross-user subagent runs must not change anything outside their own workspace, and a script has no conversation of its own to attribute a write to or to open an approval card in.
 
 **Why search/replace + append instead of full replace?** A full replace lets a model silently drop content it never read. An exact match keeps every change local and reviewable (the same diff powers the approval card), and append covers the main aggregation use case without a read.
+
+**Why is a grouped edit matched against one starting body?** Sequential application would let edits depend on each other, so skipping or failing one could change what the rest mean. Independent edits show as separate hunks with the doc's line numbers, and unticking one leaves the rest as they were. Landing the kept ones as one write keeps a half-applied doc out of History; a failed edit is reported with the others and the group retried.
 
 **Why files on disk instead of DB rows?** A doc is a portable artifact: `doc.md` plus `assets/` downloads as-is (md or zip) with working relative image links, and revisions are plain files.
 

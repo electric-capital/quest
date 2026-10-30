@@ -98,6 +98,22 @@ def _bool_arg(args: dict, key: str, default: bool) -> bool:
     raise DocError(f"{key} must be a boolean.")
 
 
+def _list_arg(args: dict, key: str):
+    """A list argument, also accepted as its JSON text (some providers
+    stringify nested arguments)."""
+    raw = args.get(key)
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raise DocError(f"{key} must be a list.") from None
+    if not isinstance(raw, list):
+        raise DocError(f"{key} must be a list.")
+    return raw
+
+
 def _write_source(caller: Caller) -> str:
     if caller.conversation_id:
         return f"conversation:{caller.conversation_id}"
@@ -185,6 +201,7 @@ async def _handle_edit_doc(caller: Caller, args: dict) -> str:
             args.get("old_string"),
             args.get("new_string"),
             replace_all=_bool_arg(args, "replace_all", False),
+            edits=_list_arg(args, "edits"),
             write_source=_write_source(caller),
         )
     return await _run(caller, op)

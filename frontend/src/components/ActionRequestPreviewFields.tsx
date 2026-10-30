@@ -1,5 +1,13 @@
 import type { ReactNode } from 'react';
 import type { PreviewField } from '../api/types';
+
+/** The skippable changes of a card: the `doc_edit_group` field's count,
+ *  0 for every other card. */
+export function selectableChanges(previewFields?: PreviewField[]): number {
+  const group = previewFields?.find((field) => field.type === 'doc_edit_group' && field.edits);
+  return group?.edits?.length ?? 0;
+}
+import { DocEditGroupPreview, type DocEditSelection } from './DocEditGroupPreview';
 import { DocImagePreview } from './DocImagePreview';
 import { SpreadsheetDiffPreview } from './SpreadsheetDiffPreview';
 import { SkillContentDiffPreview } from './SkillContentDiffPreview';
@@ -45,7 +53,9 @@ export function tableFieldLabel(field: PreviewField): string {
  * a missing preview_fields list falls back to raw params JSON (old chat
  * history). Structured fields stack full width (label line, then the
  * preview); a known type whose payload key is missing also falls back to
- * the plain value. Quest Tables types: `table_columns` (`field.columns`,
+ * the plain value. `doc_edit_group` (`field.edits`, a write_doc
+ * multi_edit) renders one diff window per edit, with Apply checkboxes
+ * when the host passes its `editSelection` (an open card). Quest Tables types: `table_columns` (`field.columns`,
  * create_table), `table_schema_diff` (`field.schema_diff`,
  * change_table_schema), `table_rows_diff` (`field.rows_diff`,
  * write_table_rows); their label line is `tableFieldLabel()`.
@@ -55,11 +65,13 @@ export function ActionRequestPreviewFields({
   params,
   conversationId,
   classPrefix,
+  editSelection,
 }: {
   previewFields?: PreviewField[];
   params: Record<string, unknown>;
   conversationId: string;
   classPrefix: 'action-request-preview' | 'request-preview';
+  editSelection?: DocEditSelection;
 }) {
   if (!previewFields || previewFields.length === 0) {
     return (
@@ -81,6 +93,11 @@ export function ActionRequestPreviewFields({
           <div key={i} className={`${classPrefix}-field skill-diff-field`}>
             <span className={`${classPrefix}-key`}>{field.key}: {field.value}</span>
             <SkillContentDiffPreview diff={field.diff} />
+          </div>
+        ) : field.type === 'doc_edit_group' && field.edits ? (
+          <div key={i} className={`${classPrefix}-field doc-edit-group-field`}>
+            <span className={`${classPrefix}-key`}>{field.key}: {field.value}</span>
+            <DocEditGroupPreview edits={field.edits} selection={editSelection} />
           </div>
         ) : field.type === 'subagent_return_files' && field.files ? (
           <div key={i} className={`${classPrefix}-field subagent-files-field`}>

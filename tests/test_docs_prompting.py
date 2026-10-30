@@ -232,8 +232,11 @@ class TestQuestDocsSkill:
         assert 'request_type="write_doc"' in content
         assert "approval_required" in content
         assert "suggested_request" in content
-        # The three forwarded param shapes.
-        for op in ('"operation": "edit"', '"operation": "append"', '"operation": "add_image"'):
+        # The four forwarded param shapes.
+        for op in (
+            '"operation": "edit"', '"operation": "multi_edit"',
+            '"operation": "append"', '"operation": "add_image"',
+        ):
             assert op in content, op
         # Quoted access-rule texts stay in sync with chat/docs/access.py.
         for text in (

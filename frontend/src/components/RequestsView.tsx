@@ -24,7 +24,13 @@ import {
 import { onRequestCountChange } from '../services/requestEvents';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
 import { ReviseFeedbackForm } from './ReviseFeedbackForm';
-import { ActionRequestPreviewFields } from './ActionRequestPreviewFields';
+import { ActionRequestPreviewFields, selectableChanges } from './ActionRequestPreviewFields';
+import {
+  SkippedChangesLine,
+  approveLabelFor,
+  skippedItemsOf,
+  skippedResultsOf,
+} from './DocEditGroupPreview';
 import { AnimatedWidthButton } from './AnimatedWidthButton';
 import { MemoryInbox } from './MemoryInbox';
 import './RequestsView.css';
@@ -199,15 +205,23 @@ export function RequestsView() {
       return next;
     });
     try {
-      const result = await resolveActionRequest(requestId, 'execute');
+      const result = await resolveActionRequest(
+        requestId, 'execute', undefined,
+        { skippedItems: skippedItemsOf(skippedEdits[requestId] ?? {}) },
+      );
       // Optimistic update
       setRequests((prev) =>
         prev.map((r) =>
           r.id === requestId
-            ? { ...r, status: result.status as 'executed', resolved_at: result.resolved_at }
+            ? { ...r, status: result.status as 'executed', resolved_at: result.resolved_at, result: result.result }
             : r
         )
       );
+      setSkippedEdits((prev) => {
+        const next = { ...prev };
+        delete next[requestId];
+        return next;
+      });
       // Sidebar refresh happens automatically via onStreamComplete when the
       // resumed conversation stream finishes, so no manual trigger needed.
     } catch (e) {
@@ -371,12 +385,46 @@ export function RequestsView() {
     fetchCounts();
   };
 
+  // Partial approval per open card (a write_doc multi_edit): the unticked
+  // changes by position with their reasons, sent as skipped_items.
+  const [skippedEdits, setSkippedEdits] = useState<Record<number, Record<number, string>>>({});
+  const toggleEdit = (requestId: number, position: number) => {
+    setSkippedEdits((prev) => {
+      const card = { ...(prev[requestId] ?? {}) };
+      if (position in card) delete card[position];
+      else card[position] = '';
+      return { ...prev, [requestId]: card };
+    });
+  };
+  const setEditReason = (requestId: number, position: number, reason: string) => {
+    setSkippedEdits((prev) => ({
+      ...prev,
+      [requestId]: { ...(prev[requestId] ?? {}), [position]: reason },
+    }));
+  };
+  const approveFor = (request: EnrichedActionRequest) => approveLabelFor(
+    request.approve_label || 'Approve',
+    selectableChanges(request.preview_fields),
+    Object.keys(skippedEdits[request.id] ?? {}).length,
+  );
+
   const renderPreview = (request: EnrichedActionRequest) => (
     <ActionRequestPreviewFields
       previewFields={request.preview_fields}
       params={request.params}
       conversationId={request.conversation_id}
       classPrefix="request-preview"
+      editSelection={
+        request.status === 'open'
+        && !reviseModeIds.has(request.id)
+        && selectableChanges(request.preview_fields) > 0
+          ? {
+            skipped: skippedEdits[request.id] ?? {},
+            onToggle: (position) => toggleEdit(request.id, position),
+            onReason: (position, reason) => setEditReason(request.id, position, reason),
+          }
+          : undefined
+      }
     />
   );
 
@@ -520,9 +568,10 @@ export function RequestsView() {
                       <AnimatedWidthButton
                         className="request-btn approve"
                         onClick={() => handleApprove(request.id)}
-                        disabled={request.id in pendingActions}
+                        disabled={request.id in pendingActions || approveFor(request).disabled}
+                        title={approveFor(request).title}
                       >
-                        {pendingActions[request.id] === 'approve' ? 'Processing...' : (request.approve_label || 'Approve')}
+                        {pendingActions[request.id] === 'approve' ? 'Processing...' : approveFor(request).label}
                       </AnimatedWidthButton>
                       <button
                         className="request-btn revise"
@@ -545,6 +594,11 @@ export function RequestsView() {
                       </AnimatedWidthButton>
                     </div>
                   )
+                )}
+
+                {/* The changes a partial approval left out */}
+                {request.status === 'executed' && (
+                  <SkippedChangesLine skipped={skippedResultsOf(request.result)} classPrefix="request" />
                 )}
 
                 {/* Persisted deny feedback on resolved cards */}
