@@ -25,6 +25,9 @@
  * (unless the row in state is already as new), keeps the draft, shows the
  * server's message and re-fetches the list, so the next Accept is against
  * what the user sees and the count matches the list again.
+ *
+ * ``MemorySuggestionsBar`` is the row ChatPanel renders above the composer:
+ * the three bubbles side by side, personal, project, doc.
  */
 
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
@@ -191,6 +194,42 @@ export function MemorySuggestions({
       kind={kind}
       config={KIND_CONFIG[kind]}
     />
+  );
+}
+
+/** A conversation's pending suggestion counts, one per kind (useConversation). */
+export interface PendingSuggestionCounts {
+  user: number;
+  project: number;
+  doc: number;
+}
+
+interface MemorySuggestionsBarProps {
+  conversationId: string;
+  pending: PendingSuggestionCounts;
+}
+
+/**
+ * The bubbles above the composer, side by side in a fixed order: personal
+ * memories, project memories, doc notes, each hidden at zero; nothing at
+ * all while the three counts are zero. ChatPanel renders it as a direct
+ * child of ``.chat-panel``, which the phone rule in MemorySuggestions.css
+ * (``.chat-panel > .memory-suggestions-bar``) positions over the composer.
+ * The doc bubble is not gated by the doc notes feature: rows already filed
+ * stay reviewable with the gate closed.
+ */
+export function MemorySuggestionsBar({ conversationId, pending }: MemorySuggestionsBarProps) {
+  if (pending.user <= 0 && pending.project <= 0 && pending.doc <= 0) return null;
+  return (
+    <div className="memory-suggestions-bar">
+      <MemorySuggestions conversationId={conversationId} pendingCount={pending.user} />
+      <MemorySuggestions
+        conversationId={conversationId}
+        pendingCount={pending.project}
+        kind="project"
+      />
+      <MemorySuggestions conversationId={conversationId} pendingCount={pending.doc} kind="doc" />
+    </div>
   );
 }
 

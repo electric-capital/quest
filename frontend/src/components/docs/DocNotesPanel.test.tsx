@@ -141,8 +141,9 @@ function duplicateError(memoryId: string) {
 }
 
 const SUGGESTIONS_HINT = 'From your conversations. Nothing changes until you accept.';
+// The server's accept refusal (the editor's own 409 says STALE_MESSAGE).
 const ACCEPT_STALE_MESSAGE =
-  'The instructions changed since this was suggested. Review the current text and accept again.';
+  "The doc's instructions changed since this suggestion was shown. Review it against the current text and accept again.";
 
 function makeSuggestion(overrides: Partial<DocNoteSuggestion> = {}): DocNoteSuggestion {
   return {
@@ -1139,28 +1140,44 @@ describe('DocNotesPanel', () => {
       expect(within(suggestionsBlock()).queryByRole('alert')).toBeNull();
     });
 
-    it('a stale 409 re-bases the diff on its current text until the listed row is as new', async () => {
-      const view = withSuggestions([INSTRUCTIONS_SUGGESTION]);
-      const accept = vi.mocked(view.acceptSuggestion);
-      accept.mockRejectedValueOnce(
-        staleError(
-          { instructions: 'Keep the tone casual.\nCite every source.', instructions_version: 5 },
-          ACCEPT_STALE_MESSAGE,
-        ),
-      );
-      const { container, rerenderView } = renderPanel(view);
-      const draft = 'Keep the tone friendly, always.\nCite every source.';
-      fireEvent.change(rowText(suggestionRow('Doc instructions text')), { target: { value: draft } });
-      fireEvent.click(rowButton(suggestionRow('Doc instructions text'), 'Accept'));
-      expect(accept).toHaveBeenLastCalledWith('s1', { content: draft, expectedInstructionsVersion: 3 });
+    // The instructions moved to "casual" (version 5) after the row was listed
+    // at version 3; the reviewer's Accept answers a 409 carrying them.
+    const CASUAL = 'Keep the tone casual.\nCite every source.';
+    const delOf = (row: HTMLElement) =>
+      rowDiffBody(row).querySelector('.memory-suggestion-diff-del')?.textContent;
 
-      const alert = await within(suggestionsBlock()).findByRole('alert');
-      expect(alert.textContent).toBe(ACCEPT_STALE_MESSAGE);
+    /** Render one instructions row and Accept it into a 409 with `CASUAL` at version 5. */
+    async function acceptIntoStale(draft?: string) {
+      const view = withSuggestions([INSTRUCTIONS_SUGGESTION]);
+      vi.mocked(view.acceptSuggestion)
+        .mockRejectedValueOnce(
+          staleError({ instructions: CASUAL, instructions_version: 5 }, ACCEPT_STALE_MESSAGE),
+        )
+        .mockReturnValue(new Promise(() => {}));
+      const rendered = renderPanel(view);
+      if (draft !== undefined) {
+        fireEvent.change(rowText(suggestionRow('Doc instructions text')), { target: { value: draft } });
+      }
+      fireEvent.click(rowButton(suggestionRow('Doc instructions text'), 'Accept'));
+      expect((await within(suggestionsBlock()).findByRole('alert')).textContent).toBe(
+        ACCEPT_STALE_MESSAGE,
+      );
+      return { view, ...rendered };
+    }
+
+    it('a stale 409 keeps the draft and re-bases the diff on its current text, past an older listed row', async () => {
+      const draft = 'Keep the tone friendly, always.\nCite every source.';
+      const { view, container, rerenderView } = await acceptIntoStale(draft);
+      expect(view.acceptSuggestion).toHaveBeenLastCalledWith('s1', {
+        content: draft,
+        expectedInstructionsVersion: 3,
+      });
+
       // The draft is kept; the diff now starts from the current text, and the
       // instructions moved past the proposal's base.
       let row = suggestionRow('Doc instructions text');
       expect(rowText(row).value).toBe(draft);
-      expect(rowDiffBody(row).querySelector('.memory-suggestion-diff-del')?.textContent).toBe('casual.');
+      expect(delOf(row)).toBe('casual.');
       expect(row.querySelector('.memory-suggestion-moved')?.textContent).toBe(
         'The instructions changed since this was suggested',
       );
@@ -1172,36 +1189,57 @@ describe('DocNotesPanel', () => {
       // A listed row older than the 409 does not undo the re-base.
       rerenderView({ ...view, suggestions: [makeSuggestion()] });
       row = suggestionRow('Doc instructions text');
-      expect(rowDiffBody(row).querySelector('.memory-suggestion-diff-del')?.textContent).toBe('casual.');
+      expect(delOf(row)).toBe('casual.');
 
-      accept.mockReturnValueOnce(new Promise(() => {}));
       fireEvent.click(rowButton(row, 'Accept'));
-      expect(accept).toHaveBeenLastCalledWith('s1', { content: draft, expectedInstructionsVersion: 5 });
-      cleanup();
-
-      // The hook's re-fetched row, as new or newer, takes over.
-      const refetched = makeSuggestion({
-        current_instructions: 'Keep the tone serious.\nCite every source.',
-        current_instructions_version: 6,
-        instructions_moved: true,
+      expect(view.acceptSuggestion).toHaveBeenLastCalledWith('s1', {
+        content: draft,
+        expectedInstructionsVersion: 5,
       });
-      const next = withSuggestions([INSTRUCTIONS_SUGGESTION]);
-      vi.mocked(next.acceptSuggestion)
-        .mockRejectedValueOnce(
-          staleError({ instructions: 'Keep the tone casual.\nCite every source.', instructions_version: 5 }),
-        )
-        .mockReturnValueOnce(new Promise(() => {}));
-      const second = renderPanel(next);
-      fireEvent.click(rowButton(suggestionRow('Doc instructions text'), 'Accept'));
-      await within(suggestionsBlock()).findByRole('alert');
-      second.rerenderView({ ...next, suggestions: [refetched] });
-      row = suggestionRow('Doc instructions text');
-      expect(rowDiffBody(row).querySelector('.memory-suggestion-diff-del')?.textContent).toBe('serious.');
-      // The message stays until the next action.
-      expect(within(row).getByRole('alert').textContent).toBe(STALE_MESSAGE);
+    });
+
+    it('a re-fetched row newer than the 409 takes over; the message stays until the next action', async () => {
+      const { view, rerenderView } = await acceptIntoStale();
+      rerenderView({
+        ...view,
+        suggestions: [
+          makeSuggestion({
+            current_instructions: 'Keep the tone serious.\nCite every source.',
+            current_instructions_version: 6,
+            instructions_moved: true,
+          }),
+        ],
+      });
+      const row = suggestionRow('Doc instructions text');
+      expect(delOf(row)).toBe('serious.');
+      expect(within(row).getByRole('alert').textContent).toBe(ACCEPT_STALE_MESSAGE);
+
       fireEvent.click(rowButton(row, 'Accept'));
-      expect(next.acceptSuggestion).toHaveBeenLastCalledWith('s1', { expectedInstructionsVersion: 6 });
+      expect(view.acceptSuggestion).toHaveBeenLastCalledWith('s1', { expectedInstructionsVersion: 6 });
       expect(within(row).queryByRole('alert')).toBeNull();
+    });
+
+    it('a re-fetched row at the 409\'s version drops the local re-base', async () => {
+      const { view, rerenderView } = await acceptIntoStale();
+      // Same version as the 409. Its text differs from the 409's only so the
+      // test can tell which row is shown: the hook's.
+      rerenderView({
+        ...view,
+        suggestions: [
+          makeSuggestion({
+            current_instructions: 'Keep the tone serious.\nCite every source.',
+            current_instructions_version: 5,
+            instructions_moved: true,
+          }),
+        ],
+      });
+      expect(delOf(suggestionRow('Doc instructions text'))).toBe('serious.');
+
+      // The re-base is gone, not just hidden: an older row now shows as listed.
+      rerenderView({ ...view, suggestions: [makeSuggestion()] });
+      expect(delOf(suggestionRow('Doc instructions text'))).toBe('formal.');
+      fireEvent.click(rowButton(suggestionRow('Doc instructions text'), 'Accept'));
+      expect(view.acceptSuggestion).toHaveBeenLastCalledWith('s1', { expectedInstructionsVersion: 3 });
     });
 
     it('a stale 409 without a current text keeps the listed row and shows the message', async () => {
@@ -1281,8 +1319,9 @@ describe('DocNotesPanel', () => {
       expect(screen.getByText('This doc has no notes.')).toBeTruthy();
       expect(screen.queryByRole('heading', { name: 'Instructions' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Memories' })).toBeNull();
-      // The rows are focusable: the scroller is no tab stop of its own.
-      expect(container.querySelector('.doc-notes-scroll')?.hasAttribute('tabindex')).toBe(false);
+      // The rows sit only at the top: the read-only notes below still need
+      // the scroller as a tab stop.
+      expect(container.querySelector('.doc-notes-scroll')?.getAttribute('tabindex')).toBe('0');
     });
 
     it('details: the block is inside the collapsed section', () => {

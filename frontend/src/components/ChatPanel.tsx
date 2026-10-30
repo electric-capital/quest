@@ -22,7 +22,7 @@ import { Composer } from './Composer';
 import { ConvertToProjectModal } from './ConvertToProjectModal';
 import { ExpensiveResumeWarning } from './ExpensiveResumeWarning';
 import { UploadProgress, describeUpload, uploadPercent, type UploadStatus } from './UploadProgress';
-import { MemorySuggestions } from './MemorySuggestions';
+import { MemorySuggestionsBar } from './MemorySuggestions';
 import { ConversationHeader } from './ConversationHeader';
 import { LazyFileViewerModal } from './LazyFileViewerModal';
 import { uploadFiles } from '../api/fileApi';
@@ -847,33 +847,17 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
 
       {/* Suggestion bubbles (the model's non-blocking suggest_memory,
           suggest_project_memory and suggest_doc_note proposals awaiting
-          review), side by side: personal memories, project memories, doc
-          notes. Click opens the kind's review panel over the conversation.
-          Each is hidden while nothing of its kind is pending. The doc notes
-          bubble is not gated by the doc notes feature: rows already filed
-          stay reviewable with the gate closed. */}
-      {(
-        pendingMemorySuggestions > 0
-        || pendingProjectMemorySuggestions > 0
-        || pendingDocNoteSuggestions > 0
-      ) && (
-        <div className="memory-suggestions-bar">
-          <MemorySuggestions
-            conversationId={conversationId}
-            pendingCount={pendingMemorySuggestions}
-          />
-          <MemorySuggestions
-            conversationId={conversationId}
-            pendingCount={pendingProjectMemorySuggestions}
-            kind="project"
-          />
-          <MemorySuggestions
-            conversationId={conversationId}
-            pendingCount={pendingDocNoteSuggestions}
-            kind="doc"
-          />
-        </div>
-      )}
+          review), side by side; click opens the kind's review panel over
+          the conversation. Must stay a direct child of .chat-panel (the
+          phone rule in MemorySuggestions.css positions it by that). */}
+      <MemorySuggestionsBar
+        conversationId={conversationId}
+        pending={{
+          user: pendingMemorySuggestions,
+          project: pendingProjectMemorySuggestions,
+          doc: pendingDocNoteSuggestions,
+        }}
+      />
 
       {/* Expensive-resume warning: blocks the composer on a long-idle,
           long-context conversation until the user picks an alternative or

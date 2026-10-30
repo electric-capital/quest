@@ -12,14 +12,13 @@
  *   shares too). Each is the shared MemorySuggestionRow (kind `doc`, no doc
  *   link: the panel is the doc) with its editable text, Accept and Dismiss
  *   through the hook, which drops the row (and after an accept reloads the
- *   notes). An
- *   instructions accept sends the version its diff was rendered against
- *   (docNoteReview.ts); a 409 `stale_instructions` keeps the draft, shows
- *   the server's message and re-bases the row's diff on the current text it
- *   carries until the hook's re-fetched row is at least as new, so the next
- *   Accept is against what the user sees. A row resolved elsewhere just
- *   leaves; other errors show on the row. Above the empty-state line, which
- *   stays about the notes.
+ *   notes). An instructions accept sends the version its diff was rendered
+ *   against (docNoteReview.ts); a 409 `stale_instructions` keeps the draft,
+ *   shows the server's message and re-bases the row's diff on the current
+ *   text it carries until the hook's re-fetched row is at least as new, so
+ *   the next Accept is against what the user sees. A row resolved elsewhere
+ *   just leaves; other errors show on the row. Above the empty-state line,
+ *   which stays about the notes.
  * - Instructions: plain text with its line breaks. The owner (`is_owner`)
  *   gets Edit ("Add instructions" while there are none), a textarea with a
  *   character counter and Save / Cancel, and an "Edited by <name>, <time>"
@@ -1060,10 +1059,10 @@ export function DocNotesPanel({ view, variant = 'card', viewerEmail = null }: Do
     );
   }
 
-  // Read-only viewers without suggestion rows have nothing focusable in a
-  // long card: the scroller takes focus so the keyboard can scroll it.
-  const keyboardScroll =
-    view.notes !== null && !view.notes.can_edit && view.suggestions.length === 0;
+  // Read-only viewers have nothing focusable in the notes of a long card
+  // (suggestion rows, if any, sit only at its top): the scroller takes
+  // focus so the keyboard can scroll it.
+  const keyboardScroll = view.notes !== null && !view.notes.can_edit;
   return (
     <section className="right-panel-card doc-notes-panel" aria-label="Notes">
       <div className="doc-notes-header">
