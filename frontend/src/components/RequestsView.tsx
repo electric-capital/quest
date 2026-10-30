@@ -2,8 +2,9 @@
  * RequestsView - the full-pane inbox, replacing the chat panel + file
  * browser when the user clicks the inbox button in the sidebar. Two tabs,
  * each with its own URL: Requests (/inbox) lists every action request;
- * Memories (/inbox/memories) is the MemoryInbox of suggested memories
- * awaiting review. The tab labels carry the unanswered counts.
+ * Memories (/inbox/memories) is the MemoryInbox of suggestions awaiting
+ * review (personal and project memories, doc notes). The tab labels carry
+ * the unanswered counts.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -33,18 +34,28 @@ export const INBOX_TAB_PATHS: Record<InboxTab, string> = {
   memories: '/inbox/memories',
 };
 
+/** The suggestion kind whose ``total_pending`` a per-user global carries, if any. */
+function suggestionCountKind(type: string | undefined): 'user' | 'project' | 'doc' | null {
+  switch (type) {
+    case 'memory_suggestions_changed': return 'user';
+    case 'project_memory_suggestions_changed': return 'project';
+    case 'doc_note_suggestions_changed': return 'doc';
+    default: return null;
+  }
+}
+
 /**
- * The user's pending suggested memories of both kinds, for the Memories
- * tab label: fetched once, then followed through the per-user globals'
- * ``total_pending``.
+ * The user's pending suggestions of all three kinds (personal and project
+ * memories, doc notes), for the Memories tab label: fetched once, then
+ * followed through the per-user globals' ``total_pending``.
  */
 function usePendingMemoryCount(): number {
-  const [counts, setCounts] = useState({ user: 0, project: 0 });
+  const [counts, setCounts] = useState({ user: 0, project: 0, doc: 0 });
   useEffect(() => {
     let cancelled = false;
     fetchMemoryInboxCounts()
       .then((resp) => {
-        if (!cancelled) setCounts({ user: resp.user, project: resp.project });
+        if (!cancelled) setCounts({ user: resp.user, project: resp.project, doc: resp.doc });
       })
       .catch(() => {
         // The label just keeps its last value.
@@ -55,14 +66,13 @@ function usePendingMemoryCount(): number {
   }, []);
   useEffect(() => {
     return persistentWebSocket.onGlobalEvent((event) => {
-      const isProject = event.type === 'project_memory_suggestions_changed';
-      if (!isProject && event.type !== 'memory_suggestions_changed') return;
+      const kind = suggestionCountKind(event.type);
       const total = event.total_pending;
-      if (typeof total !== 'number') return;
-      setCounts((prev) => (isProject ? { ...prev, project: total } : { ...prev, user: total }));
+      if (!kind || typeof total !== 'number') return;
+      setCounts((prev) => ({ ...prev, [kind]: total }));
     });
   }, []);
-  return counts.user + counts.project;
+  return counts.user + counts.project + counts.doc;
 }
 
 /** Format a timestamp as a relative or absolute string. */
@@ -460,7 +470,12 @@ export function RequestsView() {
       <div className="requests-view-content" ref={contentRef}>
         <div className="requests-view-inner">
           {tab === 'memories' ? (
-            <MemoryInbox onGoToConversation={handleGoToConversation} />
+            <MemoryInbox
+              onGoToConversation={handleGoToConversation}
+              // The doc link navigates itself; the inbox closes first, as
+              // when the sidebar opens a doc.
+              onOpenDoc={() => setShowRequestsView(false)}
+            />
           ) : (
           <>
           {newRequestCount > 0 && !loading && (

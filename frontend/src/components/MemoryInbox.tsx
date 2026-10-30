@@ -1,20 +1,29 @@
 /**
- * The inbox's Memories tab: every suggested memory of the user in one place.
+ * The inbox's Memories tab: every suggestion of the user awaiting review in
+ * one place.
  *
- * Open suggestions (personal ``suggest_memory`` and project
- * ``suggest_project_memory`` proposals, across all conversations) come
- * first, each with the same editable row as the composer panel plus a line
- * saying which conversation it came from. Below them, the recently reviewed
- * (accepted / dismissed) suggestions, newest first, paged in as the user
- * scrolls. The lists come from ``/app/api/memory-inbox`` (chat/memory_inbox.py);
- * accept and dismiss go through each kind's own endpoints (``KIND_API``).
- * Rows of a kind this tab has no endpoints for (the doc note suggestions,
- * ``kind: 'doc'``) are left out of both lists: never shown, counted or
- * reached by Accept all / Dismiss all.
+ * Open suggestions (personal ``suggest_memory``, project
+ * ``suggest_project_memory`` and doc note ``suggest_doc_note`` proposals,
+ * across all conversations) come first, each with the same editable row as
+ * the composer panel plus a line saying what kind it is, which conversation
+ * it came from and, for a doc note, which doc it is for. Below them, the
+ * recently reviewed (accepted / dismissed) suggestions, newest first, paged
+ * in as the user scrolls. The lists come from ``/app/api/memory-inbox``
+ * (chat/memory_inbox.py); accept and dismiss go through each kind's own
+ * endpoints (``KIND_API``): api/client.ts for the two memory kinds, the doc
+ * note suggestion endpoints of api/docsApi.ts for doc rows. A doc
+ * instructions accept sends the version its diff was rendered against
+ * (docNoteReview.ts); when the instructions changed meanwhile, the 409
+ * ``stale_instructions`` re-bases the row on the current text it carries
+ * (re-reading the open list when it carries none), keeps the draft and
+ * shows the server's message, as the composer bubble does.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Brain, FolderBookmark, LoaderCircle, Moon } from 'lucide-react';
+import type { MouseEvent } from 'react';
+import { Link } from 'react-router-dom';
+import { Brain, FileText, FolderBookmark, LoaderCircle, Moon } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import {
   acceptMemorySuggestion,
   acceptProjectMemorySuggestion,
@@ -23,37 +32,134 @@ import {
   fetchMemoryInboxPending,
   fetchMemoryInboxResolved,
 } from '../api/client';
+import {
+  acceptDocNoteSuggestion,
+  dismissDocNoteSuggestion,
+  isStaleInstructionsError,
+  staleInstructionsCurrent,
+} from '../api/docsApi';
 import { ApiClientError } from '../api/request';
-import type { MemoryInboxRow, MemoryInboxSuggestion, MemorySuggestion } from '../api/types';
+import type {
+  DocNoteInboxSuggestion,
+  MemoryInboxRow,
+  MemoryInboxSuggestion,
+  MemorySuggestion,
+} from '../api/types';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
+import { docViewerPath } from '../utils/docsRoute';
 import { formatRelativeTimestamp } from '../utils/formatters';
 import { MemorySuggestionRow } from './MemorySuggestionRow';
+import type { MemorySuggestionRowStateProps } from './MemorySuggestionRow';
+import { canAcceptDocNote, docNoteAcceptOptions, withCurrentInstructions } from './docNoteReview';
 import './MemorySuggestions.css';
 import './MemoryInbox.css';
 
 /** Rows per page of the reviewed list. */
 export const RESOLVED_PAGE_SIZE = 20;
 
-const KIND_API = {
+/** What an accept or dismiss response says about the row it resolved. */
+type ResolvedFields = Pick<MemorySuggestion, 'status' | 'resolved_at' | 'memory_id'>;
+
+/** One kind's endpoints and wording, for its rows of type ``R``. */
+interface KindApi<R extends MemoryInboxRow> {
+  /** Accept with the row's draft (undefined = the proposed text, never edited). */
+  accept: (row: R, draft: string | undefined) => Promise<{ suggestion: ResolvedFields }>;
+  dismiss: (suggestionId: string) => Promise<{ suggestion: ResolvedFields }>;
+  saveError: string;
+  /** Accept all skips a row this refuses (absent = every row is tried). */
+  canAccept?: (row: R, draft: string | undefined) => boolean;
+}
+
+/**
+ * The edited text to send, or undefined while the draft keeps the proposal.
+ * An archive-only row (no content) has no text to edit, so it never sends one.
+ */
+function editedText(row: MemoryInboxSuggestion, draft: string | undefined): string | undefined {
+  if (row.content === null) return undefined;
+  const edited = draft !== undefined && draft.trim() !== row.content.trim();
+  return edited ? draft.trim() : undefined;
+}
+
+const KIND_API: {
+  user: KindApi<MemoryInboxSuggestion>;
+  project: KindApi<MemoryInboxSuggestion>;
+  doc: KindApi<DocNoteInboxSuggestion>;
+} = {
   user: {
-    accept: acceptMemorySuggestion,
+    accept: (row, draft) => acceptMemorySuggestion(row.id, editedText(row, draft)),
     dismiss: dismissMemorySuggestion,
     saveError: 'Failed to save memory',
   },
   project: {
-    accept: acceptProjectMemorySuggestion,
+    accept: (row, draft) => acceptProjectMemorySuggestion(row.id, editedText(row, draft)),
     dismiss: dismissProjectMemorySuggestion,
     saveError: 'Failed to save project memory',
   },
-} as const;
+  doc: {
+    accept: (row, draft) => acceptDocNoteSuggestion(row.id, docNoteAcceptOptions(row, draft)),
+    dismiss: dismissDocNoteSuggestion,
+    saveError: 'Failed to save doc note',
+    // A blank draft would clear a doc's instructions; one over the cap is refused.
+    canAccept: canAcceptDocNote,
+  },
+};
 
-/** A row of a kind ``KIND_API`` has accept / dismiss endpoints for. */
-function isReviewableRow(row: MemoryInboxRow): row is MemoryInboxSuggestion {
+/** A row's kind API bound to the row, so callers need not narrow its kind. */
+interface RowApi {
+  accept: (draft: string | undefined) => Promise<{ suggestion: ResolvedFields }>;
+  dismiss: () => Promise<{ suggestion: ResolvedFields }>;
+  saveError: string;
+  canAccept: (draft: string | undefined) => boolean;
+}
+
+function bindRow<R extends MemoryInboxRow>(api: KindApi<R>, row: R): RowApi {
+  return {
+    accept: (draft) => api.accept(row, draft),
+    dismiss: () => api.dismiss(row.id),
+    saveError: api.saveError,
+    canAccept: (draft) => api.canAccept?.(row, draft) ?? true,
+  };
+}
+
+function rowApi(row: MemoryInboxRow): RowApi {
+  return row.kind === 'doc' ? bindRow(KIND_API.doc, row) : bindRow(KIND_API[row.kind], row);
+}
+
+/**
+ * A row of a kind ``KIND_API`` has endpoints for. A kind the server adds
+ * before this tab knows it is left out of both lists rather than shown with
+ * buttons that cannot work.
+ */
+function isReviewableRow(row: MemoryInboxRow): boolean {
   return Object.hasOwn(KIND_API, row.kind);
 }
 
+/** The source line's kind pill. */
+const KIND_LABELS: Record<MemoryInboxRow['kind'], { Icon: LucideIcon; label: string; title: string }> = {
+  user: {
+    Icon: Brain,
+    label: 'Memory',
+    title: 'A personal memory: kept across all your chats',
+  },
+  project: {
+    Icon: FolderBookmark,
+    label: 'Project memory',
+    title: 'A project memory: kept for every chat in the project',
+  },
+  doc: {
+    Icon: FileText,
+    label: 'Doc note',
+    title: 'A doc note: instructions or a memory for one doc',
+  },
+};
+
+const UNAVAILABLE_DOC_LABEL = 'Unavailable doc';
+const UNAVAILABLE_DOC_TITLE = 'This doc was deleted or you no longer have access to it';
+
 interface MemoryInboxProps {
   onGoToConversation: (conversationId: string, projectId?: string | null) => void;
+  /** Called on a plain click of a doc row's doc link, before the navigation. */
+  onOpenDoc?: () => void;
 }
 
 function errorMessage(err: unknown, fallback: string): string {
@@ -61,26 +167,65 @@ function errorMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
-/** Where a suggestion came from: the chat (and project) it was proposed
- *  in, with a link to it, or the memory review (a dream) that proposed it. */
+/**
+ * A doc row's doc: its title linking to the doc viewer, or a neutral
+ * "Unavailable doc" when the doc is gone or no longer visible to the user.
+ */
+function DocSource({
+  suggestion,
+  onOpenDoc,
+}: { suggestion: DocNoteInboxSuggestion; onOpenDoc?: () => void }) {
+  const docTitle = suggestion.doc_title ?? '';
+  if (!docTitle) {
+    return (
+      <span className="memory-inbox-doc-unavailable" title={UNAVAILABLE_DOC_TITLE}>
+        {UNAVAILABLE_DOC_LABEL}
+      </span>
+    );
+  }
+  const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
+    // A modified click opens a new tab; the inbox stays where it is.
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    onOpenDoc?.();
+  };
+  return (
+    <Link
+      to={docViewerPath(suggestion.doc_id)}
+      className="memory-inbox-doc-link"
+      title={docTitle}
+      onClick={onClick}
+    >
+      {docTitle}
+    </Link>
+  );
+}
+
+/**
+ * What a suggestion is and where it came from: the kind pill, a doc note's
+ * doc, then the chat (and project) it was proposed in, with a link to it,
+ * or the memory review (a dream) that proposed it.
+ */
 function SuggestionSource({
   suggestion,
   onGoToConversation,
-}: { suggestion: MemoryInboxSuggestion; onGoToConversation: MemoryInboxProps['onGoToConversation'] }) {
-  const KindIcon = suggestion.kind === 'project' ? FolderBookmark : Brain;
+  onOpenDoc,
+}: {
+  suggestion: MemoryInboxRow;
+  onGoToConversation: MemoryInboxProps['onGoToConversation'];
+  onOpenDoc?: () => void;
+}) {
+  const { Icon, label, title } = KIND_LABELS[suggestion.kind];
   const conversationId = suggestion.conversation_id;
+  // A dream's suggestion has no chat to link to (doc notes always have one).
+  const fromReview = suggestion.kind !== 'doc' && suggestion.source === 'dream';
   return (
     <div className="memory-inbox-source">
-      <span
-        className={`memory-inbox-kind memory-inbox-kind--${suggestion.kind}`}
-        title={suggestion.kind === 'project'
-          ? 'A project memory: kept for every chat in the project'
-          : 'A personal memory: kept across all your chats'}
-      >
-        <KindIcon size={12} aria-hidden="true" />
-        {suggestion.kind === 'project' ? 'Project memory' : 'Memory'}
+      <span className={`memory-inbox-kind memory-inbox-kind--${suggestion.kind}`} title={title}>
+        <Icon size={12} aria-hidden="true" />
+        {label}
       </span>
-      {suggestion.source === 'dream' || conversationId === null ? (
+      {suggestion.kind === 'doc' && <DocSource suggestion={suggestion} onOpenDoc={onOpenDoc} />}
+      {fromReview || conversationId === null ? (
         <span
           className="memory-inbox-from memory-inbox-from--dream"
           title="Proposed by the periodic review of your saved memories, not by a chat"
@@ -111,16 +256,16 @@ function SuggestionSource({
   );
 }
 
-export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
+export function MemoryInbox({ onGoToConversation, onOpenDoc }: MemoryInboxProps) {
   // null until the first fetch lands.
-  const [pending, setPending] = useState<MemoryInboxSuggestion[] | null>(null);
+  const [pending, setPending] = useState<MemoryInboxRow[] | null>(null);
   const [pendingError, setPendingError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set());
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [isBulkBusy, setIsBulkBusy] = useState(false);
 
-  const [resolved, setResolved] = useState<MemoryInboxSuggestion[]>([]);
+  const [resolved, setResolved] = useState<MemoryInboxRow[]>([]);
   const [resolvedLoaded, setResolvedLoaded] = useState(false);
   const [resolvedError, setResolvedError] = useState<string | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -128,8 +273,9 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
   const loadingMoreRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
-  // Bumped on every local accept / dismiss so a pending-list fetch already
-  // in flight cannot resurrect the row just removed.
+  // Bumped on every local accept / dismiss / re-base so a pending-list fetch
+  // already in flight cannot resurrect the row just removed (or undo the
+  // re-base).
   const generationRef = useRef(0);
 
   const loadPending = useCallback(async () => {
@@ -192,6 +338,7 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
       if (
         event.type !== 'memory_suggestions_changed'
         && event.type !== 'project_memory_suggestions_changed'
+        && event.type !== 'doc_note_suggestions_changed'
       ) return;
       void loadPending();
     });
@@ -238,11 +385,17 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
     });
   }, []);
 
+  const replacePending = useCallback((row: MemoryInboxRow) => {
+    generationRef.current += 1;
+    setPending((prev) => (prev ? prev.map((s) => (s.id === row.id ? row : s)) : prev));
+  }, []);
+
   const resolveOne = useCallback(async (
-    suggestion: MemoryInboxSuggestion,
+    suggestion: MemoryInboxRow,
     action: 'accept' | 'dismiss',
   ): Promise<boolean> => {
-    const api = KIND_API[suggestion.kind];
+    const api = rowApi(suggestion);
+    const draft = drafts[suggestion.id];
     setBusy(suggestion.id, true);
     setRowErrors((prev) => {
       if (!(suggestion.id in prev)) return prev;
@@ -251,29 +404,24 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
       return next;
     });
     try {
-      let outcome: MemorySuggestion;
-      if (action === 'accept') {
-        const draft = drafts[suggestion.id];
-        // An archive-only row has no text to edit, so it never sends one.
-        const edited = suggestion.content !== null
-          && draft !== undefined && draft.trim() !== suggestion.content.trim();
-        outcome = (await api.accept(suggestion.id, edited ? draft.trim() : undefined)).suggestion;
-      } else {
-        outcome = (await api.dismiss(suggestion.id)).suggestion;
-      }
+      const { suggestion: outcome } = action === 'accept'
+        ? await api.accept(draft)
+        : await api.dismiss();
       removePending(suggestion.id);
       // The row moves to the top of the reviewed list right away, showing
       // the text as saved (the edited draft on an accept). The response is
-      // the bare suggestion, so the inbox-only fields stay from the row.
-      const reviewed: MemoryInboxSuggestion = {
-        ...suggestion,
+      // the bare suggestion, so the inbox-only fields (and a doc row's doc)
+      // stay from the row.
+      const fields = {
         status: outcome.status,
         resolved_at: outcome.resolved_at,
         memory_id: outcome.memory_id,
-        content: action === 'accept' && drafts[suggestion.id] !== undefined
-          ? drafts[suggestion.id].trim()
-          : suggestion.content,
       };
+      const saved = action === 'accept' && draft !== undefined ? draft.trim() : undefined;
+      // Narrowed per kind: a memory row's content may be null (archive-only).
+      const reviewed: MemoryInboxRow = suggestion.kind === 'doc'
+        ? { ...suggestion, ...fields, content: saved ?? suggestion.content }
+        : { ...suggestion, ...fields, content: saved ?? suggestion.content };
       setResolved((prev) => [reviewed, ...prev.filter((s) => s.id !== suggestion.id)]);
       return true;
     } catch (err) {
@@ -282,6 +430,15 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
       if (err instanceof ApiClientError && err.errorCode === 'suggestion_resolved') {
         removePending(suggestion.id);
         return true;
+      }
+      // A doc instructions accept against instructions that changed since
+      // its diff was rendered: re-base the row on the current text so the
+      // diff shows what accepting now replaces (no text in the 409: re-read
+      // the list). The draft stays, and the next Accept sends the new version.
+      if (action === 'accept' && suggestion.kind === 'doc' && isStaleInstructionsError(err)) {
+        const current = staleInstructionsCurrent(err);
+        if (current) replacePending({ ...suggestion, ...withCurrentInstructions(suggestion, current) });
+        else void loadPending();
       }
       setRowErrors((prev) => ({
         ...prev,
@@ -294,7 +451,7 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
     } finally {
       setBusy(suggestion.id, false);
     }
-  }, [drafts, removePending, setBusy]);
+  }, [drafts, removePending, replacePending, loadPending, setBusy]);
 
   const resolveAll = useCallback(async (action: 'accept' | 'dismiss') => {
     if (isBulkBusy || !pending) return;
@@ -303,12 +460,13 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
       // Sequential so a failure leaves the rest intact for a retry.
       for (const suggestion of pending) {
         if (busyIds.has(suggestion.id)) continue;
+        if (action === 'accept' && !rowApi(suggestion).canAccept(drafts[suggestion.id])) continue;
         await resolveOne(suggestion, action);
       }
     } finally {
       setIsBulkBusy(false);
     }
-  }, [isBulkBusy, pending, busyIds, resolveOne]);
+  }, [isBulkBusy, pending, busyIds, drafts, resolveOne]);
 
   const pendingCount = pending?.length ?? 0;
 
@@ -342,10 +500,10 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
           )}
         </div>
         <p className="memory-inbox-hint">
-          Memories the assistant proposed in your chats, and clean-ups from the
-          periodic review of your saved memories. Edit the text if you like,
-          then accept to save it or dismiss it. Nothing changes until you
-          accept.
+          Memories and doc notes the assistant proposed in your chats, and
+          clean-ups from the periodic review of your saved memories. Edit the
+          text if you like, then accept to save it or dismiss it. Nothing
+          changes until you accept.
         </p>
         {pendingError && (
           <div className="memory-suggestions-error" role="alert">{pendingError}</div>
@@ -359,21 +517,44 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
           <div className="memory-inbox-empty">No open suggestions. You're all caught up.</div>
         ) : (
           <div className="memory-inbox-list">
-            {pending.map((suggestion) => (
-              <MemorySuggestionRow
-                key={suggestion.id}
-                suggestion={suggestion}
-                kind={suggestion.kind}
-                draft={drafts[suggestion.id] ?? suggestion.content ?? ''}
-                onDraftChange={(text) => setDrafts((prev) => ({ ...prev, [suggestion.id]: text }))}
-                busy={busyIds.has(suggestion.id)}
-                error={rowErrors[suggestion.id]}
-                onAccept={() => resolveOne(suggestion, 'accept')}
-                onDismiss={() => resolveOne(suggestion, 'dismiss')}
-              >
-                <SuggestionSource suggestion={suggestion} onGoToConversation={onGoToConversation} />
-              </MemorySuggestionRow>
-            ))}
+            {pending.map((suggestion) => {
+              const state: Omit<MemorySuggestionRowStateProps, 'children'> = {
+                draft: drafts[suggestion.id] ?? suggestion.content ?? '',
+                onDraftChange: (text) => setDrafts((prev) => ({ ...prev, [suggestion.id]: text })),
+                busy: busyIds.has(suggestion.id),
+                error: rowErrors[suggestion.id],
+                onAccept: () => resolveOne(suggestion, 'accept'),
+                onDismiss: () => resolveOne(suggestion, 'dismiss'),
+              };
+              const source = (
+                <SuggestionSource
+                  suggestion={suggestion}
+                  onGoToConversation={onGoToConversation}
+                  onOpenDoc={onOpenDoc}
+                />
+              );
+              // A doc row's source line names the doc, so the row does not.
+              return suggestion.kind === 'doc' ? (
+                <MemorySuggestionRow
+                  key={suggestion.id}
+                  kind="doc"
+                  suggestion={suggestion}
+                  showDocLink={false}
+                  {...state}
+                >
+                  {source}
+                </MemorySuggestionRow>
+              ) : (
+                <MemorySuggestionRow
+                  key={suggestion.id}
+                  kind={suggestion.kind}
+                  suggestion={suggestion}
+                  {...state}
+                >
+                  {source}
+                </MemorySuggestionRow>
+              );
+            })}
           </div>
         )}
       </section>
@@ -424,7 +605,11 @@ export function MemoryInbox({ onGoToConversation }: MemoryInboxProps) {
                     </span>
                   )}
                 </div>
-                <SuggestionSource suggestion={suggestion} onGoToConversation={onGoToConversation} />
+                <SuggestionSource
+                  suggestion={suggestion}
+                  onGoToConversation={onGoToConversation}
+                  onOpenDoc={onOpenDoc}
+                />
               </div>
             ))}
           </div>

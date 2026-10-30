@@ -1,7 +1,9 @@
 /* The inbox's Memories tab (MemoryInbox.tsx): the open-suggestions section
    reuses the row styles of MemorySuggestions.css; the reviewed list below
-   it is read-only. Dark-first like RequestsView.css, with the light block
-   at the end. */
+   it is read-only. Each kind keeps its colour from the composer bubbles:
+   the accent for personal memories, amber for project memories, rose for
+   doc notes. Dark-first like RequestsView.css, with the light block at the
+   end. */
 
 .memory-inbox {
   display: flex;
@@ -74,6 +76,10 @@
   border-color: rgb(245 158 11 / 0.4);
 }
 
+.memory-inbox .memory-suggestion-row--doc {
+  border-color: rgb(236 72 153 / 0.4);
+}
+
 .memory-inbox-status,
 .memory-inbox-empty {
   display: flex;
@@ -85,7 +91,8 @@
   color: rgba(255, 255, 255, 0.45);
 }
 
-/* Where a suggestion came from: kind pill + conversation link. */
+/* What a suggestion is and where it came from: kind pill, a doc note's
+   doc, conversation link. */
 .memory-inbox-source {
   display: flex;
   flex-wrap: wrap;
@@ -110,6 +117,42 @@
 .memory-inbox-kind--project {
   border-color: rgb(245 158 11 / 0.45);
   color: #fbbf24;
+}
+
+.memory-inbox-kind--doc {
+  border-color: rgb(236 72 153 / 0.45);
+  color: #f472b6;
+}
+
+/* A doc note's doc title, in the doc rose, cut to one line. */
+.memory-inbox-doc-link,
+.memory-inbox-doc-unavailable {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-inbox-doc-link {
+  border-radius: 3px;
+  color: #f472b6;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.memory-inbox-doc-link:hover {
+  color: #f472b6;
+  text-decoration: underline;
+}
+
+.memory-inbox-doc-link:focus-visible {
+  outline: 2px solid #db2777;
+  outline-offset: 2px;
+}
+
+.memory-inbox-doc-unavailable {
+  font-style: italic;
 }
 
 .memory-inbox-conversation-link {
@@ -246,6 +289,10 @@
     border-color: rgb(245 158 11 / 0.5);
   }
 
+  .memory-inbox .memory-suggestion-row--doc {
+    border-color: rgb(236 72 153 / 0.5);
+  }
+
   .memory-inbox-reviewed--accepted {
     border-color: rgba(80, 200, 120, 0.3);
   }
@@ -261,6 +308,16 @@
 
   .memory-inbox-kind--project {
     color: #a3540a;
+  }
+
+  .memory-inbox-kind--doc,
+  .memory-inbox-doc-link,
+  .memory-inbox-doc-link:hover {
+    color: #9d174d;
+  }
+
+  .memory-inbox-doc-link:focus-visible {
+    outline-color: #be185d;
   }
 
   .memory-inbox-project {

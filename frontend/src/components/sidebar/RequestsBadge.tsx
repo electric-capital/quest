@@ -1,14 +1,15 @@
 /**
  * Self-contained badge for everything unanswered in the inbox: open action
- * requests plus suggested memories (personal and project) awaiting review.
+ * requests plus suggestions awaiting review (personal and project memories,
+ * doc notes).
  *
  * Initial values come from one-shot REST fetches on mount. Subsequent
  * updates arrive via the persistent WS per-user globals --
  * ``request_count_changed`` for requests, ``memory_suggestions_changed`` /
- * ``project_memory_suggestions_changed`` (their ``total_pending``) for the
- * two suggestion kinds -- with the local same-tab ``onRequestCountChange``
- * bus kept as a latency shortcut for clicks in this tab (see open question
- * 5 in 00062).
+ * ``project_memory_suggestions_changed`` / ``doc_note_suggestions_changed``
+ * (their ``total_pending``) for the three suggestion kinds -- with the local
+ * same-tab ``onRequestCountChange`` bus kept as a latency shortcut for
+ * clicks in this tab (see open question 5 in 00062).
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -16,9 +17,19 @@ import { fetchActionRequestCounts, fetchMemoryInboxCounts } from '../../api/clie
 import { onRequestCountChange } from '../../services/requestEvents';
 import { persistentWebSocket } from '../../services/PersistentWebSocket';
 
+/** The suggestion kind whose ``total_pending`` a per-user global carries, if any. */
+function suggestionCountKind(type: string | undefined): 'user' | 'project' | 'doc' | null {
+  switch (type) {
+    case 'memory_suggestions_changed': return 'user';
+    case 'project_memory_suggestions_changed': return 'project';
+    case 'doc_note_suggestions_changed': return 'doc';
+    default: return null;
+  }
+}
+
 export function RequestsBadge() {
   const [openRequests, setOpenRequests] = useState(0);
-  const [pendingMemories, setPendingMemories] = useState({ user: 0, project: 0 });
+  const [pendingMemories, setPendingMemories] = useState({ user: 0, project: 0, doc: 0 });
   const inFlightRef = useRef(false);
   const memoriesInFlightRef = useRef(false);
 
@@ -40,7 +51,7 @@ export function RequestsBadge() {
     memoriesInFlightRef.current = true;
     try {
       const resp = await fetchMemoryInboxCounts();
-      setPendingMemories({ user: resp.user, project: resp.project });
+      setPendingMemories({ user: resp.user, project: resp.project, doc: resp.doc });
     } catch {
       // Silently ignore fetch errors
     } finally {
@@ -71,18 +82,18 @@ export function RequestsBadge() {
         }
         return;
       }
-      const isProject = event.type === 'project_memory_suggestions_changed';
-      if (!isProject && event.type !== 'memory_suggestions_changed') return;
+      const kind = suggestionCountKind(event.type);
+      if (!kind) return;
       const total = event.total_pending;
       if (typeof total === 'number') {
-        setPendingMemories((prev) => (isProject ? { ...prev, project: total } : { ...prev, user: total }));
+        setPendingMemories((prev) => ({ ...prev, [kind]: total }));
       } else {
         loadMemoryCounts();
       }
     });
   }, []);
 
-  const count = openRequests + pendingMemories.user + pendingMemories.project;
+  const count = openRequests + pendingMemories.user + pendingMemories.project + pendingMemories.doc;
   if (count <= 0) return null;
   return <span className="requests-badge">{count > 9 ? '9+' : count}</span>;
 }
