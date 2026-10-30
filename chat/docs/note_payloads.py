@@ -15,8 +15,9 @@ of :func:`label_user_ids` with ``db.user_store.get_users_by_ids`` first.
   the inbox tags every row ``kind`` (``user`` / ``project`` / ``doc``).
   A review row (one that went through ``note_suggestions.review_rows()``)
   always carries ``doc_title``, ``replaces_content``,
-  ``current_instructions`` and ``instructions_moved``, the last two
-  ``None`` / ``False`` on a memory row.
+  ``current_instructions``, ``current_instructions_version`` and
+  ``instructions_moved``, the last three ``None`` / ``None`` / ``False`` on
+  a memory row.
 - **Notes counters** (:func:`notes_counters`): the versions and counts of a
   ``get_notes_state()`` dict, never text or an editor id; the accept
   response carries them.
@@ -90,9 +91,10 @@ _SUGGESTION_KEYS = (
 )
 
 # The review fields every review row carries (review_rows() leaves the
-# instructions pair off memory rows).
+# instructions fields off memory rows).
 _REVIEW_DEFAULTS = {
     "current_instructions": None,
+    "current_instructions_version": None,
     "instructions_moved": False,
     "replaces_content": None,
 }

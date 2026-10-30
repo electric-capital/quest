@@ -101,7 +101,7 @@ A write that moved a version publishes `doc_notes_changed` alone to the doc's au
 
 ### Note Suggestions
 
-The review of the suggestions `suggest_doc_note` files ([Doc Notes -- Review](../architecture/doc-notes.md#review)). Every route serves only the suggestion's own user and checks no gate. Check order, errors and response shapes are in the `chat/docs/note_suggestion_routes.py` module docstring. A row is `public_suggestion()` (`chat/docs/note_payloads.py`): the store row with its kind sent as `note_kind`, plus the review fields of `review_rows()`.
+The review of the suggestions `suggest_doc_note` files ([Doc Notes -- Review](../architecture/doc-notes.md#review)). Every route serves only the suggestion's own user and checks no gate. Check order, errors and response shapes are in the `chat/docs/note_suggestion_routes.py` module docstring. A row is `public_suggestion()` (`chat/docs/note_payloads.py`): the store row with its kind sent as `note_kind`, plus the review fields of `review_rows()`. A pending instructions row on a visible doc carries `current_instructions_version`, the version its diff is rendered against, which the accept sends back as `expected_instructions_version`.
 
 - **GET `/app/api/docs/{doc_id}/note-suggestions`** (`list_doc_note_suggestions`). The caller's pending rows for one doc, oldest first. A doc the caller cannot see is 404 `doc_not_found`, also while their rows on it are pending.
 - **GET `/app/api/conversations/{conversation_id}/doc-note-suggestions`** (`list_conversation_doc_note_suggestions`). The conversation's pending rows; 404 `conversation_not_found` unless the caller owns it. A row on a doc the caller can no longer see stays listed, its doc fields blanked.

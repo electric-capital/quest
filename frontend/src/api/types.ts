@@ -1430,6 +1430,8 @@ export interface DocNoteSuggestion {
   replaces_content?: string | null;
   /** The doc's current instructions (instructions rows). List rows only. */
   current_instructions?: string | null;
+  /** The `instructions_version` of `current_instructions`; an instructions accept sends it as `expected_instructions_version`. List rows only. */
+  current_instructions_version?: number | null;
   /** The instructions changed since the proposal was written. List rows only. */
   instructions_moved?: boolean;
 }

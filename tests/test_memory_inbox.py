@@ -167,7 +167,8 @@ DOC_ROW_KEYS = {
     "id", "user_id", "doc_id", "conversation_id", "note_kind", "content",
     "reasoning", "base_instructions_version", "replaces_memory_id", "status",
     "memory_id", "created_at", "resolved_at",
-    "doc_title", "replaces_content", "current_instructions", "instructions_moved",
+    "doc_title", "replaces_content", "current_instructions",
+    "current_instructions_version", "instructions_moved",
     "kind", "conversation_title", "project_id", "project_name",
 }
 
@@ -380,6 +381,7 @@ class TestInbox:
         assert instructions["status"] == "pending"
         assert instructions["base_instructions_version"] == 0
         assert instructions["current_instructions"] == "Be thorough."
+        assert instructions["current_instructions_version"] == 1
         assert instructions["instructions_moved"] is True
         assert instructions["replaces_content"] is None
         # A doc row carries no project of its own: the conversation's.
@@ -393,6 +395,7 @@ class TestInbox:
         assert memory["replaces_memory_id"] == old["id"]
         assert memory["replaces_content"] == "Deploys on Fridays"
         assert memory["current_instructions"] is None
+        assert memory["current_instructions_version"] is None
         assert memory["instructions_moved"] is False
         assert memory["conversation_title"] == "Coffee chat"
         assert memory["project_id"] is None
@@ -419,6 +422,7 @@ class TestInbox:
         hidden = rows[di["id"]]
         assert hidden["doc_title"] == ""
         assert hidden["current_instructions"] is None
+        assert hidden["current_instructions_version"] is None
         assert hidden["instructions_moved"] is False
         assert hidden["content"] == "Be kind."  # her own conversation wrote it
 
@@ -539,6 +543,7 @@ class TestInbox:
         assert moved["status"] == "dismissed"
         assert moved["doc_title"] == "Runbook"
         assert moved["current_instructions"] is None
+        assert moved["current_instructions_version"] is None
         assert moved["instructions_moved"] is False
         assert moved["conversation_title"] == "Coffee chat"
         accepted = first[1]
@@ -790,6 +795,7 @@ class TestRoutes:
         assert doc_row["content"] == "Deploys on Fridays"
         assert doc_row["replaces_content"] is None
         assert doc_row["current_instructions"] is None
+        assert doc_row["current_instructions_version"] is None
         assert doc_row["instructions_moved"] is False
         assert doc_row["conversation_title"] == "Coffee chat"
 
