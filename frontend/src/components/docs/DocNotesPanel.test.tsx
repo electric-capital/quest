@@ -2,13 +2,21 @@
 // do; the empty, loading and load-error states and docNotesPanelShown; the
 // owner's instructions editor (save, cancel, clear, the version captured at
 // open, the 409 merge view, other errors, the character counter at the
-// cap); the memories' add / edit / delete with their inline errors and the
-// 50-memory cap; focus after saves, failures and deletes; drafts dropped
-// with a lost right; the "Suggestions for you" block (its rows, accept and
-// dismiss through the view, the 409 re-base, inline errors, read shares);
-// and the card vs details variants. The panel is presentational over
-// `view`, so each test passes a fake DocNotesView.
+// cap); the over-cap live region of the three editors; the memories' add /
+// edit / delete with their inline errors and the 50-memory cap; focus after
+// saves, failures and deletes; drafts dropped with a lost right; the
+// "Suggestions for you" block (its rows, accept and dismiss through the
+// view, the 409 re-base, inline errors, read shares, focus as rows leave,
+// the suggestions load error); the card vs details variants and the phone
+// summary's count of pending suggestions; and the keyboard paths through
+// the panel. The panel is presentational over `view`, so each test passes
+// a fake DocNotesView.
 // The clock is fixed (vi.setSystemTime), so the relative times are stable.
+// jsdom has no Tab navigation: tab order is the document order of the
+// enabled controls (tabOrder; the panel sets no positive tabindex), Enter
+// on a button is a click and Escape a keydown. A browser drops focus from a
+// button as it becomes disabled; jsdom keeps it there and cannot blur a
+// disabled element, so focus tests blur it just before the busy commit.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ApiClientError } from '../../api/request';
@@ -27,6 +35,7 @@ const CAP_MESSAGE = 'This doc already has the maximum of 50 memories. Delete or 
 const EDITOR_LINE =
   "Models follow this doc's instructions and read its memories before they change it.";
 const OWNER_ONLY_NOTE = "Only the doc's owner can change the instructions.";
+const SUGGESTIONS_LOAD_ERROR = 'Failed to load your suggestions for this doc.';
 
 const NOW = new Date('2026-10-29T12:00:00Z');
 
@@ -232,6 +241,34 @@ function openInstructionsEditor() {
   return instructionsBox();
 }
 
+// Tab order: the enabled controls in document order, minus tabindex -1.
+const TAB_STOPS = 'button, textarea, input, select, summary, a[href], [tabindex]';
+function tabOrder(root: ParentNode): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>(TAB_STOPS)].filter(
+    (el) => !el.matches(':disabled') && el.getAttribute('tabindex') !== '-1',
+  );
+}
+/** The `n` tab stops after `el` in `root`. */
+function stopsAfter(root: ParentNode, el: HTMLElement, n = 1): HTMLElement[] {
+  const order = tabOrder(root);
+  const at = order.indexOf(el);
+  expect(at).toBeGreaterThanOrEqual(0);
+  return order.slice(at + 1, at + 1 + n);
+}
+const notesCard = () => screen.getByRole('region', { name: 'Notes' });
+const cardHeading = () => screen.getByRole('heading', { name: 'Notes' });
+
+/** Focus `el` as the keyboard would before pressing it. */
+function focus(el: HTMLElement) {
+  act(() => el.focus());
+}
+
+/** What a browser does to a focused button as it becomes disabled. */
+function drop() {
+  act(() => (document.activeElement as HTMLElement).blur());
+  expect(document.activeElement).toBe(document.body);
+}
+
 describe('DocNotesPanel', () => {
   beforeEach(() => {
     vi.setSystemTime(NOW);
@@ -328,7 +365,7 @@ describe('DocNotesPanel', () => {
     it('write share: a doc with memories but no instructions says so', () => {
       renderPanel(viewWith({ ...WRITE_SHARE, instructions: '', instructions_updated_at: null }));
       expect(screen.getByRole('heading', { name: 'Instructions' })).toBeTruthy();
-      expect(screen.getByText('No instructions.')).toBeTruthy();
+      expect(screen.getByText('No instructions yet.')).toBeTruthy();
       expect(screen.getByText(OWNER_ONLY_NOTE)).toBeTruthy();
     });
 
@@ -348,7 +385,7 @@ describe('DocNotesPanel', () => {
 
     it('read share: an empty memory list says so', () => {
       renderPanel(viewWith({ ...READ_SHARE, memories: [] }));
-      expect(screen.getByText('No memories.')).toBeTruthy();
+      expect(screen.getByText('No memories yet.')).toBeTruthy();
     });
 
     it('closes the instructions editor when the owner right drops, for good', () => {
@@ -393,7 +430,8 @@ describe('DocNotesPanel', () => {
       expect(button('Add instructions')).toBeTruthy();
       expect(screen.queryByRole('button', { name: 'Edit instructions' })).toBeNull();
       expect(screen.getByRole('textbox', { name: 'New memory' })).toBeTruthy();
-      expect(screen.queryByText('No memories.')).toBeNull();
+      expect(screen.queryByText('No memories yet.')).toBeNull();
+      expect(screen.queryByText('No instructions yet.')).toBeNull();
     });
 
     it('write share: the explanation and the owner-only note, no Add instructions', () => {
@@ -406,18 +444,19 @@ describe('DocNotesPanel', () => {
 
     it('read share: only the no-notes line', () => {
       renderPanel(viewWith({ ...EMPTY, ...READ_SHARE }));
-      expect(screen.getByText('This doc has no notes.')).toBeTruthy();
+      expect(screen.getByText('No notes yet.')).toBeTruthy();
       expect(screen.queryByText(EDITOR_LINE)).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Instructions' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Memories' })).toBeNull();
-      expect(screen.queryByText('No memories.')).toBeNull();
+      expect(screen.queryByText('No memories yet.')).toBeNull();
+      expect(screen.queryByText('No instructions yet.')).toBeNull();
     });
 
     it('read share with memories but no instructions: no Instructions section', () => {
       renderPanel(viewWith({ ...READ_SHARE, instructions: '', instructions_updated_at: null }));
       expect(screen.queryByRole('heading', { name: 'Instructions' })).toBeNull();
       expect(screen.getByRole('heading', { name: 'Memories' })).toBeTruthy();
-      expect(screen.queryByText('This doc has no notes.')).toBeNull();
+      expect(screen.queryByText('No notes yet.')).toBeNull();
     });
   });
 
@@ -1005,6 +1044,57 @@ describe('DocNotesPanel', () => {
     });
   });
 
+  describe('over-cap live region', () => {
+    /** The live region of the editor holding `box`. */
+    const liveRegionOf = (box: HTMLTextAreaElement) => {
+      const regions = box.parentElement!.querySelectorAll<HTMLElement>(
+        ':scope > .doc-notes-over-cap-live',
+      );
+      expect(regions).toHaveLength(1);
+      return regions[0];
+    };
+
+    it.each([
+      ['instructions', 4000, () => openInstructionsEditor()],
+      ['Add memory', 1000, () => addBox()],
+      [
+        'memory edit',
+        1000,
+        () => {
+          fireEvent.click(editButtonOf(NEW_META));
+          return editBox();
+        },
+      ],
+    ] as const)(
+      '%s: a polite region always present, empty under the cap, holding the over-cap line over it',
+      (_label, max, openBox) => {
+        renderPanel(makeView());
+        const box = openBox();
+        const live = liveRegionOf(box);
+        expect(live.getAttribute('aria-live')).toBe('polite');
+        expect(live.childNodes).toHaveLength(0);
+
+        fireEvent.change(box, { target: { value: 'x'.repeat(max) } });
+        expect(live.childNodes).toHaveLength(0);
+
+        fireEvent.change(box, { target: { value: 'x'.repeat(max + 1) } });
+        expect(liveRegionOf(box)).toBe(live);
+        expect(live.textContent).toBe(`Use at most ${max.toLocaleString('en-US')} characters.`);
+        const line = live.firstElementChild as HTMLElement;
+        expect(box.getAttribute('aria-describedby')?.split(' ')).toContain(line.id);
+        expect(box.getAttribute('aria-invalid')).toBe('true');
+
+        // More keystrokes over the cap keep the same line: nothing new to announce.
+        fireEvent.change(box, { target: { value: 'x'.repeat(max + 2) } });
+        expect(live.firstElementChild).toBe(line);
+
+        fireEvent.change(box, { target: { value: 'x' } });
+        expect(live.childNodes).toHaveLength(0);
+        expect(box.hasAttribute('aria-invalid')).toBe(false);
+      },
+    );
+  });
+
   describe('suggestions for you', () => {
     const withSuggestions = (
       suggestions: DocNoteSuggestion[],
@@ -1316,7 +1406,7 @@ describe('DocNotesPanel', () => {
       const { container } = renderPanel(withSuggestions([MEMORY_SUGGESTION], { ...EMPTY, ...READ_SHARE }));
       expect(suggestionRows()).toHaveLength(1);
       expect(rowButton(suggestionRow('Doc memory text'), 'Accept')).toBeTruthy();
-      expect(screen.getByText('This doc has no notes.')).toBeTruthy();
+      expect(screen.getByText('No notes yet.')).toBeTruthy();
       expect(screen.queryByRole('heading', { name: 'Instructions' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Memories' })).toBeNull();
       // The rows sit only at the top: the read-only notes below still need
@@ -1328,6 +1418,138 @@ describe('DocNotesPanel', () => {
       const { container } = renderPanel(withSuggestions([MEMORY_SUGGESTION]), { variant: 'details' });
       const body = container.querySelector('details > .doc-notes-details-body') as HTMLElement;
       expect(body.querySelector('.doc-notes-suggestions .memory-suggestion-row--doc')).not.toBeNull();
+    });
+
+    describe('focus as rows leave', () => {
+      it("accepting the first of two suggestions focuses the second row's text field", async () => {
+        const view = withSuggestions([INSTRUCTIONS_SUGGESTION, MEMORY_SUGGESTION]);
+        const pending = deferred<AcceptDocNoteSuggestionResponse>();
+        vi.mocked(view.acceptSuggestion).mockReturnValue(pending.promise);
+        const { rerenderView } = renderPanel(view);
+
+        const accept = rowButton(suggestionRow('Doc instructions text'), 'Accept');
+        focus(accept);
+        drop();
+        fireEvent.click(accept);
+        expect(accept.disabled).toBe(true);
+        // Busy: nothing in the row to take focus yet.
+        expect(document.activeElement).toBe(document.body);
+
+        // As the hook does: the row leaves, then the call resolves.
+        rerenderView({ ...view, suggestions: [MEMORY_SUGGESTION] });
+        const next = rowText(suggestionRow('Doc memory text'));
+        expect(document.activeElement).toBe(next);
+        await act(async () => {
+          pending.resolve(acceptResponse(INSTRUCTIONS_SUGGESTION));
+        });
+        expect(document.activeElement).toBe(next);
+      });
+
+      it.each(['card', 'details'] as const)(
+        'dismissing the only suggestion focuses the panel heading (%s)',
+        async (variant) => {
+          const view = withSuggestions([MEMORY_SUGGESTION]);
+          const pending = deferred<DocNoteSuggestion>();
+          vi.mocked(view.dismissSuggestion).mockReturnValue(pending.promise);
+          const { container, rerenderView } = renderPanel(view, { variant });
+          const summary = container.querySelector('details > summary') as HTMLElement | null;
+          // The phone section is opened to review.
+          if (summary) fireEvent.click(summary);
+
+          const dismiss = rowButton(suggestionRow('Doc memory text'), 'Dismiss');
+          focus(dismiss);
+          drop();
+          fireEvent.click(dismiss);
+          rerenderView({ ...view, suggestions: [] });
+          await act(async () => {
+            pending.resolve({ ...MEMORY_SUGGESTION, status: 'dismissed' });
+          });
+
+          expect(screen.queryByRole('heading', { name: 'Suggestions for you' })).toBeNull();
+          expect(document.activeElement).toBe(variant === 'card' ? cardHeading() : summary);
+        },
+      );
+    });
+
+    describe('load error', () => {
+      const failed = new ApiClientError('Server exploded', 500);
+
+      it('shows a line with Retry above the rows, which stay; Retry reloads and is disabled until it settles', async () => {
+        const view = withSuggestions([INSTRUCTIONS_SUGGESTION, MEMORY_SUGGESTION]);
+        const { rerenderView } = renderPanel(view);
+        expect(screen.queryByText(SUGGESTIONS_LOAD_ERROR)).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+
+        const pending = deferred<void>();
+        vi.mocked(view.reload).mockReturnValue(pending.promise);
+        rerenderView({ ...view, suggestionsError: failed });
+        const line = screen.getByText(SUGGESTIONS_LOAD_ERROR);
+        expect(suggestionRows()).toHaveLength(2);
+        expect(
+          line.compareDocumentPosition(suggestionsBlock()) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+
+        fireEvent.click(button('Retry'));
+        expect(view.reload).toHaveBeenCalledTimes(1);
+        expect(button('Retrying...').disabled).toBe(true);
+        await act(async () => {
+          pending.resolve();
+        });
+        expect(button('Retry').disabled).toBe(false);
+
+        // The hook's next successful load clears it.
+        rerenderView(view);
+        expect(screen.queryByText(SUGGESTIONS_LOAD_ERROR)).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+        expect(suggestionRows()).toHaveLength(2);
+      });
+
+      it('without rows sits above the empty line and Instructions', () => {
+        renderPanel(viewWith(EMPTY, { suggestionsError: failed }));
+        const line = screen.getByText(SUGGESTIONS_LOAD_ERROR);
+        expect(screen.queryByRole('heading', { name: 'Suggestions for you' })).toBeNull();
+        const emptyLine = screen.getByText(EDITOR_LINE);
+        const heading = screen.getByRole('heading', { name: 'Instructions' });
+        expect(line.compareDocumentPosition(emptyLine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(line.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(button('Retry').disabled).toBe(false);
+      });
+
+      it('a Retry that clears it hands focus to the first row, else the panel heading', async () => {
+        for (const suggestions of [[MEMORY_SUGGESTION], []]) {
+          const view = withSuggestions(suggestions);
+          const pending = deferred<void>();
+          vi.mocked(view.reload).mockReturnValue(pending.promise);
+          const { rerenderView, unmount } = renderPanel({ ...view, suggestionsError: failed });
+
+          const retry = button('Retry');
+          focus(retry);
+          drop();
+          fireEvent.click(retry);
+          // As the hook does: the reload lands, then the call resolves.
+          rerenderView(view);
+          await act(async () => {
+            pending.resolve();
+          });
+          expect(document.activeElement).toBe(
+            suggestions.length > 0 ? rowText(suggestionRow('Doc memory text')) : cardHeading(),
+          );
+          unmount();
+        }
+      });
+
+      it('is not shown while the notes failed to load: their own error covers it', () => {
+        renderPanel(
+          makeView({
+            notes: null,
+            error: new ApiClientError('Server exploded', 500),
+            suggestions: [MEMORY_SUGGESTION],
+            suggestionsError: failed,
+          }),
+        );
+        expect(screen.queryByText(SUGGESTIONS_LOAD_ERROR)).toBeNull();
+        expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1);
+      });
     });
   });
 
@@ -1358,6 +1580,257 @@ describe('DocNotesPanel', () => {
       expect(within(body).getByRole('textbox', { name: 'New memory', ...hidden })).toBeTruthy();
       expect(within(body).getAllByRole('button', { name: 'Delete memory', ...hidden })).toHaveLength(2);
       expect(container.querySelectorAll('.doc-notes-body')).toHaveLength(1);
+    });
+
+    it('details: the summary counts the pending suggestions in a rose pill read as suggestions', () => {
+      const { container, rerenderView } = renderPanel(makeView(), { variant: 'details' });
+      const summary = container.querySelector('details > summary') as HTMLElement;
+      const pill = () => summary.querySelector<HTMLElement>('.doc-notes-summary-count');
+      const shown = () => pill()?.querySelector('[aria-hidden="true"]')?.textContent;
+      const spoken = () => pill()?.querySelector('.doc-notes-sr-only')?.textContent;
+      expect(pill()).toBeNull();
+      expect(summary.textContent).toBe('Notes');
+
+      rerenderView(viewWith({}, { suggestions: [MEMORY_SUGGESTION] }));
+      // The doc rose of the suggestion rows.
+      expect(pill()?.classList.contains('memory-suggestions--doc')).toBe(true);
+      expect(shown()).toBe('1');
+      expect(spoken()).toBe(', 1 pending suggestion');
+
+      rerenderView(viewWith({}, { suggestions: [INSTRUCTIONS_SUGGESTION, MEMORY_SUGGESTION] }));
+      expect(shown()).toBe('2');
+      expect(spoken()).toBe(', 2 pending suggestions');
+
+      // Not while the notes (and so the block) are not shown, nor with none pending.
+      rerenderView(makeView({ notes: null, loading: true, suggestions: [MEMORY_SUGGESTION] }));
+      expect(pill()).toBeNull();
+      rerenderView(makeView());
+      expect(pill()).toBeNull();
+      expect(summary.textContent).toBe('Notes');
+    });
+
+    it('card: no count beside the heading, the block being in view', () => {
+      const { container } = renderPanel(viewWith({}, { suggestions: [MEMORY_SUGGESTION] }));
+      expect(container.querySelector('.doc-notes-summary-count')).toBeNull();
+      expect(cardHeading().textContent).toBe('Notes');
+    });
+  });
+
+  describe('keyboard paths', () => {
+    it('instructions: Edit, the textarea, Cancel, Save; focus back on Edit after Cancel and Save, on the draft after a failure', async () => {
+      const view = makeView();
+      const save = vi.mocked(view.saveInstructions);
+      renderPanel(view);
+      const card = notesCard();
+      // The heading takes focus from script only (after the last suggestion).
+      expect(cardHeading().getAttribute('tabindex')).toBe('-1');
+      expect(tabOrder(card)[0]).toBe(button('Edit instructions'));
+
+      focus(button('Edit instructions'));
+      fireEvent.click(button('Edit instructions'));
+      expect(document.activeElement).toBe(instructionsBox());
+      expect(stopsAfter(card, instructionsBox(), 2)).toEqual([button('Cancel'), button('Save')]);
+      fireEvent.click(button('Cancel'));
+      expect(document.activeElement).toBe(button('Edit instructions'));
+
+      fireEvent.click(button('Edit instructions'));
+      save.mockRejectedValueOnce(new ApiClientError('Server exploded', 500));
+      focus(button('Save'));
+      fireEvent.click(button('Save'));
+      expect((await screen.findByRole('alert')).textContent).toBe('Server exploded');
+      expect(document.activeElement).toBe(instructionsBox());
+
+      save.mockResolvedValueOnce(makeNotes());
+      focus(button('Save'));
+      fireEvent.click(button('Save'));
+      await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Instructions' })).toBeNull());
+      await waitFor(() => expect(document.activeElement).toBe(button('Edit instructions')));
+    });
+
+    it('instructions on an empty doc: Add instructions, the textarea, Cancel, Save; Cancel returns to Add instructions', () => {
+      renderPanel(viewWith(EMPTY));
+      const card = notesCard();
+      expect(tabOrder(card)[0]).toBe(button('Add instructions'));
+      focus(button('Add instructions'));
+      fireEvent.click(button('Add instructions'));
+      expect(document.activeElement).toBe(instructionsBox());
+      expect(stopsAfter(card, instructionsBox(), 2)).toEqual([button('Cancel'), button('Save')]);
+      fireEvent.click(button('Cancel'));
+      expect(document.activeElement).toBe(button('Add instructions'));
+    });
+
+    it('Add memory: the field, then Add once there is text; focus back in the field after adding', async () => {
+      const view = makeView();
+      vi.mocked(view.addMemory).mockResolvedValue({ ...MEM_NEW, id: 'm3', content: 'Use metric units.' });
+      renderPanel(view);
+      const card = notesCard();
+      expect(stopsAfter(card, button('Edit instructions'))).toEqual([addBox()]);
+      // A disabled Add is no stop.
+      expect(stopsAfter(card, addBox())).toEqual([editButtonOf(NEW_META)]);
+
+      focus(addBox());
+      fireEvent.change(addBox(), { target: { value: 'Use metric units.' } });
+      expect(stopsAfter(card, addBox())).toEqual([button('Add')]);
+      focus(button('Add'));
+      fireEvent.click(button('Add'));
+      await waitFor(() => expect(addBox().value).toBe(''));
+      expect(document.activeElement).toBe(addBox());
+    });
+
+    it('Add memory reaching the cap: the max line replaces the field, so focus goes to the new memory\'s pencil', async () => {
+      const memories = Array.from({ length: 49 }, (_, i) => ({
+        ...MEM_NEW,
+        id: `m${i}`,
+        content: `Fact ${i}`,
+      }));
+      const added: DocMemory = { ...MEM_NEW, id: 'm49', content: 'Fact 49' };
+      const view = viewWith({ memories });
+      const pending = deferred<DocMemory>();
+      vi.mocked(view.addMemory).mockReturnValue(pending.promise);
+      const { rerenderView } = renderPanel(view);
+
+      focus(addBox());
+      fireEvent.change(addBox(), { target: { value: 'Fact 49' } });
+      focus(button('Add'));
+      fireEvent.click(button('Add'));
+      // As the hook does: the list gains the memory, then the call resolves.
+      rerenderView({ ...view, notes: makeNotes({ memories: [added, ...memories] }) });
+      expect(screen.queryByRole('textbox', { name: 'New memory' })).toBeNull();
+      await act(async () => {
+        pending.resolve(added);
+      });
+      const newest = screen.getAllByRole('listitem')[0];
+      expect(newest.textContent).toContain('Fact 49');
+      expect(document.activeElement).toBe(
+        within(newest).getByRole('button', { name: 'Edit memory' }),
+      );
+    });
+
+    it('memory edit: the pencil, the textarea, Cancel, Save; focus back on the pencil after Cancel and Save', async () => {
+      const view = makeView();
+      vi.mocked(view.updateMemory).mockResolvedValue({ ...MEM_NEW, content: 'Prices are in EUR.' });
+      renderPanel(view);
+      const card = notesCard();
+      // Each memory: its pencil, then its trash.
+      expect(stopsAfter(card, editButtonOf(NEW_META), 3)).toEqual([
+        deleteButtonOf(NEW_META),
+        editButtonOf(OLD_META),
+        deleteButtonOf(OLD_META),
+      ]);
+
+      focus(editButtonOf(NEW_META));
+      fireEvent.click(editButtonOf(NEW_META));
+      expect(document.activeElement).toBe(editBox());
+      expect(stopsAfter(card, editBox(), 2)).toEqual([button('Cancel'), button('Save')]);
+      fireEvent.click(button('Cancel'));
+      expect(document.activeElement).toBe(editButtonOf(NEW_META));
+
+      fireEvent.click(editButtonOf(NEW_META));
+      fireEvent.change(editBox(), { target: { value: 'Prices are in EUR.' } });
+      focus(button('Save'));
+      fireEvent.click(button('Save'));
+      await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Edit memory' })).toBeNull());
+      await waitFor(() => expect(document.activeElement).toBe(editButtonOf(NEW_META)));
+    });
+
+    it('every button has an accessible name; the icon-only ones from aria-label', () => {
+      renderPanel(viewWith({}, { suggestions: [INSTRUCTIONS_SUGGESTION] }));
+      for (const btn of screen.getAllByRole('button')) {
+        expect(btn.getAttribute('aria-label') || btn.textContent?.trim()).toBeTruthy();
+      }
+      const iconOnly = [...notesCard().querySelectorAll<HTMLElement>('.doc-notes-icon-button')];
+      expect(iconOnly).toHaveLength(4);
+      for (const btn of iconOnly) {
+        expect(btn.textContent).toBe('');
+        expect(btn.getAttribute('aria-label')).toMatch(/^(Edit|Delete) memory$/);
+      }
+    });
+
+    it('delete: the trash opens the confirm on Cancel, Tab stays inside, Escape returns to the trash, a delete moves on to the next pencil', async () => {
+      const view = makeView();
+      vi.mocked(view.deleteMemory).mockResolvedValue(undefined);
+      renderPanel(view);
+
+      focus(deleteButtonOf(NEW_META));
+      fireEvent.click(deleteButtonOf(NEW_META));
+      const dialog = screen.getByRole('dialog', { name: 'Delete this memory?' });
+      const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+      const del = within(dialog).getByRole('button', { name: 'Delete' });
+      expect(document.activeElement).toBe(cancel);
+      expect(tabOrder(dialog)).toEqual([cancel, del]);
+
+      // Cancel to Delete is the browser's; past either end it wraps.
+      expect(fireEvent.keyDown(cancel, { key: 'Tab' })).toBe(true);
+      focus(del);
+      expect(fireEvent.keyDown(del, { key: 'Tab' })).toBe(false);
+      expect(document.activeElement).toBe(cancel);
+      expect(fireEvent.keyDown(cancel, { key: 'Tab', shiftKey: true })).toBe(false);
+      expect(document.activeElement).toBe(del);
+
+      fireEvent.keyDown(del, { key: 'Escape' });
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(document.activeElement).toBe(deleteButtonOf(NEW_META));
+      expect(view.deleteMemory).not.toHaveBeenCalled();
+
+      fireEvent.click(deleteButtonOf(NEW_META));
+      focus(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }));
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(view.deleteMemory).toHaveBeenCalledWith('m2');
+      expect(document.activeElement).toBe(editButtonOf(OLD_META));
+    });
+
+    it('delete: a failed delete keeps the confirm open with focus back on Delete', async () => {
+      const view = makeView();
+      const pending = deferred<void>();
+      vi.mocked(view.deleteMemory).mockReturnValue(pending.promise);
+      renderPanel(view);
+      fireEvent.click(deleteButtonOf(NEW_META));
+      const del = within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'Delete',
+      }) as HTMLButtonElement;
+      focus(del);
+      drop();
+      fireEvent.click(del);
+      expect(del.disabled).toBe(true);
+      await act(async () => {
+        pending.reject(new ApiClientError('Server exploded', 500));
+      });
+      expect(within(screen.getByRole('dialog')).getByRole('alert').textContent).toBe('Server exploded');
+      expect(document.activeElement).toBe(del);
+    });
+
+    it("suggestions: each row's text, Accept and Dismiss in turn, before the notes", () => {
+      renderPanel(viewWith({}, { suggestions: [INSTRUCTIONS_SUGGESTION, MEMORY_SUGGESTION] }));
+      const [first, second] = suggestionRows();
+      expect(tabOrder(notesCard()).slice(0, 7)).toEqual([
+        rowText(first),
+        rowButton(first, 'Accept'),
+        rowButton(first, 'Dismiss'),
+        rowText(second),
+        rowButton(second, 'Accept'),
+        rowButton(second, 'Dismiss'),
+        button('Edit instructions'),
+      ]);
+    });
+
+    it('details: the summary is the first tab stop, a plain summary that toggles the section', () => {
+      const { container } = renderPanel(viewWith({}, { suggestions: [MEMORY_SUGGESTION] }), {
+        variant: 'details',
+      });
+      const details = container.querySelector('details') as HTMLDetailsElement;
+      const summary = details.querySelector('summary') as HTMLElement;
+      expect(details.firstElementChild).toBe(summary);
+      expect(tabOrder(container)[0]).toBe(summary);
+      // No role, tabindex or control of its own: the native disclosure, which
+      // Enter and Space activate like a click.
+      expect(summary.hasAttribute('role')).toBe(false);
+      expect(summary.hasAttribute('tabindex')).toBe(false);
+      expect(summary.querySelector(TAB_STOPS)).toBeNull();
+      fireEvent.click(summary);
+      expect(details.open).toBe(true);
+      fireEvent.click(summary);
+      expect(details.open).toBe(false);
     });
   });
 });

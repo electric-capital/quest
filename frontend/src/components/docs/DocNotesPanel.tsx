@@ -17,19 +17,28 @@
  *   shows the server's message and re-bases the row's diff on the current
  *   text it carries until the hook's re-fetched row is at least as new, so
  *   the next Accept is against what the user sees. A row resolved elsewhere
- *   just leaves; other errors show on the row. Above the empty-state line,
- *   which stays about the notes.
+ *   just leaves; other errors show on the row. As rows leave, focus follows
+ *   useSuggestionListFocus (the next row, else the previous one, else the
+ *   panel's heading: the card's "Notes" heading, the phone section's
+ *   summary). A failed suggestions load (`view.suggestionsError`) shows a
+ *   line with Retry (`view.reload`) above the rows, which stay listed. All
+ *   of it sits above the empty-state line, which stays about the notes.
  * - Instructions: plain text with its line breaks. The owner (`is_owner`)
  *   gets Edit ("Add instructions" while there are none), a textarea with a
  *   character counter and Save / Cancel, and an "Edited by <name>, <time>"
  *   line; saving an empty text removes the instructions. Write shares see
- *   the text with a note that only the owner changes it; read shares see the
- *   text only.
+ *   the text ("No instructions yet." while there is none) with a note that
+ *   only the owner changes it; read shares see the text only.
  * - Memories (newest first): editors (`can_edit`: the owner and write
  *   shares) get an Add row, inline edit and a delete through
  *   DocConfirmDialog. Errors (a duplicate, the 50-memory cap, a vanished
  *   memory) show inline under the row that caused them; a duplicate also
- *   highlights the memory that already has the text.
+ *   highlights the memory that already has the text. Read shares see the
+ *   list, or "No memories yet.".
+ *
+ * A doc without notes gets one line instead: for editors, that models
+ * follow its instructions and read its memories before they change it; for
+ * read shares, "No notes yet.".
  *
  * Save sends the `instructions_version` the editor opened with. When the
  * instructions changed meanwhile, the 409 `stale_instructions` keeps the
@@ -38,22 +47,37 @@
  * second 409 replaces the shown text again).
  *
  * The caps (DOC_INSTRUCTIONS_MAX_CHARS, DOC_MEMORY_MAX_CHARS) count like the
- * server: code points of the trimmed text. Over a cap the counter turns red
- * and Save / Add is disabled; nothing is truncated. The notes' three text
- * fields share CappedTextEditor (a suggestion row has its own counter).
+ * server: code points of the trimmed text. Over a cap the counter turns red,
+ * a polite live region says so once and Save / Add is disabled; nothing is
+ * truncated. The notes' three text fields share CappedTextEditor (a
+ * suggestion row has its own counter).
  * Focus stays in the panel: on a failed save it returns to the field, after
- * Save / Cancel to the button that opened the editor, and after a memory
- * delete to a neighbouring memory's Edit button (or the Add field).
+ * Save / Cancel to the button that opened the editor, after an add to the
+ * Add field (or, when the new memory reached the cap and the max line
+ * replaced the field, to its Edit button), after a memory delete to a
+ * neighbouring memory's Edit button (or the Add field), and when the delete
+ * confirm is dismissed to the memory's Delete button (DocConfirmDialog,
+ * which keeps Tab inside it while open).
  *
  * Two presentations of the same contents: `card` is the desktop aside's
  * floating card (the chat RightPanel's `.right-panel-card` chrome and
  * uppercase heading, the body scrolling inside it), `details` the phone's
- * collapsed "Notes" section under the document. Renders nothing when
+ * collapsed "Notes" section under the document, whose summary carries a
+ * rose count of the viewer's pending suggestions (the doc rose of their
+ * rows), so they are not missed while it is closed. Renders nothing when
  * docNotesPanelShown is false (gate closed, doc gone, notes refused with
  * `doc_notes_disabled`).
  */
 
-import { useEffect, useId, useRef, useState, type ReactNode, type Ref } from 'react';
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+  type RefObject,
+} from 'react';
 import { ChevronRight, Pencil, Plus, Trash2 } from 'lucide-react';
 import {
   DOC_INSTRUCTIONS_MAX_CHARS,
@@ -71,6 +95,7 @@ import type {
   StaleInstructionsCurrent,
 } from '../../api/types';
 import type { DocNotesView } from '../../hooks/useDocNotes';
+import { useSuggestionListFocus } from '../../hooks/useSuggestionListFocus';
 import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatters';
 import { MemorySuggestionRow } from '../MemorySuggestionRow';
 import { docNoteAcceptOptions, instructionsCaughtUp, rebaseOnStale } from '../docNoteReview';
@@ -86,6 +111,9 @@ const MEMORY_GONE_MESSAGE = 'This memory was deleted.';
 const SUGGESTIONS_HINT = 'From your conversations. Nothing changes until you accept.';
 const SUGGESTION_ACCEPT_ERROR = 'Failed to save doc note';
 const SUGGESTION_DISMISS_ERROR = 'Failed to dismiss';
+const SUGGESTIONS_LOAD_ERROR = 'Failed to load your suggestions for this doc.';
+const EDITOR_EMPTY_LINE =
+  "Models follow this doc's instructions and read its memories before they change it.";
 // How long the memory a duplicate points at stays highlighted.
 const HIGHLIGHT_MS = 2000;
 // Code points of a memory quoted in the delete confirm.
@@ -119,6 +147,10 @@ function isOverCap(text: string, max: number): boolean {
 
 function formatCount(n: number): string {
   return n.toLocaleString('en-US');
+}
+
+function pendingSuggestionsLabel(n: number): string {
+  return `${formatCount(n)} pending ${n === 1 ? 'suggestion' : 'suggestions'}`;
 }
 
 function errorMessage(err: unknown, fallback: string): string {
@@ -182,7 +214,10 @@ interface CappedTextEditorProps {
 /**
  * A textarea with its `n / max` counter, an over-cap line, the footer
  * buttons and an inline error. Over the cap the field is `aria-invalid`
- * and described by the over-cap line as well as the counter.
+ * and described by the over-cap line as well as the counter. The over-cap
+ * line sits in a polite live region that stays in the DOM (empty under the
+ * cap), so a screen reader hears it once as the text crosses the cap and
+ * not on every keystroke.
  */
 function CappedTextEditor({
   label,
@@ -221,11 +256,13 @@ function CappedTextEditor({
         readOnly={busy}
         onChange={(e) => onChange(e.target.value)}
       />
-      {overCap && (
-        <p id={overId} className="doc-notes-over-cap">
-          Use at most {formatCount(max)} characters.
-        </p>
-      )}
+      <div className="doc-notes-over-cap-live" aria-live="polite">
+        {overCap && (
+          <p id={overId} className="doc-notes-over-cap">
+            Use at most {formatCount(max)} characters.
+          </p>
+        )}
+      </div>
       <div className="doc-notes-editor-footer">
         {showCounter && (
           <span
@@ -271,13 +308,25 @@ function withoutKey<T>(record: Record<string, T>, id: string): Record<string, T>
 }
 
 /**
- * The viewer's pending suggestions for this doc, each reviewed in place.
- * Mounted with the notes and empty (null) while there are none, so the
- * per-row drafts, busy flags, errors and 409 re-bases live here, keyed by
- * suggestion id, and are dropped as their rows leave `view.suggestions`.
+ * The viewer's pending suggestions for this doc, each reviewed in place,
+ * under the suggestions load error while there is one. Mounted with the
+ * notes, its area empty while there is nothing to show, so the per-row
+ * drafts, busy flags, errors and 409 re-bases live here, keyed by
+ * suggestion id, and are dropped as their rows leave `view.suggestions`;
+ * and so useSuggestionListFocus, watching the area, can hand focus to the
+ * panel's heading once the last row (or the error line) has left.
  */
-function SuggestionsSection({ view }: { view: DocNotesView }) {
-  const { suggestions, acceptSuggestion, dismissSuggestion } = view;
+function SuggestionsSection({
+  view,
+  fallbackRef,
+}: {
+  view: DocNotesView;
+  /** The panel's heading, focused once nothing in the area is left. */
+  fallbackRef: RefObject<HTMLElement | null>;
+}) {
+  const { suggestions, suggestionsError, acceptSuggestion, dismissSuggestion } = view;
+  const areaRef = useRef<HTMLDivElement>(null);
+  const { retrying, retry } = useRetry(view.reload);
   // Edited text per row (absent = the proposed content untouched).
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -298,7 +347,11 @@ function SuggestionsSection({ view }: { view: DocNotesView }) {
     );
   }, [suggestions]);
 
-  if (suggestions.length === 0) return null;
+  useSuggestionListFocus({
+    containerRef: areaRef,
+    rowIds: suggestions.map((s) => s.id),
+    fallbackRef,
+  });
 
   const setBusy = (id: string, busy: boolean) => {
     setBusyIds((prev) => {
@@ -340,30 +393,42 @@ function SuggestionsSection({ view }: { view: DocNotesView }) {
   };
 
   return (
-    <div className="doc-notes-section doc-notes-suggestions">
-      <div className="doc-notes-section-header">
-        <h4 className="doc-notes-section-heading">Suggestions for you</h4>
-        <span className="doc-notes-count">{suggestions.length}</span>
-      </div>
-      <p className="doc-notes-hint">{SUGGESTIONS_HINT}</p>
-      {suggestions.map((suggestion) => {
-        const rebase = rebases[suggestion.id];
-        const row = rebase ? rebaseOnStale(suggestion, rebase) : suggestion;
-        return (
-          <MemorySuggestionRow
-            key={row.id}
-            kind="doc"
-            suggestion={row}
-            showDocLink={false}
-            draft={drafts[row.id] ?? row.content}
-            onDraftChange={(text) => setDrafts((prev) => ({ ...prev, [row.id]: text }))}
-            busy={busyIds.has(row.id)}
-            error={rowErrors[row.id]}
-            onAccept={() => void resolve(row, 'accept')}
-            onDismiss={() => void resolve(row, 'dismiss')}
-          />
-        );
-      })}
+    <div ref={areaRef} className="doc-notes-suggestions-area">
+      {suggestionsError && (
+        <LoadFailure
+          className="doc-notes-load-error"
+          message={SUGGESTIONS_LOAD_ERROR}
+          retrying={retrying}
+          onRetry={() => void retry()}
+        />
+      )}
+      {suggestions.length > 0 && (
+        <div className="doc-notes-section doc-notes-suggestions">
+          <div className="doc-notes-section-header">
+            <h4 className="doc-notes-section-heading">Suggestions for you</h4>
+            <span className="doc-notes-count">{suggestions.length}</span>
+          </div>
+          <p className="doc-notes-hint">{SUGGESTIONS_HINT}</p>
+          {suggestions.map((suggestion) => {
+            const rebase = rebases[suggestion.id];
+            const row = rebase ? rebaseOnStale(suggestion, rebase) : suggestion;
+            return (
+              <MemorySuggestionRow
+                key={row.id}
+                kind="doc"
+                suggestion={row}
+                showDocLink={false}
+                draft={drafts[row.id] ?? row.content}
+                onDraftChange={(text) => setDrafts((prev) => ({ ...prev, [row.id]: text }))}
+                busy={busyIds.has(row.id)}
+                error={rowErrors[row.id]}
+                onAccept={() => void resolve(row, 'accept')}
+                onDismiss={() => void resolve(row, 'dismiss')}
+              />
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -571,7 +636,7 @@ function InstructionsSection({
           </button>
         )}
         {!isOwner && !hasText && !panelEmpty && (
-          <p className="doc-notes-status">No instructions.</p>
+          <p className="doc-notes-status">No instructions yet.</p>
         )}
         {!isOwner && notes.can_edit && (
           <p className="doc-notes-hint">Only the doc's owner can change the instructions.</p>
@@ -642,6 +707,8 @@ function MemoriesSection({
   // Set when a delete closes the dialog: the memories whose Edit button
   // takes focus (the next one, else the previous one), else the Add field.
   const refocusAfterDeleteRef = useRef<string[] | null>(null);
+  // Set when an add settles, with the new memory's id when it succeeded.
+  const refocusAfterAddRef = useRef<{ addedId: string | null } | null>(null);
   const highlightSeqRef = useRef(0);
   const ids = useId();
 
@@ -695,6 +762,19 @@ function MemoriesSection({
     addInputRef.current?.focus();
   }, [deleteTarget]);
 
+  // After an add settled, with the list showing its result: back to the
+  // field, to add another or to fix the draft. The memory that reached the
+  // cap took the field away (the max line replaces the Add row): its Edit
+  // button instead.
+  useEffect(() => {
+    const target = refocusAfterAddRef.current;
+    if (adding || !target) return;
+    refocusAfterAddRef.current = null;
+    const field = addInputRef.current;
+    if (field) field.focus();
+    else if (target.addedId) editButtonsRef.current.get(target.addedId)?.focus();
+  }, [adding]);
+
   useEffect(() => {
     if (!highlight) return;
     const item = [...(listRef.current?.querySelectorAll<HTMLElement>('[data-memory-id]') ?? [])].find(
@@ -722,17 +802,17 @@ function MemoriesSection({
     if (!text || adding || addOverCap) return;
     setAdding(true);
     setAddError(null);
+    let addedId: string | null = null;
     try {
-      await view.addMemory(text);
+      addedId = (await view.addMemory(text)).id;
       setAddDraft('');
     } catch (err) {
       setAddError(memoryErrorMessage(err, 'Failed to add the memory.'));
       flashDuplicate(err);
     } finally {
+      refocusAfterAddRef.current = { addedId };
       setAdding(false);
     }
-    // Back to the field: to add another, or to fix the draft.
-    addInputRef.current?.focus();
   };
 
   const startEdit = (memory: DocMemory) => {
@@ -937,7 +1017,7 @@ function MemoriesSection({
         <span className="doc-notes-count">{memories.length}</span>
       </div>
       {addRow}
-      {memories.length === 0 && !canEdit && <p className="doc-notes-status">No memories.</p>}
+      {memories.length === 0 && !canEdit && <p className="doc-notes-status">No memories yet.</p>}
       {memories.length > 0 && (
         <ul ref={listRef} className="doc-notes-memory-list">
           {memories.map(renderMemory)}
@@ -969,21 +1049,20 @@ function NotesContent({
   view,
   notes,
   viewerEmail,
+  headingRef,
 }: {
   view: DocNotesView;
   notes: DocNotes;
   viewerEmail: string | null;
+  /** The panel's heading (the card's "Notes", the phone section's summary). */
+  headingRef: RefObject<HTMLElement | null>;
 }) {
   const panelEmpty = notes.instructions === '' && notes.memories.length === 0;
   return (
     <div className="doc-notes-body">
-      <SuggestionsSection view={view} />
+      <SuggestionsSection view={view} fallbackRef={headingRef} />
       {panelEmpty && (
-        <p className="doc-notes-status">
-          {notes.can_edit
-            ? "Models follow this doc's instructions and read its memories before they change it."
-            : 'This doc has no notes.'}
-        </p>
+        <p className="doc-notes-status">{notes.can_edit ? EDITOR_EMPTY_LINE : 'No notes yet.'}</p>
       )}
       <InstructionsSection
         notes={notes}
@@ -996,38 +1075,73 @@ function NotesContent({
   );
 }
 
-/** The failed first load, with Retry (disabled until the reload settles). */
-function LoadError({ view }: { view: DocNotesView }) {
+/** `reload` behind a Retry button: `retrying` until the reload settles. */
+function useRetry(reload: DocNotesView['reload']) {
   const [retrying, setRetrying] = useState(false);
   const retry = async () => {
     setRetrying(true);
     try {
-      await view.reload();
+      await reload();
     } finally {
       setRetrying(false);
     }
   };
+  return { retrying, retry };
+}
+
+/** A failed load's message with Retry (disabled while `retrying`). */
+function LoadFailure({
+  message,
+  retrying,
+  onRetry,
+  className,
+}: {
+  message: string;
+  retrying: boolean;
+  onRetry: () => void;
+  className: string;
+}) {
   return (
-    <div className="doc-notes-body doc-notes-load-error">
-      <p className="doc-notes-status">{view.error?.message || 'Failed to load notes.'}</p>
-      <button
-        type="button"
-        className="doc-notes-button"
-        onClick={() => void retry()}
-        disabled={retrying}
-      >
+    <div className={className}>
+      <p className="doc-notes-status">{message}</p>
+      <button type="button" className="doc-notes-button" onClick={onRetry} disabled={retrying}>
         {retrying ? 'Retrying...' : 'Retry'}
       </button>
     </div>
   );
 }
 
+/** The failed first load of the notes, in place of the panel's contents. */
+function LoadError({ view }: { view: DocNotesView }) {
+  const { retrying, retry } = useRetry(view.reload);
+  return (
+    <LoadFailure
+      className="doc-notes-body doc-notes-load-error"
+      message={view.error?.message || 'Failed to load notes.'}
+      retrying={retrying}
+      onRetry={() => void retry()}
+    />
+  );
+}
+
 export function DocNotesPanel({ view, variant = 'card', viewerEmail = null }: DocNotesPanelProps) {
+  // The panel's heading, where focus goes once the last suggestion row has
+  // left: the card's "Notes" heading, the phone section's summary.
+  const cardHeadingRef = useRef<HTMLHeadingElement>(null);
+  const summaryRef = useRef<HTMLElement>(null);
   if (!docNotesPanelShown(view)) return null;
+  const headingRef = variant === 'details' ? summaryRef : cardHeadingRef;
 
   let content: ReactNode;
   if (view.notes) {
-    content = <NotesContent view={view} notes={view.notes} viewerEmail={viewerEmail} />;
+    content = (
+      <NotesContent
+        view={view}
+        notes={view.notes}
+        viewerEmail={viewerEmail}
+        headingRef={headingRef}
+      />
+    );
   } else if (view.loading) {
     content = (
       <div className="doc-notes-body">
@@ -1039,11 +1153,21 @@ export function DocNotesPanel({ view, variant = 'card', viewerEmail = null }: Do
   }
 
   if (variant === 'details') {
+    // Counted while the block that lists them is shown (with the notes).
+    const pending = view.notes ? view.suggestions.length : 0;
     return (
       <details className="doc-notes-details">
-        <summary className="doc-notes-summary">
+        <summary ref={summaryRef} className="doc-notes-summary">
           <ChevronRight size={14} className="doc-notes-summary-chevron" aria-hidden="true" />
           <span>Notes</span>
+          {pending > 0 && (
+            // The doc rose of the suggestion rows (--suggestion-* of
+            // .memory-suggestions--doc, MemorySuggestions.css).
+            <span className="doc-notes-summary-count memory-suggestions--doc">
+              <span aria-hidden="true">{formatCount(pending)}</span>
+              <span className="doc-notes-sr-only">{`, ${pendingSuggestionsLabel(pending)}`}</span>
+            </span>
+          )}
         </summary>
         <div className="doc-notes-details-body">{content}</div>
       </details>
@@ -1051,13 +1175,15 @@ export function DocNotesPanel({ view, variant = 'card', viewerEmail = null }: Do
   }
 
   // Read-only viewers have nothing focusable in the notes of a long card
-  // (suggestion rows, if any, sit only at its top): the scroller takes
-  // focus so the keyboard can scroll it.
+  // (suggestion rows and their load error's Retry, if any, sit only at its
+  // top): the scroller takes focus so the keyboard can scroll it.
   const keyboardScroll = view.notes !== null && !view.notes.can_edit;
   return (
     <section className="right-panel-card doc-notes-panel" aria-label="Notes">
       <div className="doc-notes-header">
-        <h3 className="doc-notes-heading">Notes</h3>
+        <h3 ref={cardHeadingRef} className="doc-notes-heading" tabIndex={-1}>
+          Notes
+        </h3>
       </div>
       <div className="doc-notes-scroll" tabIndex={keyboardScroll ? 0 : undefined}>
         {content}

@@ -61,13 +61,17 @@
   color: var(--text);
 }
 
-/* Muted one-liners: loading, the empty panel, "No memories.". */
+/* Muted one-liners: loading, the empty panel, "No memories yet.". */
 .doc-notes-status {
   margin: 0;
   color: var(--text-muted);
 }
 
+/* A failed load's message with Retry under it: the notes' (in place of the
+   body) and the suggestions' (above their rows). */
 .doc-notes-load-error {
+  display: flex;
+  flex-direction: column;
   align-items: flex-start;
   gap: 0.5rem;
 }
@@ -193,16 +197,24 @@
   flex-shrink: 0;
 }
 
+/* The card's heading takes focus (from script) once the last suggestion row
+   has left; like the controls, it shows a ring for the keyboard only. */
 .doc-notes-button:focus:not(:focus-visible),
 .doc-notes-icon-button:focus:not(:focus-visible),
-.doc-notes-summary:focus:not(:focus-visible) {
+.doc-notes-summary:focus:not(:focus-visible),
+.doc-notes-heading:focus:not(:focus-visible) {
   outline: none;
 }
 
 .doc-notes-button:focus-visible,
-.doc-notes-summary:focus-visible {
+.doc-notes-summary:focus-visible,
+.doc-notes-heading:focus-visible {
   outline: 2px solid rgb(var(--accent-rgb) / 0.6);
   outline-offset: 2px;
+}
+
+.doc-notes-heading:focus-visible {
+  border-radius: 4px;
 }
 
 /* --- Editors (instructions, a memory, the Add row) ------------------------- */
@@ -284,11 +296,31 @@
   overflow-wrap: anywhere;
 }
 
+/* The over-cap line's live region stays in the DOM under the cap; empty,
+   it leaves the editor's flex flow so it adds no gap. */
+.doc-notes-over-cap-live:empty {
+  position: absolute;
+}
+
 /* --- Suggestions for you --------------------------------------------------- */
-/* The rows are the shared MemorySuggestionRow, whose look (the doc rose, the
-   diff, the counter) comes from MemorySuggestions.css; only the spacing is
-   the panel's. A row's padding tightens so its text and diff keep their
-   width in the 280px card. */
+/* The area holds the suggestions' load error and the block of rows; it is
+   always in the DOM (focus is kept in it as rows leave) and takes no room,
+   nor a gap of the body, while empty. The rows are the shared
+   MemorySuggestionRow, whose look (the doc rose, the diff, the counter)
+   comes from MemorySuggestions.css; only the spacing is the panel's. A
+   row's padding tightens so its text and diff keep their width in the
+   280px card. */
+.doc-notes-suggestions-area {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.doc-notes-suggestions-area:empty {
+  display: none;
+}
+
 .doc-notes-suggestions .memory-suggestion-row {
   padding: 0.5rem;
 }
@@ -500,6 +532,34 @@
 
 .doc-notes-details[open] .doc-notes-summary-chevron {
   transform: rotate(90deg);
+}
+
+/* The viewer's pending suggestions for the doc, so they are seen while the
+   section is closed: a pill in the doc rose of their rows (the
+   --suggestion-* values of .memory-suggestions--doc, MemorySuggestions.css,
+   with its light-scheme override), shaped like .doc-notes-count. */
+.doc-notes-summary-count {
+  padding: 0 0.375rem;
+  min-width: 1.125rem;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background-color: rgb(var(--suggestion-rgb) / 0.16);
+  color: var(--suggestion-text);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.125rem;
+  text-align: center;
+}
+
+/* The pill's spoken text ("2 pending suggestions"). */
+.doc-notes-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .doc-notes-details-body .doc-notes-body {
