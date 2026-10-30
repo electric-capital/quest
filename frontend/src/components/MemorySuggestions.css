@@ -396,6 +396,15 @@
   color: #e05d5d;
 }
 
+.memory-suggestion-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .memory-suggestion-over-cap {
   margin: 0;
   padding: 0 0.5rem;
@@ -541,6 +550,20 @@
 
 .memory-suggestion-accept:hover:not(:disabled) {
   filter: brightness(1.08);
+}
+
+/* Brightening the dark scheme's rose would drop white text below 4.5:1, so
+   a doc row's Accept darkens on hover there instead. */
+.memory-suggestion-row--doc .memory-suggestion-accept:hover:not(:disabled) {
+  filter: none;
+  background: #be185d;
+}
+
+@media (prefers-color-scheme: light) {
+  .memory-suggestion-row--doc .memory-suggestion-accept:hover:not(:disabled) {
+    filter: brightness(1.08);
+    background: var(--suggestion-solid);
+  }
 }
 
 .memory-suggestion-dismiss {

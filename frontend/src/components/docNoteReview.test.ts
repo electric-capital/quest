@@ -1,7 +1,8 @@
 // Doc note review helpers: what an Accept sends (the edited text only when
 // it changed, the instructions version only for an instructions row that
 // has one), the re-base on a 409's current instructions, the caps counted
-// like the server (code points of the trimmed text) and the row guard.
+// like the server (code points of the trimmed text), when Accept is allowed
+// (never for an unavailable doc) and the row guard.
 import { describe, expect, it } from 'vitest';
 import type { DocNoteSuggestion, MemorySuggestion } from '../api/types';
 import {
@@ -9,6 +10,7 @@ import {
   docNoteAcceptOptions,
   docNoteCharCount,
   docNoteMaxChars,
+  isDocNoteDocAvailable,
   isDocNoteSuggestion,
   withCurrentInstructions,
 } from './docNoteReview';
@@ -123,6 +125,14 @@ describe('caps and guards', () => {
     expect(canAcceptDocNote(memoryRow(), '😀'.repeat(1001))).toBe(false);
     expect(canAcceptDocNote(docNote(), 'x'.repeat(4000))).toBe(true);
     expect(canAcceptDocNote(docNote(), 'x'.repeat(4001))).toBe(false);
+  });
+
+  it('never accepts for an unavailable doc', () => {
+    expect(isDocNoteDocAvailable(docNote())).toBe(true);
+    for (const docTitle of ['', undefined]) {
+      expect(isDocNoteDocAvailable(memoryRow({ doc_title: docTitle }))).toBe(false);
+      expect(canAcceptDocNote(memoryRow({ doc_title: docTitle }), undefined)).toBe(false);
+    }
   });
 
   it('tells a doc note row from a memory suggestion', () => {

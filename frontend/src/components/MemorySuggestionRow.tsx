@@ -12,8 +12,10 @@
  * header line (an Instructions / Memory pill and, unless ``showDocLink`` is
  * false, the doc's title linking to its viewer), for an instructions row the
  * diff from the doc's current instructions with a notice when they changed
- * since the proposal, and an ``n / max`` counter against the server's cap
- * that disables Accept over it (docNoteReview.ts counts like the server).
+ * since the proposal, and an ``n / max`` counter against the server's cap.
+ * A doc row's Accept follows canAcceptDocNote (docNoteReview.ts): disabled
+ * over the cap, on a blank text and while the doc is unavailable; Dismiss
+ * always works.
  *
  * Styled by MemorySuggestions.css: ``.memory-suggestion-row--<kind>`` sets
  * the colour (the accent for ``user``, the project amber, the doc rose).
@@ -26,7 +28,12 @@ import { Check, FileText, LoaderCircle, TriangleAlert, X } from 'lucide-react';
 import type { DocNoteSuggestion, MemorySuggestion } from '../api/types';
 import { docViewerPath } from '../utils/docsRoute';
 import { wordDiff } from '../utils/wordDiff';
-import { docNoteCharCount, docNoteMaxChars } from './docNoteReview';
+import {
+  canAcceptDocNote,
+  docNoteCharCount,
+  docNoteMaxChars,
+  isDocNoteDocAvailable,
+} from './docNoteReview';
 
 export type MemorySuggestionKind = 'user' | 'project' | 'doc';
 
@@ -141,7 +148,7 @@ function DocNoteHeader({
   onOpenDoc,
 }: { suggestion: DocNoteSuggestion; showDocLink: boolean; onOpenDoc?: () => void }) {
   const labels = DOC_NOTE_LABELS[suggestion.note_kind];
-  const docTitle = suggestion.doc_title ?? '';
+  const docTitle = isDocNoteDocAvailable(suggestion) ? suggestion.doc_title : '';
   const onLinkClick = (e: MouseEvent<HTMLAnchorElement>) => {
     // A modified click opens a new tab; this view stays where it is.
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -247,6 +254,11 @@ export function MemorySuggestionRow(props: MemorySuggestionRowProps) {
   const overCap = maxChars !== null && charCount > maxChars;
   const counterId = `${ids}-counter`;
   const overCapId = `${ids}-over`;
+  const docUnavailable = docNote !== null && !isDocNoteDocAvailable(docNote);
+  // An archive-only row has no text: Accept just archives the memory.
+  const acceptDisabled = busy || (docNote
+    ? !canAcceptDocNote(docNote, draft)
+    : !archiveOnly && !draft.trim());
   const describedBy = maxChars !== null
     ? [counterId, overCap && overCapId].filter(Boolean).join(' ')
     : undefined;
@@ -340,13 +352,15 @@ export function MemorySuggestionRow(props: MemorySuggestionRowProps) {
               : 'memory-suggestion-counter'}
           >
             {formatCount(charCount)} / {formatCount(maxChars)}
+            <span className="memory-suggestion-sr-only"> characters</span>
           </span>
         )}
         <button
           type="button"
           className="memory-suggestion-accept"
           onClick={onAccept}
-          disabled={busy || (!archiveOnly && !draft.trim()) || overCap}
+          disabled={acceptDisabled}
+          title={docUnavailable ? UNAVAILABLE_DOC_TITLE : undefined}
         >
           {busy ? (
             <LoaderCircle size={14} className="memory-suggestions-spinner" aria-hidden="true" />

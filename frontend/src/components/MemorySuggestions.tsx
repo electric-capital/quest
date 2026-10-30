@@ -22,8 +22,9 @@
  * accept sends the version its diff was rendered against
  * (docNoteReview.ts); when the instructions changed meanwhile, the 409
  * ``stale_instructions`` re-bases the row on the current text it carries
- * (re-fetching the list when it carries none), keeps the draft and shows
- * the server's message, so the next Accept is against what the user sees.
+ * (unless the row in state is already as new), keeps the draft, shows the
+ * server's message and re-fetches the list, so the next Accept is against
+ * what the user sees and the count matches the list again.
  */
 
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
@@ -78,10 +79,12 @@ interface KindConfig<S extends MemorySuggestion | DocNoteSuggestion> {
   /** Accept all skips a row this refuses (absent = every row is tried). */
   canAccept?: (suggestion: S, draft: string | undefined) => boolean;
   /**
-   * A failed accept that leaves the row pending but changed: the re-based
-   * row, ``'refetch'`` to reload the list, or null for an ordinary failure.
+   * A failed accept that is a conflict (the row stays pending but changed
+   * underneath): ``rebase`` maps the row as it is in state when the error
+   * lands (null: the error carries no data); null for an ordinary failure.
+   * A conflict always re-fetches the list too.
    */
-  rebase?: (suggestion: S, err: unknown) => S | 'refetch' | null;
+  conflict?: (err: unknown) => { rebase: ((row: S) => S) | null } | null;
   renderRow: (suggestion: S, state: MemorySuggestionRowStateProps) => ReactNode;
 }
 
@@ -143,10 +146,19 @@ const KIND_CONFIG: {
     dismiss: dismissDocNoteSuggestion,
     setCount: (id: string, n: number) => conversationStore.setPendingDocNoteSuggestions(id, n),
     canAccept: canAcceptDocNote,
-    rebase: (s, err) => {
+    conflict: (err) => {
       if (!isStaleInstructionsError(err)) return null;
       const current = staleInstructionsCurrent(err);
-      return current ? withCurrentInstructions(s, current) : 'refetch';
+      if (!current) return { rebase: null };
+      return {
+        // A list fetch that landed during the accept may already be as new.
+        rebase: (row) => (
+          typeof row.current_instructions_version === 'number'
+          && row.current_instructions_version >= current.instructions_version
+            ? row
+            : withCurrentInstructions(row, current)
+        ),
+      };
     },
     renderRow: (s, state) => <MemorySuggestionRow kind="doc" suggestion={s} {...state} />,
   },
@@ -201,7 +213,8 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
   const [suggestions, setSuggestions] = useState<S[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  // Bumped to re-fetch the list while open (a conflict without its data).
+  // Bumped to re-fetch the list while open (after an accept conflict, which
+  // publishes no count event of its own).
   const [reloadTick, setReloadTick] = useState(0);
   // Per-suggestion edited text (absent = the proposed content untouched).
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -209,9 +222,8 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [isBulkBusy, setIsBulkBusy] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
-  // Bumped on every local accept / dismiss / re-base so a list fetch that
-  // was already in flight cannot land afterwards and resurrect the row just
-  // removed (or undo the re-base).
+  // Bumped on every local accept / dismiss so a list fetch that was already
+  // in flight cannot land afterwards and resurrect the row just removed.
   const listGenerationRef = useRef(0);
 
   // A new conversation starts closed.
@@ -296,11 +308,6 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
     });
   }, []);
 
-  const replaceRow = useCallback((row: S) => {
-    listGenerationRef.current += 1;
-    setSuggestions((prev) => prev.map((s) => (s.id === row.id ? row : s)));
-  }, []);
-
   const setBusy = useCallback((id: string, busy: boolean) => {
     setBusyIds((prev) => {
       const next = new Set(prev);
@@ -337,12 +344,16 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
         return true;
       }
       // Still pending but changed underneath (doc: the instructions moved):
-      // re-base the row, keeping the draft, and show why.
-      const rebased = action === 'accept' && config.rebase
-        ? config.rebase(suggestion, err)
-        : null;
-      if (rebased === 'refetch') setReloadTick((n) => n + 1);
-      else if (rebased) replaceRow(rebased);
+      // re-base the row now in state, keeping the draft, show why, and
+      // re-fetch (the re-run cancels a fetch already in flight).
+      const conflict = action === 'accept' && config.conflict ? config.conflict(err) : null;
+      if (conflict) {
+        const { rebase } = conflict;
+        if (rebase) {
+          setSuggestions((prev) => prev.map((s) => (s.id === suggestion.id ? rebase(s) : s)));
+        }
+        setReloadTick((n) => n + 1);
+      }
       setRowErrors((prev) => ({
         ...prev,
         [suggestion.id]: errorMessage(
@@ -354,7 +365,7 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
     } finally {
       setBusy(suggestion.id, false);
     }
-  }, [drafts, removeRow, replaceRow, setBusy, config]);
+  }, [drafts, removeRow, setBusy, config]);
 
   const resolveAll = useCallback(async (action: 'accept' | 'dismiss') => {
     if (isBulkBusy) return;

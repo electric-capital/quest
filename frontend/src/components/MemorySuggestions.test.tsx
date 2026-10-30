@@ -2,9 +2,10 @@
 // lists the conversation's pending suggestions, accept sends the edited
 // text only when it changed, dismiss removes the row, a 409 from another
 // tab drops the row silently, and a count change while open re-fetches.
-// The doc kind adds its wording and store count, the accept options with
-// the instructions version, the re-base on a 409 stale_instructions, and
-// an Accept all that skips a row its own Accept refuses.
+// The doc kind adds its icon, wording and store count, the accept options
+// with the instructions version, the re-base on a 409 stale_instructions
+// (against the row in state, then a re-fetch), and an Accept all that skips
+// a row its own Accept refuses.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -277,7 +278,8 @@ describe('MemorySuggestions kind="project"', () => {
   });
 });
 
-const STALE_MESSAGE = 'The instructions changed since this was suggested. Review the current text and accept again.';
+const STALE_MESSAGE = "The doc's instructions changed since this suggestion was shown. "
+  + 'Review it against the current text and accept again.';
 
 const docNote = (id: string, extra: Partial<DocNoteSuggestion> = {}): DocNoteSuggestion => ({
   id,
@@ -341,6 +343,18 @@ async function openDocPanel(conversationId = 'c-doc', pendingCount = 1) {
   return view;
 }
 
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  let reject: (err: unknown) => void = () => {};
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+type DocList = { suggestions: DocNoteSuggestion[]; pending_count: number };
+
 function diffBodies(): Element[] {
   return screen.getAllByTestId('memory-suggestion-diff')
     .map((diff) => diff.querySelector('.memory-suggestion-diff-body')!);
@@ -353,7 +367,9 @@ describe('MemorySuggestions kind="doc"', () => {
       <MemorySuggestions conversationId="c-doc-count" pendingCount={1} kind="doc" />,
     );
     expect(container.querySelector('.memory-suggestions--doc')).not.toBeNull();
-    expect(screen.getByRole('button', { name: /^1 suggested doc note$/ })).not.toBeNull();
+    const bubble = screen.getByRole('button', { name: /^1 suggested doc note$/ });
+    // The sidebar's Docs icon.
+    expect(bubble.querySelector('svg.lucide-file-text')).not.toBeNull();
     rerender(<MemorySuggestions conversationId="c-doc-count" pendingCount={2} kind="doc" />);
     fireEvent.click(screen.getByRole('button', { name: /^2 suggested doc notes$/ }));
 
@@ -422,6 +438,12 @@ describe('MemorySuggestions kind="doc"', () => {
     expect(diffBodies()[0].textContent).toBe('Prices are in USD. EUR.');
     fireEvent.change(textarea, { target: { value: 'Prices are in EUR, always.' } });
 
+    // What the re-fetch after the conflict returns: the same current text.
+    serveDoc([docNote('d1', {
+      current_instructions: 'Prices are in GBP.',
+      current_instructions_version: 4,
+      instructions_moved: true,
+    })]);
     fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
     expect((await screen.findByRole('alert')).textContent).toBe(STALE_MESSAGE);
     expect(mocks.acceptDocNoteSuggestion).toHaveBeenLastCalledWith(
@@ -436,7 +458,8 @@ describe('MemorySuggestions kind="doc"', () => {
     expect(screen.getByDisplayValue('Prices are in EUR, always.')).not.toBeNull();
     expect(container.querySelector('.memory-suggestion-moved')!.textContent)
       .toBe('The instructions changed since this was suggested');
-    expect(mocks.fetchConversationDocNoteSuggestions).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mocks.fetchConversationDocNoteSuggestions).toHaveBeenCalledTimes(2));
+    expect(screen.getByDisplayValue('Prices are in EUR, always.')).not.toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
     await waitFor(() => expect(mocks.acceptDocNoteSuggestion).toHaveBeenLastCalledWith(
@@ -445,6 +468,98 @@ describe('MemorySuggestions kind="doc"', () => {
     ));
     await waitFor(() => expect(screen.queryByDisplayValue('Prices are in EUR, always.')).toBeNull());
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('re-fetches after the re-base, past a list fetch in flight when the 409 lands', async () => {
+    serveDoc([docNote('d1')]);
+    const accept = deferred<unknown>();
+    mocks.acceptDocNoteSuggestion
+      .mockImplementationOnce(() => accept.promise)
+      .mockResolvedValueOnce({});
+    const { rerender } = await openDocPanel('c-doc-race', 1);
+    await screen.findByDisplayValue('Prices are in EUR.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(mocks.acceptDocNoteSuggestion).toHaveBeenCalledTimes(1));
+    // A count change starts a list fetch that is still in flight (with the
+    // old row) when the 409 lands...
+    const stale = deferred<DocList>();
+    mocks.fetchConversationDocNoteSuggestions.mockImplementationOnce(() => stale.promise);
+    rerender(<MemorySuggestions conversationId="c-doc-race" pendingCount={2} kind="doc" />);
+    await waitFor(() => expect(mocks.fetchConversationDocNoteSuggestions).toHaveBeenCalledTimes(2));
+
+    // ...and the re-fetch after the conflict brings the newest list.
+    const fresh = deferred<DocList>();
+    mocks.fetchConversationDocNoteSuggestions.mockImplementationOnce(() => fresh.promise);
+    await act(async () => {
+      accept.reject(staleError({ instructions: 'Prices are in GBP.', instructions_version: 4 }));
+    });
+    expect((await screen.findByRole('alert')).textContent).toBe(STALE_MESSAGE);
+    expect(diffBodies()[0].querySelector('.memory-suggestion-diff-del')!.textContent).toBe('GBP.');
+    await waitFor(() => expect(mocks.fetchConversationDocNoteSuggestions).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      fresh.resolve({
+        suggestions: [
+          docNote('d1', { current_instructions: 'Prices are in CHF.', current_instructions_version: 5 }),
+          docMemory('d2', 'The board meets monthly.'),
+        ],
+        pending_count: 2,
+      });
+    });
+    await screen.findByDisplayValue('The board meets monthly.');
+    expect(diffBodies()[0].querySelector('.memory-suggestion-diff-del')!.textContent).toBe('CHF.');
+    expect(conversationStore.getConversation('c-doc-race').pendingDocNoteSuggestions).toBe(2);
+    // The fetch that was in flight lands last and changes nothing.
+    await act(async () => {
+      stale.resolve({ suggestions: [docNote('d1')], pending_count: 1 });
+    });
+    expect(screen.getByDisplayValue('The board meets monthly.')).not.toBeNull();
+    expect(diffBodies()[0].querySelector('.memory-suggestion-diff-del')!.textContent).toBe('CHF.');
+    expect(conversationStore.getConversation('c-doc-race').pendingDocNoteSuggestions).toBe(2);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Accept' })[0]);
+    await waitFor(() => expect(mocks.acceptDocNoteSuggestion)
+      .toHaveBeenLastCalledWith('d1', { expectedInstructionsVersion: 5 }));
+  });
+
+  it('keeps a newer row that a list fetch brought in during the accept', async () => {
+    serveDoc([docNote('d1')]);
+    const accept = deferred<unknown>();
+    mocks.acceptDocNoteSuggestion.mockImplementationOnce(() => accept.promise);
+    const { rerender } = await openDocPanel('c-doc-newer', 1);
+    await screen.findByDisplayValue('Prices are in EUR.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(mocks.acceptDocNoteSuggestion).toHaveBeenCalledTimes(1));
+    serveDoc([docNote('d1', { current_instructions: 'Prices are in CHF.', current_instructions_version: 5 })]);
+    rerender(<MemorySuggestions conversationId="c-doc-newer" pendingCount={2} kind="doc" />);
+    await waitFor(() => expect(
+      diffBodies()[0].querySelector('.memory-suggestion-diff-del')!.textContent,
+    ).toBe('CHF.'));
+
+    // The 409 carries an older current text (version 4): no roll-back.
+    const refetch = deferred<DocList>();
+    mocks.fetchConversationDocNoteSuggestions.mockImplementationOnce(() => refetch.promise);
+    await act(async () => {
+      accept.reject(staleError({ instructions: 'Prices are in GBP.', instructions_version: 4 }));
+    });
+    expect((await screen.findByRole('alert')).textContent).toBe(STALE_MESSAGE);
+    expect(diffBodies()[0].querySelector('.memory-suggestion-diff-del')!.textContent).toBe('CHF.');
+    await waitFor(() => expect(mocks.fetchConversationDocNoteSuggestions).toHaveBeenCalledTimes(3));
+  });
+
+  it('re-fetches when the doc note count changes while open', async () => {
+    serveDoc([docNote('d1')]);
+    const { rerender } = await openDocPanel('c-doc-count-change', 1);
+    await screen.findByDisplayValue('Prices are in EUR.');
+    expect(mocks.fetchConversationDocNoteSuggestions).toHaveBeenCalledTimes(1);
+
+    serveDoc([docNote('d1'), docMemory('d2', 'Figures are unaudited.')]);
+    rerender(<MemorySuggestions conversationId="c-doc-count-change" pendingCount={2} kind="doc" />);
+    await screen.findByDisplayValue('Figures are unaudited.');
+    expect(mocks.fetchConversationDocNoteSuggestions).toHaveBeenCalledTimes(2);
+    expect(mocks.fetchConversationDocNoteSuggestions).toHaveBeenLastCalledWith('c-doc-count-change');
   });
 
   it('re-fetches the list when a 409 stale_instructions carries no current text', async () => {
@@ -486,16 +601,25 @@ describe('MemorySuggestions kind="doc"', () => {
       docNote('d1'),
       docMemory('d2', 'The board meets monthly.'),
       docMemory('d3', 'Q3 ends in September.'),
+      { ...docMemory('d4', 'Costs are in EUR.'), doc_title: '' },
+      docMemory('d5', 'Figures are audited.'),
     ]);
-    await openDocPanel('c-doc', 3);
-    await screen.findByDisplayValue('Q3 ends in September.');
-    // A blank draft would clear the instructions; Accept all leaves it.
+    await openDocPanel('c-doc', 5);
+    await screen.findByDisplayValue('Figures are audited.');
+    // A blank draft would clear the instructions, a draft over the cap would
+    // be refused, and an unavailable doc takes no notes: Accept all leaves
+    // all three.
     fireEvent.change(screen.getByLabelText('Doc instructions text'), { target: { value: '  ' } });
+    fireEvent.change(screen.getByDisplayValue('Q3 ends in September.'), {
+      target: { value: 'x'.repeat(1001) },
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Accept all' }));
-    await waitFor(() => expect(screen.queryByDisplayValue('Q3 ends in September.')).toBeNull());
-    expect(mocks.acceptDocNoteSuggestion.mock.calls.map(([id]) => id)).toEqual(['d2', 'd3']);
+    await waitFor(() => expect(screen.queryByDisplayValue('Figures are audited.')).toBeNull());
+    expect(mocks.acceptDocNoteSuggestion.mock.calls.map(([id]) => id)).toEqual(['d2', 'd5']);
     expect(screen.getByLabelText('Doc instructions text')).not.toBeNull();
+    expect(screen.getByDisplayValue('x'.repeat(1001))).not.toBeNull();
+    expect(screen.getByDisplayValue('Costs are in EUR.')).not.toBeNull();
 
     cleanup();
     serveDoc([docNote('d1'), docMemory('d4', 'Figures are unaudited.')]);

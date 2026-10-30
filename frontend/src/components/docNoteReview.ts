@@ -2,8 +2,8 @@
  * Review helpers for doc note suggestions, shared by every surface that
  * accepts them (the composer bubble in MemorySuggestions.tsx, the doc
  * viewer's Notes panel, the inbox's Memories tab): the caps as the server
- * counts them, what an Accept sends, and how a row is re-based on the
- * current instructions a 409 `stale_instructions` carries.
+ * counts them, when Accept is allowed and what it sends, and how a row is
+ * re-based on the current instructions a 409 `stale_instructions` carries.
  */
 
 import {
@@ -36,11 +36,22 @@ export function docNoteCharCount(text: string): number {
 }
 
 /**
- * Whether Accept may send this draft (undefined = the proposed text): not
- * blank (an empty instructions text would clear the doc's instructions) and
- * within the kind's cap.
+ * Whether the row's doc is still there for the user: a list row's
+ * `doc_title` is "" when the doc was deleted or is no longer visible.
+ */
+export function isDocNoteDocAvailable(
+  s: DocNoteSuggestion,
+): s is DocNoteSuggestion & { doc_title: string } {
+  return Boolean(s.doc_title);
+}
+
+/**
+ * Whether Accept may send this draft (undefined = the proposed text): the
+ * doc is available, and the text is not blank (an empty instructions text
+ * would clear the doc's instructions) and within the kind's cap.
  */
 export function canAcceptDocNote(s: DocNoteSuggestion, draft: string | undefined): boolean {
+  if (!isDocNoteDocAvailable(s)) return false;
   const count = docNoteCharCount(draft ?? s.content);
   return count > 0 && count <= docNoteMaxChars(s.note_kind);
 }

@@ -1,9 +1,10 @@
 // MemorySuggestionRow's doc kind: the Instructions / Memory pill and the doc
-// link (or "Unavailable doc", or neither with showDocLink={false}), the
+// link (or "Unavailable doc" with Accept disabled, or neither with
+// showDocLink={false}), the
 // instructions diff from the current text with its labels and the moved
 // notice, the doc-memory replacement diff and orphan pill, the cap counter
-// (code points of the trimmed draft) that disables Accept over the cap, and
-// the textarea labels. A personal row keeps none of the doc additions. The
+// (code points of the trimmed draft, " characters" for screen readers) that
+// disables Accept over the cap, and the textarea labels. A personal row keeps none of the doc additions. The
 // row is presentational, so a small harness owns the draft.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -49,9 +50,17 @@ interface HarnessProps {
   showDocLink?: boolean;
   onOpenDoc?: () => void;
   onAccept?: () => void;
+  onDismiss?: () => void;
 }
 
-function DocRowHarness({ suggestion, draft, showDocLink, onOpenDoc, onAccept }: HarnessProps) {
+function DocRowHarness({
+  suggestion,
+  draft,
+  showDocLink,
+  onOpenDoc,
+  onAccept,
+  onDismiss,
+}: HarnessProps) {
   const [text, setText] = useState(draft ?? suggestion.content);
   return (
     <MemorySuggestionRow
@@ -61,7 +70,7 @@ function DocRowHarness({ suggestion, draft, showDocLink, onOpenDoc, onAccept }: 
       onDraftChange={setText}
       busy={false}
       onAccept={onAccept ?? (() => {})}
-      onDismiss={() => {}}
+      onDismiss={onDismiss ?? (() => {})}
       showDocLink={showDocLink}
       onOpenDoc={onOpenDoc}
     />
@@ -173,13 +182,27 @@ describe('MemorySuggestionRow kind="doc": memory row', () => {
 });
 
 describe('MemorySuggestionRow kind="doc": doc link', () => {
-  it('names an unavailable doc without a link', () => {
-    const { container } = renderDocRow({ suggestion: docNote({ doc_title: '' }) });
+  it('names an unavailable doc without a link and only lets it be dismissed', () => {
+    const onDismiss = vi.fn();
+    const { container } = renderDocRow({ suggestion: docNote({ doc_title: '' }), onDismiss });
     expect(screen.queryByRole('link')).toBeNull();
     const label = container.querySelector('.memory-suggestion-doc-unavailable')!;
     expect(label.textContent).toBe('Unavailable doc');
     expect(label.getAttribute('title'))
       .toBe('This doc was deleted or you no longer have access to it');
+    const accept = screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement;
+    expect(accept.disabled).toBe(true);
+    expect(accept.getAttribute('title'))
+      .toBe('This doc was deleted or you no longer have access to it');
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives an available doc an Accept without a title', () => {
+    renderDocRow({ suggestion: docNote() });
+    const accept = screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement;
+    expect(accept.disabled).toBe(false);
+    expect(accept.getAttribute('title')).toBeNull();
   });
 
   it('shows neither link nor label with showDocLink={false}', () => {
@@ -213,12 +236,15 @@ describe('MemorySuggestionRow kind="doc": doc link', () => {
 describe('MemorySuggestionRow kind="doc": cap counter', () => {
   it('shows n / max for each note kind', () => {
     const { container, unmount } = renderDocRow({ suggestion: docNote() });
-    expect(container.querySelector('.memory-suggestion-counter')!.textContent).toBe('18 / 4,000');
+    // " characters" is for screen readers only.
+    expect(container.querySelector('.memory-suggestion-counter .memory-suggestion-sr-only')!
+      .textContent).toBe(' characters');
+    expect(container.querySelector('.memory-suggestion-counter')!.textContent).toBe('18 / 4,000 characters');
     unmount();
 
     const memory = renderDocRow({ suggestion: memoryRow() });
     expect(memory.container.querySelector('.memory-suggestion-counter')!.textContent)
-      .toBe('23 / 1,000');
+      .toBe('23 / 1,000 characters');
   });
 
   it('marks the text invalid and disables Accept over the cap', () => {
@@ -231,7 +257,7 @@ describe('MemorySuggestionRow kind="doc": cap counter', () => {
     expect(container.querySelector('.memory-suggestion-over-cap')).toBeNull();
 
     fireEvent.change(textarea, { target: { value: 'x'.repeat(1001) } });
-    expect(counter.textContent).toBe('1,001 / 1,000');
+    expect(counter.textContent).toBe('1,001 / 1,000 characters');
     expect(counter.classList.contains('memory-suggestion-counter--over')).toBe(true);
     const overCap = container.querySelector('.memory-suggestion-over-cap')!;
     expect(overCap.textContent).toBe('Use at most 1,000 characters.');
@@ -244,7 +270,7 @@ describe('MemorySuggestionRow kind="doc": cap counter', () => {
 
     // Back at the cap (surrounding whitespace does not count).
     fireEvent.change(textarea, { target: { value: ` ${'x'.repeat(1000)}\n` } });
-    expect(counter.textContent).toBe('1,000 / 1,000');
+    expect(counter.textContent).toBe('1,000 / 1,000 characters');
     expect(textarea.getAttribute('aria-invalid')).toBeNull();
     expect(accept.disabled).toBe(false);
   });
@@ -252,13 +278,13 @@ describe('MemorySuggestionRow kind="doc": cap counter', () => {
   it('counts code points, so an emoji is one character', () => {
     const { container } = renderDocRow({ suggestion: memoryRow(), draft: '😀'.repeat(1000) });
     const counter = container.querySelector('.memory-suggestion-counter')!;
-    expect(counter.textContent).toBe('1,000 / 1,000');
+    expect(counter.textContent).toBe('1,000 / 1,000 characters');
     expect((screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement).disabled).toBe(false);
 
     fireEvent.change(screen.getByLabelText('Doc memory text'), {
       target: { value: '😀'.repeat(1001) },
     });
-    expect(counter.textContent).toBe('1,001 / 1,000');
+    expect(counter.textContent).toBe('1,001 / 1,000 characters');
     expect((screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
