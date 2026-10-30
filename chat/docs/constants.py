@@ -9,6 +9,13 @@ docs/architecture/doc-notes.md) follows the same rule.
 # Body of doc.md, in bytes (1 MB).
 DOC_MAX_CONTENT_SIZE = 1_048_576
 
+# edit_doc / write_doc "multi_edit": search/replace edits one call may
+# group, each matched against the same starting body. Small on purpose: a
+# card the user reviews change by change.
+DOC_MAX_EDITS_PER_CALL = 10
+# The optional per-edit ``note`` shown as that change's heading on the card.
+DOC_EDIT_NOTE_MAX_LEN = 120
+
 # Embedded raster images under ``assets/``.
 DOC_MAX_IMAGE_SIZE = 5 * 1024 * 1024
 DOC_MAX_ASSETS = 200

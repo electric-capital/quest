@@ -41,8 +41,9 @@ Invariants kept here:
 
 - A hidden doc and a nonexistent id are indistinguishable: one DB lookup,
   no file IO, the same ``doc_not_found_message`` text.
-- ``edit`` requires the doc in the conversation's read sidecar (fed by
-  :func:`read_doc` and :func:`create_doc`, never by :func:`search_docs`).
+- ``edit`` and ``multi_edit`` require the doc in the conversation's read
+  sidecar (fed by :func:`read_doc` and :func:`create_doc`, never by
+  :func:`search_docs`).
 - Body changes go through ``files.modify_body`` (read + transform + write
   in one critical section of the per-doc threading lock), and every write
   holds a per-doc ``asyncio.Lock`` from the file op through the DB bump
@@ -156,7 +157,7 @@ __all__ = [
 # in Project Settings > Project Access; for a public conversation the same
 # set as ``project``), ``all`` = every doc the conversation can see.
 DOC_SCOPES = ("user", "project", "public", "all")
-WRITE_OPERATIONS = ("edit", "append", "add_image")
+WRITE_OPERATIONS = ("edit", "multi_edit", "append", "add_image")
 IMAGE_PLACEMENTS = ("append", "none")
 
 # spec 6.2: the message of every approval_required tool result (the second
@@ -1404,19 +1405,9 @@ def _normalize_write_params(operation: str, params: dict) -> dict:
     if not isinstance(params, dict):
         raise DocError("params must be an object.")
     if operation == "edit":
-        old_string = _normalize_text(_str_param(params, "old_string"))
-        new_string = _normalize_text(_str_param(params, "new_string"))
-        if not old_string:
-            raise DocError("old_string must not be empty.")
-        if old_string == new_string:
-            raise DocError(
-                "old_string and new_string are identical -- nothing to change."
-            )
-        clean = {
-            "old_string": old_string,
-            "new_string": new_string,
-            "replace_all": _bool_param(params, "replace_all", False),
-        }
+        clean = _normalize_edit(params)
+    elif operation == "multi_edit":
+        clean = {"edits": _normalize_edits(params.get("edits"))}
     elif operation == "append":
         content = _normalize_text(_str_param(params, "content"))
         if not content.strip():
@@ -1453,6 +1444,55 @@ def _normalize_write_params(operation: str, params: dict) -> dict:
                 "expected_instructions_version must be a non-negative integer."
             )
         clean["expected_instructions_version"] = pinned
+    return clean
+
+
+def _normalize_edit(params: dict, *, with_note: bool = False) -> dict:
+    """One search/replace edit's params (``edit``, or one item of a
+    ``multi_edit`` group with its ``note``)."""
+    old_string = _normalize_text(_str_param(params, "old_string"))
+    new_string = _normalize_text(_str_param(params, "new_string"))
+    if not old_string:
+        raise DocError("old_string must not be empty.")
+    if old_string == new_string:
+        raise DocError(
+            "old_string and new_string are identical -- nothing to change."
+        )
+    clean = {
+        "old_string": old_string,
+        "new_string": new_string,
+        "replace_all": _bool_param(params, "replace_all", False),
+    }
+    if with_note:
+        note = _str_param(params, "note", default="").strip()
+        if len(note) > constants.DOC_EDIT_NOTE_MAX_LEN:
+            raise DocError(
+                f"note must be at most {constants.DOC_EDIT_NOTE_MAX_LEN} characters."
+            )
+        clean["note"] = note
+    return clean
+
+
+def _normalize_edits(edits) -> list[dict]:
+    """The ``edits`` list of a ``multi_edit``: 1 to
+    ``DOC_MAX_EDITS_PER_CALL`` objects, each an ``edit`` plus an optional
+    ``note``. A bad item is reported with its ``edits[i]`` position."""
+    if not isinstance(edits, list) or not edits:
+        raise DocError("edits must be a non-empty list of {old_string, new_string} objects.")
+    if len(edits) > constants.DOC_MAX_EDITS_PER_CALL:
+        raise DocError(
+            f"edits holds {len(edits)} edits, the maximum per call is "
+            f"{constants.DOC_MAX_EDITS_PER_CALL}. Split the change into "
+            "several calls."
+        )
+    clean: list[dict] = []
+    for i, edit in enumerate(edits):
+        if not isinstance(edit, dict):
+            raise DocError(f"edits[{i}] must be an object.")
+        try:
+            clean.append(_normalize_edit(edit, with_note=True))
+        except DocError as exc:
+            raise DocError(f"edits[{i}]: {exc}") from None
     return clean
 
 
@@ -1531,6 +1571,11 @@ async def _refuse_unseen_notes(caller: Caller, doc: dict, notes_form: str) -> No
     )
 
 
+# The operations that need the doc in the read sidecar: they change text
+# the model must have seen.
+_READ_FIRST_OPERATIONS = ("edit", "multi_edit")
+
+
 async def _resolve_write(
     caller: Caller,
     doc_id: str,
@@ -1571,7 +1616,7 @@ async def _resolve_write(
     doc, access = await _get_visible_doc(caller, doc_id)
     if access.write == "denied":
         raise DocError(access.deny_reason)
-    if operation == "edit" and not _has_read(caller, doc["id"]):
+    if operation in _READ_FIRST_OPERATIONS and not _has_read(caller, doc["id"]):
         raise DocError(
             f"Doc '{doc['title']}' has not been read in this conversation. "
             "Read it with read_doc before editing."
@@ -1598,6 +1643,22 @@ def _apply_edit_text(body: str, clean: dict) -> tuple[str, int]:
             clean["old_string"],
             clean["new_string"],
             clean["replace_all"],
+            max_size=constants.DOC_MAX_CONTENT_SIZE,
+            noun="doc",
+            reread_hint="re-read it with read_doc",
+        )
+    except ValueError as exc:
+        raise DocError(str(exc)) from None
+
+
+def _apply_multi_edit_text(body: str, edits: list[dict]) -> tuple[str, list[int]]:
+    """Apply a grouped edit (``apply_content_edits`` semantics: every
+    old_string matched against ``body`` as it is, no overlaps)."""
+    from chat.action_request_types._skill_content_edit import apply_content_edits
+
+    try:
+        return apply_content_edits(
+            body, edits,
             max_size=constants.DOC_MAX_CONTENT_SIZE,
             noun="doc",
             reread_hint="re-read it with read_doc",
@@ -1758,6 +1819,28 @@ async def _write_edit(caller: Caller, doc: dict, clean: dict, write_source: str)
     }
 
 
+async def _write_multi_edit(caller: Caller, doc: dict, clean: dict, write_source: str) -> dict:
+    doc_id = doc["id"]
+    counts: list[list[int]] = []
+
+    def transform(current: str) -> str:
+        new_body, per_edit = _apply_multi_edit_text(current, clean["edits"])
+        counts.append(per_edit)
+        return new_body
+
+    new_body, size = await _files(
+        doc_files.modify_body, doc_id, transform,
+        write_source=write_source,
+    )
+    updated = await _finish_write(doc_id, content_size=size, write_source=write_source)
+    return {
+        "edits_applied": len(counts[0]),
+        "replaced": sum(counts[0]),
+        "total_lines": _total_lines(new_body),
+        "updated_at": updated["updated_at"],
+    }
+
+
 async def _write_append(caller: Caller, doc: dict, clean: dict, write_source: str) -> dict:
     doc_id = doc["id"]
 
@@ -1854,6 +1937,7 @@ async def _record_asset_only(doc_id: str, asset_count: int, write_source: str) -
 
 _WRITERS = {
     "edit": _write_edit,
+    "multi_edit": _write_multi_edit,
     "append": _write_append,
     "add_image": _write_add_image,
 }
@@ -1868,12 +1952,14 @@ async def apply_write_operation(
     write_source: Optional[str],
     bypass_approval: bool = False,
 ) -> dict:
-    """Run one write (``"edit"``, ``"append"`` or ``"add_image"``).
+    """Run one write (``"edit"``, ``"multi_edit"``, ``"append"`` or
+    ``"add_image"``).
 
     ``params`` are the operation's ``suggested_request.params`` without
     ``operation``/``doc_id`` (edit: old_string, new_string, replace_all;
-    append: content, ensure_blank_line; add_image: workspace_path, alt,
-    placement). The write_doc action request calls this at approve time
+    multi_edit: edits, a list of edit objects each with an optional note,
+    all applied as one write; append: content, ensure_blank_line;
+    add_image: workspace_path, alt, placement). The write_doc action request calls this at approve time
     with ``bypass_approval=True``: an ``approval`` verdict then proceeds,
     while hidden/missing (``doc_not_found_message``, e.g. the share was
     revoked or the doc deleted meanwhile) and ``denied`` (``deny_reason``)
@@ -1971,6 +2057,9 @@ async def _compute_preview(
     }
     if operation == "edit":
         new_body, replacements = _apply_edit_text(current_body, clean)
+    elif operation == "multi_edit":
+        new_body, counts = _apply_multi_edit_text(current_body, clean["edits"])
+        replacements = sum(counts)
     elif operation == "append":
         new_body = _append_text(current_body, clean["content"], clean["ensure_blank_line"])
         _check_body_size(new_body)
@@ -2015,19 +2104,34 @@ async def _compute_preview(
 async def edit_doc(
     caller: Caller,
     doc_id: str,
-    old_string: str,
-    new_string: str,
+    old_string: Optional[str] = None,
+    new_string: Optional[str] = None,
     replace_all: bool = False,
     *,
+    edits: Optional[list] = None,
     write_source: Optional[str] = None,
 ) -> dict:
-    """Exact search/replace (``apply_content_edit`` semantics).
+    """Exact search/replace (``apply_content_edit`` semantics), or with
+    ``edits`` a group of them in one write (``multi_edit``: every
+    old_string matched against the body as it is now, no overlaps, all or
+    nothing, one History version).
 
     Requires the doc in this conversation's read sidecar.
 
     Returns:
-        ``{replaced, total_lines, updated_at}``.
+        ``{replaced, total_lines, updated_at}``, with ``edits_applied`` for
+        a group.
     """
+    if edits is not None:
+        if old_string is not None or new_string is not None:
+            raise DocError(
+                "Pass either old_string / new_string for one edit, or edits "
+                "for several, not both."
+            )
+        return await apply_write_operation(
+            caller, doc_id, "multi_edit", {"edits": edits},
+            write_source=write_source,
+        )
     return await apply_write_operation(
         caller, doc_id, "edit",
         {"old_string": old_string, "new_string": new_string, "replace_all": replace_all},

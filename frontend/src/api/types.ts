@@ -310,6 +310,20 @@ export interface DocImagePreview {
   size_bytes: number | null;
 }
 
+/** One edit of a write_doc `multi_edit` card (preview field type
+ *  'doc_edit_group'): `index` is the edit's 1-based position in the
+ *  request's `edits`, `note` the model's heading for it (may be empty),
+ *  `replaced` how many matches it replaces, and `diff` the bounded window
+ *  of the live body against this edit applied alone (old-side line numbers
+ *  are the doc's). */
+export interface DocEditGroupEntry {
+  index: number;
+  note: string;
+  replace_all: boolean;
+  replaced: number;
+  diff: SkillContentDiff;
+}
+
 /** One workspace file listed on a subagent_return approval card. `path` is
  *  relative to the SAME conversation's workspace, so the card can preview /
  *  download it with the conversation's own file APIs. */
@@ -323,14 +337,15 @@ export interface PreviewField {
   key: string;
   value: string;
   // Discriminator for structured (non key/value) preview fields:
-  // 'spreadsheet_diff', 'skill_content_diff', 'subagent_return_files' and
-  // 'doc_image' exist today; unknown types fall back to the plain value
-  // string.
+  // 'spreadsheet_diff', 'skill_content_diff', 'subagent_return_files',
+  // 'doc_image' and 'doc_edit_group' exist today; unknown types fall back
+  // to the plain value string.
   type?: string;
   grid?: SpreadsheetDiffGrid;
   diff?: SkillContentDiff;
   files?: SubagentReturnFileEntry[];
   image?: DocImagePreview;
+  edits?: DocEditGroupEntry[];
   // Quest Tables cards: 'table_columns' (create_table), 'table_schema_diff'
   // (change_table_schema), 'table_rows_diff' (write_table_rows).
   columns?: TableSchemaDiffColumn[];

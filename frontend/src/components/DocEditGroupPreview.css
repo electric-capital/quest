@@ -1,0 +1,59 @@
+/* The per-edit blocks of a write_doc multi_edit approval card
+   (doc_edit_group field). */
+
+/* The generic preview fields are flex rows (key left, value right); the
+   group needs the full card width, so its field stacks instead. Applies
+   to both the chat card and the Requests pane variants. */
+.action-request-preview-field.doc-edit-group-field,
+.request-preview-field.doc-edit-group-field {
+  display: block;
+  min-width: 0;
+}
+
+.doc-edit-group {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.doc-edit-group-item {
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+
+.doc-edit-group-item:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.doc-edit-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+}
+
+.doc-edit-group-index {
+  font-weight: 600;
+}
+
+.doc-edit-group-where,
+.doc-edit-group-flag {
+  color: var(--text-muted);
+}
+
+.doc-edit-group-note {
+  margin-top: 0.15rem;
+  font-size: 0.85rem;
+}
+
+/* The diff's own top margin doubles the heading gap. */
+.doc-edit-group-item .skill-diff-scroll {
+  margin-top: 0.35rem;
+}

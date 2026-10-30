@@ -5,9 +5,14 @@ doc (``resolve_doc_access(...).write == "approval"``) makes ``edit_doc`` /
 ``append_to_doc`` / ``add_doc_image`` refuse with ``approval_required`` and a
 ``suggested_request`` the model forwards unchanged as
 ``create_action_request(request_type="write_doc", params=...)``. One type
-covers the three operations:
+covers the four operations:
 
 - ``edit``: ``{operation, doc_id, old_string, new_string, replace_all?}``
+- ``multi_edit``: ``{operation, doc_id, edits: [{old_string, new_string,
+  replace_all?, note?}, ...]}`` -- ``edit_doc(edits=[...])``'s grouped
+  form: up to ``DOC_MAX_EDITS_PER_CALL`` edits, each matched against the
+  same starting body, applied as one write. The card shows one hunk per
+  edit (the pre-card's ``edit_previews``) under the edit's ``note``.
 - ``append``: ``{operation, doc_id, content, ensure_blank_line?}``
 - ``add_image``: ``{operation, doc_id, workspace_path, alt?, placement?}``
 
@@ -56,14 +61,18 @@ IMAGE_PLACEMENTS = ("append", "none")
 # ``apply_write_operation`` params), split into required and optional.
 _REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
     "edit": ("old_string", "new_string"),
+    "multi_edit": ("edits",),
     "append": ("content",),
     "add_image": ("workspace_path",),
 }
 _OPTIONAL_KEYS: dict[str, tuple[str, ...]] = {
     "edit": ("replace_all",),
+    "multi_edit": (),
     "append": ("ensure_blank_line",),
     "add_image": ("alt", "placement"),
 }
+# The keys of one item of a multi_edit's ``edits`` list.
+EDIT_ITEM_KEYS = frozenset({"old_string", "new_string", "replace_all", "note"})
 OPERATION_PARAM_KEYS: dict[str, tuple[str, ...]] = {
     op: _REQUIRED_KEYS[op] + _OPTIONAL_KEYS[op] for op in WRITE_OPERATIONS
 }
@@ -84,6 +93,8 @@ SERVER_INJECTED_KEYS = frozenset(
         "share_summary",
         "require_approval",
         "image_preview",
+        # multi_edit: one bounded diff per edit, in the edits' order.
+        "edit_previews",
         # The doc's instructions_version at proposal (doc_notes gate open
         # for the proposer only); execute passes it on as the
         # expected_instructions_version pin.
@@ -95,6 +106,7 @@ SERVER_INJECTED_KEYS = frozenset(
 # doc turns out to be writable directly).
 OPERATION_TOOLS = {
     "edit": "edit_doc",
+    "multi_edit": "edit_doc",
     "append": "append_to_doc",
     "add_image": "add_doc_image",
 }
@@ -104,12 +116,14 @@ OPERATION_TOOLS = {
 # 'Notes'"), and resolved_label carries the outcome ("Applied: ...").
 _SNIPPET_VERBS = {
     "edit": "Edit",
+    "multi_edit": "Edit",
     "append": "Append to",
     "add_image": "Add image to",
 }
 
 _OPERATION_LABELS = {
     "edit": "Edit",
+    "multi_edit": "Edit",
     "append": "Append",
     "add_image": "Add image",
 }
@@ -176,6 +190,70 @@ def _check_text_size(value: str, key: str) -> None:
         )
 
 
+def _validate_edit(params: dict, *, with_note: bool = False) -> dict:
+    """The ``old_string`` / ``new_string`` / ``replace_all`` keys of one
+    edit (plus ``note`` for an item of a multi_edit), shape only."""
+    old_string = _require_str(params, "old_string")
+    if not old_string:
+        raise ValueError("old_string must be a non-empty string.")
+    new_string = params.get("new_string")
+    if new_string is None:
+        raise ValueError("Missing required parameter: new_string")
+    if not isinstance(new_string, str):
+        raise ValueError(
+            "new_string must be a string (it may be empty to delete "
+            "the matched text)."
+        )
+    if old_string == new_string:
+        raise ValueError(
+            "old_string and new_string are identical -- nothing to change."
+        )
+    _check_text_size(new_string, "new_string")
+    out = {
+        "old_string": old_string,
+        "new_string": new_string,
+        "replace_all": _optional_bool(params, "replace_all", False),
+    }
+    if with_note:
+        note = _optional_str(params, "note", "").strip()
+        if len(note) > doc_constants.DOC_EDIT_NOTE_MAX_LEN:
+            raise ValueError(
+                f"note must be at most {doc_constants.DOC_EDIT_NOTE_MAX_LEN} characters."
+            )
+        out["note"] = note
+    return out
+
+
+def _validate_edits(edits, type_name: str) -> list[dict]:
+    """A multi_edit's ``edits``: 1 to ``DOC_MAX_EDITS_PER_CALL`` items of
+    :data:`EDIT_ITEM_KEYS`; an item's error names its position."""
+    if not isinstance(edits, list) or not edits:
+        raise ValueError(
+            "edits must be a non-empty list of {old_string, new_string} objects."
+        )
+    if len(edits) > doc_constants.DOC_MAX_EDITS_PER_CALL:
+        raise ValueError(
+            f"edits holds {len(edits)} edits, the maximum per request is "
+            f"{doc_constants.DOC_MAX_EDITS_PER_CALL}."
+        )
+    out: list[dict] = []
+    for i, item in enumerate(edits):
+        if not isinstance(item, dict):
+            raise ValueError(f"edits[{i}] must be an object.")
+        try:
+            reject_unknown_params(f"{type_name} edits[{i}]", item, EDIT_ITEM_KEYS)
+            out.append(_validate_edit(item, with_note=True))
+        except ValueError as exc:
+            raise ValueError(f"edits[{i}]: {exc}") from None
+    return out
+
+
+def _change_count(params: dict) -> str:
+    edits = params.get("edits")
+    n = len(edits) if isinstance(edits, list) else 0
+    return f"{n} change" if n == 1 else f"{n} changes"
+
+
 class WriteDocHandler(ActionRequestHandler):
     """Edit / append to / add an image to a shared private doc after approval."""
 
@@ -203,7 +281,10 @@ class WriteDocHandler(ActionRequestHandler):
         title = str(params.get("current_title") or params.get("doc_id") or "")
         if verb is None:
             return f"'{title}'" if title else ""
-        return f"{verb} '{title}'" if title else verb
+        snippet = f"{verb} '{title}'" if title else verb
+        if operation == "multi_edit":
+            snippet += f" ({_change_count(params)})"
+        return snippet
 
     # ------------------------------------------------------------------
     # Validation (shape only; access + live-body checks are the pre-card's)
@@ -239,25 +320,9 @@ class WriteDocHandler(ActionRequestHandler):
         out: dict = {"operation": operation, "doc_id": doc_id}
 
         if operation == "edit":
-            old_string = _require_str(params, "old_string")
-            if not old_string:
-                raise ValueError("old_string must be a non-empty string.")
-            new_string = params.get("new_string")
-            if new_string is None:
-                raise ValueError("Missing required parameter: new_string")
-            if not isinstance(new_string, str):
-                raise ValueError(
-                    "new_string must be a string (it may be empty to delete "
-                    "the matched text)."
-                )
-            if old_string == new_string:
-                raise ValueError(
-                    "old_string and new_string are identical -- nothing to change."
-                )
-            _check_text_size(new_string, "new_string")
-            out["old_string"] = old_string
-            out["new_string"] = new_string
-            out["replace_all"] = _optional_bool(params, "replace_all", False)
+            out.update(_validate_edit(params))
+        elif operation == "multi_edit":
+            out["edits"] = _validate_edits(params.get("edits"), type_name)
         elif operation == "append":
             content = _require_str(params, "content")
             if not content.strip():
@@ -307,11 +372,16 @@ class WriteDocHandler(ActionRequestHandler):
             return fields
         if operation == "edit" and params.get("replace_all"):
             label = "Edit (replace all)"
+        # multi_edit keeps the plain "Edit": the Changes field carries the
+        # count.
         fields.append({"key": "Operation", "value": label})
 
         if operation == "add_image":
             fields.extend(self._image_fields(params))
 
+        if operation == "multi_edit":
+            fields.extend(_edit_group_fields(params))
+            return fields
         diff_field = _content_diff_field(params.get("content_diff"))
         if diff_field is not None:
             fields.append(diff_field)
@@ -439,6 +509,36 @@ def _content_diff_field(diff) -> dict | None:
         "type": "skill_content_diff",
         "diff": diff,
     }
+
+
+def _edit_group_fields(params: dict) -> list[dict]:
+    """The multi_edit card body: one ``doc_edit_group`` field carrying the
+    pre-card's per-edit bounded diffs, or, without them (an old card, a
+    preview rendered before the pre-card), the raw replacements."""
+    previews = params.get("edit_previews")
+    edits = params.get("edits")
+    if not isinstance(edits, list):
+        edits = []
+    if isinstance(previews, list) and previews and all(
+        isinstance(p, dict) and isinstance(p.get("diff"), dict) for p in previews
+    ):
+        added = sum(int(p["diff"].get("added", 0)) for p in previews)
+        removed = sum(int(p["diff"].get("removed", 0)) for p in previews)
+        return [{
+            "key": "Changes",
+            "value": f"{_change_count(params)}, +{added} / -{removed} line(s)",
+            "type": "doc_edit_group",
+            "edits": previews,
+        }]
+    fields: list[dict] = []
+    for i, edit in enumerate(edits, start=1):
+        if not isinstance(edit, dict):
+            continue
+        note = str(edit.get("note") or "")
+        suffix = f" ({note})" if note else ""
+        fields.append({"key": f"Replace {i}{suffix}", "value": str(edit.get("old_string", ""))})
+        fields.append({"key": f"With {i}", "value": str(edit.get("new_string", ""))})
+    return fields
 
 
 def _format_size(size: int) -> str:
