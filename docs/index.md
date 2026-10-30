@@ -88,7 +88,7 @@
 | File | Summary |
 |------|---------|
 | [development.md](setup/development.md) | Local development setup: run.py launcher, data directory, server config, shared dev-config pre-baking |
-| [development-workflows.md](setup/development-workflows.md) | Development workflow: PR-based branching, releases and tags, frontend checks, pytest layout |
+| [development-workflows.md](setup/development-workflows.md) | Development workflow: PR-based branching, releases and tags, frontend checks, pytest layout, dependency audits |
 | [production.md](setup/production.md) | Production deployment: first-run bootstrap wizard, serving, HTTPS options |
 | [ramp-setup.md](setup/ramp-setup.md) | Creating and configuring a Ramp OAuth app for Quest |
 
