@@ -8,8 +8,9 @@
  * conversation's event and the other kinds' events leave it alone. A
  * bubble that goes away with focus inside it hands focus to the bubble left
  * in the bar, else to the composer field of its ``.chat-panel`` (unless
- * disabled), both when the counts drop it and when its open panel closes
- * itself at zero; focus elsewhere stays. The API client and the realtime
+ * disabled, or the last input was a tap), both when the counts drop it and
+ * when its open panel closes itself at zero; focus elsewhere, or after a
+ * press outside the bar, stays. The API client and the realtime
  * singletons are mocked as in useConversation.test.tsx; the store is real.
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -302,6 +303,15 @@ describe('suggestions bar focus', () => {
     act(() => el.focus());
   }
 
+  /** A pointer press (jsdom has no PointerEvent, so the type is set by hand). */
+  function pointerDown(el: Element, pointerType: 'mouse' | 'touch') {
+    const event = new Event('pointerdown', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'pointerType', { value: pointerType });
+    act(() => {
+      el.dispatchEvent(event);
+    });
+  }
+
   it('focuses the composer field when the last bubble goes with focus inside it', async () => {
     const id = await mountBar({ pending_doc_note_suggestions: 1 });
     focus(bubble()!);
@@ -321,6 +331,33 @@ describe('suggestions bar focus', () => {
   it('skips a disabled composer field', async () => {
     const id = await mountBar({ pending_doc_note_suggestions: 1 }, true);
     focus(bubble()!);
+    docNoteEvent(id, 0);
+    expect(bar()).toBeNull();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('skips the composer field after a tap, but not another bubble', async () => {
+    const id = await mountBar({ pending_doc_note_suggestions: 1 });
+    pointerDown(bubble()!, 'touch');
+    focus(bubble()!);
+    docNoteEvent(id, 0);
+    expect(bar()).toBeNull();
+    expect(document.activeElement).toBe(document.body);
+    cleanup();
+
+    const id2 = await mountBar({ pending_memory_suggestions: 1, pending_doc_note_suggestions: 1 });
+    pointerDown(bubble()!, 'touch');
+    focus(bubble()!);
+    docNoteEvent(id2, 0);
+    expect(document.activeElement).toBe(personalBubble());
+  });
+
+  it('leaves focus alone after a press outside the bar', async () => {
+    const id = await mountBar({ pending_doc_note_suggestions: 1 });
+    focus(bubble()!);
+    // Clicking (or selecting) message text moves focus to <body>, no focusin.
+    pointerDown(screen.getByTestId('harness'), 'mouse');
+    act(() => (document.activeElement as HTMLElement).blur());
     docNoteEvent(id, 0);
     expect(bar()).toBeNull();
     expect(document.activeElement).toBe(document.body);

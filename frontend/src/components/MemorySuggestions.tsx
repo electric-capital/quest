@@ -69,7 +69,7 @@ import {
 import { ApiClientError } from '../api/request';
 import type { DocNoteSuggestion, MemorySuggestion } from '../api/types';
 import type { PendingSuggestionCounts } from '../hooks/usePendingSuggestionCounts';
-import { useSuggestionListFocus } from '../hooks/useSuggestionListFocus';
+import { isTouchPointer, useSuggestionListFocus } from '../hooks/useSuggestionListFocus';
 import { conversationStore } from '../store/conversationStore';
 import { MemorySuggestionRow } from './MemorySuggestionRow';
 import type { MemorySuggestionKind, MemorySuggestionRowStateProps } from './MemorySuggestionRow';
@@ -246,16 +246,21 @@ function isFocusLost(): boolean {
  * A bubble that goes away while focus is inside it would drop focus to
  * <body>. The bar stays mounted while it renders nothing, so it keeps the
  * hand-off: its focusin records which bubble holds focus (and captures the
- * ``.composer-input`` of its ``.chat-panel``), focus landing outside the bar
- * forgets it, and once that bubble is gone with focus lost, focus goes to
- * the bubble now at its place (the next one), else the last one, else the
- * composer field unless it is disabled. The check runs after each commit
- * of the bar (the counts drop the bubble, or the whole bar) and from each
- * bubble's ``onHide`` (a bubble whose panel closes itself at zero).
+ * ``.composer-input`` of its ``.chat-panel``), focus landing on, or a
+ * pointer pressed on, anything outside the bar forgets it, and once that
+ * bubble is gone with focus lost, focus goes to the bubble now at its place
+ * (the next one), else the last one, else the composer field unless it is
+ * disabled or the last input was a touch or pen tap (focusing the field
+ * from script would open the on-screen keyboard and expand the phone
+ * composer). The check runs after each commit of the bar (the counts drop
+ * the bubble, or the whole bar) and from each bubble's ``onHide`` (a
+ * bubble whose panel closes itself at zero).
  */
 export function MemorySuggestionsBar({ conversationId, pending }: MemorySuggestionsBarProps) {
   const barRef = useRef<HTMLDivElement>(null);
   const focusRef = useRef<BarFocus | null>(null);
+  // The last input was a touch or pen tap (not a mouse click or a key).
+  const touchRef = useRef(false);
 
   const handOffFocus = useCallback(() => {
     const record = focusRef.current;
@@ -266,21 +271,38 @@ export function MemorySuggestionsBar({ conversationId, pending }: MemorySuggesti
       ? Array.from(barRef.current.querySelectorAll<HTMLElement>('.memory-suggestions-bubble'))
       : [];
     const { composer } = record;
+    const composerUsable = composer !== null && composer.isConnected && !composer.disabled;
     const target = bubbles.length > 0
       ? bubbles[Math.min(record.index, bubbles.length - 1)]
-      : composer && composer.isConnected && !composer.disabled ? composer : null;
+      : composerUsable && !touchRef.current ? composer : null;
     target?.focus();
   }, []);
 
   useLayoutEffect(() => handOffFocus());
 
-  // Focus landing outside the bar, wherever it came from, forgets it.
+  // Focus landing outside the bar, or a press outside it (clicking or
+  // selecting text elsewhere moves focus to <body> without a focusin),
+  // forgets it.
   useEffect(() => {
+    const outside = (e: Event) => !(e.target instanceof Node) || !barRef.current?.contains(e.target);
     const onFocusIn = (e: FocusEvent) => {
-      if (!(e.target instanceof Node) || !barRef.current?.contains(e.target)) focusRef.current = null;
+      if (outside(e)) focusRef.current = null;
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      touchRef.current = isTouchPointer(e);
+      if (outside(e)) focusRef.current = null;
+    };
+    const onKeyDown = () => {
+      touchRef.current = false;
     };
     document.addEventListener('focusin', onFocusIn);
-    return () => document.removeEventListener('focusin', onFocusIn);
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('focusin', onFocusIn);
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+    };
   }, []);
 
   const onFocus = (e: ReactFocusEvent<HTMLDivElement>) => {

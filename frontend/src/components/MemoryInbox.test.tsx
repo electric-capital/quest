@@ -10,7 +10,7 @@
 // server's message on any other refusal, the Instructions / Memory pill on
 // reviewed rows, and an Accept all that skips a doc row its own Accept
 // refuses. Focus stays in the open list as rows leave: the next row's text
-// field, else the "Open suggestions" heading.
+// field, else the "Open suggestions" heading; not after a click elsewhere.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -1123,5 +1123,32 @@ describe('MemoryInbox', () => {
     const heading = within(openRegion()).getByRole('heading', { name: /Open suggestions/ });
     expect(heading.getAttribute('tabindex')).toBe('-1');
     expect(document.activeElement).toBe(heading);
+  });
+
+  it('leaves focus alone when the user clicked elsewhere while an accept was in flight', async () => {
+    const d1 = docRow('d1', 'Uses metric units');
+    const d2 = docRow('d2', 'Prices are net');
+    servePending([d1, d2]);
+    serveResolved([reviewed('r1', 'Older', 'dismissed')]);
+    const accept = deferred<ReturnType<typeof resolvedDoc>>();
+    mocks.acceptDocNoteSuggestion.mockImplementationOnce(() => accept.promise);
+    renderInbox(<MemoryInbox onGoToConversation={vi.fn()} />);
+    await screen.findByDisplayValue('Prices are net');
+    await waitFor(() => expect(reviewedContents()).toEqual(['Older']));
+
+    const first = within(openRegion()).getAllByRole('button', { name: 'Accept' })[0];
+    act(() => first.focus());
+    fireEvent.click(first);
+    // A click into the reviewed list's text: no focusin, focus drops to <body>.
+    const down = new Event('pointerdown', { bubbles: true });
+    Object.defineProperty(down, 'pointerType', { value: 'mouse' });
+    act(() => {
+      reviewedRegion().querySelector('.memory-inbox-reviewed-content')!.dispatchEvent(down);
+    });
+    await act(async () => {
+      accept.resolve(resolvedDoc(d1, 'accepted'));
+    });
+    await waitFor(() => expect(screen.queryByDisplayValue('Uses metric units')).toBeNull());
+    expect(document.activeElement).toBe(document.body);
   });
 });

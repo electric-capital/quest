@@ -340,9 +340,16 @@ describe('MemorySuggestions focus', () => {
 
     press(bubble);
     act(() => screen.getByDisplayValue('Likes tea').focus());
-    // A click on the backdrop drops focus to <body> before it closes the panel.
+    // A click on the backdrop (inside the bubble's surface) drops focus to
+    // <body> before it closes the panel.
+    const backdrop = container.querySelector('.memory-suggestions-backdrop')!;
+    const down = new Event('pointerdown', { bubbles: true });
+    Object.defineProperty(down, 'pointerType', { value: 'mouse' });
+    act(() => {
+      backdrop.dispatchEvent(down);
+    });
     act(() => (document.activeElement as HTMLElement).blur());
-    fireEvent.click(container.querySelector('.memory-suggestions-backdrop')!);
+    fireEvent.click(backdrop);
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(document.activeElement).toBe(bubble);
   });
