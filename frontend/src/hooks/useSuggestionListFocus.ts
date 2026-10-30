@@ -19,7 +19,8 @@
  *   user's typing never lands in another suggestion's draft.
  * - Focus was in a row that is still there (a failed accept or dismiss):
  *   while nothing in it is enabled (busy), wait; then back to the element
- *   that had focus if it is enabled again, else the row's text field.
+ *   that had focus if it is enabled again (unless it is the text field and
+ *   the last input was a tap), else the row's text field.
  * - Focus was on another control of the surface (Accept all, Dismiss all,
  *   a close button): back to it while it is still there (waiting while it
  *   is disabled), else the first row, else the fallback.
@@ -143,7 +144,11 @@ function focusTargets(
     if (row) {
       const inRow = rowTarget(row, touch);
       if (!inRow) return 'wait';
-      return [row.contains(element) && isEnabled(element) ? element : inRow];
+      // A tap on Accept leaves focus on the text field in iOS Safari; the
+      // field is not focused again from script after a tap either.
+      const keep = row.contains(element) && isEnabled(element)
+        && !(touch && element.matches(TEXT_FIELD_SELECTOR));
+      return [keep ? element : inRow];
     }
     if (!record.rowWentBusy && element.matches(TEXT_FIELD_SELECTOR)) return withFallback(null);
     const listed = new Set(rowIds);

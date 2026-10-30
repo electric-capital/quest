@@ -4,7 +4,8 @@
 // following row still listed (also when several leave at once), else the
 // previous one, else the fallback; a row dropped while its text field had
 // focus, without going busy, sends focus to the fallback; a row that stays
-// gets focus back once it is enabled again; a non-row control that leaves
+// gets focus back once it is enabled again (its action button rather than
+// its text field after a tap); a non-row control that leaves
 // hands focus to the first row; after a tap the target is the row's action
 // button; a target that does not take focus passes to the next one, and
 // none taking it leaves the next commit to retry; focus elsewhere on the
@@ -270,6 +271,18 @@ describe('useSuggestionListFocus', () => {
       expect(document.activeElement).toBe(button('Accept b'));
       unmount();
     }
+  });
+
+  it("gives a failed row's action button, not its text field, focus after a tap", () => {
+    const { rerender } = render(<List rows={['a', 'b']} />);
+    focus(field('a'));
+    // iOS Safari: tapping Accept leaves focus on the text field.
+    pointerDown(button('Accept a'), 'touch');
+    expect(document.activeElement).toBe(field('a'));
+    drop();
+    rerender(<List rows={['a', 'b']} busy={['a']} />);
+    rerender(<List rows={['a', 'b']} />);
+    expect(document.activeElement).toBe(button('Accept a'));
   });
 
   it('keeps the text field for a mouse click, or a key after a tap', () => {

@@ -8,7 +8,7 @@
 // count event starts kept (it re-bases a second instructions row on the
 // same doc), and an Accept all that skips a row its own Accept refuses.
 // Focus stays in the panel as rows leave (the next row's text field, else
-// the bubble button) and comes back to the bubble button when the panel
+// the panel's title) and comes back to the bubble button when the panel
 // closes; the panel's loading and empty lines.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -317,12 +317,33 @@ describe('MemorySuggestions focus', () => {
     return { ...view, bubble };
   }
 
-  it('moves focus to the bubble button when the only row is dismissed', async () => {
+  it("moves focus to the panel's title when the only row is dismissed, then to the bubble on close", async () => {
     const { bubble } = await openPanel([suggestion('s1', 'Likes tea')]);
     press(screen.getByRole('button', { name: 'Dismiss' }));
     await waitFor(() => expect(screen.queryByDisplayValue('Likes tea')).toBeNull());
     expect(screen.getByRole('dialog')).not.toBeNull();
+    const title = screen.getByRole('heading', { name: 'Suggested memories' });
+    expect(title.getAttribute('tabindex')).toBe('-1');
+    expect(document.activeElement).toBe(title);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(document.activeElement).toBe(bubble);
+  });
+
+  it("moves focus to the panel's title, not the bubble, when the row being typed in leaves remotely", async () => {
+    serve([suggestion('s1', 'Likes tea'), suggestion('s2', 'Likes rain')]);
+    const { rerender } = render(<MemorySuggestions conversationId="c-remote" pendingCount={2} />);
+    fireEvent.click(screen.getByRole('button', { name: /suggested memories/ }));
+    const tea = await screen.findByDisplayValue('Likes tea');
+    act(() => tea.focus());
+    // Accepted in another tab: the count event re-reads the list without it.
+    serve([suggestion('s2', 'Likes rain')]);
+    rerender(<MemorySuggestions conversationId="c-remote" pendingCount={1} />);
+    await waitFor(() => expect(screen.queryByDisplayValue('Likes tea')).toBeNull());
+    expect(document.activeElement)
+      .toBe(screen.getByRole('heading', { name: 'Suggested memories' }));
+    expect(screen.getByRole('dialog')).not.toBeNull();
   });
 
   it('returns focus to the bubble button on Escape, the X button and the backdrop', async () => {

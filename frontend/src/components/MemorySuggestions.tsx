@@ -39,12 +39,15 @@
  *
  * Focus: inside a bubble (the panel with its rows, and the bubble button)
  * useSuggestionListFocus keeps focus in the list as rows are accepted or
- * dismissed, with the bubble button as the fallback; closing the panel
- * (Escape, the X button, a backdrop click) unmounts the focused control,
- * so the same rule returns focus to the bubble button. A bubble that goes
- * away with focus inside it (nothing of its kind pending) hands focus to
- * the bar, which sends it to another bubble, else to the conversation's
- * composer field; see MemorySuggestionsBar.
+ * dismissed. Its fallback is the panel's title while the panel is open (a
+ * focused bubble button would close the panel on the next Space or Enter)
+ * and the bubble button once it is closed: closing the panel (Escape, the
+ * X button, a backdrop click) unmounts the focused control, so the same
+ * rule returns focus to the bubble button. A bubble that goes away with
+ * focus inside it (nothing of its kind pending) hands focus to the bar,
+ * which sends it to another bubble, else to the conversation's composer
+ * field, except after a touch or pen tap (no on-screen keyboard); see
+ * MemorySuggestionsBar.
  */
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -372,6 +375,7 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
   const panelRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const bubbleRef = useRef<HTMLButtonElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
   // Rows accepted or dismissed here: every list fetch leaves them out, so a
   // fetch that started before the accept cannot bring the row back.
   const resolvedIdsRef = useRef(new Set<string>());
@@ -553,12 +557,14 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
 
   const shown = pendingCount > 0 || isOpen;
 
-  // Rows are only rendered while the panel is open; with none left (or the
-  // panel closed) focus falls back to the bubble button.
+  // Rows are only rendered while the panel is open. With none left focus
+  // falls back to the panel's title while it is open (not the bubble,
+  // whose next Space or Enter would close the panel), and to the bubble
+  // button once it is closed (isOpen is already false in that commit).
   useSuggestionListFocus({
     containerRef: wrapperRef,
     rowIds: isOpen ? suggestions.map((s) => s.id) : [],
-    fallbackRef: bubbleRef,
+    fallbackRef: isOpen ? titleRef : bubbleRef,
   });
 
   useLayoutEffect(() => {
@@ -586,7 +592,7 @@ function SuggestionsReview<S extends MemorySuggestion | DocNoteSuggestion>({
           >
             <div className="memory-suggestions-header">
               <Icon size={16} className="memory-suggestions-header-icon" aria-hidden="true" />
-              <h3 id={titleId} className="memory-suggestions-title">
+              <h3 ref={titleRef} id={titleId} className="memory-suggestions-title" tabIndex={-1}>
                 {config.title}
               </h3>
               <span className="memory-suggestions-count" aria-hidden="true">

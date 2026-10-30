@@ -389,8 +389,8 @@ describe('suggestions bar focus', () => {
       focus(dismiss);
       fireEvent.click(dismiss);
       await waitFor(() => expect(screen.queryByDisplayValue('Note d1')).toBeNull());
-      // The panel stays open until the count drops; focus waits on its bubble.
-      expect(document.activeElement).toBe(docBubble);
+      // The panel stays open until the count drops; focus waits on its title.
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Suggested doc notes' }));
 
       docNoteEvent(id, 0);
       await waitFor(() => expect(bubble()).toBeNull());
