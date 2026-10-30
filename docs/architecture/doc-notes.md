@@ -154,7 +154,7 @@ A model never writes the notes: it proposes a change with `suggest_doc_note` ([D
 - **Empty instructions** are refused as `invalid_instructions` ([Design Decisions](#design-decisions)).
 - **Serialized per user**: from the replaced-memory check to the insert, a registration holds `_suggest_lock()`, one `asyncio.Lock` per suggesting user.
 
-A registration publishes `doc_note_suggestions_changed` for its conversation and for every other conversation whose instructions suggestion it superseded. Its own refusals are `NoteSuggestionError`s, whose codes are listed on the class; the strings the model reads are the `DOC_NOTE_*` constants in `chat/docs/notes.py`.
+A registration publishes `doc_note_suggestions_changed` for its conversation and for every other conversation whose instructions suggestion it superseded. Its own refusals are `NoteSuggestionError`s, whose codes are listed on the class.
 
 ### Review
 
@@ -190,7 +190,7 @@ The routes, their shapes and their errors are in [Quest Docs API -- Notes](../ap
 
 ## Frontend
 
-`frontend/src/api/docsApi.ts` holds the notes and review calls, the gate name `DOC_NOTES_FEATURE` and the helpers for the `stale_instructions` and `duplicate_memory` conflicts. `frontend/src/hooks/useDocNotes.ts` serves one doc's notes and the viewer's own pending suggestions for it, gated inside the hook; its header comment gives the events it follows and the stale-payload guard. `frontend/src/store/conversationStore.ts` keeps `pendingDocNoteSuggestions`, fed by `pending_doc_note_suggestions` and `doc_note_suggestions_changed`.
+`frontend/src/api/docsApi.ts` holds the notes and review calls, the gate name `DOC_NOTES_FEATURE` and the helpers for the `stale_instructions` and `duplicate_memory` conflicts. `frontend/src/hooks/useDocNotes.ts` serves one doc's notes and the viewer's own pending suggestions for it, gated inside the hook; its header comment gives the events it follows and the stale-payload guard. The doc viewer's Notes panel shows and edits the notes through it ([Quest Docs -- Viewer](quest-docs.md#viewer)). `frontend/src/store/conversationStore.ts` keeps `pendingDocNoteSuggestions`, fed by `pending_doc_note_suggestions` and `doc_note_suggestions_changed`.
 
 ## Lifecycle
 
@@ -260,7 +260,7 @@ The routes, their shapes and their errors are in [Quest Docs API -- Notes](../ap
 ## Known Limitations
 
 - **A second write in the same model response passes.** When one response issues several writes to a doc, the first refusal records the delivery, so the others are not refused; the refusal message (`DOC_NOTES_UNSEEN_MESSAGE`) asks the model to check them against the notes. Tracking delivery per model step was judged out of proportion.
-- **A tool write's notes step is not re-checked under the per-doc lock.** It reads the versions in the first pass of `apply_write_operation()`, so an instructions change landing between that check and the write applies from the next write on.
+- **A tool write's notes step is not re-checked under the per-doc lock.** An instructions change landing between that check and the write applies from the next write on.
 - **A process crash can leave a record for a block the model never received**, when it lands after a read recorded its delivery and before the tool result was flushed to the chat history. A Stop is safe: the tool result joins the run's messages with no `await` after the service returns (`_emit_durable()` in `chat/gemini_api/turn_tools.py`), and the next turn replays it.
 - **A conversation delete drops its suggestions without an event.** The rows cascade with the conversation, as do those of a project delete's own conversations, and, as for project memory suggestions, no `doc_note_suggestions_changed` goes out; the user's other tabs catch up on their next event or a reload.
 - **A registration landing between a delete's capture and the delete is missed.** Registration does not take the per-doc lock, so a suggestion committed after a delete path captured the pending pairs leaves that conversation's count one too high until its next event.
