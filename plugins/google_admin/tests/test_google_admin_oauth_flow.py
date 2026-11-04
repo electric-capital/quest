@@ -336,13 +336,14 @@ def test_disconnect_requires_session():
 
 def test_mount_plugin_oauth_routers_mounts_the_routes(google_admin_plugin):
     from fastapi import FastAPI
+    from chat.route_table import iter_app_routes
     from config import plugins as plugins_mod
 
     app = FastAPI()
     with patch.object(plugins_mod, "_LOADED", [google_admin_plugin]):
         plugins_mod.mount_plugin_oauth_routers(app)
 
-    paths = {route.path for route in app.routes}
+    paths = {route.path for route in iter_app_routes(app)}
     assert "/auth/google-admin" in paths
     assert "/auth/google-admin/callback" in paths
     assert "/auth/google-admin/disconnect" in paths

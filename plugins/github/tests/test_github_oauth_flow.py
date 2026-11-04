@@ -314,13 +314,14 @@ def test_disconnect_requires_session():
 
 def test_mount_plugin_oauth_routers_mounts_github_routes(github_plugin):
     from fastapi import FastAPI
+    from chat.route_table import iter_app_routes
     from config import plugins as plugins_mod
 
     app = FastAPI()
     with patch.object(plugins_mod, "_LOADED", [github_plugin]):
         plugins_mod.mount_plugin_oauth_routers(app)
 
-    paths = {route.path for route in app.routes}
+    paths = {route.path for route in iter_app_routes(app)}
     assert "/auth/github" in paths
     assert "/auth/github/callback" in paths
     assert "/auth/github/disconnect" in paths

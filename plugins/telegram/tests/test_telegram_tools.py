@@ -150,7 +150,8 @@ class TestTelegramProxyBlocked:
 
         script = (
             "import json, quest\n"
-            "paths = sorted({r.path for r in quest.app.routes if getattr(r, 'path', '')})\n"
+            "from chat.route_table import iter_app_routes\n"
+            "paths = sorted({r.path for r in iter_app_routes(quest.app) if r.path})\n"
             "print(json.dumps({'api': [p for p in paths if p.startswith('/api/telegram')],"
             " 'auth': [p for p in paths if p.startswith('/auth/telegram')]}))\n"
         )

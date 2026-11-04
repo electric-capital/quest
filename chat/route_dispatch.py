@@ -23,6 +23,7 @@ from starlette.responses import Response
 from starlette.routing import Match
 
 from chat.gemini_api.constants import get_proxy_port, get_sandbox_port
+from chat.route_table import iter_app_routes
 from chat.tool_notices import ToolResultWithNotices
 
 logger = logging.getLogger(__name__)
@@ -88,9 +89,9 @@ def resolve_route(
 ) -> tuple[Any, dict[str, Any]]:
     """Resolve a method + path to a route endpoint and path parameters.
 
-    Iterates ``app.routes`` and uses Starlette's ``route.matches()``
-    mechanism, which correctly handles path converters such as
-    ``{range:path}``.
+    Iterates the flat route table from ``chat.route_table.iter_app_routes``
+    and uses Starlette's ``route.matches()`` mechanism, which correctly
+    handles path converters such as ``{range:path}``.
 
     Args:
         app: The FastAPI application instance.
@@ -110,7 +111,7 @@ def resolve_route(
         "path": path,
     }
 
-    for route in app.routes:
+    for route in iter_app_routes(app):
         match, child_scope = route.matches(scope)
         if match == Match.FULL:
             # Verify the route supports the requested method

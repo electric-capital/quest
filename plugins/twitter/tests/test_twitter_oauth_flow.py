@@ -311,13 +311,14 @@ def test_disconnect_requires_session():
 
 def test_mount_plugin_oauth_routers_mounts_twitter_routes(twitter_plugin):
     from fastapi import FastAPI
+    from chat.route_table import iter_app_routes
     from config import plugins as plugins_mod
 
     app = FastAPI()
     with patch.object(plugins_mod, "_LOADED", [twitter_plugin]):
         plugins_mod.mount_plugin_oauth_routers(app)
 
-    paths = {route.path for route in app.routes}
+    paths = {route.path for route in iter_app_routes(app)}
     assert "/auth/twitter" in paths
     assert "/auth/twitter/callback" in paths
     assert "/auth/twitter/disconnect" in paths

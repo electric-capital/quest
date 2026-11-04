@@ -21,10 +21,11 @@ import pytest
 
 _SCRIPT = (
     "import json, quest\n"
+    "from chat.route_table import iter_app_routes\n"
     "app = quest.app\n"
-    "routes = sorted({(m, r.path) for r in app.routes"
-    " if hasattr(r, 'methods') for m in r.methods})\n"
-    "paths = [getattr(r, 'path', None) for r in app.routes]\n"
+    "routes = sorted({(m, r.path) for r in iter_app_routes(app)"
+    " if r.methods for m in r.methods})\n"
+    "paths = [r.path for r in iter_app_routes(app)]\n"
     "print(json.dumps({\n"
     "    'routes': routes,\n"
     "    'paths': paths,\n"

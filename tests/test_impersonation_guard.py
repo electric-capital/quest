@@ -509,6 +509,7 @@ from fastapi.testclient import TestClient
 from auth.config import COOKIE_NAME, COOKIE_VERSION
 from auth.session import ImpersonationAuditMiddleware, forbid_impersonation
 from config.plugins import get_loaded_plugins, plugin_auth_prefix
+from chat.route_table import iter_app_routes
 
 spec = json.loads(sys.argv[1])
 app = quest.app
@@ -517,8 +518,11 @@ def guarded(dependant):
     return any(d.call is forbid_impersonation or guarded(d) for d in dependant.dependencies)
 
 table = {}
-for r in app.routes:
-    if hasattr(r, "methods") and hasattr(r, "dependant"):
+# r.dependant is the effective one: a dependency passed to include_router
+# (how plugin OAuth routers get forbid_impersonation) is merged in there,
+# not on the APIRoute the plugin declared.
+for r in iter_app_routes(app):
+    if r.methods and hasattr(r, "dependant"):
         for m in r.methods:
             table[(m, r.path)] = guarded(r.dependant)
 
