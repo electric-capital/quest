@@ -334,6 +334,7 @@ export function Composer({
 
   const {
     getModelForConversation, getThinkingEffortForConversation, setModelForConversation,
+    hydrateModelForConversation, refreshDefaultModel,
     getLockedProvider, lockConversationProvider, isProviderLocked,
   } = useConversationModels();
   const {
@@ -546,6 +547,21 @@ export function Composer({
       setModelForConversation(conversationId, modelId, thinkingEffort);
     }
   }, [conversationId, setModelForConversation, onModelChange]);
+
+  // The setup card connected a provider. A new chat's model was resolved while
+  // no model was available (Opus 4.8 on Vertex, which this install cannot
+  // reach), and nothing re-resolves it when the config re-fetch brings the new
+  // models in. Re-resolve it for this chat so the first message goes to a model
+  // that works. A conversation that already has messages keeps its own model.
+  const handleProviderConnected = useCallback(async () => {
+    await refreshAppConfig();
+    if (!isFirstMessage) return;
+    const resolved = await refreshDefaultModel(modelVisibility);
+    hydrateModelForConversation(conversationId, resolved.model, resolved.thinkingEffort);
+  }, [
+    refreshAppConfig, isFirstMessage, refreshDefaultModel, modelVisibility,
+    hydrateModelForConversation, conversationId,
+  ]);
 
   // Handle skill modal confirm
   const handleSkillConfirm = useCallback((selectedSkillIds: string[]) => {
@@ -1371,7 +1387,7 @@ export function Composer({
   if (noModelsAvailable && isAdmin) {
     return (
       <div className="input-area composer composer-setup">
-        <ModelSetupCard onConnected={refreshAppConfig} />
+        <ModelSetupCard onConnected={handleProviderConnected} />
       </div>
     );
   }
