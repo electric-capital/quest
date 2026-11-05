@@ -439,6 +439,29 @@ def validate_plugin(plugin: QuestPlugin, existing_ids: set[str]) -> None:
                         f"Plugin {pid!r} oauth_router route {route_path!r} "
                         f"is outside the plugin's {auth_prefix!r} namespace"
                     )
+            disconnect_url = user_connection.disconnect_url
+            if disconnect_url is not None:
+                if user_connection.multi_connection:
+                    raise ValueError(
+                        f"Plugin {pid!r} multi_connection user_connection "
+                        "must not set disconnect_url (connections are "
+                        "removed per connection)"
+                    )
+                has_post_route = any(
+                    getattr(route, "path", None) == disconnect_url
+                    and "POST" in (getattr(route, "methods", None) or ())
+                    for route in routes
+                )
+                if not (
+                    isinstance(disconnect_url, str)
+                    and disconnect_url.startswith(auth_prefix + "/")
+                    and has_post_route
+                ):
+                    raise ValueError(
+                        f"Plugin {pid!r} user_connection.disconnect_url "
+                        f"{disconnect_url!r} must be a POST route of the "
+                        f"plugin's oauth_router under {auth_prefix + '/'!r}"
+                    )
             if not all(
                 isinstance(scope, str) and scope
                 for scope in user_connection.scopes
@@ -541,7 +564,9 @@ def _validate_connection_extras(pid: str, spec: UserConnectionSpec) -> None:
             f"Plugin {pid!r} user_connection.connection_limit must be an "
             f"int in {low}..{high}, got {limit!r}"
         )
-    for hook in ("account_from", "row_warning", "field_options", "verify"):
+    for hook in (
+        "account_from", "row_warning", "field_options", "verify", "revoke",
+    ):
         value = getattr(spec, hook)
         if value is not None and not callable(value):
             raise ValueError(
@@ -552,6 +577,11 @@ def _validate_connection_extras(pid: str, spec: UserConnectionSpec) -> None:
         raise ValueError(
             f"Plugin {pid!r} multi_connection {spec.kind} user_connection "
             "must supply account_from"
+        )
+    if spec.disconnect_url is not None and spec.kind != "oauth":
+        raise ValueError(
+            f"Plugin {pid!r} {spec.kind} user_connection must not set "
+            "disconnect_url (oauth-only field)"
         )
     if spec.kind != "form":
         for attr in ("fields", "field_options", "verify"):

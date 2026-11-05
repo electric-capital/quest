@@ -158,6 +158,21 @@ describe('DataConnectionsSection: single-connection rows (unchanged)', () => {
     await waitFor(() => expect(refreshConnectionStatus).toHaveBeenCalled());
   });
 
+  it('shows Disconnect on an oauth row only when it has a disconnect_url', async () => {
+    serve({ ...GOOGLE, disconnect_url: '/auth/google/disconnect' });
+    mocks.disconnectConnector.mockResolvedValue(undefined);
+    await renderSection();
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    await waitFor(() => expect(mocks.disconnectConnector).toHaveBeenCalledWith('/auth/google/disconnect'));
+    await waitFor(() => expect(refreshConnectionStatus).toHaveBeenCalled());
+  });
+
+  it('offers no Disconnect on an oauth row without a disconnect_url', async () => {
+    serve(GOOGLE);
+    await renderSection();
+    expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull();
+  });
+
   it('shows not-connected services as picker tiles', async () => {
     serve(GOOGLE, SLACK, TAILSCALE);
     await renderSection();

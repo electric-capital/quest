@@ -840,7 +840,8 @@ export interface ConnectorRow {
   // Server-side availability (e.g. a plugin service the admin has not configured).
   // Absent means available; false hides the row in Settings.
   available?: boolean;
-  // oauth rows: popup URL for Connect/Reconnect.
+  // oauth rows: popup URL for Connect/Reconnect. A plugin may also set
+  // disconnect_url (below) to show a Disconnect button.
   connect_url?: string;
   // api_key rows: key entry POSTs {[key_field]: key} to key_url; the
   // Disconnect button POSTs to disconnect_url.

@@ -22,7 +22,7 @@ Each `/connectors` row carries:
   - plugin rows use `plugin_server_available()` (e.g. a plugin without its server-side base URL, the Slack plugin without OAuth client credentials, or the Telegram plugin without its MTProto app credentials).
 
   Airtable carries no flag -- the user supplies their own PAT, so there is nothing server-side to configure.
-- oauth rows: `connect_url` (the popup URL, `?popup=1` included) -- the frontend never builds auth URLs itself, which also removed the old popup-blocked-link URL special cases
+- oauth rows: `connect_url` (the popup URL, `?popup=1` included) and, for a plugin that declares one, `disconnect_url` -- the frontend never builds auth URLs itself, which also removed the old popup-blocked-link URL special cases
 - api_key rows: `key_url` + `key_field` (the save form POSTs `{[key_field]: key}` to `key_url`), `key_placeholder`, optional `key_hint` (last characters of the stored key), and `disconnect_url`; optional `key_help` (a short plain-text sentence or two) and `key_help_links` (`{label, url}` list, https only) rendered above the key form in the add-connection key-entry step to tell the user which credential to create and where (the Tailscale plugin links the admin console's OAuth-client and API-token pages plus the two KB articles)
 - multi-connection rows additionally: `multi_connection: true`, `connection_limit`, `connections` (one `{id, account, description, is_default, needs_reauth, warning, created_at}` object per connection, default first, from `connection_view()` in `auth/connections.py` -- never a secret or form value), `connections_url` (`/auth/connections/<id>`), and for `form` kind `form_fields` (the spec's `fields` as `{key, label, type, required, placeholder, help, required_if, visible_if, options}`, select `options` resolved at request time from the spec's `field_options` hook); `connected` means "any connection satisfies the spec's predicate". A multi-connection `api_key` row omits the service-wide `key_url` / `key_field` / `key_placeholder` / `key_hint` / `disconnect_url` (it still sends `key_help` / `key_help_links`).
 
@@ -38,9 +38,9 @@ OAuth rows (core: Google Services, Ramp; plugin: e.g. Slack, GitHub, Twitter/X, 
 
 - Badge: green "Connected" label (CSS class `connector-badge-ok`)
 - Button: single "Reconnect" button (CSS class `connector-btn-reconnect`)
-- No disconnect button
+- No disconnect button, unless the plugin declares a `disconnect_url` (see below)
 
-Clicking "Reconnect" opens the OAuth popup at the row's `connect_url` -- the same URL the add flow uses to connect. This re-authenticates the user, replacing the stored token with a fresh one. There is intentionally no Disconnect button for OAuth connectors; reconnecting is the correct way to refresh or replace a connection.
+Clicking "Reconnect" opens the OAuth popup at the row's `connect_url` -- the same URL the add flow uses to connect. This re-authenticates the user, replacing the stored token with a fresh one. Core OAuth connectors intentionally have no Disconnect button; reconnecting is the way to refresh or replace a connection. A plugin's single-connection oauth row carries a `disconnect_url` when the plugin declares one (`UserConnectionSpec.disconnect_url`, see [Plugins](plugins.md#disconnect-and-revoke)); the row then also shows the Disconnect control described under API Key Connected Rows, after Reconnect (or Re-authorize).
 
 Any oauth row may report a needs-reauth state when `connected && needs_reauth` (today only Google Services computes it, from missing OAuth scopes):
 

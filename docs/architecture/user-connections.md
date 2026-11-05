@@ -98,7 +98,7 @@ Structured errors produced from these exceptions (by `authed_get` and by plugin 
 
 `validate_plugin` in `config/plugins.py` (`_validate_connection_extras`, `_validate_form_connection`, plus the tool and service checks) refuses a plugin when:
 
-- `multi_connection` is not a bool, or `connection_limit` is not an int in 1..50; any of `account_from` / `row_warning` / `field_options` / `verify` is set but not callable.
+- `multi_connection` is not a bool, or `connection_limit` is not an int in 1..50; any of `account_from` / `row_warning` / `field_options` / `verify` / `revoke` is set but not callable.
 - a multi-connection `api_key` or `oauth` spec lacks `account_from`; an `api_key` / `oauth` spec sets `fields`, `field_options` or `verify`.
 - a `form` spec sets `oauth_router` / `scopes` or any of `validate_key`, `key_placeholder`, `key_help`, `key_help_links`; is not `multi_connection` (the generic routes only serve multi-connection plugins, so a single-connection form could never connect); lacks `fields` or `verify`; has a field that is not a `CredentialField`, a key not matching `^[a-z][a-z0-9_]{0,31}$`, or a reserved key (`description`, `account`, `connection`); or fails the admin-card field rules (`_validate_fields`, with `select` allowed and runtime-option keys exempt from needing static `options` when `field_options` is set).
 - a multi-connection plugin has a tool whose `parameters.properties` lacks `connection`, declares it with a type other than `string`, or lists it in `required` -- so a plugin cannot half-convert.
