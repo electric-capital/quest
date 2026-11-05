@@ -607,6 +607,8 @@ def build_connector_rows(user: dict) -> list[dict]:
                 "connect_url": f"{plugin_auth_prefix(plugin.id)}?popup=1",
                 "needs_reauth": needs_reauth,
             })
+            if spec.disconnect_url:
+                plugin_row["disconnect_url"] = spec.disconnect_url
         if multi:
             # Multi-connection api_key/oauth plugins keep their kind's
             # fields above and add the per-connection list; `connected`
@@ -673,7 +675,9 @@ async def logout_and_disconnect(
     # Remove per-user plugin service credentials (user_service_credentials
     # rows, incl. the Slack and Telegram plugins' oauth rows -- the plugin
     # analogue of the users columns cleared above).
+    from auth.connections import revoke_user_credentials
     from db.user_service_credential_store import delete_all_credentials
+    await revoke_user_credentials(user_id)
     await delete_all_credentials(user_id)
 
     # Invalidate cached chat sessions
@@ -729,6 +733,11 @@ async def delete_account(
                 )
         except Exception:
             pass
+
+    # Let each plugin revoke its stored tokens at the provider (best-effort)
+    # while the credential rows still exist; delete_user() cascades them.
+    from auth.connections import revoke_user_credentials
+    await revoke_user_credentials(user_id)
 
     # Delete all user memories, guides, routines, and action requests before deleting the user record
     from db.memory_store import delete_all_user_memories

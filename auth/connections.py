@@ -32,6 +32,7 @@ form cannot be used to brute-force an upstream login through Quest.
 """
 
 import asyncio
+import copy
 import logging
 import time
 from collections import deque
@@ -177,6 +178,58 @@ def connection_view(spec, row: dict) -> dict:
         "warning": warning,
         "created_at": row.get("created_at"),
     }
+
+
+# Upper bound for one plugin ``revoke`` hook call.
+REVOKE_TIMEOUT_SECONDS = 10.0
+
+
+async def revoke_user_credentials(user_id: int) -> None:
+    """Best-effort token revocation for all of a user's plugin connections.
+
+    Calls each stored row's plugin ``revoke(row)`` hook (every row of a
+    multi-connection plugin), concurrently, each bounded by
+    :data:`REVOKE_TIMEOUT_SECONDS`. Called by logout-and-disconnect and
+    account deletion BEFORE the rows are deleted. Never raises: a hook that
+    raises or times out is logged by plugin id and exception type only (the
+    row holds secrets and a provider error message may echo them) and does
+    not affect the other hooks or the deletion.
+    """
+    from config.plugins import get_user_connection_spec
+    from db.user_service_credential_store import list_all_connections
+
+    try:
+        connections = await list_all_connections(user_id)
+    except Exception as exc:
+        logger.error(
+            "revoke: could not read connections (%s); skipping revocation",
+            type(exc).__name__,
+        )
+        return
+
+    async def _revoke_one(service: str, revoke, row: dict) -> None:
+        try:
+            await asyncio.wait_for(revoke(row), REVOKE_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            logger.error(
+                "[%s] revoke hook timed out after %ss",
+                service, REVOKE_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            logger.error(
+                "[%s] revoke hook failed (%s)", service, type(exc).__name__,
+            )
+
+    tasks = []
+    for service, rows in connections.items():
+        spec = get_user_connection_spec(service)
+        revoke = getattr(spec, "revoke", None)
+        if revoke is None:
+            continue
+        for row in rows:
+            tasks.append(_revoke_one(service, revoke, copy.deepcopy(row)))
+    if tasks:
+        await asyncio.gather(*tasks)
 
 
 def _row_connected(spec, row: dict) -> bool:
