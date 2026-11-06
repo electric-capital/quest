@@ -3087,3 +3087,76 @@ export interface PasswordLinkInfo {
   account_exists: boolean;
   name: string;
 }
+
+// First-run setup (auth/first_run.py): POST /app/api/setup/unlock
+export interface SetupDefaults {
+  login_method: 'google' | 'password';
+  login_method_configured: boolean;
+  admin_emails: string[];
+  allowed_login_domain: string;
+  allowed_login_emails: string[];
+  app_base_url: string;
+  app_base_url_configured: boolean;
+  google_oauth_configured: boolean;
+  google_client_id: string;
+  google_project_id: string;
+  redirect_paths: string[];
+  public_email_domains: string[];
+  inference: SetupInferenceDefaults;
+}
+
+// The models step: provider kinds to offer and the Vertex AI environment
+export interface SetupInferenceDefaults {
+  llm_configured: boolean;
+  kinds: InferenceInstanceKind[];
+  api_types: InferenceApiType[];
+  vertex: {
+    // "env" (GOOGLE_APPLICATION_CREDENTIALS), "gcloud_adc" or null when no
+    // Application Default Credentials were found
+    credentials_source: 'env' | 'gcloud_adc' | null;
+    service_account_email: string | null;
+    detected_project_id: string | null;
+    problem: string | null;
+    configured_project_id: string;
+  };
+}
+
+// POST /app/api/setup/inference/provider
+export interface SetupProviderResult {
+  instance: { id: string; kind: string; label: string };
+  added: string[];
+  check: InferenceModelTestResult | null;
+  catalog_error: string | null;
+}
+
+// POST /app/api/setup/inference/vertex
+export interface SetupVertexResult {
+  project_id: string;
+  credentials_source: 'env' | 'gcloud_adc' | null;
+  check: InferenceModelTestResult | null;
+}
+
+export interface SetupUnlockResult {
+  token: string;
+  defaults: SetupDefaults;
+}
+
+// POST /app/api/setup/complete
+export interface SetupCompleteRequest {
+  token: string;
+  login_method: 'google' | 'password';
+  admin_emails: string[];
+  allowed_login_domain: string;
+  allowed_login_emails: string[];
+  app_base_url: string;
+  admin_password?: string;
+  google_client_id?: string;
+  google_client_secret?: string;
+  google_project_id?: string;
+}
+
+export interface SetupCompleteResult {
+  login_method: 'google' | 'password';
+  // Password sign-in: the first admin's session cookie came with the response.
+  signed_in: boolean;
+}

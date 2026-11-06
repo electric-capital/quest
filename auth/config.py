@@ -16,8 +16,8 @@ SERVER_CREDENTIALS_FILE = PROJECT_ROOT / "server_credentials.json"
 _server_credentials_cache: dict | None = None
 
 # Domain restriction. Placeholder default: real deployments set the
-# ``allowed_login_domain`` key in server_config.json (the prod bootstrap
-# wizard prompts for it), which takes precedence in allowed_login_domain().
+# ``allowed_login_domain`` key in server_config.json (the first-run setup
+# flow asks for it), which takes precedence in allowed_login_domain().
 ALLOWED_DOMAIN = "example.com"
 
 
@@ -33,7 +33,7 @@ def allowed_login_domain() -> str:
        The env var is deliberately ignored outside local mode -- a stray
        environment variable must never widen staging/prod access.
     2. ``allowed_login_domain`` in server_config.json (all modes; written
-       by the prod bootstrap wizard) so a deployment for another
+       by the first-run setup flow) so a deployment for another
        organization can admit its own domain. Config-file changes require
        filesystem access to the server, unlike environment variables.
     3. The built-in ALLOWED_DOMAIN default.
@@ -324,6 +324,15 @@ def load_client_config() -> dict:
     """Load OAuth client config (the inner web/installed dict) from server_credentials.json."""
     google_oauth = load_google_oauth_config()
     return google_oauth.get("web", google_oauth.get("installed", {}))
+
+
+def google_login_configured() -> bool:
+    """Whether a Google OAuth client (id + secret) is configured anywhere."""
+    try:
+        config = load_client_config()
+    except HTTPException:
+        return False
+    return bool(config.get("client_id") and config.get("client_secret"))
 
 
 def load_slack_client_config() -> dict:

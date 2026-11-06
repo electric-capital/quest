@@ -25,12 +25,13 @@ script-runner image build, server start) in one command:
 - `python3 run.py` -- **local mode**: port 9000, throwaway seeded database, canned-account login,
   no credentials required to boot. Good for a first smoke test.
 - `python3 run.py --prod` -- **production mode**: port 8000, real sign-in, domain
-  restriction. On an unconfigured machine this launches an interactive first-run wizard
-  (`scripts/bootstrap_prod.py`) that prompts for everything in sections 2 and 3 below. Its
-  default sign-in method is **email + password** (you choose the admin password in the wizard
-  and invite users from Settings > Sign-in), which needs no Google OAuth client -- skip
-  section 2 until you want Google services or Google sign-in. A password deployment can switch
-  to Google sign-in later from Settings > Sign-in without losing any accounts.
+  restriction. The command line asks for one thing, the credential-encryption password. On an
+  unconfigured machine the server then serves a first-run setup screen in the browser (unlocked
+  with that same password) that asks for everything in sections 2 and 3 below. Its default
+  sign-in method is **email + password** (you choose your admin password there and invite users
+  from Settings > Sign-in), which needs no Google OAuth client -- skip section 2 until you want
+  Google services or Google sign-in. A password deployment can switch to Google sign-in later
+  from Settings > Sign-in without losing any accounts.
 
 ## 1. Host dependencies (Debian)
 
@@ -115,8 +116,8 @@ Google OAuth serves two separate flows on the same OAuth client:
 OAuth redirect URIs are built from the deployment's public hostname, and **Google rejects
 redirect URIs containing raw IP addresses**. Decide the hostname users will browse to (e.g.
 `quest.yourdomain.com`) before creating the OAuth client. If the server is only reachable by IP
-(e.g. an internal dev box), pick a hostname anyway, set it as `oauth_hostname` in
-`server_config.json` (the bootstrap wizard prompts for it), and point the hostname at the
+(e.g. an internal dev box), pick a hostname anyway, set it as the public URL in first-run setup
+(`app_base_url` in `server_config.json`), and point the hostname at the
 server's IP via DNS or `/etc/hosts` on client machines. See
 [docs/architecture/auth.md](docs/architecture/auth.md).
 
@@ -143,12 +144,11 @@ server's IP via DNS or `/etc/hosts` on client machines. See
 
 Preferred paths, in order:
 
-- **Production first run**: `python3 run.py --prod` launches the bootstrap wizard, which (when
-  you pick Google sign-in) prompts
-  for admin email(s), the allowed login domain, the public hostname, and the OAuth client
+- **Production first run**: the setup screen in the browser (when you pick Google sign-in)
+  asks for admin email(s), the allowed login domain, the public URL, and the OAuth client
   id/secret, then writes them to the right places (`server_config.json` plus the per-service
-  credential store under `data/service_credentials/`). It also prints the exact redirect URIs to
-  register, so you can run it before or after step 2.2.
+  credential store under `data/service_credentials/`). It shows the exact redirect URIs to
+  register, so you can do step 2.2 while it is open.
 - **Already-running instance**: an admin can enter or rotate the credentials in
   **Settings > Service Credentials > Google OAuth** in the web UI.
 - Legacy fallback: a `server_credentials.json` file in the repo root (see
@@ -156,7 +156,7 @@ Preferred paths, in order:
 
 Login is domain-restricted in all non-local modes: only accounts on the configured
 `allowed_login_domain` can sign in, and admin capabilities are granted to the `admin_emails`
-listed in `server_config.json` (both set by the wizard).
+listed in `server_config.json` (both set by first-run setup).
 
 ## 3. Vertex AI setup
 
@@ -184,10 +184,14 @@ skip to [section 4](#4-run-it) and connect a key there.
 
 ### 3.2 Give the key and project id to Quest
 
-- **Production first run**: the bootstrap wizard prompts for the key file path and the Vertex
-  project id. It copies the key to `<data_dir>/vertex-service-account.json` and writes the
-  project id to `server_config.json`; on every staging/prod startup `run.py` exports the key
-  copy as `GOOGLE_APPLICATION_CREDENTIALS` automatically, so no manual env-var setup is needed.
+- **Production first run**: the setup screen's models step offers an API-key provider, Vertex
+  AI, or skipping. For Vertex it takes the key JSON (pasted or picked as a file) and the project
+  id -- or only the project id when the server already has Google credentials in its
+  environment, which the screen reports. It stores the key at
+  `<data_dir>/vertex-service-account.json` and writes the project id to `server_config.json`;
+  on every staging/prod startup `run.py` exports the key copy as
+  `GOOGLE_APPLICATION_CREDENTIALS` automatically, so no manual env-var setup is needed.
+  Skipping is fine: after signing in, the composer offers to connect a provider.
   An externally-set `GOOGLE_APPLICATION_CREDENTIALS` wins if you prefer to manage ADC yourself.
 - **Local mode**: put the key JSON (and optionally shared service credentials) in a
   `dev-config.json` in the checkout's *parent* directory -- see
@@ -204,7 +208,7 @@ The relevant `server_config.json` keys (documented in `server_config.example.jso
 
 - `anthropic.vertex_project_id` is required for Claude models; `gemini_vertex.vertex_project_id`
   is required for Gemini models but falls back to the `anthropic` value, so one project id
-  configured under `anthropic` enables both (the wizard writes just that).
+  configured under `anthropic` enables both (first-run setup writes just that).
 - Regions rarely need changing: the Anthropic default is `us-east5`, but several newer Claude
   models are pinned per-model to the `global` endpoint; Gemini defaults to `global` and Gemini
   3.x is *only* served there (regional endpoints 404). See
@@ -225,9 +229,10 @@ quota errors with the provider's error text inline.
 python3 run.py --prod
 ```
 
-First run walks through the bootstrap wizard (sections 2-3), then builds the frontend, installs
-deps, runs migrations, builds the script-runner image, and serves everything on port 8000.
-Re-run the wizard any time with `python3 run.py --prod --bootstrap`.
+First run asks for the encryption password, builds the frontend, installs deps, runs
+migrations, builds the script-runner image, and serves everything on port 8000; open it in a
+browser to go through first-run setup (sections 2-3). Admins and the public URL are edited in
+`server_config.json` afterwards; everything else lives in Settings.
 
 For a permanent deployment, front the server with a reverse proxy for HTTPS (WebSocket upgrade
 headers, >=5 min read timeout, large client body size for uploads) and manage the process with

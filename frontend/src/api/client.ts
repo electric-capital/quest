@@ -15,6 +15,11 @@ import {
   ApiClientError,
 } from './request';
 import type {
+  SetupCompleteRequest,
+  SetupCompleteResult,
+  SetupProviderResult,
+  SetupUnlockResult,
+  SetupVertexResult,
   WaitHandle,
   ConnectionResponse,
   ConnectionRow,
@@ -1160,6 +1165,31 @@ export function changePassword(currentPassword: string, newPassword: string): Pr
   return apiPost(endpoints.passwordChange(), {
     body: { current_password: currentPassword, new_password: newPassword },
   });
+}
+
+// First-run setup (SetupScreen): unlock with the encryption password, then
+// submit every answer at once. Errors carry `details.field` for the
+// offending input.
+export function unlockSetup(password: string): Promise<SetupUnlockResult> {
+  return apiPost(endpoints.setupUnlock(), { body: { password } });
+}
+
+export function completeSetup(body: SetupCompleteRequest): Promise<SetupCompleteResult> {
+  return apiPost(endpoints.setupComplete(), { body });
+}
+
+// The models step: connect an API-key provider / self-hosted server, or
+// Vertex AI (key optional when the environment already has ADC).
+export function setupConnectProvider(
+  body: { token: string; kind: string; api_key?: string; base_url?: string; api_type?: string },
+): Promise<SetupProviderResult> {
+  return apiPost(endpoints.setupProvider(), { body });
+}
+
+export function setupConnectVertex(
+  body: { token: string; service_account?: Record<string, unknown> | null; project_id: string },
+): Promise<SetupVertexResult> {
+  return apiPost(endpoints.setupVertex(), { body });
 }
 
 export function fetchFeatureGates(): Promise<FeatureGatesListResponse> {

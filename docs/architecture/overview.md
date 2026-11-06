@@ -34,7 +34,7 @@ This doc is the map: where each piece lives, how a turn moves through them, and 
 | `quest.py` | App assembly: router registration, lifespan daemons, SPA and static serving | [Production](../setup/production.md) |
 | `run.py` | Stdlib-only launcher: mode selection, frontend build, migrations, image checks, uvicorn | [Run Modes](run-modes.md), [Development](../setup/development.md) |
 | `config/` | Stdlib-only configuration, one module per concern (run mode, data paths, server config, encryption, feature gates, provider instances, credential specs, plugin loader) | the concern's doc, e.g. [Run Modes](run-modes.md), [Data Paths](data-paths.md), [Encryption at Rest](encryption-at-rest.md), [Feature Gates](feature-gates.md) |
-| `auth/` | Sign-in methods, session cookies, OAuth flows, per-user keys and connections | [Auth](auth.md), [User Connections](user-connections.md) |
+| `auth/` | Sign-in methods, first-run setup, session cookies, OAuth flows, per-user keys and connections | [Auth](auth.md), [Production -- First-Run Setup](../setup/production.md#first-run-setup), [User Connections](user-connections.md) |
 | `chat/realtime/` | Persistent WebSocket, event bus, replay buffer | [Realtime](realtime.md) |
 | `chat/gemini_api/` | Conversation loop, tool dispatch, sub-agents, system prompt, chat sessions | [Conversation Loop](gemini-api.md) |
 | `chat/llm/` | Provider abstraction, model registry, tool schemas and tiers | [LLM Provider Abstraction](llm-providers.md) |
@@ -62,7 +62,7 @@ This doc is the map: where each piece lives, how a turn moves through them, and 
 | `frontend/src/` | SPA: contexts, conversation store, WebSocket services, components | [Frontend](frontend.md) |
 | `Dockerfile.script-runner*`, `script-runner-*` | Sandbox images and entrypoints | [Script Runner](script-runner.md), [Public Projects](public-projects.md) |
 | `chat/browser_sessions.py`, `chat/gemini_api/tool_handlers/browser.py`, `Dockerfile.browser-sidecar`, `browser-sidecar-agent.py` | Headless browser containers for public conversations and their tools | [Browser for Public Projects](public-browser.md) |
-| `scripts/` | Production bootstrap wizard, local seeding, release tagging | [Production](../setup/production.md), [Run Modes](run-modes.md), [Development Workflows](../setup/development-workflows.md) |
+| `scripts/` | Local seeding, release tagging | [Run Modes](run-modes.md), [Development Workflows](../setup/development-workflows.md) |
 | `logging_config.json`, `chat/logging_config.py` | Unified logging and the `user=<email>` convention | [Logging](logging.md) |
 
 ## Request Lifecycles

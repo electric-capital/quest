@@ -3,8 +3,7 @@
 Covers the hashing helpers, the login / link / set / change routes against a
 real temporary SQLite database, the one-method-at-a-time rule (password
 routes 404 under Google sign-in, Google login refused under password
-sign-in, password-issued sessions dropped after the switch), and the
-bootstrap hand-over of admin passwords.
+sign-in, password-issued sessions dropped after the switch).
 """
 
 import asyncio
@@ -321,27 +320,6 @@ class TestSwitchToGoogle:
 
 
 # ---------------------------------------------------------------------------
-# Bootstrap hand-over
-# ---------------------------------------------------------------------------
-
-class TestPendingAdminPasswords:
-    def test_applied_and_file_removed(self, tmp_path, method):
-        _create_account()  # existing account gets its password replaced
-        hashing.write_pending_admin_passwords(tmp_path, {
-            ALICE: hashing.hash_password("from the wizard"),
-            "root@" + ALLOWED_DOMAIN: hashing.hash_password("root password"),
-        })
-        applied = _run(password_login.apply_pending_admin_passwords(tmp_path))
-        assert sorted(applied) == sorted([ALICE, "root@" + ALLOWED_DOMAIN])
-        assert not hashing.pending_admin_passwords_path(tmp_path).exists()
-        stored = _run(password_store.get_password_hash("root@" + ALLOWED_DOMAIN))
-        assert hashing.verify_password("root password", stored)
-        client = _client()
-        resp = client.post("/auth/password/login", json={"email": ALICE, "password": "from the wizard"})
-        assert resp.status_code == 200
-
-
-# ---------------------------------------------------------------------------
 # Admin endpoints (Settings > Sign-in)
 # ---------------------------------------------------------------------------
 
@@ -373,7 +351,7 @@ def _request():
 class TestAdminSignIn:
     def test_switch_requires_google_oauth(self, method, admin_routes, monkeypatch):
         from fastapi import HTTPException
-        monkeypatch.setattr(admin_routes, "_google_login_configured", lambda: False)
+        monkeypatch.setattr(auth_config, "google_login_configured", lambda: False)
         with pytest.raises(HTTPException) as exc:
             _run(admin_routes.admin_set_login_method(
                 admin_routes.LoginMethodUpdate(login_method="google"), user=ADMIN))
@@ -381,7 +359,7 @@ class TestAdminSignIn:
         assert admin_routes.config_writes == []
 
     def test_switch_to_google(self, method, admin_routes, monkeypatch):
-        monkeypatch.setattr(admin_routes, "_google_login_configured", lambda: True)
+        monkeypatch.setattr(auth_config, "google_login_configured", lambda: True)
         result = _run(admin_routes.admin_set_login_method(
             admin_routes.LoginMethodUpdate(login_method="google"), user=ADMIN))
         assert result == {"login_method": "google"}

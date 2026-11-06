@@ -310,6 +310,22 @@ def unwrap_key_file(password: str, data: dict) -> tuple[bytes, str]:
     return dek, str(data["key_id"])
 
 
+def verify_password(password: str, path: Optional[Path] = None) -> bool:
+    """Whether ``password`` unwraps the key file.
+
+    False for a wrong, empty or sentinel password; a missing or malformed
+    key file still raises (that is a deployment problem, not a bad guess).
+    Backs the first-run setup unlock (auth/first_run.py): the operator who
+    started the server is the one who knows this password.
+    """
+    data = read_key_file(path)
+    try:
+        unwrap_key_file(password, data)
+    except (WrongPasswordError, PasswordNotAvailableError, SentinelPasswordError):
+        return False
+    return True
+
+
 def rotate_password(old_password: str, new_password: str, path: Optional[Path] = None) -> None:
     """Re-wrap the DEK under ``new_password`` (ciphertexts are unaffected)."""
     path = path or encryption_key_path()

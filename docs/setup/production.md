@@ -6,8 +6,8 @@ Quest production deployment architecture: a single FastAPI server on port 8000 s
 
 ## Key Files
 
-- `run.py` -- Single-command launcher (`python3 run.py --prod`). Runs the first-run bootstrap wizard when the deployment is unconfigured, builds frontend, installs deps, runs migrations, validates/rebuilds the script-runner Podman image, starts server on port 8000
-- `scripts/bootstrap_prod.py` -- First-run configuration wizard (see First-Run Bootstrap below)
+- `run.py` -- Single-command launcher (`python3 run.py --prod`). Prompts for the encryption password, builds frontend, installs deps, runs migrations, validates/rebuilds the script-runner Podman image, starts server on port 8000
+- `auth/first_run.py` -- First-run setup routes and checks (see First-Run Setup below)
 - `quest.py` -- FastAPI application entry point. Static file mounts, route registration, catch-all handlers
 - `server_credentials.json` -- Legacy consolidated production credentials (Google OAuth with production redirect URIs, optional Slack/GitHub/CoinGecko). Loaded by `_load_server_credentials()` in `auth/config.py` as a read fallback; every section is migrated into the per-service store at startup and managed from Settings > Service Credentials afterwards
 - `config/paths.py` -- Centralized data-directory path constants; reads optional `data_dir` from `server_config.json` (see [Data Paths](../architecture/data-paths.md))
@@ -25,66 +25,81 @@ Quest production deployment architecture: a single FastAPI server on port 8000 s
 - `data/secret_key` -- auto-generated cookie signing key. Restrict permissions (`chmod 600`). Losing this invalidates all sessions
 - `data/quest.db` -- SQLite database. Restrict permissions (`chmod 600`). Contains user API keys and OAuth tokens
 
-## First-Run Bootstrap
+## First-Run Setup
 
-`python run.py --prod` on an unconfigured deployment launches an interactive
-wizard (`scripts/bootstrap_prod.py`, stdlib-only like `run.py`) before any
-build step. "Unconfigured" means missing either of the two hard prerequisites
-a usable instance cannot run without: `admin_emails` in `server_config.json`
-(without it nobody can reach the admin UI, including Settings > Service
-Credentials) or a way to sign in, which depends on the `login_method` key (see
-[Sign-in Methods](../architecture/auth.md#sign-in-methods)): for `"password"`
-a password for at least one admin account (found in the pending-passwords file
-or, via stdlib `sqlite3`, in `users.password_hash`); for `"google"` -- also what
-an absent key means -- Google OAuth client credentials. See
-`missing_required_config()`.
+`python run.py --prod` on an unconfigured deployment starts the server as usual and
+serves a setup screen in place of the sign-in screen until the deployment is
+configured. The only command-line input is the credential-encryption password (see
+below). "Unconfigured" means missing either of the two hard prerequisites a usable
+instance cannot run without: `admin_emails` in `server_config.json` (without it
+nobody can reach the admin UI, including Settings > Service Credentials) or a way to
+sign in, which depends on the `login_method` key (see
+[Sign-in Methods](../architecture/auth.md#sign-in-methods)): for `"password"` a
+password for at least one admin account; for `"google"` -- also what an absent key
+means -- Google OAuth client credentials. See `missing_required_config()` in
+`auth/first_run.py`. `GET /app/api/config` reports the result as `setup_required`
+and `frontend/src/App.tsx` renders `SetupScreen`
+(`frontend/src/components/SetupScreen.tsx`) while it is true; the lifespan logs a
+notice. Local mode never needs setup.
 
-The wizard first asks for the sign-in method. Its default is `password` (no
-setup outside Quest -- the easy way to try Quest out), except on a deployment
-that already has Google OAuth credentials but no `login_method` (an install that
-predates password sign-in), where it is `google`. It then prompts for admin
-emails and the allowed login domain (public mailbox domains such as gmail.com
-are never suggested, see `PUBLIC_EMAIL_DOMAINS`), plus optional additional
-individual allowed emails. Admins outside the allowed domain are appended to
-`allowed_login_emails` automatically so they can always sign in. Next come the public
-URL the deployment is accessed through (`app_base_url`, used for OAuth
-callback URLs and app-generated absolute links; a bare hostname answer gets
-`https://` prepended, and a legacy `oauth_hostname` seeds the default on
-re-runs), then either the admin passwords (password sign-in: hidden, entered twice,
-checked against `password_problem()`; at least one admin needs one) or the Google
-OAuth client id/secret (Google sign-in, printing both redirect URIs to register),
-and LLM credentials (a GCP service-account key
-file + Vertex project id; all models run on Vertex AI). It writes
-`server_config.json` (merging, preserving unrelated keys, incl. `login_method`),
-the `google_oauth` per-service credential store file, for password sign-in
-`<data_dir>/pending_admin_passwords.json` (0600, scrypt hashes from
-`config/password_hashing.py` -- the database does not exist yet, so the server
-lifespan applies the hashes via `apply_pending_admin_passwords()` in
-`auth/password_login.py` and deletes the file), and a key copy at
-`<data_dir>/vertex-service-account.json` that `run.py` exports as
-`GOOGLE_APPLICATION_CREDENTIALS` in staging/prod
-(`setup_server_vertex_credentials()`), so no manual env-var setup is needed.
+**Unlock.** The screen is unauthenticated (there are no accounts yet), so it is
+unlocked with the encryption password the operator entered at startup
+(`POST /app/api/setup/unlock`, checked against the key file by `verify_password()`
+in `config/encryption.py`, rate-limited per client and in total). A correct
+password returns a one-hour signed setup token plus the form defaults: existing
+values on a partially configured deployment, and the request host as the public-URL
+suggestion. Every setup route 404s once the deployment is configured.
 
-Right after the wizard, `run.py` resolves the **credential-encryption
-password** (`resolve_encryption_password()`): `QUEST_ENCRYPTION_PASSWORD`,
-then `QUEST_ENCRYPTION_PASSWORD_FILE`, then a hidden TTY prompt (asked twice
-on the first run, when `<data_dir>/encryption_key.json` does not exist yet).
-Step 3 of startup runs `uv run python -m config.encryption init` to create or
-verify the key file and encrypt the plaintext store files the wizard wrote.
-A non-interactive start with no password aborts. For systemd, put the
-password in a root-only file and reference it via
-`QUEST_ENCRYPTION_PASSWORD_FILE` (or `LoadCredential`), never in the unit
-file itself. See [Encryption at Rest](../architecture/encryption-at-rest.md).
+**Questions.** The sign-in method (default `password`: no setup outside Quest; the
+default is `google` on a deployment that already has Google OAuth credentials but no
+`login_method`, an install that predates password sign-in); the operator's own
+email, which becomes the first admin, plus other admins; the allowed login domain
+(public mailbox domains are refused, see `PUBLIC_EMAIL_DOMAINS`) and additional
+individual addresses, with admins outside the domain appended to
+`allowed_login_emails` automatically; the public URL (`app_base_url`, used for
+OAuth callback URLs and app-generated absolute links; a bare hostname gets
+`https://`, a legacy `oauth_hostname` seeds the suggestion); then either the first
+admin's password (checked against `password_problem()`) or the Google OAuth client
+id/secret with both redirect URIs shown; and the optional models step
+(`frontend/src/components/SetupModelsStep.tsx`), which offers three ways out: connect
+an API-key provider or self-hosted server (`POST /app/api/setup/inference/provider`,
+the same `quick_setup_provider()` in `chat/llm/model_setup.py` as the composer's model
+setup card), set up Vertex AI (`POST /app/api/setup/inference/vertex`: a pasted or
+file-picked service-account key plus the project id, or the project id alone when the
+server already has Application Default Credentials -- the step says which credentials
+it found, from `vertex_environment_status()`), or skip and let the composer's model
+setup card offer it after sign-in. Both connections take effect immediately and
+health-check a model live, so the step and the review show the real outcome.
 
-Non-interactive unconfigured startups (e.g. systemd) abort with instructions
-instead of starting a server nobody can log into; `QUEST_SKIP_BOOTSTRAP=1`
-starts anyway. `python run.py --prod --bootstrap` re-runs the wizard on an
-already-configured deployment with existing values as prompt defaults.
-Connectors not covered by the wizard (Slack, GitHub, Twitter/X, Ramp, CoinGecko) are
-configured after first login by an admin in Settings > Service Credentials. On a
-password deployment that includes outgoing email (SMTP, for self-service password
-resets and sign-up) and, whenever wanted, the Google OAuth client (Google services
-connectors, and the later switch to Google sign-in from Settings > Sign-in).
+**Writes** (`POST /app/api/setup/complete`; everything is validated before anything
+is written, and a problem names its field so the screen returns to that step):
+`server_config.json` through `update_server_config()` (unrelated keys preserved),
+the `google_oauth` per-service credential store file (encrypted), and under password
+sign-in the first admin's account and scrypt hash in the database, signing that
+admin in with the response. Under Google sign-in the reload lands on the Google
+sign-in screen. The models step wrote its own files when it ran: the inference
+credential store for a provider, or for Vertex the project id in `server_config.json`
+and the key copy at `<data_dir>/vertex-service-account.json` that `run.py` exports as
+`GOOGLE_APPLICATION_CREDENTIALS` in staging/prod (`setup_server_vertex_credentials()`;
+the request also exports it into the running process).
+
+**The encryption password** is resolved by `run.py` before any build step
+(`resolve_encryption_password()`): `QUEST_ENCRYPTION_PASSWORD`, then
+`QUEST_ENCRYPTION_PASSWORD_FILE`, then a hidden TTY prompt (asked twice on the first
+run, when `<data_dir>/encryption_key.json` does not exist yet). Step 3 of startup
+runs `uv run python -m config.encryption init` to create or verify the key file. A
+non-interactive start with no password aborts. For systemd, put the password in a
+root-only file and reference it via `QUEST_ENCRYPTION_PASSWORD_FILE` (or
+`LoadCredential`), never in the unit file itself; an unconfigured deployment started
+that way serves the setup screen like any other. See
+[Encryption at Rest](../architecture/encryption-at-rest.md).
+
+Admins and the public URL are `server_config.json` edits after setup. Connectors not
+covered by setup (Slack, GitHub, Twitter/X, Ramp, CoinGecko) are configured after
+first login by an admin in Settings > Service Credentials. On a password deployment
+that includes outgoing email (SMTP, for self-service password resets and sign-up)
+and, whenever wanted, the Google OAuth client (Google services connectors, and the
+later switch to Google sign-in from Settings > Sign-in).
 
 ## Route Priority
 
@@ -108,12 +123,12 @@ Static assets (`/assets/*`, `/vite.svg`): no authentication.
 
 `server_config.json` options:
 - `admin_emails`: email addresses for admin users (case-insensitive check in `is_admin()` in `chat/auth.py`). Admins see AdminOpsMenu in frontend
-- `allowed_login_domain`: email domain allowed to sign in (default: the built-in company domain -- see `allowed_login_domain()` in `auth/config.py`). Set by the bootstrap wizard so deployments for other organizations can admit their own domain
-- `allowed_login_emails`: optional list of individual email addresses allowed to sign in in addition to the domain (see `is_login_allowed()` in `auth/config.py`), for accounts outside any single domain -- e.g. personal `@gmail.com` users on a family deployment. Also prompted by the bootstrap wizard, and appended to by admin invite links on password deployments
-- `login_method`: `"password"` (email + password accounts) or `"google"` (Google OAuth; also what an absent key means). Exactly one method is active. Written by the bootstrap wizard and by the admin switch to Google sign-in; see [Sign-in Methods](../architecture/auth.md#sign-in-methods)
+- `allowed_login_domain`: email domain allowed to sign in (default: the built-in company domain -- see `allowed_login_domain()` in `auth/config.py`). Set by first-run setup so deployments for other organizations can admit their own domain
+- `allowed_login_emails`: optional list of individual email addresses allowed to sign in in addition to the domain (see `is_login_allowed()` in `auth/config.py`), for accounts outside any single domain -- e.g. personal `@gmail.com` users on a family deployment. Also asked by first-run setup, and appended to by admin invite links on password deployments
+- `login_method`: `"password"` (email + password accounts) or `"google"` (Google OAuth; also what an absent key means). Exactly one method is active. Written by first-run setup and by the admin switch to Google sign-in; see [Sign-in Methods](../architecture/auth.md#sign-in-methods)
 - `model`, `anthropic.*`, `gemini_vertex.*`: same as development. See [Development Setup](development.md) for details
 
-Production-specific: use a service account with Vertex AI API access for ADC (rather than `gcloud auth application-default login`). The same ADC credentials serve both Anthropic Vertex AI and Vertex-backed Gemini models. A key file at `<data_dir>/vertex-service-account.json` (written by the bootstrap wizard) is exported as `GOOGLE_APPLICATION_CREDENTIALS` automatically by `run.py` in staging/prod; an externally-set env var wins.
+Production-specific: use a service account with Vertex AI API access for ADC (rather than `gcloud auth application-default login`). The same ADC credentials serve both Anthropic Vertex AI and Vertex-backed Gemini models. A key file at `<data_dir>/vertex-service-account.json` (written by first-run setup) is exported as `GOOGLE_APPLICATION_CREDENTIALS` automatically by `run.py` in staging/prod; an externally-set env var wins.
 
 ## Credential Configuration
 
@@ -279,8 +294,8 @@ over HTTPS in production -- it is also what protects the session cookie and lets
 
 Two things to get right whichever route you pick:
 
-- **Set `app_base_url` to the HTTPS URL** (`server_config.json`, env `QUEST_APP_BASE_URL`; the
-  bootstrap wizard prompts for it). `oauth_base_url()` in `auth/config.py` uses it verbatim. Without
+- **Set `app_base_url` to the HTTPS URL** (`server_config.json`, env `QUEST_APP_BASE_URL`; first-run
+  setup asks for it). `oauth_base_url()` in `auth/config.py` uses it verbatim. Without
   it, callbacks are built from the request's own scheme and host, which behind a TLS-terminating
   front is plain `http://` on `localhost:8000` -- the provider then rejects the mismatch. An
   `https://` `app_base_url` also gives the session cookie the `Secure` attribute (applied at
