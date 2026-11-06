@@ -2240,26 +2240,17 @@ async def admin_stop_impersonation(
 # Sign-in method + email/password account management
 # ---------------------------------------------------------------------------
 
-def _google_login_configured() -> bool:
-    from auth.config import load_client_config
-    try:
-        config = load_client_config()
-    except HTTPException:
-        return False
-    return bool(config.get("client_id") and config.get("client_secret"))
-
-
 @router.get("/admin/sign-in")
 async def admin_get_sign_in(
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
     """Sign-in method status for the admin Settings > Sign-in section."""
     _require_admin(user)
-    from auth.config import login_method
+    from auth.config import google_login_configured, login_method
     from auth.mailer import smtp_configured
     return {
         "login_method": login_method(),
-        "google_oauth_configured": _google_login_configured(),
+        "google_oauth_configured": google_login_configured(),
         "smtp_configured": smtp_configured(),
     }
 
@@ -2283,7 +2274,7 @@ async def admin_set_login_method(
     server_config.json edit (``"login_method": "password"``).
     """
     _require_admin(user)
-    from auth.config import LOGIN_METHOD_GOOGLE, login_method
+    from auth.config import LOGIN_METHOD_GOOGLE, google_login_configured, login_method
     from config.server_config import update_server_config
 
     if body.login_method != LOGIN_METHOD_GOOGLE:
@@ -2298,7 +2289,7 @@ async def admin_set_login_method(
         )
     if login_method() == LOGIN_METHOD_GOOGLE:
         return {"login_method": LOGIN_METHOD_GOOGLE}
-    if not _google_login_configured():
+    if not google_login_configured():
         raise HTTPException(
             status_code=400,
             detail={

@@ -13,6 +13,7 @@ import { RightPanel } from './components/RightPanel'
 import { SettingsModal } from './components/SettingsModal'
 import { SignInScreen } from './components/SignInScreen'
 import { SetPasswordScreen } from './components/SetPasswordScreen'
+import { SetupScreen } from './components/SetupScreen'
 import { RequestsView, isInboxPath } from './components/RequestsView'
 import { MobileShell } from './components/MobileShell'
 import { DocsListView } from './components/docs/DocsListView'
@@ -45,7 +46,7 @@ function AppContent() {
     setShowRequestsView,
   } = useNavigationState()
   const { isAuthenticated, isCheckingAuth, hasAnyServiceConnected, enabledFeatures, isImpersonating } = useAuth()
-  const { appName } = useAppConfig()
+  const { appName, setupRequired } = useAppConfig()
   const { setActiveProjectId } = useProjects()
 
   const params = useParams<{ conversationId?: string; projectId?: string }>()
@@ -146,6 +147,12 @@ function AppContent() {
     )
   }
 
+  // An unconfigured deployment (no admin, no way to sign in) gets the
+  // first-run setup screen; nobody can be signed in on it yet.
+  if (setupRequired) {
+    return <SetupScreen />
+  }
+
   // If not authenticated, show inline sign-in screen
   if (!isAuthenticated) {
     return <SignInScreen />
@@ -232,7 +239,7 @@ function AppContent() {
 
 function AdminSystemReportsRoute() {
   const { isAuthenticated, isCheckingAuth } = useAuth();
-  const { appName } = useAppConfig();
+  const { appName, setupRequired } = useAppConfig();
 
   const screen = (body: ReactNode) => (
     <div className="app-container">
@@ -246,6 +253,10 @@ function AdminSystemReportsRoute() {
 
   if (isCheckingAuth) {
     return loading;
+  }
+
+  if (setupRequired) {
+    return <SetupScreen />;
   }
 
   if (!isAuthenticated) {

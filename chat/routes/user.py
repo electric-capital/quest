@@ -135,11 +135,16 @@ async def get_app_config():
     from config import environment
     from chat.llm.config import get_available_models, public_model_catalog
     from auth.config import allowed_login_domain, login_method, login_restriction_description
+    from auth.first_run import setup_required
     from auth.mailer import smtp_configured
     from config.limits import max_upload_bytes
 
     return {
         "quest_env": environment.get_quest_env(),
+        # True while the deployment has no admin / no way to sign in: the
+        # frontend shows the first-run setup screen (auth/first_run.py)
+        # instead of the sign-in screen.
+        "setup_required": await setup_required(),
         "available_models": get_available_models(),
         # Metadata for every known model (incl. deprecated / admin-disabled
         # ones so old conversations still label correctly); the frontend

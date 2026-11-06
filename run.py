@@ -17,11 +17,6 @@ Local-mode options:
   --keep-data [DIR]  Reuse the most recent local run's data directory
                      (or DIR when given) instead of creating a fresh one.
 
-Prod-mode options:
-  --bootstrap        Re-run the first-run configuration wizard even when the
-                     deployment is already configured (existing values become
-                     the prompt defaults).
-
 Run modes (see config/environment.py for the semantics):
   local    Throwaway per-run database seeded with canned accounts and demo
            data (skipped with --keep-data). No OAuth needed: the sign-in
@@ -29,9 +24,10 @@ Run modes (see config/environment.py for the semantics):
            files and container runtimes degrade gracefully.
   staging  Behaves like prod (domain restriction, real credentials) with a
            distinct cookie name; meant to be launched by deploy automation.
-  prod     Current production behavior, plus a first-run bootstrap wizard
-           (scripts/bootstrap_prod.py) when the deployment is missing
-           admin_emails or Google OAuth credentials.
+  prod     Current production behavior. An unconfigured deployment (no
+           admin_emails / no way to sign in) serves the first-run setup
+           screen in the browser (auth/first_run.py), unlocked with the
+           encryption password entered here -- the only command-line input.
 
 This script performs the following steps:
 1. Install frontend dependencies and build React frontend
@@ -558,8 +554,8 @@ def setup_vertex_credentials(project_root: Path, data_dir: Path, dev_config: dic
 def setup_server_vertex_credentials(data_dir: Path) -> None:
     """Export GOOGLE_APPLICATION_CREDENTIALS in staging/prod.
 
-    The prod bootstrap wizard copies the operator's GCP service-account key
-    to <data_dir>/vertex-service-account.json; point ADC at it so both
+    The first-run setup flow (auth/first_run.py) copies the operator's GCP
+    service-account key to <data_dir>/vertex-service-account.json; point ADC at it so both
     Vertex integrations (Claude and Vertex-backed Gemini) authenticate
     without any manual env-var setup. An externally-set
     GOOGLE_APPLICATION_CREDENTIALS always wins.
@@ -702,7 +698,7 @@ def unlock_encryption_key(project_root: Path, password: str) -> None:
     available -- run.py itself stays stdlib-only) creates
     ``<data_dir>/encryption_key.json`` on first run, verifies the password
     unlocks it otherwise, and encrypts any plaintext credential store files
-    left by the bootstrap wizard / local pre-baking. The alembic, seeder,
+    left by local pre-baking. The alembic, seeder,
     and uvicorn subprocesses inherit the exported password.
     """
     from config.encryption import PASSWORD_ENV
@@ -808,11 +804,6 @@ def main() -> None:
         metavar="DIR",
         help="(local mode) reuse the most recent local run's data directory, or DIR when given, instead of creating a fresh throwaway one",
     )
-    parser.add_argument(
-        "--bootstrap",
-        action="store_true",
-        help="(prod mode) re-run the first-run configuration wizard even when the deployment is already configured",
-    )
     args = parser.parse_args()
 
     if args.prod:
@@ -866,14 +857,6 @@ def main() -> None:
     data_dir = get_data_dir(project_root)
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    # Prod mode: first-run bootstrap wizard when the deployment is missing
-    # the config a usable instance cannot run without (admin_emails, Google
-    # OAuth). Runs before the build steps so the operator is prompted
-    # immediately; aborts non-interactive unconfigured startups.
-    if mode == "prod":
-        from scripts.bootstrap_prod import maybe_run_bootstrap
-        maybe_run_bootstrap(project_root, data_dir, force=args.bootstrap)
-
     # Local mode: pre-bake shared developer config from the parent
     # directory's dev-config.json into this run's data directory (Vertex
     # service-account key exported as ADC, per-service credentials into the
@@ -885,8 +868,8 @@ def main() -> None:
         prebake_service_credentials(data_dir, dev_config)
         prebake_inference_credentials(data_dir, dev_config)
     else:
-        # Staging/prod: pick up the bootstrap-written service-account key
-        # as ADC so Vertex-backed models work without manual env setup.
+        # Staging/prod: pick up the service-account key written by first-run
+        # setup as ADC so Vertex-backed models work without manual env setup.
         setup_server_vertex_credentials(data_dir)
 
     # Resolve the credential-encryption password now (prompting if needed)

@@ -43,7 +43,7 @@
 | [quest-tables-frontend.md](architecture/quest-tables-frontend.md) | Quest Tables UI: routes and gate, sidebar blocks, All Tables, viewer and grid, filters, schema editor, History drawer, card previews, phone layouts |
 | [plugins.md](architecture/plugins.md) | Plugin system: discovery, manifest validation, atomic registration, what a plugin can register, in-tree plugins |
 | [route-dispatch.md](architecture/route-dispatch.md) | Internal route dispatch for tool calls: conversation_id injection, blocked proxy paths |
-| [run-modes.md](architecture/run-modes.md) | Run modes (local, staging, prod): capability flags, zero-credential local mode, dev-config pre-baking, prod bootstrap |
+| [run-modes.md](architecture/run-modes.md) | Run modes (local, staging, prod): capability flags, zero-credential local mode, dev-config pre-baking, first-run setup pointer |
 | [routines.md](architecture/routines.md) | Routines: one-click project prompts with model and skill auto-loads, completion signal, agent create/edit, costs |
 | [scheduling.md](architecture/scheduling.md) | Routine scheduling daemon: schedule types, restart-safe due times, catch-up and missed runs, run ledger, pausing |
 | [script-runner.md](architecture/script-runner.md) | Sandboxed script execution in Podman: restricted and public images, mounts, sandbox tool API and tokens, seccomp |
@@ -91,7 +91,7 @@
 |------|---------|
 | [development.md](setup/development.md) | Local development setup: run.py launcher, data directory, server config, shared dev-config pre-baking |
 | [development-workflows.md](setup/development-workflows.md) | Development workflow: PR-based branching, releases and tags, frontend checks, pytest layout, dependency audits |
-| [production.md](setup/production.md) | Production deployment: first-run bootstrap wizard, serving, HTTPS options |
+| [production.md](setup/production.md) | Production deployment: first-run setup flow served by the app, serving, HTTPS options |
 | [ramp-setup.md](setup/ramp-setup.md) | Creating and configuring a Ramp OAuth app for Quest |
 
 ## Plugins

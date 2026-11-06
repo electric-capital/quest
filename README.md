@@ -147,8 +147,8 @@ Setting up a new machine (Debian packages, Google OAuth, Vertex AI)? Follow the
    account or an OpenRouter key) to enable chat
 
 For complete setup instructions, see the [Development Setup Guide](docs/setup/development.md);
-for deployment, see the [Production Guide](docs/setup/production.md) (`run.py --prod` includes a
-first-run bootstrap wizard).
+for deployment, see the [Production Guide](docs/setup/production.md) (an unconfigured `run.py --prod`
+instance serves a first-run setup screen in the browser).
 
 ## Documentation
 

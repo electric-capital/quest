@@ -17,13 +17,11 @@ legacy files are never modified or deleted.
 Store files are encrypted at rest: the JSON document is wrapped as
 ``{"encrypted": "qenc1:..."}`` via ``config/encryption.py`` (context label
 ``service_credentials/<service>``). Reads tolerate a plaintext JSON file --
-the prod bootstrap wizard and local-mode pre-baking (``run.py``, both
-stdlib-only and running before the encryption password is known) write
-plaintext, and ``encrypt_plaintext_credential_files()`` (the
-``config.encryption init`` step and the app lifespan) converts those in
-place. Keeping the file a JSON object means the stdlib-only readers that
-only test for presence (``scripts/bootstrap_prod.py``, ``run.py``) keep
-working.
+local-mode pre-baking (``run.py``, stdlib-only and running before the
+encryption password is known) writes plaintext, and
+``encrypt_plaintext_credential_files()`` (the ``config.encryption init``
+step and the app lifespan) converts those in place. Keeping the file a JSON
+object means the stdlib-only presence test in ``run.py`` keeps working.
 
 This module keeps its top-level imports to the Python standard library
 (mirroring ``config/paths.py``) so it can be imported very early in the

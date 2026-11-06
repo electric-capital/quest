@@ -3087,3 +3087,49 @@ export interface PasswordLinkInfo {
   account_exists: boolean;
   name: string;
 }
+
+// First-run setup (auth/first_run.py): POST /app/api/setup/unlock
+export interface SetupDefaults {
+  login_method: 'google' | 'password';
+  login_method_configured: boolean;
+  admin_emails: string[];
+  allowed_login_domain: string;
+  allowed_login_emails: string[];
+  app_base_url: string;
+  app_base_url_configured: boolean;
+  google_oauth_configured: boolean;
+  google_client_id: string;
+  google_project_id: string;
+  redirect_paths: string[];
+  llm_configured: boolean;
+  vertex_project_id: string;
+  vertex_key_present: boolean;
+  public_email_domains: string[];
+}
+
+export interface SetupUnlockResult {
+  token: string;
+  defaults: SetupDefaults;
+}
+
+// POST /app/api/setup/complete
+export interface SetupCompleteRequest {
+  token: string;
+  login_method: 'google' | 'password';
+  admin_emails: string[];
+  allowed_login_domain: string;
+  allowed_login_emails: string[];
+  app_base_url: string;
+  admin_password?: string;
+  google_client_id?: string;
+  google_client_secret?: string;
+  google_project_id?: string;
+  vertex_service_account?: Record<string, unknown> | null;
+  vertex_project_id?: string;
+}
+
+export interface SetupCompleteResult {
+  login_method: 'google' | 'password';
+  // Password sign-in: the first admin's session cookie came with the response.
+  signed_in: boolean;
+}

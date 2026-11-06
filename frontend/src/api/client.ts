@@ -15,6 +15,9 @@ import {
   ApiClientError,
 } from './request';
 import type {
+  SetupCompleteRequest,
+  SetupCompleteResult,
+  SetupUnlockResult,
   WaitHandle,
   ConnectionResponse,
   ConnectionRow,
@@ -1160,6 +1163,17 @@ export function changePassword(currentPassword: string, newPassword: string): Pr
   return apiPost(endpoints.passwordChange(), {
     body: { current_password: currentPassword, new_password: newPassword },
   });
+}
+
+// First-run setup (SetupScreen): unlock with the encryption password, then
+// submit every answer at once. Errors carry `details.field` for the
+// offending input.
+export function unlockSetup(password: string): Promise<SetupUnlockResult> {
+  return apiPost(endpoints.setupUnlock(), { body: { password } });
+}
+
+export function completeSetup(body: SetupCompleteRequest): Promise<SetupCompleteResult> {
+  return apiPost(endpoints.setupComplete(), { body });
 }
 
 export function fetchFeatureGates(): Promise<FeatureGatesListResponse> {

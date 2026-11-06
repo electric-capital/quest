@@ -209,6 +209,11 @@ export const endpoints = {
   passwordSet: () => '/auth/password/set',
   passwordChange: () => '/auth/password/change',
 
+  // First-run setup (auth/first_run.py; unauthenticated, open only while
+  // the deployment is unconfigured).
+  setupUnlock: () => `${API_BASE_URL}/setup/unlock`,
+  setupComplete: () => `${API_BASE_URL}/setup/complete`,
+
   adminFeatureGates: () => `${API_BASE_URL}/admin/feature-gates`,
 
   adminFeatureGate: (feature: string) => `${API_BASE_URL}/admin/feature-gates/${feature}`,

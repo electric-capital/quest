@@ -31,6 +31,7 @@ from auth import (
     connections_router,
     dev_login_router,
     password_login_router,
+    first_run_router,
 )
 
 logger = logging.getLogger("quest")
@@ -151,9 +152,9 @@ async def lifespan(app: FastAPI):
         raise
 
     # Encrypt any credential store file still in plaintext (written by the
-    # stdlib-only bootstrap wizard / local pre-baking before the key was
-    # available). Runs before the legacy migration below so migrated
-    # sections are written encrypted too.
+    # stdlib-only local pre-baking in run.py before the key was available).
+    # Runs before the legacy migration below so migrated sections are
+    # written encrypted too.
     from config.service_credentials import encrypt_plaintext_credential_files
     from config.inference_providers import encrypt_plaintext_inference_files
     try:
@@ -220,14 +221,13 @@ async def lifespan(app: FastAPI):
     from chat import user_subagent
     user_subagent.set_app_ref(app)
 
-    # Apply admin passwords the prod bootstrap wizard hashed before the
-    # database existed (<data_dir>/pending_admin_passwords.json), then drop
-    # expired/used set-password links. Best-effort.
-    from auth.password_login import apply_pending_admin_passwords
+    # Drop expired/used set-password links, and tell the operator when the
+    # deployment still needs first-run setup (auth/first_run.py). Best-effort.
+    from auth.first_run import log_setup_notice
     from db.password_store import purge_expired_password_tokens
     try:
-        await apply_pending_admin_passwords(DATA_DIR)
         await purge_expired_password_tokens()
+        await log_setup_notice()
     except Exception:
         logger.exception("Password sign-in startup tasks failed; continuing")
 
@@ -493,6 +493,9 @@ app.include_router(dev_login_router)
 # Email/password sign-in (active only when server_config.json login_method
 # is "password"; auth/password_login.py)
 app.include_router(password_login_router)
+# First-run setup (unauthenticated; open only while the deployment has no
+# admin / no way to sign in; auth/first_run.py)
+app.include_router(first_run_router)
 
 
 # Both root endpoints hand out the user's long-lived users.api_key (the

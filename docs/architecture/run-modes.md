@@ -71,8 +71,6 @@ Staging behaves like prod -- domain restriction on, real credentials, persistent
 
 `run.py --prod`, port 8000, `quest_session` cookie, all credentials required for their respective features.
 
-### First-run bootstrap
+### First-run setup
 
-When the deployment is missing `admin_emails` or Google OAuth client credentials, `run.py --prod` runs an interactive configuration wizard (`scripts/bootstrap_prod.py`, stdlib-only) before the build steps; non-interactive unconfigured startups abort with instructions (`QUEST_SKIP_BOOTSTRAP=1` starts anyway), and `--bootstrap` re-runs the wizard on a configured deployment.
-
-The wizard writes `server_config.json` (admin emails, `allowed_login_domain`, `app_base_url`, Vertex project id), the `google_oauth` per-service credential store file, and a service-account key copy at `<data_dir>/vertex-service-account.json` that `run.py` exports as `GOOGLE_APPLICATION_CREDENTIALS` in staging/prod (`setup_server_vertex_credentials()`). See [Production Deployment](../setup/production.md).
+A staging/prod deployment missing `admin_emails` or a way to sign in starts normally and serves the setup screen in place of the sign-in screen (`auth/first_run.py`, `frontend/src/components/SetupScreen.tsx`), unlocked with the encryption password `run.py` prompted for -- the only command-line input. It writes `server_config.json`, the `google_oauth` credential store file, the first admin's password and a service-account key copy at `<data_dir>/vertex-service-account.json` that `run.py` exports as `GOOGLE_APPLICATION_CREDENTIALS` in staging/prod (`setup_server_vertex_credentials()`). See [Production Deployment -- First-Run Setup](../setup/production.md#first-run-setup).
