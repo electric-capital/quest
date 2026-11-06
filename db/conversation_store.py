@@ -266,6 +266,66 @@ async def record_messages_appended(
         await db.commit()
 
 
+# Origins whose conversations take unread state: the ones the owner reads and
+# answers in the web UI. Slack, inference API and cross-user subagent
+# conversations are driven and read elsewhere (their web view is read-only),
+# so a dot on them would never clear in normal use.
+UNREAD_ORIGINS = (None, "web")
+
+
+async def mark_conversation_unread(conversation_id: str) -> Optional[dict]:
+    """Advance ``unread_seq`` to the conversation's high-water message seq.
+
+    Called when a run ends (see ``chat/unread.py``). The row becomes unread
+    when that seq is beyond ``read_seq``, i.e. the run appended something no
+    focused client has acknowledged.
+
+    Returns:
+        The updated row as a dict when ``unread_seq`` moved; None when the
+        conversation is missing, its origin takes no unread state
+        (``UNREAD_ORIGINS``), or nothing was appended since the last call.
+    """
+    async with AsyncSessionLocal() as db:
+        conv = await db.get(Conversation, conversation_id)
+        if conv is None or conv.origin not in UNREAD_ORIGINS:
+            return None
+        seq = conv.last_message_seq or 0
+        if seq <= (conv.unread_seq or 0):
+            return None
+        conv.unread_seq = seq
+        updated = _conversation_to_dict(conv)
+        await db.commit()
+        return updated
+
+
+async def mark_conversation_read(
+    user_id: int, conversation_id: str, seq: int,
+) -> Optional[tuple[dict, bool]]:
+    """Advance ``read_seq`` to ``seq``: the owner has seen the conversation
+    up to that message.
+
+    ``seq`` is clamped to the row's ``last_message_seq`` and never lowers
+    the stored value, so a late or repeated acknowledgement is harmless and
+    one that predates newer output leaves the conversation unread.
+
+    Returns:
+        ``(row dict, changed)``, or None if the conversation does not exist
+        or belongs to another user. ``changed`` is False when ``read_seq``
+        was already at or beyond ``seq``.
+    """
+    async with AsyncSessionLocal() as db:
+        conv = await db.get(Conversation, conversation_id)
+        if conv is None or conv.user_id != user_id:
+            return None
+        seq = min(seq, conv.last_message_seq or 0)
+        if seq <= (conv.read_seq or 0):
+            return _conversation_to_dict(conv), False
+        conv.read_seq = seq
+        updated = _conversation_to_dict(conv)
+        await db.commit()
+        return updated, True
+
+
 async def get_last_message_seq(conversation_id: str) -> int:
     """Return the cached high-water seq for a conversation, or 0 if missing."""
     async with AsyncSessionLocal() as db:
@@ -492,6 +552,8 @@ def _conversation_to_dict(conv: Conversation) -> dict:
         "created_at": conv.created_at.isoformat() if conv.created_at else None,
         "last_message_at": conv.last_message_at.isoformat() if conv.last_message_at else None,
         "last_message_seq": conv.last_message_seq or 0,
+        "unread_seq": conv.unread_seq or 0,
+        "read_seq": conv.read_seq or 0,
         "archived": conv.archived,
         "custom_name": conv.custom_name,
         "auto_title": conv.auto_title,

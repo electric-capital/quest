@@ -24,6 +24,7 @@ import { TableViewer } from './components/tables/TableViewer'
 import { TablesListView } from './components/tables/TablesListView'
 import { TABLES_FEATURE } from './api/tablesApi'
 import { useIsMobile } from './hooks/useIsMobile'
+import { useUnreadTracking } from './hooks/useConversationUnread'
 import { parseDocsRoute } from './utils/docsRoute'
 import { parseTablesRoute } from './utils/tablesRoute'
 import { LazyBoundary, lazyNamed } from './components/LazyBoundary'
@@ -43,7 +44,7 @@ function AppContent() {
     showRequestsView,
     setShowRequestsView,
   } = useNavigationState()
-  const { isAuthenticated, isCheckingAuth, hasAnyServiceConnected, enabledFeatures } = useAuth()
+  const { isAuthenticated, isCheckingAuth, hasAnyServiceConnected, enabledFeatures, isImpersonating } = useAuth()
   const { appName } = useAppConfig()
   const { setActiveProjectId } = useProjects()
 
@@ -51,6 +52,10 @@ function AppContent() {
   const navigate = useNavigate()
   const location = useLocation()
   const isMobile = useIsMobile()
+
+  // Unread dots: follow conversation_unread_changed and window focus. An
+  // impersonating admin never marks the user's conversations read.
+  useUnreadTracking(!isImpersonating)
 
   // Quest Docs views (/docs, /docs?project=<id>, /docs/<id>) take over the
   // main pane like the requests inbox. The URL is the only state: no

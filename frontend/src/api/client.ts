@@ -188,6 +188,17 @@ export function fetchConversationTail(
 }
 
 /**
+ * Acknowledge that the user has seen a conversation up to `seq` (sent by
+ * the unread store for the conversation on screen in a focused window).
+ */
+export function markConversationRead(
+  id: string,
+  seq: number,
+): Promise<{ unread_seq: number; read_seq: number }> {
+  return apiPost(`${endpoints.conversation(id)}/read`, { body: { seq } });
+}
+
+/**
  * Fetch current user's settings
  */
 export function fetchSettings(): Promise<SettingsResponse> {

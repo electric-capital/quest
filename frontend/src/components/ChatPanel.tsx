@@ -7,6 +7,7 @@ import { RichMarkdown } from './RichMarkdown';
 import { useNavigate } from 'react-router-dom';
 import { useCodeAndMathLoaded } from '../hooks/useCodeAndMath';
 import { useConversation } from '../hooks/useConversation';
+import { useMarkConversationViewed } from '../hooks/useConversationUnread';
 import { useConversationModels } from '../contexts/ConversationModelsContext';
 import { useConversationSkills } from '../contexts/ConversationSkillsContext';
 import { useNavigationState } from '../contexts/NavigationContext';
@@ -221,6 +222,10 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
     archived,
     setArchived,
   } = useConversation(conversationId, { onLoadedSkills: handleLoadedSkills, onModelLoaded: handleModelLoaded, onProjectIdLoaded: handleProjectIdLoaded });
+
+  // This conversation is what the main view shows: while the window is
+  // focused it counts as read (the sidebar's unread dot).
+  useMarkConversationViewed(conversationId, isLoaded);
 
   // Slack-driven conversations are read-only in the web UI; the user is
   // conversing via Slack DMs and the model replies through the

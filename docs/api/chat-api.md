@@ -93,6 +93,12 @@ Returns `404 Not Found` with error code `conversation_not_found` when the conver
 
 ---
 
+### Mark Conversation Read
+
+**Endpoint**: `POST /app/api/conversations/{conversation_id}/read` (`mark_conversation_read_endpoint()` in `chat/routes/conversations.py`) -- a client showing the conversation in a focused window acknowledges it up to a message seq. The list rows and the detail response carry the `unread_seq` / `read_seq` pair it moves. See [Conversation Unread State](../architecture/conversation-unread.md).
+
+---
+
 ### Archive Conversation
 
 Archive a conversation (soft-delete). Archived conversations are excluded from list results by default and hidden from the sidebar.
@@ -333,6 +339,7 @@ Defined in the model loop in `chat/gemini_api/conversation.py`, the realtime pub
 - Per-user globals:
   - **`request_count_changed`** (`counts: {all, open, executed, denied, stopped}`),
   - **`conversation_list_changed`** (`conversation_id`, `action: "created" | "archived" | "unarchived" | "renamed" | "model_changed"`),
+  - **`conversation_unread_changed`** (`conversation_id`, `unread_seq`, `read_seq`; see [Conversation Unread State](../architecture/conversation-unread.md#realtime)),
   - **`file_list_changed`** (`conversation_id`, `project_id`, `scope: "project" | "conversation"`; emitted from each workspace-mutating tool handler and REST route (the copy routes also on a 500 `copy_failed`, since a failed copy may have written part of the destination) so file browsers can silent-refresh mid-turn; project-scoped writes fan out across sibling-conversation tabs),
   - **`wait_handle_resolved`** (`conversation_id`, `handle_id`, `kind`, `status`, optional `request_id`, optional `response`),
   - **`routine_list_changed`** (`project_id`; emitted when a `create_routine`/`edit_routine` action request executes so the sidebar refreshes its cached per-project routine list),

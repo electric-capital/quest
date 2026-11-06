@@ -388,6 +388,7 @@ async def _execute_scheduled_run(app, schedule: dict, routine: dict, run_id: str
     from chat.storage import ChatStorage
     from chat.gemini_api import run_conversation_turn
     from chat.routine_runs import drive_routine_run
+    from chat.unread import mark_unread_after_run
 
     schedule_id = schedule["id"]
     routine_id = routine["id"]
@@ -466,8 +467,10 @@ async def _execute_scheduled_run(app, schedule: dict, routine: dict, run_id: str
             log_prefix="[scheduler]",
         )
 
-        # Persist the response messages
+        # Persist the response messages, then mark the run unread: nobody
+        # was watching it.
         await _persist_scheduler_messages(conversation_id, messages_out)
+        await mark_unread_after_run(conversation_id)
 
         await finish_run(schedule_id, run_id, "completed")
         logger.info(
@@ -518,6 +521,7 @@ async def _execute_scheduled_run(app, schedule: dict, routine: dict, run_id: str
         if conversation_id:
             try:
                 await _persist_scheduler_messages(conversation_id, messages_out)
+                await mark_unread_after_run(conversation_id)
             except Exception:
                 logger.exception(
                     "[scheduler] Failed to persist messages for failed run "

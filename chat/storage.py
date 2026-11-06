@@ -761,6 +761,8 @@ class ChatStorage:
                 "archived": meta.get("archived", False),
                 "custom_name": meta.get("custom_name"),
                 "origin": meta.get("origin"),
+                "unread_seq": meta.get("unread_seq") or 0,
+                "read_seq": meta.get("read_seq") or 0,
             })
 
         return conversations
@@ -2187,6 +2189,8 @@ class ChatStorage:
                 "archived": meta.get("archived", False),
                 "custom_name": meta.get("custom_name"),
                 "origin": meta.get("origin"),
+                "unread_seq": meta.get("unread_seq") or 0,
+                "read_seq": meta.get("read_seq") or 0,
             })
 
         return conversations

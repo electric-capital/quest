@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 
 from fastapi import Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from chat.auth import get_current_user_cookie_or_apikey_checked
 from chat.conversation_access import require_owned_conversation
@@ -28,6 +28,11 @@ class UpdateModelRequest(BaseModel):
     # ``thinking_efforts``); omitted / null = the model's default. Stored
     # as sent -- the turn validates it against the model's levels.
     thinking_effort: str | None = None
+
+
+class MarkReadRequest(BaseModel):
+    # Highest message seq the client is showing.
+    seq: int = Field(ge=0)
 
 
 def _publish_list_changed(user_id: int, conversation_id: str, action: str) -> None:
@@ -344,6 +349,11 @@ async def get_conversation(conversation_id: str, user: dict = Depends(get_curren
     # subscribe with a usable last_seq right after hydration.
     conversation["last_message_seq"] = meta.get("last_message_seq") or 0
 
+    # Unread state (unread while unread_seq > read_seq); the client showing
+    # this conversation acknowledges it via POST /conversations/{id}/read.
+    conversation["unread_seq"] = meta.get("unread_seq") or 0
+    conversation["read_seq"] = meta.get("read_seq") or 0
+
     # Surface the origin discriminator so the frontend can gate the composer.
     # NULL origin is equivalent to "web".
     conversation["origin"] = meta.get("origin") or "web"
@@ -616,6 +626,44 @@ async def unarchive_conversation_endpoint(
         )
     _publish_list_changed(user["id"], conversation_id, "unarchived")
     return result
+
+
+@router.post("/conversations/{conversation_id}/read")
+async def mark_conversation_read_endpoint(
+    conversation_id: str,
+    body: MarkReadRequest,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Record that the user has seen the conversation up to ``seq``.
+
+    Sent by a client that is showing the conversation in a focused window.
+    ``read_seq`` only moves forward and is clamped to the conversation's
+    high-water seq, so the call is idempotent. Publishes
+    ``conversation_unread_changed`` when the stored value moved.
+
+    An admin impersonating the owner changes nothing: the admin looking at
+    a conversation is not the owner reading it.
+
+    Returns:
+        ``{unread_seq, read_seq}`` after the update.
+    """
+    from chat.unread import publish_changed
+    from db.conversation_store import mark_conversation_read
+
+    if "_impersonator_uid" in user:
+        meta = await require_owned_conversation(user["id"], conversation_id)
+        return {"unread_seq": meta["unread_seq"], "read_seq": meta["read_seq"]}
+
+    result = await mark_conversation_read(user["id"], conversation_id, body.seq)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "conversation_not_found", "message": "Conversation not found"},
+        )
+    meta, changed = result
+    if changed:
+        publish_changed(meta)
+    return {"unread_seq": meta["unread_seq"], "read_seq": meta["read_seq"]}
 
 
 @router.put("/conversations/{conversation_id}/rename")

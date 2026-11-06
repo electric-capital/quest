@@ -46,6 +46,26 @@ def make_conversation_list_changed(
     }
 
 
+def make_conversation_unread_changed(
+    conversation_id: str,
+    unread_seq: int,
+    read_seq: int,
+) -> dict[str, Any]:
+    """Envelope for ``conversation_unread_changed``.
+
+    Per-user global carrying the conversation's two unread seqs after one of
+    them moved; the conversation is unread while ``unread_seq > read_seq``.
+    Both only move forward, so a receiver merges each with ``max`` and the
+    order events arrive in does not matter.
+    """
+    return {
+        "type": "conversation_unread_changed",
+        "conversation_id": conversation_id,
+        "unread_seq": unread_seq,
+        "read_seq": read_seq,
+    }
+
+
 FILE_LIST_SCOPES = frozenset({"conversation", "project"})
 
 
