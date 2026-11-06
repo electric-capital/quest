@@ -57,7 +57,7 @@ All conversation REST endpoints are defined in `chat/routes/conversations.py`. S
   - Returns the same seed-friendly shape as `POST /conversations`. Surfaced as the "Duplicate Workspace" item in the sidebar conversation meatball menu (`Sidebar.tsx`), which navigates to the new conversation.
 - **GET `/app/api/conversations/{id}`** -- Get conversation with full message history (`get_conversation_endpoint()`). Response includes `last_message_seq` so the persistent-WS client can subscribe with a usable `last_seq` right after hydration. Also carries the sidebar title fields -- `title` (resolved via `ChatStorage._resolve_list_title()`), `custom_name`, and `archived` -- so the chat header title unit shows the same title as the sidebar row. See [Realtime Architecture](../architecture/realtime.md).
 - **GET `/app/api/conversations/{id}/tail?after_seq=N`** -- Return only messages with `seq > after_seq` (`get_conversation_tail()`), fetched by the persistent-WS client after each `message_appended` event. After the ownership check the rows come from the replay buffer when it holds all of them, else from `chat_history.json` read in a worker thread (see [Realtime -- Replay Buffer](../architecture/realtime.md#replay-buffer)). Response shape: `{messages: [...], last_message_seq: N}`.
-- **PUT `/app/api/conversations/{id}/archive`** -- Soft-delete a conversation (`archive_conversation_endpoint()`). Delegates to `archive_conversation()` in `db/conversation_store.py`.
+- **PUT `/app/api/conversations/{id}/archive`** -- Soft-delete a conversation (`archive_conversation_endpoint()`). Delegates to `archive_conversation()` in `db/conversation_store.py`, which also marks it read.
 - **PUT `/app/api/conversations/{id}/unarchive`** -- Restore an archived conversation (`unarchive_conversation_endpoint()`). Delegates to `unarchive_conversation()` in `db/conversation_store.py`.
 - **PUT `/app/api/conversations/{id}/rename`** -- Set or clear a custom name (`rename_conversation_endpoint()`). Max length: `MAX_CONVERSATION_NAME_LENGTH` in `db/conversation_store.py`. Empty strings normalized to NULL.
 - **PATCH `/app/api/conversations/{id}/model`** -- Update the LLM model for a conversation (`update_conversation_model_endpoint()`). Uses `set_conversation_model()` in `db/conversation_store.py` (always overwrites).
@@ -116,6 +116,7 @@ Archive a conversation (soft-delete). Archived conversations are excluded from l
 
 **Side effects**:
 - Sets `archived=True` on the conversation row in the `conversations` table via `archive_conversation()` in `db/conversation_store.py`
+- Marks the conversation read and publishes `conversation_unread_changed` ([Conversation Unread State](../architecture/conversation-unread.md#when-a-conversation-becomes-read))
 
 **Error Response**: `404 Not Found` if conversation does not exist or does not belong to the authenticated user (error code: `conversation_not_found`)
 
@@ -339,7 +340,7 @@ Defined in the model loop in `chat/gemini_api/conversation.py`, the realtime pub
 - Per-user globals:
   - **`request_count_changed`** (`counts: {all, open, executed, denied, stopped}`),
   - **`conversation_list_changed`** (`conversation_id`, `action: "created" | "archived" | "unarchived" | "renamed" | "model_changed"`),
-  - **`conversation_unread_changed`** (`conversation_id`, `unread_seq`, `read_seq`; see [Conversation Unread State](../architecture/conversation-unread.md#realtime)),
+  - **`conversation_unread_changed`** (`conversation_id`, `project_id`, `unread_seq`, `read_seq`; see [Conversation Unread State](../architecture/conversation-unread.md#realtime)),
   - **`file_list_changed`** (`conversation_id`, `project_id`, `scope: "project" | "conversation"`; emitted from each workspace-mutating tool handler and REST route (the copy routes also on a 500 `copy_failed`, since a failed copy may have written part of the destination) so file browsers can silent-refresh mid-turn; project-scoped writes fan out across sibling-conversation tabs),
   - **`wait_handle_resolved`** (`conversation_id`, `handle_id`, `kind`, `status`, optional `request_id`, optional `response`),
   - **`routine_list_changed`** (`project_id`; emitted when a `create_routine`/`edit_routine` action request executes so the sidebar refreshes its cached per-project routine list),

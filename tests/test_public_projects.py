@@ -528,11 +528,14 @@ def _isolated_project_store(monkeypatch):
     async_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
     test_session_local = async_sessionmaker(async_engine, expire_on_commit=False)
 
+    import db.conversation_store as conversation_store_mod
     import db.models as models_mod
     import db.project_store as project_store_mod
 
     models_mod.Base.metadata.create_all(sync_engine)
     monkeypatch.setattr(project_store_mod, "AsyncSessionLocal", test_session_local)
+    # The project list route also reads each project's unread conversations.
+    monkeypatch.setattr(conversation_store_mod, "AsyncSessionLocal", test_session_local)
 
     yield project_store_mod
 

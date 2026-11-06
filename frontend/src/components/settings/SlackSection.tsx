@@ -123,11 +123,12 @@ export function SlackSection() {
                 checked={notifyEnabled}
                 onChange={(e) => setNotifyEnabled(e.target.checked)}
               />
-              Remind me on Slack about my inbox
+              Remind me on Slack about my inbox and unread conversations
             </label>
             <p className="slack-settings-hint">
-              While you have requests waiting for approval or suggested memories
-              to review, Quest sends you a Slack DM at most once per interval.
+              While you have requests waiting for approval, suggested memories
+              to review or unread conversations, Quest sends you a Slack DM at
+              most once per interval.
             </p>
           </div>
           <div className="slack-settings-row">

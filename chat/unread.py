@@ -29,6 +29,7 @@ def publish_changed(meta: dict) -> None:
                 conversation_id=meta["id"],
                 unread_seq=meta["unread_seq"],
                 read_seq=meta["read_seq"],
+                project_id=meta.get("project_id"),
             ),
         )
     except Exception:
@@ -38,10 +39,15 @@ def publish_changed(meta: dict) -> None:
         )
 
 
-async def mark_unread_after_run(conversation_id: str) -> None:
+async def mark_unread_after_run(conversation_id: str, *, user_started: bool) -> None:
     """Mark a conversation unread because a run on it just ended: the model
     finished its output, failed, or suspended waiting for the user (an
     action request or another wait handle).
+
+    ``user_started`` says whether a message the user sent themselves started
+    the run; pass False for a routine's own run and for a wait-handle
+    resume. A routine's conversation stays read until a user-started run
+    ends on it (``conversation_store.mark_conversation_unread``).
 
     Call it after the run's final flush, so ``last_message_seq`` covers
     everything the run appended, and not for a run the user stopped (they
@@ -49,7 +55,9 @@ async def mark_unread_after_run(conversation_id: str) -> None:
     teardown.
     """
     try:
-        meta = await conversation_store.mark_conversation_unread(conversation_id)
+        meta = await conversation_store.mark_conversation_unread(
+            conversation_id, user_started=user_started,
+        )
     except Exception:
         logger.warning(
             "[unread] marking conversation %s unread failed",

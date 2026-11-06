@@ -26,6 +26,7 @@ from db.project_store import (
 from db.conversation_store import (
     get_conversation_meta,
     list_project_conversations_meta,
+    list_project_unread_conversations,
     set_conversation_project,
 )
 
@@ -243,8 +244,15 @@ async def list_user_projects(
 
     Archived projects are left out unless ``include_archived=true`` (the
     sidebar's "Show Archived" toggle), mirroring ``GET /conversations``.
+
+    Each row carries ``unread_conversations``, the ``{id, unread_seq,
+    read_seq}`` of the project's unread conversations, behind the project's
+    unread dot (docs/architecture/conversation-unread.md).
     """
     projects = await list_projects(user["id"], include_archived=include_archived)
+    unread = await list_project_unread_conversations(user["id"])
+    for project in projects:
+        project["unread_conversations"] = unread.get(project["id"], [])
     return {"projects": projects}
 
 

@@ -1149,6 +1149,13 @@ export interface UserSearchResponse {
 }
 
 // Project types
+/** One unread conversation of a project, as listed on a project row. */
+export interface UnreadConversationRef {
+  id: string;
+  unread_seq: number;
+  read_seq: number;
+}
+
 export interface Project {
   id: string;
   user_id: number;
@@ -1163,6 +1170,9 @@ export interface Project {
   created_at: string;
   updated_at: string | null;
   conversation_count: number;
+  /** The project's unread conversations when the list was fetched (list
+   *  rows only); store/unreadStore.ts keeps the project's dot current. */
+  unread_conversations?: UnreadConversationRef[];
 }
 
 export interface ProjectsListResponse {

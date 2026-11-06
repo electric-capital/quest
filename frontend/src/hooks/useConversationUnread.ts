@@ -8,10 +8,12 @@
  * - useMarkConversationViewed: called by the main view (ChatPanel) to say
  *   which conversation it is showing.
  * - useConversationUnread: whether a sidebar row shows the unread dot.
+ * - useProjectUnread: whether a project row shows it (any conversation of
+ *   the project is unread).
  */
 
 import { useEffect, useSyncExternalStore } from 'react';
-import type { Conversation } from '../api/types';
+import type { Conversation, Project } from '../api/types';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
 import { unreadStore } from '../store/unreadStore';
 
@@ -26,7 +28,9 @@ export function useUnreadTracking(acknowledge: boolean): void {
     const unsubscribe = persistentWebSocket.onGlobalEvent((event) => {
       if (event.type !== 'conversation_unread_changed') return;
       if (typeof event.conversation_id !== 'string') return;
-      unreadStore.merge(event.conversation_id, event.unread_seq, event.read_seq);
+      unreadStore.merge(
+        event.conversation_id, event.unread_seq, event.read_seq, event.project_id,
+      );
     });
     const onFocusChange = () => unreadStore.acknowledgeViewed();
     window.addEventListener('focus', onFocusChange);
@@ -58,5 +62,15 @@ export function useConversationUnread(
   return useSyncExternalStore(
     unreadStore.subscribe,
     () => unreadStore.isUnread(id, unreadSeq, readSeq),
+  );
+}
+
+export function useProjectUnread(
+  project: Pick<Project, 'id' | 'unread_conversations'>,
+): boolean {
+  const { id, unread_conversations: rows } = project;
+  return useSyncExternalStore(
+    unreadStore.subscribe,
+    () => unreadStore.isProjectUnread(id, rows),
   );
 }

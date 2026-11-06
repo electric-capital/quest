@@ -2,12 +2,14 @@
 
 Runs as an asyncio background task within the FastAPI process (started
 and cancelled from the FastAPI lifespan in quest.py, mirroring
-chat/scheduler.py). Periodically finds users with something "unanswered"
-in their inbox -- open action requests, or suggested memories awaiting
-review (chat/memory_inbox.py) -- and sends them a Slack bot DM reminder.
+chat/scheduler.py). Periodically finds users with something waiting for
+them -- open action requests, suggested memories awaiting review
+(chat/memory_inbox.py), or unread conversations
+(docs/architecture/conversation-unread.md) -- and sends them a Slack bot DM
+reminder, which lists the unread conversations with a link to each.
 
-A user is reminded only when their oldest unanswered item has itself been
-open for at least the reminder interval (so a card the user is about to
+A user is reminded only when their oldest waiting item has itself been
+waiting for at least the reminder interval (so a card the user is about to
 click is never insta-DMed), and then at most once per interval while any
 item remains. The interval defaults to DEFAULT_INTERVAL_MINUTES
 and is tunable per user via the ``slack_pending_notification_interval_minutes``
@@ -39,6 +41,14 @@ DEFAULT_INTERVAL_MINUTES = 60
 # write time in chat/routes/user.py -- keep in step).
 MIN_INTERVAL_MINUTES = 5
 MAX_INTERVAL_MINUTES = 1440
+
+# How many unread conversations a reminder lists by title; the rest are
+# summed up in a closing "and N more" line.
+MAX_UNREAD_LISTED = 10
+
+# Slack rejects a section whose text is over 3000 characters; the list stops
+# early rather than lose the whole reminder to long titles and URLs.
+_UNREAD_BLOCK_BUDGET = 2900
 
 # Per-process throttle state: user_id -> last DM sent at (aware UTC).
 # Lost on restart, which at worst re-sends one reminder early -- the
@@ -95,9 +105,9 @@ def _as_aware_utc(dt: datetime) -> datetime:
     return dt
 
 
-def _describe_pending(open_count: int, suggestion_count: int) -> str:
-    """``2 unanswered requests and 1 suggested memory`` -- whichever is
-    non-zero, both joined with "and"."""
+def _describe_pending(open_count: int, suggestion_count: int, unread_count: int = 0) -> str:
+    """``2 unanswered requests, 1 suggested memory and 3 unread
+    conversations`` -- whichever are non-zero."""
     parts = []
     if open_count:
         noun = "request" if open_count == 1 else "requests"
@@ -105,21 +115,71 @@ def _describe_pending(open_count: int, suggestion_count: int) -> str:
     if suggestion_count:
         noun = "memory" if suggestion_count == 1 else "memories"
         parts.append(f"{suggestion_count} suggested {noun}")
-    return " and ".join(parts)
+    if unread_count:
+        noun = "conversation" if unread_count == 1 else "conversations"
+        parts.append(f"{unread_count} unread {noun}")
+    if len(parts) <= 1:
+        return "".join(parts)
+    return ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
-def _build_reminder(open_count: int, suggestion_count: int = 0) -> tuple[str, list[dict]]:
+def _escape_mrkdwn(text: str) -> str:
+    """Escape the three characters Slack treats as control characters, so a
+    conversation title cannot break out of its link."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _unread_lines(unread: list[dict], unread_count: int, base_url: str) -> str:
+    """The mrkdwn body of the unread-conversations block: one bullet per
+    conversation in ``unread`` (rows of
+    ``conversation_store.list_unread_conversations``), linked to the
+    conversation when ``base_url`` is configured. Conversations that are
+    not listed, by the caller's cap or the block's size limit, are counted
+    in a closing "and N more" line."""
+    lines = ["*Unread conversations*"]
+    size = len(lines[0])
+    for conv in unread:
+        title = _escape_mrkdwn(conv.get("title") or "New Chat")
+        if base_url:
+            # The SPA's conversation URLs (frontend/src/App.tsx).
+            path = (
+                f"/projects/{conv['project_id']}/{conv['id']}"
+                if conv.get("project_id") else f"/chats/{conv['id']}"
+            )
+            title = f"<{base_url}{path}|{title}>"
+        if conv.get("project_name"):
+            title += f" ({_escape_mrkdwn(conv['project_name'])})"
+        line = f"\u2022 {title}"
+        if size + len(line) + 1 > _UNREAD_BLOCK_BUDGET:
+            break
+        lines.append(line)
+        size += len(line) + 1
+    more = unread_count - (len(lines) - 1)
+    if more > 0:
+        lines.append(f"_...and {more} more_")
+    return "\n".join(lines)
+
+
+def _build_reminder(
+    open_count: int,
+    suggestion_count: int = 0,
+    unread: Optional[list[dict]] = None,
+    unread_count: int = 0,
+) -> tuple[str, list[dict]]:
     """The (fallback_text, blocks) for a reminder DM about ``open_count``
-    open action requests and ``suggestion_count`` suggested memories."""
+    open action requests, ``suggestion_count`` suggested memories and
+    ``unread_count`` unread conversations, of which ``unread`` holds the
+    ones to list."""
     from config.server_config import get_app_base_url
 
-    summary = _describe_pending(open_count, suggestion_count)
+    summary = _describe_pending(open_count, suggestion_count, unread_count)
     base_url = get_app_base_url()
-    text = (
-        f":hourglass_flowing_sand: You have {summary} in Quest waiting for "
-        "your review."
-    )
-    if base_url:
+    # Requests and suggestions wait for a decision; unread conversations
+    # only wait to be read.
+    tail = " waiting for your review" if open_count or suggestion_count else ""
+    plain = f"You have {summary} in Quest{tail}."
+    text = f":hourglass_flowing_sand: {plain}"
+    if base_url and (open_count or suggestion_count):
         # /inbox deep-links straight into the inbox (RequestsView), on its
         # Memories tab when only suggestions wait; served by the SPA routes
         # in quest.py.
@@ -130,51 +190,63 @@ def _build_reminder(open_count: int, suggestion_count: int = 0) -> tuple[str, li
             "type": "section",
             "text": {"type": "mrkdwn", "text": text},
         },
-        {
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": (
-                        "_You can adjust or turn off these reminders in "
-                        "Settings > Slack._"
-                    ),
-                }
-            ],
-        },
     ]
+    if unread:
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": _unread_lines(unread, unread_count, base_url),
+            },
+        })
+    blocks.append({
+        "type": "context",
+        "elements": [
+            {
+                "type": "mrkdwn",
+                "text": (
+                    "_You can adjust or turn off these reminders in "
+                    "Settings > Slack._"
+                ),
+            }
+        ],
+    })
     # The plain-text fallback (notification banners etc.) must not carry
     # mrkdwn link syntax.
-    fallback = f"You have {summary} in Quest waiting for your review."
-    return fallback, blocks
+    return plain, blocks
 
 
 async def _collect_pending() -> list[dict]:
-    """One row per user with anything unanswered: ``{"user_id",
-    "open_count", "suggestion_count", "oldest_created_at"}``, the age being
-    the oldest item of either kind."""
+    """One row per user with anything waiting: ``{"user_id", "open_count",
+    "suggestion_count", "unread_count", "oldest_created_at"}``, the age
+    being the oldest item of any kind (for an unread conversation, when its
+    last message was written)."""
     from chat.memory_inbox import list_pending_summaries
     from db.action_request_store import list_open_request_summaries
+    from db.conversation_store import list_unread_summaries
 
     by_user: dict[int, dict] = {}
-    for summary in await list_open_request_summaries():
-        by_user[summary["user_id"]] = {
-            "user_id": summary["user_id"],
-            "open_count": summary["open_count"],
-            "suggestion_count": 0,
-            "oldest_created_at": summary["oldest_created_at"],
-        }
-    for summary in await list_pending_summaries():
-        row = by_user.setdefault(summary["user_id"], {
-            "user_id": summary["user_id"],
+
+    def add(user_id: int, count_key: str, count: int, oldest: datetime) -> None:
+        row = by_user.setdefault(user_id, {
+            "user_id": user_id,
             "open_count": 0,
             "suggestion_count": 0,
-            "oldest_created_at": summary["oldest_created_at"],
+            "unread_count": 0,
+            "oldest_created_at": oldest,
         })
-        row["suggestion_count"] = summary["pending_count"]
-        row["oldest_created_at"] = min(
-            row["oldest_created_at"], summary["oldest_created_at"],
-        )
+        row[count_key] = count
+        row["oldest_created_at"] = min(row["oldest_created_at"], oldest)
+
+    for summary in await list_open_request_summaries():
+        add(summary["user_id"], "open_count", summary["open_count"],
+            summary["oldest_created_at"])
+    for summary in await list_pending_summaries():
+        add(summary["user_id"], "suggestion_count", summary["pending_count"],
+            summary["oldest_created_at"])
+    for summary in await list_unread_summaries():
+        add(summary["user_id"], "unread_count", summary["unread_count"],
+            summary["oldest_unread_at"])
     return list(by_user.values())
 
 
@@ -182,7 +254,7 @@ async def _poll_once() -> None:
     """Single poll cycle: remind every user whose reminder is due."""
     summaries = await _collect_pending()
 
-    # Forget users with nothing unanswered any more so their next pending
+    # Forget users with nothing waiting any more so their next pending
     # item starts a fresh interval (and the dict stays bounded).
     active_ids = {s["user_id"] for s in summaries}
     for user_id in list(_last_notified):
@@ -201,6 +273,7 @@ async def _poll_once() -> None:
         logger.debug("[slack-notifier] Slack bot token not configured; skipping cycle")
         return
 
+    from db.conversation_store import list_unread_conversations
     from db.user_store import get_user_by_id
 
     now = datetime.now(timezone.utc)
@@ -228,15 +301,21 @@ async def _poll_once() -> None:
             # Recorded before the send so a persistent Slack error waits
             # out the same interval instead of retrying every poll tick.
             _last_notified[user_id] = now
+            unread = (
+                await list_unread_conversations(user_id, MAX_UNREAD_LISTED)
+                if summary["unread_count"] else []
+            )
             await _send_reminder(
                 bot_token, slack_user_id,
                 summary["open_count"], summary["suggestion_count"],
+                unread, summary["unread_count"],
             )
             logger.info(
                 "[slack-notifier] Sent pending-request reminder to user %s "
-                "(%d open requests, %d suggested memories, oldest %s)",
+                "(%d open requests, %d suggested memories, %d unread "
+                "conversations, oldest %s)",
                 user_id, summary["open_count"], summary["suggestion_count"],
-                oldest.isoformat(),
+                summary["unread_count"], oldest.isoformat(),
             )
         except Exception:
             logger.warning(
@@ -246,12 +325,19 @@ async def _poll_once() -> None:
 
 
 async def _send_reminder(
-    bot_token: str, slack_user_id: str, open_count: int, suggestion_count: int = 0,
+    bot_token: str,
+    slack_user_id: str,
+    open_count: int,
+    suggestion_count: int = 0,
+    unread: Optional[list[dict]] = None,
+    unread_count: int = 0,
 ) -> None:
     """Post the reminder DM. Slack accepts a bare user id as channel."""
     from slack_sdk.web.async_client import AsyncWebClient
 
-    fallback, blocks = _build_reminder(open_count, suggestion_count)
+    fallback, blocks = _build_reminder(
+        open_count, suggestion_count, unread, unread_count,
+    )
     client = AsyncWebClient(token=bot_token)
     await client.chat_postMessage(
         channel=slack_user_id, text=fallback, blocks=blocks,
