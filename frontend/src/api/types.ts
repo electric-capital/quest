@@ -15,6 +15,10 @@ export interface Conversation {
   slack_channel_id?: string;
   slack_thread_ts?: string;
   slack_team_id?: string;
+  /** Unread state: the conversation is unread while unread_seq > read_seq
+   *  (store/unreadStore.ts merges these with the realtime updates). */
+  unread_seq?: number;
+  read_seq?: number;
 }
 
 /** A composer attachment ref returned by the upload-composer-attachments
@@ -555,6 +559,9 @@ export interface ConversationDetail {
   subagent_run?: SubagentRunInfo;
   /** High-water seq of the conversation's chat_history.json (Phase 2). */
   last_message_seq?: number;
+  /** Unread state, as on the list rows (unread while unread_seq > read_seq). */
+  unread_seq?: number;
+  read_seq?: number;
   /** Persisted per-conversation flags (opt-in behaviors set at the start).
    *  Drives the read-only "N flags enabled" composer label after first send. */
   flags?: string[];

@@ -1208,6 +1208,21 @@ class Conversation(Base):
         sa.Integer, nullable=False, server_default="0", default=0,
     )
 
+    # Unread state, as two monotonic message seqs: the conversation is unread
+    # while ``unread_seq > read_seq``. ``unread_seq`` is the high-water seq at
+    # the end of the latest run that left something for the user to look at
+    # (the model finished, or suspended on an action request); ``read_seq`` is
+    # the highest seq a focused client showing the conversation has
+    # acknowledged. Both only move forward, so a late or repeated
+    # acknowledgement can never hide newer output. See
+    # docs/architecture/conversation-unread.md.
+    unread_seq: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, server_default="0", default=0,
+    )
+    read_seq: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, server_default="0", default=0,
+    )
+
     # Per-conversation flags set at the start of the conversation (parsed from a
     # magic ``%%flags[...]`` first line). Stored as a JSON array of enabled flag
     # name strings, e.g. ``["nested_subagents"]``. NULL is treated as "no flags"

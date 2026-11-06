@@ -317,6 +317,7 @@ class PersistentWebSocketClient {
     const conversationId = event.conversation_id as string | undefined;
     const isPerUserGlobalWithConversationId = (
       type === 'conversation_list_changed'
+      || type === 'conversation_unread_changed'
       || type === 'wait_handle_resolved'
       || type === 'request_count_changed'
       || type === 'file_list_changed'

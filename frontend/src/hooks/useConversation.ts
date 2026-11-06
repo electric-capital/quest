@@ -5,6 +5,7 @@
 
 import { useSyncExternalStore, useCallback, useEffect, useRef, useState } from 'react';
 import { conversationStore, type ConversationState } from '../store/conversationStore';
+import { unreadStore } from '../store/unreadStore';
 import { webSocketManager } from '../services/WebSocketManager';
 import { persistentWebSocket, type PersistentEvent } from '../services/PersistentWebSocket';
 import {
@@ -365,6 +366,10 @@ export function useConversation(conversationId: string, options?: UseConversatio
           persistentWebSocket.setLastSeq(conversationId, response.last_message_seq);
         }
 
+        // Unread state: once this conversation is on screen in a focused
+        // window, the store acknowledges it as read.
+        unreadStore.merge(conversationId, response.unread_seq, response.read_seq);
+
         // Hydrate sub-agent tool call data from persisted messages.
         // tool_result messages for agent_task / agent_task_parallel may carry
         // a sub_agent_tool_calls array that was saved alongside them.
@@ -499,6 +504,11 @@ export function useConversation(conversationId: string, options?: UseConversatio
           // transient lifecycle envelope, and this ack is the only
           // signal that replaces it.
           webSocketManager.syncRunState(conversationId, event.run_active);
+
+          // The ack also carries the unread seqs, covering a
+          // ``conversation_unread_changed`` published while the socket
+          // was down.
+          unreadStore.merge(conversationId, event.unread_seq, event.read_seq);
 
           // Server may answer ``catchup`` with embedded message bodies.
           // Apply them directly without a refetch.
