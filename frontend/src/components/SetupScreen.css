@@ -190,6 +190,43 @@ textarea.setup-input {
   color: var(--text-secondary);
 }
 
+.setup-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.setup-kind {
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.82rem;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.setup-kind:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.setup-kind.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.setup-kind:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+select.setup-input {
+  appearance: auto;
+}
+
 .setup-uris {
   margin: 0.25rem 0 0;
   padding: 0;

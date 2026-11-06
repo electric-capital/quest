@@ -184,12 +184,14 @@ skip to [section 4](#4-run-it) and connect a key there.
 
 ### 3.2 Give the key and project id to Quest
 
-- **Production first run**: the setup screen takes the key JSON (pasted or picked as a file)
-  and the Vertex project id. It stores the key at `<data_dir>/vertex-service-account.json` and
-  writes the project id to `server_config.json`; on every staging/prod startup `run.py` exports
-  the key copy as `GOOGLE_APPLICATION_CREDENTIALS` automatically, so no manual env-var setup is
-  needed. Skipping it is fine: after signing in, the composer offers to connect an API-key
-  provider instead.
+- **Production first run**: the setup screen's models step offers an API-key provider, Vertex
+  AI, or skipping. For Vertex it takes the key JSON (pasted or picked as a file) and the project
+  id -- or only the project id when the server already has Google credentials in its
+  environment, which the screen reports. It stores the key at
+  `<data_dir>/vertex-service-account.json` and writes the project id to `server_config.json`;
+  on every staging/prod startup `run.py` exports the key copy as
+  `GOOGLE_APPLICATION_CREDENTIALS` automatically, so no manual env-var setup is needed.
+  Skipping is fine: after signing in, the composer offers to connect a provider.
   An externally-set `GOOGLE_APPLICATION_CREDENTIALS` wins if you prefer to manage ADC yourself.
 - **Local mode**: put the key JSON (and optionally shared service credentials) in a
   `dev-config.json` in the checkout's *parent* directory -- see

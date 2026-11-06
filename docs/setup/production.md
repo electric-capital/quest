@@ -60,20 +60,28 @@ individual addresses, with admins outside the domain appended to
 OAuth callback URLs and app-generated absolute links; a bare hostname gets
 `https://`, a legacy `oauth_hostname` seeds the suggestion); then either the first
 admin's password (checked against `password_problem()`) or the Google OAuth client
-id/secret with both redirect URIs shown; and, optionally, a GCP service-account key
-(pasted or picked as a file) with the Vertex project id. Skipping the key leaves the
-composer's model setup card to connect an API-key provider after sign-in.
+id/secret with both redirect URIs shown; and the optional models step
+(`frontend/src/components/SetupModelsStep.tsx`), which offers three ways out: connect
+an API-key provider or self-hosted server (`POST /app/api/setup/inference/provider`,
+the same `quick_setup_provider()` in `chat/llm/model_setup.py` as the composer's model
+setup card), set up Vertex AI (`POST /app/api/setup/inference/vertex`: a pasted or
+file-picked service-account key plus the project id, or the project id alone when the
+server already has Application Default Credentials -- the step says which credentials
+it found, from `vertex_environment_status()`), or skip and let the composer's model
+setup card offer it after sign-in. Both connections take effect immediately and
+health-check a model live, so the step and the review show the real outcome.
 
 **Writes** (`POST /app/api/setup/complete`; everything is validated before anything
 is written, and a problem names its field so the screen returns to that step):
 `server_config.json` through `update_server_config()` (unrelated keys preserved),
-the `google_oauth` per-service credential store file (encrypted), the key copy at
-`<data_dir>/vertex-service-account.json` that `run.py` exports as
-`GOOGLE_APPLICATION_CREDENTIALS` in staging/prod (`setup_server_vertex_credentials()`;
-the completing request also exports it into the running process), and under password
+the `google_oauth` per-service credential store file (encrypted), and under password
 sign-in the first admin's account and scrypt hash in the database, signing that
 admin in with the response. Under Google sign-in the reload lands on the Google
-sign-in screen.
+sign-in screen. The models step wrote its own files when it ran: the inference
+credential store for a provider, or for Vertex the project id in `server_config.json`
+and the key copy at `<data_dir>/vertex-service-account.json` that `run.py` exports as
+`GOOGLE_APPLICATION_CREDENTIALS` in staging/prod (`setup_server_vertex_credentials()`;
+the request also exports it into the running process).
 
 **The encryption password** is resolved by `run.py` before any build step
 (`resolve_encryption_password()`): `QUEST_ENCRYPTION_PASSWORD`, then

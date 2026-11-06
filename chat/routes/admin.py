@@ -1491,33 +1491,18 @@ async def admin_list_inference_providers(
     never include the key itself.
     """
     _require_admin(user)
-    from config.inference_providers import INSTANCE_KINDS, LOCAL_API_TYPES, list_instances
+    from chat.llm.model_setup import provider_kind_views
+    from config.inference_providers import list_instances
 
+    kinds, api_types = provider_kind_views()
     return {
         "vertex": _vertex_status(),
         "instances": [_instance_status(inst) for inst in list_instances()],
-        # ``catalog`` tells the card where its "Add model" typeahead looks:
-        # the shared OpenRouter list, the instance's own key-fetched vendor
-        # catalog (Anthropic, OpenAI, Gemini, Fireworks), NEAR AI's or
-        # TrustedRouter's public list, or the self-hosted server itself.
-        # ``hint`` / ``key_required`` also feed the composer's first-run
-        # model setup card (ModelSetupCard.tsx), which offers these kinds.
-        "kinds": [
-            {
-                "kind": kind,
-                "label": spec["label"],
-                "endpoint": spec["endpoint"],
-                "catalog": spec["catalog"],
-                "hint": spec["hint"],
-                "key_required": spec["key_required"],
-            }
-            for kind, spec in INSTANCE_KINDS.items()
-        ],
-        # API types a self-hosted instance can speak (the card's selector)
-        "api_types": [
-            {"id": api_type, "label": spec["label"], "description": spec["description"]}
-            for api_type, spec in LOCAL_API_TYPES.items()
-        ],
+        # The kind roster for the composer's model setup card
+        # (ModelSetupCard.tsx) and the API types a self-hosted instance can
+        # speak; see provider_kind_views().
+        "kinds": kinds,
+        "api_types": api_types,
     }
 
 
@@ -1976,21 +1961,8 @@ async def admin_quick_setup_inference(
 ):
     """Connect a provider from one credential and make its models usable --
     the composer's first-run model setup card (shown to admins while no
-    model is available).
-
-    In one step: an instance of ``kind`` is created -- or an existing
-    instance of the kind that serves no available model yet is reused, so
-    a retry after a rejected key never piles up empty instances -- the API
-    key (or server URL + API type) is stored, the kind's catalog is fetched
-    fresh with it, and the quick-setup suggestions
-    (``chat.llm.model_setup.suggested_models``: the models Quest has real
-    metadata for) are added. The first suggestion is added alone and
-    health-checked live first; only when it passes are the rest added
-    (rechecked in the background), so a bad key leaves the instance
-    connected but empty rather than flashing unchecked models into the
-    picker. Unlike models added from Settings, these start **allowed in
-    private conversations**: the admin is connecting the deployment's
-    first model for exactly that.
+    model is available). The work is ``quick_setup_provider()`` in
+    chat/llm/model_setup.py, shared with the first-run setup screen.
 
     Returns ``{instance, added, check, catalog_error}``: the instance card
     payload, the qualified ids added, the first model's health verdict
@@ -1998,128 +1970,22 @@ async def admin_quick_setup_inference(
     admin to Settings to pick models) and the catalog fetch error, if any.
     """
     _require_admin(user)
-    from chat.llm.config import (
-        drop_provider_instance,
-        get_available_models,
-        get_configured_models,
-        reset_provider_client_caches,
-    )
-    from chat.llm.health import get_model_health_store, schedule_model_rechecks
-    from chat.llm.model_setup import fetch_instance_catalog, suggested_models
-    from chat.llm.openrouter_catalog import catalog_snapshot
-    from config.inference_providers import (
-        DEFAULT_LOCAL_API_TYPE,
-        INSTANCE_KINDS,
-        LOCAL_API_TYPES,
-        list_instances,
-        new_instance_id,
-        normalize_base_url,
-        qualify_model_id,
-        read_inference_credentials,
-        upsert_instance,
-        write_inference_credentials,
-    )
+    from chat.llm.model_setup import QuickSetupError, quick_setup_provider
 
-    # Resolve the request's kind to the registry's own key object: the
-    # instance id (and so the credential file name) derives from the kind
-    # name, and taking it from INSTANCE_KINDS rather than the request body
-    # keeps request data out of the path (``inference_credentials_path``
-    # format-checks every id on top of that).
-    kind_name = next((name for name in INSTANCE_KINDS if name == body.kind), None)
-    if kind_name is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "unknown_kind", "message": f"Unknown inference provider kind: {body.kind}"},
+    try:
+        result = await quick_setup_provider(
+            body.kind, api_key=body.api_key or "", base_url=body.base_url or "",
+            api_type=body.api_type or "",
         )
-    kind = INSTANCE_KINDS[kind_name]
-    api_key = (body.api_key or "").strip()
-    base_url = normalize_base_url(body.base_url) if body.base_url else None
-    api_type = body.api_type or DEFAULT_LOCAL_API_TYPE
-    if kind["endpoint"]:
-        if base_url is None:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "invalid_params", "message": "base_url must be an http:// or https:// server URL."},
-            )
-        if api_type not in LOCAL_API_TYPES:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "invalid_params", "message": f"Unknown api_type: {api_type} (one of {sorted(LOCAL_API_TYPES)})."},
-            )
-    elif not api_key:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "invalid_params", "message": f"An API key is required for {kind['label']}."},
-        )
-
-    available = set(get_available_models())
-    instance = next(
-        (
-            inst for inst in list_instances()
-            if inst["kind"] == kind_name
-            and not any(m.startswith(f"{inst['id']}:") for m in available)
-        ),
-        None,
-    )
-    if instance is None:
-        instance = {"id": new_instance_id(kind_name), "kind": kind_name, "label": "", "models": []}
-    if kind["endpoint"]:
-        instance["base_url"] = base_url
-        instance["api_type"] = api_type
-    instance = upsert_instance(instance)
-    if api_key:
-        stored = dict(read_inference_credentials(instance["id"]) or {})
-        stored["api_key"] = api_key
-        write_inference_credentials(instance["id"], stored)
-    reset_provider_client_caches()
-    drop_provider_instance(kind["provider"], instance["id"])
-
-    catalog = await fetch_instance_catalog(instance, refresh=True)
-    existing = {m["id"] for m in instance["models"]}
-    suggested = [w for w in suggested_models(instance, catalog["models"]) if w not in existing]
-    added: list[str] = []
-    check = None
-
-    def _entry(wire_id: str) -> dict:
-        return {"id": wire_id, "enabled": True, **(catalog_snapshot(catalog["models"], wire_id) or {})}
-
-    if suggested:
-        probe = suggested[0]
-        instance["models"].append(_entry(probe))
-        instance = upsert_instance(instance)
-        probe_id = qualify_model_id(instance["id"], probe)
-        check = await get_model_health_store().run_check(probe_id)
-        if check["ok"]:
-            added.append(probe_id)
-            for wire_id in suggested[1:]:
-                instance["models"].append(_entry(wire_id))
-                added.append(qualify_model_id(instance["id"], wire_id))
-            instance = upsert_instance(instance)
-            prefix = f"{instance['id']}:"
-            schedule_model_rechecks([
-                m for m in get_configured_models() if m.startswith(prefix) and m != probe_id
-            ])
-        else:
-            instance["models"] = [m for m in instance["models"] if m["id"] != probe]
-            instance = upsert_instance(instance)
-            await get_model_health_store().forget([probe_id])
-    elif instance["models"]:
-        # Nothing new to suggest but the reused instance already lists
-        # models: recheck them under the new credential.
-        prefix = f"{instance['id']}:"
-        schedule_model_rechecks([m for m in get_configured_models() if m.startswith(prefix)])
-
+    except QuickSetupError as exc:
+        raise HTTPException(status_code=400, detail={"error": exc.code, "message": str(exc)})
+    check = result["check"]
     logger.info(
         "[admin] %s quick-set-up inference instance %s (%s): added %s, check %s",
-        user["email"], instance["id"], kind_name, added,
+        user["email"], result["instance"]["id"], body.kind, result["added"],
         "n/a" if check is None else ("ok" if check["ok"] else check["error"]),
     )
-    return {
-        "instance": _instance_status(instance),
-        "added": added,
-        "check": check,
-        "catalog_error": catalog["error"],
-    }
+    return {**result, "instance": _instance_status(result["instance"])}
 
 
 class InferenceModelTestRequest(BaseModel):

@@ -7,10 +7,10 @@
  * they entered when starting the server -- the one thing that proves they
  * are the operator -- then walks through the questions the command line
  * used to ask: sign-in method, admins and who may sign in, the public URL,
- * the admin password or Google OAuth client, and (optionally) Vertex AI
- * credentials. Everything is submitted at once at the end
- * (POST /app/api/setup/complete); a validation error names its field and
- * the flow jumps back to that step.
+ * the admin password or Google OAuth client, and (optionally) a model
+ * provider (SetupModelsStep, which connects it live). Everything else is
+ * submitted at once at the end (POST /app/api/setup/complete); a validation
+ * error names its field and the flow jumps back to that step.
  *
  * Under password sign-in the response signs the first admin in, so the
  * reload lands in the app. Under Google sign-in it lands on the Google
@@ -22,6 +22,7 @@ import { completeSetup, unlockSetup } from '../api/client';
 import { ApiClientError } from '../api/request';
 import type { SetupDefaults } from '../api/types';
 import { useAppConfig } from '../contexts/AppConfigContext';
+import { SetupModelsStep, describeModelsOutcome, type ModelsOutcome } from './SetupModelsStep';
 import './SetupScreen.css';
 
 const MIN_PASSWORD_LENGTH = 8;
@@ -55,8 +56,6 @@ const FIELD_STEPS: Record<string, Step> = {
   google_client_id: 'credentials',
   google_client_secret: 'credentials',
   google_project_id: 'credentials',
-  vertex_service_account: 'models',
-  vertex_project_id: 'models',
 };
 
 interface Answers {
@@ -71,8 +70,6 @@ interface Answers {
   googleClientId: string;
   googleClientSecret: string;
   googleProjectId: string;
-  vertexKeyText: string;
-  vertexProjectId: string;
 }
 
 function splitEmails(raw: string): string[] {
@@ -107,8 +104,6 @@ function initialAnswers(defaults: SetupDefaults): Answers {
     googleClientId: defaults.google_client_id,
     googleClientSecret: '',
     googleProjectId: defaults.google_project_id,
-    vertexKeyText: '',
-    vertexProjectId: defaults.vertex_project_id,
   };
 }
 
@@ -143,6 +138,7 @@ export function SetupScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorField, setErrorField] = useState<string | null>(null);
+  const [modelsOutcome, setModelsOutcome] = useState<ModelsOutcome | null>(null);
   const [done, setDone] = useState<LoginMethod | null>(null);
 
   const set = useCallback(<K extends keyof Answers>(key: K, value: Answers[K]) => {
@@ -200,18 +196,6 @@ export function SetupScreen() {
           return 'Enter the OAuth client id and secret.';
         }
         return null;
-      case 'models':
-        if (answers.vertexKeyText.trim()) {
-          try {
-            const parsed = JSON.parse(answers.vertexKeyText);
-            if (!parsed || typeof parsed !== 'object' || parsed.type !== 'service_account') {
-              return 'That is not a service-account key JSON.';
-            }
-          } catch {
-            return 'The key is not valid JSON.';
-          }
-        }
-        return null;
       default:
         return null;
     }
@@ -230,28 +214,11 @@ export function SetupScreen() {
     setStep(STEPS[Math.max(stepIndex - 1, 0)]);
   };
 
-  const handleKeyFile = async (file: File | undefined) => {
-    if (!file) return;
-    set('vertexKeyText', await file.text());
-  };
-
   const handleComplete = async () => {
     if (!answers || !token) return;
     setBusy(true);
     setError(null);
     setErrorField(null);
-    let vertexKey: Record<string, unknown> | null = null;
-    if (answers.vertexKeyText.trim()) {
-      try {
-        vertexKey = JSON.parse(answers.vertexKeyText);
-      } catch {
-        setError('The service-account key is not valid JSON.');
-        setErrorField('vertex_service_account');
-        setStep('models');
-        setBusy(false);
-        return;
-      }
-    }
     try {
       const result = await completeSetup({
         token,
@@ -264,8 +231,6 @@ export function SetupScreen() {
         google_client_id: answers.loginMethod === 'google' ? answers.googleClientId.trim() : undefined,
         google_client_secret: answers.loginMethod === 'google' ? answers.googleClientSecret : undefined,
         google_project_id: answers.loginMethod === 'google' ? answers.googleProjectId.trim() : undefined,
-        vertex_service_account: vertexKey,
-        vertex_project_id: answers.vertexProjectId.trim(),
       });
       setDone(result.login_method);
       // Password sign-in: the response set the session cookie, so the
@@ -523,39 +488,13 @@ export function SetupScreen() {
         break;
       case 'models':
         stepBody = (
-          <>
-            <h1 className="setup-title">Models</h1>
-            <p className="setup-text">
-              Claude and Gemini run on Vertex AI: paste a GCP service-account key (Vertex AI User
-              role) and the project id. Skip this to connect an API-key provider (Anthropic,
-              OpenAI, OpenRouter, …) from the composer right after signing in instead.
-              {defaults.llm_configured && ' Models are already configured on this deployment.'}
-            </p>
-            <Field label="Service-account key JSON" optional invalid={invalid('vertex_service_account')}
-                   hint={defaults.vertex_key_present ? 'A key is already stored; a new one replaces it.' : undefined}>
-              <textarea
-                className="setup-input" spellCheck={false}
-                value={answers.vertexKeyText}
-                onChange={(e) => set('vertexKeyText', e.target.value)}
-                placeholder='{ "type": "service_account", "project_id": "…", … }'
-                aria-label="Service-account key JSON"
-              />
-              <input
-                type="file" accept="application/json,.json"
-                onChange={(e) => void handleKeyFile(e.target.files?.[0])}
-                aria-label="Service-account key file"
-              />
-            </Field>
-            <Field label="GCP project id for Vertex AI" optional invalid={invalid('vertex_project_id')}
-                   hint="Defaults to the key's project.">
-              <input
-                type="text" className="setup-input" autoComplete="off" spellCheck={false}
-                value={answers.vertexProjectId}
-                onChange={(e) => set('vertexProjectId', e.target.value)}
-                aria-label="GCP project id for Vertex AI"
-              />
-            </Field>
-          </>
+          <SetupModelsStep
+            token={token}
+            defaults={defaults.inference}
+            outcome={modelsOutcome}
+            onOutcome={setModelsOutcome}
+            onSkip={() => { setError(null); setStep('review'); }}
+          />
         );
         break;
       case 'review': {
@@ -580,13 +519,11 @@ export function SetupScreen() {
                   <dd>{answers.googleClientId.trim() || (defaults.google_oauth_configured ? 'stored client kept' : '')}</dd>
                 </>
               )}
-              <dt>Vertex AI</dt>
+              <dt>Models</dt>
               <dd>
-                {answers.vertexKeyText.trim()
-                  ? `key + project ${answers.vertexProjectId.trim() || 'from the key'}`
-                  : answers.vertexProjectId.trim()
-                    ? `project ${answers.vertexProjectId.trim()} (credentials from the environment)`
-                    : <span className="setup-muted">skipped; connect a provider after signing in</span>}
+                {modelsOutcome
+                  ? describeModelsOutcome(modelsOutcome)
+                  : <span className="setup-muted">skipped; connect a provider after signing in</span>}
               </dd>
             </dl>
             <p className="setup-footnote">

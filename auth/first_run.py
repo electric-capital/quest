@@ -17,11 +17,18 @@ them 404s ``setup_not_required`` once the deployment is configured):
   token plus the form defaults (existing values on a partially configured
   deployment, the request host as the public-URL suggestion). Rate-limited
   per client and globally -- the password check is an Argon2id derivation.
+- ``POST /app/api/setup/inference/provider`` and
+  ``POST /app/api/setup/inference/vertex`` (token required): the optional
+  models step. The first connects an API-key provider (or self-hosted
+  server) through the same quick setup as the composer's model setup card;
+  the second stores a Vertex service-account key and project id -- or just
+  the project id when Application Default Credentials are already present
+  -- and health-checks a Vertex model live. Both take effect immediately,
+  so the screen can show whether the credential works before moving on.
 - ``POST /app/api/setup/complete`` ``{token, ...answers}``: validates every
   answer first, then writes server_config.json (admin emails, sign-in
-  method, admission policy, public URL, Vertex project id), the
-  ``google_oauth`` credential store file, the Vertex service-account key
-  copy, and -- under password sign-in -- the first admin's account and
+  method, admission policy, public URL), the ``google_oauth`` credential
+  store file, and -- under password sign-in -- the first admin's account and
   password hash straight into the database, signing that admin in with the
   response.
 
@@ -30,8 +37,8 @@ without are present (``missing_required_config()``): ``admin_emails`` and a
 way to sign in (an admin with a password under password sign-in, Google
 OAuth client credentials under Google sign-in). Everything else degrades to
 a feature-level message and is configured later from the admin Settings
-sections; LLM credentials in particular also have the composer's model
-setup card.
+sections; LLM credentials skipped here are offered again by the composer's
+model setup card after sign-in.
 """
 
 import asyncio
@@ -332,7 +339,6 @@ def setup_defaults(request: Request) -> dict:
     """Form defaults for the setup screen: what is already configured plus
     the suggestions the screen cannot compute itself."""
     from auth.config import oauth_base_url
-    from chat.llm.config import get_configured_models
     from config.server_config import load_server_config
 
     config = load_server_config()
@@ -358,10 +364,35 @@ def setup_defaults(request: Request) -> dict:
         "google_client_id": str(web.get("client_id") or ""),
         "google_project_id": str(web.get("project_id") or ""),
         "redirect_paths": list(OAUTH_REDIRECT_PATHS),
-        "llm_configured": bool(get_configured_models()),
-        "vertex_project_id": str(config.get("anthropic", {}).get("vertex_project_id") or ""),
-        "vertex_key_present": _vertex_key_path().exists(),
         "public_email_domains": sorted(PUBLIC_EMAIL_DOMAINS),
+        "inference": inference_defaults(),
+    }
+
+
+def inference_defaults() -> dict:
+    """The models step: provider kinds to offer, the self-hosted API types,
+    and the Vertex AI environment -- whether Application Default
+    Credentials are already reachable (a key file or gcloud ADC), which
+    project they belong to, and the project id configured so far."""
+    from chat.llm.config import get_configured_models
+    from chat.llm.model_setup import provider_kind_views
+    from config.inference_providers import vertex_environment_status
+
+    kinds, api_types = provider_kind_views()
+    vertex = vertex_environment_status()
+    credentials = vertex["credentials"]
+    return {
+        "llm_configured": bool(get_configured_models()),
+        "kinds": kinds,
+        "api_types": api_types,
+        "vertex": {
+            # "env" (GOOGLE_APPLICATION_CREDENTIALS), "gcloud_adc" or None
+            "credentials_source": credentials["source"],
+            "service_account_email": credentials["service_account_email"],
+            "detected_project_id": credentials["project_id"],
+            "problem": credentials["problem"],
+            "configured_project_id": vertex["anthropic"]["vertex_project_id"],
+        },
     }
 
 
@@ -401,10 +432,6 @@ class CompleteRequest(BaseModel):
     google_client_id: str = ""
     google_client_secret: str = ""
     google_project_id: str = ""
-    # Optional LLM credentials: a GCP service-account key object and the
-    # Vertex project id (defaults to the key's project).
-    vertex_service_account: Optional[dict] = None
-    vertex_project_id: str = ""
 
 
 class SetupPlan:
@@ -413,7 +440,6 @@ class SetupPlan:
     def __init__(self):
         self.config_updates: dict = {}
         self.google_oauth: Optional[dict] = None
-        self.vertex_key: Optional[dict] = None
         self.admin_email: str = ""
         self.admin_password_hash: str = ""
 
@@ -500,38 +526,14 @@ async def validate_answers(body: CompleteRequest) -> SetupPlan:
             if base_url:
                 web["redirect_uris"] = [f"{base_url}{path}" for path in OAUTH_REDIRECT_PATHS]
             plan.google_oauth = {"web": web}
-
-    key = body.vertex_service_account
-    project_id = (body.vertex_project_id or "").strip()
-    if key is not None:
-        if not isinstance(key, dict) or key.get("type") != "service_account":
-            raise _error(
-                400, "invalid_params",
-                'That is not a service-account key (expected a JSON object with "type": "service_account").',
-                "vertex_service_account",
-            )
-        plan.vertex_key = key
-        project_id = project_id or str(key.get("project_id") or "").strip()
-        if not project_id:
-            raise _error(400, "invalid_params", "Enter the GCP project id for Vertex AI.", "vertex_project_id")
-    if project_id:
-        anthropic = dict(stored.get("anthropic") or {}) if isinstance(stored.get("anthropic"), dict) else {}
-        anthropic["vertex_project_id"] = project_id
-        plan.config_updates["anthropic"] = anthropic
     return plan
 
 
 async def apply_setup(plan: SetupPlan) -> None:
-    """Write the plan: config file, credential store, key copy, account."""
+    """Write the plan: config file, credential store, account."""
     from config.server_config import update_server_config
     from config.service_credentials import write_service_credentials
 
-    if plan.vertex_key is not None:
-        key_path = _vertex_key_path()
-        _write_private_json(key_path, plan.vertex_key)
-        # Point ADC at it in this process too (run.py does the same on every
-        # later start); an externally-set env var wins, as everywhere.
-        os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", str(key_path))
     if plan.google_oauth is not None:
         write_service_credentials("google_oauth", plan.google_oauth)
     update_server_config(plan.config_updates)
@@ -542,12 +544,134 @@ async def apply_setup(plan: SetupPlan) -> None:
         await ensure_account(plan.admin_email)
         await set_password_hash(plan.admin_email, plan.admin_password_hash)
 
-    if "anthropic" in plan.config_updates:
-        from chat.llm.config import get_configured_models, reset_provider_client_caches
-        from chat.llm.health import schedule_model_rechecks
 
-        reset_provider_client_caches()
-        schedule_model_rechecks(get_configured_models())
+# ---------------------------------------------------------------------------
+# Models step
+# ---------------------------------------------------------------------------
+
+def _require_token(token: str) -> None:
+    if not setup_token_valid(token):
+        raise _error(401, "setup_locked", "Unlock setup with the encryption password first.")
+
+
+class ProviderRequest(BaseModel):
+    token: str = ""
+    kind: str = ""
+    api_key: str = ""
+    # Self-hosted kind only
+    base_url: str = ""
+    api_type: str = ""
+
+
+@router.post("/inference/provider")
+async def setup_connect_provider(body: ProviderRequest):
+    """Connect an API-key provider or self-hosted server and add its models
+    (``quick_setup_provider()``, the composer's model setup card logic).
+    Returns ``{instance: {id, kind, label}, added, check, catalog_error}``."""
+    from chat.llm.model_setup import QuickSetupError, quick_setup_provider
+    from config.inference_providers import INSTANCE_KINDS
+
+    await _require_setup_open()
+    _require_token(body.token)
+    try:
+        result = await quick_setup_provider(
+            body.kind, api_key=body.api_key, base_url=body.base_url, api_type=body.api_type,
+        )
+    except QuickSetupError as exc:
+        raise _error(400, exc.code, str(exc), "api_key" if exc.code == "invalid_params" else "kind")
+    instance = result["instance"]
+    check = result["check"]
+    logger.info(
+        "[setup] Connected inference instance %s (%s): added %s, check %s",
+        instance["id"], instance["kind"], result["added"],
+        "n/a" if check is None else ("ok" if check["ok"] else check["error"]),
+    )
+    return {
+        **result,
+        "instance": {
+            "id": instance["id"],
+            "kind": instance["kind"],
+            "label": instance["label"] or INSTANCE_KINDS[instance["kind"]]["label"],
+        },
+    }
+
+
+class VertexRequest(BaseModel):
+    token: str = ""
+    # A GCP service-account key object; omitted when Application Default
+    # Credentials are already present in the environment.
+    service_account: Optional[dict] = None
+    # Defaults to the key's project_id.
+    project_id: str = ""
+
+
+@router.post("/inference/vertex")
+async def setup_connect_vertex(body: VertexRequest):
+    """Store a Vertex service-account key (0600 copy in the data dir, also
+    exported as GOOGLE_APPLICATION_CREDENTIALS into this process) and the
+    project id, then health-check the first Vertex model live. Returns
+    ``{project_id, credentials_source, check}``."""
+    from chat.llm.config import (
+        get_configured_models,
+        list_model_specs,
+        reset_provider_client_caches,
+    )
+    from chat.llm.health import get_model_health_store, schedule_model_rechecks
+    from config.inference_providers import vertex_environment_status
+    from config.server_config import raw_server_config, update_server_config
+
+    await _require_setup_open()
+    _require_token(body.token)
+    key = body.service_account
+    project_id = (body.project_id or "").strip()
+    if key is not None:
+        if not isinstance(key, dict) or key.get("type") != "service_account":
+            raise _error(
+                400, "invalid_params",
+                'That is not a service-account key (expected a JSON object with "type": "service_account").',
+                "service_account",
+            )
+        project_id = project_id or str(key.get("project_id") or "").strip()
+    elif not vertex_environment_status()["credentials"]["source"]:
+        raise _error(
+            400, "invalid_params",
+            "No Google credentials found in the environment: paste a service-account key.",
+            "service_account",
+        )
+    if not project_id:
+        raise _error(400, "invalid_params", "Enter the GCP project id for Vertex AI.", "project_id")
+
+    if key is not None:
+        key_path = _vertex_key_path()
+        _write_private_json(key_path, key)
+        # Point ADC at it in this process too (run.py does the same on every
+        # later start); an externally-set env var wins, as everywhere.
+        os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", str(key_path))
+    stored = raw_server_config()
+    anthropic = dict(stored.get("anthropic") or {}) if isinstance(stored.get("anthropic"), dict) else {}
+    anthropic["vertex_project_id"] = project_id
+    update_server_config({"anthropic": anthropic})
+    reset_provider_client_caches()
+
+    configured = set(get_configured_models())
+    vertex_models = [
+        spec.id for spec in list_model_specs()
+        if spec.instance_id is None and spec.id in configured
+    ]
+    check = None
+    if vertex_models:
+        check = await get_model_health_store().run_check(vertex_models[0])
+        schedule_model_rechecks(vertex_models[1:])
+    logger.info(
+        "[setup] Vertex AI configured for project %s (%s): check %s",
+        project_id, "key stored" if key is not None else "environment credentials",
+        "n/a" if check is None else ("ok" if check["ok"] else check["error"]),
+    )
+    return {
+        "project_id": project_id,
+        "credentials_source": vertex_environment_status()["credentials"]["source"],
+        "check": check,
+    }
 
 
 @router.post("/complete")
@@ -558,8 +682,7 @@ async def complete_setup(body: CompleteRequest, request: Request):
     from db.user_store import get_user_by_email
 
     await _require_setup_open()
-    if not setup_token_valid(body.token):
-        raise _error(401, "setup_locked", "Unlock setup with the encryption password first.")
+    _require_token(body.token)
 
     async with _complete_lock:
         await _require_setup_open()

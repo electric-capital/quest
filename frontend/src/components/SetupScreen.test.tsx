@@ -9,11 +9,14 @@ import { ApiClientError } from '../api/request';
 const mocks = vi.hoisted(() => ({
   unlockSetup: vi.fn(),
   completeSetup: vi.fn(),
+  setupConnectProvider: vi.fn(),
 }));
 
 vi.mock('../api/client', () => ({
   unlockSetup: mocks.unlockSetup,
   completeSetup: mocks.completeSetup,
+  setupConnectProvider: mocks.setupConnectProvider,
+  setupConnectVertex: vi.fn(),
 }));
 
 vi.mock('../contexts/AppConfigContext', () => ({
@@ -32,10 +35,18 @@ const DEFAULTS = {
   google_client_id: '',
   google_project_id: '',
   redirect_paths: ['/auth/callback', '/auth/google-services/callback'],
-  llm_configured: false,
-  vertex_project_id: '',
-  vertex_key_present: false,
   public_email_domains: ['gmail.com'],
+  inference: {
+    llm_configured: false,
+    kinds: [
+      { kind: 'anthropic', label: 'Anthropic', endpoint: false, catalog: 'anthropic', hint: 'sk-ant-...', key_required: true },
+    ],
+    api_types: [{ id: 'openai', label: 'OpenAI-compatible', description: 'llama.cpp, vLLM…' }],
+    vertex: {
+      credentials_source: null, service_account_email: null, detected_project_id: null,
+      problem: null, configured_project_id: '',
+    },
+  },
 };
 
 function type(label: string, value: string) {
@@ -104,11 +115,23 @@ describe('SetupScreen', () => {
     next();
 
     expect(screen.getByText('Models')).toBeTruthy();
-    type('Service-account key JSON', '{"type": "service_account", "project_id": "p"}');
+    // Connect a provider live, then move on.
+    fireEvent.click(screen.getByRole('button', { name: /Connect a provider with an API key/ }));
+    type('Anthropic API key', 'sk-ant-good');
+    mocks.setupConnectProvider.mockResolvedValue({
+      instance: { id: 'anthropic', kind: 'anthropic', label: 'Anthropic' },
+      added: ['anthropic:claude-sonnet-5', 'anthropic:claude-haiku-5-5'],
+      check: { model: 'anthropic:claude-sonnet-5', ok: true, error: null, checked_at: 'now' },
+      catalog_error: null,
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    expect((await screen.findByRole('status')).textContent).toContain('Anthropic: 2 models connected');
+    expect(mocks.setupConnectProvider).toHaveBeenCalledWith({ token: 'tok', kind: 'anthropic', api_key: 'sk-ant-good' });
     next();
 
     expect(screen.getByText('Review')).toBeTruthy();
     expect(screen.getByText('Me@OtherCo.com, ops@otherco.com')).toBeTruthy();
+    expect(screen.getByText('Anthropic: 2 models connected')).toBeTruthy();
     mocks.completeSetup.mockResolvedValue({ login_method: 'password', signed_in: true });
     fireEvent.click(screen.getByRole('button', { name: 'Finish setup' }));
 
@@ -124,8 +147,6 @@ describe('SetupScreen', () => {
       google_client_id: undefined,
       google_client_secret: undefined,
       google_project_id: undefined,
-      vertex_service_account: { type: 'service_account', project_id: 'p' },
-      vertex_project_id: '',
     });
     expect(screen.getByRole('status').textContent).toContain('You are signed in');
   });
@@ -147,7 +168,8 @@ describe('SetupScreen', () => {
     type('Client id', 'cid.apps.googleusercontent.com');
     type('Client secret', 'sekrit');
     next();
-    next(); // models skipped
+    fireEvent.click(screen.getByRole('button', { name: /Skip for now/ }));
+    expect(screen.getByText('skipped; connect a provider after signing in')).toBeTruthy();
 
     mocks.completeSetup.mockResolvedValue({ login_method: 'google', signed_in: false });
     fireEvent.click(screen.getByRole('button', { name: 'Finish setup' }));
@@ -160,7 +182,6 @@ describe('SetupScreen', () => {
       admin_password: undefined,
       google_client_id: 'cid.apps.googleusercontent.com',
       google_client_secret: 'sekrit',
-      vertex_service_account: null,
     }));
     expect(screen.getByRole('status').textContent).toContain('Sign in with Google');
   });

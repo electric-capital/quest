@@ -213,6 +213,8 @@ export const endpoints = {
   // the deployment is unconfigured).
   setupUnlock: () => `${API_BASE_URL}/setup/unlock`,
   setupComplete: () => `${API_BASE_URL}/setup/complete`,
+  setupProvider: () => `${API_BASE_URL}/setup/inference/provider`,
+  setupVertex: () => `${API_BASE_URL}/setup/inference/vertex`,
 
   adminFeatureGates: () => `${API_BASE_URL}/admin/feature-gates`,
 

@@ -168,8 +168,13 @@ class TestUnlock:
         assert defaults["admin_emails"] == []
         assert defaults["app_base_url"] == "http://testserver"
         assert not defaults["google_oauth_configured"]
-        assert not defaults["llm_configured"]
         assert defaults["redirect_paths"] == list(first_run.OAUTH_REDIRECT_PATHS)
+        inference = defaults["inference"]
+        assert not inference["llm_configured"]
+        assert {k["kind"] for k in inference["kinds"]} >= {"anthropic", "openrouter", "local"}
+        assert inference["api_types"][0]["id"] == "openai"
+        assert inference["vertex"]["credentials_source"] is None
+        assert inference["vertex"]["configured_project_id"] == ""
         assert defaults["public_email_domains"] == sorted(first_run.PUBLIC_EMAIL_DOMAINS)
 
     def test_defaults_reflect_partial_config(self, deployment):
@@ -189,7 +194,8 @@ class TestUnlock:
         assert defaults["allowed_login_emails"] == ["kid@gmail.com"]
         assert defaults["app_base_url"] == "https://q.otherco.com"
         assert defaults["app_base_url_configured"]
-        assert defaults["vertex_project_id"] == "proj"
+        assert defaults["inference"]["llm_configured"]
+        assert defaults["inference"]["vertex"]["configured_project_id"] == "proj"
 
     def test_empty_password_is_refused_without_kdf(self):
         assert _unlock(_client(), "   ").status_code == 401
@@ -234,7 +240,6 @@ class TestComplete:
             allowed_login_emails=["friend@gmail.com"],
             app_base_url="quest.otherco.com/",
             admin_password="correct horse battery",
-            vertex_service_account={"type": "service_account", "project_id": "otherco-quest"},
         )
         assert resp.status_code == 200, resp.text
         assert resp.json() == {"login_method": "password", "signed_in": True}
@@ -253,13 +258,8 @@ class TestComplete:
         # The gmail admin is outside the domain, so it is allow-listed.
         assert config["allowed_login_emails"] == ["friend@gmail.com", "me@gmail.com"]
         assert config["app_base_url"] == "https://quest.otherco.com"
-        assert config["anthropic"] == {"vertex_region": "europe-west1", "vertex_project_id": "otherco-quest"}
+        assert config["anthropic"] == {"vertex_region": "europe-west1"}
         assert config["custom_section"] == {"api_base": "https://internal"}
-
-        key_copy = data_dir / first_run.VERTEX_KEY_FILENAME
-        assert _mode(key_copy) == 0o600
-        assert json.loads(key_copy.read_text())["project_id"] == "otherco-quest"
-        assert os.environ["GOOGLE_APPLICATION_CREDENTIALS"] == str(key_copy)
         assert not (data_dir / "service_credentials" / "google_oauth.json").exists()
 
         assert _run(first_run.missing_required_config()) == []
@@ -301,7 +301,6 @@ class TestComplete:
         assert config["login_method"] == "google"
         assert config["allowed_login_emails"] == []
         assert "anthropic" not in config
-        assert not (data_dir / first_run.VERTEX_KEY_FILENAME).exists()
         assert _run(first_run.missing_required_config()) == []
 
     def test_google_sign_in_keeps_a_stored_client(self, deployment):
@@ -328,19 +327,6 @@ class TestComplete:
         assert _run(password_store.get_password_hash("a@otherco.com"))
         assert _run(user_store.get_user_by_email("b@otherco.com")) is None
 
-    def test_vertex_project_id_defaults_from_the_key(self, deployment):
-        config_file, _ = deployment
-        client = _client()
-        token = _unlock(client).json()["token"]
-        resp = _complete(
-            client, token, admin_emails=["a@otherco.com"], allowed_login_domain="otherco.com",
-            admin_password="correct horse",
-            vertex_service_account={"type": "service_account", "project_id": "from-key"},
-            vertex_project_id="",
-        )
-        assert resp.status_code == 200, resp.text
-        assert json.loads(config_file.read_text())["anthropic"]["vertex_project_id"] == "from-key"
-
     @pytest.mark.parametrize("answers, field", [
         ({"login_method": "ldap"}, "login_method"),
         ({"admin_emails": []}, "admin_emails"),
@@ -355,8 +341,6 @@ class TestComplete:
         ({"admin_password": ""}, "admin_password"),
         ({"login_method": "google", "google_client_id": ""}, "google_client_id"),
         ({"login_method": "google", "google_client_id": "cid", "google_client_secret": ""}, "google_client_secret"),
-        ({"vertex_service_account": {"type": "authorized_user"}}, "vertex_service_account"),
-        ({"vertex_service_account": {"type": "service_account"}}, "vertex_project_id"),
     ])
     def test_invalid_answers_name_the_field(self, deployment, answers, field):
         config_file, data_dir = deployment
@@ -383,6 +367,135 @@ class TestComplete:
         resp = _unlock(_client())
         assert resp.status_code == 404
         assert resp.json()["detail"]["error"] == "setup_not_required"
+
+
+class TestModelsStep:
+    """The optional models step: an API-key provider through the shared
+    quick setup, or Vertex AI from a key / the environment's ADC."""
+
+    @pytest.fixture
+    def quick_setup(self, monkeypatch):
+        import chat.llm.model_setup as model_setup
+        calls = []
+
+        async def fake(kind, *, api_key="", base_url="", api_type=""):
+            calls.append({"kind": kind, "api_key": api_key, "base_url": base_url, "api_type": api_type})
+            if kind == "nope":
+                raise model_setup.QuickSetupError("unknown_kind", "Unknown inference provider kind: nope")
+            if not api_key:
+                raise model_setup.QuickSetupError("invalid_params", "An API key is required for Anthropic.")
+            return {
+                "instance": {"id": "anthropic", "kind": "anthropic", "label": "", "models": []},
+                "added": ["anthropic:claude-sonnet-5"],
+                "check": {"model": "anthropic:claude-sonnet-5", "ok": api_key != "bad", "error": None if api_key != "bad" else "401"},
+                "catalog_error": None,
+            }
+
+        monkeypatch.setattr(model_setup, "quick_setup_provider", fake)
+        return calls
+
+    @pytest.fixture
+    def health(self, monkeypatch):
+        import chat.llm.health as health_mod
+        checked, scheduled = [], []
+
+        class Store:
+            async def run_check(self, model_id):
+                checked.append(model_id)
+                return {"model": model_id, "ok": True, "error": None, "checked_at": "now"}
+
+        monkeypatch.setattr(health_mod, "get_model_health_store", lambda: Store())
+        monkeypatch.setattr(health_mod, "schedule_model_rechecks", lambda ids: scheduled.append(list(ids)))
+        return checked, scheduled
+
+    def _token(self, client):
+        return _unlock(client).json()["token"]
+
+    def test_provider_requires_token(self):
+        resp = _client().post("/app/api/setup/inference/provider", json={"token": "x", "kind": "anthropic", "api_key": "k"})
+        assert resp.status_code == 401
+
+    def test_provider_connects_through_quick_setup(self, quick_setup):
+        client = _client()
+        resp = client.post("/app/api/setup/inference/provider", json={
+            "token": self._token(client), "kind": "anthropic", "api_key": "sk-ant-good",
+        })
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["instance"] == {"id": "anthropic", "kind": "anthropic", "label": "Anthropic"}
+        assert body["added"] == ["anthropic:claude-sonnet-5"]
+        assert body["check"]["ok"]
+        assert quick_setup == [{"kind": "anthropic", "api_key": "sk-ant-good", "base_url": "", "api_type": ""}]
+
+    def test_provider_reports_quick_setup_errors(self, quick_setup):
+        client = _client()
+        token = self._token(client)
+        resp = client.post("/app/api/setup/inference/provider", json={"token": token, "kind": "nope", "api_key": "k"})
+        assert resp.status_code == 400 and resp.json()["detail"]["error"] == "unknown_kind"
+        resp = client.post("/app/api/setup/inference/provider", json={"token": token, "kind": "anthropic"})
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == {
+            "error": "invalid_params", "message": "An API key is required for Anthropic.", "field": "api_key",
+        }
+
+    def test_vertex_key_is_stored_exported_and_checked(self, deployment, health):
+        config_file, data_dir = deployment
+        _write_config(config_file, anthropic={"vertex_region": "europe-west1"})
+        checked, scheduled = health
+        client = _client()
+        resp = client.post("/app/api/setup/inference/vertex", json={
+            "token": self._token(client),
+            "service_account": {"type": "service_account", "project_id": "otherco-quest"},
+        })
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["project_id"] == "otherco-quest"
+        assert body["credentials_source"] == "env"
+        assert body["check"]["ok"] and body["check"]["model"] == checked[0]
+        assert scheduled and checked[0] not in scheduled[0]
+        key_copy = data_dir / first_run.VERTEX_KEY_FILENAME
+        assert _mode(key_copy) == 0o600
+        assert json.loads(key_copy.read_text())["project_id"] == "otherco-quest"
+        assert os.environ["GOOGLE_APPLICATION_CREDENTIALS"] == str(key_copy)
+        config = json.loads(config_file.read_text())
+        assert config["anthropic"] == {"vertex_region": "europe-west1", "vertex_project_id": "otherco-quest"}
+        assert _unlock(client).json()["defaults"]["inference"]["vertex"] == {
+            "credentials_source": "env", "service_account_email": None,
+            "detected_project_id": "otherco-quest", "problem": None,
+            "configured_project_id": "otherco-quest",
+        }
+
+    def test_vertex_from_environment_credentials_needs_only_a_project(self, deployment, health, tmp_path, monkeypatch):
+        config_file, data_dir = deployment
+        adc = tmp_path / "adc.json"
+        adc.write_text(json.dumps({"type": "service_account", "project_id": "env-proj", "client_email": "sa@env"}))
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(adc))
+        client = _client()
+        token = self._token(client)
+        defaults = _unlock(client).json()["defaults"]["inference"]["vertex"]
+        assert defaults["credentials_source"] == "env"
+        assert defaults["detected_project_id"] == "env-proj"
+        assert defaults["service_account_email"] == "sa@env"
+        resp = client.post("/app/api/setup/inference/vertex", json={"token": token, "project_id": "env-proj"})
+        assert resp.status_code == 200, resp.text
+        assert json.loads(config_file.read_text())["anthropic"]["vertex_project_id"] == "env-proj"
+        assert not (data_dir / first_run.VERTEX_KEY_FILENAME).exists()
+        assert os.environ["GOOGLE_APPLICATION_CREDENTIALS"] == str(adc)
+
+    @pytest.mark.parametrize("body, field", [
+        ({}, "service_account"),                                   # no key, no ADC
+        ({"project_id": "p"}, "service_account"),
+        ({"service_account": {"type": "authorized_user"}}, "service_account"),
+        ({"service_account": {"type": "service_account"}}, "project_id"),
+    ])
+    def test_vertex_invalid_answers_name_the_field(self, deployment, health, body, field):
+        config_file, data_dir = deployment
+        client = _client()
+        resp = client.post("/app/api/setup/inference/vertex", json={"token": self._token(client), **body})
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["detail"]["field"] == field
+        assert not config_file.exists()
+        assert not (data_dir / first_run.VERTEX_KEY_FILENAME).exists()
 
 
 class TestNormalizeBaseUrl:
