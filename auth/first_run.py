@@ -108,8 +108,20 @@ MISSING_MESSAGES = {
     MISSING_GOOGLE_OAUTH: "Google OAuth client credentials (sign-in is impossible without them)",
 }
 
+# Shape checks only; inputs are length-capped first (RFC 5321 limits) so the
+# patterns never see a string long enough for backtracking to matter.
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _DOMAIN_RE = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$")
+MAX_EMAIL_LENGTH = 254
+MAX_DOMAIN_LENGTH = 253
+
+
+def _looks_like_email(value: str) -> bool:
+    return len(value) <= MAX_EMAIL_LENGTH and bool(_EMAIL_RE.match(value))
+
+
+def _looks_like_domain(value: str) -> bool:
+    return len(value) <= MAX_DOMAIN_LENGTH and bool(_DOMAIN_RE.match(value))
 
 # Unlock attempts: five per client and thirty in total per 15 minutes. The
 # password check costs an Argon2id derivation, so the global cap doubles
@@ -266,7 +278,7 @@ def _normalize_emails(raw: list, field: str, label: str) -> list[str]:
         email = str(value or "").strip().lower()
         if not email:
             continue
-        if not _EMAIL_RE.match(email):
+        if not _looks_like_email(email):
             raise _error(400, "invalid_params", f"{label}: {email!r} is not an email address.", field)
         if email not in emails:
             emails.append(email)
@@ -410,7 +422,7 @@ async def validate_answers(body: CompleteRequest) -> SetupPlan:
 
     domain = (body.allowed_login_domain or "").strip().lower().lstrip("@")
     if domain:
-        if not _DOMAIN_RE.match(domain):
+        if not _looks_like_domain(domain):
             raise _error(400, "invalid_params", f"{domain!r} is not a domain name.", "allowed_login_domain")
         if domain in PUBLIC_EMAIL_DOMAINS:
             raise _error(

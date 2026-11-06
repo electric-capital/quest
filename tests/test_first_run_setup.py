@@ -170,7 +170,7 @@ class TestUnlock:
         assert not defaults["google_oauth_configured"]
         assert not defaults["llm_configured"]
         assert defaults["redirect_paths"] == list(first_run.OAUTH_REDIRECT_PATHS)
-        assert "gmail.com" in defaults["public_email_domains"]
+        assert defaults["public_email_domains"] == sorted(first_run.PUBLIC_EMAIL_DOMAINS)
 
     def test_defaults_reflect_partial_config(self, deployment):
         config_file, _ = deployment
@@ -345,6 +345,8 @@ class TestComplete:
         ({"login_method": "ldap"}, "login_method"),
         ({"admin_emails": []}, "admin_emails"),
         ({"admin_emails": ["not-an-email"]}, "admin_emails"),
+        ({"admin_emails": ["a" * 250 + "@otherco.com"]}, "admin_emails"),
+        ({"allowed_login_domain": "a" * 250 + ".otherco.com"}, "allowed_login_domain"),
         ({"allowed_login_domain": "gmail.com"}, "allowed_login_domain"),
         ({"allowed_login_domain": "not a domain"}, "allowed_login_domain"),
         ({"allowed_login_emails": ["nope"]}, "allowed_login_emails"),
