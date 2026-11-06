@@ -38,7 +38,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 from typing import Optional
 from urllib.parse import urlsplit
 
@@ -108,20 +107,38 @@ MISSING_MESSAGES = {
     MISSING_GOOGLE_OAUTH: "Google OAuth client credentials (sign-in is impossible without them)",
 }
 
-# Shape checks only; inputs are length-capped first (RFC 5321 limits) so the
-# patterns never see a string long enough for backtracking to matter.
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_DOMAIN_RE = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$")
+# Shape checks, written without regular expressions (a pattern such as
+# ``[^@]+@[^@]+\.[^@]+`` backtracks polynomially on hostile input) and
+# capped at the RFC 5321 lengths.
 MAX_EMAIL_LENGTH = 254
 MAX_DOMAIN_LENGTH = 253
-
-
-def _looks_like_email(value: str) -> bool:
-    return len(value) <= MAX_EMAIL_LENGTH and bool(_EMAIL_RE.match(value))
+_DOMAIN_LABEL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-")
 
 
 def _looks_like_domain(value: str) -> bool:
-    return len(value) <= MAX_DOMAIN_LENGTH and bool(_DOMAIN_RE.match(value))
+    """``label(.label)+`` of lowercase letters, digits and hyphens, with an
+    alphabetic top-level label of two or more characters."""
+    if not value or len(value) > MAX_DOMAIN_LENGTH:
+        return False
+    labels = value.split(".")
+    if len(labels) < 2 or not all(labels):
+        return False
+    if any(set(label) - _DOMAIN_LABEL_CHARS for label in labels):
+        return False
+    tld = labels[-1]
+    return len(tld) >= 2 and tld.isalpha()
+
+
+def _looks_like_email(value: str) -> bool:
+    """``local@host.tld`` with no whitespace and exactly one ``@``."""
+    if not value or len(value) > MAX_EMAIL_LENGTH or any(c.isspace() for c in value):
+        return False
+    local, sep, host = value.partition("@")
+    if not sep or not local or "@" in host:
+        return False
+    head, dot, tail = host.rpartition(".")
+    return bool(dot and head and tail)
+
 
 # Unlock attempts: five per client and thirty in total per 15 minutes. The
 # password check costs an Argon2id derivation, so the global cap doubles
