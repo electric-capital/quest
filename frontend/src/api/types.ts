@@ -666,7 +666,6 @@ export interface WebSocketSendMessage {
   /** Thinking level picked for ``model`` (one of its thinking_efforts);
    *  omitted = the model's default. */
   thinking_effort?: string;
-  guide_id?: string;
   skill_ids?: string[];
   /** Per-conversation flags selected via the composer Flags popover.
    *  Honored on the first message only (out-of-band of the %%flags line). */
@@ -774,7 +773,6 @@ export interface SearchResponse {
 }
 
 export interface UserSettings {
-  custom_system_prompt?: string;
   slack_default_model?: string | null;
   default_model?: string | null;
   // Last-used composer model inside public projects (public visibility has
@@ -1010,6 +1008,58 @@ export interface MemoryInboxResolvedResponse {
   next_cursor: string | null;
 }
 
+/** A skill a ``guides_converted`` notification says a guide became. */
+export interface ConvertedGuideSkill {
+  skill_id: string;
+  skill_name: string;
+  guide_name: string;
+  was_default: boolean;
+}
+
+/** A routine a ``guides_converted`` notification says lost its guide. */
+export interface ConvertedGuideRoutine {
+  routine_id: string;
+  routine_name: string;
+  project_id: string;
+  project_name: string;
+  skill_id: string;
+  skill_name: string;
+}
+
+/**
+ * A system notification (the inbox's Other tab, chat/notifications.py):
+ * something the system did for the user that needs no decision. Open until
+ * the user dismisses it. ``title`` and ``body`` (plain text, line breaks
+ * kept) always stand on their own; ``data`` is the kind's details.
+ */
+export interface UserNotification {
+  id: string;
+  /** e.g. ``guides_converted``; a kind this build does not know renders
+   *  with its title and body only. */
+  kind: string;
+  title: string;
+  body: string;
+  data: Record<string, unknown> | null;
+  created_at: string;
+  /** null while the notification is open. */
+  dismissed_at: string | null;
+}
+
+export interface NotificationsListResponse {
+  /** Newest first, open and dismissed. */
+  notifications: UserNotification[];
+  open_count: number;
+}
+
+export interface NotificationsCountResponse {
+  open_count: number;
+}
+
+export interface NotificationDismissResponse {
+  notification: UserNotification;
+  open_count: number;
+}
+
 export interface AcceptMemorySuggestionResponse {
   suggestion: MemorySuggestion;
   /** The memory created; null when the suggestion was archive-only. */
@@ -1049,21 +1099,6 @@ export interface ProjectMemorySuggestionsListResponse {
 export interface AcceptProjectMemorySuggestionResponse {
   suggestion: ProjectMemorySuggestion;
   memory: ProjectMemory;
-}
-
-// Guide types
-export interface Guide {
-  id: string;
-  user_id: number;
-  name: string;
-  content: string;
-  is_default: boolean;
-  created_at: string;
-  updated_at: string | null;
-}
-
-export interface GuidesListResponse {
-  guides: Guide[];
 }
 
 // Skill types
@@ -1150,7 +1185,6 @@ export interface Routine {
   user_id: number;
   name: string;
   prompt: string;
-  guide_id: string | null;
   model: string | null;
   created_at: string;
   updated_at: string | null;
@@ -2316,35 +2350,6 @@ export interface AdminUsageReport {
   // Gap-free, oldest first, each ending with the in-progress period that
   // contains `today`: 90 days / 52 Monday-start weeks / 24 calendar months.
   series: Record<AdminUsageGranularity, AdminUsageBucket[]>;
-}
-
-// One row of the admin Guides report (System Reports > Guides). A deprecation
-// tracker: every user guide (guides table, incl. empty auto-created default
-// rows) plus every project with non-empty project instructions
-// (projects.guide). Content is never shipped, only its length.
-export interface AdminGuideReportRow {
-  kind: 'user' | 'project';
-  // Guide id for kind=user, project id for kind=project.
-  id: string;
-  // Guide name (user) or project name (project).
-  name: string;
-  user_id: number;
-  user_email: string;
-  user_name: string;
-  // kind=user only (null for project rows).
-  is_default: boolean | null;
-  // kind=project only (null for user rows).
-  project_id: string | null;
-  public: boolean | null;
-  content_length: number;
-  // Routines still referencing the guide as an override; kind=user only.
-  routine_count: number | null;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
-export interface AdminGuidesReportResponse {
-  guides: AdminGuideReportRow[];
 }
 
 // Admin System Reports "Docs" / "Tables" sections

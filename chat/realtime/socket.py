@@ -569,7 +569,6 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
     thinking_effort = data.get("thinking_effort")
     if not isinstance(thinking_effort, str) or not thinking_effort:
         thinking_effort = None
-    guide_id = data.get("guide_id")
     skill_ids = data.get("skill_ids")
 
     # Out-of-band flag selection (composer Flags popover). Validated below and,
@@ -883,7 +882,6 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
             timezone_str=timezone_str,
             selected_model=selected_model,
             thinking_effort=thinking_effort,
-            guide_id=guide_id,
             project_id=project_id,
             routine_id=routine_id,
             skill_ids=skill_ids,
@@ -970,7 +968,6 @@ async def _run_send_message(
     user_message: str,
     timezone_str: str,
     selected_model: Optional[str],
-    guide_id: Optional[str],
     project_id: Optional[str],
     routine_id: Optional[str],
     skill_ids: Optional[list[str]],
@@ -1037,7 +1034,6 @@ async def _run_send_message(
             model=selected_model,
             on_event=on_event,
             messages_out=shared_messages,
-            guide_id=guide_id,
             project_id=project_id,
             routine_id=routine_id,
             skill_ids=skill_ids,

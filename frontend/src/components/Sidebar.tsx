@@ -105,7 +105,7 @@ export const Sidebar = React.memo(function Sidebar({
 
   const drilledProject = projects.find((p) => p.id === drilledProjectId) ?? null;
   // The routine modals trim themselves for a public project (public model
-  // list, no skill auto-loads or guide override).
+  // list, no skill auto-loads).
   const drilledProjectIsPublic = Boolean(drilledProject?.public);
 
   const navigate = useNavigate();
@@ -402,7 +402,6 @@ export const Sidebar = React.memo(function Sidebar({
       setPendingRoutineMessage({
         conversationId: response.id,
         prompt: routine.prompt,
-        guideId: routine.guide_id,
       });
     } catch (err) {
       if (err instanceof ApiClientError) {

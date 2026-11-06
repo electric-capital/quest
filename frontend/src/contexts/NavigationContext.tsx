@@ -16,7 +16,6 @@ import type { ComposerAttachmentRef } from '../api/types';
 export interface PendingRoutineMessage {
   conversationId: string;
   prompt: string;
-  guideId: string | null;
 }
 
 // Pending first message (set by the root HomeComposer, consumed by ChatPanel).

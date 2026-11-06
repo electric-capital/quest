@@ -15,7 +15,6 @@ import { TotalUsageReport } from '../components/TotalUsageReport';
 import { TopConversationsTable } from '../components/TopConversationsTable';
 import { UsersReportTable } from '../components/UsersReportTable';
 import { ModelsReportTable } from '../components/ModelsReportTable';
-import { GuidesReportTable } from '../components/GuidesReportTable';
 import { DocsReportTable } from '../components/DocsReportTable';
 import { TablesReportTable } from '../components/TablesReportTable';
 import { MemoriesReportTable } from '../components/MemoriesReportTable';
@@ -74,11 +73,6 @@ const SECTIONS = [
     key: 'tools',
     label: 'Tool Calls',
     component: ToolCallsReportTable,
-  },
-  {
-    key: 'guides',
-    label: 'Guides',
-    component: GuidesReportTable,
   },
 ] as const;
 

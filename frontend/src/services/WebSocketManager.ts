@@ -108,7 +108,6 @@ class WebSocketManagerClass {
     conversationId: string,
     message: string,
     model?: string,
-    guideId?: string,
     skillIds?: string[],
     attachments?: ComposerAttachmentRef[],
     flags?: string[],
@@ -126,7 +125,6 @@ class WebSocketManagerClass {
       ...(model && { model }),
       // The thinking level picked for the model; omitted = its default.
       ...(model && thinkingEffort && { thinking_effort: thinkingEffort }),
-      ...(guideId && { guide_id: guideId }),
       ...(skillIds && skillIds.length > 0 && { skill_ids: skillIds }),
       ...(attachments && attachments.length > 0 && { attachments }),
       ...(flags && flags.length > 0 && { flags }),

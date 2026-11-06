@@ -4,8 +4,7 @@ Provides async CRUD operations for skills and skill sharing.
 Skills support three visibility levels: private (creator only),
 shared (creator + explicitly shared users), and public (all users).
 
-This module follows the same async pattern as db/guide_store.py:
-each function opens a fresh AsyncSessionLocal() session.
+Each function opens a fresh AsyncSessionLocal() session.
 """
 
 import uuid

@@ -26,6 +26,13 @@ test('navigate inbox tabs, reload deep links, and return using browser history',
   await page.goBack();
   await expect(page).toHaveURL(/\/inbox$/);
   await expect(page.getByRole('tab', { name: 'Requests' })).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('tab', { name: 'Other', exact: true }).click();
+  await expect(page).toHaveURL(/\/inbox\/other$/);
+  await expect(page.getByText('No new notifications.')).toBeVisible();
+  await page.reload();
+  await closeOnboarding(page);
+  await expect(page.getByRole('tab', { name: 'Other' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByText('No new notifications.')).toBeVisible();
 });
 
 for (const feature of ['Docs', 'Tables']) {

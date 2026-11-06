@@ -248,7 +248,7 @@ async def delete_schedule_for_routine(routine_id: str) -> bool:
 async def list_enabled_schedules() -> list[dict]:
     """List all enabled schedules (used by the scheduler daemon).
 
-    Returns schedules joined with routine data (routine name, prompt, guide_id,
+    Returns schedules joined with routine data (routine name, prompt,
     project_id, plus the project's archived flag for the archived-project
     pause) so the scheduler has everything it needs to execute runs.
     """
@@ -633,7 +633,6 @@ def _routine_summary(
         "user_id": routine.user_id,
         "name": routine.name,
         "prompt": routine.prompt,
-        "guide_id": routine.guide_id,
         "model": routine.model,
         "project_archived": bool(project_archived),
     }

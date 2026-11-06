@@ -162,7 +162,7 @@ When the conversation is Slack-driven and the composer is locked, `ChatPanel.tsx
 
 ### Disabled Model Selector
 
-Slack-driven conversations show a **disabled** model selector that displays the conversation's persisted `model` (see [Database Architecture](database.md) for `conversations.model`). The selector uses a "Server default" sentinel option when the stored value is NULL, matching the label used in the Slack settings section. Model IDs that are no longer in `AVAILABLE_MODELS` (retired or unknown) are still rendered by ID so the user can see exactly what the conversation is running on. The normal (editable) model/guide/skill row is hidden for these conversations.
+Slack-driven conversations show a **disabled** model selector that displays the conversation's persisted `model` (see [Database Architecture](database.md) for `conversations.model`). The selector uses a "Server default" sentinel option when the stored value is NULL, matching the label used in the Slack settings section. Model IDs that are no longer in `AVAILABLE_MODELS` (retired or unknown) are still rendered by ID so the user can see exactly what the conversation is running on. The normal (editable) model/skill row is hidden for these conversations.
 
 ## Constraints
 

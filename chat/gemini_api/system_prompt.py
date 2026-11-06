@@ -565,7 +565,6 @@ def _connected_accounts_block(paragraph: str) -> str:
 def get_system_prompt(
     user_api_key: str,
     base_url: str = "http://localhost:8000",
-    custom_system_prompt: str = "",
     connected_services: dict[str, bool] | None = None,
     user_name: str = "",
     user_email: str = "",
@@ -586,7 +585,6 @@ def get_system_prompt(
     Args:
         user_api_key: User's API key (embedded in the proxy preamble).
         base_url: Base URL for the API proxy.
-        custom_system_prompt: Optional user-defined system prompt to prepend.
         connected_services: Dict mapping service group names to booleans.
             When None, all services are included.
         user_name: User's display name (from profile).
@@ -649,18 +647,6 @@ def get_system_prompt(
             identity_line = f"\nYou are an AI agent helping {user_name} ({user_email}).\n"
         else:
             identity_line = f"\nYou are an AI agent helping {user_email}.\n"
-
-    # Build the custom prompt section if provided
-    custom_section = ""
-    if custom_system_prompt and custom_system_prompt.strip():
-        custom_section = f"""
-
-**User's Custom Instructions:**
-{custom_system_prompt.strip()}
-
----
-
-"""
 
     # Build the skills section if provided (auto-loaded + project-auto-loaded)
     skills_section = ""
@@ -803,7 +789,7 @@ Facts the user has saved about themselves and how they want you to work, newest 
     )
 
     return f"""You are Quest, a personal AI assistant. You have access to the user's APIs and connected services through a local API proxy.
-{identity_line}{custom_section}{skills_section}{project_section}{memories_section}
+{identity_line}{skills_section}{project_section}{memories_section}
 
 **Message format:** Each user message is delivered in an XML envelope with metadata:
 
@@ -963,8 +949,8 @@ def get_user_subagent_system_prompt(
     the caller until the target user approves the return call, and the
     prompt is explicit about that boundary.
 
-    Deliberately excludes the target user's custom system prompt and
-    default guide: the target is not driving this conversation, and their
+    Deliberately excludes the target user's own auto-loaded skills and
+    memories: the target is not driving this conversation, and their
     personal instructions could leak into a response that ultimately goes
     to another user. Only the caller-specified autoload skills
     (``skills_content``) are injected.
@@ -1076,10 +1062,7 @@ def get_inference_api_system_prompt(
     prompt is explicit that intermediate output is pointless and the model
     must finish with exactly one return call.
 
-    Deliberately excludes the user's custom system prompt and guides: the
-    caller is another application, and per-user chat instructions (tone,
-    formatting quirks) should not shape a machine-consumed response.
-    Auto-loaded skills ARE injected (``skills_content``) since they define
+    Auto-loaded skills are injected (``skills_content``) since they define
     the user's data reach.
     """
     user_display = (
@@ -1426,7 +1409,6 @@ def get_sub_agent_system_prompt(
     agent_name: str,
     user_api_key: str,
     base_url: str = "http://localhost:8000",
-    custom_system_prompt: str = "",
     connected_services: dict[str, bool] | None = None,
     user_name: str = "",
     user_email: str = "",
@@ -1447,7 +1429,6 @@ def get_sub_agent_system_prompt(
         agent_name: The sub-agent's display name.
         user_api_key: User's API key (embedded in the proxy preamble).
         base_url: Base URL for the API proxy.
-        custom_system_prompt: Optional user-defined system prompt to prepend.
         connected_services: Dict mapping service group names to booleans.
             When None, all services are included.
         user_name: User's display name (from profile).
@@ -1486,18 +1467,6 @@ def get_sub_agent_system_prompt(
             identity_line = f"\nYou are an AI agent helping {user_name} ({user_email}).\n"
         else:
             identity_line = f"\nYou are an AI agent helping {user_email}.\n"
-
-    # Build the custom prompt section if provided
-    custom_section = ""
-    if custom_system_prompt and custom_system_prompt.strip():
-        custom_section = f"""
-
-**User's Custom Instructions:**
-{custom_system_prompt.strip()}
-
----
-
-"""
 
     # Build the skills section if provided
     skills_section = ""
@@ -1629,7 +1598,7 @@ def get_sub_agent_system_prompt(
         )
 
     return f"""You are a sub-agent of Quest, named "{agent_name}". You have been spawned by a parent agent to complete a specific task.
-{identity_line}{custom_section}{skills_section}{project_section}
+{identity_line}{skills_section}{project_section}
 **Message format:** Each user message is delivered in an XML envelope with metadata:
 
 ```

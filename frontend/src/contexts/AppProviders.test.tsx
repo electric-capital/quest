@@ -20,7 +20,6 @@ const mocks = vi.hoisted(() => ({
   checkSession: vi.fn(),
   fetchVersion: vi.fn(() => Promise.resolve({ git_hash: 'abc' })),
   fetchProjects: vi.fn(() => Promise.resolve({ projects: [] })),
-  fetchGuides: vi.fn(() => Promise.resolve({ guides: [] })),
   wsConnect: vi.fn(),
   wsDisconnect: vi.fn(),
 }));
@@ -29,7 +28,6 @@ vi.mock('../utils/auth', () => ({ checkSession: mocks.checkSession }));
 vi.mock('../api/client', () => ({
   fetchVersion: mocks.fetchVersion,
   fetchProjects: mocks.fetchProjects,
-  fetchGuides: mocks.fetchGuides,
 }));
 vi.mock('../services/PersistentWebSocket', () => ({
   persistentWebSocket: {
@@ -147,7 +145,7 @@ describe('AppProviders', () => {
 
     await waitFor(() => expect(screen.getByTestId('auth-email').textContent).toBe('user@example.com'));
     await waitFor(() => expect(screen.getByTestId('app-name').textContent).toBe('DevQuest'));
-    // Let the post-auth loads (projects, guides gate) settle.
+    // Let the post-auth loads (projects) settle.
     await waitFor(() => expect(mocks.fetchProjects).toHaveBeenCalled());
 
     const before = {

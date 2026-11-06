@@ -522,8 +522,6 @@ create_action_request(
 - If the routine changes while the approval card is open, the approve fails
   cleanly -- re-run `list_routines` and propose the edit again.
 - There is no agent-side delete: users delete routines in the project UI.
-  The deprecated per-routine guide override is not settable or editable
-  here either.
 
 ### When to load this skill
 

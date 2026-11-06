@@ -42,13 +42,14 @@ import type {
   MemoryInboxCountsResponse,
   MemoryInboxPendingResponse,
   MemoryInboxResolvedResponse,
+  NotificationsCountResponse,
+  NotificationDismissResponse,
+  NotificationsListResponse,
   ProjectMemory,
   ProjectMemoriesListResponse,
   ProjectMemorySuggestion,
   ProjectMemorySuggestionsListResponse,
   AcceptProjectMemorySuggestionResponse,
-  Guide,
-  GuidesListResponse,
   Skill,
   SkillsListResponse,
   SkillSharesResponse,
@@ -71,7 +72,6 @@ import type {
   MostExpensiveConversationsResponse,
   AdminUserReportResponse,
   AdminModelReportResponse,
-  AdminGuidesReportResponse,
   AdminDocsReportResponse,
   AdminTablesReportResponse,
   AdminMemoriesReportResponse,
@@ -313,6 +313,20 @@ export function fetchMemoryInboxResolved(
   });
 }
 
+// The inbox's Other tab: system notifications (chat/notification_routes.py)
+
+export function fetchNotifications(): Promise<NotificationsListResponse> {
+  return apiGet(endpoints.notifications());
+}
+
+export function fetchNotificationsCount(): Promise<NotificationsCountResponse> {
+  return apiGet(endpoints.notificationsCount());
+}
+
+export function dismissNotification(notificationId: string): Promise<NotificationDismissResponse> {
+  return apiPost(endpoints.notificationDismiss(notificationId));
+}
+
 // Project memories (chat/project_memory_routes.py)
 
 export function fetchProjectMemories(
@@ -384,29 +398,6 @@ export function createInferenceApiKey(name: string): Promise<CreatedInferenceApi
 
 export function deleteInferenceApiKey(keyId: string): Promise<{ success: boolean }> {
   return apiDelete(endpoints.inferenceApiKey(keyId));
-}
-
-// Guide API functions
-
-export function fetchGuides(): Promise<GuidesListResponse> {
-  return apiGet(endpoints.guides());
-}
-
-export function convertGuideToSkill(
-  guideId: string,
-): Promise<{ skill: Skill; autoload_enabled: boolean }> {
-  return apiPost(`${endpoints.guide(guideId)}/convert-to-skill`);
-}
-
-export function updateGuide(
-  guideId: string,
-  updates: { name?: string; content?: string },
-): Promise<Guide> {
-  return apiPut(endpoints.guide(guideId), { body: updates });
-}
-
-export function deleteGuide(guideId: string): Promise<{ success: boolean }> {
-  return apiDelete(endpoints.guide(guideId));
 }
 
 // Skill API functions
@@ -878,7 +869,7 @@ export function fetchRoutineCosts(
 
 export function createRoutine(
   projectId: string,
-  data: { name: string; prompt: string; guide_id?: string | null; model?: string | null },
+  data: { name: string; prompt: string; model?: string | null },
 ): Promise<Routine> {
   return apiPost(endpoints.projectRoutines(projectId), { body: data });
 }
@@ -889,8 +880,6 @@ export function updateRoutine(
   updates: {
     name?: string;
     prompt?: string;
-    guide_id?: string | null;
-    clear_guide?: boolean;
     model?: string | null;
     clear_model?: boolean;
     // Optimistic-concurrency token: the routine's updated_at ISO string at
@@ -1074,10 +1063,6 @@ export function fetchAdminModelReport(
   return apiGet(endpoints.adminModelReport(), {
     query: { start: start || undefined, end: end || undefined },
   });
-}
-
-export function fetchAdminGuidesReport(): Promise<AdminGuidesReportResponse> {
-  return apiGet(endpoints.adminGuidesReport());
 }
 
 export function fetchAdminDocsReport(

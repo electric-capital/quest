@@ -571,7 +571,7 @@ from chat.routes import router as chat_router
 from chat.file_routes import router as file_router
 from chat.memory_routes import router as memory_router
 from chat.project_memory_routes import router as project_memory_router
-from chat.guide_routes import router as guide_router
+from chat.notification_routes import router as notification_router
 from chat.project_routes import router as project_router
 from chat.routine_routes import router as routine_router
 from chat.schedule_routes import router as schedule_router
@@ -597,7 +597,7 @@ app.include_router(chat_router)
 app.include_router(file_router)
 app.include_router(memory_router)
 app.include_router(project_memory_router)
-app.include_router(guide_router)
+app.include_router(notification_router)
 app.include_router(project_router)
 app.include_router(routine_router)
 app.include_router(schedule_router)
@@ -693,9 +693,11 @@ async def serve_spa_admin(rest: str):
 
 @app.get("/inbox")
 @app.get("/inbox/memories")
+@app.get("/inbox/other")
 async def serve_spa_inbox():
-    """Serve SPA for the inbox deep links (the Requests and Memories tabs
-    of the inbox view -- linked from Slack pending-request reminder DMs)."""
+    """Serve SPA for the inbox deep links (the Requests, Memories and Other
+    tabs of the inbox view -- the first two are linked from Slack
+    pending-request reminder DMs)."""
     return FileResponse(FRONTEND_BUILD_DIR / "index.html")
 
 @app.get("/docs")

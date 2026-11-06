@@ -47,19 +47,6 @@ logger = logging.getLogger(__name__)
 # matches the flag name in chat/conversation_flags.py.
 FEATURE_USER_SUBAGENTS = "user_subagents"
 
-# Legacy guides (see docs/architecture/guides.md): named system-prompt
-# presets deprecated in favor of skills. The gate exists so an existing
-# install can keep guides alive while its users migrate; new setups leave
-# it off and guides are fully inert -- the /guides API 403s, the Settings
-# Guides section and routine guide-override picker are hidden, routines
-# cannot be given a guide override, and neither an explicit routine
-# guide_id nor an already-snapshotted guide is applied to any turn.
-# Nothing is deleted: the guide rows, routine guide_id references, and
-# conversation snapshots are preserved, so reopening the gate restores
-# the previous behavior. Per-user access lets an admin keep guides on
-# only for the people who have not migrated yet.
-FEATURE_GUIDES = "guides"
-
 # Voice input (see docs/architecture/voice-input.md): a microphone button in
 # the chat composer records a short clip in the browser and POSTs it to
 # ``/app/api/transcribe``, which transcribes it server-side with a Gemini
@@ -143,7 +130,6 @@ FEATURE_DREAMING = "dreaming"
 # enables it.
 KNOWN_FEATURES = (
     FEATURE_USER_SUBAGENTS,
-    FEATURE_GUIDES,
     FEATURE_VOICE_INPUT,
     FEATURE_DOCS,
     FEATURE_DOC_NOTES,
@@ -157,7 +143,6 @@ KNOWN_FEATURES = (
 # run involves two users (caller and target) and a per-user list would be
 # ambiguous about which side it restricts.
 PER_USER_ACCESS_FEATURES = frozenset({
-    FEATURE_GUIDES,
     FEATURE_VOICE_INPUT,
     FEATURE_DOCS,
     FEATURE_DOC_NOTES,
@@ -186,18 +171,6 @@ FEATURE_LABELS: dict[str, dict[str, str]] = {
             "Lets conversations started with the 'user_subagents' flag "
             "propose running approved read-only subagents in other users' "
             "accounts (run_user_subagent)."
-        ),
-    },
-    FEATURE_GUIDES: {
-        "label": "Guides (legacy)",
-        "description": (
-            "Keeps the deprecated Guides feature available while users "
-            "migrate to Skills: the Settings > Guides section, the "
-            "convert-to-skill flow, and routine guide overrides. Off by "
-            "default for new installs. While off, existing guides are kept "
-            "but never applied to conversations, and routines cannot be "
-            "given a guide override. Access can be granted to all users or "
-            "only to specific users."
         ),
     },
     FEATURE_VOICE_INPUT: {
@@ -325,16 +298,6 @@ def browser_enabled_for(user_email: str) -> bool:
     prompt).
     """
     return is_feature_enabled_for_user(FEATURE_BROWSER, user_email)
-
-
-def guides_enabled_for(user_email: str) -> bool:
-    """Whether the legacy guides feature is on for this user.
-
-    Convenience wrapper over :func:`is_feature_enabled_for_user` for the
-    many guide enforcement points (guide routes, routine guide overrides,
-    the conversation-loop guide resolution, the settings sync).
-    """
-    return is_feature_enabled_for_user(FEATURE_GUIDES, user_email)
 
 
 def _normalize_email(email: str) -> str:

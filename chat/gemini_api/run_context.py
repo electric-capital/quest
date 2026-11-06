@@ -61,7 +61,6 @@ class RunContext:
     subagent_caller: dict | None
 
     # Prompt inputs shared with sub-agent spawns
-    custom_prompt: str
     resolved_project_guide: str
     resolved_skills_content: str
 

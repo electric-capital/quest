@@ -293,7 +293,7 @@ There is no per-conversation WebSocket: clients use the persistent socket and re
 
 ### Send Message
 
-`{op: "send_message", conversation_id, message, model?, thinking_effort?, guide_id?, skill_ids?, timezone?, attachments?, flags?, attached_filenames?, client_send_id?}` kicks off a model run on this conversation (`guide_id` is only sent by the routine auto-send path -- the composer no longer offers guides). `thinking_effort`: [LLM Providers -- Thinking effort](../architecture/llm-providers.md#thinking-effort).
+`{op: "send_message", conversation_id, message, model?, thinking_effort?, skill_ids?, timezone?, attachments?, flags?, attached_filenames?, client_send_id?}` kicks off a model run on this conversation. `thinking_effort`: [LLM Providers -- Thinking effort](../architecture/llm-providers.md#thinking-effort).
 
 The user message is appended to `chat_history.json` (which fires `message_appended` to every subscriber), the sending connection alone receives the delivery receipt `{type: "send_message_accepted", conversation_id, seq, client_send_id?}` (the optional opaque `client_send_id` from the request is echoed verbatim so the sender can match the receipt to its optimistic bubble; no receipt is sent when the append fails -- see [Realtime -- Delivery Receipt and Failed Sends](../architecture/realtime.md#delivery-receipt-and-failed-sends)), then `run_conversation_turn()` runs as a cancellable task.
 
@@ -372,7 +372,7 @@ These endpoints are defined in `chat/routes/user.py` and `chat/routes/admin.py`.
 
 - **POST `/app/api/admin/shutdown`** -- Graceful server shutdown (`admin_shutdown()` in `chat/routes/admin.py`). Admin-only (checked via `is_admin()` in `chat/auth.py`). Sets `app.state.shutdown_event`; lifespan handler sends SIGTERM after 1-second delay.
 - **GET `/app/api/settings`** -- Get user settings (`get_settings()` in `chat/routes/user.py`). Reads from `settings` column in user record.
-- **PUT `/app/api/settings`** -- Update user settings (`update_settings()`). Calls `invalidate_user_sessions()` to discard cached SDK sessions when system prompt changes.
+- **PUT `/app/api/settings`** -- Update user settings (`update_settings()`). Calls `invalidate_user_sessions()` to discard the user's cached SDK sessions.
   - Accepts `default_model` (per-user web/composer default for private conversations) and `public_default_model` (the same for public-project conversations), each validated via `resolve_model()` (Vertex registry ids and `<instance>:<wire_id>` instance-model ids) with empty string normalised to NULL (clear) and unknown ids rejected with 400 `invalid_model` -- mirrors the `slack_default_model` handling. The FE writes one of them best-effort only on the first send of a new chat, under the key matching the chat's visibility, with `default_thinking_effort` / `public_default_thinking_effort` (the pick's level; empty string clears, validated only when a turn uses it).
   - Also accepts `theme` (Settings > Appearance colour scheme): `"light"` / `"dark"` stored as-is, `"auto"` or empty string normalised to NULL (follow the OS), anything else rejected with 400 `invalid_theme`. `GET /app/api/me` surfaces the stored value as `theme` (null = auto) so the FE can apply it on hydration.
 - **GET `/api/instructions`** -- Get full API documentation with embedded API key (`get_instructions()` in `quest.py`). Includes all services regardless of connection status (unlike system prompts which are filtered). Source of truth: `get_instructions_content()` in `api/instructions.py`.
@@ -429,18 +429,13 @@ Action requests are created by the LLM agent during conversations and persist wi
 
 ---
 
-## Guide Endpoints
+## Notification Endpoints
 
-All guide endpoints are defined in `chat/guide_routes.py` with data access in `db/guide_store.py`. See [Guides Architecture](../architecture/guides.md) for the full architecture.
+System notifications (the inbox's Other tab) are served by `chat/notification_routes.py` with data access in `db/notification_store.py`; what a notification is, its kinds and the `notifications_changed` event are in [Notifications](../architecture/notifications.md).
 
-Guides are named system prompt presets, **deprecated in favor of skills**: new guides cannot be created, the composer no longer offers guide selection (only routine guide overrides still send a `guide_id`), new conversations no longer fall back to the default guide, and a missing default guide is never recreated. Existing guides remain manageable in Settings so users can convert them.
-
-- **GET `/app/api/guides`** -- List guides. Default guide first, then alphabetically. Does not auto-create a default.
-- **POST `/app/api/guides`** -- Returns 410 `guides_deprecated`.
-- **POST `/app/api/guides/{guide_id}/convert-to-skill`** -- Convert the guide into a private skill and delete the guide (see [Guides Architecture -- Migration to Skills](../architecture/guides.md#migration-to-skills)).
-- **GET `/app/api/guides/{guide_id}`** -- Get guide.
-- **PUT `/app/api/guides/{guide_id}`** -- Update guide. Updating `content` calls `invalidate_user_sessions()` to discard cached SDK sessions.
-- **DELETE `/app/api/guides/{guide_id}`** -- Delete any guide, the default included. Existing conversations using the deleted guide are unaffected (they use snapshotted content).
+- **GET `/app/api/notifications`** -- The user's notifications, newest first, open and dismissed, with `open_count` (`list_notifications()`).
+- **GET `/app/api/notifications/count`** -- `open_count` alone, for the sidebar inbox badge (`count_notifications()`).
+- **POST `/app/api/notifications/{notification_id}/dismiss`** -- Dismiss one (`dismiss_notification()`); idempotent, 404 `not_found` for another user's or an unknown id.
 
 ---
 

@@ -190,7 +190,7 @@ Historical: the scheduler used to compare against `daily_time_utc`. It now fires
 Each scheduled run is spawned as an independent asyncio task so the scheduler loop continues polling without waiting for Gemini to complete. This allows multiple runs to execute concurrently. Tasks are tracked in `_active_execution_tasks` so they can be cleanly cancelled during server shutdown (both Ctrl+C and admin-triggered).
 
 **Why create headless conversations instead of a separate execution model?**
-Scheduled runs create real conversations that appear in the project's sidebar, grouped under the routine that created them (via `routine_id`). This reuses the existing conversation infrastructure (message persistence, workspace access, guide resolution) and gives users visibility into what the scheduler produced.
+Scheduled runs create real conversations that appear in the project's sidebar, grouped under the routine that created them (via `routine_id`). This reuses the existing conversation infrastructure (message persistence, workspace access, skill auto-loads) and gives users visibility into what the scheduler produced.
 
 **Why skip-if-running only for interval schedules?**
 Daily, weekly and hourly schedules have natural non-overlap (they fire at most once per occurrence). Interval schedules with short intervals (e.g., every 5 minutes) could easily overlap if a Gemini conversation takes longer than the interval, so the skip-if-running guard prevents resource waste.

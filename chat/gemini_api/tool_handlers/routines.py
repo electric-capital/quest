@@ -49,7 +49,6 @@ async def _handle_list_routines(
                 "name": r["name"],
                 "prompt": r["prompt"],
                 "model": r["model"],
-                "guide_id": r["guide_id"],
                 "schedule": r["schedule"],
                 "autoloaded_skills": skills,
                 "created_at": r["created_at"],

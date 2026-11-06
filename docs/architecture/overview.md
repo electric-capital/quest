@@ -49,6 +49,7 @@ This doc is the map: where each piece lives, how a turn moves through them, and 
 | `chat/artifact_access.py` | The access procedure shared by Quest Docs and Quest Tables | [Quest Docs -- Access Rule](quest-docs.md#access-rule) |
 | `chat/scheduler.py`, `chat/routine_runs.py` | Scheduled and one-click routine runs | [Scheduling](scheduling.md), [Routines](routines.md) |
 | `chat/slack_socket_mode.py`, `chat/slack_driven_runtime.py`, `chat/slack_notifier.py` | Slack-driven conversations, pending-request DMs | [Slack Socket Mode](slack-socket-mode.md), [Slack Pending-Request Notifier](slack-pending-request-notifier.md) |
+| `chat/notifications.py` | System notifications shown in the inbox's Other tab | [Notifications](notifications.md) |
 | `chat/dreaming.py`, `config/dreaming.py` | Offline reviews of users' saved memories, proposed as inbox suggestions | [Dreaming](dreaming.md) |
 | `chat/sandbox_api.py`, `chat/sandbox_tokens.py` | Loopback tool API for sandbox scripts and its per-run tokens | [Script Runner](script-runner.md) |
 | `chat/route_dispatch.py` | In-process dispatch of `curl_proxy_*` tool calls to `/api/*` handlers | [Route Dispatch](route-dispatch.md) |

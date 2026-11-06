@@ -1,0 +1,118 @@
+/* The inbox's Other tab (NotificationsInbox.tsx): system notification
+   cards on the section layout of MemoryInbox.css. Dark-first like
+   RequestsView.css, with the light block at the end. */
+
+.notification-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background-color: #222222;
+}
+
+.notification-card--open {
+  border-color: rgb(var(--accent-rgb) / 0.4);
+}
+
+.notification-card--dismissed {
+  opacity: 0.75;
+}
+
+/* Top-aligned so a title that wraps on a phone keeps the icon and the
+   time on its first line. */
+.notification-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.notification-card-header .memory-inbox-time {
+  flex-shrink: 0;
+  line-height: 1.35rem;
+  white-space: nowrap;
+}
+
+.notification-card-icon {
+  flex-shrink: 0;
+  margin-top: 0.2rem;
+  color: var(--accent-text);
+}
+
+.notification-card--dismissed .notification-card-icon {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.notification-card-title {
+  min-width: 0;
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.35rem;
+  color: rgba(255, 255, 255, 0.9);
+  overflow-wrap: anywhere;
+}
+
+/* Plain text from the server: its line breaks and "- " lists are kept. */
+.notification-card-body {
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.8);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.notification-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.notification-card-button {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.notification-card-button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.notification-card-button--primary {
+  border-color: rgb(var(--accent-rgb) / 0.5);
+  color: var(--accent-text);
+}
+
+.notification-card-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@media (prefers-color-scheme: light) {
+  .notification-card {
+    background-color: #fafafa;
+    border-color: rgba(0, 0, 0, 0.1);
+  }
+
+  .notification-card--open {
+    border-color: rgb(var(--accent-rgb) / 0.35);
+  }
+
+  .notification-card--dismissed .notification-card-icon {
+    color: rgba(0, 0, 0, 0.4);
+  }
+
+  .notification-card-title {
+    color: rgba(0, 0, 0, 0.85);
+  }
+
+  .notification-card-body {
+    color: rgba(0, 0, 0, 0.75);
+  }
+}

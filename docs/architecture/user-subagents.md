@@ -49,7 +49,7 @@ before anything comes back. Registry-level pieces: two new
    user. `run_conversation_turn` with `origin="user_subagent"` uses the
    `USER_SUBAGENT_TOOLS` tier (`BASE_TOOLS` + `return_to_caller`; no
    `create_action_request`, no `agent_task*`), the dedicated
-   `get_user_subagent_system_prompt` (no guide, no custom prompt — the
+   `get_user_subagent_system_prompt` (none of the target's memories — the
    target is not driving), and loads ONLY the caller-specified skills
    (resolved for the target user) instead of any autoload tier. Usage is
    recorded against the target user and the subagent conversation; the

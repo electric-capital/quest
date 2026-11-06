@@ -12,8 +12,7 @@ at execute time.
 Editable pieces:
 
 - ``name`` / ``prompt`` / ``model`` (full-value replacement; ``clear_model``
-  resets the routine to the default model). The deprecated per-routine guide
-  override is deliberately NOT editable here.
+  resets the routine to the default model).
 - ``schedule`` -- a full replacement spec for the routine's (single)
   schedule, created if none exists; ``clear_schedule`` deletes it.
 - ``add_skill_ids`` / ``remove_skill_ids`` -- toggle the routine's

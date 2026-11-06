@@ -13,7 +13,7 @@ import { RightPanel } from './components/RightPanel'
 import { SettingsModal } from './components/SettingsModal'
 import { SignInScreen } from './components/SignInScreen'
 import { SetPasswordScreen } from './components/SetPasswordScreen'
-import { RequestsView } from './components/RequestsView'
+import { RequestsView, isInboxPath } from './components/RequestsView'
 import { MobileShell } from './components/MobileShell'
 import { DocsListView } from './components/docs/DocsListView'
 import { DocViewer } from './components/docs/DocViewer'
@@ -62,11 +62,12 @@ function AppContent() {
   const tablesRoute = parseTablesRoute(location.pathname, location.search)
   const tablesEnabled = enabledFeatures.includes(TABLES_FEATURE)
 
-  // Sync URL -> inbox state. /inbox (Requests tab) and /inbox/memories
-  // (Memories tab) are the deep-linkable addresses of the RequestsView
-  // (linked from Slack pending-request reminder DMs); any navigation away
-  // (conversation click, new chat, browser back) closes it.
-  const isInboxRoute = location.pathname === '/inbox' || location.pathname === '/inbox/memories'
+  // Sync URL -> inbox state. /inbox (Requests tab), /inbox/memories
+  // (Memories tab) and /inbox/other (Other tab) are the deep-linkable
+  // addresses of the RequestsView (linked from Slack pending-request
+  // reminder DMs); any navigation away (conversation click, new chat,
+  // browser back) closes it.
+  const isInboxRoute = isInboxPath(location.pathname)
   useEffect(() => {
     setShowRequestsView(isInboxRoute)
   }, [isInboxRoute, setShowRequestsView])
@@ -262,6 +263,7 @@ function App() {
         <Route path="/projects/:projectId/:conversationId" element={<AppContent />} />
         <Route path="/inbox" element={<AppContent />} />
         <Route path="/inbox/memories" element={<AppContent />} />
+        <Route path="/inbox/other" element={<AppContent />} />
         {/* Quest Docs: All Docs (?project=<id> filter) and the viewer. */}
         <Route path="/docs" element={<AppContent />} />
         <Route path="/docs/:docId" element={<AppContent />} />

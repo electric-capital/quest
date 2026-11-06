@@ -1,7 +1,7 @@
 """REST API endpoints for routine management.
 
 Routines are canned prompts attached to projects that can be run in one click.
-Each routine combines a prompt, an optional guide, and is scoped to a project.
+Each routine combines a prompt and an optional model, and is scoped to a project.
 """
 
 import logging
@@ -13,7 +13,6 @@ from pydantic import BaseModel
 
 from chat.auth import get_current_user_cookie_or_apikey_checked
 from chat.routine_costs import get_routine_cost_report
-from config.feature_gates import guides_enabled_for
 from db.project_store import get_project
 from db.routine_store import (
     StaleRoutineError,
@@ -37,25 +36,6 @@ router = APIRouter(
 )
 
 
-def _require_guides_enabled(user: dict) -> None:
-    """403 unless the deprecated guides feature is enabled for this user.
-
-    Routine guide overrides are the last remaining way a new conversation
-    gets a guide, so they are gated with the rest of the feature.
-    """
-    if not guides_enabled_for(user["email"]):
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "guides_disabled",
-                "message": (
-                    "Guides are disabled on this server, so routines cannot "
-                    "be given a guide override. Use auto-loaded skills instead."
-                ),
-            },
-        )
-
-
 async def get_routine_project(user: dict, project_id: str) -> dict:
     """The user's project for a routine/schedule endpoint, or a 404.
 
@@ -75,7 +55,6 @@ async def get_routine_project(user: dict, project_id: str) -> dict:
 class CreateRoutineRequest(BaseModel):
     name: str
     prompt: str
-    guide_id: Optional[str] = None
     model: Optional[str] = None
 
 
@@ -86,8 +65,6 @@ class RoutineAutoloadRequest(BaseModel):
 class UpdateRoutineRequest(BaseModel):
     name: Optional[str] = None
     prompt: Optional[str] = None
-    guide_id: Optional[str] = None
-    clear_guide: Optional[bool] = None  # If true, set guide_id to None
     model: Optional[str] = None
     clear_model: Optional[bool] = None  # If true, set model to None
     # Optimistic-concurrency token: the routine's updated_at ISO string at
@@ -141,8 +118,6 @@ async def create_project_routine(
             status_code=400,
             detail={"error": "invalid_prompt", "message": "Prompt cannot be empty"},
         )
-    if body.guide_id:
-        _require_guides_enabled(user)
 
     try:
         routine = await create_routine(
@@ -150,7 +125,6 @@ async def create_project_routine(
             project_id=project_id,
             name=body.name,
             prompt=body.prompt,
-            guide_id=body.guide_id,
             model=body.model,
         )
     except Exception as e:
@@ -226,25 +200,14 @@ async def update_project_routine(
     body: UpdateRoutineRequest,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """Update a routine's name, prompt, and/or guide."""
+    """Update a routine's name, prompt, and/or model."""
     user_id = user["id"]
 
     await get_routine_project(user, project_id)
 
-    # Determine guide_id value using ellipsis sentinel:
-    # - ... means "don't change" (default)
-    # - None means "clear the guide"
-    # - a string means "set to this guide ID"
-    # Clearing is always allowed (lets users tidy up leftovers); attaching a
-    # guide requires the guides feature gate to be open for this user.
-    guide_id_value = ...  # sentinel: don't change
-    if body.clear_guide:
-        guide_id_value = None
-    elif body.guide_id is not None:
-        _require_guides_enabled(user)
-        guide_id_value = body.guide_id
-
-    model_value = ...  # sentinel: don't change
+    # Model value using the ellipsis sentinel: ... means "don't change"
+    # (default), None means "clear the model", a string sets it.
+    model_value = ...
     if body.clear_model:
         model_value = None
     elif body.model is not None:
@@ -256,7 +219,6 @@ async def update_project_routine(
             routine_id=routine_id,
             name=body.name,
             prompt=body.prompt,
-            guide_id=guide_id_value,
             model=model_value,
             expected_updated_at=body.expected_updated_at,
         )
