@@ -1,5 +1,5 @@
 /**
- * Modal for editing an existing routine's settings (name, prompt, guide, model,
+ * Modal for editing an existing routine's settings (name, prompt, model,
  * schedule) and for deleting it.
  */
 
@@ -17,9 +17,7 @@ import {
   fetchSharedWithMeSkills,
   ApiClientError,
 } from '../api/client';
-import type { Routine, Guide, RoutineSchedule, RoutineScheduleRun, RoutineScheduleType, Skill } from '../api/types';
-import { useAuth } from '../contexts/AuthContext';
-import { useGuides } from '../contexts/GuidesContext';
+import type { Routine, RoutineSchedule, RoutineScheduleRun, RoutineScheduleType, Skill } from '../api/types';
 import { getSelectableModels, DEPRECATED_MODEL_MAP, getModelDisplayName } from '../constants/models';
 import { ModalShell } from './ModalShell';
 import { RoutineCostsSection } from './RoutineCostsSection';
@@ -115,13 +113,7 @@ export function RoutineSettingsModal({
   onRoutineDeleted,
   onOpenRunConversation,
 }: RoutineSettingsModalProps) {
-  const { guides } = useGuides();
-  const { enabledFeatures } = useAuth();
   const selectableModels = getSelectableModels(isPublicProject ? 'public' : 'private');
-  // While the admin `guides` feature gate is closed the guide list is not
-  // loaded and a leftover override is ignored at run time; the block below
-  // still shows so the user can clear it.
-  const guidesEnabled = enabledFeatures.includes('guides');
 
   // Authoritative routine row for this modal session. The `routine` prop
   // comes from the Sidebar's cached routines list, which can be stale when
@@ -133,7 +125,6 @@ export function RoutineSettingsModal({
   // Form state
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
-  const [guideId, setGuideId] = useState<string | null>(null);
   const [model, setModel] = useState<string>('gemini-3.5-flash-lite');
 
   // Schedule state
@@ -209,7 +200,6 @@ export function RoutineSettingsModal({
         setLoadedRoutine(row);
         setName(row.name);
         setPrompt(row.prompt);
-        setGuideId(row.guide_id);
         const rawModel = row.model || 'gemini-3.5-flash-lite';
         setModel(DEPRECATED_MODEL_MAP[rawModel] || rawModel);
         // Capture the routine's optimistic-concurrency baseline.
@@ -401,17 +391,14 @@ export function RoutineSettingsModal({
     setConflict(null);
     setSaveStatus('idle');
 
-    // Detect changes for guide and model, against the freshest row we have
-    // (the refetched copy when available, else the prop).
+    // Detect a model change against the freshest row we have (the
+    // refetched copy when available, else the prop).
     const baseline = loadedRoutine ?? routine;
-    const guideChanged = baseline.guide_id !== guideId;
     const modelChanged = baseline.model !== model;
 
     const updates: {
       name?: string;
       prompt?: string;
-      guide_id?: string | null;
-      clear_guide?: boolean;
       model?: string | null;
       clear_model?: boolean;
       expected_updated_at?: string | null;
@@ -420,14 +407,6 @@ export function RoutineSettingsModal({
       prompt: trimmedPrompt,
       expected_updated_at: routineTokenRef.current,
     };
-
-    if (guideChanged) {
-      if (guideId === null) {
-        updates.clear_guide = true;
-      } else {
-        updates.guide_id = guideId;
-      }
-    }
 
     if (modelChanged) {
       if (model === null) {
@@ -527,7 +506,7 @@ export function RoutineSettingsModal({
     } finally {
       setIsSaving(false);
     }
-  }, [projectId, routine, loadedRoutine, name, prompt, guideId, model, isSaving, scheduleType, dailyTimeLocal, weeklyDays, hourlyMinute, intervalMinutes, scheduleEnabled, editingSchedule, onRoutineUpdated, onClose]);
+  }, [projectId, routine, loadedRoutine, name, prompt, model, isSaving, scheduleType, dailyTimeLocal, weeklyDays, hourlyMinute, intervalMinutes, scheduleEnabled, editingSchedule, onRoutineUpdated, onClose]);
 
   // Conflict handlers. Discard rehydrates form state from the server's
   // current row and clears the dialog. Overwrite adopts the server's token
@@ -540,7 +519,6 @@ export function RoutineSettingsModal({
       setLoadedRoutine(current);
       setName(current.name);
       setPrompt(current.prompt);
-      setGuideId(current.guide_id);
       const rawModel = current.model || 'gemini-3.5-flash-lite';
       setModel(DEPRECATED_MODEL_MAP[rawModel] || rawModel);
       routineTokenRef.current = current.updated_at ?? null;
@@ -713,44 +691,6 @@ export function RoutineSettingsModal({
                   disabled={isSaving}
                 />
               </div>
-
-              {/* Guide Override (deprecated): read-only leftover display.
-                  Guides can no longer be attached to routines; a routine
-                  that still has one shows it here with a Clear button
-                  (applied on save via clear_guide). */}
-              {(loadedRoutine ?? routine).guide_id && (
-                <div className="routine-settings-field">
-                  <label className="routine-settings-label">
-                    Guide Override
-                    <span className="routine-settings-label-hint">
-                      {guidesEnabled
-                        ? 'Guides are deprecated; this routine still has one attached'
-                        : 'Guides are disabled on this server; the attached guide is ignored when this routine runs'}
-                    </span>
-                  </label>
-                  {guideId ? (
-                    <div className="routine-settings-guide-readonly">
-                      <span className="routine-settings-guide-name">
-                        {guidesEnabled
-                          ? guides.find((g: Guide) => g.id === guideId)?.name || 'Unknown guide'
-                          : 'Guide (disabled)'}
-                      </span>
-                      <button
-                        type="button"
-                        className="routine-settings-guide-clear-button"
-                        onClick={() => setGuideId(null)}
-                        disabled={isSaving}
-                      >
-                        Clear
-                      </button>
-                    </div>
-                  ) : (
-                    <span className="routine-settings-label-hint">
-                      Guide will be removed when you save.
-                    </span>
-                  )}
-                </div>
-              )}
 
               {/* Model */}
               <div className="routine-settings-field">

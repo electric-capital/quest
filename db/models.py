@@ -192,7 +192,7 @@ class User(Base):
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
 
-    # User settings (JSON blob: {"custom_system_prompt": "..."})
+    # User settings (JSON blob of per-user preferences, e.g. {"theme": "..."})
     settings: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
 
     # Google OAuth (login) - JSON blob, encrypted at rest
@@ -651,6 +651,45 @@ class DreamRun(Base):
     )
 
 
+class UserNotification(Base):
+    """A system notification for one user, shown in the inbox's Other tab.
+
+    Something the system did on the user's behalf that they should know
+    about but need not approve (see chat/notifications.py): a one-way
+    message with a ``kind``, a title and a plain-text body, open until the
+    user dismisses it. ``data`` carries the kind's structured details for
+    the UI (ids to link to); the title and body always stand on their own.
+    """
+
+    __tablename__ = "user_notifications"
+    __table_args__ = (
+        sa.Index("ix_user_notifications_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[int] = mapped_column(
+        sa.Integer,
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    # What the notification is about (chat/notifications.py NOTIFICATION_KINDS).
+    kind: Mapped[str] = mapped_column(String(50), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Kind-specific details for the UI; None when the kind has none.
+    data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    # When the user dismissed it; NULL while it is open.
+    dismissed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, default=None
+    )
+
+
 class ProjectMemory(Base):
     """A memory attached to a project rather than to the user.
 
@@ -754,52 +793,6 @@ class ProjectMemorySuggestion(Base):
     )
 
 
-class Guide(Base):
-    """A named system prompt preset for a user.
-
-    Each user has a default guide (is_default=True) that maps to the
-    original custom_system_prompt.  Users can create additional named
-    guides and select one per conversation.
-    """
-
-    __tablename__ = "guides"
-    __table_args__ = (
-        sa.Index("ix_guides_user_id_name", "user_id", "name", unique=True),
-    )
-
-    # Primary key: UUID string
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
-
-    # Owner (integer FK to users.id)
-    user_id: Mapped[int] = mapped_column(
-        sa.Integer,
-        sa.ForeignKey("users.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-
-    # Guide name (unique per user)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-
-    # Guide content (system prompt text)
-    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
-
-    # Whether this is the user's default guide
-    is_default: Mapped[bool] = mapped_column(
-        default=False, server_default="0"
-    )
-
-    # Timestamps
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc)
-    )
-    updated_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime, nullable=True, default=None
-    )
-
-
 class Project(Base):
     """A user project that groups related conversations with a shared workspace."""
 
@@ -889,7 +882,7 @@ class ProjectDocSource(Base):
 class Routine(Base):
     """A canned prompt attached to a project that can be run in one click.
 
-    Routines combine a prompt, an optional guide, and are scoped to a project.
+    Routines combine a prompt and an optional model, and are scoped to a project.
     Running a routine creates a new conversation in the project with the
     prompt automatically sent as the first message.
     """
@@ -925,14 +918,6 @@ class Routine(Base):
 
     # The prompt text to send as the first message
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
-
-    # Optional guide to use for conversations started by this routine
-    # NULL means use the user's default guide
-    guide_id: Mapped[Optional[str]] = mapped_column(
-        String(36),
-        sa.ForeignKey("guides.id", ondelete="SET NULL"),
-        nullable=True,
-    )
 
     # Optional model to use for conversations started by this routine
     # NULL means use the user's current model selection (manual) or config default (scheduled)
@@ -1626,8 +1611,8 @@ class Skill(Base):
     """A reusable skill definition in the skill library.
 
     Skills are instructions/prompts that can be shared across users.
-    Unlike guides (which are per-user with CASCADE delete), skills use
-    SET NULL on creator deletion so they persist for other users.
+    Skills use SET NULL on creator deletion (not CASCADE) so they persist
+    for the other users they are shared with.
     """
 
     __tablename__ = "skills"

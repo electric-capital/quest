@@ -13,8 +13,7 @@ public-safe), and on a per-project name collision by
 :mod:`chat.action_request_types.routine_precard`, with the project/name
 guards re-run at execute time.
 
-There is deliberately no ``guide_id`` (guides are deprecated) and no
-agent-side routine delete. Validation shared with ``edit_routine`` lives in
+There is deliberately no agent-side routine delete. Validation shared with ``edit_routine`` lives in
 :mod:`chat.action_request_types._routine_validation`. Like the skill
 handlers there is no ``validate_against_upstream`` -- routines are an
 internal Quest store.

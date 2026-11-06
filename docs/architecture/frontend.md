@@ -93,7 +93,7 @@ The per-conversation entry point (`UseConversationResult`). It loads the convers
 
 ## URL-Based Routing
 
-Every conversation has its own URL, so deep links, reloads and back / forward work. `frontend/src/main.tsx` wraps the app in `BrowserRouter`; the `<Routes>` in `App.tsx` send `/`, `/chats/<id>` (standalone), `/projects/<pid>/<id>` (project conversation), `/inbox`, `/inbox/memories` and the Quest Docs and Quest Tables routes to `AppContent`, and render `/set-password` and the admin reports page outside it.
+Every conversation has its own URL, so deep links, reloads and back / forward work. `frontend/src/main.tsx` wraps the app in `BrowserRouter`; the `<Routes>` in `App.tsx` send `/`, `/chats/<id>` (standalone), `/projects/<pid>/<id>` (project conversation), `/inbox`, `/inbox/memories`, `/inbox/other` and the Quest Docs and Quest Tables routes to `AppContent`, and render `/set-password` and the admin reports page outside it.
 
 The URL is the source of truth: a `useEffect` in `AppContent` copies the params into `activeConversationId` and `activeProjectId`, and selection goes through `navigate()` in `handleConversationSelect` / `handleNewConversation`, both `useCallback`-stable for the memoized Sidebar. `/inbox*` is mirrored into `showRequestsView`; docs and tables routes are parsed on every render by `parseDocsRoute()` and `parseTablesRoute()` (`frontend/src/utils/docsRoute.ts`, `frontend/src/utils/tablesRoute.ts`), with no context field. Keeping the selection only in React state was rejected: it would be lost on reload and conversations could not be linked.
 

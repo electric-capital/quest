@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 
 class UserSettingsUpdate(BaseModel):
-    custom_system_prompt: Optional[str] = None
     slack_default_model: Optional[str] = None
     default_model: Optional[str] = None
     # Last-used composer model for PUBLIC-project conversations, tracked
@@ -413,19 +412,6 @@ async def update_settings(
 
     updated_user = await update_user_settings(user_email, update_data)
 
-    # Backward compatibility: when custom_system_prompt is updated via
-    # the settings API, also update the default guide's content so they
-    # stay in sync. A missing default guide is not recreated -- guides
-    # are deprecated and a converted (deleted) default must stay gone.
-    # Skipped entirely while the guides feature gate is closed for this
-    # user (guides are inert then, and must not be written to either).
-    from config.feature_gates import guides_enabled_for
-    if settings_update.custom_system_prompt is not None and guides_enabled_for(user_email):
-        from db.guide_store import get_default_guide, update_guide
-        default_guide = await get_default_guide(user_id)
-        if default_guide:
-            await update_guide(user_id, default_guide["id"], content=settings_update.custom_system_prompt)
-
     # Invalidate any cached chat sessions for this user so the new
     # system prompt takes effect on the next message
     from chat.gemini_api import invalidate_user_sessions
@@ -739,13 +725,11 @@ async def delete_account(
     from auth.connections import revoke_user_credentials
     await revoke_user_credentials(user_id)
 
-    # Delete all user memories, guides, routines, and action requests before deleting the user record
+    # Delete all user memories, routines, and action requests before deleting the user record
     from db.memory_store import delete_all_user_memories
-    from db.guide_store import delete_all_user_guides
     from db.routine_store import delete_all_user_routines
     from db.action_request_store import delete_all_user_action_requests
     await delete_all_user_memories(user_id)
-    await delete_all_user_guides(user_id)
     await delete_all_user_routines(user_id)
     await delete_all_user_action_requests(user_id)
 

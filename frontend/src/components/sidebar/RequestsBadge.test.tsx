@@ -1,6 +1,7 @@
-// The sidebar inbox badge adds open action requests and pending suggestions
-// of all three kinds (personal and project memories, doc notes), seeded by
-// REST and then followed through the per-user globals.
+// The sidebar inbox badge adds open action requests, pending suggestions
+// of all three kinds (personal and project memories, doc notes) and open
+// system notifications, seeded by REST and then followed through the
+// per-user globals.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { RequestsBadge } from './RequestsBadge';
@@ -8,12 +9,14 @@ import { RequestsBadge } from './RequestsBadge';
 const mocks = vi.hoisted(() => ({
   fetchActionRequestCounts: vi.fn(),
   fetchMemoryInboxCounts: vi.fn(),
+  fetchNotificationsCount: vi.fn(),
   globalHandlers: new Set<(event: Record<string, unknown>) => void>(),
 }));
 
 vi.mock('../../api/client', () => ({
   fetchActionRequestCounts: mocks.fetchActionRequestCounts,
   fetchMemoryInboxCounts: mocks.fetchMemoryInboxCounts,
+  fetchNotificationsCount: mocks.fetchNotificationsCount,
 }));
 
 vi.mock('../../services/PersistentWebSocket', () => ({
@@ -34,6 +37,7 @@ function emit(event: Record<string, unknown>) {
 beforeEach(() => {
   mocks.fetchActionRequestCounts.mockReset();
   mocks.fetchMemoryInboxCounts.mockReset();
+  mocks.fetchNotificationsCount.mockReset().mockResolvedValue({ open_count: 0 });
   mocks.globalHandlers.clear();
 });
 
@@ -78,6 +82,27 @@ describe('RequestsBadge', () => {
     emit({ type: 'doc_note_suggestions_changed', conversation_id: 'c', pending_count: 1 });
     await waitFor(() => expect(mocks.fetchMemoryInboxCounts).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByText('8')).not.toBeNull());
+  });
+
+  it('adds the open notifications and follows their event', async () => {
+    mocks.fetchActionRequestCounts.mockResolvedValue({ counts: { open: 1, executed: 0, denied: 0, stopped: 0, all: 1 } });
+    mocks.fetchMemoryInboxCounts.mockResolvedValue({ user: 1, project: 0, doc: 0, pending_count: 1 });
+    mocks.fetchNotificationsCount.mockResolvedValue({ open_count: 2 });
+    render(<RequestsBadge />);
+    await waitFor(() => expect(screen.getByText('4')).not.toBeNull());
+
+    emit({ type: 'notifications_changed', open_count: 1 });
+    expect(screen.getByText('3')).not.toBeNull();
+    emit({ type: 'notifications_changed', open_count: 0 });
+    expect(screen.getByText('2')).not.toBeNull();
+  });
+
+  it('shows for an open notification alone', async () => {
+    mocks.fetchActionRequestCounts.mockResolvedValue({ counts: { open: 0, executed: 0, denied: 0, stopped: 0, all: 0 } });
+    mocks.fetchMemoryInboxCounts.mockResolvedValue({ user: 0, project: 0, doc: 0, pending_count: 0 });
+    mocks.fetchNotificationsCount.mockResolvedValue({ open_count: 1 });
+    render(<RequestsBadge />);
+    await waitFor(() => expect(screen.getByText('1')).not.toBeNull());
   });
 
   it('stays hidden while nothing is unanswered', async () => {

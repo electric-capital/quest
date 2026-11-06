@@ -6,7 +6,7 @@ actual conversation content (chat_history.json, sdk_history.json,
 workspace files) lives on disk at data/chats/{conversation_id}/.
 
 This module follows the same async pattern as db/memory_store.py and
-db/guide_store.py: each function opens a fresh AsyncSessionLocal() session.
+db/skill_store.py: each function opens a fresh AsyncSessionLocal() session.
 """
 
 from datetime import datetime

@@ -1,14 +1,15 @@
 /**
  * Self-contained badge for everything unanswered in the inbox: open action
- * requests plus suggestions awaiting review (personal and project memories,
- * doc notes).
+ * requests, suggestions awaiting review (personal and project memories,
+ * doc notes) and open system notifications.
  *
  * The open requests come from a one-shot REST fetch on mount, then the
  * persistent WS per-user global ``request_count_changed``, with the local
  * same-tab ``onRequestCountChange`` bus kept as a latency shortcut for
  * clicks in this tab (see open question 5 in 00062). The suggestion counts
  * are usePendingSuggestionCounts, shared with the inbox's Memories tab
- * label.
+ * label; the open notifications are useOpenNotificationCount, shared with
+ * its Other tab label.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -17,12 +18,14 @@ import {
   totalPendingSuggestions,
   usePendingSuggestionCounts,
 } from '../../hooks/usePendingSuggestionCounts';
+import { useOpenNotificationCount } from '../../hooks/useOpenNotificationCount';
 import { onRequestCountChange } from '../../services/requestEvents';
 import { persistentWebSocket } from '../../services/PersistentWebSocket';
 
 export function RequestsBadge() {
   const [openRequests, setOpenRequests] = useState(0);
   const pendingSuggestions = usePendingSuggestionCounts();
+  const openNotifications = useOpenNotificationCount();
   const inFlightRef = useRef(false);
 
   const loadCount = async () => {
@@ -61,7 +64,7 @@ export function RequestsBadge() {
     });
   }, []);
 
-  const count = openRequests + totalPendingSuggestions(pendingSuggestions);
+  const count = openRequests + totalPendingSuggestions(pendingSuggestions) + openNotifications;
   if (count <= 0) return null;
   return <span className="requests-badge">{count > 9 ? '9+' : count}</span>;
 }

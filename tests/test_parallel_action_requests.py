@@ -66,7 +66,7 @@ def _patched_conversation(monkeypatch):
     monkeypatch.setattr(instructions, "get_user_connected_services", lambda _u: {})
 
     async def _fake_history(_cid):
-        return {"guide_id": "g", "guide_snapshot": {"content": "guide"}}
+        return {"messages": []}
 
     monkeypatch.setattr(conv_mod, "_read_chat_history", _fake_history)
     monkeypatch.setattr(

@@ -44,8 +44,8 @@ Two keys in the `users.settings` JSON column (same pattern as `slack_default_mod
 
 The inbox (`RequestsView`) has a URL per tab so the reminder DM can land the user directly on it:
 
-- `quest.py` -- `serve_spa_inbox()` serves `index.html` for `GET /inbox` and `GET /inbox/memories` (explicit routes; the `/{filename}` static fallback would 404 them)
-- `frontend/src/App.tsx` -- `/inbox` and `/inbox/memories` routes rendering `AppContent`, plus a URL->state sync effect: `showRequestsView` is set from the pathname being one of the two, so browser back/forward and any in-app navigation close the view naturally; `RequestsView` reads the pathname to pick the tab
+- `quest.py` -- `serve_spa_inbox()` serves `index.html` for `GET /inbox`, `GET /inbox/memories` and `GET /inbox/other` (explicit routes; the `/{filename}` static fallback would 404 them)
+- `frontend/src/App.tsx` -- `/inbox`, `/inbox/memories` and `/inbox/other` routes rendering `AppContent`, plus a URL->state sync effect: `showRequestsView` is set from the pathname being one of them (`isInboxPath()` in `RequestsView.tsx`), so browser back/forward and any in-app navigation close the view naturally; `RequestsView` reads the pathname to pick the tab
 - `frontend/src/components/Sidebar.tsx` -- the Inbox button navigates to `/inbox` (and sets the state directly for an instant open); every existing close path already navigates elsewhere, which flips the state via the sync effect
 
 ## Constraints

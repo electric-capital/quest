@@ -390,14 +390,13 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       !isStreaming &&
       messages.length === 0  // Only send if conversation is fresh (no messages yet)
     ) {
-      const { prompt, guideId } = pendingRoutineMessage;
+      const { prompt } = pendingRoutineMessage;
       setPendingRoutineMessage(null);  // Clear immediately to prevent re-send
 
-      // Send the routine prompt, carrying the routine's guide override (if
-      // any) -- the only remaining path that sends a guide_id.
+      // Send the routine prompt
       const model = getModelForConversation(conversationId);
       sendMessage(
-        prompt, model, guideId ?? undefined, undefined, undefined, undefined, undefined,
+        prompt, model, undefined, undefined, undefined, undefined,
         getThinkingEffortForConversation(conversationId),
       );
 
@@ -460,7 +459,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
         : undefined;
       const attachmentsToSend = attachments && attachments.length > 0 ? attachments : undefined;
       sendMessage(
-        prompt, effectiveModel, undefined, skillIdsToSend, attachmentsToSend, flagsToSend, attachedFilenamesToSend,
+        prompt, effectiveModel, skillIdsToSend, attachmentsToSend, flagsToSend, attachedFilenamesToSend,
         effectiveEffort,
       );
 
@@ -538,19 +537,19 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
         })
           .then((resp) => {
             const attachedFilenames = resp.uploadedFiles.map((f) => f.name);
-            sendMessage(text, model, undefined, skillIds, attachments, flags, attachedFilenames, thinkingEffort);
+            sendMessage(text, model, skillIds, attachments, flags, attachedFilenames, thinkingEffort);
           })
           .catch(() => {
             // Fall back to sending without the attached-filename hint rather
             // than dropping the message; the files just weren't uploaded.
-            sendMessage(text, model, undefined, skillIds, attachments, flags, undefined, thinkingEffort);
+            sendMessage(text, model, skillIds, attachments, flags, undefined, thinkingEffort);
           })
           .finally(() => {
             setUploadStatus(null);
           });
         return;
       }
-      sendMessage(text, model, undefined, skillIds, attachments, flags, undefined, thinkingEffort);
+      sendMessage(text, model, skillIds, attachments, flags, undefined, thinkingEffort);
     },
     [conversationId, messages.length, modelVisibility, persistDefaultModel, sendMessage],
   );

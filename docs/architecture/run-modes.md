@@ -44,7 +44,7 @@ See [Shared Dev Config in Local Mode](../setup/development.md#shared-dev-config-
 
 ### Seed data
 
-`scripts/seed_local.py` runs automatically when the database file is fresh. It creates four canned users -- `admin@quest.local` (Ada Admin), `alice@quest.local` (Alice Chen), `bob@quest.local` (Bob Rivera), `heidi@quest.local` (Heidi Highvolume) -- plus memories, a guide, a skill, a project with a workspace file, and seeded conversations (written through `chat/storage.py` so DB rows and `chat_history.json` files stay coupled).
+`scripts/seed_local.py` runs automatically when the database file is fresh. It creates four canned users -- `admin@quest.local` (Ada Admin), `alice@quest.local` (Alice Chen), `bob@quest.local` (Bob Rivera), `heidi@quest.local` (Heidi Highvolume) -- plus memories, a skill, a project with a workspace file, and seeded conversations (written through `chat/storage.py` so DB rows and `chat_history.json` files stay coupled).
 
 Heidi is a high-volume account for exercising the paged sidebar list and its server-side filters: 140 standalone web conversations (the oldest 10 archived) with `last_message_at` spread over ~3 months, 12 Slack-origin and 12 Inference-API-origin conversations, and a project with 8 conversations.
 

@@ -4,9 +4,6 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { createRoutine, ApiClientError } from '../api/client';
-import type { Guide } from '../api/types';
-import { useAuth } from '../contexts/AuthContext';
-import { useGuides } from '../contexts/GuidesContext';
 import { getSelectableModels } from '../constants/models';
 import type { ModelInfo } from '../constants/models';
 import { ModalShell } from './ModalShell';
@@ -19,8 +16,7 @@ interface NewRoutineModalProps {
   /**
    * The routine is being created in a PUBLIC project: its runs are
    * public-project conversations, so only models the admin allows there
-   * are offered and the guide override (never applied in public
-   * conversations) is hidden.
+   * are offered.
    */
   isPublicProject?: boolean;
   onClose: () => void;
@@ -38,16 +34,10 @@ function defaultRoutineModel(models: ModelInfo[]): string {
 }
 
 export function NewRoutineModal({ isOpen, projectId, isPublicProject = false, onClose, onRoutineCreated }: NewRoutineModalProps) {
-  const { guides } = useGuides();
-  const { enabledFeatures } = useAuth();
-  // Guide overrides exist only while the admin `guides` feature gate is on
-  // for this user (POST /routines 403s a guide_id otherwise).
-  const guidesEnabled = enabledFeatures.includes('guides') && !isPublicProject;
   const selectableModels = getSelectableModels(isPublicProject ? 'public' : 'private');
 
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
-  const [guideId, setGuideId] = useState<string | null>(null);
   const [model, setModel] = useState<string>(DEFAULT_ROUTINE_MODEL);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +48,6 @@ export function NewRoutineModal({ isOpen, projectId, isPublicProject = false, on
     if (isOpen) {
       setName('');
       setPrompt('');
-      setGuideId(null);
       setModel(defaultRoutineModel(getSelectableModels(isPublicProject ? 'public' : 'private')));
       setError(null);
       setTimeout(() => inputRef.current?.focus(), 50);
@@ -78,7 +67,6 @@ export function NewRoutineModal({ isOpen, projectId, isPublicProject = false, on
       await createRoutine(projectId, {
         name: trimmedName,
         prompt: trimmedPrompt,
-        guide_id: guidesEnabled ? guideId : null,
         model,
       });
       onRoutineCreated();
@@ -92,7 +80,7 @@ export function NewRoutineModal({ isOpen, projectId, isPublicProject = false, on
     } finally {
       setIsCreating(false);
     }
-  }, [name, prompt, guideId, guidesEnabled, model, projectId, isCreating, onRoutineCreated, onClose]);
+  }, [name, prompt, model, projectId, isCreating, onRoutineCreated, onClose]);
 
   if (!isOpen || !projectId) return null;
 
@@ -136,33 +124,6 @@ export function NewRoutineModal({ isOpen, projectId, isPublicProject = false, on
           rows={4}
           disabled={isCreating}
         />
-
-        {guidesEnabled && (
-          <>
-            <label htmlFor="new-routine-guide-input" className="new-routine-label">
-              Guide Override
-              <span className="new-routine-label-hint">
-                Optionally apply a guide (deprecated) to conversations this routine creates
-              </span>
-            </label>
-            <select
-              id="new-routine-guide-input"
-              className="new-routine-select"
-              value={guideId || ''}
-              onChange={(e) => setGuideId(e.target.value || null)}
-              disabled={isCreating}
-            >
-              <option value="">None</option>
-              {guides
-                .filter((g: Guide) => !g.is_default)
-                .map((g: Guide) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name}
-                  </option>
-                ))}
-            </select>
-          </>
-        )}
 
         <label htmlFor="new-routine-model-input" className="new-routine-label">
           Model

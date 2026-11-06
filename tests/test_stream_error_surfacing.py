@@ -275,7 +275,7 @@ def _patched_conversation(monkeypatch):
     # ChatStorage`` here could resolve to a different class object than the
     # one run_conversation_turn actually calls.
     async def _fake_history(_cid):
-        return {"guide_id": "g", "guide_snapshot": {"content": "guide"}}
+        return {"messages": []}
 
     monkeypatch.setattr(conv_mod, "_read_chat_history", _fake_history)
     monkeypatch.setattr(

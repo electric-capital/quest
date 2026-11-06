@@ -116,7 +116,7 @@ The same server-AND-user combination gates every plugin's skills and tools via `
 
 ## Connector-Gated Settings Sections
 
-The same `GET /connectors` rows also gate the per-connector settings sections in the Settings nav (`CONNECTOR_SECTIONS` in `SettingsModal.tsx`). These are listed after the main sections (Data Connections, Memories, Guides, Skills, Inference API) and only while their backing service is usable for the current user:
+The same `GET /connectors` rows also gate the per-connector settings sections in the Settings nav (`CONNECTOR_SECTIONS` in `SettingsModal.tsx`). These are listed after the main sections (Data Connections, Memories, Skills, Inference API) and only while their backing service is usable for the current user:
 
 | Section | Connector row | Shown when |
 |---------|---------------|------------|

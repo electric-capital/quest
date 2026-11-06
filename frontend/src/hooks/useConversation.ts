@@ -185,7 +185,7 @@ interface UseConversationResult {
   stacktrace: string | undefined;
   isLoaded: boolean;
   isLoading: boolean;
-  sendMessage: (message: string, model?: string, guideId?: string, skillIds?: string[], attachments?: ComposerAttachmentRef[], flags?: string[], attachedFilenames?: string[], thinkingEffort?: string | null) => void;
+  sendMessage: (message: string, model?: string, skillIds?: string[], attachments?: ComposerAttachmentRef[], flags?: string[], attachedFilenames?: string[], thinkingEffort?: string | null) => void;
   addUserMessage: (content: string) => void;
   subAgentToolCalls: Map<string, SubAgentToolCallInfo[]>;
   subAgentReturned: Map<string, Map<string, SubAgentFinishedInfo>>;
@@ -681,7 +681,6 @@ export function useConversation(conversationId: string, options?: UseConversatio
     (
       message: string,
       model?: string,
-      guideId?: string,
       skillIds?: string[],
       attachments?: ComposerAttachmentRef[],
       flags?: string[],
@@ -732,7 +731,7 @@ export function useConversation(conversationId: string, options?: UseConversatio
       conversationStore.addMessage(conversationId, userMessage);
 
       // Send via WebSocket manager (cookie auth - no API key needed)
-      webSocketManager.sendMessage(conversationId, message, model, guideId, skillIds, attachments, flags, attachedFilenames, clientSendId, thinkingEffort);
+      webSocketManager.sendMessage(conversationId, message, model, skillIds, attachments, flags, attachedFilenames, clientSendId, thinkingEffort);
     },
     [conversationId]
   );

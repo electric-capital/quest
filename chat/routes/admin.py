@@ -32,14 +32,12 @@ from db.doc_note_suggestion_store import (
     list_all_suggestion_rows as list_all_doc_suggestion_rows,
 )
 from db.doc_store import list_all_doc_rows
-from db.guide_store import list_all_guides
 from db.memory_store import list_all_memory_rows
 from db.memory_suggestion_store import list_all_suggestion_rows
 from db.project_memory_store import list_all_project_memory_rows
 from db.project_memory_suggestion_store import (
     list_all_suggestion_rows as list_all_project_suggestion_rows,
 )
-from db.project_store import list_all_project_guides
 from db.table_store import list_all_table_rows
 from db.routine_store import get_routine_labels
 from db.skill_store import list_skill_labels
@@ -707,76 +705,6 @@ async def admin_usage_report(
     return await asyncio.to_thread(
         build_usage_report, buckets, routine_conversation_ids, signup_dates
     )
-
-
-@router.get("/admin/system-monitor/guides-report")
-async def admin_guides_report(
-    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
-):
-    """Return every guide in the system, user guides and project guides alike.
-
-    Deprecation-tracking report: guides are being retired in favor of
-    skills, and this lists who still has them. One row per user guide
-    (``kind="user"``: the ``guides`` table, incl. the empty auto-created
-    default guides so an admin can tell "has a default row" from "wrote
-    instructions") and one row per project with non-empty project
-    instructions (``kind="project"``: the ``projects.guide`` text field).
-    Content is reported as ``content_length`` -- the admin needs owners and
-    names, not the prompt text. ``routine_count`` (user guides only) is the
-    number of routines still using the guide as an override, the last
-    remaining code path that applies a guide to new conversations.
-    Sorted by owner email, then user guides (default first) before project
-    guides, then name.
-    """
-    if not is_admin(user["email"]):
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "forbidden",
-                "message": "Admin access required.",
-            }
-        )
-
-    rows = []
-    for guide in await list_all_guides():
-        rows.append({
-            "kind": "user",
-            "id": guide["id"],
-            "name": guide["name"],
-            "user_id": guide["user_id"],
-            "user_email": guide["user_email"],
-            "user_name": guide["user_name"],
-            "is_default": guide["is_default"],
-            "project_id": None,
-            "public": None,
-            "content_length": guide["content_length"],
-            "routine_count": guide["routine_count"],
-            "created_at": guide["created_at"],
-            "updated_at": guide["updated_at"],
-        })
-    for project in await list_all_project_guides():
-        rows.append({
-            "kind": "project",
-            "id": project["id"],
-            "name": project["name"],
-            "user_id": project["user_id"],
-            "user_email": project["user_email"],
-            "user_name": project["user_name"],
-            "is_default": None,
-            "project_id": project["id"],
-            "public": project["public"],
-            "content_length": project["content_length"],
-            "routine_count": None,
-            "created_at": project["created_at"],
-            "updated_at": project["updated_at"],
-        })
-    rows.sort(key=lambda r: (
-        r["user_email"],
-        0 if r["kind"] == "user" else 1,
-        0 if r["is_default"] else 1,
-        r["name"].lower(),
-    ))
-    return {"guides": rows}
 
 
 @router.get("/admin/system-monitor/docs-report")

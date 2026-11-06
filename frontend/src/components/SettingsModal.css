@@ -254,7 +254,7 @@
   color: #ff6b6b;
 }
 
-/* Shared card/button styles used across sections (memories, guides, skills) */
+/* Shared card/button styles used across sections (memories, skills) */
 .memories-create-btn {
   padding: 0.375rem 0.875rem;
   font-size: 0.8125rem;
@@ -400,7 +400,7 @@
   color: var(--text-muted);
 }
 
-/* Shared guide-name-input used by guides and skills */
+/* Shared name input of the skill forms (the class name predates skills) */
 .guide-name-input {
   width: 100%;
   padding: 0.5rem 0.625rem;
@@ -425,7 +425,7 @@
   font-weight: 400;
 }
 
-/* Shared guide-card-preview used by guides and skills */
+/* Shared content preview of the skill cards (the class name predates skills) */
 .guide-card-preview {
   font-size: 0.8125rem;
   line-height: 1.5;

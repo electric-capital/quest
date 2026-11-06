@@ -74,7 +74,7 @@ function seed() {
 }
 
 function send(id: string, sendId: string): void {
-  webSocketManager.sendMessage(id, 'hello', 'model-x', undefined, undefined, undefined, undefined, undefined, sendId);
+  webSocketManager.sendMessage(id, 'hello', 'model-x', undefined, undefined, undefined, undefined, sendId);
 }
 
 function bubble(id: string, sendId: string): Message | undefined {

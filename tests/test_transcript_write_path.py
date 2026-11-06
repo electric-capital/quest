@@ -6,8 +6,8 @@
   parked in its worker thread.
 * An append parses the transcript once: the seq high water comes from
   that parse, not from a second read.
-* The synchronous writers (notice flags, guide snapshot, action-request
-  status) wait for an in-flight threaded append instead of losing it.
+* The synchronous writers (notice flags, action-request status) wait
+  for an in-flight threaded append instead of losing it.
 * Files are written as compact JSON through an atomic replace.
 * Each append records its metadata with one ``record_messages_appended``
   call.
@@ -237,15 +237,11 @@ def _set_flags():
     return _cs().set_conversation_flags("c1", {"own_workspace": True})
 
 
-def _set_guide():
-    return _cs().set_guide_snapshot("c1", "g1", "Guide", "Be brief.")
-
-
 def _resolve_card():
     return _cs().update_action_request_message("c1", 42, "approved")
 
 
-@pytest.mark.parametrize("writer", [_set_flags, _set_guide, _resolve_card])
+@pytest.mark.parametrize("writer", [_set_flags, _resolve_card])
 def test_sync_writer_waits_for_an_in_flight_append(chats, gate_c1_writes, writer):
     chats_dir, _ = chats
     entered, gate = gate_c1_writes
@@ -273,8 +269,6 @@ def test_sync_writer_waits_for_an_in_flight_append(chats, gate_c1_writes, writer
     assert [m.get("content") for m in data["messages"]] == [None, "during"]
     if writer is _set_flags:
         assert data["own_workspace"] is True
-    elif writer is _set_guide:
-        assert data["guide_id"] == "g1"
     else:
         assert data["messages"][0]["status"] == "approved"
 

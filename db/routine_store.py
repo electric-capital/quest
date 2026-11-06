@@ -4,7 +4,7 @@ Provides async CRUD operations for project routines. Routines are canned prompts
 attached to projects that can be run in one click.
 
 This module follows the same async pattern as db/memory_store.py and
-db/guide_store.py: each function opens a fresh AsyncSessionLocal() session.
+db/skill_store.py: each function opens a fresh AsyncSessionLocal() session.
 """
 
 from datetime import datetime, timezone
@@ -41,7 +41,6 @@ async def create_routine(
     project_id: str,
     name: str,
     prompt: str,
-    guide_id: Optional[str] = None,
     model: Optional[str] = None,
 ) -> dict:
     """Create a new routine in a project."""
@@ -64,7 +63,6 @@ async def create_routine(
             project_id=project_id,
             name=name.strip(),
             prompt=prompt,
-            guide_id=guide_id,
             model=model,
             updated_at=now,
         )
@@ -158,11 +156,10 @@ async def update_routine(
     routine_id: str,
     name: Optional[str] = None,
     prompt: Optional[str] = None,
-    guide_id: Optional[str] = ...,  # sentinel: None means "clear guide", ... means "don't change"
     model: Optional[str] = ...,  # sentinel: None means "clear model", ... means "don't change"
     expected_updated_at: Optional[str] = None,
 ) -> Optional[dict]:
-    """Update a routine's name, prompt, and/or guide.
+    """Update a routine's name, prompt, and/or model.
 
     ``expected_updated_at`` is the optimistic-concurrency token: if provided,
     it must match the row's current ``updated_at`` (ISO string) or the call
@@ -202,9 +199,6 @@ async def update_routine(
             changed = True
         if prompt is not None and prompt != routine.prompt:
             routine.prompt = prompt
-            changed = True
-        if guide_id is not ... and guide_id != routine.guide_id:
-            routine.guide_id = guide_id
             changed = True
         if model is not ... and model != routine.model:
             routine.model = model
@@ -256,7 +250,6 @@ def _routine_to_dict(routine: Routine) -> dict:
         "user_id": routine.user_id,
         "name": routine.name,
         "prompt": routine.prompt,
-        "guide_id": routine.guide_id,
         "model": routine.model,
         "created_at": routine.created_at.isoformat() if routine.created_at else None,
         "updated_at": routine.updated_at.isoformat() if routine.updated_at else None,

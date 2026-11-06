@@ -6,11 +6,10 @@ This document describes the Routines feature, which provides canned prompts atta
 
 A Routine is a reusable prompt template scoped to a project. Each routine combines:
 
-- a prompt (the text sent as the first message),
-- an optional guide override (a deprecated [guide](guides.md) applied to conversations the routine creates -- the last remaining way a new conversation gets a guide, and only while the admin `guides` feature gate is open for the user; see [feature-gates.md](feature-gates.md)), and
+- a prompt (the text sent as the first message), and
 - an optional model specification (which AI model to use).
 
-When a user runs a routine, the frontend creates a new conversation in the project with a `routine_id` link, optionally sets the model, and auto-sends the prompt as the first message (carrying the guide override's `guide_id` in the send envelope).
+When a user runs a routine, the frontend creates a new conversation in the project with a `routine_id` link, optionally sets the model, and auto-sends the prompt as the first message.
 
 Routines can also have an automatic schedule attached, causing the system to execute the routine on a timer without user interaction. See [Scheduling Architecture](scheduling.md) for the full scheduling documentation.
 
@@ -22,11 +21,11 @@ Routines are managed through dedicated creation and settings modals (`NewRoutine
 
 ## Routine Model
 
-The `Routine` model in `db/models.py` maps to the `routines` table. See [Database Architecture](database.md) for the column-level schema. Key constraints: composite unique index on `(project_id, name)` prevents duplicate routine names within a project, `ON DELETE CASCADE` on `project_id` and `user_id` for cleanup, and `ON DELETE SET NULL` on `guide_id` so deleting a guide does not break routines that reference it.
+The `Routine` model in `db/models.py` maps to the `routines` table. See [Database Architecture](database.md) for the column-level schema. Key constraints: composite unique index on `(project_id, name)` prevents duplicate routine names within a project, and `ON DELETE CASCADE` on `project_id` and `user_id` for cleanup.
 
 ## Data Access Layer
 
-`db/routine_store.py` provides CRUD operations for routines. All functions are `async` and use `AsyncSessionLocal`. Callers must `await` every store call. The `update_routine()` function uses an ellipsis sentinel (`...`) for both `guide_id` and `model` to distinguish "don't change" (default) from "clear" (`None`). The API layer translates `clear_guide`/`clear_model` boolean flags into the sentinel pattern (see `chat/routine_routes.py`).
+`db/routine_store.py` provides CRUD operations for routines. All functions are `async` and use `AsyncSessionLocal`. Callers must `await` every store call. The `update_routine()` function uses an ellipsis sentinel (`...`) for `model` to distinguish "don't change" (default) from "clear" (`None`). The API layer translates the `clear_model` boolean flag into the sentinel pattern (see `chat/routine_routes.py`).
 
 ## Optimistic Concurrency
 
@@ -40,11 +39,11 @@ The `PUT` endpoints for both routines and schedules accept `expected_updated_at`
 
 The model can inspect and (with user approval) create or edit a project's routines from inside any of the project's conversations. Both surfaces are spec'd for the model in the `system:routines` system skill (`chat/system_skills/catalog.py`, `requires_project=True`).
 
-- **`list_routines`** -- a read-only `BASE_TOOLS` tool (declared in `chat/llm/tool_schemas.py`, handled by `_handle_list_routines()` in `chat/gemini_api/tool_handlers/routines.py`). Returns the current project's routines with `id`, `name`, the full `prompt`, `model`, `guide_id`, the inline `schedule` summary (via `list_routines_with_schedules()`), and `autoloaded_skills` (`[{id, name}]` resolved from `routine_skill_autoloads`). Conversations outside a project get a structured error. Not in the public-project allowlist (public projects have no routines anyway).
+- **`list_routines`** -- a read-only `BASE_TOOLS` tool (declared in `chat/llm/tool_schemas.py`, handled by `_handle_list_routines()` in `chat/gemini_api/tool_handlers/routines.py`). Returns the current project's routines with `id`, `name`, the full `prompt`, `model`, the inline `schedule` summary (via `list_routines_with_schedules()`), and `autoloaded_skills` (`[{id, name}]` resolved from `routine_skill_autoloads`). Conversations outside a project get a structured error. Not in the public-project allowlist (public projects have no routines anyway).
 - **`create_routine`** -- an action request that proposes a new routine in the current project: required `name` + `prompt`, optional `model`, `schedule` spec, and `skill_ids` to auto-load. When the proposal omits `model`, the pre-card check picks one server-side -- Claude Sonnet 5, falling back to Gemini 3.7 Flash, first available per `get_available_models()`; unset when neither is -- and the approval card shows it marked "(default)". Public projects, name collisions, and inaccessible skills are rejected same-turn before any card.
 - **`edit_routine`** -- an action request (`create_action_request(request_type="edit_routine", ...)`) that proposes changes to a routine's name, prompt (full replacement -- the approval card shows a line diff of current vs proposed prompt via the shared `skill_content_diff` preview field / `SkillContentDiffPreview.tsx`), model (or `clear_model`), schedule (full-replacement spec, or `clear_schedule`), and auto-loaded skills (`add_skill_ids` / `remove_skill_ids`), rendered as the standard Approve / Revise / Deny card.
 
-  Project scoping, routine existence, name collisions, and skill access are rejected same-turn before any card (shared `routine_precard_check` in `chat/action_request_types/routine_precard.py`); routine-row updates carry the proposal-time `updated_at` token so a concurrent edit fails cleanly at Approve time. The deprecated guide override is not settable or editable, and there is no agent-side delete. See [Action Requests Architecture](action-requests.md) for the full handler behavior.
+  Project scoping, routine existence, name collisions, and skill access are rejected same-turn before any card (shared `routine_precard_check` in `chat/action_request_types/routine_precard.py`); routine-row updates carry the proposal-time `updated_at` token so a concurrent edit fails cleanly at Approve time. There is no agent-side delete. See [Action Requests Architecture](action-requests.md) for the full handler behavior.
 
 ## Run Routine Flow
 
@@ -53,8 +52,8 @@ Running a routine is entirely frontend-driven. The flow involves the Sidebar, th
 1. User clicks the play button next to a routine in the project drill-down view in `frontend/src/components/Sidebar.tsx` (`handleRunRoutine()`)
 2. Sidebar creates a new conversation in the project via `createProjectConversation(projectId, routineId)`, passing the routine's ID so the backend links the conversation to the routine
 3. If the routine has a `model`, Sidebar calls `setModelForConversation()` on `ConversationModelsContext` to set the model for the new conversation
-4. Sidebar sets `pendingRoutineMessage` on `NavigationContext` with the conversation ID, prompt text, and the routine's guide ID (the guide override)
-5. `ChatPanel` mounts for the new conversation, detects `pendingRoutineMessage` matching its `conversationId`, and auto-sends the prompt via `webSocketManager.sendMessage()`, forwarding the guide ID in the `send_message` envelope
+4. Sidebar sets `pendingRoutineMessage` on `NavigationContext` with the conversation ID and prompt text
+5. `ChatPanel` mounts for the new conversation, detects `pendingRoutineMessage` matching its `conversationId`, and auto-sends the prompt via `webSocketManager.sendMessage()`
 6. ChatPanel clears `pendingRoutineMessage` after sending
 7. On the server, `_handle_send_message` in `chat/realtime/socket.py` recognizes the first message of a routine conversation (`routine_id` set and `last_message_seq == 0`) as the routine run and passes `routine_run=True` to `_run_send_message`, which drives the turn through `drive_routine_run()` (see Run Completion below) instead of a single `run_conversation_turn()` call. `send_message_finished` is published only after the whole run, so the composer stays locked through any nudge turn. Later messages in the conversation are the user's own follow-ups and run as ordinary turns.
 
@@ -114,7 +113,6 @@ The routine completion tool and the scheduler are unaffected.
 
 - Name input (max 100 characters)
 - Prompt textarea, with the `ROUTINE_PROMPT_FILES_HINT` help line (see [File Spaces in Routine Prompts](#file-spaces-in-routine-prompts))
-- Guide override dropdown: shows all non-default user guides (from `GuidesContext.guides`) plus a "None" option that maps to `guide_id: null` (guides are deprecated; the hint says so). Rendered only while the `guides` feature gate is on for the user (`enabled_features` from `GET /me`); otherwise the modal sends `guide_id: null`
 - Model selector dropdown: shows the non-deprecated models from the shared `SELECTABLE_MODELS` view in `frontend/src/constants/models.ts` (Gemini 3.1 Flash-Lite, Gemini 3 Flash, Gemini 3.5 Flash, Gemini 3.5 Flash-Lite, Gemini 3.6 Flash, and the Claude models); default is Gemini 3 Flash. The routine-settings modal additionally keeps a routine's stored deprecated model (e.g. Gemini 3.1 Pro) as an extra "(deprecated)" option so saving unrelated edits doesn't silently switch the model
 
 The form resets when the modal opens. On submit, it calls `createRoutine()` and fires the `onRoutineCreated` callback, which triggers a reload of the routines list in the sidebar. Styles are in `frontend/src/components/NewRoutineModal.css`.
@@ -126,7 +124,6 @@ The form resets when the modal opens. On submit, it calls `createRoutine()` and 
 **Prompt section:**
 - Name input (max 100 characters)
 - Auto-growing prompt textarea that expands to fit content up to approximately 20 lines (~420px), following the same pattern as the ChatPanel textarea. The textarea auto-sizes on initial load, on input, and when navigating back to the Prompt section. The label carries the `ROUTINE_PROMPT_FILES_HINT` help line
-- Guide override (deprecated, read-only leftover): there is no guide selection widget anymore. The field renders only when the routine still has a persisted `guide_id`, showing the guide's name read-only with a "Clear" button; clearing swaps the display for a "Guide will be removed when you save" hint and the save sends `clear_guide: true`. Routines without a guide show nothing
 - Model selector dropdown: shows all available models from the shared `AVAILABLE_MODELS` constant; deprecated models stored on routines are silently remapped on load via `DEPRECATED_MODEL_MAP` from `frontend/src/constants/models.ts`
 - Save button and error display
 
@@ -194,13 +191,12 @@ Routines and their schedules are cleaned up in multiple scenarios:
 
 - **Project deletion**: The `ON DELETE CASCADE` FK on `routines.project_id` automatically removes all routines when a project is deleted at the database level. Routine schedules are then removed via the `ON DELETE CASCADE` FK on `routine_schedules.routine_id`
 - **User account deletion**: The `delete_account()` handler in `chat/routes/user.py` explicitly calls `delete_all_user_routines(user_id)` from `db/routine_store.py` before deleting the user record. The `ON DELETE CASCADE` FK on `routines.user_id` and `routine_schedules.user_id` also provides database-level cleanup
-- **Guide deletion**: The `ON DELETE SET NULL` FK on `routines.guide_id` sets the guide reference to NULL when a guide is deleted, rather than deleting the routine
 - **Routine deletion**: The `ON DELETE CASCADE` FK on `routine_schedules.routine_id` automatically removes the schedule when a routine is deleted. The `ON DELETE SET NULL` FK on `conversations.routine_id` sets the routine reference to NULL on conversations created by the routine, preserving the conversations
 
 ## Design Decisions
 
 **Why scope routines to projects instead of making them global?**
-Routines are designed for repetitive tasks within a specific project context. Scoping them to projects keeps the UI organized (routines appear in the project drill-down) and ensures the routine's prompt makes sense in the context of the project's workspace, database and guide.
+Routines are designed for repetitive tasks within a specific project context. Scoping them to projects keeps the UI organized (routines appear in the project drill-down) and ensures the routine's prompt makes sense in the context of the project's workspace, database and instructions.
 
 **Why do runs not share files by default?**
 Runs are ordinary project conversations, and keeping every conversation's scratch out of the shared space is the point of the conversation workspace (see [Projects -- Design Decisions](projects.md#design-decisions)). Most runs are self-contained; the ones that accumulate state opt in by naming `proj://` paths in their prompt (see [File Spaces in Routine Prompts](#file-spaces-in-routine-prompts)), which keeps the dependency visible in the routine itself.
@@ -208,8 +204,8 @@ Runs are ordinary project conversations, and keeping every conversation's scratc
 **Why denormalize `user_id` on the routines table?**
 The `user_id` column is technically derivable from `project_id` (via the project's `user_id`), but storing it directly on the routine enables fast per-user queries (e.g., `delete_all_user_routines()` during account deletion) without joining through the projects table.
 
-**Why use an ellipsis sentinel for `guide_id` and `model` updates?**
-The `update_routine()` function needs to distinguish three states for both `guide_id` and `model`: "don't change" (default), "set to a specific value" (string), and "clear the value" (`None`). Python's ellipsis (`...`) serves as an unambiguous sentinel that cannot be confused with `None`. The API layer translates `clear_guide`/`clear_model` boolean flags into the sentinel pattern (see `chat/routine_routes.py`).
+**Why use an ellipsis sentinel for `model` updates?**
+The `update_routine()` function needs to distinguish three states for `model`: "don't change" (default), "set to a specific value" (string), and "clear the value" (`None`). Python's ellipsis (`...`) serves as an unambiguous sentinel that cannot be confused with `None`. The API layer translates the `clear_model` boolean flag into the sentinel pattern (see `chat/routine_routes.py`).
 
 **Why is running a routine purely frontend-driven?**
 The "run" action is just creating a conversation and sending a message -- two operations the frontend already handles. Keeping the logic in the frontend avoids adding a dedicated backend endpoint for an operation that composes existing primitives. The `pendingRoutineMessage` pattern in `NavigationContext` coordinates the creation and auto-send across components.
@@ -218,9 +214,6 @@ The "run" action is just creating a conversation and sending a message -- two op
 Different routines may have different complexity levels. A simple data retrieval routine might work well with a Flash-Lite-class model (fastest, cheapest), a daily summary routine with a Flash-class model, while a complex analysis routine might need an Opus-class model. Storing the model on the routine lets users configure this once and have it apply consistently across both manual and scheduled runs.
 
 When no model is specified, manual runs use the user's current model selection and scheduled runs use the server config default. Deprecated model IDs stored on routines are silently remapped at runtime (see [Gemini API Integration](gemini-api.md) for the full remapping details).
-
-**Why `ON DELETE SET NULL` for `guide_id` instead of `CASCADE`?**
-Deleting a guide should not delete routines that happened to reference it. Setting `guide_id` to NULL gracefully degrades the routine to run without a guide, preserving the routine's prompt and other settings.
 
 **Why is scheduling in a separate table and module instead of extending the routine model?**
 A separate `routine_schedules` table keeps the scheduling concern isolated from existing routine CRUD, avoids widening the routines table with many nullable columns, and makes it easy to query "all schedules that are due" across all users. The scheduler daemon (`chat/scheduler.py`) and schedule API (`chat/schedule_routes.py`) are separate modules from routine CRUD. See [Scheduling Architecture](scheduling.md) for the full set of scheduling design decisions.
@@ -248,8 +241,7 @@ Routine names should be unique within a project, not globally per user. Differen
 - Routine prompt cannot be empty (enforced at both the data access layer and the API validation layer)
 - Routines are deleted when the parent project is deleted (via `ON DELETE CASCADE` FK on `routines.project_id`)
 - Routines are deleted when the owner's account is deleted (via explicit `delete_all_user_routines()` call and `ON DELETE CASCADE` FK on `routines.user_id`)
-- Deleting a guide sets `routines.guide_id` to NULL (via `ON DELETE SET NULL` FK)
-- Public projects have routines like any other project; a routine there has no skill auto-loads or guide override, and its model list is the public-allowed one
+- Public projects have routines like any other project; a routine there has no skill auto-loads, and its model list is the public-allowed one
 - The `routines` table and its indexes are created by the Alembic migration `6766d7c126ba`; the `model` column is added by migration `ae661b3ecf4c`
 - Running a routine manually does not use a dedicated backend endpoint; it composes existing conversation creation (with `routine_id`) and WebSocket message sending
 - Conversations created by a routine (manual or scheduled) have `routine_id` set on the `conversations` table; the `routine_id` FK uses `ON DELETE SET NULL` so deleting a routine preserves its conversations

@@ -9,8 +9,7 @@ test_system_reports_analytics.py):
 2. ``_routine_cost_view()`` in chat/routes/admin.py -- the row projection,
    incl. the placeholder for a routine that vanished mid-request.
 
-Same monkeypatched-``AsyncSessionLocal`` isolation pattern as
-tests/test_admin_guides_report.py.
+Each store's ``AsyncSessionLocal`` is monkeypatched onto a fresh sqlite file.
 """
 
 import asyncio

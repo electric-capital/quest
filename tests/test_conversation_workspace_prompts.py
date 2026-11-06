@@ -622,7 +622,7 @@ def test_detection_turn_rebuilds_stale_session(chats_dir, monkeypatch):
     assert seen["stale_present"] is False
     assert LEGACY_NOTE in seen["system_prompt"]
     assert TWO_SPACES in seen["system_prompt"]
-    # chat_history.json was parsed once for the guide snapshot + the flags.
+    # chat_history.json was parsed once for the flags.
     assert reads == ["c1"]
 
 
@@ -700,76 +700,6 @@ class TestReadChatHistory:
 
 
 # ---------------------------------------------------------------------------
-# Guide snapshot resolution through run_conversation_turn (real files)
-# ---------------------------------------------------------------------------
-
-
-def _guide_turn(monkeypatch, *, gate_open, guide_id=None):
-    captured: dict = {}
-
-    def _capture(*_a, **kw):
-        captured.update(kw)
-        return "system prompt"
-
-    _patch_turn_collaborators(monkeypatch, public=False)
-    monkeypatch.setattr(conv_mod, "get_system_prompt", _capture)
-    monkeypatch.setattr(conv_mod, "get_or_create_chat", lambda *a, **kw: object())
-    import config.feature_gates as feature_gates
-    monkeypatch.setattr(feature_gates, "guides_enabled_for", lambda _email: gate_open)
-    import db.guide_store as guide_store
-    monkeypatch.setattr(guide_store, "get_guide", AsyncMock(return_value={
-        "id": "g-new", "name": "New guide", "content": "NEW GUIDE TEXT",
-    }))
-
-    async def _on_event(_e):
-        return None
-
-    asyncio.run(conv_mod.run_conversation_turn(
-        app=None, user=_TURN_USER, message="again", conversation_id="c1",
-        timezone="UTC", model="fake", on_event=_on_event, project_id="p1",
-        guide_id=guide_id,
-    ))
-    return captured
-
-
-class TestGuideSnapshotThroughTurn:
-    def test_existing_snapshot_wins(self, chats_dir, monkeypatch):
-        _write_history(chats_dir, "c1", {
-            "id": "c1", "project_id": "p1", "own_workspace": True,
-            "guide_id": "g-old",
-            "guide_snapshot": {"name": "Old", "content": "OLD GUIDE TEXT"},
-            "messages": [_USER_MSG],
-        })
-        captured = _guide_turn(monkeypatch, gate_open=True, guide_id="g-new")
-        assert captured["custom_system_prompt"] == "OLD GUIDE TEXT"
-
-    def test_gate_closed_ignores_snapshot(self, chats_dir, monkeypatch):
-        _write_history(chats_dir, "c1", {
-            "id": "c1", "project_id": "p1", "own_workspace": True,
-            "guide_id": "g-old",
-            "guide_snapshot": {"name": "Old", "content": "OLD GUIDE TEXT"},
-            "messages": [_USER_MSG],
-        })
-        captured = _guide_turn(monkeypatch, gate_open=False, guide_id="g-new")
-        assert captured["custom_system_prompt"] == ""
-
-    def test_explicit_guide_survives_legacy_flag_write(self, chats_dir, monkeypatch):
-        # The guide snapshot is written between the turn-start read and the
-        # flag write; the flag write re-reads, so neither clobbers the other.
-        path = _write_history(chats_dir, "c1", {
-            "id": "c1", "project_id": "p1", "messages": [_USER_MSG, _ASSISTANT_MSG],
-        })
-        captured = _guide_turn(monkeypatch, gate_open=True, guide_id="g-new")
-        assert captured["custom_system_prompt"] == "NEW GUIDE TEXT"
-        assert captured["legacy_shared_workspace"] is True
-        data = _history(path)
-        assert data["guide_id"] == "g-new"
-        assert data["guide_snapshot"]["content"] == "NEW GUIDE TEXT"
-        assert data["legacy_shared_workspace"] is True
-        assert data["own_workspace"] is True
-
-
-# ---------------------------------------------------------------------------
 # RunContext.workspace_notice_flags reaches every spawn path
 # ---------------------------------------------------------------------------
 
@@ -788,7 +718,7 @@ def _ctx_with_flags():
         is_slack_origin=False, is_user_subagent=False, is_inference_api=False,
         is_public=False, nested_subagents=True, user_subagents_enabled=False,
         user_subagents_gate_open=False, subagent_run=None, subagent_caller=None,
-        custom_prompt="", resolved_project_guide="", resolved_skills_content="",
+        resolved_project_guide="", resolved_skills_content="",
         on_event=AsyncMock(), structured_messages=[], usage_acc=UsageAccumulator(),
         workspace_notice_flags=_FLAGS,
     )

@@ -374,8 +374,8 @@ def test_memories_report_sort_counts_doc_activity_and_holdings():
 
 @pytest.fixture()
 def _isolated_db(monkeypatch):
-    """Swap every involved store onto a fresh sqlite file (same no-reload
-    pattern as tests/test_admin_guides_report.py)."""
+    """Swap every involved store onto a fresh sqlite file (monkeypatched
+    ``AsyncSessionLocal``, no module reload)."""
     tmpdir = tempfile.mkdtemp(prefix="quest_feature_usage_test_")
     db_path = os.path.join(tmpdir, "quest.db")
 

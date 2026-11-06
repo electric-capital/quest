@@ -395,7 +395,6 @@ async def _execute_scheduled_run(app, schedule: dict, routine: dict, run_id: str
     project_id = routine["project_id"]
     user_id = routine["user_id"]
     prompt = routine["prompt"]
-    guide_id = routine.get("guide_id")
     routine_model = routine.get("model")
 
     logger.info(
@@ -454,7 +453,6 @@ async def _execute_scheduled_run(app, schedule: dict, routine: dict, run_id: str
                 model=routine_model,
                 on_event=noop_event,
                 messages_out=messages_out,
-                guide_id=guide_id,
                 project_id=project_id,
                 routine_id=routine_id,
             )
