@@ -1087,13 +1087,17 @@ async def _run_send_message(
             )
         # The run left something for the user to look at (a finished answer,
         # an error, or a card it is waiting on): mark the conversation
-        # unread. A stopped run does not: the user was looking at it. Must
-        # stay BEFORE the publish below, which may have no await between it
-        # and the task returning (see ``is_run_active``).
+        # unread. A stopped run does not: the user was looking at it. Nor
+        # does a routine's own run, which ``user_started`` tells apart from
+        # the user's follow-ups. Must stay BEFORE the publish below, which
+        # may have no await between it and the task returning (see
+        # ``is_run_active``).
         if not stop_requested_event.is_set():
             # Imported here: chat.unread imports this package.
             from chat.unread import mark_unread_after_run
-            await mark_unread_after_run(conversation_id)
+            await mark_unread_after_run(
+                conversation_id, user_started=not routine_run,
+            )
         # Tell every subscribed client (sender + onlookers) that this run
         # is done so they can drain any remaining streaming-text buffer
         # and stop showing a "thinking" spinner.

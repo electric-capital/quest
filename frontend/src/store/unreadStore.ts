@@ -12,6 +12,11 @@
  * store folds every report in with `max`, so a stale list fetch that lands
  * after a newer event cannot bring a dot back.
  *
+ * A project shows the dot while any of its conversations is unread. The
+ * project list names each project's unread conversations as of the fetch,
+ * and the event names the project of the conversation it is about, so the
+ * store can follow a project's conversations it has never listed.
+ *
  * The store also knows which conversation the main view is showing. When
  * that conversation is unread and the window is focused it acknowledges at
  * once (optimistically, then POST /conversations/{id}/read), which is what
@@ -21,6 +26,7 @@
  */
 
 import { markConversationRead } from '../api/client';
+import type { UnreadConversationRef } from '../api/types';
 
 interface UnreadSeqs {
   unreadSeq: number;
@@ -44,6 +50,9 @@ class UnreadStore {
   // Acknowledgements in flight: the seq sent, counted as read until the
   // request settles so the dot clears without waiting for the round trip.
   private pendingAcks = new Map<string, number>();
+  // Conversation id -> project id, for conversations a report placed in a
+  // project. A conversation never leaves its project.
+  private projectIds = new Map<string, string>();
   private listeners = new Set<Listener>();
   private viewedId: string | null = null;
   // False under admin impersonation: the admin looking at a conversation
@@ -72,14 +81,37 @@ class UnreadStore {
     return unreadSeq > readSeq;
   }
 
-  /** Fold in seqs reported by the server (any source, any order). */
-  merge(id: string, unreadSeq: unknown, readSeq: unknown): void {
+  /**
+   * Whether the project has an unread conversation: one of the rows its
+   * list entry named, or one a later report placed in the project.
+   */
+  isProjectUnread(projectId: string, rows: UnreadConversationRef[] = []): boolean {
+    if (rows.some((row) => this.isUnread(row.id, row.unread_seq, row.read_seq))) {
+      return true;
+    }
+    for (const [id, conversationProjectId] of this.projectIds) {
+      if (conversationProjectId === projectId && this.isUnread(id)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Fold in seqs reported by the server (any source, any order), with the
+   * conversation's project when the report names one.
+   */
+  merge(id: string, unreadSeq: unknown, readSeq: unknown, projectId?: unknown): void {
     const current = this.seqs.get(id);
     const next = {
       unreadSeq: Math.max(current?.unreadSeq ?? 0, toSeq(unreadSeq)),
       readSeq: Math.max(current?.readSeq ?? 0, toSeq(readSeq)),
     };
-    if (current && current.unreadSeq === next.unreadSeq && current.readSeq === next.readSeq) {
+    const placed = typeof projectId === 'string' && projectId !== ''
+      && this.projectIds.get(id) !== projectId;
+    if (placed) this.projectIds.set(id, projectId);
+    if (
+      !placed && current
+      && current.unreadSeq === next.unreadSeq && current.readSeq === next.readSeq
+    ) {
       return;
     }
     this.seqs.set(id, next);
@@ -144,6 +176,7 @@ class UnreadStore {
   reset(): void {
     this.seqs.clear();
     this.pendingAcks.clear();
+    this.projectIds.clear();
     this.viewedId = null;
     this.acknowledging = true;
     this.emit();

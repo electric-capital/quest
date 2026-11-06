@@ -12,10 +12,10 @@ db/skill_store.py: each function opens a fresh AsyncSessionLocal() session.
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Select, and_, or_, select
+from sqlalchemy import Select, and_, func, or_, select
 
 from db.engine import AsyncSessionLocal
-from db.models import Conversation, User
+from db.models import Conversation, Project, User
 
 
 async def create_conversation(
@@ -273,21 +273,38 @@ async def record_messages_appended(
 UNREAD_ORIGINS = (None, "web")
 
 
-async def mark_conversation_unread(conversation_id: str) -> Optional[dict]:
+async def mark_conversation_unread(
+    conversation_id: str, *, user_started: bool,
+) -> Optional[dict]:
     """Advance ``unread_seq`` to the conversation's high-water message seq.
 
     Called when a run ends (see ``chat/unread.py``). The row becomes unread
     when that seq is beyond ``read_seq``, i.e. the run appended something no
     focused client has acknowledged.
 
+    Args:
+        conversation_id: The conversation whose run ended.
+        user_started: Whether a message the user sent themselves started the
+            run. False for a routine's own run and for a wait-handle resume,
+            which continues whichever run suspended. Only matters on a
+            routine's conversation.
+
     Returns:
         The updated row as a dict when ``unread_seq`` moved; None when the
-        conversation is missing, its origin takes no unread state
-        (``UNREAD_ORIGINS``), or nothing was appended since the last call.
+        conversation is missing, takes no unread state (``UNREAD_ORIGINS``,
+        archived, a routine's own run), or nothing was appended since the
+        last call.
     """
     async with AsyncSessionLocal() as db:
         conv = await db.get(Conversation, conversation_id)
-        if conv is None or conv.origin not in UNREAD_ORIGINS:
+        if conv is None or conv.origin not in UNREAD_ORIGINS or conv.archived:
+            return None
+        # A routine's conversation stays read through the routine's own run
+        # and takes unread state once the user has sent a message of their
+        # own. ``unread_seq`` doubles as the record of that: only a
+        # user-started run moves it off zero here, so a resume is marked
+        # exactly when it follows one.
+        if conv.routine_id is not None and not user_started and not conv.unread_seq:
             return None
         seq = conv.last_message_seq or 0
         if seq <= (conv.unread_seq or 0):
@@ -333,6 +350,104 @@ async def get_last_message_seq(conversation_id: str) -> int:
         if conv is None:
             return 0
         return conv.last_message_seq or 0
+
+
+def _is_unread():
+    """SQL predicate: the conversation is unread."""
+    return Conversation.unread_seq > Conversation.read_seq
+
+
+def _outside_archived_projects():
+    """SQL predicate for a query outer-joined to ``Project``: the
+    conversation is standalone or its project is not archived."""
+    return or_(Project.id.is_(None), Project.archived == False)  # noqa: E712
+
+
+async def list_project_unread_conversations(user_id: int) -> dict[str, list[dict]]:
+    """A user's unread project conversations, grouped by project.
+
+    Returns:
+        ``{project_id: [{"id", "unread_seq", "read_seq"}, ...]}`` holding
+        only projects with at least one unread conversation.
+    """
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(
+                Conversation.project_id, Conversation.id,
+                Conversation.unread_seq, Conversation.read_seq,
+            ).where(
+                Conversation.user_id == user_id,
+                Conversation.project_id.isnot(None),
+                _is_unread(),
+            )
+        )
+        by_project: dict[str, list[dict]] = {}
+        for project_id, conv_id, unread_seq, read_seq in result.all():
+            by_project.setdefault(project_id, []).append({
+                "id": conv_id, "unread_seq": unread_seq, "read_seq": read_seq,
+            })
+        return by_project
+
+
+async def list_unread_summaries() -> list[dict]:
+    """One row per user who has unread conversations, for the Slack
+    reminder (``chat/slack_notifier.py``).
+
+    Conversations in an archived project are left out: the project is
+    hidden, so the reminder should not send the user there.
+
+    Returns:
+        ``[{"user_id", "unread_count", "oldest_unread_at"}, ...]``.
+        ``oldest_unread_at`` is the earliest ``last_message_at`` among the
+        user's unread conversations, i.e. when the longest-unread run ended.
+    """
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(
+                Conversation.user_id,
+                func.count(Conversation.id),
+                func.min(Conversation.last_message_at),
+            )
+            .outerjoin(Project, Conversation.project_id == Project.id)
+            .where(_is_unread(), _outside_archived_projects())
+            .group_by(Conversation.user_id)
+        )
+        return [
+            {"user_id": user_id, "unread_count": count, "oldest_unread_at": oldest}
+            for user_id, count, oldest in result.all()
+        ]
+
+
+async def list_unread_conversations(user_id: int, limit: int) -> list[dict]:
+    """A user's unread conversations, most recently active first, under the
+    same rule as :func:`list_unread_summaries`.
+
+    Returns:
+        Up to ``limit`` rows of ``{"id", "project_id", "project_name",
+        "title"}``; ``title`` is the custom name, else the cached auto
+        title, else None.
+    """
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Conversation, Project.name)
+            .outerjoin(Project, Conversation.project_id == Project.id)
+            .where(
+                Conversation.user_id == user_id,
+                _is_unread(),
+                _outside_archived_projects(),
+            )
+            .order_by(Conversation.last_message_at.desc(), Conversation.id.desc())
+            .limit(limit)
+        )
+        return [
+            {
+                "id": conv.id,
+                "project_id": conv.project_id,
+                "project_name": project_name,
+                "title": conv.custom_name or conv.auto_title,
+            }
+            for conv, project_name in result.all()
+        ]
 
 
 async def list_project_conversations_meta(project_id: str, include_archived: bool = False) -> list[dict]:
@@ -401,12 +516,17 @@ async def set_conversation_project(
 
 
 async def archive_conversation(user_id: int, conversation_id: str) -> Optional[dict]:
-    """Set archived=True on a conversation. Returns updated dict or None if not found."""
+    """Set archived=True on a conversation. Returns updated dict or None if not found.
+
+    Archiving also marks the conversation read: the user has put it away,
+    and an archived row is hidden from the lists that show unread state.
+    """
     async with AsyncSessionLocal() as db:
         conv = await db.get(Conversation, conversation_id)
         if conv is None or conv.user_id != user_id:
             return None
         conv.archived = True
+        conv.read_seq = max(conv.read_seq or 0, conv.unread_seq or 0)
         await db.commit()
         await db.refresh(conv)
         return _conversation_to_dict(conv)

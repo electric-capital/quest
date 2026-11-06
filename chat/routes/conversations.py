@@ -597,6 +597,10 @@ async def archive_conversation_endpoint(
             detail={"error": "not_found", "message": "Conversation not found"},
         )
     _publish_list_changed(user["id"], conversation_id, "archived")
+    # Archiving marked it read (``archive_conversation``); receivers ignore
+    # the event when the conversation already was.
+    from chat.unread import publish_changed
+    publish_changed(result)
     # An archived conversation has no reason to keep a browser container
     # alive (public projects, chat/browser_sessions.py); its logins stay
     # saved for an unarchive.

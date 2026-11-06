@@ -6,6 +6,7 @@ import { act, cleanup, renderHook } from '@testing-library/react';
 import {
   useConversationUnread,
   useMarkConversationViewed,
+  useProjectUnread,
   useUnreadTracking,
 } from './useConversationUnread';
 import { unreadStore } from '../store/unreadStore';
@@ -79,6 +80,52 @@ describe('useConversationUnread', () => {
     renderHook(() => useUnreadTracking(true));
     const { result } = renderHook(() => useConversationUnread({ id: 'c1' }));
     emit({ type: 'conversation_list_changed', conversation_id: 'c1', unread_seq: 4, read_seq: 0 });
+    expect(result.current).toBe(false);
+  });
+});
+
+describe('useProjectUnread', () => {
+  it('reads the project row and follows conversation_unread_changed', () => {
+    renderHook(() => useUnreadTracking(true));
+    const { result } = renderHook(() =>
+      useProjectUnread({ id: 'p1', unread_conversations: [] }),
+    );
+    expect(result.current).toBe(false);
+
+    emit({
+      type: 'conversation_unread_changed',
+      conversation_id: 'c1', project_id: 'p1', unread_seq: 4, read_seq: 0,
+    });
+    expect(result.current).toBe(true);
+
+    emit({
+      type: 'conversation_unread_changed',
+      conversation_id: 'c1', project_id: 'p1', unread_seq: 4, read_seq: 4,
+    });
+    expect(result.current).toBe(false);
+  });
+
+  it('shows a project whose list row names an unread conversation', () => {
+    const { result } = renderHook(() =>
+      useProjectUnread({
+        id: 'p1',
+        unread_conversations: [{ id: 'c1', unread_seq: 4, read_seq: 1 }],
+      }),
+    );
+    expect(result.current).toBe(true);
+  });
+
+  it('ignores unread conversations of other projects and standalone ones', () => {
+    renderHook(() => useUnreadTracking(true));
+    const { result } = renderHook(() => useProjectUnread({ id: 'p1' }));
+    emit({
+      type: 'conversation_unread_changed',
+      conversation_id: 'c1', project_id: 'p2', unread_seq: 4, read_seq: 0,
+    });
+    emit({
+      type: 'conversation_unread_changed',
+      conversation_id: 'c2', project_id: null, unread_seq: 4, read_seq: 0,
+    });
     expect(result.current).toBe(false);
   });
 });

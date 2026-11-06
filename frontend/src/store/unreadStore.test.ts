@@ -80,6 +80,51 @@ describe('unreadStore merging', () => {
   });
 });
 
+describe('unreadStore project unread state', () => {
+  it('is unread while a conversation its list row named is unread', () => {
+    const rows = [
+      { id: 'c1', unread_seq: 4, read_seq: 0 },
+      { id: 'c2', unread_seq: 3, read_seq: 3 },
+    ];
+    expect(unreadStore.isProjectUnread('p1', rows)).toBe(true);
+    // The read arrives without the project list being fetched again.
+    unreadStore.merge('c1', 4, 4, 'p1');
+    expect(unreadStore.isProjectUnread('p1', rows)).toBe(false);
+  });
+
+  it('follows a conversation the project list never named', () => {
+    expect(unreadStore.isProjectUnread('p1')).toBe(false);
+    unreadStore.merge('c9', 2, 0, 'p1');
+    expect(unreadStore.isProjectUnread('p1')).toBe(true);
+    expect(unreadStore.isProjectUnread('p2')).toBe(false);
+    unreadStore.merge('c9', 2, 2, 'p1');
+    expect(unreadStore.isProjectUnread('p1')).toBe(false);
+  });
+
+  it('ignores standalone conversations', () => {
+    unreadStore.merge('c1', 2, 0, null);
+    unreadStore.merge('c2', 2, 0);
+    expect(unreadStore.isProjectUnread('p1')).toBe(false);
+  });
+
+  it('places a conversation it already knew as unread', () => {
+    const listener = vi.fn();
+    unreadStore.merge('c1', 2, 0);
+    unreadStore.subscribe(listener);
+    // Same seqs, but now with the project: the project's dot must appear.
+    unreadStore.merge('c1', 2, 0, 'p1');
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(unreadStore.isProjectUnread('p1')).toBe(true);
+  });
+
+  it('never shows the dot for the conversation on screen', () => {
+    unreadStore.merge('c1', 0, 0, 'p1');
+    unreadStore.setViewed('c1');
+    unreadStore.merge('c1', 5, 0, 'p1');
+    expect(unreadStore.isProjectUnread('p1')).toBe(false);
+  });
+});
+
 describe('unreadStore acknowledging the viewed conversation', () => {
   it('acknowledges an unread conversation when it comes on screen', async () => {
     unreadStore.merge('c1', 5, 0);

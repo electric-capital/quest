@@ -455,7 +455,8 @@
   color: var(--text);
 }
 
-/* Unread dot in front of a conversation title (store/unreadStore.ts). It
+/* Unread dot in front of a conversation title, or of a project's name
+   while one of its conversations is unread (store/unreadStore.ts). It
    takes inline space, so an unread title sits slightly to the right. */
 .conversation-unread-dot {
   display: inline-block;
