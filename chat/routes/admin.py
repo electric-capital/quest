@@ -32,6 +32,7 @@ from db.doc_note_suggestion_store import (
     list_all_suggestion_rows as list_all_doc_suggestion_rows,
 )
 from db.doc_store import list_all_doc_rows
+from db.dream_run_store import list_all_run_rows as list_all_dream_run_rows
 from db.memory_store import list_all_memory_rows
 from db.memory_suggestion_store import list_all_suggestion_rows
 from db.project_memory_store import list_all_project_memory_rows
@@ -764,22 +765,25 @@ async def admin_memories_report(
     """Return per-user memory adoption and the suggestion funnel for a date
     range.
 
-    One row per user with any personal memory, memory suggestion, project
-    memory (in a project they own), project memory suggestion (raised in
-    their conversation), doc memory (on a doc they own) or doc note
-    suggestion (raised in their conversation): memory counts (active and
-    archived for personal and project memories; doc memories have no
-    archive), the characters stored (personal memories only), memories
-    created in range, and the suggestions created in range split by their
-    current status (accepted / dismissed / pending), each for personal,
-    project and doc memories. Memory and suggestion text is never returned. Row shape and
-    sort order are on ``build_memories_report`` in
+    One row per user with any personal memory, memory suggestion, dream
+    run, project memory (in a project they own), project memory
+    suggestion (raised in their conversation), doc memory (on a doc they
+    own) or doc note suggestion (raised in their conversation): memory
+    counts (active and archived for personal and project memories; doc
+    memories have no archive), the characters stored (personal memories
+    only), memories created in range, the suggestions created in range
+    split by their current status (accepted / dismissed / pending), each
+    for personal (conversation-raised), dream, project and doc memories,
+    and the dreams run in range with their failures and cost. Memory and
+    suggestion text and dream error text are never returned. Row shape
+    and sort order are on ``build_memories_report`` in
     chat/feature_usage_report.py.
     """
     _require_admin(user)
     start_date, end_date, _, _ = _resolve_range_window(start, end)
     memory_rows = await list_all_memory_rows()
     suggestion_rows = await list_all_suggestion_rows()
+    dream_run_rows = await list_all_dream_run_rows()
     project_memory_rows = await list_all_project_memory_rows()
     project_suggestion_rows = await list_all_project_suggestion_rows()
     doc_memory_rows = await list_all_doc_memory_rows()
@@ -790,6 +794,7 @@ async def admin_memories_report(
         memory_rows, suggestion_rows, project_memory_rows, project_suggestion_rows,
         doc_memory_rows, doc_suggestion_rows,
         users, start_date, end_date,
+        dream_run_rows,
     )
 
 

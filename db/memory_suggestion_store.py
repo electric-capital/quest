@@ -451,15 +451,16 @@ def _to_dict(row: MemorySuggestion) -> dict:
 
 async def list_all_suggestion_rows() -> list[dict]:
     """Every memory suggestion across all users for the admin Memories
-    usage report: ``user_id``, ``status`` and naive-UTC ``created_at`` /
-    ``resolved_at`` as stored, nothing else (no content, no reasoning).
-    Folded per user by ``build_memories_report()`` in
-    chat/feature_usage_report.py."""
+    usage report: ``user_id``, ``status``, ``source`` (``conversation`` or
+    ``dream``) and naive-UTC ``created_at`` / ``resolved_at`` as stored,
+    nothing else (no content, no reasoning). Folded per user by
+    ``build_memories_report()`` in chat/feature_usage_report.py."""
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(
                 MemorySuggestion.user_id,
                 MemorySuggestion.status,
+                MemorySuggestion.source,
                 MemorySuggestion.created_at,
                 MemorySuggestion.resolved_at,
             )
@@ -468,8 +469,9 @@ async def list_all_suggestion_rows() -> list[dict]:
             {
                 "user_id": user_id,
                 "status": status,
+                "source": source,
                 "created_at": created_at,
                 "resolved_at": resolved_at,
             }
-            for user_id, status, created_at, resolved_at in result.all()
+            for user_id, status, source, created_at, resolved_at in result.all()
         ]

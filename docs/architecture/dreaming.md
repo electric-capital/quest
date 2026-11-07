@@ -60,7 +60,7 @@ The task is small and judgement-heavy (a few thousand input tokens, a short list
 5. Registers each survivor with `create_suggestion(..., conversation_id=None, source="dream", dream_run_id=...)`: a `replace` becomes a suggestion with `content` and `replaces_memory_id`, an `archive` an archive-only suggestion (no `content`). A merge of two memories is therefore one replace carrying the merged text plus one archive, reviewed as two rows. One `memory_suggestions_changed` event (`conversation_id` None) follows the batch.
 6. Closes the row `completed` with the counts, the provider-reported token usage and its list-price estimate (`db/llm_pricing.estimate_cost_usd`), or `failed` with the error -- a provider error, an unparseable answer, no model. A dream cancelled by shutdown is marked failed on the way out.
 
-Dreams are not recorded in the `llm_calls_*` tables: those rows require a conversation, and a dream has none. The run row is the cost record; the admin section sums nothing yet and shows the per-run figure.
+Dreams are not recorded in the `llm_calls_*` tables: those rows require a conversation, and a dream has none. The run row is the cost record: Settings > Dreaming shows the per-run figure, and the Memories section of [System Reports](admin-system-monitor.md#docs-tables-and-memories-sections) sums it per user over a date range next to the dream suggestions' acceptance rate.
 
 ## Settings and Gate
 

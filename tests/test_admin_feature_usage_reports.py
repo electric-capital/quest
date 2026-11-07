@@ -175,12 +175,25 @@ def _memory(user, *, archived=False, length=10, created=D1, updated=None):
             "created_at": created, "updated_at": updated}
 
 
-def _suggestion(user, status, *, created=D1, resolved=None, project=None):
+def _suggestion(user, status, *, created=D1, resolved=None, project=None,
+                source="conversation"):
     row = {"user_id": user, "status": status, "created_at": created,
            "resolved_at": resolved}
     if project is not None:
         row["project_id"] = project
+    else:
+        row["source"] = source
     return row
+
+
+def _dream_run(user, status="completed", *, started=D1, cost=0.01, tokens=1000,
+               trigger="scheduled", read=5, created=1):
+    # The list_all_run_rows() shape; ``tokens=None`` is a run that never
+    # reached the model call (cost None then means "free", not unpriced).
+    return {"user_id": user, "status": status, "trigger": trigger,
+            "memories_read": read, "suggestions_created": created,
+            "input_tokens": tokens, "estimated_cost_usd": cost,
+            "started_at": started}
 
 
 def _project_memory(user, project, *, archived=False, length=10, created=D1, updated=None):
@@ -204,6 +217,10 @@ MEMORY_ROW_KEYS = {
     "memory_count", "archived_count", "content_chars", "created_in_range",
     "suggested_in_range", "accepted_in_range", "dismissed_in_range",
     "pending_in_range",
+    "dream_count", "dreams_in_range", "dreams_failed_in_range",
+    "dream_cost_usd_in_range", "dream_suggested_in_range",
+    "dream_accepted_in_range", "dream_dismissed_in_range",
+    "dream_pending_in_range", "last_dream_at",
     "project_memory_count", "project_archived_count", "project_count",
     "project_created_in_range", "project_suggested_in_range",
     "project_accepted_in_range", "project_dismissed_in_range",
@@ -271,6 +288,12 @@ def test_memories_report_counts_memories_and_suggestion_funnel():
     assert alice["doc_count"] == 0
     assert alice["doc_created_in_range"] == 0
     assert alice["doc_suggested_in_range"] == 0
+    # Nor dream runs.
+    assert alice["dream_count"] == 0
+    assert alice["dreams_in_range"] == 0
+    assert alice["dream_cost_usd_in_range"] == 0.0
+    assert alice["dream_suggested_in_range"] == 0
+    assert alice["last_dream_at"] is None
     assert alice["last_activity_at"] == D12.isoformat()
 
     bob = by_id[2]
@@ -290,6 +313,71 @@ def test_memories_report_counts_memories_and_suggestion_funnel():
 def test_memories_report_skips_users_without_any_rows():
     report = build_memories_report([], [], [], [], [], [], USERS)
     assert report == {"users": [], "total_users": 3}
+
+
+def test_memories_report_splits_dream_suggestions_and_counts_runs():
+    suggestions = [
+        # Conversation-raised: the regular funnel.
+        _suggestion(1, "accepted", created=D5, resolved=D5),
+        _suggestion(1, "pending", created=D9),
+        # Dream-raised: the dream funnel, never the regular one.
+        _suggestion(1, "accepted", created=D5, resolved=D9, source="dream"),
+        _suggestion(1, "dismissed", created=D5, resolved=D5, source="dream"),
+        _suggestion(1, "pending", created=D9, source="dream"),
+        _suggestion(1, "accepted", created=D12, resolved=D12, source="dream"),  # outside
+        _suggestion(2, "pending", created=D5, source="dream"),
+    ]
+    dream_runs = [
+        _dream_run(1, started=D1, cost=0.5),  # outside the range, lifetime only
+        _dream_run(1, started=D5, cost=0.02, created=2),
+        _dream_run(1, "failed", started=D9, cost=0.01, created=0),  # failed after the call
+        _dream_run(1, "failed", started=D9, cost=None, tokens=None),  # never called: free
+        _dream_run(3, started=D5, cost=None),  # called but unpriced
+        _dream_run(3, started=D12, cost=0.03),  # outside
+    ]
+    report = build_memories_report(
+        [_memory(2, created=D1)], suggestions, [], [], [], [], USERS,
+        date(2026, 10, 5), date(2026, 10, 9), dream_runs,
+    )
+    by_id = {r["user_id"]: r for r in report["users"]}
+    # alice: 2 + 3 suggestions in range; bob: 1 dream suggestion; carol:
+    # dream runs only (no activity, no holdings) still gets a row.
+    assert list(by_id) == [1, 2, 3]
+    assert all(set(r) == MEMORY_ROW_KEYS for r in report["users"])
+
+    alice = by_id[1]
+    assert alice["suggested_in_range"] == 2
+    assert alice["accepted_in_range"] == 1
+    assert alice["pending_in_range"] == 1
+    assert alice["dream_suggested_in_range"] == 3
+    assert alice["dream_accepted_in_range"] == 1
+    assert alice["dream_dismissed_in_range"] == 1
+    assert alice["dream_pending_in_range"] == 1
+    assert alice["dream_count"] == 4
+    assert alice["dreams_in_range"] == 3
+    assert alice["dreams_failed_in_range"] == 2
+    assert alice["dream_cost_usd_in_range"] == pytest.approx(0.03)
+    assert alice["last_dream_at"] == D9.isoformat()
+    # The out-of-range dream suggestion still moves last activity.
+    assert alice["last_activity_at"] == D12.isoformat()
+
+    bob = by_id[2]
+    assert bob["suggested_in_range"] == 0
+    assert bob["dream_suggested_in_range"] == 1
+    assert bob["dream_pending_in_range"] == 1
+    assert bob["dream_count"] == 0
+    assert bob["last_dream_at"] is None
+
+    carol = by_id[3]
+    assert carol["memory_count"] == 0
+    assert carol["dream_count"] == 2
+    assert carol["dreams_in_range"] == 1
+    assert carol["dreams_failed_in_range"] == 0
+    # An unpriced run nulls the range sum rather than under-reporting it.
+    assert carol["dream_cost_usd_in_range"] is None
+    assert carol["last_dream_at"] == D12.isoformat()
+    # Dream runs alone are not user activity.
+    assert carol["last_activity_at"] is None
 
 
 def test_memories_report_counts_doc_notes_and_their_funnel():
@@ -390,6 +478,7 @@ def _isolated_db(monkeypatch):
     import db.doc_memory_store as doc_memory_store
     import db.doc_note_suggestion_store as doc_suggestion_store
     import db.doc_store as doc_store
+    import db.dream_run_store as dream_run_store
     import db.memory_store as memory_store
     import db.memory_suggestion_store as suggestion_store
     import db.project_memory_store as project_memory_store
@@ -405,6 +494,7 @@ def _isolated_db(monkeypatch):
         "doc_memory_store": doc_memory_store,
         "doc_suggestion_store": doc_suggestion_store,
         "doc_store": doc_store,
+        "dream_run_store": dream_run_store,
         "memory_store": memory_store,
         "suggestion_store": suggestion_store,
         "project_memory_store": project_memory_store,
@@ -556,6 +646,22 @@ def test_memory_projections_cover_all_users_and_hide_text(_isolated_db):
             alice, project["id"], conv, "Project suggestion",
         )
         await project_suggestion_store.accept_suggestion(alice, ps["id"])
+
+        # A dream proposing to shorten bob's memory, plus its ledger row.
+        run = await mods["dream_run_store"].create_run(bob, "scheduled")
+        bob_memory = next(m for m in await memory_store.list_memories(bob))
+        await suggestion_store.create_suggestion(
+            bob, None, "Bob's fact, shorter", replaces_memory_id=bob_memory["id"],
+            source="dream", dream_run_id=run["id"],
+        )
+        await mods["dream_run_store"].finish_run(
+            run["id"], "completed", model="m", memories_read=1, suggestions_created=1,
+            input_tokens=900, output_tokens=50, cached_tokens=0, estimated_cost_usd=0.004,
+        )
+        failed = await mods["dream_run_store"].create_run(alice, "manual")
+        await mods["dream_run_store"].finish_run(
+            failed["id"], "failed", memories_read=2, error="provider said no",
+        )
         return alice, bob, project["id"], m1["id"]
 
     alice, bob, project_id, m1 = _run(_seed())
@@ -571,12 +677,28 @@ def test_memory_projections_cover_all_users_and_hide_text(_isolated_db):
     assert all(isinstance(r["created_at"], datetime) for r in memories)
 
     suggestions = _run(suggestion_store.list_all_suggestion_rows())
-    assert sorted(r["status"] for r in suggestions) == ["accepted", "dismissed", "pending"]
-    assert all(r["user_id"] == alice for r in suggestions)
+    assert sorted((r["user_id"], r["status"], r["source"]) for r in suggestions) == [
+        (alice, "accepted", "conversation"), (alice, "dismissed", "conversation"),
+        (alice, "pending", "conversation"), (bob, "pending", "dream"),
+    ]
     assert all("content" not in r and "reasoning" not in r for r in suggestions)
     resolved = [r for r in suggestions if r["status"] != "pending"]
     assert all(isinstance(r["resolved_at"], datetime) for r in resolved)
-    assert next(r for r in suggestions if r["status"] == "pending")["resolved_at"] is None
+    assert all(r["resolved_at"] is None for r in suggestions if r["status"] == "pending")
+
+    runs = _run(mods["dream_run_store"].list_all_run_rows())
+    assert sorted((r["user_id"], r["status"], r["trigger"]) for r in runs) == [
+        (alice, "failed", "manual"), (bob, "completed", "scheduled"),
+    ]
+    done = next(r for r in runs if r["status"] == "completed")
+    assert (done["memories_read"], done["suggestions_created"]) == (1, 1)
+    assert done["input_tokens"] == 900
+    assert done["estimated_cost_usd"] == pytest.approx(0.004)
+    assert isinstance(done["started_at"], datetime)
+    never_called = next(r for r in runs if r["status"] == "failed")
+    assert never_called["input_tokens"] is None
+    assert never_called["estimated_cost_usd"] is None
+    assert all("error" not in r and "model" not in r for r in runs)
 
     project_memories = _run(project_memory_store.list_all_project_memory_rows())
     # Attributed to the project owner (bob), the accepted suggestion included.
@@ -689,6 +811,11 @@ def test_tables_and_memories_endpoints_return_rosters(_isolated_db, _admin):
             alice, "T", mode="private", schema=[{"key": "c1", "name": "A", "type": "text"}],
         )
         await mods["memory_store"].create_memory(alice, "fact")
+        run = await mods["dream_run_store"].create_run(alice, "manual")
+        await mods["dream_run_store"].finish_run(
+            run["id"], "completed", model="m", memories_read=1, suggestions_created=0,
+            input_tokens=10, output_tokens=5, cached_tokens=0, estimated_cost_usd=0.002,
+        )
         return alice
 
     alice = _run(_seed())
@@ -700,10 +827,17 @@ def test_tables_and_memories_endpoints_return_rosters(_isolated_db, _admin):
     memories = _run(_admin.admin_memories_report(user={"email": "admin@example.com"}))
     assert memories["total_users"] == 2
     assert [(r["user_id"], r["memory_count"]) for r in memories["users"]] == [(alice, 1)]
-    # Today falls in the open range, so the fresh memory counts as created.
-    assert memories["users"][0]["created_in_range"] == 1
-    assert memories["users"][0]["doc_memory_count"] == 0
-    assert memories["users"][0]["doc_suggested_in_range"] == 0
+    # Today falls in the open range, so the fresh memory and dream count.
+    row = memories["users"][0]
+    assert row["created_in_range"] == 1
+    assert row["doc_memory_count"] == 0
+    assert row["doc_suggested_in_range"] == 0
+    assert row["dream_count"] == 1
+    assert row["dreams_in_range"] == 1
+    assert row["dreams_failed_in_range"] == 0
+    assert row["dream_cost_usd_in_range"] == pytest.approx(0.002)
+    assert row["last_dream_at"] is not None
+    assert set(row) == MEMORY_ROW_KEYS
 
 
 def test_memories_endpoint_includes_doc_notes(_isolated_db, _admin):

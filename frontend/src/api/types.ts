@@ -2438,10 +2438,25 @@ export interface AdminMemoriesReportRow {
   archived_count: number;
   content_chars: number;
   created_in_range: number;
+  // Suggestions the model raised in the user's conversations in range, by
+  // current status (dream-raised ones are in the dream funnel below).
   suggested_in_range: number;
   accepted_in_range: number;
   dismissed_in_range: number;
   pending_in_range: number;
+  // Dreaming: lifetime runs and newest run start; runs started in range
+  // with their failures and the summed list-price cost of their model
+  // calls (null when a run in range ran on an unpriced model); the
+  // suggestions those reviews raised in range, by current status.
+  dream_count: number;
+  last_dream_at: string | null;
+  dreams_in_range: number;
+  dreams_failed_in_range: number;
+  dream_cost_usd_in_range: number | null;
+  dream_suggested_in_range: number;
+  dream_accepted_in_range: number;
+  dream_dismissed_in_range: number;
+  dream_pending_in_range: number;
   // Project memories across the projects the user owns.
   project_memory_count: number;
   project_archived_count: number;
