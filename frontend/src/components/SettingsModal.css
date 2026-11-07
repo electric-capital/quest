@@ -96,16 +96,21 @@
   justify-content: space-between;
 }
 
+/* The section list scrolls on short screens (admins have many sections);
+   Sign Out in .settings-nav-bottom stays pinned below it. */
 .settings-nav-top {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .settings-nav-bottom {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  padding-top: 0.5rem;
 }
 
 .settings-nav-section-header {
@@ -130,6 +135,7 @@
   border-radius: 6px;
   font-size: 0.875rem;
   font-family: inherit;
+  flex-shrink: 0;
   transition: color 0.15s, background-color 0.15s;
 }
 
@@ -499,6 +505,12 @@
   border-right: none;
   padding: 0.75rem 1rem;
   overflow-y: auto;
+}
+
+/* The whole nav scrolls on mobile, so the list itself must not */
+.settings-modal-mobile .settings-nav-top {
+  min-height: auto;
+  overflow-y: visible;
 }
 
 .settings-modal-mobile .settings-nav-item {
