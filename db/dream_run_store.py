@@ -73,6 +73,45 @@ async def list_recent_runs(limit: int = 50) -> list[dict]:
         return [_to_dict(row) for row in result.scalars().all()]
 
 
+async def list_all_run_rows() -> list[dict]:
+    """Every dream run across all users for the admin Memories usage
+    report: ``user_id``, ``status``, ``trigger``, ``memories_read``,
+    ``suggestions_created``, ``input_tokens`` (None when the model was
+    never called), ``estimated_cost_usd`` (None when it was not, or the
+    model has no pricing entry) and the naive-UTC ``started_at`` as
+    stored; never the error text. Folded per user by
+    ``build_memories_report()`` in chat/feature_usage_report.py."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(
+                DreamRun.user_id,
+                DreamRun.status,
+                DreamRun.trigger,
+                DreamRun.memories_read,
+                DreamRun.suggestions_created,
+                DreamRun.input_tokens,
+                DreamRun.estimated_cost_usd,
+                DreamRun.started_at,
+            )
+        )
+        return [
+            {
+                "user_id": user_id,
+                "status": status,
+                "trigger": trigger,
+                "memories_read": memories_read,
+                "suggestions_created": suggestions_created,
+                "input_tokens": input_tokens,
+                "estimated_cost_usd": estimated_cost_usd,
+                "started_at": started_at,
+            }
+            for (
+                user_id, status, trigger, memories_read, suggestions_created,
+                input_tokens, estimated_cost_usd, started_at,
+            ) in result.all()
+        ]
+
+
 async def count_memories_created_since(user_id: int, since: Optional[datetime]) -> int:
     """Active memories of the user created after ``since`` (all of them
     when ``since`` is None)."""

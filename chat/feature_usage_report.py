@@ -35,10 +35,18 @@ Docs / Tables row (``noun`` is ``doc`` or ``table``):
 
 Memories row: ``memory_count`` (active, i.e. not archived) and
 ``archived_count`` with ``content_chars`` over the active ones;
-``created_in_range``; the suggestion funnel for suggestions created in
-the range (``suggested_in_range`` split into ``accepted_in_range``,
-``dismissed_in_range`` and ``pending_in_range`` by current status); the
-same figures for project memories (``project_memory_count`` /
+``created_in_range``; the suggestion funnel for suggestions the model
+raised in the user's conversations in the range (``suggested_in_range``
+split into ``accepted_in_range``, ``dismissed_in_range`` and
+``pending_in_range`` by current status; rows whose ``source`` is
+``dream`` are counted in the dream funnel instead); the dreaming figures
+(``dreams_in_range`` runs started in the range with ``dreams_failed_in_range``
+and ``dream_cost_usd_in_range``, the summed list-price estimate of those
+runs' model calls or None when a run that called the model has no
+estimate, i.e. an unpriced model; the dream suggestion funnel
+``dream_suggested_in_range`` etc.; lifetime ``dream_count`` and
+``last_dream_at``, the newest run start); the same figures for project
+memories (``project_memory_count`` /
 ``project_archived_count`` across the projects the user owns,
 ``project_count`` the projects among them that hold a memory,
 ``project_created_in_range``) and project suggestions
@@ -56,7 +64,7 @@ memory or suggestion timestamp of any kind.
 from datetime import date, datetime
 from typing import Optional
 
-from db.models import MemorySuggestionStatus
+from db.models import DreamRunStatus, MemorySuggestionSource, MemorySuggestionStatus
 
 # ``last_write_source`` prefixes that mean a model wrote the body (see the
 # Doc / DataTable column comments in db/models.py).
@@ -214,6 +222,14 @@ def _empty_memory_row() -> dict:
         "accepted_in_range": 0,
         "dismissed_in_range": 0,
         "pending_in_range": 0,
+        "dream_count": 0,
+        "dreams_in_range": 0,
+        "dreams_failed_in_range": 0,
+        "dream_cost_usd_in_range": 0.0,
+        "dream_suggested_in_range": 0,
+        "dream_accepted_in_range": 0,
+        "dream_dismissed_in_range": 0,
+        "dream_pending_in_range": 0,
         "project_memory_count": 0,
         "project_archived_count": 0,
         "project_created_in_range": 0,
@@ -231,6 +247,7 @@ def _empty_memory_row() -> dict:
         # (``project_count``, ``doc_count``).
         "_containers": {"project_": set(), "doc_": set()},
         "_last_activity": None,
+        "_last_dream": None,
     }
 
 
@@ -270,16 +287,48 @@ def _fold_memory_rows(
         acc["_last_activity"] = _newest(acc["_last_activity"], row["updated_at"])
 
 
-def _fold_suggestion_rows(acc_for, rows, start, end, prefix: str) -> None:
+def _fold_suggestion_rows(
+    acc_for, rows, start, end, prefix: str, *, split_dreams: bool = False,
+) -> None:
+    """Fold one suggestion projection into the ``<prefix>`` funnel.
+
+    ``split_dreams``: rows carry a ``source`` and the ``dream`` ones go to
+    the ``dream_`` funnel instead (personal memory suggestions only)."""
     for row in rows:
         acc = acc_for(row["user_id"])
+        key = prefix
+        if split_dreams and row["source"] == MemorySuggestionSource.DREAM:
+            key = "dream_"
         if _in_range(row["created_at"], start, end):
-            acc[f"{prefix}suggested_in_range"] += 1
+            acc[f"{key}suggested_in_range"] += 1
             status_key = _SUGGESTION_STATUS_KEY.get(row["status"])
             if status_key:
-                acc[f"{prefix}{status_key}_in_range"] += 1
+                acc[f"{key}{status_key}_in_range"] += 1
         acc["_last_activity"] = _newest(acc["_last_activity"], row["created_at"])
         acc["_last_activity"] = _newest(acc["_last_activity"], row["resolved_at"])
+
+
+def _fold_dream_run_rows(acc_for, rows, start, end) -> None:
+    """Fold the dream-run ledger: lifetime count and newest start, runs
+    started in range with their failures and summed cost. A run that
+    called the model (``input_tokens`` set) but has no cost estimate ran
+    on an unpriced model and nulls the range sum; a run that never got to
+    the call costs nothing."""
+    for row in rows:
+        acc = acc_for(row["user_id"])
+        acc["dream_count"] += 1
+        acc["_last_dream"] = _newest(acc["_last_dream"], row["started_at"])
+        if not _in_range(row["started_at"], start, end):
+            continue
+        acc["dreams_in_range"] += 1
+        if row["status"] == DreamRunStatus.FAILED:
+            acc["dreams_failed_in_range"] += 1
+        cost = row["estimated_cost_usd"]
+        if cost is None:
+            if row["input_tokens"] is not None:
+                acc["dream_cost_usd_in_range"] = None
+        elif acc["dream_cost_usd_in_range"] is not None:
+            acc["dream_cost_usd_in_range"] += float(cost)
 
 
 def build_memories_report(
@@ -292,13 +341,14 @@ def build_memories_report(
     users: list[dict],
     start: Optional[date] = None,
     end: Optional[date] = None,
+    dream_run_rows: Optional[list[dict]] = None,
 ) -> dict:
-    """Fold the six memory projections per user (row shape in the module
-    docstring): personal, project and doc memories with their suggestions.
-    A user gets a row when any of the six has a row for them. Sorted by
-    in-range activity (memories created plus suggestions raised, personal,
-    project and doc), then memories held (active personal, active project
-    and doc), then email."""
+    """Fold the seven memory projections per user (row shape in the module
+    docstring): personal, project and doc memories with their suggestions,
+    and the dream-run ledger. A user gets a row when any of the seven has
+    a row for them. Sorted by in-range activity (memories created plus
+    suggestions raised, personal, dream, project and doc), then memories
+    held (active personal, active project and doc), then email."""
     roster = _roster(users)
     per_user: dict[int, dict] = {}
 
@@ -309,7 +359,8 @@ def build_memories_report(
         return acc
 
     _fold_memory_rows(acc_for, memory_rows, start, end, "", count_chars=True)
-    _fold_suggestion_rows(acc_for, suggestion_rows, start, end, "")
+    _fold_suggestion_rows(acc_for, suggestion_rows, start, end, "", split_dreams=True)
+    _fold_dream_run_rows(acc_for, dream_run_rows or [], start, end)
     _fold_memory_rows(
         acc_for, project_memory_rows, start, end, "project_", container="project_id",
     )
@@ -324,17 +375,19 @@ def build_memories_report(
     for user_id, acc in per_user.items():
         containers = acc.pop("_containers")
         last_activity = acc.pop("_last_activity")
+        last_dream = acc.pop("_last_dream")
         out.append({
             **_identity(user_id, roster),
             **acc,
             "project_count": len(containers["project_"]),
             "doc_count": len(containers["doc_"]),
+            "last_dream_at": _iso(last_dream),
             "last_activity_at": _iso(last_activity),
         })
 
     def activity(r: dict) -> int:
         return (
-            r["created_in_range"] + r["suggested_in_range"]
+            r["created_in_range"] + r["suggested_in_range"] + r["dream_suggested_in_range"]
             + r["project_created_in_range"] + r["project_suggested_in_range"]
             + r["doc_created_in_range"] + r["doc_suggested_in_range"]
         )

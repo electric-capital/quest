@@ -216,8 +216,12 @@
   font-size: 0.75rem;
 }
 
-.feature-report .col-owner.col-w17 {
-  width: 17%;
+.feature-report .col-owner.col-w14 {
+  width: 14%;
+}
+
+.feature-report .col-when.col-w9 {
+  width: 9%;
 }
 
 .feature-report .col-when.col-w15 {
