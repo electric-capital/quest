@@ -56,6 +56,7 @@ from chat.tables.constants import (
     TABLE_WRITE_MAX_ROWS,
     TABLES_SERVICE_KEY,
 )
+from chat.tasks.constants import TASKS_SERVICE_KEY
 
 
 SYSTEM_SKILL_PREFIX = "system:"
@@ -80,6 +81,13 @@ class SystemSkill:
             default first) -- see loader.build_skill_content.
         requires_project: When True, skill is only surfaced when the
             current conversation belongs to a project.
+        requires_task_run: When True, skill is only surfaced (and only
+            loads) in a task run of a Quest Task -- the twin of
+            ``requires_project``. Not bypassed by
+            ``connected_services=None``.
+        task_run_note: Optional text prepended (followed by a blank line)
+            to the loaded content when the skill is loaded in a task run.
+            Content loaded anywhere else is unchanged.
     """
 
     id: str
@@ -89,6 +97,8 @@ class SystemSkill:
     content_builder: Callable[..., str]
     requires: Optional[str] = None
     requires_project: bool = False
+    requires_task_run: bool = False
+    task_run_note: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -561,6 +571,22 @@ create_action_request(
   set up a new canned prompt, rename one, tweak its prompt or model, put it
   on a schedule (or pause/remove one), or change which skills it auto-loads.
 """
+
+
+# Prepended to system:workspace when it loads in a task run of a Quest Task,
+# where the file spaces are chat:// and task:// instead of the project ones.
+_WORKSPACE_TASK_RUN_NOTE = (
+    "**In a task run of a Quest Task:** the two file spaces are `chat://` "
+    "(this task run's own workspace, `/workspace` in scripts) and `task://` "
+    "(the task workspace shared by every task run of this Quest Task, "
+    "`/task` in scripts), reached only through the five scheme-qualified "
+    "tools. There is no `proj://` or `/project`, and the four "
+    "`*_workspace_file` tools are not offered. Read the guidance below with "
+    "that mapping: a `*_workspace_file` call is the scheme tool on a "
+    "`chat://` path, and a `proj://` or `/project` path is a `task://` or "
+    "`/task` one. Scratch stays in `chat://`; put a file in `task://` only "
+    "when a later task run will need it."
+)
 
 
 def _workspace_content(_base_url: str, _api_key: str) -> str:
@@ -1722,6 +1748,10 @@ suggestions are refused until the user reviews them.
 """
 
 
+def _quest_tasks_content(_base_url: str, _api_key: str) -> str:
+    return "## Quest Tasks\n\nPLACEHOLDER"
+
+
 # ---------------------------------------------------------------------------
 # Catalog
 # ---------------------------------------------------------------------------
@@ -1960,6 +1990,7 @@ _register(SystemSkill(
     when_to_load="Load for file-heavy tasks, generated artifacts, charts, or sandbox script work.",
     requires=None,
     content_builder=_workspace_content,
+    task_run_note=_WORKSPACE_TASK_RUN_NOTE,
 ))
 
 _register(SystemSkill(
@@ -2012,6 +2043,20 @@ _register(SystemSkill(
     when_to_load="Load when a doc result carries doc_notes or doc_notes_unseen, the user asks about a doc's notes, instructions or memories, or gives a doc a standing rule or a fact to keep.",
     requires=DOC_NOTES_SERVICE_KEY,
     content_builder=_doc_notes_content,
+))
+
+# Gated on the "tasks" connected-services pseudo-key (the per-user Quest
+# Tasks feature gate) and shown only in a task run of a Quest Task. Not
+# "system:tasks": that id is the Google Tasks skill (the same split as
+# system:quest_docs vs system:docs).
+_register(SystemSkill(
+    id="system:quest_tasks",
+    name="Quest Tasks",
+    description="How this task run of a Quest Task keeps its brief, notes, result and files, and when to ask the user.",
+    when_to_load="Load before finishing a task run that changed the state of the work, or when unsure what belongs in the brief, the notes or task://.",
+    requires=TASKS_SERVICE_KEY,
+    requires_task_run=True,
+    content_builder=_quest_tasks_content,
 ))
 
 # Gated on the "tables" connected-services pseudo-key (the per-user Quest
