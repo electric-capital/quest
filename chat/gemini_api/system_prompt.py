@@ -550,6 +550,12 @@ _ROUTINE_NAMING_SECTION = """**Routine run:** This conversation is a routine run
 
 **Routine completion (IMPORTANT):** When every piece of work the routine prompt asked for is done and you have written your final summary, call the top-level `routine_completed` tool (it has its own function declaration -- call it directly, not through `tool_call`) EXACTLY ONCE as your LAST tool call. A run that ends without this call is treated as unfinished: you will receive a follow-up message asking you to check that all the requested work was done and to call `routine_completed`. If part of the task could not be completed, still call `routine_completed` and explain what is missing in its `summary`."""
 
+# Replacement for task runs of a Quest Task (issue #213): a run conversation
+# is never shown by name (the task thread shows the task's title), so
+# ``set_conversation_name`` is not offered. How a task run finishes is in the
+# ``## Task`` section near the end of the prompt.
+_TASK_RUN_NAMING_SECTION = """**Task run:** This conversation is one task run of a Quest Task and has no name of its own: do not try to set a conversation name; go straight to the work in the user's message. On the first task run of a Quest Task you may give the task a short title through `complete_task_run`'s `task_title` (it is ignored once the task has a title)."""
+
 
 def _connected_accounts_block(paragraph: str) -> str:
     """The "Connected accounts" paragraph as a prompt block, or ``""``.
@@ -579,6 +585,7 @@ def get_system_prompt(
     connected_accounts: str = "",
     memories_content: str = "",
     project_memories_content: str = "",
+    task_context: str = "",
 ) -> str:
     """Build the system prompt with tool instructions and skill enumeration.
 
@@ -632,6 +639,14 @@ def get_system_prompt(
             into the "Project Memories" paragraph; empty -> the paragraph
             only names the read tools. Ignored when ``has_project`` is
             False.
+        task_context: The ``## Task`` block of a task run of a Quest Task
+            (chat.tasks.context, frozen on the run row). Non-empty marks
+            the conversation as a task run: the block is placed as its own
+            section after every stable section and right before the proxy
+            preamble (which stays last), ``set_conversation_name`` is left
+            out of the enumeration and the naming section is replaced by
+            the task-run note. The caller passes no project (a task run
+            never has one). Empty -> the prompt is unchanged.
 
     Project conversations also get the "Two file spaces" paragraph and a
     ``/project`` script example; a standalone conversation's prompt carries
@@ -746,6 +761,12 @@ Facts the user has saved about themselves and how they want you to work, newest 
         top_level_exclude.add("suggest_memory")
         top_level_exclude.add("suggest_project_memory")
         top_level_exclude.add("suggest_doc_note")
+    is_task_run = bool(task_context and task_context.strip())
+    if is_task_run:
+        # A run conversation's name is never shown: the task thread shows
+        # the task's title, which the first run sets through
+        # complete_task_run's task_title.
+        top_level_exclude.add("set_conversation_name")
     dynamic_tools_section = _build_dynamic_tools_section(
         exclude=top_level_exclude, connected_services=connected_services,
     )
@@ -777,9 +798,15 @@ Facts the user has saved about themselves and how they want you to work, newest 
             "1st-level sub-agents and let them spin up leaf agents as needed."
         )
 
-    naming_section = (
-        _ROUTINE_NAMING_SECTION if is_routine else _CONVERSATION_NAMING_SECTION
-    )
+    if is_task_run:
+        naming_section = _TASK_RUN_NAMING_SECTION
+    elif is_routine:
+        naming_section = _ROUTINE_NAMING_SECTION
+    else:
+        naming_section = _CONVERSATION_NAMING_SECTION
+    # The task context changes between task runs, so it sits after every
+    # stable section: the prefix before it stays cacheable across runs.
+    task_section = f"\n{task_context.strip()}\n" if is_task_run else ""
     project_script_example = _PROJECT_SCRIPT_EXAMPLE if has_project else ""
     file_discovery_rules = (
         _PROJECT_FILE_RULES if has_project else _STANDALONE_FILE_RULES
@@ -923,7 +950,7 @@ To run multiple research tasks in parallel:
 To load backend API documentation before using a backend's APIs:
   load_skills(skill_ids=["system:gmail"])
   (then call the relevant Gmail API as documented in the loaded skill)
-{slack_section}
+{slack_section}{task_section}
 ---
 
 {proxy_preamble}"""
@@ -1419,6 +1446,7 @@ def get_sub_agent_system_prompt(
     legacy_shared_workspace: bool = False,
     converted_from_standalone: bool = False,
     connected_accounts: str = "",
+    task_context: str = "",
 ) -> str:
     """Build the system prompt for a sub-agent.
 
@@ -1453,6 +1481,11 @@ def get_sub_agent_system_prompt(
             note. Project conversations only.
         connected_accounts: Pre-rendered "Connected accounts" paragraph (the
             user's multi-connection services); empty -> nothing added.
+        task_context: The read-only ``## Task`` block for a sub-agent of a
+            task run of a Quest Task
+            (chat.tasks.context.load_task_subagent_context), placed after
+            the important rules, right before the proxy preamble (which
+            stays last). Empty -> the prompt is unchanged.
 
     Project conversations also get the "Two file spaces" paragraph (the
     sub-agent shares the parent's conversation and project workspaces).
@@ -1597,6 +1630,12 @@ def get_sub_agent_system_prompt(
             "on your behalf."
         )
 
+    # The read-only task block of a task run's sub-agent: last before the
+    # proxy preamble, like the top-level ``## Task`` section.
+    task_section = (
+        f"\n{task_context.strip()}\n" if task_context and task_context.strip() else ""
+    )
+
     return f"""You are a sub-agent of Quest, named "{agent_name}". You have been spawned by a parent agent to complete a specific task.
 {identity_line}{skills_section}{project_section}
 **Message format:** Each user message is delivered in an XML envelope with metadata:
@@ -1652,7 +1691,7 @@ You have {tool_count_word} tools available:
 - Your response should be comprehensive and well-formatted.
 - Do not ask follow-up questions -- complete the task with the information available.
 - Use `run_python` for one-off, throwaway tasks. Use {sub_write_tool} + `run_script` for scripts the user will want to keep, re-run, or modify. Load `system:workspace` for full patterns.
-
+{task_section}
 ---
 
 {proxy_preamble}"""

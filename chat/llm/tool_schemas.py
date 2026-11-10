@@ -26,6 +26,15 @@ from chat.tables.constants import (
     TABLE_WRITE_MAX_ROWS,
     TABLES_SERVICE_KEY,
 )
+from chat.tasks.constants import (
+    TASK_BRIEF_MAX_CHARS,
+    TASK_QUESTION_MAX_CHARS,
+    TASK_QUESTION_MAX_OPTIONS,
+    TASK_RUN_NOTES_MAX_CHARS,
+    TASK_RUN_RESULT_MAX_CHARS,
+    TASK_RUN_SUMMARY_MAX_CHARS,
+    TASK_TITLE_MAX_CHARS,
+)
 from chat.llm.base import ToolSpec
 from chat.workspace_hints import PROJECT_COPY_FIRST_SENTENCE
 from db.models import ActionRequestType
@@ -4026,6 +4035,130 @@ _ROUTINE_COMPLETED: ToolSpec = {
 }
 
 # ---------------------------------------------------------------------------
+# Quest Task runs
+# ---------------------------------------------------------------------------
+
+# Loop-level tools of a task run of a Quest Task (a conversation with a
+# ``task_id``; issue #213, spec 6.2). Both act on the run of the calling
+# conversation, resolved server-side (chat/gemini_api/turn_tools.py); they
+# take no task or run id. Model-facing text says "Quest Task" and "task run"
+# because api/tasks.py is Google Tasks and agent_task is the sub-agent tool.
+_COMPLETE_TASK_RUN: ToolSpec = {
+    "name": "complete_task_run",
+    "description": (
+        "Finish this task run of the Quest Task. Call it EXACTLY ONCE, as "
+        "the LAST thing you do, when the work the prompt asked for is done "
+        "(or you have gone as far as you can); call it again only after a "
+        "limit error or a `brief_conflict`, as below. It saves this run's log "
+        "entry (`summary`, `result`, `notes`), applies `brief` when given, "
+        "and ends the run: no further turn follows, so put everything the "
+        "user needs in `result`. A field over its limit "
+        "(`summary_too_long`, `result_too_long`, `notes_too_long`, "
+        "`brief_too_long`, each with the cap and the actual length) comes "
+        "back as a tool error and the run continues: shorten it and call "
+        "again. A `brief_conflict` result means the user edited the brief "
+        "during this run: your entry is saved and the run stays open; "
+        "merge your changes into the current brief that result returns and "
+        "call again with the merged `brief` and `brief_expected_version`. "
+        "On success returns `{status: \"completed\", run, brief_version}`."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "summary": {
+                "type": "string",
+                "description": (
+                    "One line for the task's log: what this run did "
+                    f"(at most {TASK_RUN_SUMMARY_MAX_CHARS} characters)."
+                ),
+            },
+            "result": {
+                "type": "string",
+                "description": (
+                    "Your answer to the user, in markdown: shown as the "
+                    "reply in the task thread (the user never opens the "
+                    "run). At most "
+                    f"{TASK_RUN_RESULT_MAX_CHARS:,} characters; put large "
+                    "outputs in files or Quest Docs and point at them."
+                ),
+            },
+            "notes": {
+                "type": "string",
+                "description": (
+                    "The handoff for the next task run: what it needs that "
+                    "the result does not say -- findings, dead ends, and "
+                    "where files and artifacts are, by id. May be empty. "
+                    f"At most {TASK_RUN_NOTES_MAX_CHARS:,} characters."
+                ),
+            },
+            "brief": {
+                "type": "string",
+                "description": (
+                    "The COMPLETE new brief, only when this run changed the "
+                    "state of the work: a rewrite of the current state "
+                    "(facts, decisions, open questions, next steps), not an "
+                    "appended history. Omit it to leave the brief as it is. "
+                    f"At most {TASK_BRIEF_MAX_CHARS:,} characters."
+                ),
+            },
+            "brief_expected_version": {
+                "type": "integer",
+                "description": (
+                    "Only when retrying after a `brief_conflict` result: "
+                    "the `brief_version` that result carried, sent "
+                    "together with a `brief` merged from the current brief "
+                    "it returned. Omit it otherwise."
+                ),
+            },
+            "task_title": {
+                "type": "string",
+                "description": (
+                    "Optional short title for the Quest Task (at most "
+                    f"{TASK_TITLE_MAX_CHARS} characters). Used only while "
+                    "the task still has its default title cut from the "
+                    "first prompt; ignored otherwise."
+                ),
+            },
+        },
+        "required": ["summary", "result", "notes"],
+    },
+}
+
+_ASK_TASK_QUESTION: ToolSpec = {
+    "name": "ask_task_question",
+    "description": (
+        "Ask the user one question in the task thread when only they can "
+        "unblock this task run, instead of guessing. The run waits, with no "
+        "time limit, until they answer. Returns `{\"answer\": \"...\"}`, or "
+        "`{\"status\": \"cancelled\"}` when the user stopped the run. One "
+        "question per call."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "question": {
+                "type": "string",
+                "description": (
+                    "The question, self-contained: the user reads it in "
+                    "the task thread without this run's context (at most "
+                    f"{TASK_QUESTION_MAX_CHARS:,} characters)."
+                ),
+            },
+            "options": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Optional suggested answers the user can click (at "
+                    f"most {TASK_QUESTION_MAX_OPTIONS}); free text is "
+                    "always allowed."
+                ),
+            },
+        },
+        "required": ["question"],
+    },
+}
+
+# ---------------------------------------------------------------------------
 # Slack-driven conversations
 # ---------------------------------------------------------------------------
 
@@ -4086,6 +4219,16 @@ SLACK_TOP_LEVEL_TOOLS: list[ToolSpec] = TOP_LEVEL_TOOLS + [_SEND_SLACK_REPLY]
 # conversation carries the routine_id, so a manual follow-up by the user
 # sees the tool too -- calling it there is a harmless no-op.
 ROUTINE_TOP_LEVEL_TOOLS: list[ToolSpec] = TOP_LEVEL_TOOLS + [_ROUTINE_COMPLETED]
+
+# Task runs of a Quest Task (a ``task_id`` on the conversation row): the full
+# top-level tier plus the two loop tools that act on the calling run --
+# complete_task_run (writes the log entry and ends the run) and
+# ask_task_question (suspends the run on a question). Sub-agents of a run
+# get neither (they keep SUB_AGENT_TOOLS).
+TASK_RUN_TOOLS: list[ToolSpec] = TOP_LEVEL_TOOLS + [
+    _COMPLETE_TASK_RUN,
+    _ASK_TASK_QUESTION,
+]
 
 # Cross-user subagent conversations (origin="user_subagent"): the base
 # read/workspace/skill tools plus return_to_caller -- deliberately NO

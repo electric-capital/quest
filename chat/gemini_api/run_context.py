@@ -84,3 +84,9 @@ class RunContext:
     # other conversation.
     task_id: str | None = None
     task_run_id: str | None = None
+    # The tasks.brief_version the run's ``## Task`` system-prompt section
+    # was built from (frozen on the task_runs row with the text, so it
+    # survives a resume and a restart). Phase A5's complete_task_run passes
+    # it as set_brief(expected_version=...), so a brief the user edited
+    # during the run is detected as a conflict. None outside a task run.
+    task_context_brief_version: int | None = None

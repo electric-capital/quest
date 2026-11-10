@@ -566,6 +566,16 @@ async def _tool_send_gmail_to_self(ctx: ToolContext, args: dict) -> str:
 
 
 async def _tool_set_conversation_name(ctx: ToolContext, args: dict) -> str:
+    if ctx.is_task_run:
+        # The task-run prompt does not offer the tool: a run conversation's
+        # name is never shown (the task thread shows the task's title).
+        return json.dumps({
+            "error": (
+                "A task run of a Quest Task has no conversation name to set. "
+                "The task's title is set through complete_task_run's "
+                "task_title (first task run only)."
+            ),
+        })
     return await _handle_set_conversation_name(
         ctx.user["id"], ctx.conversation_id, args.get("name", ""),
     )
