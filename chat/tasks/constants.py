@@ -59,8 +59,25 @@ TASK_LOG_WINDOW_MAX_ENTRIES = 8
 TASK_LOG_WINDOW_MAX_CHARS = 20_000
 # One-line index entries after the window; the rest are counted.
 TASK_LOG_INDEX_MAX_ENTRIES = 100
+# Characters of summary (or prompt, for a run without one) on an index
+# line, whitespace collapsed.
+TASK_LOG_INDEX_SUMMARY_CHARS = 120
+# Characters of all index lines together. The builder lowers this further
+# when the rest of the block leaves less room (below).
+TASK_LOG_INDEX_MAX_CHARS = 8_000
+# How much of a failed run's ``error`` the context shows (``error`` has no
+# write-time cap).
+TASK_RUN_ERROR_EXCERPT_CHARS = 300
 # Asserted upper bound of the whole task context block.
 TASK_CONTEXT_MAX_CHARS = 50_000
+# Worst case, every field at its cap:
+#   title 120 + instructions 8 000 + brief 12 000 + window 20 000 = 40 120,
+#   + fixed prose, headings and tags (~2 100)                     ~ 42 200,
+#   leaving ~7 800 of the 50 000 for the index and its count line.
+# A 100-line index at 120 characters a line would be ~15 000, so the index
+# gets min(TASK_LOG_INDEX_MAX_CHARS, what is left) and the count line takes
+# the rest of the runs; the builder also hard-cuts at the bound as a last
+# resort (chat/tasks/context.py).
 
 # --- Questions (ask_task_question) -----------------------------------------
 
