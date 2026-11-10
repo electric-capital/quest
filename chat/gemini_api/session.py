@@ -231,7 +231,9 @@ async def cancel_pending_wait_handles_for_conversation(
     ``cancelled`` status visible.
 
     Publishes a ``wait_handle_resolved`` event per cancelled row so any
-    FE tabs viewing the conversation can unlock their composer.
+    FE tabs viewing the conversation can unlock their composer, and
+    rewrites the transcript message of each cancelled Quest Task question
+    so the run view shows it cancelled (the task thread reads the handle).
     """
     from db import tool_wait_handle_store
     from chat.realtime import bus, events as realtime_events
@@ -239,6 +241,15 @@ async def cancel_pending_wait_handles_for_conversation(
     cancelled = await tool_wait_handle_store.cancel_pending_for_conversation(
         user_id, conversation_id,
     )
+    if cancelled:
+        try:
+            from chat.tasks.questions import mark_questions_cancelled
+            mark_questions_cancelled(cancelled)
+        except Exception:
+            logger.warning(
+                "[session] marking task questions cancelled failed "
+                "(conversation=%s)", conversation_id, exc_info=True,
+            )
     for row in cancelled:
         try:
             request_id_str = (
