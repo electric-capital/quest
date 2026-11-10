@@ -227,6 +227,10 @@ async def start_run(
         "Task run started (task=%s, run=%s, seq=%s, conversation=%s, model=%s)",
         task_id, run["id"], run["seq"], conversation["id"], run_model,
     )
+    # The task gained an active run (thread and list row both changed).
+    from chat.tasks.events import publish_task_state
+
+    await publish_task_state(task_id)
     return StartedRun(
         run=run, task=task, model=run_model, thinking_effort=run_effort,
     )
@@ -234,7 +238,8 @@ async def start_run(
 
 async def fail_unstarted_run(run_id: str, error: str) -> None:
     """Mark a run ``failed`` whose turn never started (the send path gave
-    up after :func:`start_run`). Best-effort: logged, never raises."""
+    up after :func:`start_run`), then mark its task unread and publish (a
+    failed run, spec 10). Best-effort: logged, never raises."""
     try:
         updated = await task_store.set_run_status(
             run_id, TASK_RUN_STATUS_FAILED, error=error,
@@ -246,8 +251,18 @@ async def fail_unstarted_run(run_id: str, error: str) -> None:
         logger.warning(
             "Unstarted task run %s was not active; left as it was", run_id,
         )
-    else:
-        logger.info("Task run %s failed before its turn started: %s", run_id, error)
+        return
+    logger.info("Task run %s failed before its turn started: %s", run_id, error)
+    try:
+        await task_store.mark_task_unread(updated["task_id"])
+    except Exception:
+        logger.warning(
+            "Marking task %s unread after a failed start failed",
+            updated["task_id"], exc_info=True,
+        )
+    from chat.tasks.events import publish_task_state
+
+    await publish_task_state(updated["task_id"])
 
 
 # ---------------------------------------------------------------------------

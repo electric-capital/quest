@@ -49,6 +49,10 @@ FLUSH_EVENT_TYPES: frozenset[str] = frozenset({
     # row is appended to messages_out before this is emitted so it lands in
     # the transcript ahead of the nudge turn's messages.
     "routine_nudge",
+    # The Quest Tasks twin: a task run ended without calling
+    # complete_task_run and its driver (chat/tasks/runs.py) is about to run
+    # a follow-up turn; the notice row is appended before this is emitted.
+    "task_nudge",
 })
 
 
