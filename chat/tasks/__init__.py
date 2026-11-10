@@ -10,8 +10,12 @@ Modules:
 - ``constants`` -- size caps, the connected-services pseudo-key and the
   shared error texts.
 - ``context`` -- the ``## Task`` system-prompt section of a run.
-- ``service`` -- starting a run, answering a run's question, the startup
-  sweeps.
+- ``service`` -- the task lifecycle (create, edit, brief, archive, read,
+  delete task or run), starting a run, answering a run's question, the
+  startup sweeps.
+- ``routes`` -- the ``/app/api/tasks`` HTTP routes; ``http`` -- their
+  error mapping and route guard; ``thread`` -- their response shapes (task
+  detail, brief versions, the thread's run pages).
 - ``runs`` -- ``complete_task_run`` and the run driver (run statuses).
 - ``questions`` -- ``ask_task_question``: the ``task_question`` wait
   handle, its validation, transcript message and thread view.
