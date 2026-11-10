@@ -19,6 +19,9 @@ from chat.gemini_api.constants import (
 from chat.llm.tool_schemas import (
     PROJECT_HIDDEN_WORKSPACE_TOOLS,
     PROJECT_ONLY_TOOL_CALL_TOOLS,
+    SCHEME_FILE_TOOLS,
+    TASK_ONLY_TOOL_CALL_TOOLS,
+    TASK_RUN_FILE_TOOL_SPECS,
     TOOL_CALL_REGISTRY,
     format_tool_call_doc,
     mutating_tool_call_tools,
@@ -399,6 +402,106 @@ _PROJECT_SCRIPT_EXAMPLE = (
 )
 
 
+# --- Task runs of a Quest Task (issue #213) --------------------------------
+#
+# A task run has two file spaces like a project conversation, with the task
+# workspace in place of the project one: chat:// (this task run's own
+# workspace, /workspace in scripts) and task:// (the task workspace shared by
+# every task run of the Quest Task, /task in scripts). Its prompts offer the
+# five scheme-qualified file tools in their task-run wording
+# (TASK_RUN_FILE_TOOL_SPECS) and the run log reads (TASK_ONLY_TOOL_CALL_TOOLS),
+# and hide the four *_workspace_file tools and the rest of the project-only
+# tools. Every other prompt hides TASK_ONLY_TOOL_CALL_TOOLS.
+_TASK_RUN_EXCLUDED_TOOLS: frozenset[str] = (
+    PROJECT_HIDDEN_WORKSPACE_TOOLS
+    | (PROJECT_ONLY_TOOL_CALL_TOOLS - SCHEME_FILE_TOOLS)
+)
+
+# Shared tail of the two task-run file-spaces paragraphs: the plain-path
+# rule and the *_workspace_file name mapping (the project paragraph's, with
+# the task-run wording).
+_TASK_RUN_PLAIN_PATHS_SENTENCES = (
+    "Every other tool that takes a file path (attachments, inline images, "
+    "`run_script`, downloads) uses plain paths in this task run's workspace "
+    "only: `copy_file` a task file from `task://` to `chat://` first. To run "
+    "a script kept in the task workspace, copy it over or start it from "
+    "`run_python` (`subprocess.run([\"python3\", \"/task/etl.py\"])`). "
+    "Tool descriptions that mention the conversation-workspace tools mean "
+    "the same files through the tools above: `list_workspace_files` = "
+    "`list_files(\"chat://\")`, `get_workspace_file(p)` = "
+    "`read_file(\"chat://p\")`, `write_workspace_file` = `write_file` on a "
+    "`chat://` path, `edit_workspace_file` = `edit_file` on a `chat://` path."
+)
+
+# The top-level task run's paragraph. Static (the same for every task run of
+# every Quest Task), so it sits with the task-run naming note in the cacheable
+# part of the prompt, never in the per-run ``## Task`` block.
+_TASK_RUN_FILE_SPACES_SECTION = (
+    "**Two file spaces:** This task run has its own workspace and the Quest "
+    "Task has a shared workspace. The file tools name the space in every "
+    "path: `chat://<path>` is this task run's workspace (`/workspace` in "
+    "scripts), `task://<path>` is the task workspace shared by every task "
+    "run of this Quest Task (`/task` in scripts); `list_files`, `read_file`, "
+    "`write_file`, `edit_file` and `copy_file` accept only scheme-qualified "
+    "paths. Scratch work goes to `chat://`: drafts, downloads, intermediate "
+    "data, scripts, API responses. Later task runs never see this task "
+    "run's workspace, so put a file in `task://` when a later task run will "
+    "need it (data the work builds on, finished deliverables, scripts worth "
+    "re-running), or when the user asks, and say where it is in your notes. "
+    "Promote a file with `copy_file` from `chat://` to `task://` (from a "
+    "script: `shutil.copy('/workspace/out.csv', '/task/out.csv')`). "
+    + _TASK_RUN_PLAIN_PATHS_SENTENCES
+)
+
+# The sub-agent variant: a task run's sub-agent works in the same two
+# spaces as the run that spawned it.
+_TASK_RUN_SUB_AGENT_FILE_SPACES_SECTION = (
+    "**Two file spaces:** You share the two file spaces of the task run "
+    "that spawned you. The file tools name the space in every path: "
+    "`chat://<path>` is the task run's own workspace (`/workspace` in "
+    "scripts), `task://<path>` is the task workspace shared by every task "
+    "run of this Quest Task (`/task` in scripts); `list_files`, `read_file`, "
+    "`write_file`, `edit_file` and `copy_file` accept only scheme-qualified "
+    "paths. Write scratch work and files for the parent agent to "
+    "`chat://`; write to `task://` only when your task asks for it. "
+    + _TASK_RUN_PLAIN_PATHS_SENTENCES
+)
+
+_TASK_RUN_FILE_RULES = (
+    '- Use `tool_call(tool_name="list_files", arguments={"path": "chat://"})` '
+    '(or `"task://"` for the task workspace) to discover available files '
+    'before trying to read them. For workspace + sandbox details, load '
+    '`system:workspace`.\n'
+    '- Use `tool_call(tool_name="read_file", arguments={"path": "chat://..."})` '
+    '(or a `task://` path) to read text files, images, and PDFs.'
+)
+_TASK_RUN_FILE_EXAMPLES = (
+    "To list this task run's files and the task's files:\n"
+    '  tool_call(tool_name="list_files", arguments={"path": "chat://"})\n'
+    '  tool_call(tool_name="list_files", arguments={"path": "task://"})\n'
+    '\n'
+    'To read a text file:\n'
+    '  tool_call(tool_name="read_file", arguments={"path": "chat://notes.txt"})\n'
+    '\n'
+    'To analyze an uploaded PDF:\n'
+    '  tool_call(tool_name="read_file", arguments={"path": "chat://report.pdf"})\n'
+    '\n'
+    "To write a file to this task run's workspace:\n"
+    '  tool_call(tool_name="write_file", arguments={"path": '
+    '"chat://analysis.py", "content": "import pandas as pd\\n..."})\n'
+    '\n'
+    'To keep a file for later task runs of this Quest Task:\n'
+    '  tool_call(tool_name="copy_file", arguments={"src": "chat://report.pdf", '
+    '"dest": "task://report.pdf"})'
+)
+_TASK_RUN_SCRIPT_EXAMPLE = (
+    "\n\nTo keep a file from this task run's workspace in the task workspace "
+    "from a script:\n"
+    "  run_python(script=\"import shutil\\nshutil.copy('/workspace/out.csv', "
+    "'/task/out.csv')\")"
+)
+
+
 _CORE_TOOLS_TAIL = (
     "These are the core tools, documented in full here. Every other "
     "`tool_call` tool is listed by name on the `Tools:` tail of the System "
@@ -412,6 +515,7 @@ def _build_dynamic_tools_section(
     exclude: set[str] | None = None,
     connected_services: dict[str, bool] | None = None,
     core_only: bool = True,
+    spec_overrides: dict | None = None,
 ) -> str:
     """Build the 'Dynamic Tools' system prompt section from TOOL_CALL_REGISTRY.
 
@@ -432,6 +536,10 @@ def _build_dynamic_tools_section(
             must be passed to ``build_system_skills_enumeration``). False
             documents every offered tool in full -- the public-project
             prompt, which has no skill tools to load.
+        spec_overrides: Optional ``{name: spec}`` documenting a tool with
+            another spec's text (a task run's prompts pass
+            ``TASK_RUN_FILE_TOOL_SPECS``). Which tools are listed, and in
+            which order, still follows the registry entries.
 
     Returns:
         A formatted string describing the tools available through tool_call.
@@ -452,6 +560,8 @@ def _build_dynamic_tools_section(
             continue
         if not tool_is_advertised(spec, connected_services):
             continue
+        if spec_overrides and name in spec_overrides:
+            spec = spec_overrides[name]
         lines.append(format_tool_call_doc(name, spec))
         lines.append("")
 
@@ -645,12 +755,22 @@ def get_system_prompt(
             section after every stable section and right before the proxy
             preamble (which stays last), ``set_conversation_name`` is left
             out of the enumeration and the naming section is replaced by
-            the task-run note. The caller passes no project (a task run
-            never has one). Empty -> the prompt is unchanged.
+            the task-run note plus the task run's "Two file spaces"
+            paragraph (``chat://`` and ``task://``, static so it stays in
+            the cacheable prefix). The dynamic tools then offer the five
+            scheme-qualified file tools in their task-run wording
+            (``TASK_RUN_FILE_TOOL_SPECS``) and the run log reads
+            (``TASK_ONLY_TOOL_CALL_TOOLS``), hide the four
+            ``*_workspace_file`` tools and the other project-only tools,
+            and the file rules, examples and script example name
+            ``task://`` / ``/task``. The caller passes no project (a task
+            run never has one; ``task_context`` wins if it did). Empty ->
+            the prompt is unchanged.
 
     Project conversations also get the "Two file spaces" paragraph and a
     ``/project`` script example; a standalone conversation's prompt carries
-    none of the project text.
+    none of the project text. Every prompt but a task run's leaves out
+    ``TASK_ONLY_TOOL_CALL_TOOLS``.
 
     Returns:
         Complete system prompt string.
@@ -731,11 +851,19 @@ Facts the user has saved about themselves and how they want you to work, newest 
     # (project_db_query, scheme-qualified file tools) for non-project
     # conversations, and the four *_workspace_file tools for project ones
     top_level_exclude: set[str] = set()
-    if has_project:
+    is_task_run = bool(task_context and task_context.strip())
+    if is_task_run:
+        # A task run has chat:// and task://: the scheme-qualified file
+        # tools (in their task-run wording) and the run log reads, and none
+        # of the other project-only tools.
+        top_level_exclude |= _TASK_RUN_EXCLUDED_TOOLS
+    elif has_project:
         # The scheme-qualified file tools replace the four workspace tools.
         top_level_exclude |= PROJECT_HIDDEN_WORKSPACE_TOOLS
     else:
         top_level_exclude |= PROJECT_ONLY_TOOL_CALL_TOOLS
+    if not is_task_run:
+        top_level_exclude |= TASK_ONLY_TOOL_CALL_TOOLS
     if is_slack:
         # Slack-driven runs have no web UI to resolve the
         # create_action_request approval card, so hide it from the
@@ -761,7 +889,6 @@ Facts the user has saved about themselves and how they want you to work, newest 
         top_level_exclude.add("suggest_memory")
         top_level_exclude.add("suggest_project_memory")
         top_level_exclude.add("suggest_doc_note")
-    is_task_run = bool(task_context and task_context.strip())
     if is_task_run:
         # A run conversation's name is never shown: the task thread shows
         # the task's title, which the first run sets through
@@ -769,6 +896,7 @@ Facts the user has saved about themselves and how they want you to work, newest 
         top_level_exclude.add("set_conversation_name")
     dynamic_tools_section = _build_dynamic_tools_section(
         exclude=top_level_exclude, connected_services=connected_services,
+        spec_overrides=TASK_RUN_FILE_TOOL_SPECS if is_task_run else None,
     )
 
     # Build the system-skills enumeration block (per-backend API docs live
@@ -799,7 +927,9 @@ Facts the user has saved about themselves and how they want you to work, newest 
         )
 
     if is_task_run:
-        naming_section = _TASK_RUN_NAMING_SECTION
+        naming_section = (
+            f"{_TASK_RUN_NAMING_SECTION}\n\n{_TASK_RUN_FILE_SPACES_SECTION}"
+        )
     elif is_routine:
         naming_section = _ROUTINE_NAMING_SECTION
     else:
@@ -807,13 +937,18 @@ Facts the user has saved about themselves and how they want you to work, newest 
     # The task context changes between task runs, so it sits after every
     # stable section: the prefix before it stays cacheable across runs.
     task_section = f"\n{task_context.strip()}\n" if is_task_run else ""
-    project_script_example = _PROJECT_SCRIPT_EXAMPLE if has_project else ""
-    file_discovery_rules = (
-        _PROJECT_FILE_RULES if has_project else _STANDALONE_FILE_RULES
-    )
-    file_examples = (
-        _PROJECT_FILE_EXAMPLES if has_project else _STANDALONE_FILE_EXAMPLES
-    )
+    if is_task_run:
+        project_script_example = _TASK_RUN_SCRIPT_EXAMPLE
+        file_discovery_rules = _TASK_RUN_FILE_RULES
+        file_examples = _TASK_RUN_FILE_EXAMPLES
+    else:
+        project_script_example = _PROJECT_SCRIPT_EXAMPLE if has_project else ""
+        file_discovery_rules = (
+            _PROJECT_FILE_RULES if has_project else _STANDALONE_FILE_RULES
+        )
+        file_examples = (
+            _PROJECT_FILE_EXAMPLES if has_project else _STANDALONE_FILE_EXAMPLES
+        )
 
     return f"""You are Quest, a personal AI assistant. You have access to the user's APIs and connected services through a local API proxy.
 {identity_line}{skills_section}{project_section}{memories_section}
@@ -1005,7 +1140,8 @@ def get_user_subagent_system_prompt(
     # Cross-user runs cannot mutate connected services or Quest artifacts.
     # Dispatch enforces the boundary; the prompt advertises only reads.
     # The run is a standalone conversation in the target's account, so the
-    # project-only tools never apply. Nobody reviews suggestions here, so
+    # project-only tools never apply, nor do the task-run-only ones. Nobody
+    # reviews suggestions here, so
     # the suggest tools are out (doc notes stay readable: list_doc_notes).
     user_subagent_exclude = (
         {
@@ -1014,6 +1150,7 @@ def get_user_subagent_system_prompt(
             "set_conversation_name", "suggest_memory", "suggest_doc_note",
         }
         | PROJECT_ONLY_TOOL_CALL_TOOLS
+        | TASK_ONLY_TOOL_CALL_TOOLS
         | mutating_tool_call_tools()
     )
     dynamic_tools = _build_dynamic_tools_section(
@@ -1111,7 +1248,8 @@ def get_inference_api_system_prompt(
     # Mutating dynamic tools are hidden here AND hard-rejected at dispatch
     # (chat/gemini_api/tool_dispatch.py, is_inference_api): inference runs
     # must not change anything. That covers the Quest Docs writes too.
-    # Inference runs are standalone conversations: no project-only tools.
+    # Inference runs are standalone conversations: no project-only or
+    # task-run-only tools.
     # Nobody reviews suggestions in a headless run, so the suggest tools
     # are out too (doc notes stay readable: list_doc_notes).
     inference_exclude = (
@@ -1121,6 +1259,7 @@ def get_inference_api_system_prompt(
             "set_conversation_name", "suggest_memory", "suggest_doc_note",
         }
         | PROJECT_ONLY_TOOL_CALL_TOOLS
+        | TASK_ONLY_TOOL_CALL_TOOLS
         | mutating_tool_call_tools()
     )
     dynamic_tools = _build_dynamic_tools_section(
@@ -1485,10 +1624,17 @@ def get_sub_agent_system_prompt(
             task run of a Quest Task
             (chat.tasks.context.load_task_subagent_context), placed after
             the important rules, right before the proxy preamble (which
-            stays last). Empty -> the prompt is unchanged.
+            stays last), behind the sub-agent's "Two file spaces"
+            paragraph (it shares the run's ``chat://`` and ``task://``
+            workspaces). Non-empty also selects the task run's tools as in
+            get_system_prompt(): the file tools in their task-run wording
+            and the run log reads, without the ``*_workspace_file`` and
+            other project-only tools. Empty -> the prompt is unchanged.
 
     Project conversations also get the "Two file spaces" paragraph (the
     sub-agent shares the parent's conversation and project workspaces).
+    Every sub-agent prompt but a task run's leaves out
+    ``TASK_ONLY_TOOL_CALL_TOOLS``.
 
     Returns:
         Complete system prompt string for the sub-agent.
@@ -1559,12 +1705,20 @@ def get_sub_agent_system_prompt(
         "suggest_doc_note",
     }
     sub_agent_exclude |= _doc_write_tool_names() | _table_write_tool_names()
-    if has_project:
+    is_task_run = bool(task_context and task_context.strip())
+    if is_task_run:
+        # The parent task run's file tools (chat:// and task://) and run
+        # log reads; neither loop tool is a tool_call tool.
+        sub_agent_exclude |= _TASK_RUN_EXCLUDED_TOOLS
+    elif has_project:
         sub_agent_exclude |= PROJECT_HIDDEN_WORKSPACE_TOOLS
     else:
         sub_agent_exclude |= PROJECT_ONLY_TOOL_CALL_TOOLS
+    if not is_task_run:
+        sub_agent_exclude |= TASK_ONLY_TOOL_CALL_TOOLS
     sub_agent_dynamic_tools = _build_dynamic_tools_section(
         exclude=sub_agent_exclude, connected_services=connected_services,
+        spec_overrides=TASK_RUN_FILE_TOOL_SPECS if is_task_run else None,
     )
 
     # Build the system-skills enumeration block
@@ -1575,9 +1729,10 @@ def get_sub_agent_system_prompt(
     # Build the proxy preamble (intro + auth header rule + numbered API list)
     proxy_preamble = _build_proxy_preamble(base_url, user_api_key, connected_services)
 
-    # File tool names in the sub-agent rules: a project conversation's
-    # prompt offers the scheme-qualified tools instead of *_workspace_file.
-    if has_project:
+    # File tool names in the sub-agent rules: a project conversation's (and
+    # a task run's) prompt offers the scheme-qualified tools instead of
+    # *_workspace_file.
+    if has_project or is_task_run:
         sub_read_tool = "`read_file` (`chat://<file>`)"
         sub_write_tool = "`write_file` (`chat://<file>`)"
     else:
@@ -1631,9 +1786,11 @@ def get_sub_agent_system_prompt(
         )
 
     # The read-only task block of a task run's sub-agent: last before the
-    # proxy preamble, like the top-level ``## Task`` section.
+    # proxy preamble, like the top-level ``## Task`` section, after the
+    # static file-spaces paragraph.
     task_section = (
-        f"\n{task_context.strip()}\n" if task_context and task_context.strip() else ""
+        f"\n{_TASK_RUN_SUB_AGENT_FILE_SPACES_SECTION}\n\n{task_context.strip()}\n"
+        if is_task_run else ""
     )
 
     return f"""You are a sub-agent of Quest, named "{agent_name}". You have been spawned by a parent agent to complete a specific task.
