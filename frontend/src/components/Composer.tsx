@@ -238,6 +238,18 @@ export interface ComposerProps {
    * PATCHes the conversation's model).
    */
   onModelChange?: (model: string, thinkingEffort: string | null) => void;
+  /**
+   * Hide the Flags button / popover and the read-only flags label. Set by
+   * the Quest Tasks composer: a task run takes no conversation flags (the
+   * server ignores them). Defaults to false.
+   */
+  hideFlags?: boolean;
+  /**
+   * Replaces the default input placeholder (the unlocked state, and the
+   * streaming state, which shows the same copy). The read-only, pending-wait,
+   * expensive-resume and voice-input placeholders keep their own text.
+   */
+  placeholder?: string;
 }
 
 /**
@@ -272,6 +284,8 @@ export function Composer({
   isPublicProject = false,
   readOnlyNotice = null,
   onModelChange,
+  hideFlags = false,
+  placeholder,
 }: ComposerProps) {
   const [inputValue, setInputValue] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<PastedImage[]>([]);
@@ -397,6 +411,8 @@ export function Composer({
     composerPlaceholder = "Waiting for the pending tool call to resolve.";
   } else if (expensiveResumeBlocked) {
     composerPlaceholder = "Choose an option in the cost warning above to continue.";
+  } else if (placeholder) {
+    composerPlaceholder = placeholder;
   } else {
     // Mobile keeps the collapsed pill quiet; the desktop hint mentions the
     // Enter-to-send binding, which mobile doesn't have.
@@ -1200,7 +1216,7 @@ export function Composer({
   // (hydrated from the GET response); fall back to the local selection while
   // the first send round-trips. Null when no flags are enabled.
   const effectiveFlags = conversationFlags.length > 0 ? conversationFlags : selectedFlags;
-  const flagsLabel = !isFirstMessage && effectiveFlags.length > 0 ? (
+  const flagsLabel = !hideFlags && !isFirstMessage && effectiveFlags.length > 0 ? (
     <span className="flags-label" title={effectiveFlags.map(getFlagLabel).join(', ')}>
       {effectiveFlags.length} flag{effectiveFlags.length === 1 ? '' : 's'} enabled
     </span>
@@ -1316,7 +1332,7 @@ export function Composer({
       {/* Flags lock at conversation start: interactive button + popover on a
           fresh conversation (hidden when feature gates leave no flag to
           offer), the read-only count label afterwards. */}
-      {isFirstMessage && visibleFlags.length > 0 && (
+      {!hideFlags && isFirstMessage && visibleFlags.length > 0 && (
         <div className="flags-container" ref={flagsMenuRef}>
           <button
             type="button"

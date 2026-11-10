@@ -1,31 +1,71 @@
-/* NewTaskPage (/tasks/new) -- B1 placeholder inside .docs-main.tasks-main
- * (App.css); B2 replaces it with the empty thread and its composer. */
+/* NewTaskPage (/tasks/new) -- inside .docs-main.tasks-main (App.css), the
+ * scrolling column. Like the home screen (HomeComposer.css): a centred
+ * column with the heading, the explanatory line, the inline error, the
+ * upload strip and the shared composer, which keeps its ChatPanel.css
+ * styling (in-flow on phones too: only .chat-panel overlays it). */
 
 .task-new-page {
   flex: 1 0 auto;
   display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 1.5rem;
+  box-sizing: border-box;
+}
+
+.task-new-page-inner {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 1.25rem 2rem;
+  align-items: stretch;
 }
 
 .task-new-page-title {
-  margin: 0;
-  font-size: 1.25rem;
+  margin: 0 0 0.75rem;
+  font-size: 2.25rem;
   font-weight: 600;
-  line-height: 1.3;
+  line-height: 1.2;
+  text-align: center;
   color: var(--text);
 }
 
 .task-new-page-note {
-  margin: 0;
-  font-size: 0.9375rem;
+  margin: 0 auto 1.5rem;
+  max-width: 34rem;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  text-align: center;
   color: var(--text-secondary);
+}
+
+.task-new-page-error {
+  margin: 0 0 0.75rem;
+}
+
+.task-new-page-composer {
+  width: 100%;
+}
+
+/* The composer's floating bubble is the card here; drop the strip padding
+   around it so the bubble aligns with the column (as on the home screen). */
+.task-new-page-composer .input-area.composer {
+  padding: 0;
 }
 
 @media (max-width: 768px) {
   .task-new-page {
-    padding-left: 16px;
-    padding-right: 16px;
+    align-items: flex-start;
+    padding: 2.5rem 16px 1.5rem;
+  }
+
+  .task-new-page-title {
+    font-size: 1.75rem;
+  }
+
+  .task-new-page-note {
+    margin-bottom: 1.25rem;
+    font-size: 0.9rem;
   }
 }
