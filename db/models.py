@@ -129,6 +129,12 @@ class ToolWaitHandleKind(StrEnum):
     # subagent_conversation_id, target_user_email); response carries
     # {"status": "returned"|"denied"|"failed", "response", "files": [...]}.
     USER_SUBAGENT = "user_subagent"
+    # Question a task run of a Quest Task asks the user in the task thread
+    # (ask_task_question, chat/tasks/questions.py); payload carries
+    # (question, options), response carries {"answer": "..."} written by
+    # chat/tasks/service.py answer_question. correlation_kind "task_run" /
+    # correlation_id = the run id are populated at create time. No expiry.
+    TASK_QUESTION = "task_question"
 
 
 class ToolWaitHandleStatus(StrEnum):

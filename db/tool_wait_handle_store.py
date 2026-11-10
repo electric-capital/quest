@@ -247,6 +247,30 @@ async def list_pending_for_conversation(
         return [_row_to_dict(r) for r in rows]
 
 
+async def list_handles_for_conversations(
+    conversation_ids: list[str], *, kind: str,
+) -> list[dict]:
+    """List every handle of ``kind`` (any status) in ``conversation_ids``,
+    oldest first.
+
+    One query for a whole page of conversations (the Quest Tasks thread
+    reads the questions of a page of runs this way). No ownership check:
+    callers pass conversation ids they have already scoped to the user.
+    """
+    if not conversation_ids:
+        return []
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ToolWaitHandle)
+            .where(
+                ToolWaitHandle.conversation_id.in_(list(dict.fromkeys(conversation_ids))),
+                ToolWaitHandle.kind == kind,
+            )
+            .order_by(ToolWaitHandle.created_at, ToolWaitHandle.id)
+        )
+        return [_row_to_dict(r) for r in result.scalars().all()]
+
+
 async def resolve_handle(
     handle_id: str,
     new_status: str,
