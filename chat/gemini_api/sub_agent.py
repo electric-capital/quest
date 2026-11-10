@@ -63,6 +63,8 @@ async def _run_sub_agent(
     level: int = 1,
     nested_parent_id: str | None = None,
     task_context: str = "",
+    task_id: str | None = None,
+    task_run_id: str | None = None,
 ) -> str:
     """Run a sub-agent task and return its response.
 
@@ -122,6 +124,14 @@ async def _run_sub_agent(
             task run of a Quest Task (``load_task_subagent_context``, loaded
             by the spawn arm), placed in the sub-agent's system prompt;
             ``""`` otherwise. Passed through to a nested sub-agent unchanged.
+        task_id: The parent's Quest Task when it is a task run
+            (``RunContext.task_id``), else None. Passed to every tool call
+            the sub-agent dispatches, so ``task://`` paths, the ``/task``
+            sandbox mount and the task-run read tools (``list_task_runs``,
+            ``read_task_run``) reach the parent run's task. Passed through
+            to a nested sub-agent unchanged.
+        task_run_id: The parent's task run (``RunContext.task_run_id``),
+            else None; passed along with ``task_id``.
 
     Returns:
         The sub-agent's response string.
@@ -497,6 +507,8 @@ async def _run_sub_agent(
                                 level=2,
                                 nested_parent_id=nested_agent_id,
                                 task_context=task_context,
+                                task_id=task_id,
+                                task_run_id=task_run_id,
                             )
                         except Exception as e:
                             logger.exception(
@@ -577,6 +589,7 @@ async def _run_sub_agent(
                 app, provider, user, conversation_id, timezone,
                 fc_event.tool_name, args, project_id=project_id,
                 model=model, is_sub_agent=True, agent_name=agent_name,
+                task_id=task_id, task_run_id=task_run_id,
             )
 
             tool_duration_ms = int((time.time() - tool_start) * 1000)
@@ -680,6 +693,8 @@ async def _run_parallel_sub_agents(
     nested_enabled: bool = False,
     workspace_notice_flags: dict[str, bool] | None = None,
     task_context: str = "",
+    task_id: str | None = None,
+    task_run_id: str | None = None,
 ) -> str:
     """Run multiple sub-agent tasks in parallel and return combined results.
 
@@ -704,7 +719,8 @@ async def _run_parallel_sub_agents(
             sub-agent (see ``_run_sub_agent``), as are
             ``workspace_notice_flags`` and ``task_context`` (the read-only
             ``## Task`` block of a task run's sub-agents, loaded once for
-            the whole batch).
+            the whole batch), ``task_id`` and ``task_run_id`` (the parent
+            task run's, else None).
         project_guide: Optional project-specific instructions.
         usage_accumulator: Optional dict to accumulate usage.
 
@@ -733,7 +749,7 @@ async def _run_parallel_sub_agents(
     # Build coroutines for each task
     async def run_one_task(task_spec: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         """Run a single sub-agent task and return (id, result_dict)."""
-        task_id = task_spec["id"]
+        spec_id = task_spec["id"]
         agent_name = task_spec.get("name", "Sub-Agent")
         agent_prompt = task_spec.get("prompt", "")
         agent_model = task_spec.get("model") or parent_model
@@ -747,7 +763,7 @@ async def _run_parallel_sub_agents(
         if agent_model in SUB_AGENT_DISALLOWED_MODELS:
             logger.info(
                 "Rejected disallowed sub-agent model '%s' for task '%s' (id=%s, user=%s)",
-                agent_model, agent_name, task_id, user["email"],
+                agent_model, agent_name, spec_id, user["email"],
             )
             error_msg = (
                 f"Model '{agent_model}' is not permitted for sub-agents. "
@@ -764,7 +780,7 @@ async def _run_parallel_sub_agents(
                     })
                 except Exception:
                     logger.debug("Failed to emit sub_agent_finished (error) event", exc_info=True)
-            return task_id, {
+            return spec_id, {
                 "status": "error",
                 "name": agent_name,
                 "error": error_msg,
@@ -804,15 +820,17 @@ async def _run_parallel_sub_agents(
                 workspace_notice_flags=workspace_notice_flags,
                 level=1,
                 task_context=task_context,
+                task_id=task_id,
+                task_run_id=task_run_id,
             )
-            return task_id, {
+            return spec_id, {
                 "status": "success",
                 "name": agent_name,
                 "response": response,
                 "_usage": task_usage,
             }
         except Exception as e:
-            logger.exception("Error in parallel sub-agent '%s' (id=%s, user=%s)", agent_name, task_id, user["email"])
+            logger.exception("Error in parallel sub-agent '%s' (id=%s, user=%s)", agent_name, spec_id, user["email"])
             # Emit a sub_agent_finished event so the UI can flip this
             # particular sub-agent's row to the errored terminal state.
             # _run_sub_agent raised before it could emit its own event.
@@ -827,7 +845,7 @@ async def _run_parallel_sub_agents(
                     })
                 except Exception:
                     logger.debug("Failed to emit sub_agent_finished (error) event", exc_info=True)
-            return task_id, {
+            return spec_id, {
                 "status": "error",
                 "name": agent_name,
                 "error": f"Sub-agent '{agent_name}' failed: {str(e)}",
@@ -840,7 +858,7 @@ async def _run_parallel_sub_agents(
 
     # Assemble results dict keyed by task ID
     results = {}
-    for task_id, result_dict in completed:
+    for spec_id, result_dict in completed:
         # Aggregate usage into the parent accumulator
         if usage_accumulator is not None:
             task_usage = result_dict.pop("_usage", {})
@@ -853,7 +871,7 @@ async def _run_parallel_sub_agents(
             usage_accumulator["call_count"] = usage_accumulator.get("call_count", 0) + task_usage.get("call_count", 0)
         else:
             result_dict.pop("_usage", None)
-        results[task_id] = result_dict
+        results[spec_id] = result_dict
 
     return json.dumps({"results": results})
 
@@ -876,6 +894,8 @@ async def _run_parallel_sub_agents_template(
     nested_enabled: bool = False,
     workspace_notice_flags: dict[str, bool] | None = None,
     task_context: str = "",
+    task_id: str | None = None,
+    task_run_id: str | None = None,
 ) -> str:
     """Run template-based parallel sub-agents and return combined results.
 
@@ -903,6 +923,9 @@ async def _run_parallel_sub_agents_template(
         parent_tool_id: Optional parent tool ID for event tracking.
         task_context: The read-only ``## Task`` block of a task run's
             sub-agents (``""`` otherwise), passed to every agent.
+        task_id: The parent task run's Quest Task (None otherwise), passed
+            to every agent with ``task_run_id``.
+        task_run_id: The parent task run (None otherwise).
 
     Returns:
         JSON string with results keyed by agent name.
@@ -978,4 +1001,6 @@ async def _run_parallel_sub_agents_template(
         nested_enabled=nested_enabled,
         workspace_notice_flags=workspace_notice_flags,
         task_context=task_context,
+        task_id=task_id,
+        task_run_id=task_run_id,
     )
