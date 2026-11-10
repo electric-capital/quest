@@ -474,9 +474,13 @@ async def get_conversation(conversation_id: str, user: dict = Depends(get_curren
 # Transcript row types that are rewritten in place after they are appended:
 # resolving an action request writes its status / result / feedback into the
 # card (``ChatStorage.update_action_request_message``), and resolving a connect
-# request does the same (``update_connect_request_message``). The replay buffer keeps
-# such a row as it was appended, so a tail holding one is read from disk.
-_REWRITTEN_IN_PLACE_TYPES = frozenset({"action_request", "connect_request"})
+# request does the same (``update_connect_request_message``), and answering or
+# cancelling a task run's question does it for the ``task_question`` row
+# (``update_task_question_message``). The replay buffer keeps such a row as it
+# was appended, so a tail holding one is read from disk.
+_REWRITTEN_IN_PLACE_TYPES = frozenset({
+    "action_request", "connect_request", "task_question",
+})
 
 
 def _tail_from_replay_buffer(

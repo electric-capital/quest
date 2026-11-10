@@ -1,4 +1,4 @@
-"""The task service: the one place for the rules that start a task run.
+"""The task service: the rules that start a task run and answer its questions.
 
 A run starts in two steps (spec issue #213, section 7): ``POST
 /tasks/{id}/runs`` creates the run's conversation
@@ -8,6 +8,9 @@ first ``send_message`` on that conversation allocates the ``task_runs`` row
 invariant 6 (one active run per task) is enforced from the send path; the
 store's ``allocate_run`` does the transactional check, so lifting the rule
 later is one change here and there.
+
+:func:`answer_question` answers a run's open question (``ask_task_question``,
+chat/tasks/questions.py) and continues the run.
 
 The startup sweeps (:func:`run_startup_sweeps`) settle what a restart
 leaves behind: a ``running`` run whose in-memory turn is gone, and run
@@ -25,14 +28,27 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
 import shutil
-from typing import Optional
+from typing import Any, Optional
 
 from chat.tasks.constants import (
     TASK_ABANDONED_RUN_CONVERSATION_MAX_AGE,
+    TASK_RUN_ACTIVE_STATUSES,
     TASK_RUN_STATUS_FAILED,
     tasks_disabled_message,
 )
-from db import task_store
+from chat.tasks.questions import (
+    CORRELATION_KIND,
+    HANDLE_KIND,
+    QUESTION_STATUS_ANSWERED,
+    QUESTION_STATUS_CANCELLED,
+    TaskQuestionNotFoundError,
+    TaskQuestionResolvedError,
+    question_view,
+    rewrite_question_message,
+    validate_answer,
+)
+from db import task_store, tool_wait_handle_store
+from db.models import ToolWaitHandleStatus
 from db.task_store import (
     TaskArchivedError,
     TaskNotFoundError,
@@ -263,6 +279,136 @@ async def fail_unstarted_run(run_id: str, error: str) -> None:
     from chat.tasks.events import publish_task_state
 
     await publish_task_state(updated["task_id"])
+
+
+# ---------------------------------------------------------------------------
+# Answering a run's question
+# ---------------------------------------------------------------------------
+
+
+async def answer_question(
+    user: dict, task_id: str, handle_id: str, answer: Any, *, app,
+) -> dict:
+    """Answer a task run's open question (``POST
+    /tasks/{id}/questions/{handle_id}/answer``) and continue the run.
+
+    Resolves the question's ``task_question`` wait handle with the answer,
+    writes the outcome into the run's transcript message, publishes the
+    resolution and the thread change, and kicks the run's resume. While
+    another card of the same tool-call batch (an approval card) is still
+    pending, the resume gate holds the run until that one is resolved too.
+
+    Args:
+        user: The caller's user dict.
+        task_id: The task the question belongs to.
+        handle_id: The question's wait-handle id.
+        answer: The user's answer (validated here).
+        app: The FastAPI app, for the headless resume.
+
+    Returns:
+        The answered question (``chat.tasks.questions.question_view``).
+
+    Raises:
+        TasksDisabledError, TaskNotFoundError (missing or foreign task),
+        TaskQuestionNotFoundError (missing, foreign, or not a question of
+        this task), TaskQuestionResolvedError (already answered, or
+        cancelled: a Stop, or its run is no longer active),
+        TaskValidationError ``invalid_answer``.
+    """
+    require_tasks_enabled(user)
+    task = await task_store.get_task(user["id"], task_id)
+    if task is None:
+        raise TaskNotFoundError(task_id)
+
+    # Invariant 7: a missing handle, another kind, another user's, or one
+    # of another task's run all read the same.
+    handle = await tool_wait_handle_store.get_handle_for_user(user["id"], handle_id)
+    if handle is None or handle.get("kind") != HANDLE_KIND:
+        raise TaskQuestionNotFoundError(handle_id)
+    conversation_id = handle["conversation_id"]
+    run = await task_store.get_run_by_conversation(conversation_id)
+    if run is None or run["task_id"] != task_id:
+        raise TaskQuestionNotFoundError(handle_id)
+
+    if handle["status"] != ToolWaitHandleStatus.PENDING:
+        view = question_view(handle)
+        raise TaskQuestionResolvedError(view["status"], view["answer"])
+    if run["status"] not in TASK_RUN_ACTIVE_STATUSES:
+        # A pending handle left on a finished run: nothing would read the
+        # answer.
+        raise TaskQuestionResolvedError(QUESTION_STATUS_CANCELLED)
+
+    answer = validate_answer(answer)
+
+    # resolve_handle overwrites the correlation, so pass the run through.
+    updated = await tool_wait_handle_store.resolve_handle(
+        handle_id,
+        new_status=ToolWaitHandleStatus.ACCEPTED.value,
+        response={"answer": answer},
+        correlation_kind=CORRELATION_KIND,
+        correlation_id=run["id"],
+        user_id=user["id"],
+    )
+    if updated is None:
+        # Lost a race with another answer or a Stop.
+        current = await tool_wait_handle_store.get_handle_for_user(
+            user["id"], handle_id,
+        )
+        if current is None:
+            raise TaskQuestionNotFoundError(handle_id)
+        view = question_view(current)
+        raise TaskQuestionResolvedError(view["status"], view["answer"])
+    logger.info(
+        "Task question %s answered (task=%s, run=%s, conversation=%s, user=%s)",
+        handle_id, task_id, run["id"], conversation_id, user["id"],
+    )
+
+    rewrite_question_message(
+        conversation_id, handle_id, status=QUESTION_STATUS_ANSWERED, answer=answer,
+    )
+
+    from chat.realtime import events as realtime_events
+    from chat.realtime.bus import bus
+
+    try:
+        bus.publish_to_user(
+            user["id"],
+            realtime_events.make_wait_handle_resolved(
+                conversation_id=conversation_id,
+                handle_id=updated["id"],
+                kind=HANDLE_KIND,
+                status=updated["status"],
+                response={"answer": answer},
+            ),
+        )
+    except Exception:
+        logger.debug(
+            "[task_question] publish wait_handle_resolved failed", exc_info=True,
+        )
+    # The thread changed (the question shows its answer); the list row did
+    # not (the run is still waiting until its resume starts).
+    try:
+        await task_store.bump_event_seq(task_id)
+    except Exception:
+        logger.warning(
+            "Bumping event_seq of task %s after an answer failed",
+            task_id, exc_info=True,
+        )
+    from chat.tasks.events import publish_task_state
+
+    await publish_task_state(task_id, list_changed=False)
+
+    from chat.wait_handles import resume as wait_resume
+
+    try:
+        wait_resume.maybe_kick_resume(app, user, conversation_id)
+    except Exception:
+        logger.exception(
+            "Failed to kick the resume of task run %s (conversation=%s)",
+            run["id"], conversation_id,
+        )
+
+    return question_view(updated)
 
 
 # ---------------------------------------------------------------------------

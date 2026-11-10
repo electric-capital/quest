@@ -92,6 +92,8 @@ TASK_CONTEXT_MAX_CHARS = 50_000
 TASK_QUESTION_MAX_CHARS = 2_000
 TASK_ANSWER_MAX_CHARS = 8_000
 TASK_QUESTION_MAX_OPTIONS = 6
+# An option is a clickable answer label, so it stays short.
+TASK_QUESTION_OPTION_MAX_CHARS = 200
 
 # --- Completion (complete_task_run) ----------------------------------------
 

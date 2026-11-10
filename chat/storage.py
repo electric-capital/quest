@@ -1186,6 +1186,29 @@ class ChatStorage:
         )
 
     @staticmethod
+    def update_task_question_message(
+        conversation_id: str,
+        wait_handle_id: str,
+        fields: Dict,
+    ) -> None:
+        """Merge *fields* into the persisted ``task_question`` entry in place.
+
+        Answering a task run's question (``answered`` plus the ``answer``)
+        or cancelling it (``cancelled``) writes the outcome into the entry
+        keyed by its ``wait_handle_id``, so the run view shows the same
+        state the task thread shows (chat/tasks/questions.py). Best-effort
+        like :meth:`update_connect_request_message`.
+        """
+        ChatStorage._rewrite_message_in_place(
+            conversation_id,
+            lambda msg: (
+                msg.get("type") == "task_question"
+                and msg.get("wait_handle_id") == wait_handle_id
+            ),
+            fields,
+        )
+
+    @staticmethod
     def _rewrite_message_in_place(
         conversation_id: str,
         matches,
