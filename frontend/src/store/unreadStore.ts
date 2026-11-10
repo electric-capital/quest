@@ -23,9 +23,20 @@
  * clears the dot on every other client. An unfocused window acknowledges
  * when it regains focus (`acknowledgeViewed`, wired to the focus events by
  * hooks/useConversationUnread.ts).
+ *
+ * Quest Tasks follow the same rules with their own pair of seqs (unread
+ * while `unread_seq > read_seq`), kept in separate maps so a task id can
+ * never be read as a conversation id. Task seqs come from list rows, the
+ * task detail and the read response only: there is no task unread event;
+ * `task_list_changed` / `task_changed` make the task hooks refetch, and
+ * they merge the refetched rows and detail here (hooks/useTasks.ts,
+ * hooks/useTask.ts). The viewed task (the thread on screen, reported by
+ * hooks/useTaskUnread.ts) is acknowledged by `acknowledgeViewed` exactly
+ * like the viewed conversation, through POST /tasks/{id}/read.
  */
 
 import { markConversationRead } from '../api/client';
+import { markTaskRead } from '../api/tasksApi';
 import type { UnreadConversationRef } from '../api/types';
 
 interface UnreadSeqs {
@@ -55,6 +66,10 @@ class UnreadStore {
   private projectIds = new Map<string, string>();
   private listeners = new Set<Listener>();
   private viewedId: string | null = null;
+  // Quest Tasks: the same three pieces of state, keyed by task id.
+  private taskSeqs = new Map<string, UnreadSeqs>();
+  private taskPendingAcks = new Map<string, number>();
+  private viewedTaskId: string | null = null;
   // False under admin impersonation: the admin looking at a conversation
   // is not its owner reading it (the server refuses the request as well).
   private acknowledging = true;
@@ -117,14 +132,14 @@ class UnreadStore {
     this.seqs.set(id, next);
     // Before notifying: when this is the conversation on screen, listeners
     // never observe it as unread.
-    if (id === this.viewedId) this.acknowledgeViewed();
+    if (id === this.viewedId) this.acknowledgeViewedConversation();
     this.emit();
   }
 
   /** The main view now shows this conversation (loaded). */
   setViewed(id: string): void {
     this.viewedId = id;
-    this.acknowledgeViewed();
+    this.acknowledgeViewedConversation();
   }
 
   /** The main view no longer shows this conversation. */
@@ -139,10 +154,58 @@ class UnreadStore {
   }
 
   /**
-   * Acknowledge the viewed conversation if it is unread and the window is
-   * focused. Called whenever any of the three can have changed.
+   * Whether the task is unread, given the seqs on the caller's own copy of
+   * its row or detail.
+   */
+  isTaskUnread(id: string, rowUnreadSeq: unknown = 0, rowReadSeq: unknown = 0): boolean {
+    const known = this.taskSeqs.get(id);
+    const unreadSeq = Math.max(toSeq(rowUnreadSeq), known?.unreadSeq ?? 0);
+    const readSeq = Math.max(
+      toSeq(rowReadSeq),
+      known?.readSeq ?? 0,
+      this.taskPendingAcks.get(id) ?? 0,
+    );
+    return unreadSeq > readSeq;
+  }
+
+  /** Fold in a task's seqs reported by the server (row, detail, read response). */
+  mergeTask(id: string, unreadSeq: unknown, readSeq: unknown): void {
+    const current = this.taskSeqs.get(id);
+    const next = {
+      unreadSeq: Math.max(current?.unreadSeq ?? 0, toSeq(unreadSeq)),
+      readSeq: Math.max(current?.readSeq ?? 0, toSeq(readSeq)),
+    };
+    if (current && current.unreadSeq === next.unreadSeq && current.readSeq === next.readSeq) {
+      return;
+    }
+    this.taskSeqs.set(id, next);
+    // Before notifying, as for conversations.
+    if (id === this.viewedTaskId) this.acknowledgeViewedTask();
+    this.emit();
+  }
+
+  /** The main view now shows this task's thread (loaded). */
+  setViewedTask(id: string): void {
+    this.viewedTaskId = id;
+    this.acknowledgeViewedTask();
+  }
+
+  /** The main view no longer shows this task's thread. */
+  clearViewedTask(id: string): void {
+    if (this.viewedTaskId === id) this.viewedTaskId = null;
+  }
+
+  /**
+   * Acknowledge the viewed conversation and the viewed task, each if it is
+   * unread and the window is focused. Called whenever any of the three can
+   * have changed.
    */
   acknowledgeViewed(): void {
+    this.acknowledgeViewedConversation();
+    this.acknowledgeViewedTask();
+  }
+
+  private acknowledgeViewedConversation(): void {
     const id = this.viewedId;
     if (!id || !this.acknowledging || !isWindowFocused()) return;
     const known = this.seqs.get(id);
@@ -162,6 +225,32 @@ class UnreadStore {
       });
   }
 
+  private acknowledgeViewedTask(): void {
+    const id = this.viewedTaskId;
+    if (!id || !this.acknowledging || !isWindowFocused()) return;
+    const known = this.taskSeqs.get(id);
+    if (!known || !this.isTaskUnread(id)) return;
+    const seq = known.unreadSeq;
+    this.taskPendingAcks.set(id, seq);
+    this.emit();
+    markTaskRead(id, seq)
+      .then((result) => {
+        this.mergeTask(id, result.unread_seq, result.read_seq);
+        this.settleTaskAck(id, seq);
+      })
+      .catch(() => {
+        // Unacknowledged: the dot comes back, and the next focus change or
+        // refetch of this task retries.
+        this.settleTaskAck(id, seq);
+      });
+  }
+
+  private settleTaskAck(id: string, seq: number): void {
+    if (this.taskPendingAcks.get(id) !== seq) return;
+    this.taskPendingAcks.delete(id);
+    this.emit();
+  }
+
   private settleAck(id: string, seq: number): void {
     if (this.pendingAcks.get(id) !== seq) return;
     this.pendingAcks.delete(id);
@@ -178,6 +267,9 @@ class UnreadStore {
     this.pendingAcks.clear();
     this.projectIds.clear();
     this.viewedId = null;
+    this.taskSeqs.clear();
+    this.taskPendingAcks.clear();
+    this.viewedTaskId = null;
     this.acknowledging = true;
     this.emit();
   }
