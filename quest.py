@@ -606,6 +606,7 @@ from chat.tables.routes import router as tables_router
 from chat.tables.history_routes import router as tables_history_router
 from chat.tables.download_routes import router as tables_download_router
 from chat.tables.share_routes import router as tables_share_router
+from chat.tasks.routes import router as tasks_router
 from chat.realtime import realtime_router
 
 app.include_router(chat_router)
@@ -632,6 +633,7 @@ app.include_router(tables_router)
 app.include_router(tables_history_router)
 app.include_router(tables_download_router)
 app.include_router(tables_share_router)
+app.include_router(tasks_router)
 app.include_router(realtime_router)
 
 # Discover and register filesystem plugins (plugins/*/plugin.py) AFTER the
@@ -728,6 +730,13 @@ async def serve_spa_docs(rest: str = ""):
 async def serve_spa_tables(rest: str = ""):
     """Serve SPA for the Quest Tables deep links (/tables All Tables view,
     /tables?project=<id>, /tables/<id> viewer)."""
+    return FileResponse(FRONTEND_BUILD_DIR / "index.html")
+
+@app.get("/tasks")
+@app.get("/tasks/{rest:path}")
+async def serve_spa_tasks(rest: str = ""):
+    """Serve SPA for the Quest Tasks deep links (/tasks/new, /tasks/<id>
+    thread, /tasks/<id>/runs/<conversation id> run view)."""
     return FileResponse(FRONTEND_BUILD_DIR / "index.html")
 
 @app.get("/set-password")

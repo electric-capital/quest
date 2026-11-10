@@ -1,4 +1,15 @@
-"""The task service: the rules that start a task run and answer its questions.
+"""The task service: the rules behind every Quest Task route and the send
+path.
+
+Task lifecycle (spec issue #213, sections 7 and 10): :func:`create_task`,
+:func:`update_task`, the user's brief edit and restore (:func:`set_brief`,
+:func:`restore_brief`), :func:`set_task_archived`, the read
+acknowledgement (:func:`mark_task_read`), and the deletes
+(:func:`delete_task`, :func:`delete_run`), which stop live turns, cancel
+wait handles, close the run conversations' open approval cards and sweep
+their directories. Each checks the gate and ownership itself and publishes
+through chat/tasks/events.py; the route-facing shapes are built in
+chat/tasks/thread.py.
 
 A run starts in two steps (spec issue #213, section 7): ``POST
 /tasks/{id}/runs`` creates the run's conversation
@@ -17,8 +28,8 @@ leaves behind: a ``running`` run whose in-memory turn is gone, and run
 conversations created but never sent.
 
 Every refusal is a ``db.task_store.TaskStoreError`` subclass with a stable
-``code``, so routes and the send path put it straight into their error
-bodies. Later phases add the rest of the task lifecycle here.
+``code``, so routes (through ``chat.tasks.http.task_http_exception``) and
+the send path put it straight into their error bodies.
 """
 
 from __future__ import annotations
@@ -409,6 +420,417 @@ async def answer_question(
         )
 
     return question_view(updated)
+
+
+# ---------------------------------------------------------------------------
+# Task CRUD, brief, archive, read
+# ---------------------------------------------------------------------------
+
+
+async def _require_owned(user: dict, task_id: str) -> dict:
+    """Gate, then ownership (missing and foreign read the same)."""
+    require_tasks_enabled(user)
+    task = await task_store.get_task(user["id"], task_id)
+    if task is None:
+        raise TaskNotFoundError(task_id)
+    return task
+
+
+def _check_model_allowed(model: Any) -> None:
+    """Refuse a task default model unticked for private conversations. A
+    None or malformed value is left to the store's shape check."""
+    if not isinstance(model, str) or not model.strip():
+        return
+    from config.model_selection import is_model_allowed
+
+    if not is_model_allowed(model.strip(), public=False):
+        raise TaskModelNotAllowedError(model.strip())
+
+
+async def create_task(
+    user: dict,
+    *,
+    title: Optional[str] = None,
+    prompt: Optional[str] = None,
+    instructions: Optional[str] = None,
+    model: Optional[str] = None,
+    thinking_effort: Optional[str] = None,
+) -> dict:
+    """Create a task (``POST /tasks``) and publish ``task_list_changed``.
+
+    The title is the user's ``title`` when given (``title_is_default``
+    False); else cut from ``prompt`` (the New Task composer's first
+    message, which is not stored: it only names the task, so its first run
+    may still rename it); else ``task_store.DEFAULT_TASK_TITLE``. Both
+    fallbacks keep ``title_is_default`` True.
+
+    Returns:
+        The task dict.
+
+    Raises:
+        TasksDisabledError, TaskModelNotAllowedError, TaskValidationError
+        (``invalid_title``, ``invalid_instructions``, ``invalid_model``,
+        ``invalid_thinking_effort``), TaskCapReachedError.
+    """
+    require_tasks_enabled(user)
+    if title is not None:
+        task_title, title_is_default = title, False
+    elif prompt is not None:
+        task_title, title_is_default = task_store.title_from_prompt(prompt), True
+    else:
+        task_title, title_is_default = task_store.DEFAULT_TASK_TITLE, True
+    _check_model_allowed(model)
+    task = await task_store.create_task(
+        user["id"],
+        title=task_title,
+        title_is_default=title_is_default,
+        instructions=instructions or "",
+        model=model,
+        thinking_effort=thinking_effort,
+    )
+    logger.info("Task created (task=%s, user=%s)", task["id"], user["id"])
+    from chat.tasks.events import publish_task_list_changed
+
+    publish_task_list_changed(user["id"])
+    return task
+
+
+async def update_task(
+    user: dict,
+    task_id: str,
+    *,
+    title: Any = task_store.UNSET,
+    instructions: Any = task_store.UNSET,
+    model: Any = task_store.UNSET,
+    thinking_effort: Any = task_store.UNSET,
+) -> dict:
+    """Edit the user-owned fields (``PATCH /tasks/{id}``); fields left at
+    ``task_store.UNSET`` stay, None clears ``model`` / ``thinking_effort``
+    (a None ``title`` is refused by the store). Publishes ``task_changed``
+    and ``task_list_changed`` when something changed.
+
+    Returns:
+        The task dict.
+
+    Raises:
+        TasksDisabledError, TaskNotFoundError, TaskModelNotAllowedError,
+        TaskValidationError.
+    """
+    before = await _require_owned(user, task_id)
+    if model is not task_store.UNSET:
+        _check_model_allowed(model)
+    task = await task_store.update_task(
+        user["id"], task_id,
+        title=title, instructions=instructions,
+        model=model, thinking_effort=thinking_effort,
+    )
+    if task["event_seq"] != before["event_seq"]:
+        from chat.tasks.events import publish_task_state
+
+        await publish_task_state(task_id)
+    return task
+
+
+async def set_brief(
+    user: dict, task_id: str, brief: Any, *, expected_version: int,
+) -> dict:
+    """The user's brief edit (``PUT /tasks/{id}/brief``), allowed while a
+    run is active (the run's own write then gets ``brief_conflict``).
+    Publishes ``task_changed`` (the list row does not change).
+
+    Returns:
+        ``{brief, brief_version, brief_updated_at}`` after the write.
+
+    Raises:
+        TasksDisabledError, TaskNotFoundError, StaleBriefError,
+        TaskValidationError (``invalid_brief``, ``brief_too_long``).
+    """
+    await _require_owned(user, task_id)
+    state = await task_store.set_brief(
+        task_id, brief, expected_version=expected_version, source="ui",
+    )
+    from chat.tasks.events import publish_task_state
+
+    await publish_task_state(task_id, list_changed=False)
+    return state
+
+
+async def restore_brief(
+    user: dict, task_id: str, version: int, *, expected_version: int,
+) -> dict:
+    """Write stored version ``version`` as a new brief version (``POST
+    /tasks/{id}/brief/versions/{version}/restore``, source
+    ``restore:<version>``). Publishes ``task_changed``.
+
+    Returns:
+        ``{brief, brief_version, brief_updated_at}`` after the write.
+
+    Raises:
+        TasksDisabledError, TaskNotFoundError, BriefVersionNotFoundError,
+        StaleBriefError, TaskValidationError (``brief_too_long``).
+    """
+    await _require_owned(user, task_id)
+    state = await task_store.restore_brief_version(
+        task_id, version, expected_version=expected_version,
+    )
+    from chat.tasks.events import publish_task_state
+
+    await publish_task_state(task_id, list_changed=False)
+    return state
+
+
+async def set_task_archived(user: dict, task_id: str, archived: bool) -> dict:
+    """Archive or unarchive a task (``PUT /tasks/{id}/archive`` /
+    ``unarchive``) and publish ``task_changed`` and ``task_list_changed``.
+
+    Archiving is refused while a run is active, and marks the task read up
+    to its ``event_seq`` (as archiving a conversation does): an archived
+    task carries no unread dot. Unarchiving counts against the task cap.
+
+    Returns:
+        The task dict.
+
+    Raises:
+        TasksDisabledError, TaskNotFoundError, TaskRunActiveError (archive),
+        TaskCapReachedError (unarchive).
+    """
+    require_tasks_enabled(user)
+    task = await task_store.set_task_archived(user["id"], task_id, archived)
+    if archived and task["read_seq"] < task["event_seq"]:
+        await task_store.mark_task_read(
+            user["id"], task_id, up_to_seq=task["event_seq"],
+        )
+        task = await task_store.get_task(user["id"], task_id) or task
+    logger.info(
+        "Task %s (task=%s, user=%s)",
+        "archived" if archived else "unarchived", task_id, user["id"],
+    )
+    from chat.tasks.events import publish_task_state
+
+    await publish_task_state(task_id)
+    return task
+
+
+async def mark_task_read(user: dict, task_id: str, *, seq: int) -> dict:
+    """Acknowledge the thread up to ``seq`` (``POST /tasks/{id}/read``,
+    sent by a client showing the thread in a focused window) and publish
+    ``task_list_changed`` when ``read_seq`` moved.
+
+    An admin impersonating the owner changes nothing: the admin looking at
+    the thread is not the owner reading it.
+
+    Returns:
+        The task dict after the acknowledgement.
+
+    Raises:
+        TasksDisabledError, TaskNotFoundError.
+    """
+    task = await _require_owned(user, task_id)
+    if "_impersonator_uid" in user:
+        return task
+    moved = await task_store.mark_task_read(user["id"], task_id, up_to_seq=seq)
+    if not moved:
+        return task
+    from chat.tasks.events import publish_task_list_changed
+
+    publish_task_list_changed(user["id"])
+    return await task_store.get_task(user["id"], task_id) or task
+
+
+# ---------------------------------------------------------------------------
+# Deleting a task or a run (spec 10)
+# ---------------------------------------------------------------------------
+
+# How long a delete waits for the cancelled live turns of the doomed
+# conversations to unwind (a cancelled turn flushes its transcript on the
+# way out; the directory sweep must come after that flush).
+_DELETE_CANCEL_WAIT_SECONDS = 10.0
+
+
+async def _cancel_live_runs(conversation_ids) -> None:
+    """Cancel the in-flight send run and headless resume of each
+    conversation and wait (bounded) for them to finish."""
+    from chat.realtime.socket import cancel_conversation_runs
+
+    cancelled: list[asyncio.Task] = []
+    for conversation_id in conversation_ids:
+        cancelled.extend(cancel_conversation_runs(conversation_id))
+    if not cancelled:
+        return
+    _done, pending = await asyncio.wait(cancelled, timeout=_DELETE_CANCEL_WAIT_SECONDS)
+    if pending:
+        logger.warning(
+            "%d cancelled task run turn(s) did not finish within %.0fs; "
+            "sweeping their conversations anyway",
+            len(pending), _DELETE_CANCEL_WAIT_SECONDS,
+        )
+
+
+async def _close_conversation_cards(user_id: int, conversation_ids) -> list[int]:
+    """Cancel the pending wait handles of the conversations that have any
+    (one query finds them) and close their open action requests as
+    ``stopped`` (``action_requests`` has no foreign key on the
+    conversation, so a card of a deleted run would otherwise stay
+    approvable in the inbox). Best-effort per conversation.
+
+    Returns:
+        The ids of the action requests closed.
+    """
+    from chat.gemini_api.session import cancel_pending_wait_handles_for_conversation
+    from db import action_request_store
+
+    ids = list(dict.fromkeys(conversation_ids))
+    if not ids:
+        return []
+    try:
+        pending = await tool_wait_handle_store.list_pending_for_conversations(ids)
+    except Exception:
+        logger.exception("Listing pending wait handles of task conversations failed")
+        pending = []
+    for conversation_id in dict.fromkeys(h["conversation_id"] for h in pending):
+        try:
+            await cancel_pending_wait_handles_for_conversation(user_id, conversation_id)
+        except Exception:
+            logger.exception(
+                "Cancelling pending wait handles of %s failed", conversation_id,
+            )
+    try:
+        return await action_request_store.stop_open_action_requests_for_conversations(
+            user_id, ids, reason="task_run_deleted",
+        )
+    except Exception:
+        logger.exception("Closing open action requests of task conversations failed")
+        return []
+
+
+async def _sweep_conversations(user_id: int, conversation_ids) -> None:
+    """After the rows are gone: cancel any live turn again (a run started
+    in the race window), drop the in-memory sessions and remove each
+    conversation's ``CHATS_DIR`` directory. Best-effort per id."""
+    from chat.gemini_api.session import remove_chat_session
+    from chat.storage import ChatStorage
+
+    ids = list(dict.fromkeys(conversation_ids))
+    await _cancel_live_runs(ids)
+    for conversation_id in ids:
+        try:
+            remove_chat_session(user_id, conversation_id)
+            conversation_dir = ChatStorage.get_conversation_dir(conversation_id)
+            await asyncio.to_thread(shutil.rmtree, conversation_dir, ignore_errors=True)
+        except Exception:
+            logger.exception(
+                "Removing task run conversation %s failed", conversation_id,
+            )
+
+
+async def _publish_request_count_changed(user_id: int) -> None:
+    """Best-effort: the inbox badge counts moved (cards were closed)."""
+    from chat.realtime import events as realtime_events
+    from chat.realtime.bus import bus
+    from db.action_request_store import count_action_requests_by_status
+
+    try:
+        counts = await count_action_requests_by_status(user_id)
+        bus.publish_to_user(user_id, realtime_events.make_request_count_changed(counts))
+    except Exception:
+        logger.debug(
+            "[tasks] publish request_count_changed failed (user_id=%s)",
+            user_id, exc_info=True,
+        )
+
+
+async def delete_task(user: dict, task_id: str) -> None:
+    """Delete a task with its runs, their conversations and its workspace
+    (``DELETE /tasks/{id}``).
+
+    1. Cancel every live turn of the task's conversations and wait for
+       them (bounded), then stop the active run (``stopped``, its handles
+       cancelled).
+    2. Cancel the pending wait handles and close the open approval cards of
+       every run conversation.
+    3. Delete the rows (runs, brief versions and conversations cascade).
+    4. Sweep the conversations (live turns again, in-memory sessions,
+       ``CHATS_DIR`` directories), then ``TASKS_DIR/<id>``.
+    5. Publish ``task_changed`` (no active run; an open thread refetches
+       and gets 404), ``task_list_changed``, and ``request_count_changed``
+       when cards were closed.
+
+    Raises:
+        TasksDisabledError, TaskNotFoundError.
+    """
+    from chat.storage import ChatStorage
+    from chat.tasks.runs import stop_task_run
+
+    task = await _require_owned(user, task_id)
+    user_id = user["id"]
+
+    conversation_ids = await task_store.list_task_conversation_ids(task_id)
+    await _cancel_live_runs(conversation_ids)
+    active = await task_store.get_active_run(task_id)
+    if active is not None:
+        await stop_task_run(user_id, active["conversation_id"])
+    closed = await _close_conversation_cards(user_id, conversation_ids)
+    task = await task_store.get_task(user_id, task_id) or task
+
+    deleted_ids = await task_store.delete_task(user_id, task_id)
+    known_ids = set(conversation_ids)
+    late_ids = [cid for cid in deleted_ids if cid not in known_ids]
+    if late_ids:
+        # A run conversation created between the read and the delete.
+        closed += await _close_conversation_cards(user_id, late_ids)
+    logger.info(
+        "Task deleted (task=%s, user=%s, conversations=%d)",
+        task_id, user_id, len(deleted_ids),
+    )
+
+    await _sweep_conversations(user_id, list(conversation_ids) + late_ids)
+    try:
+        task_dir = ChatStorage.get_task_dir(task_id)
+        await asyncio.to_thread(shutil.rmtree, task_dir, ignore_errors=True)
+    except Exception:
+        logger.exception("Removing the directory of task %s failed", task_id)
+
+    from chat.tasks.events import publish_task_changed, publish_task_list_changed
+
+    # The delete bumped event_seq once more before removing the row.
+    publish_task_changed(user_id, {**task, "event_seq": task["event_seq"] + 1}, None)
+    publish_task_list_changed(user_id)
+    if closed:
+        await _publish_request_count_changed(user_id)
+
+
+async def delete_run(user: dict, task_id: str, run_id: str) -> None:
+    """Delete a finished run's log entry and its conversation (``DELETE
+    /tasks/{id}/runs/{run_id}``). Its ``seq`` is never reused; docs, tables
+    and task files it created stay.
+
+    The store delete is the atomic refusal; then the conversation's live
+    turn (one still flushing after its completion), pending wait handles
+    and open approval cards are closed, its in-memory session dropped and
+    its ``CHATS_DIR`` directory removed. Publishes ``task_changed`` and
+    ``task_list_changed``, and ``request_count_changed`` when cards were
+    closed.
+
+    Raises:
+        TasksDisabledError, TaskNotFoundError, TaskRunNotFoundError (also a
+        run of another task), TaskRunActiveError.
+    """
+    require_tasks_enabled(user)
+    user_id = user["id"]
+    conversation_id = await task_store.delete_run(user_id, task_id, run_id)
+    logger.info(
+        "Task run deleted (task=%s, run=%s, conversation=%s, user=%s)",
+        task_id, run_id, conversation_id, user_id,
+    )
+    await _cancel_live_runs([conversation_id])
+    closed = await _close_conversation_cards(user_id, [conversation_id])
+    await _sweep_conversations(user_id, [conversation_id])
+
+    from chat.tasks.events import publish_task_state
+
+    await publish_task_state(task_id)
+    if closed:
+        await _publish_request_count_changed(user_id)
 
 
 # ---------------------------------------------------------------------------
