@@ -117,7 +117,7 @@ TASK_BRIEF_CONFLICT_NUDGE = (
 # (appended to the validation message; nothing was saved and the run stays
 # open). Codes not listed get _REFUSAL_HINT_DEFAULT.
 _REFUSAL_HINTS: dict[str, str] = {
-    "summary_too_long": "Shorten summary to one line",
+    "summary_too_long": "Shorten summary to one short line",
     "result_too_long": (
         "Shorten result: put long material in a task:// file, a Quest Doc "
         "or a Quest Table and point at it from the result"
