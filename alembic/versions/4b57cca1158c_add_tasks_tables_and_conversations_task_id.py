@@ -1,7 +1,7 @@
 """add tasks, task_runs, task_brief_versions and conversations.task_id
 
 Revision ID: 4b57cca1158c
-Revises: e7c2a9f4b1d6
+Revises: a3d9e5c7f2b4
 Create Date: 2026-11-10 12:00:00.000000
 
 Quest Tasks: a ``tasks`` row holds a task's title, the user's instructions,
@@ -30,7 +30,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '4b57cca1158c'
-down_revision: Union[str, Sequence[str], None] = 'e7c2a9f4b1d6'
+down_revision: Union[str, Sequence[str], None] = 'a3d9e5c7f2b4'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
