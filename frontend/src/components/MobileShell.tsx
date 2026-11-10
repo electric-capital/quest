@@ -19,6 +19,8 @@ import { TablesGateClosed } from './tables/TablesGateClosed'
 import { TableViewer } from './tables/TableViewer'
 import { TablesListView } from './tables/TablesListView'
 import type { TablesRoute } from '../utils/tablesRoute'
+import { TasksMain } from './tasks/TasksMain'
+import type { TasksRoute } from '../utils/tasksRoute'
 
 interface MobileShellProps {
   activeConversationId: string | null
@@ -34,6 +36,10 @@ interface MobileShellProps {
   tablesRoute: TablesRoute | null
   /** Whether the `tables` feature gate is open for the current user. */
   tablesEnabled: boolean
+  /** Parsed /tasks URL (parseTasksRoute), or null off the tasks routes. */
+  tasksRoute: TasksRoute | null
+  /** Whether the `tasks` feature gate is open for the current user. */
+  tasksEnabled: boolean
 }
 
 interface ConversationSelectOpts {
@@ -45,7 +51,7 @@ interface ConversationSelectOpts {
  * Sidebar/ChatPanel/RightPanel row when useIsMobile() matches. Same routes,
  * same data layer — only the layout tree differs: a fixed top bar, a slide-in
  * drawer hosting the existing Sidebar, and a single main pane (chat, home
- * composer, requests, or a Quest Docs or Quest Tables view). The
+ * composer, requests, or a Quest Docs, Tables or Tasks view). The
  * desktop-only RightPanel is intentionally absent.
  */
 export function MobileShell({
@@ -58,6 +64,8 @@ export function MobileShell({
   docsEnabled,
   tablesRoute,
   tablesEnabled,
+  tasksRoute,
+  tasksEnabled,
 }: MobileShellProps) {
   const { appName } = useAppConfig()
   const {
@@ -159,6 +167,22 @@ export function MobileShell({
     setWorkspaceOpen(false)
   }, [tablesRouteKey])
 
+  // Same for a tasks view (a list, New Task, a thread or a run view).
+  const tasksRouteKey = tasksRoute
+    ? tasksRoute.kind === 'list'
+      ? `list:${tasksRoute.archived ? 'archived' : 'active'}`
+      : tasksRoute.kind === 'new'
+        ? 'new'
+        : tasksRoute.kind === 'thread'
+          ? `thread:${tasksRoute.taskId}`
+          : `run:${tasksRoute.taskId}:${tasksRoute.conversationId}`
+    : null
+  useEffect(() => {
+    if (tasksRouteKey === null) return
+    setDrawerOpen(false)
+    setWorkspaceOpen(false)
+  }, [tasksRouteKey])
+
   const closeOverlays = useCallback(() => {
     setDrawerOpen(false)
     setWorkspaceOpen(false)
@@ -222,9 +246,9 @@ export function MobileShell({
             <span className="mobile-topbar-title-text">{appName}</span>
           )}
         </div>
-        {/* No workspace beside a docs or tables view (desktop hides the
-            RightPanel there too); keep the slot so the title stays put. */}
-        {docsRoute || tablesRoute ? (
+        {/* No workspace beside a docs, tables or tasks view (desktop hides
+            the RightPanel there too); keep the slot so the title stays put. */}
+        {docsRoute || tablesRoute || tasksRoute ? (
           <span className="mobile-topbar-button mobile-topbar-button-end" aria-hidden="true" />
         ) : (
           <button
@@ -266,6 +290,10 @@ export function MobileShell({
                 sort={tablesRoute.sort}
               />
             )}
+          </div>
+        ) : tasksRoute ? (
+          <div className="main-content docs-main tasks-main">
+            <TasksMain route={tasksRoute} enabled={tasksEnabled} />
           </div>
         ) : activeConversationId ? (
           <ChatPanel

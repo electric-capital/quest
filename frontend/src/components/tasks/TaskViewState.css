@@ -1,0 +1,50 @@
+/* TaskViewState -- centered loading / not-found / error notices of the
+ * Quest Tasks views, the same look as the doc viewer's states. */
+
+.task-view-state {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2rem 16px;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  text-align: center;
+}
+
+.task-view-state-text {
+  margin: 0;
+}
+
+.task-view-state-link {
+  color: var(--accent-text);
+}
+
+.task-view-state-link:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.task-view-retry {
+  padding: 0.4rem 1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.task-view-retry:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background-color: var(--hover);
+}
+
+.task-view-retry:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

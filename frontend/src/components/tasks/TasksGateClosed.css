@@ -1,0 +1,30 @@
+/* TasksGateClosed -- centered notice on /tasks URLs while the tasks gate is closed */
+
+.tasks-gate-closed {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem 16px;
+  text-align: center;
+}
+
+.tasks-gate-closed-icon {
+  color: var(--text-muted);
+  margin-bottom: 0.25rem;
+}
+
+.tasks-gate-closed-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.tasks-gate-closed-hint {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}

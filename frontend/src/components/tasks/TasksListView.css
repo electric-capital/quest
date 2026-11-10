@@ -1,0 +1,170 @@
+/* TasksListView (/tasks, /tasks?archived=true) -- inside .docs-main.tasks-main
+ * (App.css), which is the scrolling column; the header sticks to its top.
+ * Rows are pills separated by spacing and hover, like the tables list. */
+
+.tasks-list {
+  flex: 1 0 auto;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tasks-list-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  padding: 1.25rem 2rem 0.75rem;
+  background-color: var(--surface);
+}
+
+.tasks-list-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.tasks-list-title-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.tasks-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.tasks-list-switch {
+  font-size: 0.875rem;
+  color: var(--accent-text);
+}
+
+.tasks-list-switch:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.tasks-list-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 2.125rem;
+  padding: 0 0.9rem;
+  border-radius: 999px;
+  background-color: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color 0.15s;
+}
+
+.tasks-list-new:hover {
+  background-color: var(--accent-hover);
+  color: var(--accent-contrast);
+}
+
+.tasks-list-content {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+  padding: 0.5rem 2rem 2.5rem;
+}
+
+.tasks-list-empty {
+  margin: 0;
+  padding: 4rem 1rem;
+  text-align: center;
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+}
+
+.tasks-list-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.tasks-list-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.55rem 0.75rem;
+  border-radius: 10px;
+  color: var(--text);
+  font-weight: 400;
+  text-decoration: none;
+  transition: background-color 0.12s;
+}
+
+.tasks-list-row:hover {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.tasks-list-row:active {
+  background-color: var(--pressed);
+}
+
+.tasks-list-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9375rem;
+}
+
+.tasks-list-row-title.unread {
+  font-weight: 600;
+}
+
+.tasks-list-row-state {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.tasks-list-row-state.waiting {
+  font-weight: 600;
+  color: var(--accent-text);
+}
+
+.tasks-list-row-unread {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--accent);
+}
+
+@media (max-width: 768px) {
+  .tasks-list-header,
+  .tasks-list-content {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
