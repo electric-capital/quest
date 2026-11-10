@@ -7,6 +7,8 @@ write time, not at prompt-build time, so the context stays bounded however
 many runs a task has.
 """
 
+from datetime import timedelta
+
 # --- Task text (``tasks`` row) ---------------------------------------------
 
 TASK_TITLE_MAX_CHARS = 120
@@ -49,6 +51,12 @@ TASK_RUN_FINISHED_STATUSES = frozenset({
 
 # The ``conversations.origin`` value of a run conversation.
 TASK_CONVERSATION_ORIGIN = "task"
+
+# A run conversation created by ``POST /tasks/{id}/runs`` but never sent
+# (no ``task_runs`` row) is deleted by the startup sweep once it is older
+# than this (spec section 10, default 19; chat/tasks/service.py
+# sweep_abandoned_run_conversations).
+TASK_ABANDONED_RUN_CONVERSATION_MAX_AGE = timedelta(days=1)
 
 # --- Task context (chat/tasks/context.py) ----------------------------------
 
