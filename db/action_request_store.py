@@ -6,7 +6,7 @@ from typing import Optional
 from sqlalchemy import select, delete, func, update
 
 from db.engine import AsyncSessionLocal
-from db.models import ActionRequest, ActionRequestStatus, Conversation, Routine, Project
+from db.models import ActionRequest, ActionRequestStatus, Conversation, Routine, Project, Task
 
 
 async def create_action_request(
@@ -151,6 +151,52 @@ async def resolve_action_request(
         return _request_to_dict(req)
 
 
+async def stop_open_action_requests_for_conversations(
+    user_id: int,
+    conversation_ids,
+    *,
+    reason: str = "task_run_deleted",
+) -> list[int]:
+    """Close every OPEN request of ``user_id`` in ``conversation_ids`` as
+    ``stopped`` with ``result = {"stopped": True, "reason": reason}``.
+
+    For conversations about to be deleted (a Quest Task or one of its runs):
+    ``action_requests`` has no foreign key on ``conversation_id``, so their
+    open cards would otherwise stay in the inbox, and approving one later
+    would execute the write with no conversation behind it. One conditional
+    ``UPDATE ... WHERE status = 'open'`` per 500 conversations, so a card
+    resolved concurrently keeps its outcome.
+
+    Returns:
+        The ids of the requests this call closed.
+    """
+    ids = list(dict.fromkeys(cid for cid in conversation_ids if cid))
+    if not ids:
+        return []
+    now = datetime.now(timezone.utc)
+    closed: list[int] = []
+    async with AsyncSessionLocal() as db:
+        for i in range(0, len(ids), 500):
+            rows = await db.execute(
+                update(ActionRequest)
+                .where(
+                    ActionRequest.user_id == user_id,
+                    ActionRequest.conversation_id.in_(ids[i:i + 500]),
+                    ActionRequest.status == ActionRequestStatus.OPEN,
+                )
+                .values(
+                    status=ActionRequestStatus.STOPPED,
+                    result={"stopped": True, "reason": reason},
+                    resolved_at=now,
+                )
+                .returning(ActionRequest.id)
+                .execution_options(synchronize_session=False)
+            )
+            closed.extend(rows.scalars().all())
+        await db.commit()
+    return sorted(closed)
+
+
 async def delete_all_user_action_requests(user_id: int) -> int:
     """Delete all action requests for a user (account deletion)."""
     async with AsyncSessionLocal() as db:
@@ -233,9 +279,10 @@ async def list_action_requests_enriched(
 ) -> list[dict]:
     """List all action requests for a user with conversation/routine/project context.
 
-    Returns enriched dicts that include routine_name, project_name, and project_id
-    in addition to the standard action request fields. Uses batch loading to avoid
-    N+1 queries.
+    Returns enriched dicts that include routine_name, project_name, project_id,
+    task_id and task_title (a Quest Task run's request: the inbox links it to
+    the task thread) in addition to the standard action request fields. Uses
+    batch loading to avoid N+1 queries.
     """
     async with AsyncSessionLocal() as db:
         # 1. Get all action requests for the user
@@ -284,7 +331,19 @@ async def list_action_requests_enriched(
             projects = result.all()
             project_map = {p.id: p.name for p in projects}
 
-        # 6. Assemble enriched dicts
+        # 6. Batch-load Quest Task titles (a task run's conversation)
+        task_ids = list({
+            c.task_id for c in conversations
+            if c.task_id is not None
+        })
+        task_map: dict[str, str] = {}
+        if task_ids:
+            result = await db.execute(
+                select(Task.id, Task.title).where(Task.id.in_(task_ids))
+            )
+            task_map = {t.id: t.title for t in result.all()}
+
+        # 7. Assemble enriched dicts
         enriched = []
         for req in requests:
             d = _request_to_dict(req)
@@ -293,10 +352,14 @@ async def list_action_requests_enriched(
                 d["routine_name"] = routine_map.get(conv.routine_id) if conv.routine_id else None
                 d["project_name"] = project_map.get(conv.project_id) if conv.project_id else None
                 d["project_id"] = conv.project_id
+                d["task_id"] = conv.task_id if conv.task_id in task_map else None
+                d["task_title"] = task_map.get(conv.task_id) if conv.task_id else None
             else:
                 d["routine_name"] = None
                 d["project_name"] = None
                 d["project_id"] = None
+                d["task_id"] = None
+                d["task_title"] = None
             enriched.append(d)
 
         return enriched

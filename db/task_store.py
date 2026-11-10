@@ -911,6 +911,26 @@ async def delete_task(user_id: int, task_id: str) -> list[str]:
         return sorted(conversation_ids)
 
 
+async def list_task_conversation_ids(task_id: str) -> list[str]:
+    """Every conversation id that belongs to the task: ``conversations``
+    rows carrying its ``task_id`` (abandoned run conversations included)
+    plus every run's ``conversation_id``. Not owner-scoped.
+
+    The task-delete service reads it BEFORE :func:`delete_task` to stop
+    live turns, cancel wait handles and close approval cards while the
+    conversations still exist; :func:`delete_task` returns the same set
+    collected inside its own transaction.
+    """
+    async with AsyncSessionLocal() as db:
+        ids = set((await db.execute(
+            select(Conversation.id).where(Conversation.task_id == task_id)
+        )).scalars().all())
+        ids.update((await db.execute(
+            select(TaskRun.conversation_id).where(TaskRun.task_id == task_id)
+        )).scalars().all())
+    return sorted(ids)
+
+
 async def list_task_ids_for_user(user_id: int) -> list[str]:
     """Every task id of the user, archived included (the account-delete
     sweep of ``TASKS_DIR``)."""
@@ -1345,6 +1365,21 @@ async def list_runs_page(
     }
 
 
+async def get_run_seqs(task_id: str, run_ids: Iterable[str]) -> dict[str, int]:
+    """``{run_id: seq}`` for the runs of ``task_id`` among ``run_ids`` (one
+    query). Deleted runs and runs of another task are absent. The thread
+    resolves brief sources ``run:<id>`` to "run N" with it."""
+    ids = sorted({rid for rid in run_ids if isinstance(rid, str) and rid})
+    if not ids:
+        return {}
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            select(TaskRun.id, TaskRun.seq)
+            .where(TaskRun.task_id == task_id, TaskRun.id.in_(ids))
+        )).all()
+    return {run_id: seq for run_id, seq in rows}
+
+
 async def list_runs(task_id: str, *, offset: int = 0, limit: int = 50) -> list[dict]:
     """The task's runs newest first, offset-paged (``limit`` clamped to
     1..500), results included. For the ``list_task_runs`` tool; the
@@ -1616,6 +1651,19 @@ async def get_brief_version(task_id: str, version: int) -> Optional[dict]:
             "created_at": _iso(row.created_at),
             "content": row.content,
         }
+
+
+async def get_brief_version_source(task_id: str, version: int) -> Optional[str]:
+    """The ``source`` of stored version ``version`` (``ui``, ``run:<id>``,
+    ``restore:<n>``), or None (version 0, never written, or pruned). Reads
+    no brief text."""
+    async with AsyncSessionLocal() as db:
+        return (await db.execute(
+            select(TaskBriefVersion.source).where(
+                TaskBriefVersion.task_id == task_id,
+                TaskBriefVersion.version == version,
+            )
+        )).scalar_one_or_none()
 
 
 async def restore_brief_version(
