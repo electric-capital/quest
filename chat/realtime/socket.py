@@ -132,6 +132,32 @@ def get_active_send_run(conversation_id: str) -> Optional[asyncio.Task]:
     return None
 
 
+def cancel_conversation_runs(conversation_id: str) -> list[asyncio.Task]:
+    """Cancel every in-flight model run of a conversation: the WS send run
+    and the headless wait-handle resume (the continuation after an
+    approval, a connect card or a task question).
+
+    Returns the tasks it cancelled, so a caller about to delete the
+    conversation can await them (a cancelled turn still flushes its
+    transcript on the way out). Wait handles are not touched: the caller
+    cancels those. Used by the WS ``stop`` op and the Quest Task deletes.
+    """
+    cancelled: list[asyncio.Task] = []
+    task = _active_send_runs.get(conversation_id)
+    if task is not None and not task.done():
+        task.cancel()
+        cancelled.append(task)
+    try:
+        from chat.wait_handles import resume as wait_resume
+        resume_task = wait_resume.get_active_resume(conversation_id)
+    except Exception:
+        resume_task = None
+    if resume_task is not None:
+        resume_task.cancel()
+        cancelled.append(resume_task)
+    return cancelled
+
+
 def is_run_active(conversation_id: str) -> bool:
     """True while a model run is streaming on this conversation.
 
@@ -982,24 +1008,14 @@ async def _handle_stop(conn: _Connection, data: dict) -> None:
         })
         return
 
-    # Cancel the task only if this user owns it. Cross-user cancellation
+    # Cancel the run only if this user owns it. Cross-user cancellation
     # is impossible because the lock is keyed by conversation_id and the
-    # ownership check on subscribe / send already gates user access.
-    task = _active_send_runs.get(conv_id)
-    if task is not None and not task.done():
-        task.cancel()
-
-    # A headless wait-handle resume (the continuation after an
+    # ownership check on subscribe / send already gates user access. A
+    # headless wait-handle resume (the continuation after an
     # action-request Approve / Revise / Deny) is a stoppable run too: the
-    # FE shows the same stop button while it streams, so stop must cancel
-    # it the same way it cancels a send run.
-    try:
-        from chat.wait_handles import resume as wait_resume
-        resume_task = wait_resume.get_active_resume(conv_id)
-    except Exception:
-        resume_task = None
-    if resume_task is not None:
-        resume_task.cancel()
+    # FE shows the same stop button while it streams, so stop cancels it
+    # the same way it cancels a send run.
+    cancel_conversation_runs(conv_id)
 
     try:
         await cancel_pending_wait_handles_for_conversation(
