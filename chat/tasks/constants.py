@@ -125,3 +125,11 @@ def tasks_disabled_message() -> str:
         "Quest Tasks is not enabled for this user. An admin can enable it "
         "in Settings > Features."
     )
+
+
+# --- Run log read tools (list_task_runs, read_task_run) --------------------
+
+# Entries per list_task_runs page, newest first; the tool pages the whole log
+# with ``offset``. An entry is one short line's worth (seq, date, status,
+# summary), so a page stays small.
+TASK_RUN_LIST_PAGE_SIZE = 50

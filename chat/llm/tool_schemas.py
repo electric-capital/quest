@@ -30,10 +30,12 @@ from chat.tasks.constants import (
     TASK_BRIEF_MAX_CHARS,
     TASK_QUESTION_MAX_CHARS,
     TASK_QUESTION_MAX_OPTIONS,
+    TASK_RUN_LIST_PAGE_SIZE,
     TASK_RUN_NOTES_MAX_CHARS,
     TASK_RUN_RESULT_MAX_CHARS,
     TASK_RUN_SUMMARY_MAX_CHARS,
     TASK_TITLE_MAX_CHARS,
+    TASKS_SERVICE_KEY,
 )
 from chat.llm.base import ToolSpec
 from chat.workspace_hints import PROJECT_COPY_FIRST_SENTENCE
@@ -1606,6 +1608,74 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                 },
             },
             "required": ["src", "dest"],
+        },
+    },
+    # The run log of the Quest Task this conversation is a task run of
+    # (spec 00012 section 6.2; chat/gemini_api/tool_handlers/task_runs.py).
+    # Listed only in task runs and their sub-agents (TASK_ONLY_TOOL_CALL_TOOLS
+    # below keeps them out of every other prompt) and gated on the ``tasks``
+    # pseudo-key; outside a task run the handlers refuse with not_task_run.
+    # Reads of the caller's own task only, so not mutating.
+    "list_task_runs": {
+        "name": "list_task_runs",
+        "description": (
+            "List the task runs of this Quest Task, newest first, "
+            f"{TASK_RUN_LIST_PAGE_SIZE} per page: the whole log, including "
+            "the runs the task context in your prompt shows only as index "
+            "lines or leaves out. Each entry has the run number ('run', the "
+            "#N of the task context), date, status ('running', 'waiting', "
+            "'completed', 'failed' or 'stopped') and one-line summary; a run "
+            "without a summary shows the start of its prompt instead, a run "
+            "that ended without a handoff is marked handoff_missing, and a "
+            "run still in progress (yours is marked current) has no summary "
+            "yet. Returns {runs, offset, next_offset, total}; pass "
+            "next_offset as offset for the next page (null on the last). "
+            "Use read_task_run for one run's full result and notes."
+        ),
+        "requires_service": TASKS_SERVICE_KEY,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "offset": {
+                    "type": "integer",
+                    "description": "How many of the newest runs to skip (default 0): the next_offset of the previous page",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'List earlier task runs'.",
+                },
+            },
+            "required": [],
+        },
+    },
+    "read_task_run": {
+        "name": "read_task_run",
+        "description": (
+            "Read one task run of this Quest Task by its run number (the #N "
+            "of the task context or list_task_runs): its prompt (the user's "
+            "message), status, start and finish times, summary, result (the "
+            "answer the user was shown, which the task context leaves out), "
+            "notes (that run's handoff to later runs), handoff_missing, "
+            "error (a failed run) and the questions it asked the user with "
+            "their answers. A run still in progress (yours is marked "
+            "current) has no summary, result or notes yet. Only runs of "
+            "this Quest Task can be read; a number with no run (never used, "
+            "or its entry was deleted) returns run_not_found."
+        ),
+        "requires_service": TASKS_SERVICE_KEY,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "run": {
+                    "type": "integer",
+                    "description": "The task run number N (as in #N), 1 or more",
+                },
+                "intent_message": {
+                    "type": "string",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Read task run #3'.",
+                },
+            },
+            "required": ["run"],
         },
     },
     "authed_get": {
@@ -4278,7 +4348,9 @@ MUTATING_PROXY_PATHS: frozenset[str] = frozenset({
 # conversation they could only reach chat://, which the four
 # *_workspace_file tools already cover). Every prompt builder
 # that offers dynamic tools excludes these when the conversation has no
-# project (chat/gemini_api/system_prompt.py), and the prompts of standalone
+# project (chat/gemini_api/system_prompt.py) -- except that a task run of a
+# Quest Task keeps the five file tools (SCHEME_FILE_TOOLS below) over
+# chat:// and task:// -- and the prompts of standalone
 # run kinds -- cross-user subagents and inference-API runs -- exclude them
 # always. The handlers refuse with a structured error when there is no
 # project_id for ``proj://`` paths (no_project), so a hallucinated call is
@@ -4295,6 +4367,33 @@ PROJECT_ONLY_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
     "write_file",
     "edit_file",
     "copy_file",
+})
+
+# The five scheme-qualified file tools (a subset of
+# PROJECT_ONLY_TOOL_CALL_TOOLS). A task run of a Quest Task offers them too,
+# over chat:// and task:// instead of chat:// and proj:// (the handlers take
+# the spaces from the conversation, chat/gemini_api/tool_handlers/
+# file_paths.py), while the rest of the project-only tools stay out of it.
+SCHEME_FILE_TOOLS: frozenset[str] = frozenset({
+    "list_files",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "copy_file",
+})
+assert SCHEME_FILE_TOOLS <= PROJECT_ONLY_TOOL_CALL_TOOLS
+
+# Dynamic tools that exist only in task runs of a Quest Task (and their
+# sub-agents): the run log reads. The twin of PROJECT_ONLY_TOOL_CALL_TOOLS:
+# every prompt builder excludes these unless it builds a task run's prompt
+# (chat/gemini_api/system_prompt.py), even for a user with the ``tasks``
+# gate open, where their ``requires_service`` alone would show them. The
+# handlers refuse outside a task run (not_task_run), so a hallucinated call
+# is harmless. Never in PUBLIC_TOOL_CALL_ALLOWLIST (a task run is never
+# public); in SCRIPT_TOOL_CALL_ALLOWLIST (a task run's scripts read its log).
+TASK_ONLY_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
+    "list_task_runs",
+    "read_task_run",
 })
 
 # The four conversation-workspace tools, hidden from every prompt of a
@@ -4604,6 +4703,9 @@ CORE_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
     "write_file",
     "edit_file",
     "copy_file",
+    # Task runs only (TASK_ONLY_TOOL_CALL_TOOLS); the ## Task section names
+    # them, so they are documented in full there (spec 00012 default 20).
+    *TASK_ONLY_TOOL_CALL_TOOLS,
 })
 
 # The system skill documenting each built-in tool that is not core.
@@ -4679,6 +4781,118 @@ def _stamp_prompt_tiers() -> None:
 
 
 _stamp_prompt_tiers()
+
+
+def _task_run_file_tool_specs() -> dict[str, ToolSpec]:
+    """Task-run wording of the five scheme-qualified file tools.
+
+    Same names, parameters and handlers as the registry entries; only the
+    descriptions say ``chat://`` (this task run's own workspace) and
+    ``task://`` (the task workspace shared by every task run of the Quest
+    Task) instead of ``chat://`` and ``proj://``. The registry entries stay
+    as they are, so project prompts are unchanged.
+    """
+    specs = {name: copy.deepcopy(TOOL_CALL_REGISTRY[name]) for name in sorted(SCHEME_FILE_TOOLS)}
+    texts = {
+        "list_files": (
+            "List the files in one of this task run's two file spaces: "
+            "'chat://' is this task run's own workspace (mounted at /workspace "
+            "in scripts), 'task://' is the task workspace shared by every task "
+            "run of this Quest Task (mounted at /task). Pass 'chat://' or "
+            "'task://' for the whole space, or a directory such as "
+            "'task://reports' for that subtree only. Returns an object "
+            "{file_count, files} with each file's path, size and modification "
+            "time; the paths are relative to the space root (listing "
+            "'task://reports' returns 'reports/q3.md'), so prefix them with the "
+            "scheme ('task://reports/q3.md') to pass them to the other file "
+            "tools. Use this to discover files before reading them.",
+            {
+                "path": "Scheme-qualified directory: 'chat://' or 'task://' for a whole space, or e.g. 'chat://data', 'task://reports'. The scheme is required.",
+            },
+        ),
+        "read_file": (
+            "Retrieve a file from this task run's workspace ('chat://...') or "
+            "the task workspace ('task://...'). For small text files (under "
+            "100KB), returns the file contents directly. For large or binary "
+            "files, makes the file available for you to analyze directly in this "
+            "response. Very large files (over the per-model attachment limit) "
+            "cannot be attached and return an error suggesting how to split or "
+            "reduce them with run_python first (the spaces are at /workspace and "
+            "/task there). Do not use it for Office documents (.docx/.xlsx/"
+            ".pptx): extract them with run_python. Use list_files first to see "
+            "available files.",
+            {
+                "path": "Scheme-qualified file path, e.g. 'chat://report.pdf', 'task://data/input.csv'. Use paths from list_files.",
+            },
+        ),
+        "write_file": (
+            "Write or create a text file in this task run's workspace "
+            "('chat://...') or the task workspace ('task://...'). Drafts, "
+            "intermediate data, scripts and scratch output go to 'chat://'; "
+            "write to 'task://' only for durable files that later task runs of "
+            "this Quest Task should find, or when the user asks. Overwrites an "
+            "existing file; parent directories are created automatically. "
+            "Maximum file size is 1MB. To promote an existing file (including "
+            "binary files) from 'chat://' to 'task://', use copy_file instead.",
+            {
+                "path": "Scheme-qualified file path, e.g. 'chat://src/main.py', 'task://reports/q3.md'. Parent directories are created automatically.",
+            },
+        ),
+        "edit_file": (
+            "Perform an exact string replacement in a text file in this task "
+            "run's workspace ('chat://...') or the task workspace "
+            "('task://...'). old_string must match the file contents exactly "
+            "(including whitespace and indentation) and must appear exactly once "
+            "in the file unless replace_all is true. You must have read the file "
+            "with read_file (or written it with write_file) earlier in this "
+            "task run before editing it -- a read in an earlier task run does "
+            "not count; for a chat:// file, a get_workspace_file / "
+            "write_workspace_file read counts too. Prefer this over rewriting "
+            "the whole file with write_file when making small changes. Text "
+            "files only.",
+            {
+                "path": "Scheme-qualified file path, e.g. 'chat://report.md', 'task://notes/plan.md'. The file must already exist.",
+            },
+        ),
+        "copy_file": (
+            "Copy a file or directory between or within this task run's "
+            "workspace ('chat://...') and the task workspace ('task://...'). "
+            "Use 'chat://' -> 'task://' to promote durable files that later "
+            "task runs of this Quest Task should find (or when the user asks), "
+            "and 'task://' -> 'chat://' to bring a task file into this task "
+            "run: attachments, inline images, run_script and every other tool "
+            "that takes a plain file path read this task run's workspace only. "
+            "Parent directories are created. An existing destination is an "
+            "error (destination_exists, nothing written) unless overwrite is "
+            "true; with overwrite a file replaces a file and a directory "
+            "merges entry by entry. A destination equal to the source, inside "
+            "it, or containing it is refused (invalid_destination). A symlink "
+            "or special file named as the source is refused (not_a_regular_file). "
+            "When copying a directory, symlinks, special files and (unless "
+            "include_hidden is true) hidden dot-prefixed entries are skipped and "
+            "counted in the result's 'skipped'. This task run's "
+            "'.responses/', '.subagent_responses/' and 'pasted/' (chat://) "
+            "cannot be copied to task://.",
+            {
+                "src": "Scheme-qualified source (a file or a directory), e.g. 'chat://out/report.pdf' or 'task://data'. Use paths from list_files.",
+                "dest": "Scheme-qualified destination path, e.g. 'task://reports/report.pdf' or 'chat://data'. Required; give the full destination path, not just a directory to copy into.",
+                "intent_message": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Save report to the task'.",
+            },
+        ),
+    }
+    for name, (description, params) in texts.items():
+        spec = specs[name]
+        spec["description"] = description
+        for pname, pdesc in params.items():
+            spec["parameters"]["properties"][pname]["description"] = pdesc
+    return specs
+
+
+# The five scheme-qualified file tools as a task run's prompts document them
+# (chat/gemini_api/system_prompt.py renders them in place of the registry
+# entries for a task run and its sub-agents). Prompt text only: dispatch and
+# the provider tool tiers use the registry entries.
+TASK_RUN_FILE_TOOL_SPECS: dict[str, ToolSpec] = _task_run_file_tool_specs()
 
 
 def tool_is_advertised(spec: ToolSpec, connected_services: dict[str, bool] | None) -> bool:
