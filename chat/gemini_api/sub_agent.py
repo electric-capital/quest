@@ -62,6 +62,7 @@ async def _run_sub_agent(
     workspace_notice_flags: dict[str, bool] | None = None,
     level: int = 1,
     nested_parent_id: str | None = None,
+    task_context: str = "",
 ) -> str:
     """Run a sub-agent task and return its response.
 
@@ -117,6 +118,10 @@ async def _run_sub_agent(
             1st-level ``parent_tool_id``) so the FE can render the grandchild's
             tool calls one extra indent level deep, under the nested-agent node
             rather than flat under the 1st-level agent row.
+        task_context: The read-only ``## Task`` block when the parent is a
+            task run of a Quest Task (``load_task_subagent_context``, loaded
+            by the spawn arm), placed in the sub-agent's system prompt;
+            ``""`` otherwise. Passed through to a nested sub-agent unchanged.
 
     Returns:
         The sub-agent's response string.
@@ -214,6 +219,7 @@ async def _run_sub_agent(
         # PUBLIC_TOOLS tier and hard-rejected in public runs via
         # _PUBLIC_BLOCKED_LOOP_TOOLS (turn_tools.py).
         connected_accounts=build_connected_accounts_paragraph(user),
+        task_context=task_context,
     )
 
     # Choose the tool tier: only a 1st-level sub-agent with the flag on gets the
@@ -490,6 +496,7 @@ async def _run_sub_agent(
                                 workspace_notice_flags=workspace_notice_flags,
                                 level=2,
                                 nested_parent_id=nested_agent_id,
+                                task_context=task_context,
                             )
                         except Exception as e:
                             logger.exception(
@@ -672,6 +679,7 @@ async def _run_parallel_sub_agents(
     parent_tool_id: str | None = None,
     nested_enabled: bool = False,
     workspace_notice_flags: dict[str, bool] | None = None,
+    task_context: str = "",
 ) -> str:
     """Run multiple sub-agent tasks in parallel and return combined results.
 
@@ -693,8 +701,10 @@ async def _run_parallel_sub_agents(
         tasks: List of task specification dicts, each with 'id', 'name',
                'prompt', 'description', and optional 'model'.
         project_id: Optional project UUID (the parent's), passed to every
-            sub-agent (see ``_run_sub_agent``), as is
-            ``workspace_notice_flags``.
+            sub-agent (see ``_run_sub_agent``), as are
+            ``workspace_notice_flags`` and ``task_context`` (the read-only
+            ``## Task`` block of a task run's sub-agents, loaded once for
+            the whole batch).
         project_guide: Optional project-specific instructions.
         usage_accumulator: Optional dict to accumulate usage.
 
@@ -793,6 +803,7 @@ async def _run_parallel_sub_agents(
                 nested_enabled=nested_enabled,
                 workspace_notice_flags=workspace_notice_flags,
                 level=1,
+                task_context=task_context,
             )
             return task_id, {
                 "status": "success",
@@ -864,6 +875,7 @@ async def _run_parallel_sub_agents_template(
     parent_tool_id: str | None = None,
     nested_enabled: bool = False,
     workspace_notice_flags: dict[str, bool] | None = None,
+    task_context: str = "",
 ) -> str:
     """Run template-based parallel sub-agents and return combined results.
 
@@ -889,6 +901,8 @@ async def _run_parallel_sub_agents_template(
         usage_accumulator: Optional dict to accumulate usage.
         on_event: Optional event callback.
         parent_tool_id: Optional parent tool ID for event tracking.
+        task_context: The read-only ``## Task`` block of a task run's
+            sub-agents (``""`` otherwise), passed to every agent.
 
     Returns:
         JSON string with results keyed by agent name.
@@ -963,4 +977,5 @@ async def _run_parallel_sub_agents_template(
         parent_tool_id=parent_tool_id,
         nested_enabled=nested_enabled,
         workspace_notice_flags=workspace_notice_flags,
+        task_context=task_context,
     )

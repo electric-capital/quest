@@ -67,6 +67,14 @@ REQUEST_SERVICE_CONNECTION_KEY = "tool_call:request_service_connection"
 ROUTINE_COMPLETED_KEY = "routine_completed"
 ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY = "tool_call:routine_completed"
 
+# The two loop tools of a task run of a Quest Task (TASK_RUN_TOOLS). Like
+# routine_completed they have their own top-level schemas and are accepted
+# through ``tool_call`` too, since weaker models route loop tools that way.
+COMPLETE_TASK_RUN_KEY = "complete_task_run"
+COMPLETE_TASK_RUN_VIA_TOOL_CALL_KEY = "tool_call:complete_task_run"
+ASK_TASK_QUESTION_KEY = "ask_task_question"
+ASK_TASK_QUESTION_VIA_TOOL_CALL_KEY = "tool_call:ask_task_question"
+
 # Loop-handled tool arms hard-rejected in public-project conversations
 # (defense in depth beside the trimmed PUBLIC_TOOLS schema): sub-agent
 # spawners, wait_for_handles, and the origin-specific finish/reply tools.
@@ -76,7 +84,9 @@ ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY = "tool_call:routine_completed"
 # and routine runs in public projects need it (PUBLIC_ROUTINE_TOOLS).
 # ``create_action_request`` is absent too: its arm admits only the
 # public-safe request types there (PUBLIC_ACTION_REQUEST_TYPES, the Quest
-# Docs and Quest Tables cards) and rejects every other type itself.
+# Docs and Quest Tables cards) and rejects every other type itself. The
+# task-run tools are listed although a task run is never public (its
+# arms also refuse outside a task run): defense in depth.
 _PUBLIC_BLOCKED_LOOP_TOOLS = frozenset({
     "agent_task",
     "agent_task_parallel",
@@ -86,6 +96,10 @@ _PUBLIC_BLOCKED_LOOP_TOOLS = frozenset({
     "return_final_response",
     WAIT_FOR_HANDLES_KEY,
     REQUEST_SERVICE_CONNECTION_KEY,
+    COMPLETE_TASK_RUN_KEY,
+    COMPLETE_TASK_RUN_VIA_TOOL_CALL_KEY,
+    ASK_TASK_QUESTION_KEY,
+    ASK_TASK_QUESTION_VIA_TOOL_CALL_KEY,
 })
 
 
@@ -292,6 +306,10 @@ def registry_key_for(tool_name: str, args: dict[str, Any]) -> str:
             return REQUEST_SERVICE_CONNECTION_KEY
         if inner == ROUTINE_COMPLETED_KEY:
             return ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY
+        if inner == COMPLETE_TASK_RUN_KEY:
+            return COMPLETE_TASK_RUN_VIA_TOOL_CALL_KEY
+        if inner == ASK_TASK_QUESTION_KEY:
+            return ASK_TASK_QUESTION_VIA_TOOL_CALL_KEY
     return tool_name
 
 
@@ -638,6 +656,25 @@ async def _open_action_request_card(
     return request_id, wait_handle_id
 
 
+async def _load_spawn_task_context(ctx: RunContext) -> str:
+    """The read-only ``## Task`` block for the sub-agents of one spawn call
+    (spec 6.4), or ``""`` outside a task run of a Quest Task.
+
+    Loaded fresh per spawn call (once for a whole parallel batch), so a
+    sub-agent sees the brief as it is now. Called inside the spawn arm's
+    runner: a store error, or a task deleted under the run, becomes the
+    spawn's tool error through :func:`_run_spawn_arm`.
+    """
+    if not ctx.task_id:
+        return ""
+    from chat.tasks.context import load_task_subagent_context
+
+    text = await load_task_subagent_context(ctx.task_id)
+    if text is None:
+        raise RuntimeError("this task run's Quest Task no longer exists")
+    return text
+
+
 async def _run_spawn_arm(
     ctx: RunContext,
     *,
@@ -736,6 +773,7 @@ async def _handle_agent_task(
         sub_provider = ctx.provider
 
     async def _runner(usage: dict) -> str:
+        task_context = await _load_spawn_task_context(ctx)
         return await _run_sub_agent(
             app=ctx.app,
             provider=sub_provider,
@@ -754,6 +792,7 @@ async def _handle_agent_task(
             nested_enabled=ctx.nested_subagents,
             workspace_notice_flags=ctx.workspace_notice_flags,
             level=1,
+            task_context=task_context,
         )
 
     return await _run_spawn_arm(
@@ -779,6 +818,7 @@ async def _handle_agent_task_parallel(
     task_names = [t.get("name", "Sub-Agent") for t in tasks_list]
 
     async def _runner(usage: dict) -> str:
+        task_context = await _load_spawn_task_context(ctx)
         return await _run_parallel_sub_agents(
             app=ctx.app,
             provider=ctx.provider,
@@ -795,6 +835,7 @@ async def _handle_agent_task_parallel(
             parent_tool_id=call.tool_id,
             nested_enabled=ctx.nested_subagents,
             workspace_notice_flags=ctx.workspace_notice_flags,
+            task_context=task_context,
         )
 
     return await _run_spawn_arm(
@@ -817,6 +858,7 @@ async def _handle_agent_task_parallel_template(
     agent_names = [a.get("name", "Sub-Agent") for a in template_agents]
 
     async def _runner(usage: dict) -> str:
+        task_context = await _load_spawn_task_context(ctx)
         return await _run_parallel_sub_agents_template(
             app=ctx.app,
             provider=ctx.provider,
@@ -834,6 +876,7 @@ async def _handle_agent_task_parallel_template(
             parent_tool_id=call.tool_id,
             nested_enabled=ctx.nested_subagents,
             workspace_notice_flags=ctx.workspace_notice_flags,
+            task_context=task_context,
         )
 
     return await _run_spawn_arm(
@@ -1054,6 +1097,61 @@ async def _handle_routine_completed(
     if isinstance(summary, str) and summary.strip():
         result["summary"] = summary.strip()
     return json.dumps(result)
+
+
+def _not_in_task_run_result(tool_name: str) -> str:
+    """The refusal for a task-run tool called outside a task run of a
+    Quest Task (``ctx.task_run_id`` is None). The run is resolved
+    server-side from the calling conversation, never from arguments."""
+    return json.dumps({
+        "error": (
+            f"{tool_name} is only available inside task runs of a "
+            "Quest Task."
+        ),
+    })
+
+
+async def _handle_complete_task_run(
+    ctx: RunContext, call: ToolCall, turn: TurnState,
+) -> str:
+    """Finish the calling task run (``complete_task_run``).
+
+    Registered under both the top-level name and the ``tool_call``-riding
+    key (:data:`COMPLETE_TASK_RUN_VIA_TOOL_CALL_KEY`).
+    """
+    if ctx.task_run_id is None:
+        return _not_in_task_run_result("complete_task_run")
+    # Placeholder: phase A5 of issue #213 replaces this with the real handler
+    # (validate and save the entry, apply the brief with
+    # expected_version=ctx.task_context_brief_version, end the run).
+    return json.dumps({
+        "error": (
+            "complete_task_run is not implemented yet: the task run's log "
+            "entry cannot be saved. End your reply with the result for the "
+            "user."
+        ),
+    })
+
+
+async def _handle_ask_task_question(
+    ctx: RunContext, call: ToolCall, turn: TurnState,
+) -> str:
+    """Ask the user a question in the task thread (``ask_task_question``).
+
+    Registered under both the top-level name and the ``tool_call``-riding
+    key (:data:`ASK_TASK_QUESTION_VIA_TOOL_CALL_KEY`).
+    """
+    if ctx.task_run_id is None:
+        return _not_in_task_run_result("ask_task_question")
+    # Placeholder: phase A6 of issue #213 replaces this with the real handler
+    # (task_question wait handle, SuspendForTaskQuestion, run -> waiting).
+    return json.dumps({
+        "error": (
+            "ask_task_question is not implemented yet: the question cannot "
+            "be posted. Proceed on your best assumption and say so in your "
+            "reply."
+        ),
+    })
 
 
 async def _enrich_params_for_preview(
@@ -1419,6 +1517,10 @@ TURN_TOOL_HANDLERS: dict[str, TurnToolHandler] = {
     "return_final_response": _handle_return_final_response,
     ROUTINE_COMPLETED_KEY: _handle_routine_completed,
     ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY: _handle_routine_completed,
+    COMPLETE_TASK_RUN_KEY: _handle_complete_task_run,
+    COMPLETE_TASK_RUN_VIA_TOOL_CALL_KEY: _handle_complete_task_run,
+    ASK_TASK_QUESTION_KEY: _handle_ask_task_question,
+    ASK_TASK_QUESTION_VIA_TOOL_CALL_KEY: _handle_ask_task_question,
     "create_action_request": _handle_create_action_request,
     WAIT_FOR_HANDLES_KEY: _handle_wait_for_handles,
     REQUEST_SERVICE_CONNECTION_KEY: _handle_request_service_connection,

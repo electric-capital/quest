@@ -546,7 +546,13 @@ async def run_conversation_turn(
             send path and the wait-handle resume. Marks a Quest Task run: the
             conversation's ``task_runs`` row is resolved up front and both ids
             reach every top-level tool call (``ToolContext.task_id`` /
-            ``task_run_id``). A task run never belongs to a project.
+            ``task_run_id``). The run's task context (frozen on the run row
+            on its first turn, chat.tasks.context.load_run_task_context)
+            becomes the system prompt's ``## Task`` section, its
+            ``brief_version`` lands on ``RunContext.task_context_brief_version``,
+            the session gets ``TASK_RUN_TOOLS``, and ``flags`` are ignored.
+            A task run never belongs to a project. Raises RuntimeError when
+            the run row or the task is missing.
 
     Returns:
         List of structured message dicts for storage.
@@ -617,7 +623,11 @@ async def run_conversation_turn(
 
         # Resolve per-conversation flags. ``nested_subagents`` lets 1st-level
         # sub-agents spawn one tier of 2nd-level sub-agents (Haiku / Flash-Lite
-        # only). NULL/empty flags mean no opt-in behaviors are active.
+        # only). NULL/empty flags mean no opt-in behaviors are active. A
+        # task run of a Quest Task takes no flags (spec 00012 section 6.1),
+        # whatever a caller passed.
+        if task_id:
+            flags = None
         from chat.conversation_flags import (
             is_flag_enabled, FLAG_NESTED_SUBAGENTS, FLAG_USER_SUBAGENTS,
         )
@@ -687,9 +697,19 @@ async def run_conversation_turn(
             project_data = await get_project(user["id"], project_id)
             if project_data:
                 resolved_project_guide = project_data.get("guide", "")
-        # A task run has no project (checked above); phase A4 of issue #213
-        # loads its task context here (chat.tasks.context.load_task_context
-        # with task_run["seq"]) for the system prompt's ## Task section.
+        # A task run has no project (checked above); in its place it gets
+        # its task context: the system prompt's ## Task section. It is
+        # frozen on the run row on the first turn, so a resume or a restart
+        # rebuilds the identical prompt with the same brief_version.
+        run_task_context = None
+        if task_run is not None:
+            from chat.tasks.context import load_run_task_context
+            run_task_context = await load_run_task_context(task_run)
+            if run_task_context is None:
+                raise RuntimeError(
+                    f"Conversation {conversation_id} is a run of task "
+                    f"{task_id}, which no longer exists"
+                )
 
         # Public-project conversations run with an internet-enabled sandbox
         # and are cut off from every internal resource (skills, memories,
@@ -918,6 +938,9 @@ async def run_conversation_turn(
                 connected_accounts=connected_accounts,
                 memories_content=memories_content,
                 project_memories_content=project_memories_content,
+                # Task runs only reach this branch: they have no project,
+                # so they are never public.
+                task_context=run_task_context.text if run_task_context else "",
             )
         ChatStorage.set_system_prompt(conversation_id, system_prompt)
         # Always load saved SDK history from disk so it's available as a
@@ -964,6 +987,11 @@ async def run_conversation_turn(
         elif is_public:
             from chat.llm.tool_schemas import PUBLIC_TOOLS
             session_tools = PUBLIC_TOOLS
+        elif task_run is not None:
+            # Task run of a Quest Task: the top-level tier plus
+            # complete_task_run and ask_task_question.
+            from chat.llm.tool_schemas import TASK_RUN_TOOLS
+            session_tools = TASK_RUN_TOOLS
         elif routine_id:
             # Routine conversation: the top-level tier plus
             # routine_completed, which the run drivers wait for.
@@ -1021,6 +1049,9 @@ async def run_conversation_turn(
             workspace_notice_flags=notice_flags,
             task_id=task_id,
             task_run_id=task_run["id"] if task_run else None,
+            task_context_brief_version=(
+                run_task_context.brief_version if run_task_context else None
+            ),
         )
 
         wrapped_message = _wrap_message_with_metadata(
