@@ -125,6 +125,20 @@ FEATURE_BROWSER = "browser"
 # Access can be restricted to specific users (PER_USER_ACCESS_FEATURES).
 FEATURE_DREAMING = "dreaming"
 
+# Quest Tasks (see spec issue #213): long-lived, user-owned units of work
+# answered by runs that each start with a fresh model context over the
+# task's instructions, brief and work log (``tasks`` / ``task_runs`` /
+# ``task_brief_versions`` in quest.db, the task workspace under
+# ``<data_dir>/tasks/<id>/workspace`` resolved only via
+# ``ChatStorage.get_task_dir``). Closed for a user = the task tools and the
+# system skill are hidden from the prompt (connected-services pseudo-key
+# "tasks"), the /app/api/tasks routes 403 ``tasks_disabled``, starting a run
+# is refused on the send path and the sidebar section is hidden. A waiting
+# run can still be stopped. Nothing is deleted: reopening the gate restores
+# everything. Access can be restricted to specific users
+# (PER_USER_ACCESS_FEATURES).
+FEATURE_TASKS = "tasks"
+
 # All admin-gateable features. Extend this tuple (and FEATURE_LABELS) when a
 # new optional feature gets a gate. Every feature is off until an admin
 # enables it.
@@ -136,6 +150,7 @@ KNOWN_FEATURES = (
     FEATURE_TABLES,
     FEATURE_BROWSER,
     FEATURE_DREAMING,
+    FEATURE_TASKS,
 )
 
 # Features whose gate can be narrowed to specific users via
@@ -149,6 +164,7 @@ PER_USER_ACCESS_FEATURES = frozenset({
     FEATURE_TABLES,
     FEATURE_BROWSER,
     FEATURE_DREAMING,
+    FEATURE_TASKS,
 })
 
 # Gates that depend on another gate: ``{feature: required feature}``. A
@@ -244,6 +260,18 @@ FEATURE_LABELS: dict[str, dict[str, str]] = {
             "all users or only to specific users."
         ),
     },
+    FEATURE_TASKS: {
+        "label": "Tasks",
+        "description": (
+            "Lets users keep long-lived tasks they prompt into again and "
+            "again. Each prompt is answered by a run that starts with a "
+            "fresh context and inherits only the task's instructions, a "
+            "brief the model keeps current, a log of earlier runs and the "
+            "task's shared files. Access can be granted to all users or "
+            "only to specific users. Turning it off hides tasks; nothing is "
+            "deleted."
+        ),
+    },
 }
 
 
@@ -298,6 +326,16 @@ def browser_enabled_for(user_email: str) -> bool:
     prompt).
     """
     return is_feature_enabled_for_user(FEATURE_BROWSER, user_email)
+
+
+def tasks_enabled_for(user_email: str) -> bool:
+    """Whether Quest Tasks is on for this user.
+
+    Convenience wrapper over :func:`is_feature_enabled_for_user` for the
+    task enforcement points (the task routes, the run send path, the task
+    tools and system skill via the connected-services prompt gating).
+    """
+    return is_feature_enabled_for_user(FEATURE_TASKS, user_email)
 
 
 def _normalize_email(email: str) -> str:

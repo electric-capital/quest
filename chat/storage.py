@@ -44,7 +44,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, List, Dict, Optional, TypeVar
 
-from config.paths import CHATS_DIR, DOCS_DIR, PROJECTS_DIR, TABLES_DIR
+from config.paths import CHATS_DIR, DOCS_DIR, PROJECTS_DIR, TABLES_DIR, TASKS_DIR
 
 if TYPE_CHECKING:
     from chat.docs.notes import NotesSeen
@@ -293,13 +293,13 @@ async def run_to_completion(awaitable: Awaitable[_T]) -> _T:
 
 
 class InvalidStorageIdError(ValueError):
-    """A conversation, project, doc or table id cannot be turned into an on-disk path.
+    """A conversation, project, doc, table or task id cannot be turned into an on-disk path.
 
     Raised by the central path resolvers on ``ChatStorage`` for ids that are
     not a single canonical path segment (empty, ``.``, ``..``, containing a
     separator, absolute) or whose resolved directory would not live under
-    ``CHATS_DIR`` / ``PROJECTS_DIR`` / ``DOCS_DIR`` / ``TABLES_DIR`` (e.g. a
-    planted symlink). Subclasses ``ValueError`` so callers that already treat
+    ``CHATS_DIR`` / ``PROJECTS_DIR`` / ``DOCS_DIR`` / ``TABLES_DIR`` /
+    ``TASKS_DIR`` (e.g. a planted symlink). Subclasses ``ValueError`` so callers that already treat
     a bad id as a cache miss or a 4xx keep working.
     """
 
@@ -363,11 +363,12 @@ class ChatStorage:
     Ownership is authoritative in the conversations SQLite table.
 
     ``get_conversation_dir`` / ``get_project_dir`` / ``get_doc_dir`` /
-    ``get_table_dir`` (and the helpers built on them) are the ONLY places that
-    turn an id into a filesystem path. They validate the id and
-    containment-check the result, so every caller is safe by construction;
-    production code must not join ``CHATS_DIR`` / ``PROJECTS_DIR`` /
-    ``DOCS_DIR`` / ``TABLES_DIR`` with an id itself. Ownership is
+    ``get_table_dir`` / ``get_task_dir`` (and the helpers built on them) are
+    the ONLY places that turn an id into a filesystem path. They validate the
+    id and containment-check the result, so every caller is safe by
+    construction; production code must not join ``CHATS_DIR`` /
+    ``PROJECTS_DIR`` / ``DOCS_DIR`` / ``TABLES_DIR`` / ``TASKS_DIR`` with an
+    id itself. Ownership is
     deliberately NOT checked here -- schedulers, migrations and cross-user subagents resolve
     paths without a "current user"; HTTP routes go through
     ``chat.conversation_access`` which adds the DB ownership lookup.
@@ -472,6 +473,38 @@ class ChatStorage:
         """
         _validate_id_segment(table_id, "table")
         return _resolve_contained_dir(TABLES_DIR, table_id)
+
+    @staticmethod
+    def get_task_dir(task_id: str) -> Path:
+        """Return ``TASKS_DIR / task_id`` for a canonical, contained id.
+
+        The sole id-to-path resolver for Quest Tasks; the task workspace
+        lives under it (:meth:`get_task_workspace_root`). The directory is
+        NOT created here.
+
+        Raises:
+            InvalidStorageIdError: non-canonical id or path outside TASKS_DIR.
+        """
+        _validate_id_segment(task_id, "task")
+        return _resolve_contained_dir(TASKS_DIR, task_id)
+
+    @staticmethod
+    def get_task_workspace_root(task_id: str) -> Path:
+        """Return the task workspace root ``TASKS_DIR / id / "workspace"``.
+
+        The browsable root shared by every run of the task (``task://`` for
+        the file tools, ``/task`` in the sandbox). Inherits the canonical-id
+        and containment checks of :meth:`get_task_dir` and additionally
+        refuses a ``workspace`` entry that resolves outside this task's own
+        dir (a planted symlink, incl. one into another task). The directory
+        is NOT created here.
+
+        Raises:
+            InvalidStorageIdError: non-canonical id or path outside the task
+            dir.
+        """
+        task_dir = ChatStorage.get_task_dir(task_id)
+        return _check_contained(task_dir, task_dir / "workspace")
 
     @staticmethod
     def _get_chat_history_file(conversation_id: str) -> Path:

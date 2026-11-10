@@ -21,9 +21,10 @@ from chat.browser_sessions import BROWSER_SERVICE_KEY
 from chat.docs.constants import DOC_NOTES_SERVICE_KEY, DOCS_SERVICE_KEY
 from chat.project_db import PROJECT_DB_SERVICE_KEY
 from chat.tables.constants import TABLES_SERVICE_KEY
+from chat.tasks.constants import TASKS_SERVICE_KEY
 from config.feature_gates import (
     browser_enabled_for, doc_notes_enabled_for, docs_enabled_for,
-    tables_enabled_for,
+    tables_enabled_for, tasks_enabled_for,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 # must skip them.
 PSEUDO_SERVICE_KEYS = frozenset({
     DOCS_SERVICE_KEY, DOC_NOTES_SERVICE_KEY, TABLES_SERVICE_KEY,
-    BROWSER_SERVICE_KEY, PROJECT_DB_SERVICE_KEY,
+    BROWSER_SERVICE_KEY, PROJECT_DB_SERVICE_KEY, TASKS_SERVICE_KEY,
 })
 
 
@@ -55,10 +56,10 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
     visible after an admin disables the plugin's service server-side.
 
     The map also carries capability pseudo-keys (:data:`PSEUDO_SERVICE_KEYS`:
-    ``"docs"``, ``"doc_notes"`` and ``"tables"`` for the Quest Docs, Quest
-    Doc notes and Quest Tables feature gates, ``"browser"`` and
-    ``"project_db"``) that gate tools and skills the same way but are not
-    connections.
+    ``"docs"``, ``"doc_notes"``, ``"tables"`` and ``"tasks"`` for the Quest
+    Docs, Quest Doc notes, Quest Tables and Quest Tasks feature gates,
+    ``"browser"`` and ``"project_db"``) that gate tools and skills the same
+    way but are not connections.
     A plugin with neither a credential schema nor a user connection (a free public API, e.g.
     ``sec_edgar``) is always true here; GET /me's aggregate skips those
     ids via :func:`config.plugins.connectionless_plugin_ids`.
@@ -119,6 +120,10 @@ def get_user_connected_services(user: dict) -> dict[str, bool]:
     services[DOCS_SERVICE_KEY] = docs_enabled_for(email)
     services[DOC_NOTES_SERVICE_KEY] = doc_notes_enabled_for(email)
     services[TABLES_SERVICE_KEY] = tables_enabled_for(email)
+    # The task tools and the system:tasks skill (requires_service /
+    # requires "tasks"). The gate alone decides the key; the task-only
+    # tools are additionally listed only inside a task run.
+    services[TASKS_SERVICE_KEY] = tasks_enabled_for(email)
     # The browser tools exist for public projects only; their specs are
     # gated on this key so the regular prompts, which never carry a
     # public conversation, never advertise them. The public prompt takes
@@ -148,6 +153,8 @@ def get_public_connected_services(user: dict) -> dict[str, bool]:
         TABLES_SERVICE_KEY: tables_enabled_for(email),
         BROWSER_SERVICE_KEY: browser_enabled_for(email),
         PROJECT_DB_SERVICE_KEY: False,
+        # Tasks are private only: a public conversation is never a task run.
+        TASKS_SERVICE_KEY: False,
     }
 
 
