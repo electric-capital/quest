@@ -39,6 +39,7 @@ import uuid
 
 from sqlalchemy import delete, func, literal, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import defer
 
 from chat.tasks.constants import (
     MAX_ACTIVE_TASKS_PER_USER,
@@ -68,9 +69,10 @@ DEFAULT_TASK_TITLE = "Untitled task"
 _MODEL_MAX_CHARS = 100
 _THINKING_EFFORT_MAX_CHARS = 20
 
-# Page size bounds: the thread page (list_runs_page) and the offset listing
-# (list_runs; the context builder reads the window and the index, about
-# TASK_LOG_WINDOW_MAX_ENTRIES + TASK_LOG_INDEX_MAX_ENTRIES rows, in one call).
+# Page size bounds: the thread page (list_runs_page) and the plain listings
+# (list_runs, and list_context_runs, from which the context builder reads
+# the window and the index, about TASK_LOG_WINDOW_MAX_ENTRIES +
+# TASK_LOG_INDEX_MAX_ENTRIES rows, in one call).
 _RUNS_PAGE_MAX_LIMIT = 100
 _LIST_RUNS_MAX_LIMIT = 500
 
@@ -488,7 +490,7 @@ def _task_to_dict(task: Task) -> dict:
     }
 
 
-def _run_to_dict(run: TaskRun) -> dict:
+def _run_to_dict(run: TaskRun, *, include_result: bool = True) -> dict:
     """Convert a TaskRun ORM instance to the run dict.
 
     Shape::
@@ -497,8 +499,11 @@ def _run_to_dict(run: TaskRun) -> dict:
          "summary", "result", "notes",          # None until completed
          "handoff_missing", "error", "model",
          "started_at", "finished_at"}           # ISO strings
+
+    With ``include_result=False`` the ``result`` key is left out and the
+    attribute is never read (for rows loaded with ``result`` deferred).
     """
-    return {
+    row = {
         "id": run.id,
         "task_id": run.task_id,
         "seq": run.seq,
@@ -506,14 +511,18 @@ def _run_to_dict(run: TaskRun) -> dict:
         "prompt": run.prompt,
         "status": run.status,
         "summary": run.summary,
-        "result": run.result,
+    }
+    if include_result:
+        row["result"] = run.result
+    row.update({
         "notes": run.notes,
         "handoff_missing": bool(run.handoff_missing),
         "error": run.error,
         "model": run.model,
         "started_at": _iso(run.started_at),
         "finished_at": _iso(run.finished_at),
-    }
+    })
+    return row
 
 
 def _active_run_summary(run: TaskRun) -> dict:
@@ -1219,8 +1228,8 @@ async def list_runs_page(
 
 async def list_runs(task_id: str, *, offset: int = 0, limit: int = 50) -> list[dict]:
     """The task's runs newest first, offset-paged (``limit`` clamped to
-    1..500). For the context builder's window and index and the
-    ``list_task_runs`` tool."""
+    1..500), results included. For the ``list_task_runs`` tool; the
+    context builder uses :func:`list_context_runs`."""
     offset = max(0, int(offset))
     limit = max(1, min(int(limit), _LIST_RUNS_MAX_LIMIT))
     async with AsyncSessionLocal() as db:
@@ -1234,12 +1243,36 @@ async def list_runs(task_id: str, *, offset: int = 0, limit: int = 50) -> list[d
         return [_run_to_dict(r) for r in runs]
 
 
-async def count_runs(task_id: str) -> int:
-    """How many runs the task has (deleted runs not counted)."""
+async def list_context_runs(task_id: str, *, before_seq: int, limit: int) -> list[dict]:
+    """The runs the task context of run ``before_seq`` shows: ``seq <
+    before_seq``, newest first, at most ``limit`` (clamped to 1..500).
+
+    The ``result`` column (up to ``TASK_RUN_RESULT_MAX_CHARS`` each) is
+    never loaded: each row is the run dict without its ``result`` key. The
+    context builder (chat/tasks/context.py) reads no result, so loading the
+    window and the index costs no more than their prompts, summaries and
+    notes.
+    """
+    limit = max(1, min(int(limit), _LIST_RUNS_MAX_LIMIT))
     async with AsyncSessionLocal() as db:
-        return (await db.execute(
-            select(func.count()).select_from(TaskRun).where(TaskRun.task_id == task_id)
-        )).scalar_one()
+        runs = (await db.execute(
+            select(TaskRun)
+            .options(defer(TaskRun.result, raiseload=True))
+            .where(TaskRun.task_id == task_id, TaskRun.seq < int(before_seq))
+            .order_by(TaskRun.seq.desc())
+            .limit(limit)
+        )).scalars().all()
+        return [_run_to_dict(r, include_result=False) for r in runs]
+
+
+async def count_runs(task_id: str, *, before_seq: Optional[int] = None) -> int:
+    """How many runs the task has (deleted runs not counted); with
+    ``before_seq``, only those with ``seq < before_seq``."""
+    stmt = select(func.count()).select_from(TaskRun).where(TaskRun.task_id == task_id)
+    if before_seq is not None:
+        stmt = stmt.where(TaskRun.seq < int(before_seq))
+    async with AsyncSessionLocal() as db:
+        return (await db.execute(stmt)).scalar_one()
 
 
 async def fail_interrupted_runs(error: str = "interrupted by a restart") -> list[dict]:
