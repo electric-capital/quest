@@ -330,6 +330,7 @@ async def _run_resume(
         model = (meta or {}).get("model")
         project_id = (meta or {}).get("project_id")
         routine_id = (meta or {}).get("routine_id")
+        task_id = (meta or {}).get("task_id")
         origin = (meta or {}).get("origin") or "web"
 
         if origin == "slack":
@@ -429,6 +430,7 @@ async def _run_resume(
                     exc_info=True,
                 )
 
+        # A5 seam (issue #213): a task run's resume turn is wrapped in chat.tasks.runs.drive_task_run() here (spec 6.3).
         await run_conversation_turn(
             app=app,
             user=user,
@@ -443,6 +445,7 @@ async def _run_resume(
             origin=origin,
             slack_context=slack_context,
             flags=resumed_flags or None,
+            task_id=task_id,
         )
         # Detect a slack_reply suspend by inspecting the saved transcript:
         # run_conversation_turn converts SuspendForSlackReply into a normal return,

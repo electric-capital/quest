@@ -78,3 +78,9 @@ class RunContext:
     # start and handed to sub-agent spawns for their prompts. Empty for a
     # standalone conversation. Treat as read-only.
     workspace_notice_flags: dict[str, bool] = field(default_factory=dict)
+
+    # Quest Task run linkage (conversations.task_id set, origin="task"):
+    # the task id and the conversation's task_runs row id. None for every
+    # other conversation.
+    task_id: str | None = None
+    task_run_id: str | None = None
