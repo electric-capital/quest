@@ -622,6 +622,7 @@ async def _tool_list_skills(ctx: ToolContext, args: dict) -> str:
         ctx.user["id"],
         connected_services=_get_connected_services(ctx),
         has_project=bool(ctx.project_id),
+        is_task_run=ctx.is_task_run,
     )
 
 
@@ -630,6 +631,7 @@ async def _tool_search_skills(ctx: ToolContext, args: dict) -> str:
         ctx.user["id"], args.get("keyword", ""),
         connected_services=_get_connected_services(ctx),
         has_project=bool(ctx.project_id),
+        is_task_run=ctx.is_task_run,
     )
 
 
@@ -650,6 +652,7 @@ async def _tool_load_skills(ctx: ToolContext, args: dict) -> str:
         api_key=ctx.user.get("api_key", ""),
         conversation_id=ctx.conversation_id,
         user=ctx.user,
+        is_task_run=ctx.is_task_run,
     )
 
 

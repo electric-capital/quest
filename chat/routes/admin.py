@@ -836,7 +836,9 @@ async def admin_skills_report(
     from chat.system_skills.loader import list_system_skills
     system_names = {
         skill.id: skill.name
-        for skill in list_system_skills(connected_services=None, has_project=True)
+        for skill in list_system_skills(
+            connected_services=None, has_project=True, is_task_run=True,
+        )
         if skill.id in seen_ids
     }
     routine_conversations = {

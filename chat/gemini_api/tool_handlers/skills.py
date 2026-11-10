@@ -46,18 +46,21 @@ async def _handle_list_skills(
     user_id: int,
     connected_services: dict[str, bool] | None = None,
     has_project: bool = False,
+    is_task_run: bool = False,
 ) -> str:
     """List all skills accessible to the current user.
 
     Includes both DB-backed user/shared/public skills AND hardcoded
-    ``system:*`` skills (gated by ``connected_services`` and
-    ``has_project``). System skills appear first.
+    ``system:*`` skills (gated by ``connected_services``, ``has_project``
+    and ``is_task_run``). System skills appear first.
 
     Args:
         user_id: User's integer ID.
         connected_services: User's connected-services map (drives system
             skill gating).
         has_project: Whether this conversation belongs to a project.
+        is_task_run: Whether this conversation is a task run of a Quest
+            Task.
 
     Returns:
         JSON string with skill_count and skills array.
@@ -66,7 +69,9 @@ async def _handle_list_skills(
         from chat.system_skills import list_system_skills
         from db.skill_store import list_accessible_skills
 
-        system_skills = list_system_skills(connected_services, has_project)
+        system_skills = list_system_skills(
+            connected_services, has_project, is_task_run=is_task_run,
+        )
         db_results = await list_accessible_skills(user_id)
         skills_payload: list[dict] = [
             {
@@ -100,6 +105,7 @@ async def _handle_search_skills(
     keyword: str,
     connected_services: dict[str, bool] | None = None,
     has_project: bool = False,
+    is_task_run: bool = False,
 ) -> str:
     """Search skills by keyword against name and description.
 
@@ -112,6 +118,8 @@ async def _handle_search_skills(
         keyword: Search term for substring matching (case-insensitive).
         connected_services: User's connected-services map.
         has_project: Whether this conversation belongs to a project.
+        is_task_run: Whether this conversation is a task run of a Quest
+            Task.
 
     Returns:
         JSON string with match_count and skills array.
@@ -125,7 +133,9 @@ async def _handle_search_skills(
 
         kw = keyword.strip().lower()
         system_matches = [
-            s for s in list_system_skills(connected_services, has_project)
+            s for s in list_system_skills(
+                connected_services, has_project, is_task_run=is_task_run,
+            )
             if kw in s.name.lower()
             or kw in s.description.lower()
             or kw in s.when_to_load.lower()
@@ -260,6 +270,7 @@ async def _handle_load_skills(
     api_key: str = "",
     conversation_id: str | None = None,
     user: dict | None = None,
+    is_task_run: bool = False,
 ) -> str:
     """Load the full content of one or more skills by ID.
 
@@ -281,6 +292,8 @@ async def _handle_load_skills(
             DB skills for the edit_skill content-edit read gate).
         user: The user dict, passed to system skill builders that take a
             ``connections`` keyword.
+        is_task_run: Whether this conversation is a task run of a Quest
+            Task (task-run-only system skills, task-run notes).
 
     Returns:
         A markdown document (plain string) describing the loaded skills.
@@ -299,7 +312,7 @@ async def _handle_load_skills(
 
         system_results = load_system_skills(
             system_ids, connected_services, base_url, api_key,
-            has_project=has_project, user=user,
+            has_project=has_project, user=user, is_task_run=is_task_run,
         ) if system_ids else []
 
         db_results = await get_accessible_skills_by_ids(user_id, db_ids) if db_ids else []
