@@ -308,29 +308,33 @@ async def _tool_edit_workspace_file(ctx: ToolContext, args: dict) -> str:
     )
 
 
-# Space-aware file tools (chat:// / proj:// paths; devplan 00009, revised
-# 2026-10-08). Offered only in project conversations; a proj:// path
-# without ctx.project_id returns a structured ``no_project`` error, a bare
-# or malformed path ``invalid_path`` -- the handlers never raise.
+# Space-aware file tools (chat:// / proj:// / task:// paths; devplan 00009,
+# revised 2026-10-08; issue #213). Offered in project conversations
+# (chat:// + proj://) and task runs (chat:// + task://, keyed off
+# ctx.task_id). A proj:// path without ctx.project_id or in a task run
+# returns a structured ``no_project`` error, a task:// path outside a task
+# run ``no_task``, a bare or malformed path ``invalid_path`` -- the handlers
+# never raise.
 
 
 async def _tool_list_files(ctx: ToolContext, args: dict) -> str:
     return await _handle_list_files(
         ctx.user["id"], ctx.conversation_id, ctx.project_id, args.get("path"),
+        task_id=ctx.task_id,
     )
 
 
 async def _tool_read_file(ctx: ToolContext, args: dict) -> tuple[str, list]:
     return await _handle_read_file(
         ctx.provider, ctx.user["id"], ctx.conversation_id, ctx.project_id,
-        args.get("path"), model=ctx.model,
+        args.get("path"), model=ctx.model, task_id=ctx.task_id,
     )
 
 
 async def _tool_write_file(ctx: ToolContext, args: dict) -> str:
     return await _handle_write_file(
         ctx.user["id"], ctx.conversation_id, ctx.project_id,
-        args.get("path"), args.get("content", ""),
+        args.get("path"), args.get("content", ""), task_id=ctx.task_id,
     )
 
 
@@ -339,6 +343,7 @@ async def _tool_edit_file(ctx: ToolContext, args: dict) -> str:
         ctx.user["id"], ctx.conversation_id, ctx.project_id,
         args.get("path"), args.get("old_string", ""), args.get("new_string", ""),
         replace_all=_as_bool(args.get("replace_all")),
+        task_id=ctx.task_id,
     )
 
 
@@ -348,7 +353,24 @@ async def _tool_copy_file(ctx: ToolContext, args: dict) -> str:
         args.get("src"), args.get("dest"),
         overwrite=_as_bool(args.get("overwrite")),
         include_hidden=_as_bool(args.get("include_hidden")),
+        task_id=ctx.task_id,
     )
+
+
+# Read tools over the calling run's own Quest Task (issue #213, spec 6.2):
+# listed only in task runs (TASK_ONLY_TOOL_CALL_TOOLS); the handlers refuse
+# a conversation without ctx.task_id. Imported lazily: the tasks modules
+# import chat.realtime, whose package init imports the socket module.
+
+
+async def _tool_list_task_runs(ctx: ToolContext, args: dict) -> str:
+    from chat.gemini_api.tool_handlers.task_runs import handle_list_task_runs
+    return await handle_list_task_runs(ctx, args)
+
+
+async def _tool_read_task_run(ctx: ToolContext, args: dict) -> str:
+    from chat.gemini_api.tool_handlers.task_runs import handle_read_task_run
+    return await handle_read_task_run(ctx, args)
 
 
 async def _tool_memory_search(ctx: ToolContext, args: dict) -> str:
@@ -664,6 +686,8 @@ async def _tool_run_script(ctx: ToolContext, args: dict) -> str:
         project_id=ctx.project_id,
         public=ctx.is_public,
         block_mutating_tools=ctx.block_mutating_tools,
+        task_id=ctx.task_id,
+        task_run_id=ctx.task_run_id,
     )
 
 
@@ -674,6 +698,8 @@ async def _tool_run_python(ctx: ToolContext, args: dict) -> str:
         project_id=ctx.project_id,
         public=ctx.is_public,
         block_mutating_tools=ctx.block_mutating_tools,
+        task_id=ctx.task_id,
+        task_run_id=ctx.task_run_id,
     )
 
 
@@ -823,6 +849,9 @@ TOOL_CALL_HANDLERS: dict[str, ToolHandler] = {
     "write_file": _tool_write_file,
     "edit_file": _tool_edit_file,
     "copy_file": _tool_copy_file,
+    # Quest Task run reads (task runs only; see TASK_ONLY_TOOL_CALL_TOOLS).
+    "list_task_runs": _tool_list_task_runs,
+    "read_task_run": _tool_read_task_run,
     "memory_search": _tool_memory_search,
     "memory_list": _tool_memory_list,
     "memory_get": _tool_memory_get,
@@ -1061,7 +1090,11 @@ async def _dispatch_tool_call(
             suggest_doc_note out (``ToolContext.is_routine``).
         task_id: The conversation's Quest Task id when it is a task run
             (``conversations.task_id``), else None. Like is_routine it does
-            not change ``run_kind``; it sets ``ToolContext.is_task_run``.
+            not change ``run_kind``; it sets ``ToolContext.is_task_run``,
+            switches the space-aware file tools to ``chat://`` +
+            ``task://`` (``proj://`` is refused), mounts the task workspace
+            at ``/task`` in the sandbox, and scopes list_task_runs /
+            read_task_run to this task.
         task_run_id: The ``task_runs`` row id of that conversation, set
             together with task_id. The run-scoped task tools act on this
             run only.
@@ -1222,15 +1255,28 @@ async def _dispatch_tool_call_inner(
             result = json.dumps({"error": "tool_call requires a 'tool_name' parameter."})
         elif inner_tool_name not in TOOL_CALL_REGISTRY:
             # List what the prompt offers: the project-only tools only in a
-            # project, the *_workspace_file tools only outside one.
+            # project, the *_workspace_file tools only outside one; a task
+            # run has the scheme file tools (not the other project-only
+            # ones) and the task-only tools, which every other
+            # conversation lacks.
             from chat.llm.tool_schemas import (
                 PROJECT_HIDDEN_WORKSPACE_TOOLS,
-                            PROJECT_ONLY_TOOL_CALL_TOOLS,
+                PROJECT_ONLY_TOOL_CALL_TOOLS,
+                SCHEME_FILE_TOOLS,
+                TASK_ONLY_TOOL_CALL_TOOLS,
             )
-            hidden = (
-                PROJECT_HIDDEN_WORKSPACE_TOOLS if project_id
-                else PROJECT_ONLY_TOOL_CALL_TOOLS
-            )
+            if task_id:
+                hidden = PROJECT_HIDDEN_WORKSPACE_TOOLS | (
+                    PROJECT_ONLY_TOOL_CALL_TOOLS - SCHEME_FILE_TOOLS
+                )
+            elif project_id:
+                hidden = (
+                    PROJECT_HIDDEN_WORKSPACE_TOOLS | TASK_ONLY_TOOL_CALL_TOOLS
+                )
+            else:
+                hidden = (
+                    PROJECT_ONLY_TOOL_CALL_TOOLS | TASK_ONLY_TOOL_CALL_TOOLS
+                )
             names = [n for n in TOOL_CALL_REGISTRY if n not in hidden]
             available = ", ".join(sorted(names))
             result = json.dumps({"error": f"Unknown tool: '{inner_tool_name}'. Available dynamic tools: {available}."})
