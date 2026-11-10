@@ -837,6 +837,8 @@ async def _handle_agent_task(
             workspace_notice_flags=ctx.workspace_notice_flags,
             level=1,
             task_context=task_context,
+            task_id=ctx.task_id,
+            task_run_id=ctx.task_run_id,
         )
 
     return await _run_spawn_arm(
@@ -880,6 +882,8 @@ async def _handle_agent_task_parallel(
             nested_enabled=ctx.nested_subagents,
             workspace_notice_flags=ctx.workspace_notice_flags,
             task_context=task_context,
+            task_id=ctx.task_id,
+            task_run_id=ctx.task_run_id,
         )
 
     return await _run_spawn_arm(
@@ -921,6 +925,8 @@ async def _handle_agent_task_parallel_template(
             nested_enabled=ctx.nested_subagents,
             workspace_notice_flags=ctx.workspace_notice_flags,
             task_context=task_context,
+            task_id=ctx.task_id,
+            task_run_id=ctx.task_run_id,
         )
 
     return await _run_spawn_arm(
