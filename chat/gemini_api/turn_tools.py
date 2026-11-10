@@ -1231,6 +1231,16 @@ async def _handle_create_action_request(
                 req_type, validated_params, ctx.user, ctx.project_id,
                 conversation_id=ctx.conversation_id,
             )
+        # archive_memory pre-card check: the memory must exist in the named
+        # scope (personal, or the conversation's project) and still be
+        # active; its text is snapshotted for the card preview.
+        if req_type == "archive_memory":
+            from chat.action_request_types.archive_memory import (
+                archive_memory_precard_check,
+            )
+            await archive_memory_precard_check(
+                validated_params, ctx.user, ctx.project_id,
+            )
         # Routine create/edit pre-card checks: project scoping, routine
         # existence, name collision, and skill access, plus preview
         # enrichment (current name, skill names, prompt content_diff) and

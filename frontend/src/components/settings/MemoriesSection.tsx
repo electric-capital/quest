@@ -28,6 +28,8 @@ interface Memory {
   created_at: string;
   updated_at: string | null;
   archived: boolean;
+  /** Why it was archived, recorded by the archive_memory action request. */
+  archive_reason?: string | null;
 }
 
 /** The store the table edits: the user's memories or one project's. */
@@ -425,6 +427,12 @@ export function MemoriesSection({ projectId }: MemoriesSectionProps = {}) {
                         <span className="memory-badge-archived">Archived</span>
                       )}
                     </div>
+                    {memory.archived && memory.archive_reason && (
+                      <div className="memory-archive-reason">
+                        <span className="memory-archive-reason-label">Reason:</span>{' '}
+                        {memory.archive_reason}
+                      </div>
+                    )}
                   </td>
                   <td className="memories-col-date" title={dateTooltip(memory)}>
                     {shortDate(memory.updated_at ?? memory.created_at)}

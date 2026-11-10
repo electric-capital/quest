@@ -52,7 +52,7 @@ Keys are written by the generic routes `POST /auth/service-key/{service}` and `P
 
 ## Memory Model
 
-The `Memory` model in `db/models.py` maps to the `memories` table. Memories are markdown text blobs associated with a user (size capped by `MAX_MEMORY_SIZE` in `db/memory_store.py`, enforced at the application layer), supporting inline editing, soft-delete via archiving, and full-text search. The columns are on the class; ids are UUIDs generated at the application layer, `updated_at` is stamped on content update, archive and unarchive, and archived rows are excluded from list/search by default.
+The `Memory` model in `db/models.py` maps to the `memories` table: markdown text blobs owned by a user (capped by `MAX_MEMORY_SIZE` in `db/memory_store.py`, app-enforced), with inline editing, soft-delete via archiving and full-text search. Ids are app-generated UUIDs; `updated_at` is stamped on content update, archive and unarchive, and archived rows are excluded from list/search by default. `archive_reason` (also on `project_memories`) is set only by the [`archive_memory` request](memory-suggestions.md#archiving-a-memory-by-request) and cleared on unarchive.
 
 The composite `(user_id, archived)` index serves the common query, listing a user's non-archived memories; `user_id` cascades on user delete.
 

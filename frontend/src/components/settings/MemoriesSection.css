@@ -185,6 +185,27 @@
   color: var(--text-secondary);
 }
 
+/* Why an archived memory was archived (set by the archive_memory action
+   request): one ellipsized line under the text, in full when expanded. */
+.memory-archive-reason {
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-row-expanded .memory-archive-reason {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-archive-reason-label {
+  font-weight: 600;
+}
+
 /* Icon actions, always visible (touch has no hover) but muted until the
    row is hovered or a button is focused. */
 .memory-row-actions {

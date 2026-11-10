@@ -92,6 +92,12 @@ async def _handle_memory_list(user_id: int) -> str:
     })
 
 
+def _archive_reason_view(m: dict) -> dict:
+    """``archive_reason`` for a get-by-id result, only when one is recorded."""
+    reason = m.get("archive_reason")
+    return {"archive_reason": reason} if reason else {}
+
+
 async def _handle_memory_get(user_id: int, ids: object) -> str:
     """Fetch memories by id (the ids the prompt's memory index shows).
 
@@ -119,6 +125,7 @@ async def _handle_memory_get(user_id: int, ids: object) -> str:
             "created_at": m["created_at"],
             "updated_at": m.get("updated_at"),
             "archived": bool(m.get("archived")),
+            **_archive_reason_view(m),
         })
     return json.dumps({"memories": found, "missing": missing})
 
@@ -231,7 +238,11 @@ async def _handle_project_memory_get(project_id: str | None, ids: object) -> str
         if m is None:
             missing.append(memory_id)
             continue
-        found.append({**_project_memory_view(m), "archived": bool(m.get("archived"))})
+        found.append({
+            **_project_memory_view(m),
+            "archived": bool(m.get("archived")),
+            **_archive_reason_view(m),
+        })
     return json.dumps({"project_memories": found, "missing": missing})
 
 

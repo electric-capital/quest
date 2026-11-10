@@ -169,4 +169,21 @@ describe('MemoriesSection with a projectId', () => {
     await waitFor(() => expect(mocks.deleteProjectMemory).toHaveBeenCalledWith('proj-1', 'pm2'));
     expect(mocks.createMemory).not.toHaveBeenCalled();
   });
+
+  it('shows why an archived memory was archived when a reason is recorded', async () => {
+    mocks.fetchMemories.mockResolvedValue({
+      memories: [
+        memory('m1', 'Reports to Dana', { archived: true, archive_reason: 'Dana left in October' }),
+        memory('m2', 'Old timezone', { archived: true, archive_reason: null }),
+        memory('m3', 'Prefers bullet points'),
+      ],
+    });
+    render(<MemoriesSection />);
+    await screen.findByText('Reports to Dana');
+    const [withReason, withoutReason, active] = rows();
+    expect(within(withReason).getByText('Dana left in October')).not.toBeNull();
+    expect(within(withReason).getByText('Reason:')).not.toBeNull();
+    expect(within(withoutReason).queryByText('Reason:')).toBeNull();
+    expect(within(active).queryByText('Reason:')).toBeNull();
+  });
 });

@@ -946,6 +946,8 @@ export interface Memory {
   created_at: string;
   updated_at: string | null;
   archived: boolean;
+  /** Why it was archived, when the ``archive_memory`` action request did it. */
+  archive_reason?: string | null;
 }
 
 /** A memory the model proposed via ``suggest_memory``, reviewed from the
@@ -1086,6 +1088,7 @@ export interface ProjectMemory {
   created_at: string;
   updated_at: string | null;
   archived: boolean;
+  archive_reason?: string | null;
 }
 
 export interface ProjectMemoriesListResponse {
