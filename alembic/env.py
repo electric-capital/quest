@@ -72,7 +72,10 @@ def include_name(name, type_, parent_names):
 # foreign_keys=ON cascades away every row referencing it. The database
 # enforces these keys (migration 7103d39f4efb), so autogenerate skips them.
 # Entries: (table, constrained columns).
-_INLINE_FKS = {("docs", ("instructions_updated_by",))}
+_INLINE_FKS = {
+    ("docs", ("instructions_updated_by",)),
+    ("conversations", ("task_id",)),  # migration 4b57cca1158c
+}
 
 
 def include_object(object_, name, type_, reflected, compare_to):
