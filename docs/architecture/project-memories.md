@@ -37,6 +37,6 @@ Every project, public ones included, keeps its own memories beside each user's p
 ## Design Decisions
 
 - **Separate tables, not a `project_id` column on `memories`.** Every personal-memory query stays untouched, so a project fact can never leak into `memory_search` of another project or a standalone chat.
-- **Suggestions only, no card.** Project memories are meant to accumulate without interrupting the conversation; the review bubble is the single consent point, also for explicit requests.
+- **Suggestions only, no card, for new memories.** Project memories are meant to accumulate without interrupting the conversation; the review bubble is the single consent point, also for explicit requests. Retiring one is the exception: the `archive_memory` action request with `scope: "project"` archives a project memory with a recorded reason behind an approval card ([Action Requests](action-requests.md)), in private projects only.
 - **Available in public projects.** A public conversation sees only its own project's memories, which nothing outside the project can read, and every write waits for the user's accept -- so no internal data reaches the internet-facing sandbox and nothing leaves the project. The user's personal memories stay unreachable there.
 - **A second bubble, not a mixed panel.** The two stores answer different questions (who the user is vs. what the project knows); separate bubbles make the destination of each accept obvious.

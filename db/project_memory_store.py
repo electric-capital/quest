@@ -90,6 +90,8 @@ async def search_project_memories(project_id: str, query: str) -> list[dict]:
                 "created_at": _iso(row.created_at),
                 "updated_at": _iso(row.updated_at),
                 "archived": bool(row.archived),
+                # Search returns active memories only.
+                "archive_reason": None,
             }
             for row in result.fetchall()
         ]
@@ -112,12 +114,16 @@ async def update_project_memory(
 
 async def set_project_memory_archived(
     project_id: str, memory_id: str, archived: bool,
+    reason: Optional[str] = None,
 ) -> Optional[dict]:
+    """Archive or unarchive a project memory. ``reason`` (why it is
+    archived) is stored on archive and always cleared on unarchive."""
     async with AsyncSessionLocal() as db:
         memory = await db.get(ProjectMemory, memory_id)
         if not memory or memory.project_id != project_id:
             return None
         memory.archived = archived
+        memory.archive_reason = reason if archived else None
         memory.updated_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(memory)
@@ -149,6 +155,7 @@ def _to_dict(memory: ProjectMemory) -> dict:
         "created_at": _iso(memory.created_at),
         "updated_at": _iso(memory.updated_at),
         "archived": memory.archived,
+        "archive_reason": memory.archive_reason,
     }
 
 

@@ -72,6 +72,7 @@ class ActionRequestType(StrEnum):
     CREATE_CALENDAR_INVITE = "create_calendar_invite"
     EDIT_CALENDAR_EVENT = "edit_calendar_event"
     CREATE_MEMORY = "create_memory"
+    ARCHIVE_MEMORY = "archive_memory"
     UPLOAD_TO_DRIVE = "upload_to_drive"
     CREATE_DRIVE_FOLDER = "create_drive_folder"
     CREATE_SKILL = "create_skill"
@@ -484,6 +485,12 @@ class Memory(Base):
         default=False, server_default="0"
     )
 
+    # Why the memory was archived: set by the archive_memory action request,
+    # cleared on unarchive, NULL for every other archive path.
+    archive_reason: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None
+    )
+
 
 class MemorySuggestionStatus(StrEnum):
     """Lifecycle of a model-proposed memory (see chat/memory_suggestions.py)."""
@@ -725,6 +732,12 @@ class ProjectMemory(Base):
     )
     archived: Mapped[bool] = mapped_column(
         default=False, server_default="0"
+    )
+
+    # Why the memory was archived: set by the archive_memory action request,
+    # cleared on unarchive, NULL for every other archive path.
+    archive_reason: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None
     )
 
 

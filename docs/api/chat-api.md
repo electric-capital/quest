@@ -403,7 +403,7 @@ All memory endpoints are defined in `chat/memory_routes.py` with data access in 
 - **GET `/app/api/memories/{memory_id}`** -- Get memory (`get_user_memory()`).
 - **PUT `/app/api/memories/{memory_id}`** -- Update memory content (`update_user_memory()`). FTS5 index updated via `memories_au` trigger.
 - **DELETE `/app/api/memories/{memory_id}`** -- Delete memory (`delete_user_memory()`). FTS5 index updated via `memories_ad` trigger.
-- **PUT `/app/api/memories/{memory_id}/archive`** -- Archive memory (`archive_user_memory()`).
+- **PUT `/app/api/memories/{memory_id}/archive`** -- Archive memory (`archive_user_memory()`), with no reason. Every memory object carries `archive_reason`, non-null only when the `archive_memory` action request archived it (see [Action Requests](../architecture/action-requests.md)).
 - **PUT `/app/api/memories/{memory_id}/unarchive`** -- Unarchive memory (`unarchive_user_memory()`).
 
 ---

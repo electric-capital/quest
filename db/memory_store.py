@@ -16,6 +16,9 @@ from db.models import Memory
 # Maximum memory content size: 4KB
 MAX_MEMORY_SIZE = 4096
 
+# Maximum length (characters) of a memory's archive_reason: one short line.
+MAX_ARCHIVE_REASON_LEN = 500
+
 
 async def create_memory(user_id: int, content: str) -> dict:
     """Create a new memory for a user.
@@ -141,6 +144,8 @@ async def search_memories(user_id: int, query: str) -> list[dict]:
                     else row.updated_at
                 ),
                 "archived": bool(row.archived),
+                # Search returns active memories only.
+                "archive_reason": None,
             }
             for row in rows
         ]
@@ -165,12 +170,16 @@ async def update_memory(user_id: int, memory_id: str, content: str) -> Optional[
         return _memory_to_dict(memory)
 
 
-async def archive_memory(user_id: int, memory_id: str) -> Optional[dict]:
+async def archive_memory(
+    user_id: int, memory_id: str, reason: Optional[str] = None,
+) -> Optional[dict]:
+    """Archive a memory, recording ``reason`` (why) when one is given."""
     async with AsyncSessionLocal() as db:
         memory = await db.get(Memory, memory_id)
         if not memory or memory.user_id != user_id:
             return None
         memory.archived = True
+        memory.archive_reason = reason
         memory.updated_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(memory)
@@ -183,6 +192,7 @@ async def unarchive_memory(user_id: int, memory_id: str) -> Optional[dict]:
         if not memory or memory.user_id != user_id:
             return None
         memory.archived = False
+        memory.archive_reason = None
         memory.updated_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(memory)
@@ -236,6 +246,7 @@ def _memory_to_dict(memory: Memory) -> dict:
         "created_at": memory.created_at.isoformat() if memory.created_at else None,
         "updated_at": memory.updated_at.isoformat() if memory.updated_at else None,
         "archived": memory.archived,
+        "archive_reason": memory.archive_reason,
     }
 
 

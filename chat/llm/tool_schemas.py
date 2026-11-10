@@ -3840,6 +3840,7 @@ _CREATE_ACTION_REQUEST: ToolSpec = {
         "invites in `system:calendar`, Telegram in `system:telegram`, "
         "Twitter DMs in `system:twitter`, memory writes "
         "(`request_type=\"create_memory\"`, `params={\"content\": \"...\"}`) "
+        "and archiving a memory with a recorded reason (`archive_memory`) "
         "in `system:memory`, skill create/edit in `system:skill_management`, "
         "routine create/edit (`create_routine` / `edit_routine`) in "
         "`system:routines`, "

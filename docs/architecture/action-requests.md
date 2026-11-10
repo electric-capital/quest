@@ -1,6 +1,6 @@
 # Action Requests Architecture
 
-This document describes the Action Requests system, which allows the LLM agent to propose write operations to external services (e.g., sending a Slack message, creating a calendar invite, uploading a file to Google Drive, or editing a Google Spreadsheet cell range) -- plus internal-store writes (saving a memory, creating or editing a DB-backed skill, changing a shared private Quest Doc, and creating, re-shaping or writing a Quest Table) -- that require explicit user approval before execution.
+This document describes the Action Requests system, which allows the LLM agent to propose write operations to external services (e.g., sending a Slack message, creating a calendar invite, uploading a file to Google Drive, or editing a Google Spreadsheet cell range) -- plus internal-store writes (saving or archiving a memory, creating or editing a DB-backed skill, changing a shared private Quest Doc, and creating, re-shaping or writing a Quest Table) -- that require explicit user approval before execution.
 
 Plugins register additional request types (loaded via `plugins/` or `QUEST_PLUGIN_PATH` -- see [Plugins](plugins.md)); the mechanics below apply to core and plugin handlers alike.
 
@@ -25,7 +25,7 @@ Approved requests are executed server-side by a registry of `ActionRequestHandle
 - Drive uploads and folder creation (`upload_to_drive`, `create_drive_folder`) in `system:drive`
 - Sheets cell edits (`edit_google_spreadsheet`) in `system:sheets`
 - the GCP VM hard reset (`reset_gcp_instance`) in `system:gcp`
-- memory writes (`create_memory`) in `system:memory`
+- memory writes (`create_memory`, `archive_memory`) in `system:memory`
 - skill create/edit (`create_skill` / `edit_skill`) in `system:skill_management`
 - routine create/edit (`create_routine` / `edit_routine`) in `system:routines`
 - shared Quest Doc changes (`write_doc`) in `system:quest_docs`
@@ -77,9 +77,8 @@ The registry in `chat/action_request_types/registry.py` (core handlers, plus wha
   - On approval the handler runs a write-scope pre-check against `SPREADSHEETS_WRITE_SCOPE` (reauth error on legacy connections; the scope is part of `GOOGLE_SERVICE_SCOPES` in `auth/config.py` alongside the read-only one), re-verifies, and PUTs to the Sheets v4 `values.update` endpoint with `valueInputOption=USER_ENTERED`; the result dict (incl. the API's `updatedRange` and a URL carrying `#gid=` when the sheet id was captured) is built at the end of `execute()`.
   - The `summary_snippet` is `title -- tab!range`. The model-facing parameter spec lives in `api/sheets.py` (`get_instructions()`, "Google Sheets Write Operations" section), surfaced via the `system:sheets` skill.
 - **`forward_gmail_message`** (`chat/action_request_types/forward_gmail_message.py`): forwards an existing Gmail message unchanged; the model never supplies the body. See [Gmail API -- Forward a Message](../api/gmail-api.md#forward-a-message).
-- **`create_memory`**: Saves a new user memory after explicit approval. The `params` object carries `content` (capped at `MAX_MEMORY_SIZE` in `db/memory_store.py`; `validate_params()` strips whitespace and rejects empty content).
-  - `render_preview()` returns a single Memory row. On approval the handler calls `db.memory_store.create_memory()` and returns the new memory id.
-  - This is the path for explicit "remember that ..." requests. Unprompted proposals go through the non-blocking `suggest_memory` tool instead, reviewed from the composer's suggestions panel -- see [Memory Suggestions](memory-suggestions.md).
+- **`create_memory`** (`CreateMemoryHandler`): Saves a new user memory after approval, the path for explicit "remember that ..." requests. `params` carries `content` (stripped, non-empty, capped at `MAX_MEMORY_SIZE` in `db/memory_store.py`); the result is the new memory id. Unprompted proposals use the non-blocking `suggest_memory` tool instead -- see [Memory Suggestions](memory-suggestions.md).
+- **`archive_memory`** (`ArchiveMemoryHandler` in `chat/action_request_types/archive_memory.py`): Archives one personal or project memory and records the reason on it. See [Memory Suggestions -- Archiving a Memory by Request](memory-suggestions.md#archiving-a-memory-by-request).
 - **`create_skill`** (`CreateSkillHandler` in `chat/action_request_types/create_skill.py`): Creates a new DB-backed skill after approval. Skills are an internal Quest store (like memory), so -- like `create_memory` -- the handler has no `validate_against_upstream` and no external API key. An optional `target` (one of `_VALID_TARGETS`, user by default) selects the destination.
   - **User target**: creates a skill the caller owns with a `visibility` from `_USER_VISIBILITIES` (private by default) and an optional `share_emails` roster accepted only when `visibility == "shared"` (emails resolved to user IDs at execute time, unknown / self silently skipped).
   - **Project target**: creates a `visibility="project"` skill in the conversation's project; `visibility` / `share_emails` are rejected, and execution requires the conversation to be in a project the caller owns (`db.project_store.get_project(user_id, project_id)` truthy).

@@ -31,6 +31,7 @@ from chat.action_request_types.create_calendar_invite import _resolve_calendar_n
 from chat.action_request_types.create_calendar_invite import CreateCalendarInviteHandler
 from chat.action_request_types.edit_calendar_event import EditCalendarEventHandler
 from chat.action_request_types.create_memory import CreateMemoryHandler
+from chat.action_request_types.archive_memory import ArchiveMemoryHandler
 from chat.action_request_types.upload_to_drive import UploadToDriveHandler
 from chat.action_request_types.create_drive_folder import CreateDriveFolderHandler
 from chat.action_request_types.create_skill import CreateSkillHandler
@@ -51,6 +52,7 @@ from chat.action_request_types.forward_gmail_message import ForwardGmailMessageH
 register_handler(CreateCalendarInviteHandler())
 register_handler(EditCalendarEventHandler())
 register_handler(CreateMemoryHandler())
+register_handler(ArchiveMemoryHandler())
 register_handler(UploadToDriveHandler())
 register_handler(CreateDriveFolderHandler())
 register_handler(CreateSkillHandler())
