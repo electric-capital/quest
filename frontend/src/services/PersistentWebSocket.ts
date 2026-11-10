@@ -398,6 +398,11 @@ class PersistentWebSocketClient {
     this.ensureRefreshTimer(conversationId);
   }
 
+  /** The conversation is in the client's subscribed set (some caller subscribed it). */
+  isSubscribed(conversationId: string): boolean {
+    return this.subscribed.has(conversationId);
+  }
+
   unsubscribe(conversationId: string): void {
     this.subscribed.delete(conversationId);
     this.clearRefreshTimer(conversationId);
