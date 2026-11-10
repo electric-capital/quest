@@ -36,6 +36,7 @@ import {
   findActiveRun,
   isActiveRunStatus,
   oldestPendingQuestion,
+  waitingOnPhrase,
 } from './taskThreadComposer'
 
 /** Distance (px) from the bottom within which the thread counts as pinned there. */
@@ -569,7 +570,7 @@ export function TaskThread({
     const label = waiting
       ? oldestPendingQuestion(activeRun)
         ? 'Waiting for your answer'
-        : 'Waiting for your approval'
+        : `Waiting for ${waitingOnPhrase(activeRun)}`
       : activity.label
     return {
       label,
