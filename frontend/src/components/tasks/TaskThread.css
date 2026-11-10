@@ -116,6 +116,11 @@
   min-width: 0;
 }
 
+/* The prompt bubble's hover footer hangs under it; keep it off the next card. */
+.task-run > .message {
+  margin-bottom: 0.375rem;
+}
+
 .task-run + .task-run {
   padding-top: 1.25rem;
   border-top: 1px solid var(--border);
@@ -148,8 +153,11 @@
   min-width: 0;
 }
 
+/* Room for the hover footer (time and model) Message.css hangs under the
+   bubble, so it never sits on the Handoff notes toggle. */
 .task-run-outcome > .message {
   align-self: stretch;
+  margin-bottom: 0.75rem;
 }
 
 .task-run-state {

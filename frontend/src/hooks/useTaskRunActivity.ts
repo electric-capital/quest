@@ -107,6 +107,11 @@ function toolWords(name: string): string {
 }
 
 /** Label of a top-level tool call (a durable `tool_use` row). */
+const TASK_LOOP_TOOL_LABELS: Record<string, string> = {
+  complete_task_run: 'Writing the result and handoff',
+  ask_task_question: 'Asking you a question',
+};
+
 export function toolUseLabel(row: Row): string {
   const intent = str(row.intent_message);
   if (intent) return intent;
@@ -116,6 +121,9 @@ export function toolUseLabel(row: Row): string {
     const inner = input && typeof input === 'object' ? str((input as Row).tool_name) : '';
     if (inner) name = inner;
   }
+  // The task run's own loop tools read better as steps than as tool names.
+  const own = TASK_LOOP_TOOL_LABELS[name];
+  if (own) return own;
   return name ? `Running ${toolWords(name)}` : TASK_ACTIVITY_THINKING;
 }
 

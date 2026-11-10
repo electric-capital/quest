@@ -75,6 +75,17 @@ export function oldestPendingQuestion(run: TaskRun): TaskQuestion | null {
   return run.questions.find((q) => q.status === 'pending') ?? null;
 }
 
+/**
+ * What a `waiting` run with no pending question waits on, from its open
+ * cards: an approval card wins over a connect card; with neither loaded
+ * (e.g. the card row is not on the page yet) the wording stays generic.
+ */
+export function waitingOnPhrase(run: TaskRun): string {
+  if (run.open_requests.some((card) => card.type === 'action_request')) return 'your approval';
+  if (run.open_requests.some((card) => card.type === 'connect_request')) return 'you to connect a service';
+  return 'you';
+}
+
 export function deriveTaskThreadComposer(input: TaskThreadComposerInput): TaskThreadComposerView {
   const base: TaskThreadComposerView = {
     mode: 'start',
@@ -113,7 +124,7 @@ export function deriveTaskThreadComposer(input: TaskThreadComposerInput): TaskTh
       stopConversationId: activeRun.conversation_id,
       placeholder:
         activeRun.status === 'waiting'
-          ? `Run ${activeRun.seq} is waiting for your approval`
+          ? `Run ${activeRun.seq} is waiting for ${waitingOnPhrase(activeRun)}`
           : `Run ${activeRun.seq} is working`,
       activeRun,
     };
