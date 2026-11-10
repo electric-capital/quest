@@ -1,4 +1,5 @@
-import { Link } from 'react-router-dom'
+import { useCallback } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import './TaskPage.css'
 import { useTask } from '../../hooks/useTask'
 import { useTaskRuns } from '../../hooks/useTaskRuns'
@@ -7,6 +8,7 @@ import { TaskHeader } from './TaskHeader'
 import { TaskThread } from './TaskThread'
 import { TaskPanel } from './TaskPanel'
 import { TaskLoadError, TaskViewState } from './TaskViewState'
+import { TaskNotice, readTaskNotice } from './TaskNotice'
 
 /**
  * The task page (/tasks/<id>): the header over a two-column body, the
@@ -20,6 +22,11 @@ import { TaskLoadError, TaskViewState } from './TaskViewState'
  * (B4 adds the rename / archive / delete menu), the thread (B3) and the
  * panel (B4) are replaced in later phases. App.tsx keys it by task id, so
  * switching tasks starts from a fresh state.
+ *
+ * A notice carried in the router state (TaskPageLocationState, e.g. the
+ * New Task page's "created, but the run did not start") shows above the
+ * body until dismissed; dismissing replaces the history entry's state so a
+ * reload does not bring it back.
  */
 export function TaskPage({ taskId }: { taskId: string }) {
   const view = useTask(taskId)
@@ -27,6 +34,13 @@ export function TaskPage({ taskId }: { taskId: string }) {
   const { task, loading, error, notFound, refresh } = view
 
   useMarkTaskViewed(taskId, task !== null)
+
+  const location = useLocation()
+  const navigate = useNavigate()
+  const notice = readTaskNotice(location.state)
+  const dismissNotice = useCallback(() => {
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null })
+  }, [navigate, location.pathname, location.search])
 
   if (loading) {
     return (
@@ -54,6 +68,11 @@ export function TaskPage({ taskId }: { taskId: string }) {
   return (
     <div className="task-page">
       <TaskHeader task={task} />
+      {notice && (
+        <div className="task-page-notice">
+          <TaskNotice message={notice} onDismiss={dismissNotice} />
+        </div>
+      )}
       <div className="task-page-body">
         <div className="task-page-thread">
           <TaskThread taskId={taskId} task={task} runs={runs} />

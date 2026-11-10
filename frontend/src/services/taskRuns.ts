@@ -32,7 +32,7 @@
 
 import { createTaskRunConversation, parseTaskActiveRun, taskActiveRunFromError } from '../api/tasksApi';
 import { ApiClientError } from '../api/request';
-import type { TaskActiveRun } from '../api/types';
+import type { ComposerAttachmentRef, TaskActiveRun } from '../api/types';
 import { persistentWebSocket, type PersistentEvent } from './PersistentWebSocket';
 
 /**
@@ -89,10 +89,19 @@ export interface StartTaskRunOptions {
   // The thinking level is sent only together with a model, as for chats.
   model?: string | null;
   thinkingEffort?: string | null;
+  // Skills to load into the run (the composer's queued skills); sent as
+  // skill_ids when non-empty.
+  skillIds?: string[];
   // Runs after the run conversation exists and before the send (upload
   // attachments to the conversation workspace here); may return the names
-  // to send as attached_filenames.
-  beforeSend?: (conversationId: string) => Promise<{ attachedFilenames?: string[] } | void>;
+  // to send as attached_filenames and the pasted-image refs to send as
+  // attachments (from uploadComposerAttachments).
+  beforeSend?: (conversationId: string) => Promise<TaskRunBeforeSendResult | void>;
+}
+
+export interface TaskRunBeforeSendResult {
+  attachedFilenames?: string[];
+  attachments?: ComposerAttachmentRef[];
 }
 
 export interface StartedTaskRun {
@@ -160,10 +169,12 @@ export async function startTaskRun(
   }
 
   let attachedFilenames: string[] | undefined;
+  let attachments: ComposerAttachmentRef[] | undefined;
   if (opts.beforeSend) {
     try {
       const result = await opts.beforeSend(conversationId);
       attachedFilenames = result?.attachedFilenames;
+      attachments = result?.attachments;
     } catch (err) {
       throw new TaskRunStartError('start_failed', errorMessage(err), { conversationId });
     }
@@ -177,6 +188,8 @@ export async function startTaskRun(
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     ...(opts.model && { model: opts.model }),
     ...(opts.model && opts.thinkingEffort && { thinking_effort: opts.thinkingEffort }),
+    ...(opts.skillIds && opts.skillIds.length > 0 && { skill_ids: opts.skillIds }),
+    ...(attachments && attachments.length > 0 && { attachments }),
     ...(attachedFilenames && attachedFilenames.length > 0 && {
       attached_filenames: attachedFilenames,
     }),

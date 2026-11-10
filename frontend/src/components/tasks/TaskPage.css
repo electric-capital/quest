@@ -70,6 +70,12 @@
   opacity: 0.8;
 }
 
+/* Router-state notice (TaskNotice) between the header and the body */
+.task-page-notice {
+  flex-shrink: 0;
+  padding: 0.75rem 2rem 0;
+}
+
 /* Thread (B1 placeholder) */
 .task-thread {
   max-width: 760px;
@@ -239,6 +245,7 @@
   }
 
   .task-header,
+  .task-page-notice,
   .task-thread {
     padding-left: 16px;
     padding-right: 16px;

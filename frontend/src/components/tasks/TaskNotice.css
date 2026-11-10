@@ -1,0 +1,59 @@
+/* TaskNotice -- the inline error strip of the Quest Tasks views (task page,
+ * New Task page, tasks list). Same red tint as .home-composer-error; the
+ * app has no error colour token, so dark is the default and the light
+ * scheme overrides it (themeOverridePlugin keys both on data-theme). */
+
+.task-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.6rem 0.85rem;
+  border-radius: 8px;
+  background-color: rgba(220, 38, 38, 0.15);
+  border: 1px solid rgba(220, 38, 38, 0.4);
+  color: #fca5a5;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.task-notice-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.task-notice-dismiss {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  margin: -0.05rem -0.35rem 0 0;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.8;
+  transition: background-color 0.12s, opacity 0.12s;
+}
+
+.task-notice-dismiss:hover {
+  opacity: 1;
+  background-color: rgba(220, 38, 38, 0.2);
+}
+
+@media (prefers-color-scheme: light) {
+  .task-notice {
+    background-color: rgba(220, 38, 38, 0.1);
+    border-color: rgba(220, 38, 38, 0.35);
+    color: #b91c1c;
+  }
+
+  .task-notice-dismiss:hover {
+    background-color: rgba(220, 38, 38, 0.12);
+  }
+}
