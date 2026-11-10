@@ -3,7 +3,7 @@
  *
  * One singleton socket per browser session. Carries:
  *  - per-user globals (request_count_changed, conversation_list_changed,
- *    wait_handle_resolved)
+ *    wait_handle_resolved, task_list_changed, task_changed, ...)
  *  - per-conversation events (Phase 2: message_appended; Phase 3:
  *    text_delta, tool_started, sub_agent_*)
  *
@@ -324,6 +324,12 @@ class PersistentWebSocketClient {
       || type === 'memory_suggestions_changed'
       || type === 'project_memory_suggestions_changed'
       || type === 'doc_note_suggestions_changed'
+      // Quest Tasks globals. Neither carries a conversation_id today; listed
+      // defensively so a later field (e.g. the run's conversation) can never
+      // divert them to the per-conversation channel, where the task hooks
+      // would never see them.
+      || type === 'task_list_changed'
+      || type === 'task_changed'
     );
     if (conversationId && !isPerUserGlobalWithConversationId) {
       // Track high-water seq from durable events so a reconnect can issue
@@ -367,6 +373,11 @@ class PersistentWebSocketClient {
   // ------------------------------------------------------------------
   // Public API
   // ------------------------------------------------------------------
+
+  /** The socket is open: a `send` now is written to it (not proof of delivery). */
+  get connected(): boolean {
+    return this.ws !== null && this.isOpen;
+  }
 
   send(payload: Record<string, unknown>): boolean {
     if (!this.ws || !this.isOpen) return false;

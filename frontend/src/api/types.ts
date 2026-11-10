@@ -2016,6 +2016,176 @@ export interface ShareTableRequest {
   permission: TableSharePermission;
 }
 
+// Quest Tasks types (/app/api/tasks). Field names match the response
+// builders of chat/tasks/thread.py (`task_list_row`, `build_task_detail`,
+// `build_brief_state`, `build_runs_page`, `read_state`) exactly.
+
+/** A run's state: `running` / `waiting` (on a question or approval) are active. */
+export type TaskRunStatus = 'running' | 'waiting' | 'completed' | 'failed' | 'stopped';
+
+/** The task's one active run, on list rows, the detail and `task_changed`. */
+export interface TaskActiveRun {
+  id: string;
+  seq: number;
+  status: 'running' | 'waiting';
+}
+
+/** One row of GET /tasks (newest activity first). */
+export interface TaskListRow {
+  id: string;
+  title: string;
+  archived: boolean;
+  last_activity_at: string | null;
+  active_run: TaskActiveRun | null;
+  // unread_seq > read_seq; the seqs feed store/unreadStore.ts.
+  unread: boolean;
+  event_seq: number;
+  unread_seq: number;
+  read_seq: number;
+}
+
+/** Who wrote the current brief: 'ui', `run:<run id>`, `restore:<version>`, or null (never written). */
+export type TaskBriefSource = string | null;
+
+/** GET /tasks/{id} (also returned by create, PATCH, archive and unarchive). */
+export interface Task {
+  id: string;
+  title: string;
+  // True while the title is still the one cut from the first prompt (the
+  // first run may rename the task).
+  title_is_default: boolean;
+  archived: boolean;
+  instructions: string;
+  brief: string;
+  brief_version: number;
+  brief_updated_at: string | null;
+  brief_source: TaskBriefSource;
+  // Seq of the run that wrote the current brief, when a run did.
+  brief_run_seq: number | null;
+  // Default model and thinking level for new runs; null = the server default.
+  model: string | null;
+  thinking_effort: string | null;
+  run_count: number;
+  active_run: TaskActiveRun | null;
+  event_seq: number;
+  unread_seq: number;
+  read_seq: number;
+  unread: boolean;
+  created_at: string;
+  updated_at: string;
+  last_activity_at: string | null;
+}
+
+/** PUT /tasks/{id}/brief and the restore route. */
+export interface TaskBriefState {
+  brief: string;
+  brief_version: number;
+  brief_updated_at: string | null;
+  brief_source: TaskBriefSource;
+  brief_run_seq: number | null;
+}
+
+/** One stored brief version (GET /tasks/{id}/brief/versions, newest first). */
+export interface TaskBriefVersion {
+  version: number;
+  source: string;
+  run_seq: number | null;
+  created_at: string;
+  excerpt: string;
+}
+
+/** GET /tasks/{id}/brief/versions/{version}. */
+export interface TaskBriefVersionDetail {
+  version: number;
+  source: string;
+  run_seq: number | null;
+  created_at: string;
+  content: string;
+}
+
+/** A question a run asked the user (`ask_user` in a task run). */
+export interface TaskQuestion {
+  handle_id: string;
+  question: string;
+  options: string[];
+  answer: string | null;
+  status: 'pending' | 'answered' | 'cancelled';
+  asked_at: string | null;
+  answered_at: string | null;
+}
+
+/** One entry of the task thread (GET /tasks/{id}/runs). */
+export interface TaskRun {
+  id: string;
+  // 1-based run number within the task ("Run N").
+  seq: number;
+  conversation_id: string;
+  prompt: string;
+  status: TaskRunStatus;
+  // summary / result / notes are always null while the run is active.
+  summary: string | null;
+  result: string | null;
+  notes: string | null;
+  // The run finished without calling complete_task_run.
+  handoff_missing: boolean;
+  error: string | null;
+  model: string | null;
+  started_at: string;
+  finished_at: string | null;
+  // Oldest first.
+  questions: TaskQuestion[];
+  // The run's open approval / connect cards as stored in its transcript
+  // (with `seq` and `wait_handle_id`); [] for finished runs.
+  open_requests: Array<ActionRequestMessage | ConnectRequestMessage>;
+}
+
+/** One page of the thread, newest first; page on with `next_before_seq`. */
+export interface TaskRunsPage {
+  runs: TaskRun[];
+  next_before_seq: number | null;
+}
+
+export interface ListTasksResponse {
+  tasks: TaskListRow[];
+}
+
+/**
+ * POST /tasks. With no `title` the server cuts one from `prompt` (which is
+ * not stored) and keeps `title_is_default`.
+ */
+export interface CreateTaskRequest {
+  title?: string;
+  prompt?: string;
+  instructions?: string;
+  model?: string | null;
+  thinking_effort?: string | null;
+}
+
+/** PATCH /tasks/{id}: absent keeps a field, null clears model / thinking_effort. */
+export interface UpdateTaskRequest {
+  title?: string;
+  instructions?: string;
+  model?: string | null;
+  thinking_effort?: string | null;
+}
+
+/** POST /tasks/{id}/read. */
+export interface TaskReadState {
+  event_seq: number;
+  unread_seq: number;
+  read_seq: number;
+  unread: boolean;
+}
+
+/** The payload of a `task_changed` realtime global. */
+export interface TaskChangedEvent {
+  task_id: string;
+  event_seq: number;
+  brief_version: number;
+  // Null also on the last event of a delete.
+  active_run: TaskActiveRun | null;
+}
+
 // Project table types
 export interface ProjectTable {
   name: string;

@@ -129,7 +129,7 @@ export interface RequestOptions {
   nullOn?: number[];
 }
 
-type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 /**
  * Perform a session-cookie-authed JSON request and return the parsed body.
@@ -167,6 +167,10 @@ export function apiPost<T>(url: string, options?: RequestOptions): Promise<T> {
 
 export function apiPut<T>(url: string, options?: RequestOptions): Promise<T> {
   return apiRequest<T>('PUT', url, options);
+}
+
+export function apiPatch<T>(url: string, options?: RequestOptions): Promise<T> {
+  return apiRequest<T>('PATCH', url, options);
 }
 
 export function apiDelete<T>(url: string, options?: RequestOptions): Promise<T> {
