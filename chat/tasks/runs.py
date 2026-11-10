@@ -86,29 +86,57 @@ TASK_NUDGE_MESSAGE_TYPE = "task_nudge"
 # message_metadata envelope) and shows in the transcript as a system notice
 # (``task_nudge`` message), not as a user bubble.
 TASK_COMPLETION_NUDGE = (
-    "SYSTEM: This task run of a Quest Task ended without calling "
-    "complete_task_run, so its result and handoff notes were not saved. Go "
-    "back over the user's request and finish any requested work that is "
-    "still outstanding. Then call complete_task_run as your last tool call, "
-    "with summary (one line), result (your answer to the user) and notes "
-    "(the handoff for the next task run), plus brief when the state of the "
-    "work changed. If you cannot continue without the user's input, call "
-    "ask_task_question instead."
+    "SYSTEM: Your turn ended without calling complete_task_run, so this "
+    "task run of a Quest Task has not saved its result or its handoff "
+    "notes, and the user has seen nothing of it: the task thread shows only "
+    "the result of complete_task_run. Finish any work the user's prompt "
+    "asked for that is still outstanding, then call complete_task_run as "
+    "your last tool call with summary (one line), result (your answer to "
+    "the user), notes (the handoff to the next task run) and, if the state "
+    "of the work changed, brief (the whole brief, rewritten). If you cannot "
+    "go on without the user's input, call ask_task_question instead. This "
+    "is the only reminder: if this turn also ends without either call, your "
+    "last reply is saved as the result, with no notes."
 )
 
 # The nudge turn's input when the run has a pending entry: complete_task_run
 # returned brief_conflict and the model never retried.
 TASK_BRIEF_CONFLICT_NUDGE = (
-    "SYSTEM: This task run of a Quest Task is not finished yet. The user "
-    "edited the brief of this Quest Task during the run, so your last "
-    "complete_task_run call returned brief_conflict: your log entry is "
-    "saved but the run is still open. Merge your changes into the current "
-    "brief shown in that brief_conflict result and call complete_task_run "
-    "again with the merged brief and brief_expected_version set to that "
-    "result's brief_version, plus the same summary, result and notes. If "
-    "your changes to the brief no longer apply, call complete_task_run "
-    "without brief."
+    "SYSTEM: This task run of a Quest Task is not finished yet. Your last "
+    "complete_task_run call returned brief_conflict because the user edited "
+    "the brief during this task run: your log entry is saved, but the run "
+    "stays open until the brief is settled. Merge your changes into the "
+    "current brief from that brief_conflict result, keeping the user's "
+    "edits where they overlap, and call complete_task_run again with the "
+    "merged brief, brief_expected_version set to that result's "
+    "brief_version, and the same summary, result and notes. If your changes "
+    "to the brief no longer apply, call it again without brief."
 )
+
+# What a refused complete_task_run argument should do next, by error code
+# (appended to the validation message; nothing was saved and the run stays
+# open). Codes not listed get _REFUSAL_HINT_DEFAULT.
+_REFUSAL_HINTS: dict[str, str] = {
+    "summary_too_long": "Shorten summary to one line",
+    "result_too_long": (
+        "Shorten result: put long material in a task:// file, a Quest Doc "
+        "or a Quest Table and point at it from the result"
+    ),
+    "notes_too_long": (
+        "Shorten notes to facts and pointers: put long material in a "
+        "task:// file and point at it from the notes"
+    ),
+    "brief_too_long": (
+        "Shorten brief to the current state of the work: drop history (the "
+        "log keeps it) and put long material in a task:// file the brief "
+        "points at"
+    ),
+    "invalid_summary": "Pass summary as a string",
+    "invalid_result": "Pass result as a string",
+    "invalid_notes": "Pass notes as a string",
+    "invalid_brief": "Pass brief as a string, or leave it out",
+}
+_REFUSAL_HINT_DEFAULT = "Fix the argument"
 
 # ``run_turn(message)`` runs one run_conversation_turn with that message
 # text; the caller binds every other argument. An empty message is a
@@ -238,6 +266,18 @@ def _store_error(exc: TaskStoreError) -> CompletionOutcome:
     return _tool_error(exc.message, exc.code, **exc.details)
 
 
+def _refusal(exc: TaskValidationError) -> CompletionOutcome:
+    """A refused argument, with what to do next: the store's validation
+    texts are shared with the HTTP routes, so the model-facing hint is
+    added here."""
+    hint = _REFUSAL_HINTS.get(exc.code, _REFUSAL_HINT_DEFAULT)
+    message = (
+        f"{exc.message} Nothing was saved and this task run is still open. "
+        f"{hint}, then call complete_task_run again."
+    )
+    return _tool_error(message, exc.code, **exc.details)
+
+
 def _parse_brief_expected_version(value: Any) -> Optional[int]:
     """None when absent; else a non-negative int (bool excluded).
 
@@ -309,7 +349,7 @@ async def complete_task_run(
             args.get("brief_expected_version"),
         )
     except TaskValidationError as exc:
-        return _store_error(exc)
+        return _refusal(exc)
 
     # 2. The run must still be active.
     run = await task_store.get_run(run_id)
@@ -361,14 +401,16 @@ async def complete_task_run(
                         "brief_version": current.get("brief_version"),
                     },
                     "message": (
-                        "The user changed the brief of this Quest Task during "
-                        "this task run. Your log entry is saved, but the run is "
-                        "not finished. Merge your changes into the brief above "
-                        "and call complete_task_run again with the merged "
-                        "brief, brief_expected_version="
-                        f"{current.get('brief_version')} and the same summary, "
-                        "result and notes. If your changes to the brief no "
-                        "longer apply, call it without brief."
+                        "The user edited the brief of this Quest Task during "
+                        "this task run. Your log entry is saved, but the run "
+                        "stays open until the brief is settled. Merge your "
+                        "changes into the current brief in brief_conflict, "
+                        "keeping the user's edits where they overlap, and "
+                        "call complete_task_run again with the merged brief, "
+                        "brief_expected_version="
+                        f"{current.get('brief_version')} and the same "
+                        "summary, result and notes. If your changes to the "
+                        "brief no longer apply, call it again without brief."
                     ),
                 }),
                 ended=False,

@@ -437,8 +437,8 @@ _TASK_RUN_PLAIN_PATHS_SENTENCES = (
 # every Quest Task), so it sits with the task-run naming note in the cacheable
 # part of the prompt, never in the per-run ``## Task`` block.
 _TASK_RUN_FILE_SPACES_SECTION = (
-    "**Two file spaces:** This task run has its own workspace and the Quest "
-    "Task has a shared workspace. The file tools name the space in every "
+    "**Two file spaces:** This task run has its own workspace and this "
+    "Quest Task has a shared one. The file tools name the space in every "
     "path: `chat://<path>` is this task run's workspace (`/workspace` in "
     "scripts), `task://<path>` is the task workspace shared by every task "
     "run of this Quest Task (`/task` in scripts); `list_files`, `read_file`, "
@@ -664,7 +664,20 @@ _ROUTINE_NAMING_SECTION = """**Routine run:** This conversation is a routine run
 # is never shown by name (the task thread shows the task's title), so
 # ``set_conversation_name`` is not offered. How a task run finishes is in the
 # ``## Task`` section near the end of the prompt.
-_TASK_RUN_NAMING_SECTION = """**Task run:** This conversation is one task run of a Quest Task and has no name of its own: do not try to set a conversation name; go straight to the work in the user's message. On the first task run of a Quest Task you may give the task a short title through `complete_task_run`'s `task_title` (it is ignored once the task has a title)."""
+_TASK_RUN_NAMING_SECTION = """**Task run:** This conversation is one task run of a Quest Task and has no name of its own: do not try to set a conversation name; go straight to the work in the user's message. How to finish the run, ask the user and hand off to the next task run is in the `## Task` section at the end of this prompt. If the title shown there is still just the start of the first prompt, give this Quest Task a short title through `complete_task_run`'s `task_title` (it is ignored once a title has been set)."""
+
+# The two loop-level tools of a task run, appended to the numbered tool list
+# (which then counts fifteen). Their own function declarations carry the
+# parameters; the ``## Task`` section says when to call them.
+_TASK_RUN_TOOL_LINES = (
+    "\n14. **complete_task_run(summary, result, notes, brief?, "
+    "brief_expected_version?, task_title?)** -- Finish this task run: saves "
+    "its log entry, applies the brief and ends the run. Call it directly, "
+    "not through `tool_call`."
+    "\n15. **ask_task_question(question, options?)** -- Ask the user one "
+    "question in the task thread and wait for the answer. Call it directly, "
+    "not through `tool_call`."
+)
 
 
 def _connected_accounts_block(paragraph: str) -> str:
@@ -903,12 +916,15 @@ Facts the user has saved about themselves and how they want you to work, newest 
     # here now, and each skill line names the non-core tools it documents)
     system_skills_block = build_system_skills_enumeration(
         connected_services, has_project, exclude_tools=top_level_exclude,
+        is_task_run=is_task_run,
     )
 
     # Build the proxy preamble (intro + auth header rule + numbered API list)
     proxy_preamble = _build_proxy_preamble(base_url, user_api_key, connected_services)
 
     slack_section = _SLACK_REPLY_MODE_SECTION if is_slack else ""
+    tool_count = "fifteen" if is_task_run else "thirteen"
+    task_run_tool_lines = _TASK_RUN_TOOL_LINES if is_task_run else ""
 
     # Nested sub-agent note: only present when the conversation flag is on. It is
     # appended to the sub-agent model-selection guidance so the top-level agent
@@ -970,7 +986,7 @@ Use the time information to answer time-sensitive questions correctly without ne
 
 **Conversation skills:** The user may load additional skills mid-conversation. When they do, a `<conversation_skills_loaded>` section will appear in that message. These skills are **persistent instructions that apply to the entire conversation from that point forward** — not just the single message they appear on. Follow them on all subsequent turns just as you would follow the system prompt.
 
-You have thirteen tools available:
+You have {tool_count} tools available:
 
 **How to access APIs:** There are two ways to make API requests, and choosing the right one matters:
 - `curl_proxy_get` / `curl_proxy_post` — for Quest's **local proxy** endpoints (`{base_url}/api/...`). These are APIs hosted by Quest itself; today that is only the Gmail Raw batch endpoint -- Slack, Telegram, Twitter/X and the Gmail Simple operations all have dedicated `tool_call` tools instead.
@@ -988,7 +1004,7 @@ You have thirteen tools available:
 10. **run_python(script, args?, timeout?)** -- Run inline Python in the same sandboxed container. For one-off tasks (no file written). For full usage patterns, load the `system:workspace` skill.
 11. **list_skills()** -- List skills accessible to you, including built-in `system:*` skills.
 12. **search_skills(keyword)** -- Search skills (DB + system) by keyword.
-13. **load_skills(skill_ids)** -- Fetch full content for one or more skills (by `system:*` id or DB UUID). You can load multiple at once.
+13. **load_skills(skill_ids)** -- Fetch full content for one or more skills (by `system:*` id or DB UUID). You can load multiple at once.{task_run_tool_lines}
 
 {dynamic_tools_section}
 
