@@ -45,6 +45,7 @@ from chat.tasks.constants import (
     MAX_ACTIVE_TASKS_PER_USER,
     TASK_BRIEF_MAX_CHARS,
     TASK_BRIEF_MAX_VERSIONS,
+    TASK_CONTEXT_MAX_CHARS,
     TASK_INSTRUCTIONS_MAX_CHARS,
     TASK_RUN_ACTIVE_STATUSES,
     TASK_RUN_FINISHED_STATUSES,
@@ -498,9 +499,12 @@ def _run_to_dict(run: TaskRun, *, include_result: bool = True) -> dict:
         {"id", "task_id", "seq", "conversation_id", "prompt", "status",
          "summary", "result", "notes",          # None until completed
          "handoff_missing", "error", "model",
+         "context_brief_version",               # None until frozen
          "started_at", "finished_at"}           # ISO strings
 
-    With ``include_result=False`` the ``result`` key is left out and the
+    The frozen ``context`` text itself is never included (the column is
+    deferred; :func:`get_run_context` reads it). With
+    ``include_result=False`` the ``result`` key is left out and the
     attribute is never read (for rows loaded with ``result`` deferred).
     """
     row = {
@@ -519,6 +523,7 @@ def _run_to_dict(run: TaskRun, *, include_result: bool = True) -> dict:
         "handoff_missing": bool(run.handoff_missing),
         "error": run.error,
         "model": run.model,
+        "context_brief_version": run.context_brief_version,
         "started_at": _iso(run.started_at),
         "finished_at": _iso(run.finished_at),
     })
@@ -1145,6 +1150,74 @@ async def complete_run(
         await _touch_task(db, row[0], activity=True, now=now)
         await db.commit()
         return _run_to_dict(await db.get(TaskRun, run_id, populate_existing=True))
+
+
+async def get_run_context(run_id: str) -> Optional[tuple[str, int]]:
+    """The run's frozen starting context as ``(context,
+    context_brief_version)``, or None when it is not frozen yet or the run
+    is missing."""
+    async with AsyncSessionLocal() as db:
+        row = (await db.execute(
+            select(TaskRun.context, TaskRun.context_brief_version)
+            .where(TaskRun.id == run_id)
+        )).first()
+    if row is None or row[0] is None or row[1] is None:
+        return None
+    return row[0], row[1]
+
+
+async def freeze_run_context(
+    run_id: str, *, context: str, brief_version: int,
+) -> tuple[str, int]:
+    """Freeze the run's starting context: the ``## Task`` block its system
+    prompt is built with and the brief version that block shows.
+
+    One compare-and-set UPDATE that writes both columns only while
+    ``context`` is still NULL, so the first writer wins and the frozen pair
+    never changes afterwards; a later (or concurrent, losing) caller gets
+    the pair that is stored. The run's status is not checked: freezing is
+    part of building a turn, whatever the run's state.
+
+    Returns:
+        The ``(context, context_brief_version)`` stored on the row.
+
+    Raises:
+        TaskRunNotFoundError.
+        ValueError: ``context`` is not a string or is over
+            ``TASK_CONTEXT_MAX_CHARS``, or ``brief_version`` is not a
+            non-negative integer.
+    """
+    if not isinstance(context, str) or len(context) > TASK_CONTEXT_MAX_CHARS:
+        raise ValueError(
+            "context must be a string of at most "
+            f"{TASK_CONTEXT_MAX_CHARS} characters."
+        )
+    if (
+        isinstance(brief_version, bool) or not isinstance(brief_version, int)
+        or brief_version < 0
+    ):
+        raise ValueError("brief_version must be a non-negative integer.")
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            update(TaskRun)
+            .where(TaskRun.id == run_id, TaskRun.context.is_(None))
+            .values({
+                TaskRun.context: context,
+                TaskRun.context_brief_version: brief_version,
+            })
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount == 1:
+            await db.commit()
+            return context, brief_version
+        await db.rollback()
+        row = (await db.execute(
+            select(TaskRun.context, TaskRun.context_brief_version)
+            .where(TaskRun.id == run_id)
+        )).first()
+        if row is None:
+            raise TaskRunNotFoundError(run_id)
+        return row[0], row[1]
 
 
 async def delete_run(user_id: int, task_id: str, run_id: str) -> str:

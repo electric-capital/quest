@@ -1240,7 +1240,10 @@ class TaskRun(Base):
     ``TASK_RUN_STATUSES``; ``running`` and ``waiting`` are active, and at
     most one run per task is active (checked in ``allocate_run``). The log
     entry (``summary``, ``result``, ``notes``) is written by
-    ``complete_task_run``.
+    ``complete_task_run``. ``context`` and ``context_brief_version`` freeze
+    the run's starting ``## Task`` block on its first turn
+    (``freeze_run_context``), so every later turn, after a restart too,
+    rebuilds the same system prompt.
     """
 
     __tablename__ = "task_runs"
@@ -1285,6 +1288,17 @@ class TaskRun(Base):
     # The model the run used
     model: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True, default=None
+    )
+    # The rendered ## Task block the run's system prompt was built with (up
+    # to TASK_CONTEXT_MAX_CHARS), written once on the run's first turn; NULL
+    # until then. Deferred: only get_run_context / freeze_run_context read it.
+    context: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None, deferred=True
+    )
+    # The tasks.brief_version that context shows (complete_task_run's
+    # expected_version); NULL until the context is frozen.
+    context_brief_version: Mapped[Optional[int]] = mapped_column(
+        sa.Integer, nullable=True, default=None
     )
     started_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)

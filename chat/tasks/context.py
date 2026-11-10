@@ -59,7 +59,11 @@ logged and hard-cut rather than raised: a run must not die on its prompt.
 :func:`build_task_context` and :func:`build_task_subagent_context` are pure;
 :func:`load_task_context` reads the store (the window and the index rows
 without their results, plus a count) and returns the text with the
-``brief_version`` it was built from.
+``brief_version`` it was built from. :func:`load_run_task_context` is what a
+task run's turns use: it freezes that pair on the run row on the first turn
+(``task_runs.context`` and ``context_brief_version``) and returns the frozen
+pair on every later one, so the run keeps its starting context across a
+rebuilt session or a server restart.
 """
 
 from __future__ import annotations
@@ -502,6 +506,55 @@ async def load_task_context(task_id: str, *, current_seq: int) -> Optional[TaskC
         task, runs, current_seq=current_seq, earlier_run_count=earlier_run_count,
     )
     return TaskContext(text=text, brief_version=task["brief_version"], task=task)
+
+
+@dataclass(frozen=True)
+class RunTaskContext:
+    """A task run's starting context, as frozen on its run row."""
+
+    text: str  # the ## Task block
+    brief_version: int  # the brief version that text shows
+
+
+async def load_run_task_context(run: dict) -> Optional[RunTaskContext]:
+    """The task run's starting context, frozen on its first turn.
+
+    ``run_conversation_turn`` calls this on every turn of a task run. The
+    first call builds the block with :func:`load_task_context` and freezes
+    it on the run row (``task_store.freeze_run_context``); every later call
+    (a resume after a question or an action-request card, a server restart,
+    a rebuilt session) returns the stored pair, so the run sees the
+    identical text and ``brief_version`` it started with, however the
+    brief, the log or the instructions changed since. Phase A5's
+    ``complete_task_run`` passes that ``brief_version`` as
+    ``expected_version``, read from ``RunContext`` (set from this) or from
+    the run dict's ``context_brief_version``.
+
+    Args:
+        run: A run dict (db/task_store.py ``_run_to_dict`` shape; ``id``,
+            ``task_id`` and ``seq`` are read).
+
+    Returns:
+        The frozen context, or None when the task is missing (nothing is
+        frozen then). When two turns race on the first freeze, both get the
+        pair the first writer stored.
+
+    Raises:
+        Store errors propagate (``TaskRunNotFoundError`` when the run row
+        is gone), as in :func:`load_task_context`.
+    """
+    from db import task_store
+
+    frozen = await task_store.get_run_context(run["id"])
+    if frozen is not None:
+        return RunTaskContext(text=frozen[0], brief_version=frozen[1])
+    built = await load_task_context(run["task_id"], current_seq=run["seq"])
+    if built is None:
+        return None
+    text, brief_version = await task_store.freeze_run_context(
+        run["id"], context=built.text, brief_version=built.brief_version,
+    )
+    return RunTaskContext(text=text, brief_version=brief_version)
 
 
 async def load_task_subagent_context(task_id: str) -> Optional[str]:
