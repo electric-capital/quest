@@ -91,11 +91,30 @@
 }
 
 .tasks-list-empty {
-  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
   padding: 4rem 1rem;
   text-align: center;
+}
+
+.tasks-list-empty-title {
+  margin: 0;
   font-size: 0.95rem;
   color: var(--text-secondary);
+}
+
+.tasks-list-empty-hint {
+  margin: 0 0 0.25rem;
+  max-width: 28rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.tasks-list-error {
+  margin: 0 0 0.75rem;
 }
 
 .tasks-list-rows {
@@ -107,22 +126,39 @@
   gap: 0.125rem;
 }
 
+/* One row: the thread link (title, state, time, unread dot) and the row's
+ * action buttons beside it (buttons cannot sit inside the link). The item
+ * carries the hover background so link and buttons read as one pill. */
+.tasks-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  padding-right: 0.4rem;
+  border-radius: 10px;
+  transition: background-color 0.12s;
+}
+
+.tasks-list-item:hover,
+.tasks-list-item:focus-within {
+  background-color: var(--hover);
+}
+
 .tasks-list-row {
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 0.75rem;
   min-width: 0;
-  padding: 0.55rem 0.75rem;
+  padding: 0.55rem 0.35rem 0.55rem 0.75rem;
   border-radius: 10px;
   color: var(--text);
   font-weight: 400;
   text-decoration: none;
-  transition: background-color 0.12s;
 }
 
 .tasks-list-row:hover {
   color: var(--text);
-  background-color: var(--hover);
 }
 
 .tasks-list-row:active {
@@ -142,8 +178,15 @@
   font-weight: 600;
 }
 
+.tasks-list-item.archived .tasks-list-row-title {
+  color: var(--text-secondary);
+}
+
 .tasks-list-row-state {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   font-size: 0.75rem;
   color: var(--text-secondary);
 }
@@ -153,12 +196,119 @@
   color: var(--accent-text);
 }
 
-.tasks-list-row-unread {
+/* Same quiet spinning LoaderCircle as the sidebar's working mark. */
+.tasks-list-row-spinner {
   flex-shrink: 0;
+  animation: tasks-list-spin 1s linear infinite;
+}
+
+@keyframes tasks-list-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tasks-list-row-spinner {
+    animation: none;
+  }
+}
+
+.tasks-list-row-time {
+  flex-shrink: 0;
+  min-width: 4.5rem;
+  text-align: right;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+/* Fixed slot so the times line up whether or not a row is unread. */
+.tasks-list-row-dot-slot {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 8px;
+}
+
+.tasks-list-row-unread {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background-color: var(--accent);
+}
+
+.tasks-list-row-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.tasks-list-row-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  height: 1.875rem;
+  padding: 0 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.tasks-list-row-button:hover:not(:disabled) {
+  background-color: var(--pressed);
+}
+
+.tasks-list-row-button.danger:hover:not(:disabled) {
+  border-color: rgba(220, 38, 38, 0.5);
+  color: #fca5a5;
+}
+
+.tasks-list-row-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Archive on an active row: a borderless icon button. */
+.tasks-list-row-button.icon-only {
+  width: 1.875rem;
+  padding: 0;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+.tasks-list-row-button.icon-only:hover:not(:disabled) {
+  color: var(--text);
+}
+
+/* With a pointer, the active rows' Archive shows on hover / focus only;
+ * touch screens always show it. */
+@media (hover: hover) {
+  .tasks-list-item:not(.archived) .tasks-list-row-actions {
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+
+  .tasks-list-item:not(.archived):hover .tasks-list-row-actions,
+  .tasks-list-item:not(.archived):focus-within .tasks-list-row-actions {
+    opacity: 1;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  .tasks-list-row-button.danger:hover:not(:disabled) {
+    border-color: rgba(220, 38, 38, 0.45);
+    color: #b91c1c;
+  }
 }
 
 @media (max-width: 768px) {
@@ -166,5 +316,26 @@
   .tasks-list-content {
     padding-left: 16px;
     padding-right: 16px;
+  }
+
+  .tasks-list-row {
+    gap: 0.5rem;
+    padding-left: 0.5rem;
+  }
+
+  .tasks-list-row-time {
+    min-width: 0;
+  }
+
+  /* The archived rows' buttons go icon-only (their aria-labels name the
+   * action). */
+  .tasks-list-row-button-label {
+    display: none;
+  }
+
+  .tasks-list-row-button {
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
   }
 }
