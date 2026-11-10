@@ -10,8 +10,11 @@ Modules:
 - ``constants`` -- size caps, the connected-services pseudo-key and the
   shared error texts.
 - ``context`` -- the ``## Task`` system-prompt section of a run.
-- ``service`` -- starting a run, the startup sweeps.
+- ``service`` -- starting a run, answering a run's question, the startup
+  sweeps.
 - ``runs`` -- ``complete_task_run`` and the run driver (run statuses).
+- ``questions`` -- ``ask_task_question``: the ``task_question`` wait
+  handle, its validation, transcript message and thread view.
 - ``events`` -- the ``task_changed`` / ``task_list_changed`` publishes.
 
 The rows (``tasks``, ``task_runs``, ``task_brief_versions``) are written
