@@ -969,7 +969,8 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
 
 async def _handle_stop(conn: _Connection, data: dict) -> None:
     """Cancel an in-flight run for the conversation if any, plus pending
-    wait handles. Mirrors the per-turn ``stop`` semantics verbatim.
+    wait handles. Mirrors the per-turn ``stop`` semantics verbatim. A Quest
+    Task run is also marked ``stopped`` (``chat.tasks.runs.stop_task_run``).
     """
     conv_id = data.get("conversation_id")
     if not isinstance(conv_id, str) or not conv_id:
@@ -1008,6 +1009,18 @@ async def _handle_stop(conn: _Connection, data: dict) -> None:
         logger.exception(
             "[realtime] cancel_pending_wait_handles failed "
             "(conversation=%s, user_id=%s)", conv_id, conn.user_id,
+        )
+
+    # A Quest Task run ends as ``stopped``, also when it is ``waiting``
+    # with no live turn to cancel. No-op for any other conversation (one
+    # indexed lookup); idempotent with the cancelled driver's own write.
+    try:
+        from chat.tasks.runs import stop_task_run
+        await stop_task_run(conn.user_id, conv_id)
+    except Exception:
+        logger.exception(
+            "[realtime] stop_task_run failed (conversation=%s, user_id=%s)",
+            conv_id, conn.user_id,
         )
 
     await _send_to_client(conn, {
@@ -1050,8 +1063,13 @@ async def _run_send_message(
     whole run, so the composer stays locked across the nudge turn.
 
     ``task_id`` / ``task_run`` mark a Quest Task run (its single message,
-    the run row already allocated by ``chat.tasks.service.start_run``);
-    ``run_conversation_turn`` resolves the run row from ``task_id``.
+    the run row already allocated by ``chat.tasks.service.start_run``):
+    the turn is driven through ``chat.tasks.runs.drive_task_run``, which
+    sets the run's status (completed, waiting, failed, stopped), nudging
+    once when the run ends without ``complete_task_run``; it re-raises a
+    cancellation or a failure after recording it, so the handlers below
+    run unchanged. ``run_conversation_turn`` resolves the run row from
+    ``task_id``.
     """
     user_id = user["id"]
     shared_messages: list[dict] = []
@@ -1118,10 +1136,16 @@ async def _run_send_message(
                 log_prefix="[realtime]",
             )
         elif task_run is not None:
-            # A5 seam (issue #213): wrap this in chat.tasks.runs.drive_task_run()
-            # (spec 6.3), which sets the run's final status. Until then the run
-            # stays ``running`` after its turn ends.
-            await run_turn(user_message)
+            # Imported here: chat.tasks.events imports this package.
+            from chat.tasks.runs import drive_task_run
+            await drive_task_run(
+                run_turn,
+                run=task_run,
+                prompt=user_message,
+                messages_out=shared_messages,
+                on_event=on_event,
+                log_prefix="[realtime]",
+            )
         else:
             await run_turn(user_message)
     except asyncio.CancelledError:

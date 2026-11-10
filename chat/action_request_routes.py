@@ -523,6 +523,11 @@ async def _resolve_locked(
         await _stop_sibling_action_requests(
             request, user, req["conversation_id"], request_id,
         )
+        # A Quest Task run has no "next message" to wait for (one message
+        # per run), so Stop on its card ends the run as ``stopped``. No-op
+        # for any other conversation; never raises.
+        from chat.tasks.runs import stop_task_run
+        await stop_task_run(user_id, req["conversation_id"])
         await _publish_request_count_changed(user_id)
         return await _enrich_with_preview(updated, user)
 
