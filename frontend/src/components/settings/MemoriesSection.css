@@ -192,9 +192,8 @@
   font-size: 0.75rem;
   line-height: 1.5;
   color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Never ellipsized: the id is there to be read and copied in full. */
+  overflow-wrap: anywhere;
 }
 
 .memory-row-id-label {
