@@ -40,6 +40,7 @@ from chat.gemini_api.turn_tools import (
     _WAIT_FOR_HANDLES_MAX_IDS,
     TURN_TOOL_HANDLERS,
     FinishInferenceResponse,
+    FinishTaskRun,
     REQUEST_SERVICE_CONNECTION_KEY,
     SuspendForActionRequest,
     SuspendForServiceConnection,
@@ -1683,6 +1684,30 @@ async def run_conversation_turn(
             "return_final_response (tool_id=%s, user=%s)",
             conversation_id, exc.tool_id, user["email"],
         )
+        return structured_messages
+    except FinishTaskRun as exc:
+        # A task run of a Quest Task was completed by complete_task_run
+        # (the run row is already ``completed`` and the closing tool_result
+        # is in structured_messages). The run ends here with no further
+        # model call; unlike an inference finish it keeps the turn's stats
+        # (the run view's cost line) and the turn-end SDK history save.
+        # Tool calls after complete_task_run in the same batch are never
+        # dispatched.
+        logger.info(
+            "[task-run] Conversation %s finished via complete_task_run "
+            "(tool_id=%s, user=%s)",
+            conversation_id, exc.tool_id, user["email"],
+        )
+        stats = usage_acc.build_stats(
+            duration_ms=int((time.time() - start_time) * 1000),
+            tool_calls=tool_call_count,
+            turns=turn_count,
+            provider_name=provider_name,
+            model=model,
+        )
+        await _emit_durable(ctx, {"type": "stats", "stats": stats})
+        # Same rule as the turn-end save: after the last await.
+        _save_sdk_history(conversation_id, chat, provider)
         return structured_messages
     except Exception as exc:
         logger.exception("Error in run_conversation_turn (user=%s, conversation=%s)", user["email"], conversation_id)

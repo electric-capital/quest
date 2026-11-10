@@ -1096,6 +1096,10 @@ async def _dispatch_tool_call(
 # load_skills, whose public arm admits PUBLIC_SYSTEM_SKILLS alone.
 _PUBLIC_DIRECT_TOOLS = frozenset({"run_script", "run_python", "load_skills"})
 
+# The loop tools of a task run (TASK_RUN_TOOLS): refused by shared dispatch,
+# which only sub-agents and scripts reach with these names.
+_TASK_RUN_LOOP_TOOLS = frozenset({"complete_task_run", "ask_task_question"})
+
 
 async def _dispatch_tool_call_inner(
     app,
@@ -1191,6 +1195,22 @@ async def _dispatch_tool_call_inner(
                     "instead in the final response."
                 ),
             }), []
+
+    # The task-run loop tools act on the calling run and only its own
+    # top-level model may call them (spec 5, invariant 5). The top-level
+    # loop handles both names in TURN_TOOL_HANDLERS before shared dispatch,
+    # so reaching here means a sub-agent or a script asked: refuse
+    # explicitly rather than with an unknown-tool error.
+    requested_loop_tool = (
+        args.get("tool_name") if tool_name == "tool_call" else tool_name
+    )
+    if requested_loop_tool in _TASK_RUN_LOOP_TOOLS:
+        return json.dumps({
+            "error": (
+                f"{requested_loop_tool} can only be called by the task run's "
+                "own model, not by a sub-agent or a script."
+            ),
+        }), []
 
     if tool_name == "tool_call":
         from chat.llm.tool_schemas import TOOL_CALL_REGISTRY

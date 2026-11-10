@@ -430,23 +430,50 @@ async def _run_resume(
                     exc_info=True,
                 )
 
-        # A5 seam (issue #213): a task run's resume turn is wrapped in chat.tasks.runs.drive_task_run() here (spec 6.3).
-        await run_conversation_turn(
-            app=app,
-            user=user,
-            message="",
-            conversation_id=conversation_id,
-            timezone="UTC",
-            model=model,
-            on_event=_on_event,
-            messages_out=messages_out,
-            project_id=project_id,
-            routine_id=routine_id,
-            origin=origin,
-            slack_context=slack_context,
-            flags=resumed_flags or None,
-            task_id=task_id,
-        )
+        async def run_turn(message: str) -> None:
+            await run_conversation_turn(
+                app=app,
+                user=user,
+                message=message,
+                conversation_id=conversation_id,
+                timezone="UTC",
+                model=model,
+                on_event=_on_event,
+                messages_out=messages_out,
+                project_id=project_id,
+                routine_id=routine_id,
+                origin=origin,
+                slack_context=slack_context,
+                flags=resumed_flags or None,
+                task_id=task_id,
+            )
+
+        task_run: Optional[dict] = None
+        if task_id:
+            # A Quest Task run's resume turn goes through its driver, which
+            # moves the run back to ``running``, sets its status from how
+            # the turn ended (and nudges a run that ended without
+            # complete_task_run), and runs no turn at all for a run that
+            # already finished (a card approved after a Stop).
+            from db.task_store import get_run_by_conversation
+            task_run = await get_run_by_conversation(conversation_id)
+            if task_run is None:
+                logger.warning(
+                    "[wait-resume] Task conversation %s has no run row; "
+                    "resuming without the task run driver", conversation_id,
+                )
+        if task_run is not None:
+            from chat.tasks.runs import drive_task_run
+            await drive_task_run(
+                run_turn,
+                run=task_run,
+                prompt=None,
+                messages_out=messages_out,
+                on_event=_on_event,
+                log_prefix="[wait-resume]",
+            )
+        else:
+            await run_turn("")
         # Detect a slack_reply suspend by inspecting the saved transcript:
         # run_conversation_turn converts SuspendForSlackReply into a normal return,
         # so the dispatcher cannot tell apart "model finished" from "model

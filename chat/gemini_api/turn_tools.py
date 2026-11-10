@@ -18,8 +18,9 @@ Handler calling convention:
 * A handler returns the tool-result string, or raises one of the suspend
   sentinels defined below (:class:`SuspendForWaitHandles`,
   :class:`SuspendForSlackReply`, :class:`SuspendForActionRequest`,
-  :class:`FinishInferenceResponse`) -- those are control flow, not
-  errors, and must propagate to the loop unchanged.
+  :class:`SuspendForServiceConnection`, :class:`FinishInferenceResponse`,
+  :class:`FinishTaskRun`) -- those are control flow, not errors, and must
+  propagate to the loop unchanged.
 
 The loop calls ``_log_large_tool_result`` once per handled call, so no
 handler logs its own result.
@@ -252,6 +253,24 @@ class FinishInferenceResponse(Exception):
         super().__init__(
             f"return_final_response delivered (tool_id={tool_id})"
         )
+        self.tool_id = tool_id
+
+
+class FinishTaskRun(Exception):
+    """Raised by the ``complete_task_run`` arm when a task run of a Quest
+    Task has been completed and the loop must end with no further model
+    call.
+
+    Same shape as :class:`FinishInferenceResponse`: the run is genuinely
+    finished (its row is ``completed``, written by chat/tasks/runs.py), and
+    the matching ``tool_result`` is appended BEFORE the raise so the
+    transcript closes cleanly. The run driver (``drive_task_run``) reads the
+    run row, not this exception. Inherits from ``Exception`` (not
+    ``BaseException``) so it never masks ``CancelledError``.
+    """
+
+    def __init__(self, tool_id: str) -> None:
+        super().__init__(f"complete_task_run accepted (tool_id={tool_id})")
         self.tool_id = tool_id
 
 
@@ -1116,21 +1135,58 @@ async def _handle_complete_task_run(
 ) -> str:
     """Finish the calling task run (``complete_task_run``).
 
+    The run is the calling conversation's own (``ctx.task_id`` /
+    ``ctx.task_run_id``, invariant 5); the work is
+    ``chat.tasks.runs.complete_task_run``. An accepted call appends the
+    closing tool_result and ends the loop through the :class:`FinishTaskRun`
+    sentinel, with no further model call. A refusal (validation, a
+    ``brief_conflict``, a finished run) is the tool result and the run
+    continues so the model can retry.
+
     Registered under both the top-level name and the ``tool_call``-riding
-    key (:data:`COMPLETE_TASK_RUN_VIA_TOOL_CALL_KEY`).
+    key (:data:`COMPLETE_TASK_RUN_VIA_TOOL_CALL_KEY`); in the latter form
+    the tool's own arguments sit under ``arguments``. Sub-agents and
+    scripts never reach this arm: shared dispatch refuses the name
+    (``_dispatch_tool_call_inner``).
     """
-    if ctx.task_run_id is None:
+    if ctx.task_run_id is None or ctx.task_id is None:
         return _not_in_task_run_result("complete_task_run")
-    # Placeholder: phase A5 of issue #213 replaces this with the real handler
-    # (validate and save the entry, apply the brief with
-    # expected_version=ctx.task_context_brief_version, end the run).
-    return json.dumps({
-        "error": (
-            "complete_task_run is not implemented yet: the task run's log "
-            "entry cannot be saved. End your reply with the result for the "
-            "user."
-        ),
-    })
+    args = call.args
+    if call.key == COMPLETE_TASK_RUN_VIA_TOOL_CALL_KEY:
+        inner = args.get("arguments")
+        args = inner if isinstance(inner, dict) else {}
+
+    from chat.tasks.runs import complete_task_run
+
+    try:
+        outcome = await complete_task_run(
+            task_id=ctx.task_id,
+            run_id=ctx.task_run_id,
+            context_brief_version=ctx.task_context_brief_version,
+            args=args,
+        )
+    except Exception:
+        # A store hiccup must not kill the run: the model can call again.
+        logger.exception(
+            "complete_task_run failed (conversation=%s, run=%s)",
+            ctx.conversation_id, ctx.task_run_id,
+        )
+        return json.dumps({
+            "error": (
+                "complete_task_run failed because of a server error; the "
+                "task run's log entry was not saved. Try the call again."
+            ),
+            "code": "complete_task_run_failed",
+        })
+    if not outcome.ended:
+        return outcome.result
+
+    await _emit_durable(ctx, {
+        "type": "tool_result",
+        "tool_id": call.tool_id,
+        "tool_output": outcome.result,
+    }, durable_extra={"role": "assistant"})
+    raise FinishTaskRun(tool_id=call.tool_id)
 
 
 async def _handle_ask_task_question(
