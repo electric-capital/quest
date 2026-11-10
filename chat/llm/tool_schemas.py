@@ -1621,9 +1621,9 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
         "description": (
             "List the task runs of this Quest Task, newest first, "
             f"{TASK_RUN_LIST_PAGE_SIZE} per page: the whole log, including "
-            "the runs the task context in your prompt shows only as index "
-            "lines or leaves out. Each entry has the run number ('run', the "
-            "#N of the task context), date, status ('running', 'waiting', "
+            "the runs the `## Task` section of your prompt shows only as "
+            "index lines or leaves out. Each entry has the run number ('run', "
+            "the #N of the `## Task` section), date, status ('running', 'waiting', "
             "'completed', 'failed' or 'stopped') and one-line summary; a run "
             "without a summary shows the start of its prompt instead, a run "
             "that ended without a handoff is marked handoff_missing, and a "
@@ -1652,9 +1652,9 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
         "name": "read_task_run",
         "description": (
             "Read one task run of this Quest Task by its run number (the #N "
-            "of the task context or list_task_runs): its prompt (the user's "
-            "message), status, start and finish times, summary, result (the "
-            "answer the user was shown, which the task context leaves out), "
+            "of the `## Task` section or list_task_runs): its prompt (the "
+            "user's message), status, start and finish times, summary, result "
+            "(the answer the user was shown, which the `## Task` section leaves out), "
             "notes (that run's handoff to later runs), handoff_missing, "
             "error (a failed run) and the questions it asked the user with "
             "their answers. A run still in progress (yours is marked "
@@ -4116,21 +4116,20 @@ _ROUTINE_COMPLETED: ToolSpec = {
 _COMPLETE_TASK_RUN: ToolSpec = {
     "name": "complete_task_run",
     "description": (
-        "Finish this task run of the Quest Task. Call it EXACTLY ONCE, as "
+        "Finish this task run of this Quest Task. Call it EXACTLY ONCE, as "
         "the LAST thing you do, when the work the prompt asked for is done "
         "(or you have gone as far as you can); call it again only after a "
-        "limit error or a `brief_conflict`, as below. It saves this run's log "
+        "refusal or a `brief_conflict`, as below. It saves this run's log "
         "entry (`summary`, `result`, `notes`), applies `brief` when given, "
-        "and ends the run: no further turn follows, so put everything the "
-        "user needs in `result`. A field over its limit "
-        "(`summary_too_long`, `result_too_long`, `notes_too_long`, "
-        "`brief_too_long`, each with the cap and the actual length) comes "
-        "back as a tool error and the run continues: shorten it and call "
-        "again. A `brief_conflict` result means the user edited the brief "
-        "during this run: your entry is saved and the run stays open; "
-        "merge your changes into the current brief that result returns and "
-        "call again with the merged `brief` and `brief_expected_version`. "
-        "On success returns `{status: \"completed\", run, brief_version}`."
+        "and ends the run at once: no further turn follows, and the user "
+        "sees only `result`. A refused argument (`summary_too_long`, "
+        "`result_too_long`, `notes_too_long`, `brief_too_long`, each with "
+        "the cap and the actual length) comes back as a tool error with "
+        "nothing saved and the run still open: fix it and call again. A "
+        "`brief_conflict` result means the user edited the brief during "
+        "this run: your entry is saved and the run stays open; merge your "
+        "changes into the current brief that result returns and call again "
+        "with the merged `brief` and `brief_expected_version`."
     ),
     "parameters": {
         "type": "object",
@@ -4138,37 +4137,42 @@ _COMPLETE_TASK_RUN: ToolSpec = {
             "summary": {
                 "type": "string",
                 "description": (
-                    "One line for the task's log: what this run did "
-                    f"(at most {TASK_RUN_SUMMARY_MAX_CHARS} characters)."
+                    "One line for the log of this Quest Task: what this run "
+                    "did, not the prompt restated (at most "
+                    f"{TASK_RUN_SUMMARY_MAX_CHARS} characters)."
                 ),
             },
             "result": {
                 "type": "string",
                 "description": (
                     "Your answer to the user, in markdown: shown as the "
-                    "reply in the task thread (the user never opens the "
-                    "run). At most "
+                    "reply in the task thread, and the only text of this "
+                    "run the user sees. At most "
                     f"{TASK_RUN_RESULT_MAX_CHARS:,} characters; put large "
-                    "outputs in files or Quest Docs and point at them."
+                    "outputs in `task://` files, Quest Docs or Quest Tables "
+                    "and point at them."
                 ),
             },
             "notes": {
                 "type": "string",
                 "description": (
-                    "The handoff for the next task run: what it needs that "
-                    "the result does not say -- findings, dead ends, and "
-                    "where files and artifacts are, by id. May be empty. "
-                    f"At most {TASK_RUN_NOTES_MAX_CHARS:,} characters."
+                    "The handoff to the next task run: what it needs that "
+                    "the result does not say -- what was tried, what failed "
+                    "and why, findings, and where files and artifacts are "
+                    "(`task://` paths, doc and table ids). Empty only when "
+                    "the result says everything. At most "
+                    f"{TASK_RUN_NOTES_MAX_CHARS:,} characters."
                 ),
             },
             "brief": {
                 "type": "string",
                 "description": (
-                    "The COMPLETE new brief, only when this run changed the "
-                    "state of the work: a rewrite of the current state "
-                    "(facts, decisions, open questions, next steps), not an "
-                    "appended history. Omit it to leave the brief as it is. "
-                    f"At most {TASK_BRIEF_MAX_CHARS:,} characters."
+                    "The whole new brief, only when this run changed the "
+                    "state of the work: the current state rewritten (goal, "
+                    "facts, decisions, open questions, next steps), not a "
+                    "history with this run appended. Omit it to leave the "
+                    "brief as it is. At most "
+                    f"{TASK_BRIEF_MAX_CHARS:,} characters."
                 ),
             },
             "brief_expected_version": {
@@ -4183,10 +4187,10 @@ _COMPLETE_TASK_RUN: ToolSpec = {
             "task_title": {
                 "type": "string",
                 "description": (
-                    "Optional short title for the Quest Task (at most "
+                    "Optional short title for this Quest Task (at most "
                     f"{TASK_TITLE_MAX_CHARS} characters). Used only while "
-                    "the task still has its default title cut from the "
-                    "first prompt; ignored otherwise."
+                    "the Quest Task still has the default title cut from "
+                    "its first prompt; ignored otherwise."
                 ),
             },
         },
@@ -4198,10 +4202,14 @@ _ASK_TASK_QUESTION: ToolSpec = {
     "name": "ask_task_question",
     "description": (
         "Ask the user one question in the task thread when only they can "
-        "unblock this task run, instead of guessing. The run waits, with no "
-        "time limit, until they answer. Returns `{\"answer\": \"...\"}`, or "
-        "`{\"status\": \"cancelled\"}` when the user stopped the run. One "
-        "question per call."
+        "unblock this task run, instead of guessing: an ambiguous goal, a "
+        "choice between materially different approaches, missing access or "
+        "data, or a step that is costly or hard to undo. Ask before the "
+        "work that depends on the answer; for small choices, pick a sensible "
+        "default and state it in the result and the notes. The run waits, "
+        "with no time limit, until the user answers. Returns "
+        "`{\"answer\": \"...\"}`, or `{\"status\": \"cancelled\"}` when the "
+        "question was withdrawn. One question per call."
     ),
     "parameters": {
         "type": "object",
@@ -4210,7 +4218,8 @@ _ASK_TASK_QUESTION: ToolSpec = {
                 "type": "string",
                 "description": (
                     "The question, self-contained: the user reads it in "
-                    "the task thread without this run's context (at most "
+                    "the task thread without this run's context, so say "
+                    "what you need and why (at most "
                     f"{TASK_QUESTION_MAX_CHARS:,} characters)."
                 ),
             },
@@ -4846,8 +4855,7 @@ def _task_run_file_tool_specs() -> dict[str, ToolSpec]:
             "in the file unless replace_all is true. You must have read the file "
             "with read_file (or written it with write_file) earlier in this "
             "task run before editing it -- a read in an earlier task run does "
-            "not count; for a chat:// file, a get_workspace_file / "
-            "write_workspace_file read counts too. Prefer this over rewriting "
+            "not count. Prefer this over rewriting "
             "the whole file with write_file when making small changes. Text "
             "files only.",
             {
