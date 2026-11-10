@@ -1384,6 +1384,54 @@ async def list_context_runs(task_id: str, *, before_seq: int, limit: int) -> lis
         return [_run_to_dict(r, include_result=False) for r in runs]
 
 
+async def list_run_index(
+    task_id: str, *, offset: int = 0, limit: int = 50, prompt_chars: int = 200,
+) -> list[dict]:
+    """One page of the task's run log as index rows, newest first,
+    offset-paged (``limit`` clamped to 1..500). For the ``list_task_runs``
+    tool (chat/gemini_api/tool_handlers/task_runs.py).
+
+    Reads only the short columns: ``result``, ``notes``, ``error`` and the
+    frozen ``context`` are never loaded, and of the prompt only its first
+    ``prompt_chars`` characters, so a page costs the same however long the
+    runs' texts are.
+
+    Returns:
+        ``[{"id", "seq", "status", "summary", "handoff_missing",
+        "started_at", "finished_at", "prompt_head"}, ...]`` with ISO
+        datetimes; ``summary`` is None until the run has an entry (an
+        active run's may be a pending, unpublished one: the caller decides
+        whether to show it).
+    """
+    offset = max(0, int(offset))
+    limit = max(1, min(int(limit), _LIST_RUNS_MAX_LIMIT))
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            select(
+                TaskRun.id, TaskRun.seq, TaskRun.status, TaskRun.summary,
+                TaskRun.handoff_missing, TaskRun.started_at, TaskRun.finished_at,
+                func.substr(TaskRun.prompt, 1, max(0, int(prompt_chars))),
+            )
+            .where(TaskRun.task_id == task_id)
+            .order_by(TaskRun.seq.desc())
+            .offset(offset)
+            .limit(limit)
+        )).all()
+    return [
+        {
+            "id": row[0],
+            "seq": row[1],
+            "status": row[2],
+            "summary": row[3],
+            "handoff_missing": bool(row[4]),
+            "started_at": _iso(row[5]),
+            "finished_at": _iso(row[6]),
+            "prompt_head": row[7] or "",
+        }
+        for row in rows
+    ]
+
+
 async def count_runs(task_id: str, *, before_seq: Optional[int] = None) -> int:
     """How many runs the task has (deleted runs not counted); with
     ``before_seq``, only those with ``seq < before_seq``."""
