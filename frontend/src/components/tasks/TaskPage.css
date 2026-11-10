@@ -1,12 +1,14 @@
 /* TaskPage (/tasks/<id>) -- rendered inside .docs-main.tasks-main (App.css).
  * Desktop: the page fills the pane's height; the header sits on top, the
  * thread column (flex 1) and the panel column (fixed width, border-left)
- * each scroll on their own. At the phone breakpoint (768px, same as
- * useIsMobile / MobileShell) the panel stacks under the thread and the
- * pane scrolls as a whole.
+ * each scroll on their own: the thread column is a flex column whose
+ * TaskThread scrolls its runs above a pinned composer (TaskThread.css owns
+ * every .task-thread-* rule), the panel column scrolls as a whole. At the
+ * phone breakpoint (768px, same as useIsMobile / MobileShell) the panel
+ * stacks under the thread and the pane scrolls as a whole.
  *
- * The .task-thread-* and .task-panel-* rules style the B1 placeholder
- * bodies; B3 and B4 replace them with their own files. */
+ * The .task-panel-* rules style the B1 placeholder panel; B4 replaces
+ * them with its own file. */
 
 .task-page {
   flex: 1 1 0;
@@ -24,7 +26,9 @@
 .task-page-thread {
   flex: 1 1 0;
   min-width: 0;
-  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .task-page-panel {
@@ -74,105 +78,6 @@
 .task-page-notice {
   flex-shrink: 0;
   padding: 0.75rem 2rem 0;
-}
-
-/* Thread (B1 placeholder) */
-.task-thread {
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 1rem 2rem 2rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.task-thread-older,
-.task-thread-inline-button {
-  align-self: center;
-  padding: 0.3rem 0.85rem;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  background: none;
-  color: var(--text);
-  font-family: inherit;
-  font-size: 0.8125rem;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.task-thread-older:hover:not(:disabled),
-.task-thread-inline-button:hover {
-  border-color: var(--border-strong);
-  background-color: var(--hover);
-}
-
-.task-thread-older:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.task-thread-note {
-  margin: 0;
-  padding: 2rem 0;
-  text-align: center;
-  font-size: 0.9375rem;
-  color: var(--text-secondary);
-}
-
-.task-thread-runs {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.task-thread-run {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
-  min-width: 0;
-  padding: 0.55rem 0.75rem;
-  border-radius: 10px;
-  background-color: var(--surface-raised);
-  font-size: 0.875rem;
-  color: var(--text);
-}
-
-.task-thread-run-seq {
-  flex-shrink: 0;
-  font-weight: 600;
-}
-
-.task-thread-run-status {
-  flex-shrink: 0;
-  color: var(--text-secondary);
-}
-
-.task-thread-run-prompt {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-thread-run-open {
-  flex-shrink: 0;
-  font-size: 0.8125rem;
-  color: var(--accent-text);
-}
-
-.task-thread-run-open:hover {
-  color: var(--accent-text);
-  text-decoration: underline;
-}
-
-.task-thread-active {
-  margin: 0;
-  font-size: 0.875rem;
-  color: var(--text-secondary);
 }
 
 /* Panel (B1 placeholder) */
@@ -237,6 +142,12 @@
     overflow-y: visible;
   }
 
+  /* The thread takes its content height; the pane scrolls. */
+  .task-page-thread {
+    flex: 0 0 auto;
+    min-height: auto;
+  }
+
   .task-page-panel {
     flex: 0 0 auto;
     width: auto;
@@ -245,8 +156,7 @@
   }
 
   .task-header,
-  .task-page-notice,
-  .task-thread {
+  .task-page-notice {
     padding-left: 16px;
     padding-right: 16px;
   }

@@ -75,7 +75,7 @@ export function TaskPage({ taskId }: { taskId: string }) {
       )}
       <div className="task-page-body">
         <div className="task-page-thread">
-          <TaskThread taskId={taskId} task={task} runs={runs} />
+          <TaskThread taskId={taskId} task={task} runs={runs} onTaskDetail={view.applyDetail} />
         </div>
         <aside className="task-page-panel" aria-label="Task brief and instructions">
           <TaskPanel task={view} />
