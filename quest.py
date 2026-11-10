@@ -181,6 +181,18 @@ async def lifespan(app: FastAPI):
         check_vertex_credentials_consistency()
     except Exception:
         logger.exception("Vertex credentials consistency check failed; continuing")
+
+    # Quest Task startup sweeps (chat/tasks/service.py), before the
+    # scheduler and wait-handle sweeps start: a ``running`` task run cannot
+    # survive a restart (its in-memory turn is gone), so it is failed; a
+    # ``waiting`` run survives because its wait handle does; and run
+    # conversations created but never sent are deleted once older than a day.
+    from chat.tasks.service import run_startup_sweeps
+    try:
+        await run_startup_sweeps()
+    except Exception:
+        logger.exception("Task startup sweeps failed; continuing")
+
     # Kick off per-model health checks in the background: one minimal live
     # inference call per configured model (none when no provider is
     # configured), recorded in the model-health store that the admin

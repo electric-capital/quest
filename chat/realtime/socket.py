@@ -613,6 +613,11 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
 
     project_id = meta.get("project_id")
     routine_id = meta.get("routine_id")
+    # A Quest Task run conversation (spec issue #213): its single message
+    # starts the run through the task service below, and the prompt is
+    # stored verbatim (no ``%%flags`` parsing; task runs get no
+    # conversation flags, spec 6.1).
+    task_id = meta.get("task_id")
 
     # First-message flag parsing. A brand-new conversation has
     # last_message_seq == 0 (the user message has not been appended yet), which
@@ -629,7 +634,7 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
     # without a magic line these two are identical.
     original_message = user_message
     model_message = user_message
-    if is_first_message:
+    if is_first_message and not task_id:
         from chat.conversation_flags import parse_flags_line
         recognized, stripped_message = parse_flags_line(user_message)
         if recognized or stripped_message != user_message:
@@ -687,7 +692,10 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
     # Reject attachments-during-resume: a pasted-image send into a
     # conversation with a dangling tool_use would need to be folded into
     # the synthesized tool_results, which is delicate and out of scope.
-    if attachments:
+    # A task run takes one message only, so neither this check nor the
+    # expensive-resume gate below applies to it: a second message must be
+    # refused as ``task_run_single_message`` by ``start_run``.
+    if attachments and not task_id:
         try:
             from chat.gemini_api.history import _load_sdk_history
             from chat.llm.config import get_provider_for_model, get_provider_instance
@@ -732,6 +740,7 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
     # internal failure, so this gate can never block a healthy send.
     if (
         not is_first_message
+        and not task_id
         and data.get("expensive_resume_acknowledged") is not True
     ):
         from chat.expensive_resume import check_expensive_resume
@@ -749,8 +758,10 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
     # message only; on a later message they are ignored (the setter is idempotent
     # and would no-op anyway, but ignoring early avoids confusion). Both paths are
     # rarely used together, but a defensive union keeps either one working.
+    # A task run takes no flags from either path (``parsed_flags`` is empty
+    # for one, since the magic line is not parsed).
     merged_flags: list[str] = list(parsed_flags)
-    if is_first_message:
+    if is_first_message and not task_id:
         seen_merged = set(merged_flags)
         for name in oob_flags:
             if name not in seen_merged:
@@ -781,6 +792,53 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
             # Non-fatal: fall through and run with the in-memory merged_flags so
             # the turn still honors the requested behavior.
 
+    # Quest Task run: the task service allocates the run row (the feature
+    # gate, one message per run conversation, one active run per task, the
+    # archive flag and the model rule) BEFORE the append, so a refused send
+    # leaves nothing in the transcript. Every early return between here and
+    # the run task's creation fails the allocated run (``_fail_task_run``).
+    task_run: Optional[dict] = None
+    if task_id:
+        from chat.tasks import service as task_service
+        from db.task_store import TaskStoreError
+        try:
+            started = await task_service.start_run(
+                conn.user, meta,
+                prompt=user_message,
+                model=selected_model,
+                thinking_effort=thinking_effort,
+            )
+        except TaskStoreError as exc:
+            rejection: dict[str, Any] = {
+                "type": "send_message_rejected",
+                "conversation_id": conv_id,
+                "reason": exc.code,
+                "message": exc.message,
+            }
+            if "active_run" in exc.details:
+                rejection["active_run"] = exc.details["active_run"]
+            await _send_to_client(conn, rejection)
+            return
+        except Exception:
+            logger.exception(
+                "[realtime] task run start failed (conversation=%s, task=%s)",
+                conv_id, task_id,
+            )
+            await _send_to_client(conn, {
+                "type": "send_message_rejected",
+                "conversation_id": conv_id,
+                "reason": "task_run_start_failed",
+            })
+            return
+        task_run = started.run
+        selected_model = started.model
+        thinking_effort = started.thinking_effort
+
+    async def _fail_task_run(error: str) -> None:
+        if task_run is not None:
+            from chat.tasks.service import fail_unstarted_run
+            await fail_unstarted_run(task_run["id"], error)
+
     # Persist the user message before kicking the run so the new bubble
     # is visible to all subscribers via ``message_appended``.
     user_timestamp = utc_timestamp()
@@ -800,6 +858,7 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
             "[realtime] append user message failed (conversation=%s)",
             conv_id,
         )
+        await _fail_task_run("the message could not be saved")
         await _send_to_client(conn, {
             "type": "error",
             "code": CLOSE_INTERNAL,
@@ -842,12 +901,14 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
             "[realtime] fresh user re-load failed (user_id=%s)",
             conn.user_id, exc_info=True,
         )
+        await _fail_task_run("the user could not be loaded")
         await _close_auth_revoked(conn)
         return
     else:
         if fresh_user is None:
             # User row is gone (deleted). Reject the send rather than
             # silently running with a stale dict.
+            await _fail_task_run("the user no longer exists")
             await _send_to_client(conn, {
                 "type": "send_message_rejected",
                 "conversation_id": conv_id,
@@ -859,6 +920,7 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
         conn.user = fresh_user
 
     if not check_user_allowed(fresh_user.get("email", "")):
+        await _fail_task_run("the user is no longer allowed to sign in")
         await _close_auth_revoked(conn)
         return
 
@@ -879,8 +941,9 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
             attachments=attachments or None,
             # Effective flags for this run: existing row flags win (set on a
             # prior first message), else the flags just merged off this message
-            # (magic ``%%flags`` line + out-of-band composer selection).
-            flags=(meta.get("flags") or merged_flags) or None,
+            # (magic ``%%flags`` line + out-of-band composer selection). A
+            # task run has none.
+            flags=None if task_id else ((meta.get("flags") or merged_flags) or None),
             attached_filenames=attached_filenames or None,
             # The first message of a routine conversation is the routine
             # prompt auto-sent by the one-click run (ChatPanel's
@@ -889,6 +952,8 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
             # routine_completed. Later messages are the user's own
             # follow-ups and run as ordinary turns.
             routine_run=bool(routine_id) and is_first_message,
+            task_id=task_id,
+            task_run=task_run,
         )
     )
     _active_send_runs[conv_id] = task
@@ -967,6 +1032,8 @@ async def _run_send_message(
     attached_filenames: Optional[list[str]] = None,
     routine_run: bool = False,
     thinking_effort: Optional[str] = None,
+    task_id: Optional[str] = None,
+    task_run: Optional[dict] = None,
 ) -> None:
     """Background task that drives ``run_conversation_turn`` for a persistent-WS
     send. Kept symmetrical with ``_handle_api_mode`` so the regression
@@ -981,6 +1048,10 @@ async def _run_send_message(
     ``routine_completed`` call gets one follow-up turn, exactly like a
     scheduled run. ``send_message_finished`` is published only after the
     whole run, so the composer stays locked across the nudge turn.
+
+    ``task_id`` / ``task_run`` mark a Quest Task run (its single message,
+    the run row already allocated by ``chat.tasks.service.start_run``);
+    ``run_conversation_turn`` resolves the run row from ``task_id``.
     """
     user_id = user["id"]
     shared_messages: list[dict] = []
@@ -1032,6 +1103,7 @@ async def _run_send_message(
             flags=flags,
             attached_filenames=attached_filenames if first_turn else None,
             thinking_effort=thinking_effort,
+            task_id=task_id,
         )
 
     try:
@@ -1045,6 +1117,11 @@ async def _run_send_message(
                 conversation_id=conversation_id,
                 log_prefix="[realtime]",
             )
+        elif task_run is not None:
+            # A5 seam (issue #213): wrap this in chat.tasks.runs.drive_task_run()
+            # (spec 6.3), which sets the run's final status. Until then the run
+            # stays ``running`` after its turn ends.
+            await run_turn(user_message)
         else:
             await run_turn(user_message)
     except asyncio.CancelledError:
