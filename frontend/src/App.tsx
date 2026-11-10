@@ -24,10 +24,13 @@ import { TablesGateClosed } from './components/tables/TablesGateClosed'
 import { TableViewer } from './components/tables/TableViewer'
 import { TablesListView } from './components/tables/TablesListView'
 import { TABLES_FEATURE } from './api/tablesApi'
+import { TasksMain } from './components/tasks/TasksMain'
+import { TASKS_FEATURE } from './api/tasksApi'
 import { useIsMobile } from './hooks/useIsMobile'
 import { useUnreadTracking } from './hooks/useConversationUnread'
 import { parseDocsRoute } from './utils/docsRoute'
 import { parseTablesRoute } from './utils/tablesRoute'
+import { parseTasksRoute } from './utils/tasksRoute'
 import { LazyBoundary, lazyNamed } from './components/LazyBoundary'
 
 // Admin-only page: a separate chunk, fetched on the first visit.
@@ -67,6 +70,11 @@ function AppContent() {
   // same URL-only main-pane takeover as the docs views.
   const tablesRoute = parseTablesRoute(location.pathname, location.search)
   const tablesEnabled = enabledFeatures.includes(TABLES_FEATURE)
+  // Quest Tasks views (/tasks, /tasks/new, /tasks/<id>, the run view
+  // /tasks/<id>/runs/<conversation id>): the same URL-only takeover. The run
+  // view's conversation id is not mirrored into activeConversationId.
+  const tasksRoute = parseTasksRoute(location.pathname, location.search)
+  const tasksEnabled = enabledFeatures.includes(TASKS_FEATURE)
 
   // Sync URL -> inbox state. /inbox (Requests tab), /inbox/memories
   // (Memories tab) and /inbox/other (Other tab) are the deep-linkable
@@ -172,6 +180,8 @@ function AppContent() {
         docsEnabled={docsEnabled}
         tablesRoute={tablesRoute}
         tablesEnabled={tablesEnabled}
+        tasksRoute={tasksRoute}
+        tasksEnabled={tasksEnabled}
       />
     )
   }
@@ -210,6 +220,12 @@ function AppContent() {
               sort={tablesRoute.sort}
             />
           )}
+        </div>
+      ) : tasksRoute ? (
+        // Full takeover: no RightPanel beside a task view. TaskPage lays out
+        // its own panel column in the RightPanel's place (spec 8.3).
+        <div className="main-content docs-main tasks-main">
+          <TasksMain route={tasksRoute} enabled={tasksEnabled} />
         </div>
       ) : (
         <>
@@ -286,6 +302,14 @@ function App() {
         {/* Quest Tables: All Tables (?project=<id> filter) and the viewer. */}
         <Route path="/tables" element={<AppContent />} />
         <Route path="/tables/:tableId" element={<AppContent />} />
+        {/* Quest Tasks: the list (?archived=true), New Task, the thread and
+            the run view. The run param is deliberately not `conversationId`:
+            AppContent mirrors that into activeConversationId, and a run
+            conversation never becomes the active sidebar conversation. */}
+        <Route path="/tasks" element={<AppContent />} />
+        <Route path="/tasks/new" element={<AppContent />} />
+        <Route path="/tasks/:taskId" element={<AppContent />} />
+        <Route path="/tasks/:taskId/runs/:runConversationId" element={<AppContent />} />
         {/* Set-password links (invites, sign-up, resets); works signed out. */}
         <Route path="/set-password" element={<SetPasswordScreen />} />
         <Route path="/admin/system-reports" element={<AdminSystemReportsRoute />} />

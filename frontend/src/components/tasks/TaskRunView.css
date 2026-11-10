@@ -1,0 +1,71 @@
+/* TaskRunView (/tasks/<id>/runs/<conversation id>) -- inside
+ * .docs-main.tasks-main (App.css). The header is the lasting "Back to task"
+ * bar; .task-run-view-placeholder is the B1 body that B5 replaces with
+ * ChatPanel. */
+
+.task-run-view {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.task-run-view-header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 1rem 2rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Same pill link as the tables list's back link. */
+.task-run-view-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  margin-left: -0.35rem;
+  padding: 0.1rem 0.45rem 0.1rem 0.15rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.task-run-view-back:hover {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.task-run-view-title {
+  margin: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.task-run-view-placeholder {
+  margin: 0;
+  padding: 2rem;
+  font-size: 0.9375rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 768px) {
+  .task-run-view-header {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .task-run-view-placeholder {
+    padding: 1.5rem 16px;
+  }
+}
