@@ -5,12 +5,15 @@ worker) after the suspended dispatch arm is gone, this module kicks off
 a fresh ``run_conversation_turn`` task that picks up the dangling tool_use and
 closes it via the resume path's DB re-query.
 
-Three suspend sentinels feed into here:
+These suspend sentinels feed into here:
 * ``wait_for_handles`` (web confirm-action / generic wait flow)
 * ``send_slack_reply_and_get_response`` (Slack-driven thread suspend)
 * ``create_action_request`` (web action-request Approve / Revise; a Stop
   resolves the handle but deliberately kicks NO resume -- see
   ``_stopped_handle_ids``)
+* ``request_service_connection`` (web inline connect card)
+* ``ask_task_question`` (a Quest Task run's question, answered from the
+  task thread)
 
 For Slack-origin conversations the resume reads the conversation's
 stored ``origin`` and the matching ``slack_conversations`` row so the
@@ -121,11 +124,13 @@ def _pending_tool_uses(conversation_id: str) -> list[tuple[str, str, dict]]:
 def _conversation_has_dangling_wait(conversation_id: str) -> bool:
     """Heuristic check: does sdk_history.json end on a suspendable tool use?
 
-    Recognises all three suspend-by-sentinel cases:
+    Recognises every suspend-by-sentinel case:
     * ``wait_for_handles`` (web confirm-action / generic wait flow)
     * ``send_slack_reply_and_get_response`` (Slack-driven thread suspend)
     * ``create_action_request`` (web action-request Approve / Revise / Stop)
     * ``request_service_connection`` (web inline connect card)
+    * ``ask_task_question`` (a Quest Task run's question; top-level or
+      through ``tool_call``)
 
     Returns False if the file is missing, the provider is unknown, or the
     check raises -- the caller treats False as "no resume needed."
@@ -137,10 +142,12 @@ def _conversation_has_dangling_wait(conversation_id: str) -> bool:
             "send_slack_reply_and_get_response",
             "create_action_request",
             "return_to_caller",
+            "ask_task_question",
         ):
             return True
         if name == "tool_call" and (args or {}).get("tool_name") in (
             "wait_for_handles", "request_service_connection",
+            "ask_task_question",
         ):
             return True
     return False
@@ -166,7 +173,7 @@ def _conversation_has_dangling_slack_reply(conversation_id: str) -> bool:
 # is deliberately absent: its rows belong to other tools and its contract
 # is "return when ANY resolves."
 _ONE_ROW_PER_TOOL_USE_KINDS = frozenset({
-    "action_request", "slack_reply", "service_connection",
+    "action_request", "slack_reply", "service_connection", "task_question",
 })
 
 
@@ -176,12 +183,14 @@ async def _unresolved_blocking_handle_ids(
     """Ids of still-pending wait handles that a resume would have to close
     with a ``still_waiting`` marker.
 
-    A parallel tool-call batch can leave SEVERAL dangling
-    ``create_action_request`` tool_uses on disk, one card each. Resolving
-    the first card must NOT resume the conversation -- the resume bucket
-    would close the other cards' tool_uses with ``still_waiting`` and the
-    model would carry on without their verdicts. This returns the pending
-    ``action_request`` / ``slack_reply`` rows whose ``tool_id`` is one of
+    A parallel tool-call batch can leave SEVERAL dangling card tool_uses
+    on disk (``create_action_request``, ``request_service_connection``,
+    ``ask_task_question``), one card each -- e.g. a task run's question and
+    an approval card pending at once. Resolving the first card must NOT
+    resume the conversation -- the resume bucket would close the other
+    cards' tool_uses with ``still_waiting`` and the model would carry on
+    without their verdicts. This returns the pending rows of the
+    :data:`_ONE_ROW_PER_TOOL_USE_KINDS` kinds whose ``tool_id`` is one of
     the dangling tool_uses; the resume proceeds only when it is empty.
     Scoping by dangling tool_id keeps a stale row from a long-gone turn
     from wedging the conversation.
@@ -263,8 +272,9 @@ async def _run_resume(
     from db.conversation_store import get_conversation_meta
 
     # Multi-card gate: hold the continuation while any sibling card of a
-    # parallel create_action_request batch is still pending. Best-effort
-    # -- a failing check falls through to the pre-gate behavior. Runs
+    # parallel card batch (approval, connect, task question) is still
+    # pending. Best-effort -- a failing check falls through to the
+    # pre-gate behavior. Runs
     # BEFORE ``resume_started`` so a held resume publishes nothing and the
     # composer stays locked on the remaining pending_wait_handles.
     try:

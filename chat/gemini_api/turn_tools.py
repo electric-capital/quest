@@ -18,8 +18,9 @@ Handler calling convention:
 * A handler returns the tool-result string, or raises one of the suspend
   sentinels defined below (:class:`SuspendForWaitHandles`,
   :class:`SuspendForSlackReply`, :class:`SuspendForActionRequest`,
-  :class:`SuspendForServiceConnection`, :class:`FinishInferenceResponse`,
-  :class:`FinishTaskRun`) -- those are control flow, not errors, and must
+  :class:`SuspendForServiceConnection`, :class:`SuspendForTaskQuestion`,
+  :class:`FinishInferenceResponse`, :class:`FinishTaskRun`) -- those are
+  control flow, not errors, and must
   propagate to the loop unchanged.
 
 The loop calls ``_log_large_tool_result`` once per handled call, so no
@@ -231,6 +232,30 @@ class SuspendForServiceConnection(Exception):
         self.handle_id = handle_id
         self.tool_id = tool_id
         self.service = service
+        # Same logging-only role as SuspendForActionRequest.sibling_handle_ids.
+        self.sibling_handle_ids: list[str] = []
+
+
+class SuspendForTaskQuestion(Exception):
+    """Raised by the ``ask_task_question`` arm when a task run of a Quest
+    Task must suspend until the user answers its question in the task
+    thread (chat/tasks/questions.py).
+
+    Mirrors :class:`SuspendForServiceConnection`: the dispatch loop records
+    it per call (siblings in the same batch keep running), unwinds without
+    a ``tool_result``, and the resume bucket closes the dangling tool_use
+    with the ``task_question`` wait-handle row's ``response``. The task run
+    driver sets the run ``waiting`` when the turn ends this way.
+    """
+
+    def __init__(self, handle_id: str, tool_id: str, run_id: str) -> None:
+        super().__init__(
+            f"ask_task_question suspended "
+            f"(tool_id={tool_id}, handle_id={handle_id}, run_id={run_id})"
+        )
+        self.handle_id = handle_id
+        self.tool_id = tool_id
+        self.run_id = run_id
         # Same logging-only role as SuspendForActionRequest.sibling_handle_ids.
         self.sibling_handle_ids: list[str] = []
 
@@ -1192,22 +1217,94 @@ async def _handle_complete_task_run(
 async def _handle_ask_task_question(
     ctx: RunContext, call: ToolCall, turn: TurnState,
 ) -> str:
-    """Ask the user a question in the task thread (``ask_task_question``).
+    """Ask the user a question in the task thread and suspend
+    (``ask_task_question``).
+
+    See chat/tasks/questions.py. The run is the calling conversation's own
+    (``ctx.task_id`` / ``ctx.task_run_id``, invariant 5). The arm validates
+    the arguments, checks the run is still active, opens a pending
+    ``task_question`` wait handle, records the durable ``task_question``
+    transcript message and raises :class:`SuspendForTaskQuestion`; the
+    resume bucket closes the tool_use with the answer. A refusal
+    (validation, a finished run, a store failure) is the tool result
+    ``{error, code, ...}`` and the run continues.
+
+    The run's status is NOT set here: the task run driver
+    (``drive_task_run``) sets ``waiting``, marks the task unread and
+    publishes when the turn ends on the dangling tool_use.
 
     Registered under both the top-level name and the ``tool_call``-riding
-    key (:data:`ASK_TASK_QUESTION_VIA_TOOL_CALL_KEY`).
+    key (:data:`ASK_TASK_QUESTION_VIA_TOOL_CALL_KEY`); in the latter form
+    the tool's own arguments sit under ``arguments``. Sub-agents and
+    scripts never reach this arm: shared dispatch refuses the name
+    (``_dispatch_tool_call_inner``).
     """
-    if ctx.task_run_id is None:
+    if ctx.task_run_id is None or ctx.task_id is None:
         return _not_in_task_run_result("ask_task_question")
-    # Placeholder: phase A6 of issue #213 replaces this with the real handler
-    # (task_question wait handle, SuspendForTaskQuestion, run -> waiting).
-    return json.dumps({
-        "error": (
-            "ask_task_question is not implemented yet: the question cannot "
-            "be posted. Proceed on your best assumption and say so in your "
-            "reply."
-        ),
-    })
+    args = call.args
+    if call.key == ASK_TASK_QUESTION_VIA_TOOL_CALL_KEY:
+        inner = args.get("arguments")
+        args = inner if isinstance(inner, dict) else {}
+
+    # Lazy like the complete_task_run arm: the chat.tasks modules stay off
+    # this module's import graph (chat.tasks.events imports chat.realtime,
+    # whose package init imports the socket module, which imports this
+    # package).
+    from chat.tasks import questions
+    from chat.tasks.constants import TASK_RUN_ACTIVE_STATUSES
+    from db import task_store
+    from db.task_store import (
+        TaskRunFinishedError,
+        TaskRunNotFoundError,
+        TaskStoreError,
+        TaskValidationError,
+    )
+
+    def _store_error(exc: TaskStoreError) -> str:
+        return json.dumps({"error": exc.message, "code": exc.code, **exc.details})
+
+    try:
+        question, options = questions.validate_question(
+            args.get("question"), args.get("options"),
+        )
+    except TaskValidationError as exc:
+        return _store_error(exc)
+
+    # Provider-native id, like request_service_connection: the resume
+    # bucket matches rows against the dangling tool_use's own id.
+    tool_id = call.raw_tool_id or call.tool_id
+    try:
+        run = await task_store.get_run(ctx.task_run_id)
+        if run is None or run["task_id"] != ctx.task_id:
+            return _store_error(TaskRunNotFoundError(ctx.task_run_id))
+        if run["status"] not in TASK_RUN_ACTIVE_STATUSES:
+            return _store_error(TaskRunFinishedError(ctx.task_run_id, run["status"]))
+        handle = await questions.post_question(
+            user_id=ctx.user["id"],
+            conversation_id=ctx.conversation_id,
+            run_id=ctx.task_run_id,
+            tool_id=tool_id,
+            question=question,
+            options=options,
+        )
+    except Exception:
+        # A store hiccup must not kill the run: the model can call again.
+        logger.exception(
+            "ask_task_question failed (conversation=%s, run=%s)",
+            ctx.conversation_id, ctx.task_run_id,
+        )
+        return json.dumps({
+            "error": (
+                "ask_task_question failed because of a server error; the "
+                "question was not posted. Try the call again."
+            ),
+            "code": "ask_task_question_failed",
+        })
+
+    await _emit_durable(ctx, questions.make_question_message(handle))
+    raise SuspendForTaskQuestion(
+        handle_id=handle["id"], tool_id=tool_id, run_id=ctx.task_run_id,
+    )
 
 
 async def _enrich_params_for_preview(

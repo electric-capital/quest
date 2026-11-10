@@ -39,12 +39,15 @@ from chat.gemini_api.turn_tools import (
     _PUBLIC_BLOCKED_LOOP_TOOLS,
     _WAIT_FOR_HANDLES_MAX_IDS,
     TURN_TOOL_HANDLERS,
+    ASK_TASK_QUESTION_KEY,
+    ASK_TASK_QUESTION_VIA_TOOL_CALL_KEY,
     FinishInferenceResponse,
     FinishTaskRun,
     REQUEST_SERVICE_CONNECTION_KEY,
     SuspendForActionRequest,
     SuspendForServiceConnection,
     SuspendForSlackReply,
+    SuspendForTaskQuestion,
     SuspendForWaitHandles,
     ToolCall,
     TurnState,
@@ -1077,7 +1080,9 @@ async def run_conversation_turn(
         # Resolve each dangling tool_use against the wait-handle table by
         # tool_id. Rows with kind="slack_reply" indicate a
         # send_slack_reply_and_get_response suspend; kind="action_request"
-        # indicates a create_action_request suspend.
+        # a create_action_request suspend; kind="service_connection" a
+        # request_service_connection suspend; kind="task_question" an
+        # ask_task_question suspend.
         wait_handle_by_tool_id: dict[str, dict] = {}
         if pending_tool_uses_with_args:
             for tool_id, _tname, _args in pending_tool_uses_with_args:
@@ -1203,6 +1208,30 @@ async def run_conversation_turn(
                         })
                     else:
                         result_str = json.dumps(response)
+                    tool_results_for_resume.append({
+                        "name": tool_name,
+                        "result": result_str,
+                        "tool_id": tool_id,
+                        "extra_parts": [],
+                    })
+                elif row is not None and row.get("kind") == "task_question":
+                    # ask_task_question suspends (a task run of a Quest
+                    # Task): close with the user's answer from
+                    # chat.tasks.service.answer_question. Any other terminal
+                    # status (a Stop, a completion cancelling open handles)
+                    # reads as cancelled.
+                    response = row.get("response") or {}
+                    if row.get("status") == ToolWaitHandleStatus.PENDING:
+                        result_str = json.dumps({
+                            "status": "still_waiting",
+                            "note": "The user has not answered the question yet.",
+                        })
+                    elif row.get("status") == ToolWaitHandleStatus.ACCEPTED:
+                        result_str = json.dumps({
+                            "answer": response.get("answer", ""),
+                        })
+                    else:
+                        result_str = json.dumps({"status": "cancelled"})
                     tool_results_for_resume.append({
                         "name": tool_name,
                         "result": result_str,
@@ -1419,17 +1448,21 @@ async def run_conversation_turn(
             # Execute each function call and collect responses
             tool_results = []
             turn_state = TurnState()
-            # create_action_request suspends collected across this batch.
-            # A model may emit several create_action_request calls in ONE
-            # turn (parallel tool calls); each opens its own card + wait
-            # handle, and the loop keeps dispatching the rest of the batch
-            # instead of unwinding on the first suspend (which would leave
-            # the later tool_uses undispatched and closed with the
-            # "interrupted" marker on resume). The batch-wide suspend is
-            # raised after the loop; the resume gate in
-            # chat/wait_handles/resume.py holds the continuation until
-            # every card is resolved.
-            batch_suspends: list[SuspendForActionRequest] = []
+            # Card suspends collected across this batch (create_action_request,
+            # request_service_connection, ask_task_question). A model may
+            # emit several of them in ONE turn (parallel tool calls); each
+            # opens its own card + wait handle, and the loop keeps
+            # dispatching the rest of the batch instead of unwinding on the
+            # first suspend (which would leave the later tool_uses
+            # undispatched and closed with the "interrupted" marker on
+            # resume). The batch-wide suspend is raised after the loop; the
+            # resume gate in chat/wait_handles/resume.py holds the
+            # continuation until every card is resolved.
+            batch_suspends: list[
+                SuspendForActionRequest
+                | SuspendForServiceConnection
+                | SuspendForTaskQuestion
+            ] = []
             for fc_event in function_calls:
                 tool_call_count += 1
                 tool_id = fc_event.tool_id or f"{fc_event.tool_name}_{uuid.uuid4().hex[:8]}"
@@ -1512,20 +1545,23 @@ async def run_conversation_turn(
                         )
                     except (
                         SuspendForActionRequest, SuspendForServiceConnection,
+                        SuspendForTaskQuestion,
                     ) as suspend_exc:
                         if registry_key not in (
                             "create_action_request",
                             REQUEST_SERVICE_CONNECTION_KEY,
+                            ASK_TASK_QUESTION_KEY,
+                            ASK_TASK_QUESTION_VIA_TOOL_CALL_KEY,
                         ):
                             # return_to_caller keeps its immediate unwind:
                             # a subagent run has exactly one return.
                             raise
                         # Card + wait handle are already durable (the arm
-                        # emitted the action_request / connect_request
-                        # event before raising). No tool_result for this
-                        # call -- the resume bucket closes it with the
-                        # row's verdict. Keep dispatching the rest of the
-                        # batch.
+                        # emitted the action_request / connect_request /
+                        # task_question event before raising). No
+                        # tool_result for this call -- the resume bucket
+                        # closes it with the row's verdict. Keep
+                        # dispatching the rest of the batch.
                         batch_suspends.append(suspend_exc)
                         continue
                     _log_large_tool_result(
@@ -1672,6 +1708,20 @@ async def run_conversation_turn(
             "sibling_handle_ids=%s, user=%s)",
             conversation_id, exc.tool_id, exc.handle_id,
             exc.service, exc.sibling_handle_ids, user["email"],
+        )
+        return structured_messages
+    except SuspendForTaskQuestion as exc:
+        # Same shape as SuspendForServiceConnection: the dangling
+        # ask_task_question tool_use is on disk and the resume bucket closes
+        # it once chat.tasks.service.answer_question writes the
+        # task_question wait-handle row (or a Stop cancels it). The task run
+        # driver sets the run ``waiting``.
+        logger.info(
+            "[wait-suspend] Conversation %s suspended on task_question "
+            "(tool_id=%s, handle_id=%s, run_id=%s, "
+            "sibling_handle_ids=%s, user=%s)",
+            conversation_id, exc.tool_id, exc.handle_id,
+            exc.run_id, exc.sibling_handle_ids, user["email"],
         )
         return structured_messages
     except FinishInferenceResponse as exc:
