@@ -177,6 +177,16 @@ async def create_project_from_conversation(
                 ),
             },
         )
+    if meta.get("task_id"):
+        # A task run never belongs to a project (invariant: private, its
+        # record is the task, not the conversation).
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "task_run_conversation",
+                "message": "Task run conversations cannot be converted to projects",
+            },
+        )
 
     project = await _create_project_checked(user, body.name)
     ChatStorage.create_project_workspace(project["id"])

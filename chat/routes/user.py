@@ -743,8 +743,16 @@ async def delete_account(
     from db.project_store import list_projects, delete_all_user_projects
     from db.conversation_store import list_conversations_meta
     from chat.storage import ChatStorage
-    conversations_meta = await list_conversations_meta(user_id)
+    # Quest Task run conversations included: their rows cascade with the
+    # user too, and their directories must be swept like any other.
+    conversations_meta = await list_conversations_meta(
+        user_id, include_task_runs=True,
+    )
     user_projects = await list_projects(user_id)
+    # The user's Quest Tasks (archived included); the rows cascade with the
+    # user, their TASKS_DIR directories are swept below.
+    from db import task_store
+    task_ids = await task_store.list_task_ids_for_user(user_id)
     # Quest Docs the user owns, user and project docs alike. Collected
     # before ANY row delete: the project delete below already cascades the
     # project docs' rows, and delete_user() cascades the rest.
@@ -794,6 +802,26 @@ async def delete_account(
         from chat.tables import service as table_service
 
         await asyncio.to_thread(table_service.delete_table_dirs, table_ids)
+
+    # Each task's directory (the task workspace). Best-effort per id and
+    # never raises, so like the doc and table sweeps it runs before the
+    # unguarded rmtree loops below.
+    if task_ids:
+        import asyncio
+
+        def _sweep_task_dirs() -> None:
+            for task_id in task_ids:
+                try:
+                    task_dir = ChatStorage.get_task_dir(task_id)
+                    if task_dir.exists():
+                        shutil.rmtree(task_dir)
+                except Exception:
+                    logger.exception(
+                        "Account delete: failed to remove task directory %s "
+                        "(user %s)", task_id, user_id,
+                    )
+
+        await asyncio.to_thread(_sweep_task_dirs)
 
     # Delete each conversation's filesystem directory individually
     for conv in conversations_meta:

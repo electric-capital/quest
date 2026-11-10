@@ -201,6 +201,20 @@ class ToolContext:
     # what a routine run must not do reads it (suggest_doc_note: nobody
     # reviews a routine conversation's suggestions as it runs).
     is_routine: bool = False
+    # Quest Task run (the conversation has a task_id, origin="task"):
+    # task_id is the conversation row's task, task_run_id its task_runs
+    # row. Not a run kind of its own: run_kind stays "top_level". The
+    # run-scoped task tools resolve the task and run from here, never from
+    # tool arguments (spec 00012 invariant 5).
+    task_id: str | None = None
+    task_run_id: str | None = None
+
+    @property
+    def is_task_run(self) -> bool:
+        """Whether the conversation is a Quest Task run, whatever the
+        caller kind. Tools that only the run's own top-level model may
+        call combine it with ``is_sub_agent`` / ``is_script``."""
+        return self.task_id is not None
 
     @property
     def block_mutating_tools(self) -> bool:
@@ -977,6 +991,8 @@ async def _dispatch_tool_call(
     is_slack: bool = False,
     is_script: bool = False,
     is_routine: bool = False,
+    task_id: str | None = None,
+    task_run_id: str | None = None,
 ) -> tuple[str, list]:
     """Dispatch a tool call to the appropriate handler.
 
@@ -1033,6 +1049,12 @@ async def _dispatch_tool_call(
             or one-click). It does not change ``run_kind`` (a routine run
             is ``top_level`` and records doc notes deliveries); it keeps
             suggest_doc_note out (``ToolContext.is_routine``).
+        task_id: The conversation's Quest Task id when it is a task run
+            (``conversations.task_id``), else None. Like is_routine it does
+            not change ``run_kind``; it sets ``ToolContext.is_task_run``.
+        task_run_id: The ``task_runs`` row id of that conversation, set
+            together with task_id. The run-scoped task tools act on this
+            run only.
 
     Returns:
         Tuple of (result_string, extra_parts) where extra_parts is a
@@ -1046,6 +1068,7 @@ async def _dispatch_tool_call(
             is_public=is_public, is_inference_api=is_inference_api,
             is_user_subagent=is_user_subagent, is_slack=is_slack,
             is_script=is_script, is_routine=is_routine,
+            task_id=task_id, task_run_id=task_run_id,
         )
     except Exception as exc:
         label = tool_name
@@ -1082,6 +1105,8 @@ async def _dispatch_tool_call_inner(
     is_slack: bool = False,
     is_script: bool = False,
     is_routine: bool = False,
+    task_id: str | None = None,
+    task_run_id: str | None = None,
 ) -> tuple[str, list]:
     """Un-guarded dispatch body; see ``_dispatch_tool_call``."""
     extra_parts = []
@@ -1103,6 +1128,8 @@ async def _dispatch_tool_call_inner(
         is_slack=is_slack,
         is_script=is_script,
         is_routine=is_routine,
+        task_id=task_id,
+        task_run_id=task_run_id,
     )
 
     # Public-project enforcement. This is the security boundary, not the

@@ -505,6 +505,7 @@ async def run_conversation_turn(
     flags: list[str] | None = None,
     attached_filenames: list[str] | None = None,
     thinking_effort: str | None = None,
+    task_id: str | None = None,
 ) -> list[dict]:
     """Run an LLM conversation turn with streaming and tool execution.
 
@@ -541,6 +542,11 @@ async def run_conversation_turn(
             model menu, or None for the model's default. A level the model's
             spec does not list (``thinking_efforts``) is ignored, not an
             error -- the catalog may have changed since the pick was made.
+        task_id: The conversation's ``conversations.task_id``, set by the WS
+            send path and the wait-handle resume. Marks a Quest Task run: the
+            conversation's ``task_runs`` row is resolved up front and both ids
+            reach every top-level tool call (``ToolContext.task_id`` /
+            ``task_run_id``). A task run never belongs to a project.
 
     Returns:
         List of structured message dicts for storage.
@@ -651,6 +657,24 @@ async def run_conversation_turn(
                 )
             subagent_caller = await _get_user_by_id(subagent_run["caller_user_id"])
 
+        # Quest Task runs (conversations.task_id set, origin="task") are
+        # private standalone conversations (spec 00012 invariant 8) with one
+        # task_runs row each; the run-scoped task tools act on that row.
+        task_run = None
+        if task_id:
+            if project_id:
+                raise RuntimeError(
+                    f"Conversation {conversation_id} is a task run and "
+                    "cannot belong to a project"
+                )
+            from db.task_store import get_run_by_conversation
+            task_run = await get_run_by_conversation(conversation_id)
+            if task_run is None or task_run["task_id"] != task_id:
+                raise RuntimeError(
+                    f"Conversation {conversation_id} has task_id={task_id} "
+                    "but no task_runs row"
+                )
+
         # chat_history.json is read ONCE here; the workspace notice flags
         # (below) are derived from it.
         chat_history_data = await _read_chat_history(conversation_id)
@@ -663,6 +687,9 @@ async def run_conversation_turn(
             project_data = await get_project(user["id"], project_id)
             if project_data:
                 resolved_project_guide = project_data.get("guide", "")
+        # A task run has no project (checked above); phase A4 of issue #213
+        # loads its task context here (chat.tasks.context.load_task_context
+        # with task_run["seq"]) for the system prompt's ## Task section.
 
         # Public-project conversations run with an internet-enabled sandbox
         # and are cut off from every internal resource (skills, memories,
@@ -992,6 +1019,8 @@ async def run_conversation_turn(
             structured_messages=structured_messages,
             usage_acc=usage_acc,
             workspace_notice_flags=notice_flags,
+            task_id=task_id,
+            task_run_id=task_run["id"] if task_run else None,
         )
 
         wrapped_message = _wrap_message_with_metadata(
@@ -1483,6 +1512,7 @@ async def run_conversation_turn(
                         # Routine runs keep run_kind "top_level" but may not
                         # suggest doc notes (the suggest_doc_note backstop).
                         is_routine=bool(ctx.routine_id),
+                        task_id=ctx.task_id, task_run_id=ctx.task_run_id,
                     )
 
                     # Emit conversation_updated event when the name was set

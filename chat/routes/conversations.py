@@ -248,7 +248,8 @@ async def compact_conversation_endpoint(
         archive filename, and the summary text).
 
     Raises:
-        HTTPException: 404 unknown conversation; 409 when the conversation
+        HTTPException: 404 unknown conversation; 409 for a Quest Task run
+        (``task_run_conversation``), or when the conversation
         cannot be compacted right now (no model, pending wait handles, a
         model run in progress or one that changed the history while the
         summary was written, no history, nothing to compact, provider
@@ -257,6 +258,17 @@ async def compact_conversation_endpoint(
     user_id = user["id"]
 
     meta = await require_owned_conversation(user_id, conversation_id)
+
+    # A Quest Task run takes exactly one user message, so there is never an
+    # older portion to summarize; the expensive-resume path does not apply.
+    if meta.get("task_id"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "task_run_conversation",
+                "message": "A task run has a single message and cannot be compacted.",
+            }
+        )
 
     model = meta.get("model")
     if not model:
@@ -345,6 +357,8 @@ async def get_conversation(conversation_id: str, user: dict = Depends(get_curren
         conversation["routine_id"] = meta["routine_id"]
     if meta.get("project_id"):
         conversation["project_id"] = meta["project_id"]
+    if meta.get("task_id"):
+        conversation["task_id"] = meta["task_id"]
     # Surface the cached high-water seq so the persistent-WS client can
     # subscribe with a usable last_seq right after hydration.
     conversation["last_message_seq"] = meta.get("last_message_seq") or 0

@@ -712,6 +712,64 @@ class ChatStorage:
         return conversation_id
 
     @staticmethod
+    async def create_task_run_conversation(
+        user_id: int,
+        task_id: str,
+        *,
+        model: Optional[str] = None,
+    ) -> str:
+        """Create the conversation for one run of a Quest Task (origin="task").
+
+        Mirrors create_inference_api_conversation(): ``chat_history.json``
+        and the row both carry ``origin="task"`` and ``task_id``. The row
+        never has a ``project_id`` (a task run is private and never belongs
+        to a project), takes no unread state of its own (unread lives on the
+        task) and stays out of the Conversations sidebar and search
+        (``list_conversations_meta(include_task_runs=False)``).
+
+        No access checks happen here: the task service checks the feature
+        gate, ownership, the archive flag and the one-active-run rule before
+        calling this. The ``task_runs`` row is allocated later, when the
+        run's single user message arrives.
+
+        Args:
+            user_id: The task owner's integer ID.
+            task_id: The task this run belongs to.
+            model: Optional LLM model ID to set on the conversation.
+
+        Returns:
+            conversation_id: UUID string for the new conversation.
+        """
+        from chat.tasks.constants import TASK_CONVERSATION_ORIGIN
+        from db.conversation_store import create_conversation as db_create_conversation
+
+        conversation_id = str(uuid.uuid4())
+        conversation_dir = ChatStorage._get_conversation_dir(conversation_id)
+        conversation_dir.mkdir(parents=True, exist_ok=True)
+
+        created_at_str = utc_timestamp()
+
+        chat_data = {
+            "id": conversation_id,
+            "user_id": user_id,
+            "created_at": created_at_str,
+            "origin": TASK_CONVERSATION_ORIGIN,
+            "task_id": task_id,
+            "messages": [],
+        }
+
+        chat_file = ChatStorage._get_chat_history_file(conversation_id)
+        write_json_atomic(chat_file, chat_data)
+
+        created_at_dt = _parse_datetime(created_at_str)
+        await db_create_conversation(
+            user_id, conversation_id, created_at_dt,
+            model=model, origin=TASK_CONVERSATION_ORIGIN, task_id=task_id,
+        )
+
+        return conversation_id
+
+    @staticmethod
     def get_conversation(conversation_id: str) -> Optional[Dict]:
         """Get conversation history from disk.
 
@@ -1926,7 +1984,9 @@ class ChatStorage:
             include_routines: Whether to scan conversations a routine
                 created (``routine_id`` set). Off by default so a routine
                 that runs daily does not fill the results with
-                near-identical hits.
+                near-identical hits. Quest Task run conversations are
+                never scanned (``list_conversations_meta`` default): a run
+                is read on its task's page.
 
         Returns:
             Dict with 'results', 'total_matches', and 'query' keys.
