@@ -1120,6 +1120,217 @@ class RoutineScheduleRun(Base):
     )
 
 
+class Task(Base):
+    """A Quest Task: a long-lived unit of work the owner keeps prompting into.
+
+    Every prompt is answered by a run (``task_runs``) that starts from a
+    fresh model context; what carries over between runs lives on this row
+    (the user's ``instructions`` and the model-maintained ``brief``), in the
+    runs' log entries and in the task workspace on disk
+    (``TASKS_DIR/<id>/workspace``). Private and owned by one user; every
+    write goes through db/task_store.py, and the caps come from
+    chat/tasks/constants.py (enforced at the application layer).
+    """
+
+    __tablename__ = "tasks"
+    __table_args__ = (
+        sa.Index(
+            "ix_tasks_user_id_archived_last_activity",
+            "user_id", "archived", "last_activity_at",
+        ),
+    )
+
+    # UUID string primary key
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+
+    # Owner (integer FK to users.id); cascade-deleted with the user
+    user_id: Mapped[int] = mapped_column(
+        sa.Integer,
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # Display title (max TASK_TITLE_MAX_CHARS, enforced at application layer)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    # True while ``title`` is still the text cut from the first prompt. Only
+    # then may a run name the task (complete_task_run ``task_title``); a
+    # rename by the user or the run's naming clears it for good.
+    title_is_default: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=True, server_default=sa.true()
+    )
+
+    # Standing rules written by the user only; no model path writes them.
+    instructions: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
+
+    # The current state of the work (markdown), rewritten by runs and
+    # editable by the user. ``brief_version`` is its concurrency token and
+    # counts writes (0 = never written); each write also stores a
+    # ``task_brief_versions`` row.
+    brief: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
+    brief_version: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+    brief_updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, default=None
+    )
+
+    # Default model and thinking level for new runs; NULL = the user's default
+    model: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True, default=None
+    )
+    thinking_effort: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True, default=None
+    )
+
+    # Archived tasks leave the sidebar and refuse new runs; the thread stays
+    # readable. Unarchived tasks count against MAX_ACTIVE_TASKS_PER_USER.
+    archived: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
+
+    # The ``seq`` the next run gets. Only ever incremented, so run numbers
+    # are never reused, even after a run is deleted.
+    next_run_seq: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=1, server_default="1"
+    )
+
+    # Bumped on every change to what the thread shows (run start, status,
+    # entry, delete, brief, question) and on task edits. Unread state is the
+    # conversation-unread scheme over this counter: the task is unread while
+    # ``unread_seq > read_seq``; both only move forward.
+    event_seq: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+    unread_seq: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+    read_seq: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+
+    # Timestamps. ``last_activity_at`` orders the sidebar: it moves on
+    # create and on every run write.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    last_activity_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class TaskRun(Base):
+    """One run of a task: a prompt answered in its own conversation.
+
+    The run's conversation carries ``conversations.task_id`` and origin
+    ``"task"``; the row is created when the conversation's one user message
+    is accepted (db/task_store.py ``allocate_run``) and cascades with both
+    the task and the conversation, so deleting a run's conversation deletes
+    its log entry. ``seq`` numbers the runs of a task from 1 and is never
+    reused. ``status`` is one of chat/tasks/constants.py
+    ``TASK_RUN_STATUSES``; ``running`` and ``waiting`` are active, and at
+    most one run per task is active (checked in ``allocate_run``). The log
+    entry (``summary``, ``result``, ``notes``) is written by
+    ``complete_task_run``.
+    """
+
+    __tablename__ = "task_runs"
+    __table_args__ = (
+        sa.Index("ix_task_runs_task_id_seq", "task_id", "seq", unique=True),
+        sa.Index("ix_task_runs_task_id_status", "task_id", "status"),
+        sa.Index("ix_task_runs_conversation_id", "conversation_id", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    task_id: Mapped[str] = mapped_column(
+        String(36),
+        sa.ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Run number within the task, from 1 (allocated from tasks.next_run_seq)
+    seq: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    # The run's conversation (one per run; unique)
+    conversation_id: Mapped[str] = mapped_column(
+        String(36),
+        sa.ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # The user's message, verbatim
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    # running | waiting | completed | failed | stopped
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    # The log entry: one line for the index, the reply shown to the user,
+    # and the handoff for later runs. NULL until the run completes.
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    result: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    # The run finished without calling complete_task_run (even after the
+    # nudge); its entry was filled from its final text.
+    handoff_missing: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
+    # Why a failed run failed
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    # The model the run used
+    model: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True, default=None
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    finished_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, default=None
+    )
+
+
+class TaskBriefVersion(Base):
+    """One stored version of a task's brief.
+
+    Each brief write stores the text it wrote under the ``brief_version`` it
+    produced, so the newest row is always the current brief and ``source``
+    names who wrote that version: ``run:<run_id>``, ``ui`` or
+    ``restore:<version>``. The empty version 0 has no row. At most
+    TASK_BRIEF_MAX_VERSIONS rows per task are kept (the oldest are pruned in
+    the writing transaction); cascades with the task.
+    """
+
+    __tablename__ = "task_brief_versions"
+    __table_args__ = (
+        sa.Index(
+            "ix_task_brief_versions_task_id_version",
+            "task_id", "version", unique=True,
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    task_id: Mapped[str] = mapped_column(
+        String(36),
+        sa.ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # The tasks.brief_version this text had
+    version: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # run:<run_id> | ui | restore:<version>
+    source: Mapped[str] = mapped_column(String(50), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+
 class Conversation(Base):
     """Per-conversation metadata stored in SQLite.
 
@@ -1166,6 +1377,16 @@ class Conversation(Base):
         index=True,
     )
 
+    # The Quest Task this conversation is a run of (NULL for every other
+    # conversation). Set at creation with origin "task"; cascade-deleted
+    # with the task. A run conversation never has a project_id.
+    task_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        sa.ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     last_message_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
@@ -1206,8 +1427,11 @@ class Conversation(Base):
     # "web" (default), "slack", "user_subagent" (a cross-user subagent run
     # created by another user's approved run_user_subagent action request; the
     # owner can view but not send), and "inference_api" (a one-shot headless
-    # run driven by POST /api/inference; also read-only for the owner). NULL
-    # is treated as "web" by application code.
+    # run driven by POST /api/inference; also read-only for the owner), and
+    # "task" (one run of a Quest Task, ``task_id`` set; it takes exactly one
+    # user message, stays out of the Conversations list and is read-only when
+    # opened; unread state is tracked on the task). NULL is treated as "web"
+    # by application code.
     origin: Mapped[Optional[str]] = mapped_column(
         String(20), nullable=True, default=None
     )
