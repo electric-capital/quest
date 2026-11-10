@@ -1152,6 +1152,52 @@ async def complete_run(
         return _run_to_dict(await db.get(TaskRun, run_id, populate_existing=True))
 
 
+async def save_run_entry(
+    run_id: str, *, summary: str, result: str, notes: str,
+) -> dict:
+    """Save an active run's log entry WITHOUT finishing the run.
+
+    The pending-entry state of a ``brief_conflict`` (chat/tasks/runs.py):
+    ``complete_task_run`` could not apply its brief because the user edited
+    it during the run, so the entry is kept while the model merges and
+    retries. An active run whose ``summary`` is not None has a pending
+    entry; :func:`complete_run` later overwrites or finalizes it.
+
+    The entry goes through :func:`validate_run_entry` first, so a refused
+    entry writes nothing. ``status``, ``finished_at`` and the task's
+    ``event_seq`` are left alone: a pending entry is not a thread change.
+
+    Returns:
+        The run dict.
+
+    Raises:
+        TaskValidationError, TaskRunNotFoundError, TaskRunFinishedError.
+    """
+    clean_summary, clean_result, clean_notes = validate_run_entry(summary, result, notes)
+    async with AsyncSessionLocal() as db:
+        result_proxy = await db.execute(
+            update(TaskRun)
+            .where(
+                TaskRun.id == run_id,
+                TaskRun.status.in_(TASK_RUN_ACTIVE_STATUSES),
+            )
+            .values({
+                TaskRun.summary: clean_summary,
+                TaskRun.result: clean_result,
+                TaskRun.notes: clean_notes,
+            })
+            .execution_options(synchronize_session=False)
+        )
+        if result_proxy.rowcount != 1:
+            await db.rollback()
+            run = await db.get(TaskRun, run_id, populate_existing=True)
+            if run is None:
+                raise TaskRunNotFoundError(run_id)
+            raise TaskRunFinishedError(run_id, run.status)
+        await db.commit()
+        return _run_to_dict(await db.get(TaskRun, run_id, populate_existing=True))
+
+
 async def get_run_context(run_id: str) -> Optional[tuple[str, int]]:
     """The run's frozen starting context as ``(context,
     context_brief_version)``, or None when it is not frozen yet or the run

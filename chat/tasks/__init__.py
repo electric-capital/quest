@@ -9,6 +9,10 @@ Modules:
 
 - ``constants`` -- size caps, the connected-services pseudo-key and the
   shared error texts.
+- ``context`` -- the ``## Task`` system-prompt section of a run.
+- ``service`` -- starting a run, the startup sweeps.
+- ``runs`` -- ``complete_task_run`` and the run driver (run statuses).
+- ``events`` -- the ``task_changed`` / ``task_list_changed`` publishes.
 
 The rows (``tasks``, ``task_runs``, ``task_brief_versions``) are written
 only through ``db/task_store.py``; the task workspace path is resolved only

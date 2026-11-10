@@ -211,6 +211,46 @@ def make_table_changed(
     }
 
 
+def make_task_list_changed() -> dict[str, Any]:
+    """Envelope for ``task_list_changed``.
+
+    Per-user global published after any Quest Tasks change that can alter
+    a list row (create, rename, archive, delete, and every change to a
+    row's ``active_run`` or ``unread``: a run starting, waiting, finishing,
+    the task being marked unread). Carries no ids: the sidebar section and
+    the archived list simply re-fetch. Published through
+    chat/tasks/events.py only.
+    """
+    return {"type": "task_list_changed"}
+
+
+def make_task_changed(
+    task_id: str,
+    event_seq: int,
+    brief_version: int,
+    active_run: Optional[dict],
+) -> dict[str, Any]:
+    """Envelope for ``task_changed``.
+
+    Per-user global published after every change to a task's thread or
+    brief (a run starting, changing status or finishing, a brief write).
+    ``event_seq`` is the task's thread counter after the change: an open
+    thread of ``task_id`` re-fetches its newest page when it moved.
+    ``brief_version`` lets the brief panel re-fetch only when it moved.
+    ``active_run`` is ``{id, seq, status}`` of the task's running or
+    waiting run, or None, so the composer and the activity line update
+    without a fetch. Carries no task text. Published through
+    chat/tasks/events.py only.
+    """
+    return {
+        "type": "task_changed",
+        "task_id": task_id,
+        "event_seq": event_seq,
+        "brief_version": brief_version,
+        "active_run": active_run,
+    }
+
+
 def make_memory_suggestions_changed(
     conversation_id: Optional[str],
     pending_count: int,
