@@ -9,10 +9,10 @@ yielded a full-account bearer (issue #201).
 This module replaces it with a per-run token:
 
 * :func:`issue_sandbox_token` mints a random ``qsb_``-prefixed token bound
-  to one user and the launching conversation's context (its id, project and
-  public flag, which the ``POST /api/tool-call`` bridge hands to tool
-  dispatch so a script sees the docs and tables its conversation sees) with
-  a hard expiry equal to the container's maximum lifetime plus a small
+  to one user and the launching conversation's context (its id, project,
+  public flag and task run, which the ``POST /api/tool-call`` bridge hands
+  to tool dispatch so a script sees the docs, tables and task runs its
+  conversation sees) with a hard expiry equal to the container's maximum lifetime plus a small
   grace.
 * :func:`revoke_sandbox_token` drops it the moment the container exits;
   :func:`sandbox_token_lease` wraps both around the container run.
@@ -70,6 +70,12 @@ class SandboxLease:
     # chat.llm.tool_schemas), so a script cannot do what the run's own
     # tool dispatch refuses.
     block_mutating_tools: bool = False
+    # The launching task run of a Quest Task (both None outside task runs).
+    # The script tool-call bridge passes them to _dispatch_tool_call, so a
+    # run's scripts can call list_task_runs / read_task_run for the run's
+    # own task.
+    task_id: str | None = None
+    task_run_id: str | None = None
 
 
 _leases: dict[str, SandboxLease] = {}
@@ -94,6 +100,8 @@ def issue_sandbox_token(
     project_id: str | None = None,
     is_public: bool = False,
     block_mutating_tools: bool = False,
+    task_id: str | None = None,
+    task_run_id: str | None = None,
 ) -> str:
     """Mint a token for *user_id* valid for ``ttl_seconds`` from now."""
     if ttl_seconds <= 0:
@@ -109,6 +117,8 @@ def issue_sandbox_token(
             project_id=project_id,
             is_public=is_public,
             block_mutating_tools=block_mutating_tools,
+            task_id=task_id,
+            task_run_id=task_run_id,
         )
     return token
 
@@ -146,6 +156,8 @@ def sandbox_token_lease(
     project_id: str | None = None,
     is_public: bool = False,
     block_mutating_tools: bool = False,
+    task_id: str | None = None,
+    task_run_id: str | None = None,
 ) -> Iterator[str]:
     """Issue a token for the duration of a container run and revoke it after.
 
@@ -159,6 +171,7 @@ def sandbox_token_lease(
         user_id, ttl_seconds=ttl_seconds, conversation_id=conversation_id,
         project_id=project_id, is_public=is_public,
         block_mutating_tools=block_mutating_tools,
+        task_id=task_id, task_run_id=task_run_id,
     )
     try:
         yield token

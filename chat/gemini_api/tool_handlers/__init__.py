@@ -13,6 +13,7 @@ package -- the re-export is a separate binding.
 from chat.gemini_api.tool_handlers._common import (
     conversation_workspace_dir,
     project_workspace_dir,
+    task_workspace_dir,
     _no_project_result,
     _publish_file_list_changed,
     _parse_content_disposition_filename,
@@ -38,6 +39,7 @@ from chat.gemini_api.tool_handlers.workspace_copy import _handle_copy_file
 from chat.gemini_api.tool_handlers.file_paths import (
     SPACE_CHAT,
     SPACE_PROJECT,
+    SPACE_TASK,
     SpacePathError,
     format_space_path,
     parse_space_path,
@@ -112,6 +114,7 @@ from chat.gemini_api.tool_handlers.docs import (
 __all__ = [
     "conversation_workspace_dir",
     "project_workspace_dir",
+    "task_workspace_dir",
     "_no_project_result",
     "_publish_file_list_changed",
     "_parse_content_disposition_filename",
@@ -131,6 +134,7 @@ __all__ = [
     "resolve_space_root",
     "SPACE_CHAT",
     "SPACE_PROJECT",
+    "SPACE_TASK",
     "SpacePathError",
     "format_space_path",
     "parse_space_path",

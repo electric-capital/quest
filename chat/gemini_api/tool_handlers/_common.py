@@ -38,6 +38,23 @@ async def project_workspace_dir(project_id: str) -> Path:
     return workspace_dir
 
 
+async def task_workspace_dir(task_id: str) -> Path:
+    """Return the task workspace root, creating it if missing.
+
+    ``ChatStorage.get_task_workspace_root``: the workspace shared by every
+    task run of a Quest Task, reached only through ``task://`` paths of
+    the space-aware file tools, ``/task`` in the sandbox and the task file
+    routes. The resolver never creates it; the first tool use does, here.
+
+    Raises:
+        InvalidStorageIdError: ``task_id`` is not a valid storage id.
+    """
+    from chat.storage import ChatStorage
+    workspace_dir = ChatStorage.get_task_workspace_root(task_id)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    return workspace_dir
+
+
 def _no_project_result() -> str:
     """Structured refusal of a ``proj://`` path outside a project.
 
@@ -64,20 +81,46 @@ def _invalid_project_result() -> str:
     })
 
 
+def _no_task_result() -> str:
+    """Structured refusal of a ``task://`` path outside a task run.
+
+    ``parse_space_path`` already refuses ``task://`` for a conversation
+    without a task id; this guards a direct ``resolve_space_root`` call.
+    """
+    return json.dumps({
+        "error": (
+            "This conversation is not a task run of a Quest Task, so task:// "
+            "paths do not exist here."
+        ),
+        "code": "no_task",
+    })
+
+
+def _invalid_task_result() -> str:
+    """Structured refusal when the conversation's task id does not resolve
+    to a valid task workspace (``InvalidStorageIdError``)."""
+    return json.dumps({
+        "error": "This task run's task workspace could not be resolved.",
+        "code": "invalid_task",
+    })
+
+
 def _publish_file_list_changed(
     user_id: int,
     scope: str,
     conversation_id: str | None,
     project_id: str | None,
+    task_id: str | None = None,
 ) -> None:
     """Best-effort: notify the user's WS subscribers that a workspace
     listing has changed so the file browser can silent-refresh.
 
     ``scope`` is the workspace that changed, set explicitly by the caller:
     ``"conversation"`` for the conversation workspace (every tool write by
-    default) and ``"project"`` for the project workspace (project file and
-    copy tools), whose events reach every sibling conversation's tab.
-    Same argument order as the ``chat.file_routes`` helper.
+    default), ``"project"`` for the project workspace (project file and
+    copy tools), whose events reach every sibling conversation's tab, and
+    ``"task"`` for the task workspace of ``task_id`` (required for that
+    scope). Same argument order as the ``chat.file_routes`` helper.
     """
     try:
         from chat.realtime import bus, events as realtime_events
@@ -87,13 +130,16 @@ def _publish_file_list_changed(
                 conversation_id=conversation_id,
                 project_id=project_id,
                 scope=scope,
+                task_id=task_id,
             ),
         )
     except Exception:
         logger.debug(
             "[tool_handlers] publish file_list_changed failed "
-            "(user_id=%s, scope=%s, conversation_id=%s, project_id=%s)",
-            user_id, scope, conversation_id, project_id, exc_info=True,
+            "(user_id=%s, scope=%s, conversation_id=%s, project_id=%s, "
+            "task_id=%s)",
+            user_id, scope, conversation_id, project_id, task_id,
+            exc_info=True,
         )
 
 

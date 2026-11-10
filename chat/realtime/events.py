@@ -71,13 +71,14 @@ def make_conversation_unread_changed(
     }
 
 
-FILE_LIST_SCOPES = frozenset({"conversation", "project"})
+FILE_LIST_SCOPES = frozenset({"conversation", "project", "task"})
 
 
 def make_file_list_changed(
     conversation_id: Optional[str],
     project_id: Optional[str],
     scope: str,
+    task_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Envelope for ``file_list_changed``.
 
@@ -94,21 +95,32 @@ def make_file_list_changed(
       ``project_id`` is still carried);
     * ``"project"`` -- the shared workspace of ``project_id``;
       ``conversation_id`` is the triggering conversation, or None for a
-      write through the project file routes.
+      write through the project file routes;
+    * ``"task"`` -- the shared workspace of the Quest Task ``task_id``
+      (required for this scope); ``conversation_id`` is the triggering
+      task run, or None for a write through the task file routes.
 
-    The FE filter keys off ``scope`` plus the matching id.
+    The payload carries a ``task_id`` key only when ``task_id`` is given,
+    so conversation and project payloads keep their shape. The FE filter
+    keys off ``scope`` plus the matching id (``task_id`` for scope task).
 
     Raises:
-        ValueError: ``scope`` is not one of ``FILE_LIST_SCOPES``.
+        ValueError: ``scope`` is not one of ``FILE_LIST_SCOPES``, or scope
+            ``"task"`` without a ``task_id``.
     """
     if scope not in FILE_LIST_SCOPES:
         raise ValueError(f"invalid file_list_changed scope: {scope!r}")
-    return {
+    if scope == "task" and not task_id:
+        raise ValueError("file_list_changed scope 'task' requires a task_id")
+    event = {
         "type": "file_list_changed",
         "conversation_id": conversation_id,
         "project_id": project_id,
         "scope": scope,
     }
+    if task_id is not None:
+        event["task_id"] = task_id
+    return event
 
 
 def make_routine_list_changed(project_id: str) -> dict[str, Any]:
