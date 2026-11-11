@@ -1,6 +1,7 @@
 /* TaskPanel -- the task page's brief and instructions panel
  * (TaskPanelSection, TaskInstructionsSection, TaskBriefSection,
- * TaskBriefEditor, TaskBriefHistory). TaskPage.css places the panel: the
+ * TaskBriefEditor, TaskBriefHistory, and the Task files card TaskPage
+ * passes in). TaskPage.css places the panel: the
  * 340px right column on desktop, between the header and the thread on
  * phones.
  *
@@ -362,6 +363,23 @@
   overflow-x: auto;
 }
 
+/* --- Task files (TaskPage's FileBrowser card, `hideTitle`) ------------- */
+
+/* A bounded card so the file list scrolls inside it instead of stretching
+   the panel; FileBrowser fills it (flex: 1, min-height: 0). */
+.task-panel-files {
+  display: flex;
+  flex-direction: column;
+  height: 22rem;
+  max-height: 60vh;
+  min-height: 14rem;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background-color: var(--surface-raised);
+}
+
 /* --- Editors ------------------------------------------------------------ */
 
 .task-panel-editor {
@@ -713,6 +731,10 @@
 
   .task-panel-button {
     min-height: 2rem;
+  }
+
+  .task-panel-files {
+    height: min(22rem, 65vh);
   }
 
   /* 16px: iOS zooms into smaller inputs on focus. */

@@ -1,10 +1,12 @@
-import { useCallback } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import './TaskPage.css'
+import { taskSource } from '../../api/fileApi'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useTask } from '../../hooks/useTask'
 import { useTaskRuns } from '../../hooks/useTaskRuns'
 import { useMarkTaskViewed } from '../../hooks/useTaskUnread'
+import { FileBrowser, type FileBrowserListing } from '../FileBrowser'
 import { TaskHeader } from './TaskHeader'
 import { TaskThread } from './TaskThread'
 import { TaskPanel } from './TaskPanel'
@@ -26,9 +28,12 @@ import { TaskNotice, readTaskNotice } from './TaskNotice'
  * This shell is the lasting page frame: it owns the one useTask and the one
  * useTaskRuns of the page and passes them down, and acknowledges an unread
  * task while it is on screen in a focused window. The header, the thread
- * and the panel own their bodies (TaskHeader, TaskThread, TaskPanel; B5
- * passes the Task files card into TaskPanel's `filesSection`). App.tsx
- * keys it by task id, so switching tasks starts from a fresh state.
+ * and the panel own their bodies (TaskHeader, TaskThread, TaskPanel). The
+ * page supplies the panel's Task files section: a FileBrowser card over the
+ * task workspace (titled by the section, so `hideTitle`), whose own listing
+ * of the root also gives the section's phone summary ("3 items"), so the
+ * space is never listed twice. App.tsx keys it by task id, so switching
+ * tasks starts from a fresh state.
  *
  * A notice carried in the router state (TaskPageLocationState, e.g. the
  * New Task page's "created, but the run did not start") shows above the
@@ -49,6 +54,14 @@ export function TaskPage({ taskId }: { taskId: string }) {
   const dismissNotice = useCallback(() => {
     navigate(`${location.pathname}${location.search}`, { replace: true, state: null })
   }, [navigate, location.pathname, location.search])
+
+  const filesSource = useMemo(() => taskSource(taskId), [taskId])
+  // Entries at the task workspace root, from the card's own listing; null
+  // until it listed the root (it may restore a subfolder it was left in).
+  const [rootEntryCount, setRootEntryCount] = useState<number | null>(null)
+  const handleFilesListing = useCallback((listing: FileBrowserListing) => {
+    if (listing.path === '/') setRootEntryCount(listing.count)
+  }, [])
 
   if (loading) {
     return (
@@ -80,7 +93,15 @@ export function TaskPage({ taskId }: { taskId: string }) {
   )
   const panel = (
     <aside key="panel" className="task-page-panel" aria-label="Task brief and instructions">
-      <TaskPanel task={view} />
+      <TaskPanel
+        task={view}
+        filesSection={
+          <div className="task-panel-files">
+            <FileBrowser source={filesSource} hideTitle onListing={handleFilesListing} />
+          </div>
+        }
+        filesSummary={taskFilesSummary(rootEntryCount)}
+      />
     </aside>
   )
 
@@ -95,4 +116,11 @@ export function TaskPage({ taskId }: { taskId: string }) {
       <div className="task-page-body">{isMobile ? [panel, thread] : [thread, panel]}</div>
     </div>
   )
+}
+
+/** The collapsed Task files row's summary: what the workspace root holds. */
+function taskFilesSummary(rootEntryCount: number | null): string {
+  if (rootEntryCount === null) return 'Shared by every run'
+  if (rootEntryCount === 0) return 'No files yet'
+  return `${rootEntryCount} item${rootEntryCount === 1 ? '' : 's'}`
 }
