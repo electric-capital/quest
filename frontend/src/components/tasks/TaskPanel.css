@@ -338,6 +338,24 @@
   margin-bottom: 0;
 }
 
+/* Headings scaled to the narrow column: a brief is mostly "## Section"
+   blocks, which at chat size dwarf the panel's own headings. */
+.task-panel-markdown h1,
+.task-panel-markdown h2 {
+  margin: 1rem 0 0.4rem;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.task-panel-markdown h3,
+.task-panel-markdown h4,
+.task-panel-markdown h5,
+.task-panel-markdown h6 {
+  margin: 0.85rem 0 0.35rem;
+  font-size: 0.9375rem;
+  line-height: 1.35;
+}
+
 .task-panel-markdown .katex-display,
 .task-panel-markdown table {
   display: block;
