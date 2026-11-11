@@ -11,11 +11,11 @@ import { TaskTimeAgo } from './TaskControls'
 const EMPTY_TEXT = 'No brief yet. The first update writes it, or write one yourself.'
 
 /**
- * The brief, the main content of the task page (TaskPage's main column,
- * under the header): the task's markdown brief, written by runs
+ * The Brief card, the main content of the task page (TaskPage's main
+ * column, under the header): the task's markdown brief, written by runs
  * and editable by the user in place.
  *
- * View: a "Brief" heading row with the byline ("Updated 3h ago · update
+ * View: the card header with "Brief", the byline ("Updated 3h ago · update
  * N", "Edited by you · 3h ago", "Restored from version n · 3h ago", full
  * time on hover) and Edit and History, then the rendered brief (TaskBriefMarkdown;
  * `task://` links open in the page's file viewer through `onOpenFile`). An
@@ -87,17 +87,17 @@ export function TaskBrief({
   } else if (hasBrief) {
     body = <TaskBriefBody taskId={task.id} content={task.brief} onOpenFile={onOpenFile} />
   } else {
-    body = <p className="task-brief-empty">{EMPTY_TEXT}</p>
+    body = <p className="task-card-empty">{EMPTY_TEXT}</p>
   }
 
   return (
-    <section className="task-section task-brief" aria-labelledby={headingId}>
-      <div className="task-section-head">
-        <h2 id={headingId} className="task-section-heading">
+    <section className="task-card task-brief" aria-labelledby={headingId}>
+      <div className="task-card-head">
+        <h2 id={headingId} className="task-card-title">
           Brief
         </h2>
         {hasBrief && !editing && (attribution || updatedAt) && (
-          <p className="task-section-meta">
+          <p className="task-card-meta">
             {byUpdate && updatedAt ? (
               <>
                 Updated <TaskTimeAgo iso={updatedAt} />
@@ -117,7 +117,7 @@ export function TaskBrief({
             )}
           </p>
         )}
-        <div className="task-section-actions">
+        <div className="task-card-actions">
           {!editing && (
             <button
               ref={editButtonRef}
@@ -144,7 +144,7 @@ export function TaskBrief({
           )}
         </div>
       </div>
-      {body}
+      <div className="task-card-body">{body}</div>
     </section>
   )
 }

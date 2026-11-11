@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Task, TaskRun } from '../../api/types'
-import { conversationSource } from '../../api/fileApi'
+import { conversationSource, type FileSource } from '../../api/fileApi'
 import type { WorkspaceCopy } from '../../hooks/useWorkspaceCopy'
 import { useTaskRun } from '../../hooks/useTaskRun'
 import { formatTimestamp } from '../../utils/formatters'
 import { ChatPanel } from '../ChatPanel'
+import { MarkdownWorkspaceContext, markdownComponents } from '../Message'
+import { RichMarkdown } from '../RichMarkdown'
 import { FileBrowser } from '../FileBrowser'
 import { TaskDetailPanel } from './TaskDetailPanel'
 import { TaskRunError } from './TaskRunError'
@@ -26,7 +28,7 @@ function taskRunStatusLabel(run: Pick<TaskRun, 'status' | 'handoff_missing'>): s
   }
 }
 
-type RunPanelTab = 'transcript' | 'files'
+type RunPanelTab = 'transcript' | 'notes' | 'files'
 
 /**
  * A run's transcript in the task page's detail panel (TaskDetailPanel),
@@ -43,6 +45,10 @@ type RunPanelTab = 'transcript' | 'files'
  *   `task_question` rows the task id and the run's questions as last
  *   listed, so a pending question is answerable here; approval and connect
  *   cards resolve through their own endpoints, as in any chat.
+ * - Handoff notes (only for a finished run that left notes): what the run
+ *   handed to the next one, as markdown in the run's workspace context
+ *   (`task://` links open in the page's viewer, `onOpenFile`). The main
+ *   column no longer shows them.
  * - Chat Files: the run's own workspace (FileBrowser), with the page's
  *   Copy / Move row actions to the task files (`copy`, TaskPage's
  *   useWorkspaceCopy, which also gives the main column's Task files card
@@ -64,6 +70,7 @@ export function TaskRunPanel({
   copy,
   onResolved,
   onClose,
+  onOpenFile,
 }: {
   task: Task
   /** useTask's count of `task_changed` events: each re-reads the run. */
@@ -72,6 +79,7 @@ export function TaskRunPanel({
   copy: WorkspaceCopy
   onResolved: (conversationId: string, resolved: boolean) => void
   onClose: () => void
+  onOpenFile: (workspacePath: string, filename: string, source: FileSource) => void
 }) {
   const taskId = task.id
   const lookup = useTaskRun(taskId, conversationId, changeSeq)
@@ -89,6 +97,10 @@ export function TaskRunPanel({
     [taskId, run],
   )
   const chatSource = useMemo(() => conversationSource(conversationId), [conversationId])
+  const notesWorkspace = useMemo(
+    () => ({ conversationId, taskId, onOpenFile }),
+    [conversationId, taskId, onOpenFile],
+  )
 
   if (!run || !ctx) {
     let note
@@ -117,6 +129,10 @@ export function TaskRunPanel({
     )
   }
 
+  const notes =
+    run.status !== 'running' && run.status !== 'waiting' && run.notes?.trim() ? run.notes : null
+  const shownTab = tab === 'notes' && !notes ? 'transcript' : tab
+
   const ended =
     run.status === 'failed' ? (
       <TaskRunError error={run.error} className="task-run-panel-error" />
@@ -142,16 +158,27 @@ export function TaskRunPanel({
           <button
             type="button"
             role="tab"
-            aria-selected={tab === 'transcript'}
+            aria-selected={shownTab === 'transcript'}
             className="task-run-panel-tab"
             onClick={() => setTab('transcript')}
           >
             Transcript
           </button>
+          {notes && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={shownTab === 'notes'}
+              className="task-run-panel-tab"
+              onClick={() => setTab('notes')}
+            >
+              Handoff notes
+            </button>
+          )}
           <button
             type="button"
             role="tab"
-            aria-selected={tab === 'files'}
+            aria-selected={shownTab === 'files'}
             className="task-run-panel-tab"
             onClick={() => setTab('files')}
           >
@@ -162,7 +189,19 @@ export function TaskRunPanel({
       onClose={onClose}
       body="fill"
     >
-      {tab === 'transcript' ? (
+      {shownTab === 'notes' && notes ? (
+        <div className="task-run-panel-notes" role="tabpanel" aria-label="Handoff notes">
+          <p className="task-run-panel-notes-hint">
+            What this update left for the next one: findings, dead ends, and where its files and
+            artifacts are.
+          </p>
+          <div className="message-content task-ctl-markdown">
+            <MarkdownWorkspaceContext.Provider value={notesWorkspace}>
+              <RichMarkdown components={markdownComponents}>{notes}</RichMarkdown>
+            </MarkdownWorkspaceContext.Provider>
+          </div>
+        </div>
+      ) : shownTab === 'transcript' ? (
         <TaskRunPanelContext.Provider value={ctx}>
           <div className="task-run-panel-transcript" role="tabpanel" aria-label="Transcript">
             <ChatPanel conversationId={conversationId} header={ended} />

@@ -43,10 +43,12 @@ interface ViewerFile {
  * that run open in the detail panel; TasksMain keys it by task id, so
  * moving between the two keeps the page).
  *
- * The main column (TaskMainColumn) holds, top to bottom: the header, the
- * brief as the page's main content (TaskBrief, edited in place), the Task files card (a FileBrowser
- * over the task workspace), the Updates (one per run, oldest first) and the
- * composer pinned at the bottom. The page opens at the top. Without a
+ * The main column (TaskMainColumn) holds, top to bottom: the header, then
+ * three cards: the Brief, the page's main content (TaskBrief, edited in
+ * place), Task files (a compact FileBrowser over the task workspace whose
+ * toolbar is the card's header row) and Updates (one per run, in the
+ * viewer's sort order, TaskUpdates), and the composer pinned at the bottom
+ * outside the cards. The page opens at the top. Without a
  * detail view the column takes the whole width at the chat's reading
  * measure, centred.
  *
@@ -227,24 +229,24 @@ export function TaskPage({ taskId, runConversationId }: { taskId: string; runCon
         onOpenHistory={openHistory}
         onOpenFile={handleOpenFile}
       />
-      <section className="task-section task-files" aria-labelledby={filesHeadingId}>
-        <div className="task-section-head">
-          <h2 id={filesHeadingId} className="task-section-heading">
-            Task files
-          </h2>
-          <p className="task-section-meta">{taskFilesSummary(rootEntryCount)}</p>
-        </div>
-        <div className="task-files-card">
-          <FileBrowser
-            source={filesSource}
-            hideTitle
-            compact
-            onListing={handleFilesListing}
-            rowActions={copy.sharedRowActions}
-            notice={copy.notices.task}
-            onDismissNotice={() => copy.dismissNotice('task')}
-          />
-        </div>
+      <section className="task-card task-files" aria-labelledby={filesHeadingId}>
+        <FileBrowser
+          source={filesSource}
+          hideTitle
+          compact
+          toolbarLead={
+            <>
+              <h2 id={filesHeadingId} className="task-card-title">
+                Task files
+              </h2>
+              <span className="task-card-meta">{taskFilesSummary(rootEntryCount)}</span>
+            </>
+          }
+          onListing={handleFilesListing}
+          rowActions={copy.sharedRowActions}
+          notice={copy.notices.task}
+          onDismissNotice={() => copy.dismissNotice('task')}
+        />
       </section>
     </>
   )
@@ -260,6 +262,7 @@ export function TaskPage({ taskId, runConversationId }: { taskId: string; runCon
         copy={copy}
         onResolved={handleRunResolved}
         onClose={closePanel}
+        onOpenFile={handleOpenFile}
       />
     )
   } else if (historyOpen) {
@@ -324,8 +327,8 @@ export function TaskPage({ taskId, runConversationId }: { taskId: string; runCon
   )
 }
 
-/** The Task files heading's meta: what the workspace root holds. */
+/** The Task files card's count: what the workspace root holds (nothing while empty or unknown). */
 function taskFilesSummary(rootEntryCount: number | null): string {
-  if (rootEntryCount === null || rootEntryCount === 0) return 'Shared across updates'
-  return `${rootEntryCount} item${rootEntryCount === 1 ? '' : 's'} · shared across updates`
+  if (rootEntryCount === null || rootEntryCount === 0) return ''
+  return `${rootEntryCount} item${rootEntryCount === 1 ? '' : 's'}`
 }

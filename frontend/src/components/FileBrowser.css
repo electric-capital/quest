@@ -582,6 +582,10 @@
   border-bottom: 1px solid var(--border);
 }
 
+.file-browser-nav-spacer {
+  flex: 1;
+}
+
 .file-browser--compact .file-browser-header-actions {
   gap: 2px;
 }

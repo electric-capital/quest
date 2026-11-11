@@ -101,11 +101,18 @@ interface FileBrowserProps {
   /**
    * The dense variant for a card inside a page column (the task page):
    * Upload and New folder become icon buttons beside the hidden-files
-   * toggle and Refresh instead of the full-width button row, rows are one
-   * line, and the empty state is one line with an upload link. Drag and
-   * drop works as in the default card.
+   * toggle and Refresh instead of the full-width button row, the toolbar
+   * row shows Up and the path only inside a folder (no Back / Forward),
+   * rows are one line, and the empty state is one line with an upload
+   * link. Drag and drop works as in the default card.
    */
   compact?: boolean;
+  /**
+   * Compact only: content at the start of the toolbar row (the task page's
+   * card title and item count), so a host card's header and the browser's
+   * toolbar are one row.
+   */
+  toolbarLead?: React.ReactNode;
   /**
    * Called with each listing the card shows once it has loaded: the
    * directory and how many entries it shows (dot-named ones only while
@@ -205,7 +212,7 @@ function formatDate(isoString: string): string {
   });
 }
 
-export function FileBrowser({ source, hideTitle = false, compact = false, onListing, rowActions, notice, onDismissNotice }: FileBrowserProps) {
+export function FileBrowser({ source, hideTitle = false, compact = false, toolbarLead, onListing, rowActions, notice, onDismissNotice }: FileBrowserProps) {
   // Primitives for effect deps: hosts may pass a fresh object every render.
   const sourceKind = source?.kind ?? null;
   const sourceId = source?.id ?? null;
@@ -515,14 +522,41 @@ export function FileBrowser({ source, hideTitle = false, compact = false, onList
     >
       {/* Header with title (left out for a host-headed card: its actions
           then end the navigation row) */}
-      {!hideTitle && (
+      {!hideTitle && !compact && (
         <div className="file-browser-header">
           <h3>{fileBrowserTitle(source)}</h3>
           {headerActions}
         </div>
       )}
 
-      {/* Navigation bar */}
+      {/* Navigation bar. Compact: the host's lead, then Up and the path only
+          inside a folder, then the actions. */}
+      {compact ? (
+        <div className="file-browser-nav">
+          {toolbarLead}
+          {canGoUp ? (
+            <>
+              <button
+                className="nav-button"
+                onClick={goUp}
+                disabled={isInitialLoading}
+                title="Up one level"
+                aria-label="Up one level"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 19V5M5 12l7-7 7 7" />
+                </svg>
+              </button>
+              <span className="current-path" title={currentPath}>
+                {currentPath}
+              </span>
+            </>
+          ) : (
+            <span className="file-browser-nav-spacer" />
+          )}
+          {headerActions}
+        </div>
+      ) : (
       <div className="file-browser-nav">
         <button
           className="nav-button"
@@ -559,6 +593,7 @@ export function FileBrowser({ source, hideTitle = false, compact = false, onList
         </span>
         {hideTitle && headerActions}
       </div>
+      )}
 
       <input
         ref={fileInputRef}

@@ -1,5 +1,5 @@
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronRight, MoreHorizontal, PanelRight, Trash2 } from 'lucide-react'
+import { MoreHorizontal, PanelRight, Trash2 } from 'lucide-react'
 import type {
   ActionRequestMessage as ActionRequestMessageType,
   ConnectRequestMessage as ConnectRequestMessageType,
@@ -48,10 +48,9 @@ export interface TaskRunActivityView {
  *   open ones plus, while the run is active, those resolved since they were
  *   first seen, which flip themselves to their resolved state);
  * - for the active run the activity line, else the outcome: the `result` as
- *   plain body text in the column, no bubble (with a "Handoff notes"
- *   disclosure for the notes),
- *   the handoff-missing, failed (TaskRunError: one line plus "Show
- *   details") or stopped line.
+ *   plain body text in the column, no bubble, and the handoff-missing,
+ *   failed (TaskRunError: one line plus "Show details") or stopped line.
+ *   The handoff notes are in the run's details (TaskRunPanel).
  *
  * Everything is inside a MarkdownWorkspaceContext for the RUN's
  * conversation and its task, so workspace images and relative links in the
@@ -159,10 +158,9 @@ export const TaskRunEntry = memo(function TaskRunEntry({
   )
 })
 
-/** A finished run's result, notes and state line. */
+/** A finished run's result and state line. */
 function TaskRunOutcome({ run }: { run: TaskRun }) {
   const result = run.result?.trim() ? run.result : null
-  const notes = run.notes?.trim() ? run.notes : null
 
   return (
     <div className="task-run-outcome">
@@ -181,7 +179,6 @@ function TaskRunOutcome({ run }: { run: TaskRun }) {
       {!result && run.status === 'completed' && (
         <p className="task-run-state">This update finished without a result.</p>
       )}
-      {notes && <TaskRunNotes notes={notes} />}
     </div>
   )
 }
@@ -251,31 +248,6 @@ export function TaskRunRequest({ prompt }: { prompt: string }) {
         >
           {expanded ? 'Show less' : 'Show full prompt'}
         </button>
-      )}
-    </div>
-  )
-}
-
-/** The collapsed "Handoff notes" disclosure under a result. */
-function TaskRunNotes({ notes }: { notes: string }) {
-  const [open, setOpen] = useState(false)
-  const regionId = useId()
-  return (
-    <div className={`task-run-notes${open ? ' open' : ''}`}>
-      <button
-        type="button"
-        className="task-run-notes-toggle"
-        aria-expanded={open}
-        aria-controls={regionId}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <ChevronRight size={14} className="task-run-notes-chevron" aria-hidden="true" />
-        Handoff notes
-      </button>
-      {open && (
-        <div id={regionId} className="task-run-notes-body message-content" role="region" aria-label="Handoff notes">
-          <RichMarkdown components={markdownComponents}>{notes}</RichMarkdown>
-        </div>
       )}
     </div>
   )
