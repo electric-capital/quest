@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import './TaskPage.css'
 import { taskSource } from '../../api/fileApi'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -10,7 +10,7 @@ import { FileBrowser, type FileBrowserListing } from '../FileBrowser'
 import { TaskHeader } from './TaskHeader'
 import { TaskThread } from './TaskThread'
 import { TaskPanel } from './TaskPanel'
-import { TaskLoadError, TaskViewState } from './TaskViewState'
+import { TaskLoadError, TaskNotFound, TaskViewLoading } from './TaskViewState'
 import { TaskNotice, readTaskNotice } from './TaskNotice'
 
 /**
@@ -64,22 +64,11 @@ export function TaskPage({ taskId }: { taskId: string }) {
   }, [])
 
   if (loading) {
-    return (
-      <TaskViewState>
-        <p className="task-view-state-text">Loading task...</p>
-      </TaskViewState>
-    )
+    return <TaskViewLoading text="Loading task..." />
   }
 
   if (notFound) {
-    return (
-      <TaskViewState>
-        <p className="task-view-state-text">This task does not exist or was deleted.</p>
-        <Link to="/" className="task-view-state-link">
-          Back to home
-        </Link>
-      </TaskViewState>
-    )
+    return <TaskNotFound />
   }
 
   if (!task) {
