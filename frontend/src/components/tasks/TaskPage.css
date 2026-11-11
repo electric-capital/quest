@@ -6,10 +6,14 @@
  * every .task-thread-* rule), the panel column scrolls as a whole.
  *
  * Phone (768px, same as useIsMobile / MobileShell): one column that the
- * pane scrolls as a whole: the header, the notice, the panel (its sections
- * collapse to disclosure rows), then the thread. TaskPage renders the panel
- * before the thread in the DOM, so the thread's sticky composer, which
- * cannot leave the thread column, never covers panel content.
+ * pane scrolls as a whole: the header (sticky at the pane's top,
+ * TaskHeader.css), the notice, the panel (its sections collapse to
+ * disclosure rows), then the thread. TaskPage renders the panel before the
+ * thread in the DOM, so the thread's sticky composer, which cannot leave
+ * the thread column, never covers panel content. TaskPage keeps the sticky
+ * header's height in --task-page-header-height; every element of the body
+ * takes it as scroll-margin-top, so focusing or scrolling to a panel row or
+ * a run never leaves it under the header.
  *
  * The panel's own rules (.task-panel-*, .task-brief-*) live in
  * TaskPanel.css. */
@@ -83,5 +87,10 @@
   .task-page-notice {
     padding-left: 16px;
     padding-right: 16px;
+  }
+
+  .task-page-body,
+  .task-page-body * {
+    scroll-margin-top: var(--task-page-header-height, 0px);
   }
 }
