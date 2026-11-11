@@ -1,7 +1,8 @@
 /**
  * File browser panel component for workspace file management. One card per
- * file space (`source`): a conversation's own workspace ("Chat Files") or a
- * project's shared workspace ("Project Files"). Every operation -- listing,
+ * file space (`source`): a conversation's own workspace ("Chat Files"), a
+ * project's shared workspace ("Project Files") or a task's workspace ("Task
+ * files", shared by every run of the task). Every operation -- listing,
  * upload, new folder, delete, downloads, the viewer and its Save to Drive --
  * goes through that source's routes, and the card refreshes only on
  * `file_list_changed` events for its own space.
@@ -85,10 +86,23 @@ export interface FileRowAction {
 interface FileBrowserProps {
   /**
    * The file space browsed: a conversation's own workspace (card titled
-   * "Chat Files") or a project's shared workspace ("Project Files"). Null
-   * renders the no-conversation empty state.
+   * "Chat Files"), a project's shared workspace ("Project Files") or a
+   * task's workspace ("Task files"). Null renders the no-conversation empty
+   * state.
    */
   source: FileSource | null;
+  /**
+   * Leave out the card's title, for a host that heads the card itself (the
+   * task panel's "Task files" section). The hidden-files toggle and Refresh
+   * then sit at the end of the navigation row.
+   */
+  hideTitle?: boolean;
+  /**
+   * Called with each listing the card shows once it has loaded: the
+   * directory and how many entries it shows (dot-named ones only while
+   * revealed). Lets a host summarise the space without a listing of its own.
+   */
+  onListing?: (listing: FileBrowserListing) => void;
   /**
    * Extra per-row actions for the row's menu. Called on render for each row
    * whose menu is open; return [] for none.
@@ -102,6 +116,21 @@ interface FileBrowserProps {
   onDismissNotice?: () => void;
 }
 
+/** What a card currently lists (FileBrowser `onListing`). */
+export interface FileBrowserListing {
+  /** Root-relative directory, `/` for the space root. */
+  path: string;
+  /** Entries shown (dot-named ones only while the card reveals them). */
+  count: number;
+}
+
+/** Card titles per file space. */
+const CARD_TITLE: Record<FileSource['kind'], string> = {
+  conversation: 'Chat Files',
+  project: 'Project Files',
+  task: 'Task files',
+};
+
 /** A host-owned card message: `error` in the error style, `warning` in the accent tint. */
 export interface FileBrowserNotice {
   message: string;
@@ -111,24 +140,42 @@ export interface FileBrowserNotice {
 /** Card title for a file space. */
 export function fileBrowserTitle(source: FileSource | null): string {
   if (!source) return 'Files';
-  return source.kind === 'project' ? 'Project Files' : 'Chat Files';
+  return CARD_TITLE[source.kind];
 }
 
 /**
  * Whether a ``file_list_changed`` event concerns the space a card shows:
  * conversation routes/tools publish scope "conversation" with the
  * conversation id, project routes publish scope "project" with the project
- * id (and a null conversation id); copy routes and sandbox runs publish one
- * event per scope.
+ * id (and a null conversation id), task routes and a run's task:// writes
+ * publish scope "task" with the task id; copy routes and sandbox runs
+ * publish one event per scope.
  */
 export function fileListEventMatchesSource(
   event: Record<string, unknown>,
   source: FileSource,
 ): boolean {
-  if (source.kind === 'conversation') {
-    return event.scope === 'conversation' && event.conversation_id === source.id;
+  switch (source.kind) {
+    case 'conversation':
+      return event.scope === 'conversation' && event.conversation_id === source.id;
+    case 'project':
+      return event.scope === 'project' && event.project_id === source.id;
+    case 'task':
+      return event.scope === 'task' && event.task_id === source.id;
   }
-  return event.scope === 'project' && event.project_id === source.id;
+}
+
+/** The empty-state hint of a card: what the space is for. */
+function emptyHint(source: FileSource): React.ReactNode {
+  switch (source.kind) {
+    case 'project':
+      return 'Shared by every chat in this project; chats reach these files as proj:// paths. You can drop or upload files and folders here.';
+    case 'task':
+      return 'Shared by every run of this task; runs reach these files as task:// paths. You can drop or upload files and folders here.';
+    case 'conversation':
+      return <>You can drop or upload files and folders here for the agent to work on.
+        Files created by the agent will also appear here.</>;
+  }
 }
 
 function formatFileSize(bytes: number | null): string {
@@ -149,13 +196,14 @@ function formatDate(isoString: string): string {
   });
 }
 
-export function FileBrowser({ source, rowActions, notice, onDismissNotice }: FileBrowserProps) {
+export function FileBrowser({ source, hideTitle = false, onListing, rowActions, notice, onDismissNotice }: FileBrowserProps) {
   // Primitives for effect deps: hosts may pass a fresh object every render.
   const sourceKind = source?.kind ?? null;
   const sourceId = source?.id ?? null;
   const {
     currentPath,
     files,
+    listedPath,
     loading,
     error,
     uploadProgress,
@@ -206,6 +254,16 @@ export function FileBrowser({ source, rowActions, notice, onDismissNotice }: Fil
     [files, showHidden]
   );
   const hiddenCount = files.length - visibleFiles.length;
+
+  // Report each loaded listing to the host (onListing). Kept in a ref so a
+  // host passing a fresh callback every render does not re-fire it.
+  const onListingRef = useRef(onListing);
+  onListingRef.current = onListing;
+  const visibleCount = visibleFiles.length;
+  useEffect(() => {
+    if (listedPath === null) return;
+    onListingRef.current?.({ path: listedPath, count: visibleCount });
+  }, [listedPath, visibleCount]);
 
   // Auto-refresh when the BE publishes a ``file_list_changed`` per-user
   // global. Filters by scope/id so only events for this card's own space
@@ -366,6 +424,31 @@ export function FileBrowser({ source, rowActions, notice, onDismissNotice }: Fil
     }
   }, [currentPath, source, deleteItem]);
 
+  const headerActions = (
+    <div className="file-browser-header-actions">
+      <button
+        className={`hidden-toggle-button${showHidden ? ' active' : ''}`}
+        onClick={() => setShowHidden(!showHidden)}
+        title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
+        aria-pressed={showHidden}
+      >
+        {showHidden ? <Eye size={16} /> : <EyeOff size={16} />}
+      </button>
+      <button
+        className="refresh-button"
+        onClick={refresh}
+        disabled={isInitialLoading}
+        title="Refresh"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M23 4v6h-6" />
+          <path d="M1 20v-6h6" />
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+        </svg>
+      </button>
+    </div>
+  );
+
   // No file space: nothing to browse until a conversation is selected.
   if (!source) {
     return (
@@ -382,37 +465,19 @@ export function FileBrowser({ source, rowActions, notice, onDismissNotice }: Fil
 
   return (
     <div
-      className={`file-browser ${isDragOver ? 'drag-over' : ''}`}
+      className={`file-browser${hideTitle ? ' file-browser--untitled' : ''}${isDragOver ? ' drag-over' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {/* Header with title */}
-      <div className="file-browser-header">
-        <h3>{fileBrowserTitle(source)}</h3>
-        <div className="file-browser-header-actions">
-          <button
-            className={`hidden-toggle-button${showHidden ? ' active' : ''}`}
-            onClick={() => setShowHidden(!showHidden)}
-            title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
-            aria-pressed={showHidden}
-          >
-            {showHidden ? <Eye size={16} /> : <EyeOff size={16} />}
-          </button>
-          <button
-            className="refresh-button"
-            onClick={refresh}
-            disabled={isInitialLoading}
-            title="Refresh"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M23 4v6h-6" />
-              <path d="M1 20v-6h6" />
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-            </svg>
-          </button>
+      {/* Header with title (left out for a host-headed card: its actions
+          then end the navigation row) */}
+      {!hideTitle && (
+        <div className="file-browser-header">
+          <h3>{fileBrowserTitle(source)}</h3>
+          {headerActions}
         </div>
-      </div>
+      )}
 
       {/* Navigation bar */}
       <div className="file-browser-nav">
@@ -449,6 +514,7 @@ export function FileBrowser({ source, rowActions, notice, onDismissNotice }: Fil
         <span className="current-path" title={currentPath}>
           {currentPath}
         </span>
+        {hideTitle && headerActions}
       </div>
 
       {/* Action buttons: Upload Files + New Folder, equal width */}
@@ -544,12 +610,7 @@ export function FileBrowser({ source, rowActions, notice, onDismissNotice }: Fil
                 {hiddenCount} hidden item{hiddenCount !== 1 ? 's' : ''}. Toggle "Show hidden files" to reveal {hiddenCount !== 1 ? 'them' : 'it'}.
               </p>
             ) : (
-              <p className="drop-hint">
-                {source.kind === 'project'
-                  ? 'Shared by every chat in this project; chats reach these files as proj:// paths. You can drop or upload files and folders here.'
-                  : <>You can drop or upload files and folders here for the agent to work on.
-                    Files created by the agent will also appear here.</>}
-              </p>
+              <p className="drop-hint">{emptyHint(source)}</p>
             )}
           </div>
         ) : (

@@ -1,7 +1,7 @@
 /**
  * React hook for file browser functionality over one file space (a
- * conversation's workspace or a project's shared workspace, see
- * `FileSource` in api/fileApi.ts).
+ * conversation's workspace, a project's shared workspace or a task's
+ * workspace, see `FileSource` in api/fileApi.ts).
  */
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
@@ -42,6 +42,8 @@ interface UseFileBrowserResult {
   // State
   currentPath: string;
   files: FileEntry[];
+  /** The directory `files` lists (as the server normalised it); null until a listing loaded. */
+  listedPath: string | null;
   loading: boolean;
   error: string | null;
   uploadProgress: boolean;
@@ -89,7 +91,7 @@ export function useFileBrowser(source: FileSource | null): UseFileBrowserResult 
     [sourceKind, sourceId],
   );
   // State key of the active file space (`conversation:<id>` /
-  // `project:<id>`); the guards compare keys, API calls use `activeSource`.
+  // `project:<id>` / `task:<id>`); the guards compare keys, API calls use `activeSource`.
   const sourceKey = activeSource ? fileSourceKey(activeSource) : null;
 
   // Get state from context (file-space-specific)
@@ -100,6 +102,7 @@ export function useFileBrowser(source: FileSource | null): UseFileBrowserResult 
 
   // Local UI state (not persisted per file space)
   const [files, setFiles] = useState<FileEntry[]>([]);
+  const [listedPath, setListedPath] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<boolean>(false);
@@ -137,6 +140,7 @@ export function useFileBrowser(source: FileSource | null): UseFileBrowserResult 
   const fetchFilesInternal = useCallback(async (silent: boolean = false) => {
     if (!sourceKey || !activeSource) {
       setFiles([]);
+      setListedPath(null);
       setError(null);
       return;
     }
@@ -169,6 +173,7 @@ export function useFileBrowser(source: FileSource | null): UseFileBrowserResult 
         return;
       }
       setFiles(response.files);
+      setListedPath(response.currentPath);
       setCanGoUp(response.canGoUp);
 
       // Update current path from server response (normalized) - use ref to get latest state
@@ -186,6 +191,7 @@ export function useFileBrowser(source: FileSource | null): UseFileBrowserResult 
         setError('Failed to load files');
       }
       setFiles([]);
+      setListedPath(null);
     } finally {
       if (!silent) {
         setLoading(false);
@@ -218,6 +224,7 @@ export function useFileBrowser(source: FileSource | null): UseFileBrowserResult 
     if (!sourceKey) {
       // No file space - clear the panel.
       setFiles([]);
+      setListedPath(null);
       setError(null);
       return;
     }
@@ -227,6 +234,7 @@ export function useFileBrowser(source: FileSource | null): UseFileBrowserResult 
       // never momentarily display the previous one's files, then refetch
       // silently (stale-while-revalidate with no spinner flash).
       setFiles([]);
+      setListedPath(null);
       setCanGoUp(false);
       setError(null);
       fetchFilesInternal(true);
@@ -478,6 +486,7 @@ export function useFileBrowser(source: FileSource | null): UseFileBrowserResult 
   return {
     currentPath,
     files,
+    listedPath,
     loading,
     error,
     uploadProgress,
