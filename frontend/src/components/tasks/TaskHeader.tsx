@@ -25,8 +25,7 @@
  * title until dismissed or the next menu action; the archive confirmation is
  * a transient status line (NOTICE_MS).
  *
- * The page-level `.task-header`, `.task-header-title` and `.task-header-chip`
- * rules are in TaskPage.css; everything the menu adds is in TaskHeader.css.
+ * Styles in TaskHeader.css.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'

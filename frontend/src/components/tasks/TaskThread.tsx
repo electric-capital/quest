@@ -274,8 +274,8 @@ export function TaskThread({
     if (footer) {
       const rect = footer.getBoundingClientRect()
       limit = Math.min(rect.top, view.bottom)
-      // On phones the sticky composer leaves the viewport bottom once the
-      // user scrolled on into the panel below the thread.
+      // On phones the sticky composer sits below the viewport bottom while
+      // an expanded panel section above the thread fills the screen.
       footerAtBottom = rect.bottom >= view.bottom - 2
     }
     const distance = end.getBoundingClientRect().bottom - limit
