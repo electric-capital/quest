@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronRight, MoreHorizontal, Trash2 } from 'lucide-react'
 import type {
@@ -15,6 +15,7 @@ import { MarkdownWorkspaceContext, Message, markdownComponents } from '../Messag
 import { RichMarkdown } from '../RichMarkdown'
 import { TaskActivityLine } from './TaskActivityLine'
 import { TaskQuestionCard } from './TaskQuestionCard'
+import { TaskRunError } from './TaskRunError'
 import { isActiveRunStatus } from './taskThreadComposer'
 
 /** An approval or connect card of a run, as the runs page lists them. */
@@ -38,7 +39,8 @@ export interface TaskRunActivityView {
  *
  * - a header: "Run N", its start time and, on a finished run, the row menu
  *   ("Delete entry", confirmed by the thread);
- * - the prompt, rendered as Message.tsx renders a user message;
+ * - the prompt, rendered as Message.tsx renders a user message, clamped
+ *   with a "Show full prompt" toggle when it is long (TaskRunPrompt);
  * - its questions (TaskQuestionCard, oldest first; answered / cancelled
  *   ones keep showing on finished runs);
  * - the approval and connect cards the thread keeps for it (`cards`: the
@@ -46,7 +48,8 @@ export interface TaskRunActivityView {
  *   first seen, which flip themselves to their resolved state);
  * - for the active run the activity line, else the outcome: the `result` as
  *   the assistant reply (with a "Handoff notes" disclosure for the notes),
- *   the handoff-missing, failed or stopped line, and a quiet "Open run".
+ *   the handoff-missing, failed (TaskRunError: one line plus "Show
+ *   details") or stopped line, and a quiet "Open run".
  *
  * Everything is inside a MarkdownWorkspaceContext for the RUN's
  * conversation and its task, so workspace images and relative links in the
@@ -93,9 +96,8 @@ export const TaskRunEntry = memo(function TaskRunEntry({
           {finished && <TaskRunMenu seq={run.seq} onDelete={() => onDelete(run)} />}
         </div>
 
-        <Message
-          role="user"
-          content={run.prompt}
+        <TaskRunPrompt
+          prompt={run.prompt}
           timestamp={run.started_at}
           conversationId={conversationId}
         />
@@ -148,11 +150,7 @@ function TaskRunOutcome({ run, runPath }: { run: TaskRun; runPath: string }) {
 
   return (
     <div className="task-run-outcome">
-      {run.status === 'failed' && (
-        <p className="task-run-state failed" role="alert">
-          Run failed: {run.error?.trim() || 'unknown error'}
-        </p>
-      )}
+      {run.status === 'failed' && <TaskRunError error={run.error} className="task-run-outcome-error" />}
       {run.status === 'stopped' && <p className="task-run-state">Stopped.</p>}
       {run.handoff_missing && (
         <p className="task-run-state">
@@ -169,6 +167,79 @@ function TaskRunOutcome({ run, runPath }: { run: TaskRun; runPath: string }) {
       <Link to={runPath} className="task-run-open">
         Open run
       </Link>
+    </div>
+  )
+}
+
+/** A prompt longer than this many characters or lines is shown clamped. */
+const PROMPT_CLAMP_CHARS = 600
+const PROMPT_CLAMP_LINES = 12
+
+function isLongPrompt(prompt: string): boolean {
+  if (prompt.length > PROMPT_CLAMP_CHARS) return true
+  let lines = 1
+  for (let i = 0; i < prompt.length; i += 1) {
+    if (prompt[i] === '\n' && ++lines > PROMPT_CLAMP_LINES) return true
+  }
+  return false
+}
+
+/**
+ * The run's prompt as a user bubble. A long prompt (isLongPrompt) is
+ * clamped to a few lines with a fade (CSS, `.task-run-prompt.clamped`) and
+ * a "Show full prompt" / "Show less" toggle under the bubble. Whether the
+ * clamp actually hides anything is measured (the bubble's width changes
+ * with the viewport): when the whole prompt fits, no fade and no toggle.
+ */
+function TaskRunPrompt({
+  prompt,
+  timestamp,
+  conversationId,
+}: {
+  prompt: string
+  timestamp: string
+  conversationId: string
+}) {
+  const long = isLongPrompt(prompt)
+  const [expanded, setExpanded] = useState(false)
+  const [overflows, setOverflows] = useState(true)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  const contentId = useId()
+
+  // Measure while clamped; an expanded prompt keeps the last answer.
+  useLayoutEffect(() => {
+    const wrapper = wrapperRef.current
+    if (!long || expanded || !wrapper) return
+    const content = wrapper.querySelector<HTMLElement>('.message-content')
+    if (!content) return
+    const check = () => setOverflows(content.scrollHeight > content.clientHeight + 1)
+    check()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(check)
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [long, expanded, prompt])
+
+  const clampable = long && overflows
+  const clamped = clampable && !expanded
+  return (
+    <div
+      ref={wrapperRef}
+      id={contentId}
+      className={`task-run-prompt${long && !expanded ? ' clamp' : ''}${clamped ? ' clamped' : ''}${clampable ? ' clampable' : ''}`}
+    >
+      <Message role="user" content={prompt} timestamp={timestamp} conversationId={conversationId} />
+      {clampable && (
+        <button
+          type="button"
+          className="task-run-prompt-toggle"
+          aria-expanded={expanded}
+          aria-controls={contentId}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? 'Show less' : 'Show full prompt'}
+        </button>
+      )}
     </div>
   )
 }
