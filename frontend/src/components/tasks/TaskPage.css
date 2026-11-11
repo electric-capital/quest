@@ -1,14 +1,18 @@
 /* TaskPage (/tasks/<id>) -- rendered inside .docs-main.tasks-main (App.css).
  * Desktop: the page fills the pane's height; the header sits on top, the
- * thread column (flex 1) and the panel column (fixed width, border-left)
+ * thread column (flex 1) and the panel column (fixed 340px, border-left)
  * each scroll on their own: the thread column is a flex column whose
  * TaskThread scrolls its runs above a pinned composer (TaskThread.css owns
- * every .task-thread-* rule), the panel column scrolls as a whole. At the
- * phone breakpoint (768px, same as useIsMobile / MobileShell) the panel
- * stacks under the thread and the pane scrolls as a whole.
+ * every .task-thread-* rule), the panel column scrolls as a whole.
  *
- * The .task-panel-* rules style the B1 placeholder panel; B4 replaces
- * them with its own file. */
+ * Phone (768px, same as useIsMobile / MobileShell): one column that the
+ * pane scrolls as a whole: the header, the notice, the panel (its sections
+ * collapse to disclosure rows), then the thread. TaskPage renders the panel
+ * before the thread in the DOM, so the thread's sticky composer, which
+ * cannot leave the thread column, never covers panel content.
+ *
+ * The panel's own rules (.task-panel-*, .task-brief-*) live in
+ * TaskPanel.css. */
 
 .task-page {
   flex: 1 1 0;
@@ -80,52 +84,6 @@
   padding: 0.75rem 2rem 0;
 }
 
-/* Panel (B1 placeholder) */
-.task-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-  padding: 1rem 1.25rem 2rem;
-}
-
-.task-panel-section {
-  min-width: 0;
-}
-
-.task-panel-heading {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  margin: 0 0 0.4rem;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-
-.task-panel-heading-meta {
-  font-weight: 400;
-  letter-spacing: 0;
-  text-transform: none;
-  color: var(--text-muted);
-}
-
-.task-panel-text {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 0.875rem;
-  line-height: 1.5;
-  color: var(--text);
-}
-
-.task-panel-empty {
-  margin: 0;
-  font-size: 0.875rem;
-  color: var(--text-muted);
-}
-
 @media (max-width: 768px) {
   .task-page {
     flex: 1 0 auto;
@@ -142,26 +100,22 @@
     overflow-y: visible;
   }
 
-  /* The thread takes its content height; the pane scrolls. */
+  /* The panel takes its content height above the thread; the pane scrolls. */
+  .task-page-panel {
+    flex: 0 0 auto;
+    width: auto;
+    border-left: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* The thread takes its content height too. */
   .task-page-thread {
     flex: 0 0 auto;
     min-height: auto;
   }
 
-  .task-page-panel {
-    flex: 0 0 auto;
-    width: auto;
-    border-left: none;
-    border-top: 1px solid var(--border);
-  }
-
   .task-header,
   .task-page-notice {
-    padding-left: 16px;
-    padding-right: 16px;
-  }
-
-  .task-panel {
     padding-left: 16px;
     padding-right: 16px;
   }

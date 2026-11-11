@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import './TaskPage.css'
+import { useIsMobile } from '../../hooks/useIsMobile'
 import { useTask } from '../../hooks/useTask'
 import { useTaskRuns } from '../../hooks/useTaskRuns'
 import { useMarkTaskViewed } from '../../hooks/useTaskUnread'
@@ -14,14 +15,20 @@ import { TaskNotice, readTaskNotice } from './TaskNotice'
  * The task page (/tasks/<id>): the header over a two-column body, the
  * thread (TaskThread) on the left and the brief and instructions panel
  * (TaskPanel) on the right, in the place the RightPanel takes beside a chat
- * (spec 8.3). Below 768px the panel stacks under the thread.
+ * (spec 8.3). On phones (useIsMobile, 768px) the body is one column: the
+ * panel (collapsible sections) directly below the header and the notice,
+ * then the thread with its sticky composer. The panel comes first in the
+ * DOM as well, so the reading order matches, and the composer (sticky
+ * inside the thread column, which it cannot leave) can never cover panel
+ * content. The two columns are keyed, so crossing the breakpoint moves
+ * them instead of remounting them (drafts and thread state survive).
  *
  * This shell is the lasting page frame: it owns the one useTask and the one
  * useTaskRuns of the page and passes them down, and acknowledges an unread
- * task while it is on screen in a focused window. The bodies of the header
- * (B4 adds the rename / archive / delete menu), the thread (B3) and the
- * panel (B4) are replaced in later phases. App.tsx keys it by task id, so
- * switching tasks starts from a fresh state.
+ * task while it is on screen in a focused window. The header, the thread
+ * and the panel own their bodies (TaskHeader, TaskThread, TaskPanel; B5
+ * passes the Task files card into TaskPanel's `filesSection`). App.tsx
+ * keys it by task id, so switching tasks starts from a fresh state.
  *
  * A notice carried in the router state (TaskPageLocationState, e.g. the
  * New Task page's "created, but the run did not start") shows above the
@@ -32,6 +39,7 @@ export function TaskPage({ taskId }: { taskId: string }) {
   const view = useTask(taskId)
   const runs = useTaskRuns(taskId)
   const { task, loading, error, notFound, refresh } = view
+  const isMobile = useIsMobile()
 
   useMarkTaskViewed(taskId, task !== null)
 
@@ -65,6 +73,17 @@ export function TaskPage({ taskId }: { taskId: string }) {
     return <TaskLoadError message={error?.message || 'Failed to load the task.'} onRetry={refresh} />
   }
 
+  const thread = (
+    <div key="thread" className="task-page-thread">
+      <TaskThread taskId={taskId} task={task} runs={runs} onTaskDetail={view.applyDetail} />
+    </div>
+  )
+  const panel = (
+    <aside key="panel" className="task-page-panel" aria-label="Task brief and instructions">
+      <TaskPanel task={view} />
+    </aside>
+  )
+
   return (
     <div className="task-page">
       <TaskHeader task={task} />
@@ -73,14 +92,7 @@ export function TaskPage({ taskId }: { taskId: string }) {
           <TaskNotice message={notice} onDismiss={dismissNotice} />
         </div>
       )}
-      <div className="task-page-body">
-        <div className="task-page-thread">
-          <TaskThread taskId={taskId} task={task} runs={runs} onTaskDetail={view.applyDetail} />
-        </div>
-        <aside className="task-page-panel" aria-label="Task brief and instructions">
-          <TaskPanel task={view} />
-        </aside>
-      </div>
+      <div className="task-page-body">{isMobile ? [panel, thread] : [thread, panel]}</div>
     </div>
   )
 }
