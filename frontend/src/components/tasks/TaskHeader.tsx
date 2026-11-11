@@ -94,11 +94,13 @@ export type TaskHeaderJumpTarget = 'brief' | 'latest'
 
 /** The header's jump button (TaskMainColumn owns the scroller it moves). */
 export interface TaskHeaderJump {
-  /** `latest` while the newest update is below the view, `brief` once scrolled down past it. */
+  /** `latest` while the newest update is out of view, `brief` once scrolled down with it in view. */
   target: TaskHeaderJumpTarget
   onJump: (target: TaskHeaderJumpTarget) => void
   /** On "Latest": a run is working, or the task has an update not yet seen. */
   mark: 'working' | 'unread' | null
+  /** The target is above the view (the brief; the newest update, recent first). */
+  up: boolean
 }
 
 export interface TaskHeaderProps {
@@ -520,7 +522,7 @@ export function TaskHeader({ task, onTaskDetail, jump }: TaskHeaderProps) {
             title={jumpLabel(jump)}
             onClick={() => jump.onJump(jump.target)}
           >
-            {jump.target === 'brief' ? (
+            {jump.up ? (
               <ArrowUp size={16} aria-hidden="true" />
             ) : (
               <ArrowDown size={16} aria-hidden="true" />

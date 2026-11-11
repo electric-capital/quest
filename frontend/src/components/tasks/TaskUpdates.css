@@ -1,11 +1,11 @@
-/* TaskUpdates, TaskRunEntry and TaskActivityLine -- the Updates section of
- * the task page's main column (TaskPage.css owns the page frame, the
- * section headings and the composer footer).
+/* TaskUpdates, TaskRunEntry and TaskActivityLine -- the Updates card of
+ * the task page's main column (TaskPage.css owns the page frame, the card
+ * chrome and the composer footer).
  *
- * Every run is an update, oldest first, divided by a rule; the one whose
- * transcript the detail panel shows is marked (`.is-open`). Colours come
- * from the theme tokens only; error text uses --diff-removed-text, the
- * theme's red. */
+ * Every run is an update, in the viewer's sort order, divided by a rule;
+ * the one whose transcript the detail panel shows is marked (`.is-open`).
+ * Colours come from the theme tokens only; error text uses
+ * --diff-removed-text, the theme's red. */
 
 .task-updates-list {
   display: flex;
@@ -14,41 +14,83 @@
   min-width: 0;
 }
 
-/* "Show earlier updates": a quiet full-width button at the top of the
-   section while older pages exist. */
-.task-updates-earlier {
-  align-self: stretch;
-  width: 100%;
-  margin: 0 0 1rem;
-  padding: 0.45rem 0.75rem;
-  border: 1px dashed var(--border-strong);
-  border-radius: 10px;
-  background: none;
+/* The sort control in the card header: a small segmented pair. */
+.task-updates-sort {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+
+.task-updates-sort-option {
+  padding: 0.15rem 0.55rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
   color: var(--text-secondary);
   font-family: inherit;
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
   cursor: pointer;
-  transition: background-color 0.15s, color 0.15s;
+  transition: background-color 0.12s, color 0.12s;
+}
+
+.task-updates-sort-option:hover {
+  color: var(--text);
+}
+
+.task-updates-sort-option[aria-pressed='true'] {
+  background-color: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.task-updates-sort-option:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* "Show earlier updates": a quiet full-width row at the old end of the
+   list, divided from the updates like they are from each other. */
+.task-updates-earlier {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--accent-text);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.task-updates-earlier--oldest {
+  margin-bottom: 1rem;
+}
+
+.task-updates-earlier--recent {
+  margin-top: 1rem;
 }
 
 .task-updates-earlier:hover:not(:disabled) {
   background-color: var(--hover);
-  color: var(--text);
 }
 
 .task-updates-earlier:disabled {
   cursor: default;
-  opacity: 0.7;
+  color: var(--text-muted);
 }
 
 .task-updates-note {
   margin: 0;
-  padding: 1.5rem 0;
+  padding: 0.5rem 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.75rem;
-  text-align: center;
   font-size: 0.9375rem;
   color: var(--text-secondary);
 }
@@ -57,15 +99,11 @@
   margin: 0;
 }
 
-/* No runs yet: a quiet state in the section. */
+/* No updates yet: plain text in the card. */
 .task-updates-empty {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 0.375rem;
-  padding: 1rem 1.125rem;
-  border: 1px dashed var(--border-strong);
-  border-radius: 10px;
+  gap: 0.25rem;
 }
 
 .task-updates-empty-title {
@@ -248,58 +286,6 @@
 /* TaskRunError (TaskRunError.css) styles the failed line itself. */
 .task-run-outcome-error {
   align-self: stretch;
-}
-
-/* Handoff notes disclosure */
-.task-run-notes {
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  min-width: 0;
-}
-
-.task-run-notes-toggle {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.2rem 0.4rem 0.2rem 0.15rem;
-  border: none;
-  border-radius: 6px;
-  background: none;
-  color: var(--text-secondary);
-  font-family: inherit;
-  font-size: 0.8125rem;
-  cursor: pointer;
-  transition: background-color 0.12s;
-}
-
-.task-run-notes-toggle:hover {
-  background-color: var(--hover);
-  color: var(--text);
-}
-
-.task-run-notes-chevron {
-  transition: transform 0.15s;
-}
-
-.task-run-notes.open .task-run-notes-chevron {
-  transform: rotate(90deg);
-}
-
-/* Markdown styling comes from Message.css (.message-content); drop the
-   bubble and indent it under the toggle. */
-.task-run-notes-body.message-content {
-  max-width: 100%;
-  margin-left: 0.5rem;
-  padding: 0.25rem 0 0.25rem 0.85rem;
-  border-left: 2px solid var(--border-strong);
-  border-radius: 0;
-  background: none;
-  white-space: normal;
-  font-size: 0.875rem;
-  color: var(--text-secondary);
 }
 
 /* Row menu (finished runs) -- the conversation header menu's look. */
@@ -506,7 +492,6 @@
     margin: -0.375rem -0.375rem -0.375rem 0;
   }
 
-  .task-run-notes-toggle,
   .task-run-request-toggle {
     min-height: 2.5rem;
   }

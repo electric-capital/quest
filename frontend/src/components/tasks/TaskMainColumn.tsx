@@ -27,6 +27,7 @@ import { TaskHeader, type TaskHeaderJump, type TaskHeaderJumpTarget } from './Ta
 import { TaskNotice } from './TaskNotice'
 import { taskRunCardKey, type TaskRunActivityView, type TaskRunCard } from './TaskRunEntry'
 import { TaskUpdates, type PendingStart } from './TaskUpdates'
+import { readTaskUpdatesOrder, writeTaskUpdatesOrder, type TaskUpdatesOrder } from './taskUpdatesOrder'
 import {
   initialUploadStatus,
   startTaskRunFromComposer,
@@ -79,9 +80,16 @@ function contentTop(el: Element, scroller: HTMLElement): number {
   return el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
 }
 
-/** The updates in the section, oldest first (the last one is the newest). */
+/** The updates in the section, in DOM (display) order. */
 function updateElements(section: HTMLElement | null): HTMLElement[] {
   return section ? Array.from(section.querySelectorAll<HTMLElement>('.task-updates-list > .task-run')) : []
+}
+
+/** The newest update's element: the last one oldest first, the first one recent first. */
+function newestElement(section: HTMLElement | null, order: TaskUpdatesOrder): HTMLElement | null {
+  const updates = updateElements(section)
+  if (updates.length === 0) return null
+  return order === 'oldest' ? updates[updates.length - 1] : updates[0]
 }
 
 /**
@@ -107,21 +115,30 @@ function updateElements(section: HTMLElement | null): HTMLElement[] {
  * conversation the runs are refreshed (task_changed follows the status
  * change as well).
  *
+ * The updates' sort order (`order`: oldest or most recent first, the
+ * Updates card's control) is the viewer's one stored preference
+ * (taskUpdatesOrder.ts); the newest update is the last one oldest first and
+ * the first one recent first, and everything below follows it.
+ *
  * Scrolling (all in the one scroller):
  * - "Latest" / "Brief" in the header (TaskHeader `jump`): "Latest" while
- *   the newest update is below the visible area, scrolling its top into
- *   view, with a working mark while a run is active and an unread mark
- *   while the task is unread; otherwise "Brief" once scrolled down,
- *   scrolling back to the top; no button with both in view.
+ *   the newest update is out of view (pointing down or up to it; recent
+ *   first, it is above once the reader has scrolled into older updates),
+ *   scrolling its top into view, with a working mark while a run is active
+ *   and an unread mark while the task is unread; otherwise "Brief" once
+ *   scrolled down, scrolling back to the top; no button with both in view.
  * - `onNewestVisibleChange` reports whether the newest update reaches into
  *   the view, for the page's mark-as-read rule.
- * - Sending a prompt or an answer scrolls to the end, and the column then
- *   follows growth at the bottom (the run's activity, its result) for as
- *   long as the user stays there. Opening at the top never pins it.
- * - "Show earlier updates" keeps the previously first update where it was
- *   on screen once the older page is prepended (measured before and after
- *   in a layout effect; the browser's own scroll anchoring is off on the
- *   scroller, CSS, so the two never add up).
+ * - Sending a prompt or an answer scrolls to the newest update. Oldest
+ *   first that is the end, and the column then follows growth at the bottom
+ *   (the run's activity, its result) for as long as the user stays there;
+ *   recent first it is the top of the Updates card, where the update grows
+ *   downward in place. Opening at the top never pins it.
+ * - "Show earlier updates" sits at the old end. Oldest first it keeps the
+ *   previously first update where it was on screen once the older page is
+ *   prepended (measured before and after in a layout effect; the browser's
+ *   own scroll anchoring is off on the scroller, CSS, so the two never add
+ *   up); recent first the page lands below everything already shown.
  * - `openRunConversationId` (the run in the detail panel, e.g. from a deep
  *   link) is scrolled into view when it is off screen or only peeks in at
  *   an edge, loading older pages until it is found or the pages end.
@@ -261,7 +278,17 @@ export function TaskMainColumn({
   // A run to scroll into view once its update is loaded (the panel's run).
   const revealRef = useRef<string | null>(openRunConversationId)
   const [scrollEndSeq, setScrollEndSeq] = useState(0)
+  const [order, setOrder] = useState<TaskUpdatesOrder>(readTaskUpdatesOrder)
+  const orderRef = useRef(order)
+  orderRef.current = order
+  const handleOrderChange = useCallback((next: TaskUpdatesOrder) => {
+    setOrder(next)
+    writeTaskUpdatesOrder(next)
+    // Following the end only means something oldest first.
+    if (next !== 'oldest') pinnedRef.current = false
+  }, [])
   const [jumpTarget, setJumpTarget] = useState<TaskHeaderJumpTarget | null>(null)
+  const [jumpUp, setJumpUp] = useState(false)
   const newestVisibleRef = useRef<boolean | null>(null)
   const onNewestVisibleRef = useRef(onNewestVisibleChange)
   onNewestVisibleRef.current = onNewestVisibleChange
@@ -273,17 +300,34 @@ export function TaskMainColumn({
     pinnedRef.current = true
   }, [])
 
+  /** After a send: to the end oldest first (and follow it), to the newest update recent first. */
+  const scrollToNewest = useCallback(() => {
+    const scroller = scrollerRef.current
+    if (!scroller) return
+    if (orderRef.current === 'oldest') {
+      scrollToEnd()
+      return
+    }
+    pinnedRef.current = false
+    const newest = newestElement(updatesRef.current, 'recent')
+    if (newest) scroller.scrollTop = Math.max(0, contentTop(newest, scroller) - REVEAL_MARGIN_PX)
+  }, [scrollToEnd])
+
   // Where the newest update is relative to the view, and what follows from it.
   const sync = useCallback(() => {
     const scroller = scrollerRef.current
     if (!scroller) return
     const view = scroller.getBoundingClientRect()
-    const updates = updateElements(updatesRef.current)
-    const newest = updates.length > 0 ? updates[updates.length - 1].getBoundingClientRect() : null
+    const newestEl = newestElement(updatesRef.current, orderRef.current)
+    const newest = newestEl ? newestEl.getBoundingClientRect() : null
     const newestVisible =
       newest !== null && newest.top < view.bottom - VISIBLE_SLACK_PX && newest.bottom > view.top + VISIBLE_SLACK_PX
     const newestBelow = newest !== null && newest.top >= view.bottom - VISIBLE_SLACK_PX
-    setJumpTarget(newestBelow ? 'latest' : scroller.scrollTop > BRIEF_JUMP_AFTER_PX ? 'brief' : null)
+    const newestAbove = newest !== null && newest.bottom <= view.top + VISIBLE_SLACK_PX
+    setJumpTarget(
+      newestBelow || newestAbove ? 'latest' : scroller.scrollTop > BRIEF_JUMP_AFTER_PX ? 'brief' : null,
+    )
+    setJumpUp(newestAbove)
     if (newestVisibleRef.current !== newestVisible) {
       newestVisibleRef.current = newestVisible
       onNewestVisibleRef.current(newestVisible)
@@ -305,7 +349,7 @@ export function TaskMainColumn({
     }
     const onScroll = () => {
       const nearBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - NEAR_BOTTOM_PX
-      pinnedRef.current = nearBottom && scroller.scrollTop > 0
+      pinnedRef.current = orderRef.current === 'oldest' && nearBottom && scroller.scrollTop > 0
       schedule()
     }
     sync()
@@ -332,8 +376,13 @@ export function TaskMainColumn({
 
   // A send asked for the end.
   useLayoutEffect(() => {
-    if (scrollEndSeq > 0) scrollToEnd()
-  }, [scrollEndSeq, scrollToEnd])
+    if (scrollEndSeq > 0) scrollToNewest()
+  }, [scrollEndSeq, scrollToNewest])
+
+  // A new order moves the newest update: re-check the jump and read state.
+  useLayoutEffect(() => {
+    sync()
+  }, [order, sync])
 
   // Keep the previously first update in place across a prepended older page.
   useLayoutEffect(() => {
@@ -349,7 +398,8 @@ export function TaskMainColumn({
 
   const handleLoadOlder = useCallback(() => {
     const scroller = scrollerRef.current
-    const first = updateElements(updatesRef.current)[0]
+    // Recent first the page lands below the shown updates: nothing moves.
+    const first = orderRef.current === 'oldest' ? updateElements(updatesRef.current)[0] : undefined
     const runId = first?.dataset.runId
     anchorRef.current = scroller && first && runId ? { runId, top: contentTop(first, scroller) } : null
     loadOlder()
@@ -398,8 +448,7 @@ export function TaskMainColumn({
       scroller.scrollTo({ top: 0, behavior })
       return
     }
-    const updates = updateElements(updatesRef.current)
-    const newest = updates[updates.length - 1]
+    const newest = newestElement(updatesRef.current, orderRef.current)
     if (!newest) return
     const max = scroller.scrollHeight - scroller.clientHeight
     scroller.scrollTo({ top: Math.min(max, contentTop(newest, scroller) - REVEAL_MARGIN_PX), behavior })
@@ -609,6 +658,7 @@ export function TaskMainColumn({
         target: jumpTarget,
         onJump: handleJump,
         mark: jumpTarget !== 'latest' ? null : working ? 'working' : unread ? 'unread' : null,
+        up: jumpTarget === 'brief' || jumpUp,
       }
     : undefined
 
@@ -630,6 +680,9 @@ export function TaskMainColumn({
             activity={activeActivity}
             answeringHandleId={answeringHandleId}
             openRunConversationId={openRunConversationId}
+            count={task.run_count}
+            order={order}
+            onOrderChange={handleOrderChange}
             onLoadOlder={handleLoadOlder}
             onStop={handleStop}
             onQuestionAnswered={handleQuestionAnswered}
