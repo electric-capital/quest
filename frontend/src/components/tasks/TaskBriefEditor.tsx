@@ -86,8 +86,12 @@ export function TaskBriefEditor({
   const overId = `${ids}-over`
   const errorId = `${ids}-error`
 
+  // Open with the caret after the text, ready to add to it.
   useEffect(() => {
-    textareaRef.current?.focus()
+    const el = textareaRef.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
   }, [])
 
   const length = taskTextLength(draft)
