@@ -42,6 +42,10 @@ interface MobileShellProps {
   tasksRoute: TasksRoute | null
   /** Whether the `tasks` feature gate is open for the current user. */
   tasksEnabled: boolean
+  /** On a task run view: whether the route's run resolved (App.tsx), so it has a workspace. */
+  runResolved: boolean
+  /** The run view's report of whether its run resolved (TaskRunView onRunResolved). */
+  onRunResolved: (resolved: boolean) => void
 }
 
 interface ConversationSelectOpts {
@@ -56,8 +60,8 @@ interface ConversationSelectOpts {
  * composer, requests, or a Quest Docs, Tables or Tasks view). The
  * RightPanel lives in the workspace drawer behind the top bar's folder
  * button, for a chat and for a task run view (with the run's task, as
- * beside the desktop run view); the other docs, tables and tasks views
- * have no workspace.
+ * beside the desktop run view, and like it only once the run resolved);
+ * the other docs, tables and tasks views have no workspace.
  */
 export function MobileShell({
   activeConversationId,
@@ -72,6 +76,8 @@ export function MobileShell({
   tablesEnabled,
   tasksRoute,
   tasksEnabled,
+  runResolved,
+  onRunResolved,
 }: MobileShellProps) {
   const { appName } = useAppConfig()
   const {
@@ -189,9 +195,17 @@ export function MobileShell({
     setWorkspaceOpen(false)
   }, [tasksRouteKey])
 
-  // The task run view has a workspace: the run's conversation and its task.
+  // The task run view has a workspace once its run resolved: the run's
+  // conversation and its task (none while loading or beside a not-found run).
   const runRoute = tasksRoute?.kind === 'run' && tasksEnabled ? tasksRoute : null
-  const hasWorkspace = runRoute !== null || (!docsRoute && !tablesRoute && !tasksRoute)
+  const hasWorkspace = runRoute !== null
+    ? runResolved
+    : !docsRoute && !tablesRoute && !tasksRoute
+  // A run deleted while its workspace drawer is open: close the empty drawer.
+  const runWorkspaceGone = runRoute !== null && !runResolved
+  useEffect(() => {
+    if (runWorkspaceGone) setWorkspaceOpen(false)
+  }, [runWorkspaceGone])
 
   const closeOverlays = useCallback(() => {
     setDrawerOpen(false)
@@ -304,7 +318,7 @@ export function MobileShell({
           </div>
         ) : tasksRoute ? (
           <div className="main-content docs-main tasks-main">
-            <TasksMain route={tasksRoute} enabled={tasksEnabled} />
+            <TasksMain route={tasksRoute} enabled={tasksEnabled} onRunResolved={onRunResolved} />
           </div>
         ) : activeConversationId ? (
           <ChatPanel
@@ -331,11 +345,13 @@ export function MobileShell({
       </div>
       <div className={`mobile-workspace-drawer${workspaceOpen ? ' open' : ''}`}>
         {runRoute ? (
-          <RightPanel
-            conversationId={runRoute.conversationId}
-            projectId={null}
-            taskId={runRoute.taskId}
-          />
+          runResolved && (
+            <RightPanel
+              conversationId={runRoute.conversationId}
+              projectId={null}
+              taskId={runRoute.taskId}
+            />
+          )
         ) : (
           <RightPanel
             conversationId={activeConversationId}

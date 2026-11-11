@@ -95,9 +95,39 @@
   color: #e5484d;
 }
 
+/* Why the run ended without its handoff, under the meta line: a failed
+ * run's TaskRunError (its own colours, TaskRunError.css) or a stopped
+ * run's line. Full width, so a long error wraps instead of widening the
+ * header. Scoped under the header so these win over TaskRunError.css,
+ * which loads later. */
+.task-run-view-header .task-run-view-error,
+.task-run-view-header .task-run-view-ended {
+  align-self: stretch;
+  min-width: 0;
+  margin: 0.125rem 0 0;
+  font-size: 0.8125rem;
+}
+
+.task-run-view-header .task-run-view-ended {
+  color: var(--text-secondary);
+}
+
+/* The details block stays small: the transcript below needs the room. */
+.task-run-view-header .task-run-error-details {
+  max-height: 12rem;
+}
+
 @media (max-width: 768px) {
   .task-run-view-header {
-    padding-left: 16px;
-    padding-right: 16px;
+    padding: 0.625rem 16px 0.5rem;
+    gap: 0.125rem;
+  }
+
+  .task-run-view-title {
+    font-size: 1.125rem;
+  }
+
+  .task-run-view-header .task-run-error-details {
+    max-height: 30vh;
   }
 }

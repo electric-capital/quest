@@ -12,8 +12,19 @@ import { TaskRunView } from './TaskRunView'
  * `tasks` feature gate is closed, otherwise the list, New Task, the thread
  * (keyed by task id, so switching tasks starts from a fresh state) or the
  * run view. Lasting routing glue, not a placeholder.
+ *
+ * `onRunResolved` reaches the run view (TaskRunView): whether the route's
+ * run resolved, which decides whether the host shows the run's workspace.
  */
-export function TasksMain({ route, enabled }: { route: TasksRoute; enabled: boolean }) {
+export function TasksMain({
+  route,
+  enabled,
+  onRunResolved,
+}: {
+  route: TasksRoute
+  enabled: boolean
+  onRunResolved?: (resolved: boolean) => void
+}) {
   if (!enabled) return <TasksGateClosed />
   switch (route.kind) {
     case 'list':
@@ -23,6 +34,12 @@ export function TasksMain({ route, enabled }: { route: TasksRoute; enabled: bool
     case 'thread':
       return <TaskPage key={route.taskId} taskId={route.taskId} />
     case 'run':
-      return <TaskRunView taskId={route.taskId} conversationId={route.conversationId} />
+      return (
+        <TaskRunView
+          taskId={route.taskId}
+          conversationId={route.conversationId}
+          onRunResolved={onRunResolved}
+        />
+      )
   }
 }

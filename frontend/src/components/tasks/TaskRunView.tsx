@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronLeft } from 'lucide-react'
 import './TaskRunView.css'
@@ -8,7 +8,8 @@ import { useTaskRun } from '../../hooks/useTaskRun'
 import { formatTimestamp } from '../../utils/formatters'
 import { taskThreadPath } from '../../utils/tasksRoute'
 import { ChatPanel } from '../ChatPanel'
-import { TaskLoadError, TaskViewState } from './TaskViewState'
+import { TaskLoadError, TaskNotFound, TaskViewLoading, TaskViewState } from './TaskViewState'
+import { TaskRunError } from './TaskRunError'
 import { TaskRunViewContext, type TaskRunViewContextValue } from './TaskRunViewContext'
 
 /** The run's state in the header ("Run 3 · Needs you"). */
@@ -37,6 +38,16 @@ function taskRunStatusLabel(run: Pick<TaskRun, 'status' | 'handoff_missing'>): s
  * workspace drawer in MobileShell), with copy and move to and from the task
  * files.
  *
+ * The header's meta line says why a run ended without its handoff: a
+ * failed run's error (TaskRunError, one line with "Show details"), and
+ * "Stopped by you." for a stopped one.
+ *
+ * `onRunResolved` tells the host whether the route's run resolved (the
+ * ChatPanel is up), so App.tsx renders the RightPanel, and MobileShell
+ * offers the workspace drawer, only beside a real run: never while loading
+ * and never beside a not-found or failed lookup. The host keys what it
+ * stores by the route, so a report for the previous run never counts.
+ *
  * The run is looked up among the task's runs by its conversation
  * (useTaskRun) and re-read on every `task_changed` of the task, so the
  * status moves live and a deleted run turns into the not-found state. The
@@ -50,10 +61,24 @@ function taskRunStatusLabel(run: Pick<TaskRun, 'status' | 'handoff_missing'>): s
  * endpoints, as in any chat. The run conversation never becomes the app's
  * active conversation (see the route note in App.tsx).
  */
-export function TaskRunView({ taskId, conversationId }: { taskId: string; conversationId: string }) {
+export interface TaskRunViewProps {
+  taskId: string
+  conversationId: string
+  /** Called with whether the run resolved (true once the transcript shows), on every change. */
+  onRunResolved?: (resolved: boolean) => void
+}
+
+export function TaskRunView({ taskId, conversationId, onRunResolved }: TaskRunViewProps) {
   const { task, loading, error, notFound, refresh, changeSeq } = useTask(taskId)
   const lookup = useTaskRun(taskId, conversationId, changeSeq)
   const run = lookup.run
+
+  // Both hooks drop their data synchronously when the ids change, so this is
+  // false on the first render of a new route.
+  const resolved = task !== null && run !== null
+  useEffect(() => {
+    onRunResolved?.(resolved)
+  }, [onRunResolved, resolved])
 
   const runViewCtx = useMemo<TaskRunViewContextValue | null>(
     () => (run ? { taskId, questions: run.questions } : null),
@@ -61,22 +86,11 @@ export function TaskRunView({ taskId, conversationId }: { taskId: string; conver
   )
 
   if (loading || (task && lookup.loading)) {
-    return (
-      <TaskViewState>
-        <p className="task-view-state-text">Loading run...</p>
-      </TaskViewState>
-    )
+    return <TaskViewLoading text="Loading run..." />
   }
 
   if (notFound) {
-    return (
-      <TaskViewState>
-        <p className="task-view-state-text">This task does not exist or was deleted.</p>
-        <Link to="/" className="task-view-state-link">
-          Back to home
-        </Link>
-      </TaskViewState>
-    )
+    return <TaskNotFound />
   }
 
   if (!task) {
@@ -112,7 +126,10 @@ export function TaskRunView({ taskId, conversationId }: { taskId: string; conver
   )
 }
 
-/** "Back to task", the task title, then "Run N", the live status and the start time. */
+/**
+ * "Back to task", the task title, then "Run N", the live status and the
+ * start time; under them a failed run's error or a stopped run's line.
+ */
 function TaskRunViewHeader({ taskId, task, run }: { taskId: string; task: Task; run: TaskRun }) {
   return (
     <header className="task-run-view-header" aria-label={`Run ${run.seq} of ${task.title}`}>
@@ -132,6 +149,8 @@ function TaskRunViewHeader({ taskId, task, run }: { taskId: string; task: Task; 
           {formatTimestamp(run.started_at)}
         </time>
       </div>
+      {run.status === 'failed' && <TaskRunError error={run.error} className="task-run-view-error" />}
+      {run.status === 'stopped' && <p className="task-run-view-ended">Stopped by you.</p>}
     </header>
   )
 }
