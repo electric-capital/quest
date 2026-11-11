@@ -39,15 +39,17 @@
  * - `tool_use` row: its `intent_message`, else `Running <tool name>` (the
  *   inner `tool_input.tool_name` for the `tool_call` dispatcher; snake_case
  *   turned into words, e.g. "Running web search").
- * - `tool_result` row, and an assistant text row: "Thinking".
+ * - `tool_result` row, an assistant text row, and the user's prompt row:
+ *   "Thinking" (once the prompt is in the transcript the model is working
+ *   on it; the first turn can think for a while before any tool call, and
+ *   there are no thinking events).
  * - a pending `task_question`, or an open `action_request` /
  *   `connect_request` row: "Waiting for you" (a resolved one: "Thinking").
- * - the user's prompt row: "Starting".
  * - `text_delta` event: "Writing the reply".
  * - `sub_agent_tool_use` event: `Sub-agent: <intent_message or tool name>`.
  * - `resume_started` event: "Resuming".
- * - nothing known yet: "Starting". Other rows (stats, errors, nudges,
- *   markers) leave the label alone.
+ * - nothing known yet (no row seen): "Starting". Other rows (stats, errors,
+ *   nudges, markers) leave the label alone.
  *
  * "Newest" is arrival order, not fetch order: every event takes a stamp
  * from a local clock, a row takes the stamp of the `message_appended` that
@@ -151,8 +153,8 @@ export function rowActivityLabel(row: Row): string | null {
         ? TASK_ACTIVITY_WAITING
         : TASK_ACTIVITY_THINKING;
     case 'text':
-      if (row.role === 'user') return TASK_ACTIVITY_STARTING;
-      if (row.role === 'assistant') return TASK_ACTIVITY_THINKING;
+      // The prompt is in: the model is working on it.
+      if (row.role === 'user' || row.role === 'assistant') return TASK_ACTIVITY_THINKING;
       return null;
     default:
       return null;
