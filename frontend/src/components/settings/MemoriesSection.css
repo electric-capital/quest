@@ -138,8 +138,9 @@
   padding: 0.5rem 0.25rem 0.625rem;
 }
 
-/* The content cell: one ellipsized line when collapsed, the full text
-   (markdown source, so pre-wrap) when expanded. */
+/* The content cell: up to two lines when collapsed (memories often open
+   with the same words, so one line does not tell them apart), the full
+   text (markdown source, so pre-wrap) when expanded. */
 .memory-row-content {
   display: flex;
   align-items: baseline;
@@ -160,11 +161,17 @@
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 
 .memory-row-expanded .memory-row-text {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
   white-space: pre-wrap;
   word-break: break-word;
 }
