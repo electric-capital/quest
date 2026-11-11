@@ -1,8 +1,8 @@
 /**
  * The task thread's composer state machine (spec 8.2), as a pure function
- * of what the thread knows, so TaskThread only renders its answer:
+ * of what the task page knows, so TaskMainColumn only renders its answer:
  *
- * - `archived`: the task is archived; no composer (the thread shows the
+ * - `archived`: the task is archived; no composer (the page shows the
  *   "This task is archived." notice with Unarchive instead).
  * - `start`: no active run; Send starts the next run. While a start is in
  *   flight (`starting`: the optimistic entry is on screen until its run

@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { parseUTCTimestamp } from '../../utils/formatters'
 
 /**
@@ -7,16 +6,17 @@ import { parseUTCTimestamp } from '../../utils/formatters'
  * 8.2): a working indicator (the chat's typing dots while the run works, a
  * still "needs you" dot while it waits), the label of what the run is doing
  * now, the elapsed time since the run started (ticking every second, `m:ss`
- * or `h:mm:ss`), Stop and "Open run".
+ * or `h:mm:ss`) and Stop. "View run" sits on the update's header row
+ * (TaskRunEntry).
  *
  * The label is single-line with an ellipsis and the elapsed time has a fixed
  * tabular width, so a changing label never shifts the layout. On phones a
- * line with controls (`has-controls`) wraps instead: the label takes the
- * first line, the time, Stop and Open run the second (TaskThread.css). The
- * label is a polite live region; the ticking time is not announced.
+ * line with Stop (`has-controls`) wraps instead: the label takes the first
+ * line, the time and Stop the second (TaskUpdates.css). The label is a
+ * polite live region; the ticking time is not announced.
  *
- * Stop and Open run are optional: the optimistic "Starting..." entry of a
- * run whose conversation is not known yet has neither. While `stopping` the
+ * Stop is optional: the optimistic "Starting..." entry of a run whose
+ * conversation is not known yet has none. While `stopping` the
  * button reads "Stopping..." and is disabled; `stopError` (e.g. "Not
  * connected") shows after the time.
  */
@@ -27,7 +27,6 @@ export function TaskActivityLine({
   onStop,
   stopping = false,
   stopError = null,
-  openRunPath,
 }: {
   label: string
   /** The run waits for the user (a question or a card) rather than working. */
@@ -37,13 +36,12 @@ export function TaskActivityLine({
   onStop?: () => void
   stopping?: boolean
   stopError?: string | null
-  openRunPath?: string
 }) {
   const elapsed = useElapsedSeconds(startedAt)
 
   return (
     <div
-      className={`task-activity${waiting ? ' waiting' : ''}${onStop || openRunPath ? ' has-controls' : ''}`}
+      className={`task-activity${waiting ? ' waiting' : ''}${onStop ? ' has-controls' : ''}`}
       data-testid="task-activity-line"
     >
       <span className="task-activity-indicator" aria-hidden="true">
@@ -77,11 +75,6 @@ export function TaskActivityLine({
         >
           {stopping ? 'Stopping...' : 'Stop'}
         </button>
-      )}
-      {openRunPath && (
-        <Link to={openRunPath} className="task-activity-open">
-          Open run
-        </Link>
       )}
     </div>
   )

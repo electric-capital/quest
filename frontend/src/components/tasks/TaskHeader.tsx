@@ -33,14 +33,15 @@
  * title after a rename ended with Enter or Escape and after a menu action
  * that leaves nothing to focus (archive; Delete's dialog returns there).
  *
- * Phones: TaskPage passes `jump`, a button at the end of the title row that
- * moves between the task panel and the newest run (TaskHeaderJump). The
- * header is sticky at the top of the scrolling pane there.
+ * `jump` (TaskMainColumn) is a button at the end of the title row that
+ * moves between the brief and the newest update (TaskHeaderJump), with a
+ * dot on "Latest" while a run works (pulsing) or the task is unread. The
+ * header sits above the page's scroller, so it stays on screen.
  *
  * Styles in TaskHeader.css.
  */
 
-import { useCallback, useEffect, useRef, useState, type Ref } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Archive, ArchiveRestore, ArrowDown, ArrowUp, ChevronDown, Pencil, Trash2 } from 'lucide-react'
 import {
@@ -76,6 +77,13 @@ function runActiveMessage(seq: number | null | undefined): string {
   return `${run} is still working. Stop it or wait for it to finish before archiving.`
 }
 
+function jumpLabel(jump: TaskHeaderJump): string {
+  if (jump.target === 'brief') return 'Back to the brief'
+  if (jump.mark === 'working') return 'Jump to the newest update (a run is working)'
+  if (jump.mark === 'unread') return 'Jump to the newest update (not seen yet)'
+  return 'Jump to the newest update'
+}
+
 interface HeaderNotice {
   text: string
   /** `status`: transient confirmation; `error`: stays until dismissed. */
@@ -84,24 +92,24 @@ interface HeaderNotice {
   seq: number
 }
 
-/** Where the phone jump button goes: up to the task panel, or down to the newest run. */
+/** Where the jump button goes: up to the brief, or down to the newest update. */
 export type TaskHeaderJumpTarget = 'brief' | 'latest'
 
-/** The phone header's jump button (TaskPage owns the panel and the thread). */
+/** The header's jump button (TaskMainColumn owns the scroller it moves). */
 export interface TaskHeaderJump {
-  /** `brief` while the panel is out of view, `latest` while it is in view. */
+  /** `latest` while the newest update is below the view, `brief` once scrolled down past it. */
   target: TaskHeaderJumpTarget
   onJump: (target: TaskHeaderJumpTarget) => void
+  /** On "Latest": a run is working, or the task has an update not yet seen. */
+  mark: 'working' | 'unread' | null
 }
 
 export interface TaskHeaderProps {
   task: Task
   /** A Task returned by rename / archive / unarchive (useTask.applyDetail). */
   onTaskDetail?: (task: Task) => void
-  /** Phones only: the jump between the panel and the newest run. */
+  /** The jump between the brief and the newest update; none while both are in view. */
   jump?: TaskHeaderJump
-  /** The <header> element (TaskPage measures it for the sticky offset). */
-  headerRef?: Ref<HTMLElement>
 }
 
 /** Which menu item to focus once the menu has opened. */
@@ -109,7 +117,7 @@ type MenuFocus = 'first' | 'last' | null
 
 const MENU_ITEM_SELECTOR = '[role="menuitem"]:not(:disabled)'
 
-export function TaskHeader({ task, onTaskDetail, jump, headerRef }: TaskHeaderProps) {
+export function TaskHeader({ task, onTaskDetail, jump }: TaskHeaderProps) {
   const navigate = useNavigate()
   const activeRun = task.active_run
   const canArchive = !task.archived && activeRun === null
@@ -380,7 +388,7 @@ export function TaskHeader({ task, onTaskDetail, jump, headerRef }: TaskHeaderPr
   const titleLength = renameValue.length
 
   return (
-    <header className="task-header" ref={headerRef}>
+    <header className="task-header">
       <div className="task-header-bar">
         <div className="task-header-unit">
           {renaming ? (
@@ -510,7 +518,9 @@ export function TaskHeader({ task, onTaskDetail, jump, headerRef }: TaskHeaderPr
             type="button"
             className={`task-header-jump task-header-jump--${jump.target}`}
             data-jump-target={jump.target}
-            aria-label={jump.target === 'brief' ? 'Show brief, instructions and files' : 'Jump to the newest run'}
+            data-jump-mark={jump.mark ?? undefined}
+            aria-label={jumpLabel(jump)}
+            title={jumpLabel(jump)}
             onClick={() => jump.onJump(jump.target)}
           >
             {jump.target === 'brief' ? (
@@ -519,6 +529,7 @@ export function TaskHeader({ task, onTaskDetail, jump, headerRef }: TaskHeaderPr
               <ArrowDown size={16} aria-hidden="true" />
             )}
             <span>{jump.target === 'brief' ? 'Brief' : 'Latest'}</span>
+            {jump.mark && <span className={`task-header-jump-mark ${jump.mark}`} aria-hidden="true" />}
           </button>
         )}
       </div>

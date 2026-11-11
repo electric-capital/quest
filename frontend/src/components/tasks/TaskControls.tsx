@@ -2,9 +2,12 @@ import { useEffect, useId, useRef, type KeyboardEvent } from 'react'
 import { ApiClientError } from '../../api/request'
 import { taskErrorDetail } from '../../api/tasksApi'
 import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatters'
+import './TaskControls.css'
 
 /**
- * Small shared pieces of the task panel (TaskPanel.css):
+ * Small shared pieces of the task page's editors and detail panel
+ * (TaskControls.css, which also styles the brief's markdown, the editors
+ * and the brief History):
  *
  * - `taskTextLength`: the length the server checks a brief or instructions
  *   text against: after stripping, in code points (Python `len`), so an
@@ -15,11 +18,13 @@ import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatte
  *   over the limit" line in a polite live region. Editors disable Save while
  *   `isOverCap`.
  * - `TaskTimeAgo`: a relative time with the full local time on hover.
- * - `taskPanelErrorMessage`: the inline message for a failed save or
+ * - `taskSaveErrorMessage`: the inline message for a failed save or
  *   restore, mapping 400 `brief_too_long` (its `cap` / `actual` extras) to a
  *   sentence and anything else to the server's message or a fallback.
  * - `TaskDiscardConfirm`: the "Discard your changes?" row an editor shows
- *   in place of its Cancel / Save row when Escape is pressed with changes.
+ *   in place of its Cancel / Save row when Escape is pressed with changes
+ *   (or, for the instructions editor, when the detail panel is closed over
+ *   them).
  */
 
 /** Share of the cap from which the counter takes its warning tone. */
@@ -62,13 +67,13 @@ export function TaskCharCounter({
   const over = length - cap
   const tone = over > 0 ? 'over' : length >= cap * NEAR_CAP_RATIO ? 'near' : 'ok'
   return (
-    <div className="task-panel-counter-row">
-      <p id={overId} className="task-panel-over-cap" aria-live="polite">
+    <div className="task-ctl-counter-row">
+      <p id={overId} className="task-ctl-over-cap" aria-live="polite">
         {over > 0 ? `${over.toLocaleString()} characters over the limit` : ''}
       </p>
-      <span id={id} className={`task-panel-counter task-panel-counter--${tone}`}>
+      <span id={id} className={`task-ctl-counter task-ctl-counter--${tone}`}>
         {length.toLocaleString()} / {cap.toLocaleString()}
-        <span className="task-panel-sr-only"> characters</span>
+        <span className="task-ctl-sr-only"> characters</span>
       </span>
     </div>
   )
@@ -82,7 +87,7 @@ export function TaskTimeAgo({ iso }: { iso: string }) {
   )
 }
 
-export function taskPanelErrorMessage(err: unknown, fallback: string): string {
+export function taskSaveErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof ApiClientError && err.errorCode === 'brief_too_long') {
     const detail = taskErrorDetail(err)
     const cap = typeof detail?.cap === 'number' ? detail.cap : null
@@ -97,8 +102,9 @@ export function taskPanelErrorMessage(err: unknown, fallback: string): string {
 
 /**
  * The inline "Discard your changes?" row of the Instructions and Brief
- * editors, shown when Escape is pressed over a changed draft (the Cancel
- * button still cancels at once). Focus moves to "Keep editing" when it
+ * editors, shown when Escape is pressed over a changed draft, or when the
+ * detail panel holding the instructions editor is asked to close (the
+ * Cancel button still cancels at once). Focus moves to "Keep editing" when it
  * appears; "Keep editing" or Escape anywhere in the row calls
  * `onKeepEditing` (the editor hides the row and focuses its textarea, the
  * draft intact); "Discard" calls `onDiscard` (the editor cancels as Cancel
@@ -125,14 +131,14 @@ export function TaskDiscardConfirm({
   }
 
   return (
-    <div className="task-panel-discard" role="group" aria-labelledby={textId} onKeyDown={onKeyDown}>
-      <p id={textId} className="task-panel-discard-text">
+    <div className="task-ctl-discard" role="group" aria-labelledby={textId} onKeyDown={onKeyDown}>
+      <p id={textId} className="task-ctl-discard-text">
         Discard your changes?
       </p>
-      <div className="task-panel-editor-actions">
+      <div className="task-ctl-editor-actions">
         <button
           type="button"
-          className="task-panel-button task-panel-discard-confirm"
+          className="task-ctl-button task-ctl-discard-confirm"
           onClick={onDiscard}
         >
           Discard
@@ -140,7 +146,7 @@ export function TaskDiscardConfirm({
         <button
           ref={keepRef}
           type="button"
-          className="task-panel-button task-panel-button--primary task-panel-discard-keep"
+          className="task-ctl-button task-ctl-button--primary task-ctl-discard-keep"
           onClick={onKeepEditing}
         >
           Keep editing

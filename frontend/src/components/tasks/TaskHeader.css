@@ -255,15 +255,17 @@
   }
 }
 
-/* Phone jump button (TaskPage passes `jump` on phones only): "Brief" while
-   the task panel is scrolled away, "Latest" while it shows. A quiet outline
-   pill at the end of the title row, 40px tall for the thumb. */
+/* Jump button (TaskMainColumn's `jump`): "Latest" while the newest update
+   is below the view, "Brief" once scrolled down. A quiet outline pill at
+   the end of the title row, 40px tall on phones for the thumb; a dot on
+   "Latest" while a run works (pulsing) or the task is unread. */
 .task-header-jump {
+  position: relative;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  min-height: 40px;
+  min-height: 32px;
   margin-left: auto;
   padding: 0 0.75rem 0 0.6rem;
   border: 1px solid var(--border-strong);
@@ -288,18 +290,45 @@
   outline: none;
 }
 
-/* Phone: the pane (.docs-main) scrolls the whole page, so the header sticks
-   to its top: opaque, with its bottom border, and compact. The title
-   ellipsizes before the chip and the jump button; the menu stays a popover
-   under the title, kept inside the 16px gutters (the rename input shrinks
-   with the row, since the unit has min-width 0). TaskPage keeps the panel
-   and the runs clear of it (scroll-margin, TaskPage.css). */
+.task-header-jump-mark {
+  width: 7px;
+  height: 7px;
+  margin-left: 0.1rem;
+  border-radius: 50%;
+  background-color: var(--accent);
+}
+
+.task-header-jump-mark.working {
+  animation: task-header-jump-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes task-header-jump-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-header-jump-mark.working {
+    animation: none;
+  }
+}
+
+/* Phone: compact. The title ellipsizes before the chip and the jump
+   button; the menu stays a popover under the title, kept inside the 16px
+   gutters (the rename input shrinks with the row, since the unit has
+   min-width 0). */
 @media (max-width: 768px) {
   .task-header {
-    position: sticky;
-    top: 0;
     padding: 0.375rem 16px;
-    background-color: var(--surface);
+  }
+
+  .task-header-jump {
+    min-height: 40px;
   }
 
   .task-header-bar {

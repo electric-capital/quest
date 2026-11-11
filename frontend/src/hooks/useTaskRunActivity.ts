@@ -11,7 +11,7 @@
  * Subscription ownership. On a conversation id the hook attaches its event
  * handler first, then always calls `persistentWebSocket.subscribe(id)`: the
  * op is idempotent server side (it only pushes the TTL deadline forward), so
- * even a conversation some other caller already subscribed (the run view's
+ * even a conversation some other caller already subscribed (the run panel's
  * useConversation, which never unsubscribes) gets a fresh `subscribed` ack
  * with `run_active` and `current_seq`. The hook OWNS the subscription only
  * when the id was not in the client's subscribed set before that call; on

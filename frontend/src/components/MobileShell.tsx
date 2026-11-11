@@ -42,10 +42,6 @@ interface MobileShellProps {
   tasksRoute: TasksRoute | null
   /** Whether the `tasks` feature gate is open for the current user. */
   tasksEnabled: boolean
-  /** On a task run view: whether the route's run resolved (App.tsx), so it has a workspace. */
-  runResolved: boolean
-  /** The run view's report of whether its run resolved (TaskRunView onRunResolved). */
-  onRunResolved: (resolved: boolean) => void
 }
 
 interface ConversationSelectOpts {
@@ -59,9 +55,9 @@ interface ConversationSelectOpts {
  * drawer hosting the existing Sidebar, and a single main pane (chat, home
  * composer, requests, or a Quest Docs, Tables or Tasks view). The
  * RightPanel lives in the workspace drawer behind the top bar's folder
- * button, for a chat and for a task run view (with the run's task, as
- * beside the desktop run view, and like it only once the run resolved);
- * the other docs, tables and tasks views have no workspace.
+ * button, for a chat; the docs, tables and tasks views have no workspace
+ * (a task page shows its files in its main column, and a run's Chat Files
+ * in its full-screen run view).
  */
 export function MobileShell({
   activeConversationId,
@@ -76,8 +72,6 @@ export function MobileShell({
   tablesEnabled,
   tasksRoute,
   tasksEnabled,
-  runResolved,
-  onRunResolved,
 }: MobileShellProps) {
   const { appName } = useAppConfig()
   const {
@@ -179,7 +173,7 @@ export function MobileShell({
     setWorkspaceOpen(false)
   }, [tablesRouteKey])
 
-  // Same for a tasks view (a list, New Task, a thread or a run view).
+  // Same for a tasks view (a list, New Task, a task page or one of its runs).
   const tasksRouteKey = tasksRoute
     ? tasksRoute.kind === 'list'
       ? `list:${tasksRoute.archived ? 'archived' : 'active'}`
@@ -195,17 +189,7 @@ export function MobileShell({
     setWorkspaceOpen(false)
   }, [tasksRouteKey])
 
-  // The task run view has a workspace once its run resolved: the run's
-  // conversation and its task (none while loading or beside a not-found run).
-  const runRoute = tasksRoute?.kind === 'run' && tasksEnabled ? tasksRoute : null
-  const hasWorkspace = runRoute !== null
-    ? runResolved
-    : !docsRoute && !tablesRoute && !tasksRoute
-  // A run deleted while its workspace drawer is open: close the empty drawer.
-  const runWorkspaceGone = runRoute !== null && !runResolved
-  useEffect(() => {
-    if (runWorkspaceGone) setWorkspaceOpen(false)
-  }, [runWorkspaceGone])
+  const hasWorkspace = !docsRoute && !tablesRoute && !tasksRoute
 
   const closeOverlays = useCallback(() => {
     setDrawerOpen(false)
@@ -270,9 +254,8 @@ export function MobileShell({
             <span className="mobile-topbar-title-text">{appName}</span>
           )}
         </div>
-        {/* No workspace beside a docs, tables or tasks view other than the
-            task run view (desktop hides the RightPanel there too); keep the
-            slot so the title stays put. */}
+        {/* No workspace beside a docs, tables or tasks view (desktop hides
+            the RightPanel there too); keep the slot so the title stays put. */}
         {!hasWorkspace ? (
           <span className="mobile-topbar-button mobile-topbar-button-end" aria-hidden="true" />
         ) : (
@@ -318,7 +301,7 @@ export function MobileShell({
           </div>
         ) : tasksRoute ? (
           <div className="main-content docs-main tasks-main">
-            <TasksMain route={tasksRoute} enabled={tasksEnabled} onRunResolved={onRunResolved} />
+            <TasksMain route={tasksRoute} enabled={tasksEnabled} />
           </div>
         ) : activeConversationId ? (
           <ChatPanel
@@ -344,20 +327,10 @@ export function MobileShell({
         />
       </div>
       <div className={`mobile-workspace-drawer${workspaceOpen ? ' open' : ''}`}>
-        {runRoute ? (
-          runResolved && (
-            <RightPanel
-              conversationId={runRoute.conversationId}
-              projectId={null}
-              taskId={runRoute.taskId}
-            />
-          )
-        ) : (
-          <RightPanel
-            conversationId={activeConversationId}
-            projectId={projectId}
-          />
-        )}
+        <RightPanel
+          conversationId={activeConversationId}
+          projectId={projectId}
+        />
       </div>
 
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setSettingsOpen(false)} />

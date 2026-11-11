@@ -9,9 +9,6 @@
  *   Project Files (the project's shared workspace) and, for a project that
  *   still holds legacy project-database tables, Tables, with Copy / Move
  *   row actions between the two file cards (useWorkspaceCopy);
- * - task run (a conversation plus `taskId`): Chat Files (the run's own
- *   workspace) and Task files (the task's workspace, shared by its runs),
- *   with Copy / Move row actions between them; never Tables;
  * - standalone conversation: Chat Files alone, full height;
  * - no conversation inside a project (the home composer while the Sidebar
  *   is drilled into one -- the URL is "/", so the project comes from the
@@ -35,13 +32,14 @@
  * user drags it, derives its shares from the two-card key so an existing
  * Tables height carries over. The two file cards without Tables use
  * ``quest_project_files_split_<pid>`` (Chat Files' percentage), derived
- * from the three-card shares until dragged. A task run's two file cards use
- * ``quest_task_files_split_<tid>`` (Chat Files' percentage), per task.
+ * from the three-card shares until dragged. (A task run's files live on
+ * the task page instead: its Chat Files in the run panel, the task's files
+ * in the page's main column.)
  */
 
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { FileBrowser } from './FileBrowser';
-import { conversationSource, projectSource, taskSource } from '../api/fileApi';
+import { conversationSource, projectSource } from '../api/fileApi';
 import { ProjectTables } from './ProjectTables';
 import { useLegacyProjectTables } from '../hooks/useLegacyProjectTables';
 import { DocConfirmDialog } from './docs/DocConfirmDialog';
@@ -80,11 +78,6 @@ export function getSplit3StorageKey(projectId: string): string {
 /** Two file cards (Chat Files, Project Files) key: Chat Files' percentage. */
 export function getFilesSplitStorageKey(projectId: string): string {
   return `quest_project_files_split_${projectId}`;
-}
-
-/** A task run's two file cards (Chat Files, Task files) key: Chat Files' percentage. */
-export function getTaskFilesSplitStorageKey(taskId: string): string {
-  return `quest_task_files_split_${taskId}`;
 }
 
 /**
@@ -190,12 +183,6 @@ export function loadSizes(layout: Layout, projectId: string | null): number[] {
   return defaultSizes('three');
 }
 
-/** A task run's card shares: stored per task, else the two-file-card default. */
-export function loadTaskFilesSizes(taskId: string): number[] {
-  const files = readPercent(getTaskFilesSplitStorageKey(taskId));
-  return files !== null ? [files, 100 - files] : defaultSizes('files');
-}
-
 function saveSizes(layout: Layout, projectId: string, sizes: number[]): void {
   if (layout === 'two') {
     writeStorage(getSplitStorageKey(projectId), String(sizes[0]));
@@ -251,35 +238,22 @@ interface RightPanelProps {
   conversationId: string | null;
   /** Project id from the URL (null at "/" and for standalone chats). */
   projectId: string | null;
-  /**
-   * The task whose run `conversationId` is (the run view): shows Task files
-   * beside Chat Files. Ignored without a conversation; a run is never in a
-   * project, so `projectId` is ignored with it.
-   */
-  taskId?: string | null;
 }
 
-export function RightPanel({ conversationId, projectId: urlProjectId, taskId: taskIdProp = null }: RightPanelProps) {
+export function RightPanel({ conversationId, projectId: urlProjectId }: RightPanelProps) {
   const { drilledProjectId } = useProjects();
-
-  // A task run: its task's workspace is the shared space, never a project.
-  const taskId = conversationId ? taskIdProp : null;
 
   // With a live conversation the URL decides (a standalone chat viewed while
   // the Sidebar happens to be drilled must NOT show project cards). Without
   // one -- the home composer -- the drilled project is what the user sees.
-  const projectId = taskId
-    ? null
-    : conversationId ? urlProjectId : (urlProjectId ?? drilledProjectId);
+  const projectId = conversationId ? urlProjectId : (urlProjectId ?? drilledProjectId);
 
   // The legacy project database: its Tables card exists only for a project
   // that still holds tables in it (or whose list failed, to show the error).
   const legacyTables = useLegacyProjectTables(projectId);
   const showTables = legacyTables.tables.length > 0 || legacyTables.error !== null;
 
-  const layout: Layout = taskId
-    ? 'files'
-    : !projectId
+  const layout: Layout = !projectId
       ? 'single'
       : conversationId
         ? (showTables ? 'three' : 'files')
@@ -293,30 +267,20 @@ export function RightPanel({ conversationId, projectId: urlProjectId, taskId: ta
     () => (projectId ? projectSource(projectId) : null),
     [projectId],
   );
-  const taskFilesSource = useMemo(
-    () => (taskId ? taskSource(taskId) : null),
-    [taskId],
-  );
 
   // Copy / Move between the two file cards: actions only in a project
-  // conversation or a task run.
-  const copy = useWorkspaceCopy(
-    conversationId,
-    taskFilesSource ?? (conversationId ? projectFilesSource : null),
-  );
+  // conversation.
+  const copy = useWorkspaceCopy(conversationId, conversationId ? projectFilesSource : null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
 
   // Card shares while dragging (or after a drag), for the layout and the
-  // project or task they were made in; otherwise the stored/default shares
-  // for what is on screen.
-  const layoutKey = taskId ? `${layout}:task:${taskId}` : `${layout}:${projectId ?? ''}`;
+  // project they were made in; otherwise the stored/default shares for what
+  // is on screen.
+  const layoutKey = `${layout}:${projectId ?? ''}`;
   const [dragSizes, setDragSizes] = useState<{ key: string; sizes: number[] } | null>(null);
-  const loadedSizes = useMemo(
-    () => (taskId ? loadTaskFilesSizes(taskId) : loadSizes(layout, projectId)),
-    [layout, projectId, taskId],
-  );
+  const loadedSizes = useMemo(() => loadSizes(layout, projectId), [layout, projectId]);
   const sizes = dragSizes && dragSizes.key === layoutKey ? dragSizes.sizes : loadedSizes;
   // Live shares for the drag handler (so it need not be rebuilt per render).
   const sizesRef = useRef(sizes);
@@ -449,8 +413,7 @@ export function RightPanel({ conversationId, projectId: urlProjectId, taskId: ta
       setResizing(null);
       setActiveDivider(null);
       // Save on drag end, and only when the split actually changed.
-      if (moved && taskId) writeStorage(getTaskFilesSplitStorageKey(taskId), String(current[0]));
-      else if (moved && projectId) saveSizes(layout, projectId, current);
+      if (moved && projectId) saveSizes(layout, projectId, current);
       handle.removeEventListener('pointermove', handleMove);
       handle.removeEventListener('pointerup', handleEnd);
       handle.removeEventListener('pointercancel', handleEnd);
@@ -459,7 +422,7 @@ export function RightPanel({ conversationId, projectId: urlProjectId, taskId: ta
     handle.addEventListener('pointermove', handleMove);
     handle.addEventListener('pointerup', handleEnd);
     handle.addEventListener('pointercancel', handleEnd);
-  }, [layout, layoutKey, projectId, taskId]);
+  }, [layout, layoutKey, projectId]);
 
   const panelClass = `right-panel${resizing ? ` resizing-${resizing}` : ''}`;
 
@@ -473,19 +436,6 @@ export function RightPanel({ conversationId, projectId: urlProjectId, taskId: ta
           rowActions={copy.chatRowActions}
           notice={copy.notices.conversation}
           onDismissNotice={() => copy.dismissNotice('conversation')}
-        />
-      ),
-    });
-  }
-  if (taskFilesSource) {
-    cards.push({
-      key: 'task',
-      node: (
-        <FileBrowser
-          source={taskFilesSource}
-          rowActions={copy.sharedRowActions}
-          notice={copy.notices.task}
-          onDismissNotice={() => copy.dismissNotice('task')}
         />
       ),
     });

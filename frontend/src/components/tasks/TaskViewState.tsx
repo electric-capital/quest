@@ -5,7 +5,7 @@ import './TaskViewState.css'
 
 /**
  * Centered loading / not-found / error notices shared by the Quest Tasks
- * views (TaskPage, TaskRunView, TasksListView), styled like the doc and
+ * views (TaskPage, TasksListView), styled like the doc and
  * table viewers' states. Not a placeholder: later phases keep using it.
  *
  * `delayed` (the loading states, TaskViewLoading) fades the notice in only

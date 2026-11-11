@@ -6,12 +6,11 @@ import {
   TaskCharCounter,
   TaskDiscardConfirm,
   isOverCap,
-  taskPanelErrorMessage,
+  taskSaveErrorMessage,
   taskTextLength,
-} from './TaskPanelControls'
-import { TaskPanelSection } from './TaskPanelSection'
+} from './TaskControls'
 
-const EMPTY_TEXT =
+const ABOUT_TEXT =
   'Standing rules every run of this task follows, like tone, sources to use or things to avoid. Only you write them; runs never change them.'
 const CHANGED_NOTE =
   'The instructions were changed elsewhere while you were editing. Saving replaces them with your text.'
@@ -23,36 +22,57 @@ interface InstructionsEdit {
 }
 
 /**
- * The Instructions section of the task panel (spec 8.3): the task's
- * standing rules as plain text (pre-wrap), user-written only.
+ * The instructions in the task page's detail panel (TaskPage wraps this
+ * body in TaskDetailPanel, opened from the instructions row above the
+ * brief): the task's standing rules as plain text (pre-wrap), user-written
+ * only, under a line saying what they are for.
  *
- * Edit opens a textarea (focused) with an `n / 8,000` counter
- * (TaskCharCounter: no truncation, warning near the cap, Save disabled over
- * it), Save and Cancel. Save PATCHes `instructions` and hands the returned
- * task to `onSaved` (useTask's applyDetail); any error (400
- * `invalid_instructions` included) shows inline under the textarea and the
- * editor stays open. Cancel, or Escape while the draft is unchanged,
- * closes the editor and puts focus back on the control that opened it.
- * Escape over a changed draft asks first (TaskDiscardConfirm in place of
- * the Cancel / Save row): Discard closes as Cancel does, Keep editing (or
- * Escape again) goes back to the textarea with the draft intact.
+ * Edit (or "Add instructions", or opening the panel from the row's "Add
+ * instructions", `startEditing`) opens a textarea (focused, caret after the
+ * text) with an `n / 8,000` counter (TaskCharCounter: no truncation,
+ * warning near the cap, Save disabled over it), Save and Cancel. Save
+ * PATCHes `instructions`, hands the returned task to `onSaved` (useTask's
+ * applyDetail) and goes back to the text; any error (400
+ * `invalid_instructions` included) shows inline and the editor stays open.
+ * Cancel, or Escape while the draft is unchanged, closes the editor and
+ * puts focus back on the control that opened it. Escape over a changed
+ * draft asks first (TaskDiscardConfirm in place of the Cancel / Save row).
+ *
+ * The panel itself must not close over a changed draft: the page tracks
+ * `onDirtyChange` and, when the panel is asked to close or switch to
+ * another view (Escape elsewhere in the panel, its close button, View run,
+ * History), sets `closePending` instead; the same discard row then shows,
+ * and Discard calls `onConfirmClose` (the page carries out the close),
+ * Keep editing `onCancelClose`.
  *
  * The draft is never replaced from outside: if the task's instructions
  * change while editing (another tab), a quiet note says that saving
- * replaces them. With no instructions the section explains what they are
- * for and offers "Add instructions".
+ * replaces them.
  */
-export function TaskInstructionsSection({
+export function TaskInstructionsPanel({
   task,
   onSaved,
-  collapsible,
+  startEditing,
+  onDirtyChange,
+  closePending,
+  onConfirmClose,
+  onCancelClose,
 }: {
   task: Task
   /** Merge the Task returned by the PATCH into the page's view. */
   onSaved: (task: Task) => void
-  collapsible: boolean
+  /** Open straight into the editor (the row's "Add instructions"). */
+  startEditing: boolean
+  /** Whether an unsaved, changed draft is open. */
+  onDirtyChange: (dirty: boolean) => void
+  /** The page was asked to close the panel over a changed draft. */
+  closePending: boolean
+  onConfirmClose: () => void
+  onCancelClose: () => void
 }) {
-  const [edit, setEdit] = useState<InstructionsEdit | null>(null)
+  const [edit, setEdit] = useState<InstructionsEdit | null>(() =>
+    startEditing ? { draft: task.instructions, base: task.instructions } : null,
+  )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
@@ -79,6 +99,12 @@ export function TaskInstructionsSection({
     }
   }, [editing])
 
+  const dirty = edit !== null && edit.draft !== edit.base
+  useEffect(() => {
+    onDirtyChange(dirty)
+  }, [dirty, onDirtyChange])
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange])
+
   const startEdit = () => {
     setError(null)
     setConfirmDiscard(false)
@@ -94,7 +120,13 @@ export function TaskInstructionsSection({
 
   const keepEditing = () => {
     setConfirmDiscard(false)
+    if (closePending) onCancelClose()
     textareaRef.current?.focus()
+  }
+
+  const discard = () => {
+    if (closePending) onConfirmClose()
+    else close()
   }
 
   const length = edit ? taskTextLength(edit.draft) : 0
@@ -113,7 +145,7 @@ export function TaskInstructionsSection({
       close()
     } catch (err) {
       setSaving(false)
-      setError(taskPanelErrorMessage(err, 'Failed to save the instructions.'))
+      setError(taskSaveErrorMessage(err, 'Failed to save the instructions.'))
     }
   }
 
@@ -126,43 +158,24 @@ export function TaskInstructionsSection({
 
   const changedUnderneath = edit !== null && !saving && task.instructions !== edit.base
 
-  let summary: string
-  if (editing) summary = 'Editing'
-  else if (task.instructions) summary = task.instructions.split('\n', 1)[0]
-  else summary = 'None yet'
-
-  const actions =
-    !editing && task.instructions ? (
-      <button
-        ref={openerRef}
-        type="button"
-        className="task-panel-button"
-        onClick={startEdit}
-        aria-label="Edit instructions"
-      >
-        <Pencil size={13} aria-hidden="true" />
-        Edit
-      </button>
-    ) : null
-
   let body
   if (edit) {
     body = (
-      <div className="task-panel-editor">
-        <label htmlFor={textareaId} className="task-panel-sr-only">
+      <div className="task-ctl-editor">
+        <label htmlFor={textareaId} className="task-ctl-sr-only">
           Edit instructions
         </label>
         {changedUnderneath && (
-          <p className="task-panel-note" role="status">
+          <p className="task-ctl-note" role="status">
             {CHANGED_NOTE}
           </p>
         )}
         <textarea
           ref={textareaRef}
           id={textareaId}
-          className="task-panel-textarea"
+          className="task-ctl-textarea"
           value={edit.draft}
-          rows={8}
+          rows={12}
           placeholder="For example: Answer in English. Prefer primary sources. Never email anyone."
           readOnly={saving}
           aria-busy={saving}
@@ -181,20 +194,20 @@ export function TaskInstructionsSection({
           cap={TASK_INSTRUCTIONS_MAX_CHARS}
         />
         {error && (
-          <p id={errorId} className="task-panel-error" role="alert">
+          <p id={errorId} className="task-ctl-error" role="alert">
             {error}
           </p>
         )}
-        {confirmDiscard ? (
-          <TaskDiscardConfirm onDiscard={close} onKeepEditing={keepEditing} />
+        {confirmDiscard || (closePending && dirty) ? (
+          <TaskDiscardConfirm onDiscard={discard} onKeepEditing={keepEditing} />
         ) : (
-          <div className="task-panel-editor-actions">
-            <button type="button" className="task-panel-button" onClick={close} disabled={saving}>
+          <div className="task-ctl-editor-actions">
+            <button type="button" className="task-ctl-button" onClick={close} disabled={saving}>
               Cancel
             </button>
             <button
               type="button"
-              className="task-panel-button task-panel-button--primary"
+              className="task-ctl-button task-ctl-button--primary"
               onClick={() => void save()}
               disabled={!canSave}
             >
@@ -205,12 +218,22 @@ export function TaskInstructionsSection({
       </div>
     )
   } else if (task.instructions) {
-    body = <p className="task-panel-text">{task.instructions}</p>
+    body = (
+      <>
+        <p className="task-ctl-text">{task.instructions}</p>
+        <div className="task-ctl-editor-actions task-instructions-panel-actions">
+          <button ref={openerRef} type="button" className="task-ctl-button" onClick={startEdit}>
+            <Pencil size={13} aria-hidden="true" />
+            Edit
+          </button>
+        </div>
+      </>
+    )
   } else {
     body = (
-      <div className="task-panel-empty">
-        <p className="task-panel-empty-text">{EMPTY_TEXT}</p>
-        <button ref={openerRef} type="button" className="task-panel-button" onClick={startEdit}>
+      <div className="task-ctl-empty">
+        <p className="task-ctl-empty-text">No instructions yet.</p>
+        <button ref={openerRef} type="button" className="task-ctl-button" onClick={startEdit}>
           Add instructions
         </button>
       </div>
@@ -218,8 +241,9 @@ export function TaskInstructionsSection({
   }
 
   return (
-    <TaskPanelSection title="Instructions" summary={summary} actions={actions} collapsible={collapsible}>
+    <div className="task-instructions-panel">
+      <p className="task-ctl-hint">{ABOUT_TEXT}</p>
       {body}
-    </TaskPanelSection>
+    </div>
   )
 }

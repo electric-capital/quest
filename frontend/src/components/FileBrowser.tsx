@@ -93,7 +93,7 @@ interface FileBrowserProps {
   source: FileSource | null;
   /**
    * Leave out the card's title, for a host that heads the card itself (the
-   * task panel's "Task files" section). The hidden-files toggle and Refresh
+   * task page's "Task files" section, a task run's Chat Files tab). The hidden-files toggle and Refresh
    * then sit at the end of the navigation row.
    */
   hideTitle?: boolean;

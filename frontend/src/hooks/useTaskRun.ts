@@ -1,5 +1,5 @@
 /**
- * Data layer of the task run view: the run of task `taskId` whose
+ * Data layer of the task page's run panel: the run of task `taskId` whose
  * conversation is `conversationId`, kept current while the view is open.
  *
  * There is no by-conversation run route, so the first lookup pages the

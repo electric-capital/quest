@@ -4,7 +4,7 @@ import type { TaskQuestion, TaskQuestionTranscriptMessage } from '../../api/type
 import { persistentWebSocket } from '../../services/PersistentWebSocket'
 import { taskThreadPath } from '../../utils/tasksRoute'
 import { TaskQuestionCard } from './TaskQuestionCard'
-import { TaskRunViewContext } from './TaskRunViewContext'
+import { TaskRunPanelContext } from './TaskRunPanelContext'
 
 /** An outcome learned from `wait_handle_resolved` after the row was loaded. */
 interface LiveOutcome {
@@ -28,22 +28,22 @@ function questionFromRow(row: TaskQuestionTranscriptMessage): TaskQuestion {
 
 /**
  * A `task_question` row of a task run's transcript (ChatPanel, through
- * MessageContentRenderer), shown with the thread's TaskQuestionCard.
+ * MessageContentRenderer), shown with the updates' TaskQuestionCard.
  *
  * The state shown is the freshest known: the run's own question from the
- * run view's runs page (TaskRunViewContext, refetched on `task_changed`),
+ * run panel's runs page (TaskRunPanelContext, refetched on `task_changed`),
  * else the transcript row; a `wait_handle_resolved` for the question's
- * handle (an answer from the thread or another tab, a stop) flips a still
+ * handle (an answer from the task page or another tab, a stop) flips a still
  * pending one at once, since the conversation store keeps the row as it was
  * loaded while the server rewrites it in place.
  *
- * Inside the run view the option buttons answer through the task; a free
- * text answer goes through the thread's composer (the run view's composer
+ * Inside the run panel the option buttons answer through the task; a free
+ * text answer goes through the task page's composer (the run's composer
  * is read-only), which the hint links to. Anywhere else the card is
  * read-only with an "Answer in the task" hint.
  */
 export function TaskQuestionMessage({ message }: { message: TaskQuestionTranscriptMessage }) {
-  const runView = useContext(TaskRunViewContext)
+  const runView = useContext(TaskRunPanelContext)
   const handleId = message.wait_handle_id
   const [live, setLive] = useState<LiveOutcome | null>(null)
 

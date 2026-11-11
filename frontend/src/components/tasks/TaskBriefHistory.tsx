@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { ArrowLeft, ChevronLeft, FileDiff, RotateCcw, X } from 'lucide-react'
+import { ChevronLeft, FileDiff, RotateCcw, X } from 'lucide-react'
 import { ApiClientError } from '../../api/request'
 import {
   getTaskBriefVersion,
@@ -12,7 +12,7 @@ import { boundedWordDiff, type WordDiffSegment } from '../../utils/wordDiff'
 import { DocConfirmDialog } from '../docs/DocConfirmDialog'
 import { TaskBriefMarkdown } from './TaskBriefMarkdown'
 import { versionSourceLabel } from './taskBriefSource'
-import { TaskTimeAgo, taskPanelErrorMessage } from './TaskPanelControls'
+import { TaskTimeAgo, taskSaveErrorMessage } from './TaskControls'
 
 // Mirrors TASK_BRIEF_MAX_VERSIONS (chat/tasks/constants.py).
 const RETENTION_NOTE = 'The last 50 versions of the brief are kept.'
@@ -60,10 +60,10 @@ function BriefDiff({ before, after }: { before: string; after: string }) {
     [before, after],
   )
   if (segments === null) {
-    return <p className="task-panel-muted">Too many changes to show a word diff.</p>
+    return <p className="task-ctl-muted">Too many changes to show a word diff.</p>
   }
   if (!segments.some((s) => s.type !== 'equal' && /\S/.test(s.text))) {
-    return <p className="task-panel-muted">Same as the current brief.</p>
+    return <p className="task-ctl-muted">Same as the current brief.</p>
   }
   return (
     <section className="task-brief-diff" aria-label="Changes since this version">
@@ -90,11 +90,12 @@ function BriefDiff({ before, after }: { before: string; after: string }) {
 }
 
 /**
- * The brief's History (TaskBriefSection's history mode, in place of the
- * brief body): the 340px panel always uses DocHistory's phone pattern, a
- * version list, and one version's detail with an "All versions" control
- * back to the list. "Back to brief" (or Escape from the list) leaves
- * History.
+ * The brief's History, in the task page's detail panel (TaskPage wraps it
+ * in TaskDetailPanel, titled "Brief history", beside the current brief in
+ * the main column): DocHistory's phone pattern, a version list, and one
+ * version's detail with an "All versions" control back to the list
+ * (Escape in the detail goes back to the list too; Escape on the list is
+ * the panel's, which closes).
  *
  * List: `listTaskBriefVersions`, newest first: "Version N", its source
  * ("Run N", "Edited by you", "Restored from version n"), when it was
@@ -111,34 +112,32 @@ function BriefDiff({ before, after }: { before: string; after: string }) {
  * once its text has loaded) opens a confirm; confirming sends the
  * `brief_version` frozen when the confirm opened, so a write landing
  * behind the dialog is a 409, never a silent overwrite. Success hands the
- * new brief state to `onRestored` (the parent applies it and leaves
- * History); 409 `stale_brief` closes the dialog with a notice, calls
+ * new brief state to `onRestored` (the page applies it, so the main column
+ * shows the restored brief) and goes back to the list with a note naming
+ * the new version; 409 `stale_brief` closes the dialog with a notice, calls
  * `onStale` (useTask's refresh) and reloads the list; 404
  * `brief_version_not_found` closes it with a notice and reloads the list;
  * other errors stay inline in the dialog. Restoring while a run is active
  * is allowed (the run merges, as for an edit).
  *
  * List, detail and restore responses are sequence-numbered: one whose
- * number is no longer current is dropped. Focus: the History heading on
- * open, "All versions" on opening a version, the selected row on going
- * back.
+ * number is no longer current is dropped. Focus: the panel's heading on
+ * open (TaskDetailPanel), "All versions" on opening a version, the
+ * selected row on going back.
  */
 export function TaskBriefHistory({
   task,
-  onClose,
   onRestored,
   onStale,
 }: {
   task: Task
-  /** Back to the brief. */
-  onClose: () => void
   onRestored: (brief: TaskBriefState) => void
   onStale: () => void
 }) {
   const taskId = task.id
   const currentVersion = task.brief_version
   const ids = useId()
-  const headingRef = useRef<HTMLHeadingElement>(null)
+  const rootRef = useRef<HTMLElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
   const allVersionsRef = useRef<HTMLButtonElement>(null)
   const restoreButtonRef = useRef<HTMLButtonElement>(null)
@@ -172,7 +171,7 @@ export function TaskBriefHistory({
       },
       (err: unknown) => {
         if (seq !== listSeqRef.current) return
-        setListError(taskPanelErrorMessage(err, 'Failed to load the versions.'))
+        setListError(taskSaveErrorMessage(err, 'Failed to load the versions.'))
       },
     )
     // currentVersion: every brief write adds a version.
@@ -206,7 +205,7 @@ export function TaskBriefHistory({
         } else {
           setDetailError({
             version,
-            message: taskPanelErrorMessage(err, 'Failed to load this version.'),
+            message: taskSaveErrorMessage(err, 'Failed to load this version.'),
             retryable: true,
           })
         }
@@ -231,8 +230,11 @@ export function TaskBriefHistory({
     setRestoreTarget(null)
     setRestoreError(null)
     setRestoreBusy(false)
-    // Back to the trigger (gone with the version: the heading).
-    setTimeout(() => (restoreButtonRef.current ?? headingRef.current)?.focus(), 0)
+    // Back to the trigger (gone with the version: the first focusable control).
+    setTimeout(
+      () => (restoreButtonRef.current ?? rootRef.current?.querySelector<HTMLElement>('button'))?.focus(),
+      0,
+    )
   }, [])
 
   const confirmRestore = async () => {
@@ -247,6 +249,9 @@ export function TaskBriefHistory({
       setRestoreBusy(false)
       setRestoreTarget(null)
       onRestored(result)
+      pendingFocusRef.current = 'list'
+      setSelected(null)
+      setNotice(`Version ${target.version} was restored as version ${result.brief_version}.`)
     } catch (err) {
       if (seq !== restoreSeqRef.current) return
       setRestoreBusy(false)
@@ -260,16 +265,12 @@ export function TaskBriefHistory({
         setNotice(GONE_NOTICE)
         reloadList()
       } else {
-        setRestoreError(taskPanelErrorMessage(err, 'Failed to restore this version.'))
+        setRestoreError(taskSaveErrorMessage(err, 'Failed to restore this version.'))
       }
     }
   }
 
   // --- Navigation and focus ----------------------------------------------------------
-  useEffect(() => {
-    headingRef.current?.focus()
-  }, [])
-
   useEffect(() => {
     const target = pendingFocusRef.current
     pendingFocusRef.current = null
@@ -298,10 +299,9 @@ export function TaskBriefHistory({
   const onRootKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     // The dialog is portaled but its key events bubble through here; its
     // own Escape closes it, not History.
-    if (e.key !== 'Escape' || e.defaultPrevented || dialogOpen) return
+    if (e.key !== 'Escape' || e.defaultPrevented || dialogOpen || selected === null) return
     e.preventDefault()
-    if (selected !== null) backToList()
-    else onClose()
+    backToList()
   }
 
   // Up / Down (and Home / End) move between the list rows.
@@ -328,11 +328,11 @@ export function TaskBriefHistory({
   if (versions === null) {
     content =
       listError === null ? (
-        <p className="task-panel-muted">Loading versions...</p>
+        <p className="task-ctl-muted">Loading versions...</p>
       ) : (
         <div className="task-brief-history-state">
-          <p className="task-panel-error">{listError}</p>
-          <button type="button" className="task-panel-button" onClick={reloadList}>
+          <p className="task-ctl-error">{listError}</p>
+          <button type="button" className="task-ctl-button" onClick={reloadList}>
             Retry
           </button>
         </div>
@@ -341,7 +341,7 @@ export function TaskBriefHistory({
     content = (
       <>
         {versions.length === 0 ? (
-          <p className="task-panel-muted">No versions yet.</p>
+          <p className="task-ctl-muted">No versions yet.</p>
         ) : (
           <ul ref={listRef} className="task-brief-history-list" aria-label="Versions" onKeyDown={onListKeyDown}>
             {versions.map((row) => {
@@ -358,7 +358,7 @@ export function TaskBriefHistory({
                     onClick={() => openVersion(row.version)}
                   >
                     <span className="task-brief-history-item-title">Version {row.version}</span>
-                    {current && <span className="task-panel-badge">Current</span>}
+                    {current && <span className="task-ctl-badge">Current</span>}
                   </button>
                   <div id={metaId} className="task-brief-history-item-meta">
                     <span>
@@ -389,21 +389,21 @@ export function TaskBriefHistory({
     let detailBody
     if (body !== undefined) {
       if (showChanges && !isCurrent) detailBody = <BriefDiff before={body} after={task.brief} />
-      else if (body.trim() === '') detailBody = <p className="task-panel-muted">This version is empty.</p>
+      else if (body.trim() === '') detailBody = <p className="task-ctl-muted">This version is empty.</p>
       else detailBody = <TaskBriefMarkdown taskId={taskId} content={body} />
     } else if (error) {
       detailBody = (
         <div className="task-brief-history-state">
-          <p className="task-panel-error">{error.message}</p>
+          <p className="task-ctl-error">{error.message}</p>
           {error.retryable && (
-            <button type="button" className="task-panel-button" onClick={() => setDetailRetry((n) => n + 1)}>
+            <button type="button" className="task-ctl-button" onClick={() => setDetailRetry((n) => n + 1)}>
               Retry
             </button>
           )}
         </div>
       )
     } else {
-      detailBody = <p className="task-panel-muted">Loading this version...</p>
+      detailBody = <p className="task-ctl-muted">Loading this version...</p>
     }
 
     content = (
@@ -411,17 +411,17 @@ export function TaskBriefHistory({
         <button
           ref={allVersionsRef}
           type="button"
-          className="task-panel-button task-panel-button--plain"
+          className="task-ctl-button task-ctl-button--plain"
           onClick={backToList}
         >
           <ChevronLeft size={15} aria-hidden="true" />
           All versions
         </button>
         <div className="task-brief-history-detail-head">
-          <h4 className="task-brief-history-detail-title">
+          <h3 className="task-brief-history-detail-title">
             Version {version}
-            {isCurrent && <span className="task-panel-badge">Current</span>}
-          </h4>
+            {isCurrent && <span className="task-ctl-badge">Current</span>}
+          </h3>
           <p className="task-brief-history-detail-meta">
             {source && (
               <>
@@ -436,7 +436,7 @@ export function TaskBriefHistory({
           <div className="task-brief-history-actions">
             <button
               type="button"
-              className="task-panel-button"
+              className="task-ctl-button"
               aria-pressed={showChanges}
               onClick={() => setShowChanges((on) => !on)}
             >
@@ -446,7 +446,7 @@ export function TaskBriefHistory({
             <button
               ref={restoreButtonRef}
               type="button"
-              className="task-panel-button task-panel-button--primary"
+              className="task-ctl-button task-ctl-button--primary"
               onClick={() => openRestore(version)}
             >
               <RotateCcw size={13} aria-hidden="true" />
@@ -460,23 +460,14 @@ export function TaskBriefHistory({
   }
 
   return (
-    <section className="task-brief-history" aria-labelledby={`${ids}-title`} onKeyDown={onRootKeyDown}>
-      <div className="task-brief-history-header">
-        <h3 id={`${ids}-title`} ref={headingRef} tabIndex={-1} className="task-brief-history-title">
-          History
-        </h3>
-        <button type="button" className="task-panel-button" onClick={onClose}>
-          <ArrowLeft size={13} aria-hidden="true" />
-          Back to brief
-        </button>
-      </div>
+    <section ref={rootRef} className="task-brief-history" aria-label="Versions of the brief" onKeyDown={onRootKeyDown}>
       <div aria-live="polite">
         {notice && (
-          <div className="task-panel-note">
+          <div className="task-ctl-note">
             <span>{notice}</span>
             <button
               type="button"
-              className="task-panel-note-dismiss"
+              className="task-ctl-note-dismiss"
               aria-label="Dismiss"
               onClick={() => setNotice(null)}
             >
@@ -485,9 +476,9 @@ export function TaskBriefHistory({
           </div>
         )}
         {versions !== null && listError !== null && (
-          <div className="task-panel-note">
+          <div className="task-ctl-note">
             <span>Couldn't refresh the versions: {listError}</span>
-            <button type="button" className="task-panel-link-button" onClick={reloadList}>
+            <button type="button" className="task-ctl-link-button" onClick={reloadList}>
               Retry
             </button>
           </div>

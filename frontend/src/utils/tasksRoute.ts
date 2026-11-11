@@ -5,13 +5,14 @@
  *
  *   /tasks                               Tasks list (unarchived)
  *   /tasks?archived=true                 Archived tasks
- *   /tasks/new                           New Task (an empty thread)
- *   /tasks/<id>                          Task thread
- *   /tasks/<id>/runs/<conversation id>   Run view (one run's transcript)
+ *   /tasks/new                           New Task (creates the task on first send)
+ *   /tasks/<id>                          Task page
+ *   /tasks/<id>/runs/<conversation id>   Task page with that run's transcript
+ *                                        open in its detail panel
  *
  * `new` is reserved and never a task id. Any other shape is not a tasks
  * route. The server serves the SPA for all of these (quest.py
- * serve_spa_tasks). The run view's conversation is deliberately not the
+ * serve_spa_tasks). The run's conversation is deliberately not the
  * router's `conversationId` param (App.tsx): a run conversation never becomes
  * the active sidebar conversation.
  */
@@ -90,12 +91,12 @@ export function newTaskPath(): string {
   return `${TASKS_PREFIX}/${NEW_SEGMENT}`
 }
 
-/** URL of one task's thread. */
+/** URL of one task's page. */
 export function taskThreadPath(taskId: string): string {
   return `${TASKS_PREFIX}/${encodeURIComponent(taskId)}`
 }
 
-/** URL of the run view for one run of a task, by the run's conversation id. */
+/** URL of a task's page with one run open in its detail panel, by the run's conversation id. */
 export function taskRunPath(taskId: string, conversationId: string): string {
   return `${taskThreadPath(taskId)}/${RUNS_SEGMENT}/${encodeURIComponent(conversationId)}`
 }

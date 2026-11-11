@@ -6,7 +6,7 @@ import type { TaskBriefSource } from '../../api/types'
  * `restore:<version>`), plus the writing run's `seq` when the server could
  * resolve it (null once that run was deleted). Shared by the brief's
  * attribution line, the editor's "updated while you were editing" notice
- * and the History list (TaskBriefSection, TaskBriefEditor, TaskBriefHistory).
+ * and the History list (TaskBrief, TaskBriefEditor, TaskBriefHistory).
  */
 
 export type ParsedBriefSource =
