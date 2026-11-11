@@ -10,8 +10,10 @@ import { parseUTCTimestamp } from '../../utils/formatters'
  * or `h:mm:ss`), Stop and "Open run".
  *
  * The label is single-line with an ellipsis and the elapsed time has a fixed
- * tabular width, so a changing label never shifts the layout. The label is a
- * polite live region; the ticking time is not announced.
+ * tabular width, so a changing label never shifts the layout. On phones a
+ * line with controls (`has-controls`) wraps instead: the label takes the
+ * first line, the time, Stop and Open run the second (TaskThread.css). The
+ * label is a polite live region; the ticking time is not announced.
  *
  * Stop and Open run are optional: the optimistic "Starting..." entry of a
  * run whose conversation is not known yet has neither. While `stopping` the
@@ -40,7 +42,10 @@ export function TaskActivityLine({
   const elapsed = useElapsedSeconds(startedAt)
 
   return (
-    <div className={`task-activity${waiting ? ' waiting' : ''}`} data-testid="task-activity-line">
+    <div
+      className={`task-activity${waiting ? ' waiting' : ''}${onStop || openRunPath ? ' has-controls' : ''}`}
+      data-testid="task-activity-line"
+    >
       <span className="task-activity-indicator" aria-hidden="true">
         {waiting ? (
           <span className="task-activity-needs-you" />

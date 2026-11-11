@@ -9,8 +9,8 @@
  *   shows up in the runs list) the input is `busy`: locked, and no Stop,
  *   since the run conversation is not known yet.
  * - `answer`: the active run is `waiting` with a pending question; Send
- *   answers the OLDEST pending question ("Answering run N" as label and
- *   placeholder). `busy` while the answer is in flight.
+ *   answers the OLDEST pending question ("Answering run N" as the label,
+ *   ANSWER_PLACEHOLDER in the input). `busy` while the answer is in flight.
  * - `locked`: the active run is `running`, or `waiting` only on approval /
  *   connect cards: the input is `disabled` and Stop is offered on the run's
  *   conversation ("Run N is working" / "Run N is waiting for your
@@ -57,6 +57,7 @@ export interface TaskThreadComposerView {
 }
 
 export const START_PLACEHOLDER = 'What should the next run do?';
+export const ANSWER_PLACEHOLDER = 'Type your answer';
 
 export function isActiveRunStatus(status: TaskRun['status']): boolean {
   return status === 'running' || status === 'waiting';
@@ -111,7 +112,7 @@ export function deriveTaskThreadComposer(input: TaskThreadComposerInput): TaskTh
         ...base,
         mode: 'answer',
         busy: input.answering,
-        placeholder: label,
+        placeholder: ANSWER_PLACEHOLDER,
         label,
         question,
         activeRun,

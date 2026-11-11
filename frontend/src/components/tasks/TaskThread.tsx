@@ -611,6 +611,7 @@ export function TaskThread({
     }
   }, [activeRun, activity.label, stopping, stopError])
 
+  const threadEmpty = runList.length === 0 && !pendingVisible
   let body
   if (runs.loading && runList.length === 0) {
     body = <p className="task-thread-note">Loading runs...</p>
@@ -623,11 +624,19 @@ export function TaskThread({
         </button>
       </div>
     )
-  } else if (runList.length === 0 && !pendingVisible) {
-    body = (
-      <p className="task-thread-note">
-        {task.archived ? 'No runs yet.' : 'No runs yet. Send a prompt to start the first run.'}
-      </p>
+  } else if (threadEmpty) {
+    body = task.archived ? (
+      <div className="task-thread-empty">
+        <p className="task-thread-empty-text">No runs yet.</p>
+      </div>
+    ) : (
+      <div className="task-thread-empty">
+        <h2 className="task-thread-empty-title">No runs yet</h2>
+        <p className="task-thread-empty-text">
+          Each prompt you send starts a run with a fresh context that reads the brief and the
+          instructions.
+        </p>
+      </div>
     )
   } else {
     body = (
@@ -666,7 +675,7 @@ export function TaskThread({
   return (
     <section className="task-thread" aria-label="Runs" ref={sectionRef}>
       <div className="task-thread-scroller" ref={scrollerRef}>
-        <div className="task-thread-list" ref={listRef}>
+        <div className={`task-thread-list${threadEmpty ? ' empty' : ''}`} ref={listRef}>
           {hasOlder && hasRuns && (
             <div className="task-thread-older" ref={sentinelRef}>
               <span className={loadingOlder ? '' : 'task-thread-older-idle'}>
@@ -736,8 +745,8 @@ export function TaskThread({
 
       <DocConfirmDialog
         isOpen={deleteTarget !== null}
-        title={`Delete run ${deleteTarget?.seq ?? ''}?`}
-        confirmLabel="Delete"
+        title={`Delete the entry of run ${deleteTarget?.seq ?? ''}?`}
+        confirmLabel="Delete entry"
         busyLabel="Deleting..."
         tone="danger"
         busy={deleting}
