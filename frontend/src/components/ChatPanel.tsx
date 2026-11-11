@@ -281,14 +281,16 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
     : origin === 'inference_api'
       ? 'Inference API run — a read-only transcript of a one-shot request made by an application with your API key.'
       : origin === 'task'
-        ? (
-          <>
-            This is one run of a task.{' '}
-            {taskId && tasksEnabled
-              ? <Link to={taskThreadPath(taskId)}>Continue in the task.</Link>
-              : 'Continue in the task.'}
-          </>
-        )
+        // The link only while the tasks gate is open for the user: with it
+        // closed the task page would only say the feature is off.
+        ? (taskId && tasksEnabled
+          ? (
+            <>
+              This is one run of a task.{' '}
+              <Link to={taskThreadPath(taskId)}>Continue in the task.</Link>
+            </>
+          )
+          : 'This is one run of a task.')
         : null;
 
   // (The composer's disabled state and placeholder copy now live in
