@@ -10,7 +10,7 @@ import { TaskDetailPanel } from './TaskDetailPanel'
 import { TaskRunError } from './TaskRunError'
 import { TaskRunPanelContext, type TaskRunPanelContextValue } from './TaskRunPanelContext'
 
-/** The run's state in the panel header ("Run 3 · Needs you"). */
+/** The run's state in the panel header ("Update 3 · Needs you"). */
 function taskRunStatusLabel(run: Pick<TaskRun, 'status' | 'handoff_missing'>): string {
   switch (run.status) {
     case 'running':
@@ -93,17 +93,17 @@ export function TaskRunPanel({
   if (!run || !ctx) {
     let note
     if (lookup.loading) {
-      note = <p className="task-detail-panel-note" role="status">Loading run...</p>
+      note = <p className="task-detail-panel-note" role="status">Loading update...</p>
     } else if (lookup.notFound) {
       note = (
         <p className="task-detail-panel-note">
-          This run does not exist, was deleted, or belongs to another task.
+          This update does not exist, was deleted, or belongs to another task.
         </p>
       )
     } else {
       note = (
         <div className="task-detail-panel-note" role="alert">
-          <p>{lookup.error?.message || 'Failed to load the run.'}</p>
+          <p>{lookup.error?.message || 'Failed to load the update.'}</p>
           <button type="button" className="task-ctl-button" onClick={() => void lookup.refresh()}>
             Retry
           </button>
@@ -111,7 +111,7 @@ export function TaskRunPanel({
       )
     }
     return (
-      <TaskDetailPanel title="Run" onClose={onClose}>
+      <TaskDetailPanel title="Update" onClose={onClose}>
         {note}
       </TaskDetailPanel>
     )
@@ -126,7 +126,7 @@ export function TaskRunPanel({
 
   return (
     <TaskDetailPanel
-      title={`Run ${run.seq}`}
+      title={`Update ${run.seq}`}
       meta={
         <div className="task-run-panel-meta">
           <span className={`task-run-panel-status ${run.status}`} role="status">
@@ -138,7 +138,7 @@ export function TaskRunPanel({
         </div>
       }
       toolbar={
-        <div className="task-run-panel-tabs" role="tablist" aria-label={`Run ${run.seq}`}>
+        <div className="task-run-panel-tabs" role="tablist" aria-label={`Update ${run.seq}`}>
           <button
             type="button"
             role="tab"
@@ -173,6 +173,7 @@ export function TaskRunPanel({
           <FileBrowser
             source={chatSource}
             hideTitle
+            compact
             rowActions={copy.chatRowActions}
             notice={copy.notices.conversation}
             onDismissNotice={() => copy.dismissNotice('conversation')}

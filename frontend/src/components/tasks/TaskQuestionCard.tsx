@@ -129,7 +129,7 @@ export function TaskQuestionCard({
       ref={cardRef}
       tabIndex={-1}
       className={`task-question-card ${status}`}
-      aria-label="Question from the run"
+      aria-label="Question"
     >
       <div className="task-question-header">
         <MessageCircleQuestionMark size={14} aria-hidden="true" />
@@ -190,7 +190,7 @@ export function TaskQuestionCard({
       )}
 
       {status === 'cancelled' && (
-        <p className="task-question-cancelled">Cancelled: the run was stopped before you answered.</p>
+        <p className="task-question-cancelled">Cancelled: the update was stopped before you answered.</p>
       )}
     </section>
   )

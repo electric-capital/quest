@@ -579,7 +579,7 @@ export function RequestsView() {
                   >
                     {request.status === 'open'
                       ? `Go to task: ${request.task_title || 'Untitled task'}`
-                      : 'Go to task run'}
+                      : `Go to task: ${request.task_title || 'Untitled task'}`}
                   </span>
                 ) : (
                   <span

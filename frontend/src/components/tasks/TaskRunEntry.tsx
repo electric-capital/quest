@@ -9,7 +9,7 @@ import type { FileSource } from '../../api/fileApi'
 import { formatTimestamp } from '../../utils/formatters'
 import { ActionRequestMessage } from '../ActionRequestMessage'
 import { ConnectRequestMessage } from '../ConnectRequestMessage'
-import { MarkdownWorkspaceContext, Message, markdownComponents } from '../Message'
+import { MarkdownWorkspaceContext, markdownComponents } from '../Message'
 import { RichMarkdown } from '../RichMarkdown'
 import { TaskActivityLine } from './TaskActivityLine'
 import { TaskQuestionCard } from './TaskQuestionCard'
@@ -40,15 +40,16 @@ export interface TaskRunActivityView {
  *   transcript in the page's detail panel; "Close run" while it is the one
  *   showing there, `isOpen`, which also marks the update) and, on a
  *   finished run, the row menu ("Delete entry", confirmed by the page);
- * - the prompt, rendered as Message.tsx renders a user message, clamped
- *   with a "Show full prompt" toggle when it is long (TaskRunPrompt);
+ * - the prompt as the request (TaskRunRequest: "You asked", a quiet left
+ *   rule, clamped with a "Show full prompt" toggle when it is long);
  * - its questions (TaskQuestionCard, oldest first; answered / cancelled
  *   ones keep showing on finished runs);
  * - the approval and connect cards the page keeps for it (`cards`: the
  *   open ones plus, while the run is active, those resolved since they were
  *   first seen, which flip themselves to their resolved state);
  * - for the active run the activity line, else the outcome: the `result` as
- *   the assistant reply (with a "Handoff notes" disclosure for the notes),
+ *   plain body text in the column, no bubble (with a "Handoff notes"
+ *   disclosure for the notes),
  *   the handoff-missing, failed (TaskRunError: one line plus "Show
  *   details") or stopped line.
  *
@@ -83,7 +84,7 @@ export const TaskRunEntry = memo(function TaskRunEntry({
   onDelete: (run: TaskRun) => void
   /** This run's transcript is the one showing in the detail panel. */
   isOpen: boolean
-  /** View run / Close run: the page toggles the run's panel. */
+  /** View details / Close details: the page toggles the run's panel. */
   onView: (conversationId: string) => void
 }) {
   const conversationId = run.conversation_id
@@ -99,11 +100,11 @@ export const TaskRunEntry = memo(function TaskRunEntry({
         className={`task-run${isOpen ? ' is-open' : ''}`}
         data-run-id={run.id}
         data-conversation-id={conversationId}
-        aria-label={`Run ${run.seq}`}
+        aria-label={`Update ${run.seq}`}
         aria-current={isOpen ? 'true' : undefined}
       >
         <div className="task-run-meta">
-          <span className="task-run-seq">Run {run.seq}</span>
+          <span className="task-run-seq">Update {run.seq}</span>
           <span className="task-run-time">{formatTimestamp(run.started_at)}</span>
           <button
             type="button"
@@ -112,16 +113,12 @@ export const TaskRunEntry = memo(function TaskRunEntry({
             onClick={() => onView(conversationId)}
           >
             <PanelRight size={14} aria-hidden="true" />
-            {isOpen ? 'Close run' : 'View run'}
+            {isOpen ? 'Close details' : 'View details'}
           </button>
           {finished && <TaskRunMenu seq={run.seq} onDelete={() => onDelete(run)} />}
         </div>
 
-        <TaskRunPrompt
-          prompt={run.prompt}
-          timestamp={run.started_at}
-          conversationId={conversationId}
-        />
+        <TaskRunRequest prompt={run.prompt} />
 
         {run.questions.map((question) => (
           <TaskQuestionCard
@@ -166,7 +163,6 @@ export const TaskRunEntry = memo(function TaskRunEntry({
 function TaskRunOutcome({ run }: { run: TaskRun }) {
   const result = run.result?.trim() ? run.result : null
   const notes = run.notes?.trim() ? run.notes : null
-  const finishedAt = run.finished_at ?? run.started_at
 
   return (
     <div className="task-run-outcome">
@@ -174,14 +170,16 @@ function TaskRunOutcome({ run }: { run: TaskRun }) {
       {run.status === 'stopped' && <p className="task-run-state">Stopped.</p>}
       {run.handoff_missing && (
         <p className="task-run-state">
-          This run ended without a handoff; its final text is shown as the result.
+          This update ended without a handoff; its final text is shown as the result.
         </p>
       )}
       {result && (
-        <Message role="assistant" content={result} timestamp={finishedAt} model={run.model ?? undefined} />
+        <div className="message-content task-ctl-markdown task-run-result">
+          <RichMarkdown components={markdownComponents}>{result}</RichMarkdown>
+        </div>
       )}
       {!result && run.status === 'completed' && (
-        <p className="task-run-state">This run finished without a result.</p>
+        <p className="task-run-state">This update finished without a result.</p>
       )}
       {notes && <TaskRunNotes notes={notes} />}
     </div>
@@ -202,38 +200,34 @@ function isLongPrompt(prompt: string): boolean {
 }
 
 /**
- * The run's prompt as a user bubble. A long prompt (isLongPrompt) is
- * clamped to a few lines with a fade (CSS, `.task-run-prompt.clamped`) and
- * a "Show full prompt" / "Show less" toggle under the bubble. Whether the
- * clamp actually hides anything is measured (the bubble's width changes
- * with the viewport): when the whole prompt fits, no fade and no toggle.
+ * The run's prompt as the update's request: a small "You asked" label over
+ * the text (plain, pre-wrapped, as the user typed it), set off from the
+ * result below by a quiet left rule and the secondary text colour, all
+ * left-anchored in the column (TaskUpdates.css). Also the optimistic entry
+ * of a run being started (TaskUpdates).
+ *
+ * A long prompt (isLongPrompt) is clamped to about eight lines with a fade
+ * (`.task-run-request.clamped`) and a "Show full prompt" / "Show less"
+ * toggle under it. Whether the clamp actually hides anything is measured
+ * (the column's width changes with the viewport): when the whole prompt
+ * fits, no fade and no toggle.
  */
-function TaskRunPrompt({
-  prompt,
-  timestamp,
-  conversationId,
-}: {
-  prompt: string
-  timestamp: string
-  conversationId: string
-}) {
+export function TaskRunRequest({ prompt }: { prompt: string }) {
   const long = isLongPrompt(prompt)
   const [expanded, setExpanded] = useState(false)
   const [overflows, setOverflows] = useState(true)
-  const wrapperRef = useRef<HTMLDivElement>(null)
+  const textRef = useRef<HTMLDivElement>(null)
   const contentId = useId()
 
   // Measure while clamped; an expanded prompt keeps the last answer.
   useLayoutEffect(() => {
-    const wrapper = wrapperRef.current
-    if (!long || expanded || !wrapper) return
-    const content = wrapper.querySelector<HTMLElement>('.message-content')
-    if (!content) return
-    const check = () => setOverflows(content.scrollHeight > content.clientHeight + 1)
+    const text = textRef.current
+    if (!long || expanded || !text) return
+    const check = () => setOverflows(text.scrollHeight > text.clientHeight + 1)
     check()
     if (typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(check)
-    observer.observe(content)
+    observer.observe(text)
     return () => observer.disconnect()
   }, [long, expanded, prompt])
 
@@ -241,15 +235,16 @@ function TaskRunPrompt({
   const clamped = clampable && !expanded
   return (
     <div
-      ref={wrapperRef}
-      id={contentId}
-      className={`task-run-prompt${long && !expanded ? ' clamp' : ''}${clamped ? ' clamped' : ''}${clampable ? ' clampable' : ''}`}
+      className={`task-run-request${long && !expanded ? ' clamp' : ''}${clamped ? ' clamped' : ''}`}
     >
-      <Message role="user" content={prompt} timestamp={timestamp} conversationId={conversationId} />
+      <p className="task-run-request-label">You asked</p>
+      <div ref={textRef} id={contentId} className="task-run-request-text">
+        {prompt}
+      </div>
       {clampable && (
         <button
           type="button"
-          className="task-run-prompt-toggle"
+          className="task-run-request-toggle"
           aria-expanded={expanded}
           aria-controls={contentId}
           onClick={() => setExpanded((v) => !v)}
@@ -324,7 +319,7 @@ function TaskRunMenu({ seq, onDelete }: { seq: number; onDelete: () => void }) {
         }}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Run ${seq} options`}
+        aria-label={`Update ${seq} options`}
         title="More"
       >
         <MoreHorizontal size={16} aria-hidden="true" />
@@ -342,7 +337,7 @@ function TaskRunMenu({ seq, onDelete }: { seq: number; onDelete: () => void }) {
             }}
           >
             <Trash2 size={15} className="task-run-menu-icon" aria-hidden="true" />
-            <span>Delete entry</span>
+            <span>Delete update</span>
           </button>
         </div>
       )}

@@ -111,19 +111,19 @@ export interface StartedTaskRun {
 }
 
 /** Fallback text of a TaskRunStartError that has no better message. */
-const START_FAILED_MESSAGE = 'The run could not be started. Try again.';
+const START_FAILED_MESSAGE = 'The prompt could not be sent. Try again.';
 
 /** The one sentence the UI shows for each known reason. */
 const REASON_MESSAGES: Record<string, string> = {
   tasks_disabled: 'Tasks are not enabled for your account.',
   task_not_found: 'This task no longer exists.',
-  task_archived: 'This task is archived. Unarchive it to start a run.',
-  task_run_active: 'Another run of this task is still working.',
-  task_run_single_message: 'This run already has its message. Send the next prompt from the task.',
+  task_archived: 'This task is archived. Unarchive it to send a prompt.',
+  task_run_active: 'Another update of this task is still in progress.',
+  task_run_single_message: 'This update already has its prompt. Send the next prompt from the task.',
   model_not_allowed: 'The selected model is not available here. Pick another model.',
-  invalid_prompt: 'Write a prompt to start a run.',
+  invalid_prompt: 'Write a prompt first.',
   not_connected: 'Not connected to the server. Your message was not sent.',
-  unconfirmed: 'The server did not confirm the message. Check the thread before sending again.',
+  unconfirmed: 'The server did not confirm the message. Check the task before sending again.',
   task_run_start_failed: START_FAILED_MESSAGE,
 };
 

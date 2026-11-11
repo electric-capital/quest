@@ -5,6 +5,7 @@ import { ApiClientError } from '../../api/request'
 import { createTask } from '../../api/tasksApi'
 import type { Task } from '../../api/types'
 import { TASK_DRAFT_KEY } from '../../constants/drafts'
+import { useAppConfig } from '../../contexts/AppConfigContext'
 import { useConversationSkills } from '../../contexts/ConversationSkillsContext'
 import { taskRunStartErrorMessage } from '../../services/taskRuns'
 import { taskThreadPath } from '../../utils/tasksRoute'
@@ -17,7 +18,6 @@ import {
   type TaskComposerSubmission,
 } from './taskComposerSend'
 
-const PLACEHOLDER = 'What should this task do?'
 
 /** Create refusals about the model alone: retried without it, so they never block the task. */
 const MODEL_REFUSALS = new Set(['model_not_allowed', 'invalid_model', 'invalid_thinking_effort'])
@@ -71,6 +71,7 @@ async function createTaskForSubmission(
  * draft-key rules). Send is guarded against a double submit.
  */
 export function NewTaskPage() {
+  const { appName } = useAppConfig()
   const navigate = useNavigate()
   const { setQueuedSkillsForConversation } = useConversationSkills()
   const [submitting, setSubmitting] = useState(false)
@@ -121,7 +122,7 @@ export function NewTaskPage() {
         })
         if (warnings.length > 0) notice = warnings.join(' ')
       } catch (err) {
-        notice = `The task was created, but its run did not start: ${taskRunStartErrorMessage(err)}`
+        notice = `The task was created, but its first prompt was not sent: ${taskRunStartErrorMessage(err)}`
       }
       // The page unmounts on navigation; the reset only matters if it does not.
       submittingRef.current = false
@@ -144,8 +145,8 @@ export function NewTaskPage() {
       <div className="task-new-page-inner">
         <h1 className="task-new-page-title">New task</h1>
         <p className="task-new-page-note">
-          Each prompt is answered by a run with a fresh context; the task keeps a brief and a
-          log between runs. You can edit the title and instructions afterwards.
+          Each prompt is worked on with a fresh context and comes back as an update; the task
+          keeps a brief that carries over between updates. You can rename the task afterwards.
         </p>
         {error && (
           <div className="task-new-page-error">
@@ -158,7 +159,7 @@ export function NewTaskPage() {
             draftKey={TASK_DRAFT_KEY}
             onSubmit={onSubmit}
             busy={submitting}
-            placeholder={PLACEHOLDER}
+            placeholder={`What should ${appName} do?`}
             onModelChange={onModelChange}
           />
         </div>

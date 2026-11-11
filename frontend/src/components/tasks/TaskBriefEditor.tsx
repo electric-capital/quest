@@ -168,7 +168,7 @@ export function TaskBriefEditor({
     <div className="task-ctl-editor">
       {activeRun && (
         <p className="task-ctl-hint">
-          Run {activeRun.seq} is working; if it also rewrites the brief, it will merge your edit.
+          An update is in progress; if it also rewrites the brief, it will merge your edit.
         </p>
       )}
       <div aria-live="polite">
@@ -224,7 +224,7 @@ export function TaskBriefEditor({
         value={draft}
         rows={14}
         spellCheck
-        placeholder="What a run should know before it starts: the goal, where things stand, open threads..."
+        placeholder="What Quest should know before each update: the goal, where things stand, open threads..."
         readOnly={saving}
         aria-busy={saving}
         aria-invalid={over || error !== null}
@@ -237,7 +237,7 @@ export function TaskBriefEditor({
         onKeyDown={onKeyDown}
       />
       <p id={hintId} className="task-ctl-sr-only">
-        Markdown. Runs read the brief when they start and may rewrite it.
+        Markdown. Each update starts from the brief and may rewrite it.
       </p>
       <TaskCharCounter id={counterId} overId={overId} length={length} cap={TASK_BRIEF_MAX_CHARS} />
       {error && (

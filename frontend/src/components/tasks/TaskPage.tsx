@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import './TaskPage.css'
 import { taskSource, type FileSource } from '../../api/fileApi'
@@ -15,15 +15,10 @@ import { LazyFileViewerModal } from '../LazyFileViewerModal'
 import { TaskBrief } from './TaskBrief'
 import { TaskBriefHistory } from './TaskBriefHistory'
 import { TaskDetailPanel } from './TaskDetailPanel'
-import { TaskInstructionsPanel } from './TaskInstructionsPanel'
-import { TaskInstructionsRow } from './TaskInstructionsRow'
 import { TaskMainColumn } from './TaskMainColumn'
 import { TaskNotice, readTaskNotice } from './TaskNotice'
 import { TaskRunPanel } from './TaskRunPanel'
 import { TaskLoadError, TaskNotFound, TaskViewLoading } from './TaskViewState'
-
-/** The detail views kept in component state (a run's lives in the URL). */
-type LocalPanel = { kind: 'history' } | { kind: 'instructions'; startEditing: boolean }
 
 /**
  * Router state on a run URL pushed by this page ("View run"): closing the
@@ -49,15 +44,14 @@ interface ViewerFile {
  * moving between the two keeps the page).
  *
  * The main column (TaskMainColumn) holds, top to bottom: the header, the
- * instructions row (TaskInstructionsRow), the brief as the page's main
- * content (TaskBrief, edited in place), the Task files card (a FileBrowser
+ * brief as the page's main content (TaskBrief, edited in place), the Task files card (a FileBrowser
  * over the task workspace), the Updates (one per run, oldest first) and the
  * composer pinned at the bottom. The page opens at the top. Without a
  * detail view the column takes the whole width at the chat's reading
  * measure, centred.
  *
  * The detail panel (TaskDetailPanel) is closed by default and shows one of
- * three views at a time, beside the main column on desktop and as a
+ * two views at a time, beside the main column on desktop and as a
  * full-screen view with "Back to task" on phones:
  *
  * - a run's transcript (TaskRunPanel): "View run" on an update. The run is
@@ -66,12 +60,8 @@ interface ViewerFile {
  *   the run URL (switching from another run replaces it), and closing goes
  *   back when this page pushed it, else replaces it with the task URL. A
  *   run that is not this task's shows the panel's not-found state.
- * - the brief History (TaskBriefHistory): the brief's History button.
- * - the instructions (TaskInstructionsPanel): the instructions row.
- *
- * Closing or switching views is guarded: while the instructions editor
- * holds a changed draft the change waits (`pendingChange`) and the editor
- * asks to discard first.
+ * - the brief History (TaskBriefHistory): the brief's History button,
+ *   which toggles it; plain component state, no URL.
  *
  * Copy / Move between a run's Chat Files (in the run panel) and the Task
  * files card (in the main column) come from one useWorkspaceCopy over the
@@ -109,25 +99,11 @@ export function TaskPage({ taskId, runConversationId }: { taskId: string; runCon
 
   // --- Detail panel ------------------------------------------------------------
 
-  const [localPanel, setLocalPanel] = useState<LocalPanel | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
   // A run in the URL takes the panel.
   useEffect(() => {
-    if (runConversationId) setLocalPanel(null)
+    if (runConversationId) setHistoryOpen(false)
   }, [runConversationId])
-
-  const [instructionsDirty, setInstructionsDirty] = useState(false)
-  const [pendingChange, setPendingChange] = useState<{ run: () => void } | null>(null)
-  const guardRef = useRef({ dirty: false, instructionsOpen: false })
-  guardRef.current = {
-    dirty: instructionsDirty,
-    instructionsOpen: runConversationId === null && localPanel?.kind === 'instructions',
-  }
-  /** Run a panel change now, or after the instructions editor's discard confirm. */
-  const guarded = useCallback((change: () => void) => {
-    const { dirty, instructionsOpen } = guardRef.current
-    if (dirty && instructionsOpen) setPendingChange({ run: change })
-    else change()
-  }, [])
 
   const fromPage = openedFromPage(location.state)
   const routeState = location.state
@@ -137,58 +113,35 @@ export function TaskPage({ taskId, runConversationId }: { taskId: string; runCon
   }, [fromPage, navigate, taskId])
 
   const closePanel = useCallback(() => {
-    guarded(() => {
-      if (runConversationId) closeRunRoute()
-      else setLocalPanel(null)
-    })
-  }, [guarded, runConversationId, closeRunRoute])
+    if (runConversationId) closeRunRoute()
+    else setHistoryOpen(false)
+  }, [runConversationId, closeRunRoute])
 
   const viewRun = useCallback(
     (conversationId: string) => {
-      guarded(() => {
-        if (runConversationId === conversationId) {
-          closeRunRoute()
-          return
-        }
-        setLocalPanel(null)
-        if (runConversationId) {
-          navigate(taskRunPath(taskId, conversationId), { replace: true, state: routeState })
-        } else {
-          navigate(taskRunPath(taskId, conversationId), { state: { [RUN_PANEL_FROM_PAGE]: true } })
-        }
-      })
+      if (runConversationId === conversationId) {
+        closeRunRoute()
+        return
+      }
+      setHistoryOpen(false)
+      if (runConversationId) {
+        navigate(taskRunPath(taskId, conversationId), { replace: true, state: routeState })
+      } else {
+        navigate(taskRunPath(taskId, conversationId), { state: { [RUN_PANEL_FROM_PAGE]: true } })
+      }
     },
-    [guarded, runConversationId, closeRunRoute, navigate, taskId, routeState],
+    [runConversationId, closeRunRoute, navigate, taskId, routeState],
   )
 
-  const openLocal = useCallback(
-    (next: LocalPanel) => {
-      guarded(() => {
-        if (runConversationId) closeRunRoute()
-        // The same view again closes it (History and the row toggle).
-        setLocalPanel((current) =>
-          !runConversationId && current?.kind === next.kind && !(next.kind === 'instructions' && next.startEditing)
-            ? null
-            : next,
-        )
-      })
-    },
-    [guarded, runConversationId, closeRunRoute],
-  )
-  const openHistory = useCallback(() => openLocal({ kind: 'history' }), [openLocal])
-  const openInstructions = useCallback(
-    (startEditing: boolean) => openLocal({ kind: 'instructions', startEditing }),
-    [openLocal],
-  )
-
-  const confirmPendingChange = useCallback(() => {
-    const change = pendingChange
-    setPendingChange(null)
-    guardRef.current.dirty = false
-    setInstructionsDirty(false)
-    change?.run()
-  }, [pendingChange])
-  const cancelPendingChange = useCallback(() => setPendingChange(null), [])
+  // History toggles; over a run it replaces the run.
+  const openHistory = useCallback(() => {
+    if (runConversationId) {
+      closeRunRoute()
+      setHistoryOpen(true)
+    } else {
+      setHistoryOpen((open) => !open)
+    }
+  }, [runConversationId, closeRunRoute])
 
   // --- Run panel resolution and the files copy -----------------------------------
 
@@ -216,7 +169,7 @@ export function TaskPage({ taskId, runConversationId }: { taskId: string; runCon
   const [newestVisible, setNewestVisible] = useState(false)
   const runList = runs.runs
   const newestRun = runList.length > 0 ? runList[runList.length - 1] : null
-  const panelCoversColumn = isMobile && (runConversationId !== null || localPanel !== null)
+  const panelCoversColumn = isMobile && (runConversationId !== null || historyOpen)
   const newestSeen =
     task !== null &&
     !runs.loading &&
@@ -264,20 +217,13 @@ export function TaskPage({ taskId, runConversationId }: { taskId: string; runCon
     return <TaskLoadError message={error?.message || 'Failed to load the task.'} onRetry={refresh} />
   }
 
-  const panelKind = runConversationId ? 'run' : localPanel?.kind ?? null
-
   const lead = (
     <>
-      <TaskInstructionsRow
-        instructions={task.instructions}
-        open={panelKind === 'instructions'}
-        onOpen={openInstructions}
-      />
       <TaskBrief
         task={task}
         onBrief={view.applyBrief}
         onStale={() => void refresh()}
-        historyOpen={panelKind === 'history'}
+        historyOpen={!runConversationId && historyOpen}
         onOpenHistory={openHistory}
         onOpenFile={handleOpenFile}
       />
@@ -292,6 +238,7 @@ export function TaskPage({ taskId, runConversationId }: { taskId: string; runCon
           <FileBrowser
             source={filesSource}
             hideTitle
+            compact
             onListing={handleFilesListing}
             rowActions={copy.sharedRowActions}
             notice={copy.notices.task}
@@ -315,24 +262,10 @@ export function TaskPage({ taskId, runConversationId }: { taskId: string; runCon
         onClose={closePanel}
       />
     )
-  } else if (localPanel?.kind === 'history') {
+  } else if (historyOpen) {
     panel = (
       <TaskDetailPanel key="history" title="Brief history" onClose={closePanel}>
         <TaskBriefHistory task={task} onRestored={view.applyBrief} onStale={() => void refresh()} />
-      </TaskDetailPanel>
-    )
-  } else if (localPanel?.kind === 'instructions') {
-    panel = (
-      <TaskDetailPanel key="instructions" title="Instructions" onClose={closePanel}>
-        <TaskInstructionsPanel
-          task={task}
-          onSaved={view.applyDetail}
-          startEditing={localPanel.startEditing}
-          onDirtyChange={setInstructionsDirty}
-          closePending={pendingChange !== null}
-          onConfirmClose={confirmPendingChange}
-          onCancelClose={cancelPendingChange}
-        />
       </TaskDetailPanel>
     )
   }
@@ -393,6 +326,6 @@ export function TaskPage({ taskId, runConversationId }: { taskId: string; runCon
 
 /** The Task files heading's meta: what the workspace root holds. */
 function taskFilesSummary(rootEntryCount: number | null): string {
-  if (rootEntryCount === null || rootEntryCount === 0) return 'Shared by every run'
-  return `${rootEntryCount} item${rootEntryCount === 1 ? '' : 's'} · shared by every run`
+  if (rootEntryCount === null || rootEntryCount === 0) return 'Shared across updates'
+  return `${rootEntryCount} item${rootEntryCount === 1 ? '' : 's'} · shared across updates`
 }

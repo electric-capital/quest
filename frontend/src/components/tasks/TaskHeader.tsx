@@ -47,7 +47,6 @@ import { Archive, ArchiveRestore, ArrowDown, ArrowUp, ChevronDown, Pencil, Trash
 import {
   archiveTask,
   deleteTask,
-  taskActiveRunFromError,
   TASK_TITLE_MAX_CHARS,
   unarchiveTask,
   updateTask,
@@ -60,7 +59,7 @@ import { TaskNotice } from './TaskNotice'
 import './TaskHeader.css'
 
 const NOTICE_MS = 5000
-const ARCHIVED_NOTICE = 'Task archived. It is hidden from the sidebar and takes no new runs.'
+const ARCHIVED_NOTICE = 'Task archived. It is hidden from the sidebar and takes no new prompts.'
 const CAP_REACHED_FALLBACK =
   'You have reached the limit of active tasks; archive or delete another task first.'
 
@@ -72,14 +71,12 @@ function errorCode(err: unknown): string | null {
   return err instanceof ApiClientError ? err.errorCode ?? null : null
 }
 
-function runActiveMessage(seq: number | null | undefined): string {
-  const run = seq ? `Run ${seq}` : 'A run'
-  return `${run} is still working. Stop it or wait for it to finish before archiving.`
-}
+const RUN_ACTIVE_MESSAGE =
+  'An update is still in progress. Stop it or wait for it to finish before archiving.'
 
 function jumpLabel(jump: TaskHeaderJump): string {
   if (jump.target === 'brief') return 'Back to the brief'
-  if (jump.mark === 'working') return 'Jump to the newest update (a run is working)'
+  if (jump.mark === 'working') return 'Jump to the newest update (in progress)'
   if (jump.mark === 'unread') return 'Jump to the newest update (not seen yet)'
   return 'Jump to the newest update'
 }
@@ -295,7 +292,7 @@ export function TaskHeader({ task, onTaskDetail, jump }: TaskHeaderProps) {
       } catch (err) {
         const code = errorCode(err)
         if (code === 'task_run_active') {
-          showNotice(runActiveMessage(taskActiveRunFromError(err)?.seq ?? activeRun?.seq), 'error')
+          showNotice(RUN_ACTIVE_MESSAGE, 'error')
         } else if (code === 'tasks_cap_reached') {
           showNotice(errorMessage(err, CAP_REACHED_FALLBACK), 'error')
         } else {
@@ -306,7 +303,7 @@ export function TaskHeader({ task, onTaskDetail, jump }: TaskHeaderProps) {
         setArchiving(false)
       }
     },
-    [activeRun?.seq, archiving, closeMenuFromItem, onTaskDetail, showNotice, task.id],
+    [archiving, closeMenuFromItem, onTaskDetail, showNotice, task.id],
   )
 
   // --- Delete ---------------------------------------------------------------
@@ -486,8 +483,8 @@ export function TaskHeader({ task, onTaskDetail, jump }: TaskHeaderProps) {
                   onClick={() => void runArchive('archive')}
                   title={
                     activeRun
-                      ? runActiveMessage(activeRun.seq)
-                      : 'Hide this task from the sidebar; it takes no new runs until unarchived'
+                      ? RUN_ACTIVE_MESSAGE
+                      : 'Hide this task from the sidebar; it takes no new prompts until unarchived'
                   }
                 >
                   <Archive size={16} className="task-header-menu-icon" aria-hidden="true" />
@@ -563,10 +560,10 @@ export function TaskHeader({ task, onTaskDetail, jump }: TaskHeaderProps) {
         onClose={() => setDeleteOpen(false)}
       >
         <p>
-          <strong>{task.title}</strong> is deleted for good, with all its runs and their
-          conversations, its brief and its files.
+          <strong>{task.title}</strong> is deleted for good, with all its updates and the work
+          behind them, its brief and its files.
         </p>
-        {activeRun && <p>Run {activeRun.seq} is working and will be stopped.</p>}
+        {activeRun && <p>The update in progress will be stopped.</p>}
         <p>This cannot be undone.</p>
       </DocConfirmDialog>
     </header>

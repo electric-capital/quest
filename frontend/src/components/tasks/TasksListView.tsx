@@ -110,7 +110,7 @@ export function TasksListView({ archived }: { archived: boolean }) {
       <div className="tasks-list-empty">
         <p className="tasks-list-empty-title">No tasks yet.</p>
         <p className="tasks-list-empty-hint">
-          A task keeps a brief and a log across runs, so you can come back to the same piece of
+          A task keeps a brief and a log of updates, so you can come back to the same piece of
           work again and again.
         </p>
         <Link to={newTaskPath()} className="tasks-list-new">
@@ -175,8 +175,8 @@ export function TasksListView({ archived }: { archived: boolean }) {
         onClose={() => setDeleteTarget(null)}
       >
         <p>
-          <strong>{deleteTarget?.title}</strong> is deleted for good, with all its runs and their
-          conversations, its brief and its files.
+          <strong>{deleteTarget?.title}</strong> is deleted for good, with all its updates and the work
+          behind them, its brief and its files.
         </p>
         <p>This cannot be undone.</p>
       </DocConfirmDialog>
@@ -214,7 +214,7 @@ function TasksListRow({
           <span className="tasks-list-row-state waiting">Needs you</span>
         )}
         {active && active.status === 'running' && (
-          <span className="tasks-list-row-state" title={`Run ${active.seq} is working`}>
+          <span className="tasks-list-row-state" title="An update is in progress">
             <LoaderCircle size={13} className="tasks-list-row-spinner" aria-hidden="true" />
             <span className="tasks-list-row-state-label">Working</span>
           </span>
@@ -247,7 +247,7 @@ function TasksListRow({
               className="tasks-list-row-button danger"
               onClick={onDelete}
               disabled={busy}
-              title="Delete this task, its runs and its files"
+              title="Delete this task, its updates and its files"
               aria-label={`Delete ${row.title}`}
             >
               <Trash2 size={14} aria-hidden="true" />
@@ -260,7 +260,7 @@ function TasksListRow({
             className="tasks-list-row-button icon-only"
             onClick={onArchive}
             disabled={busy || active !== null}
-            title={active ? 'Stop or finish the active run to archive this task' : 'Archive'}
+            title={active ? 'Stop or finish the update in progress to archive this task' : 'Archive'}
             aria-label={`Archive ${row.title}`}
           >
             <Archive size={15} aria-hidden="true" />

@@ -2094,7 +2094,6 @@ export interface Task {
   // first run may rename the task).
   title_is_default: boolean;
   archived: boolean;
-  instructions: string;
   brief: string;
   brief_version: number;
   brief_updated_at: string | null;
@@ -2195,7 +2194,6 @@ export interface ListTasksResponse {
 export interface CreateTaskRequest {
   title?: string;
   prompt?: string;
-  instructions?: string;
   model?: string | null;
   thinking_effort?: string | null;
 }
@@ -2203,7 +2201,6 @@ export interface CreateTaskRequest {
 /** PATCH /tasks/{id}: absent keeps a field, null clears model / thinking_effort. */
 export interface UpdateTaskRequest {
   title?: string;
-  instructions?: string;
   model?: string | null;
   thinking_effort?: string | null;
 }

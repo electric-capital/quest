@@ -500,7 +500,7 @@ export function TaskBriefHistory({
           {restoreTarget ? ` (version ${restoreTarget.expected})` : ''} is kept in History, so you can undo this.
         </p>
         {task.active_run && (
-          <p>Run {task.active_run.seq} is working; if it also rewrites the brief, it will merge this.</p>
+          <p>An update is in progress; if it also rewrites the brief, it will merge this.</p>
         )}
       </DocConfirmDialog>
     </section>

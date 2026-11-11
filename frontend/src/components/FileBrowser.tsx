@@ -93,10 +93,19 @@ interface FileBrowserProps {
   source: FileSource | null;
   /**
    * Leave out the card's title, for a host that heads the card itself (the
-   * task page's "Task files" section, a task run's Chat Files tab). The hidden-files toggle and Refresh
-   * then sit at the end of the navigation row.
+   * task page's "Task files" section, a task run's Chat Files tab). The
+   * hidden-files toggle and Refresh then sit at the end of the navigation
+   * row.
    */
   hideTitle?: boolean;
+  /**
+   * The dense variant for a card inside a page column (the task page):
+   * Upload and New folder become icon buttons beside the hidden-files
+   * toggle and Refresh instead of the full-width button row, rows are one
+   * line, and the empty state is one line with an upload link. Drag and
+   * drop works as in the default card.
+   */
+  compact?: boolean;
   /**
    * Called with each listing the card shows once it has loaded: the
    * directory and how many entries it shows (dot-named ones only while
@@ -171,7 +180,7 @@ function emptyHint(source: FileSource): React.ReactNode {
     case 'project':
       return 'Shared by every chat in this project; chats reach these files as proj:// paths. You can drop or upload files and folders here.';
     case 'task':
-      return 'Shared by every run of this task; runs reach these files as task:// paths. You can drop or upload files and folders here.';
+      return 'Shared across the updates of this task, as task:// paths. You can drop or upload files and folders here.';
     case 'conversation':
       return <>You can drop or upload files and folders here for the agent to work on.
         Files created by the agent will also appear here.</>;
@@ -196,7 +205,7 @@ function formatDate(isoString: string): string {
   });
 }
 
-export function FileBrowser({ source, hideTitle = false, onListing, rowActions, notice, onDismissNotice }: FileBrowserProps) {
+export function FileBrowser({ source, hideTitle = false, compact = false, onListing, rowActions, notice, onDismissNotice }: FileBrowserProps) {
   // Primitives for effect deps: hosts may pass a fresh object every render.
   const sourceKind = source?.kind ?? null;
   const sourceId = source?.id ?? null;
@@ -429,8 +438,37 @@ export function FileBrowser({ source, hideTitle = false, onListing, rowActions, 
     }
   }, [currentPath, source, deleteItem]);
 
+  const uploadLabel = uploadProgress
+    ? uploadPercent !== null
+      ? `Uploading ${uploadPercent}%`
+      : 'Uploading...'
+    : 'Upload files';
   const headerActions = (
     <div className="file-browser-header-actions">
+      {compact && (
+        <>
+          <button
+            type="button"
+            className="nav-button file-browser-compact-action"
+            onClick={handleUploadClick}
+            disabled={uploadProgress || isInitialLoading}
+            title={uploadLabel}
+            aria-label={uploadLabel}
+          >
+            <Upload size={16} />
+          </button>
+          <button
+            type="button"
+            className="nav-button file-browser-compact-action"
+            onClick={handleNewFolderClick}
+            disabled={uploadProgress || isInitialLoading}
+            title="New folder"
+            aria-label="New folder"
+          >
+            <FolderPlus size={16} />
+          </button>
+        </>
+      )}
       <button
         className={`hidden-toggle-button${showHidden ? ' active' : ''}`}
         onClick={() => setShowHidden(!showHidden)}
@@ -470,7 +508,7 @@ export function FileBrowser({ source, hideTitle = false, onListing, rowActions, 
 
   return (
     <div
-      className={`file-browser${hideTitle ? ' file-browser--untitled' : ''}${isDragOver ? ' drag-over' : ''}`}
+      className={`file-browser${hideTitle ? ' file-browser--untitled' : ''}${compact ? ' file-browser--compact' : ''}${isDragOver ? ' drag-over' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -522,15 +560,22 @@ export function FileBrowser({ source, hideTitle = false, onListing, rowActions, 
         {hideTitle && headerActions}
       </div>
 
-      {/* Action buttons: Upload Files + New Folder, equal width */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        onChange={handleFileInputChange}
+        style={{ display: 'none' }}
+      />
+      {compact ? (
+        uploadProgress && uploadPercent !== null && (
+          <div className="upload-progress-bar file-browser-compact-progress">
+            <div className="upload-progress-bar-fill" style={{ width: `${uploadPercent}%` }} />
+          </div>
+        )
+      ) : (
+      /* Action buttons: Upload Files + New Folder, equal width */
       <div className="file-browser-actions">
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          onChange={handleFileInputChange}
-          style={{ display: 'none' }}
-        />
         <div className="file-browser-action-buttons">
           <button
             className="action-button upload-button"
@@ -566,6 +611,7 @@ export function FileBrowser({ source, hideTitle = false, onListing, rowActions, 
           </div>
         )}
       </div>
+      )}
 
       {/* Error display */}
       {error && (
@@ -607,6 +653,27 @@ export function FileBrowser({ source, hideTitle = false, onListing, rowActions, 
       <div className="file-list">
         {loading && files.length === 0 ? (
           <div className="file-browser-loading">Loading...</div>
+        ) : !loading && visibleFiles.length === 0 && compact ? (
+          <div className="file-browser-empty file-browser-empty--compact">
+            {hiddenCount > 0 ? (
+              <p>
+                No files shown: {hiddenCount} hidden item{hiddenCount !== 1 ? 's' : ''}.
+              </p>
+            ) : (
+              <p>
+                No files yet. Drop files here or{' '}
+                <button
+                  type="button"
+                  className="file-browser-empty-upload"
+                  onClick={handleUploadClick}
+                  disabled={uploadProgress || isInitialLoading}
+                >
+                  upload
+                </button>
+                .
+              </p>
+            )}
+          </div>
         ) : !loading && visibleFiles.length === 0 ? (
           <div className="file-browser-empty">
             <p>No files yet</p>

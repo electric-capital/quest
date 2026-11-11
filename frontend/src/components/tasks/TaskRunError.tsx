@@ -33,13 +33,13 @@ export function TaskRunError({ error, className = '' }: { error: string | null; 
   const detailsId = useId()
   const text = error?.trim() || ''
   if (!text) {
-    return <p className={`task-run-error ${className}`}>Run failed: unknown error</p>
+    return <p className={`task-run-error ${className}`}>Failed: unknown error</p>
   }
   const { line, truncated } = summarizeRunError(text)
   return (
     <div className={`task-run-error ${className}`}>
       <p className="task-run-error-line">
-        <span>Run failed: {line}</span>
+        <span>Failed: {line}</span>
         {truncated && (
           <button
             type="button"

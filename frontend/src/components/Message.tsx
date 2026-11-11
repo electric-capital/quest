@@ -761,7 +761,7 @@ export const MessageContentRenderer = React.memo(function MessageContentRenderer
       <div className="message-task-nudge" title={nudgeMsg.content || undefined}>
         <span className="task-nudge-icon" aria-hidden="true">&#8635;</span>
         <span className="task-nudge-text">
-          Task run did not finish — asked the model to call complete_task_run and hand off
+          The update did not finish — asked the model to call complete_task_run and hand off
         </span>
         <span className="task-nudge-timestamp">
           {nudgeMsg.timestamp ? formatTimestamp(nudgeMsg.timestamp) : ''}

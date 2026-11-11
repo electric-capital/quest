@@ -1,5 +1,5 @@
 /**
- * Data layer for one Quest Task's detail (title, instructions, brief, model,
+ * Data layer for one Quest Task's detail (title, brief, model,
  * active run, unread seqs), modelled on useTable.
  *
  * Kept current by two realtime globals:

@@ -3,9 +3,8 @@ import './TaskUpdates.css'
 import type { FileSource } from '../../api/fileApi'
 import type { TaskRun } from '../../api/types'
 import type { TaskRunsView } from '../../hooks/useTaskRuns'
-import { Message } from '../Message'
 import { TaskActivityLine } from './TaskActivityLine'
-import { TaskRunEntry, type TaskRunActivityView, type TaskRunCard } from './TaskRunEntry'
+import { TaskRunEntry, TaskRunRequest, type TaskRunActivityView, type TaskRunCard } from './TaskRunEntry'
 import { isActiveRunStatus } from './taskThreadComposer'
 
 /** A run being started from the composer, shown until its run is in the runs list. */
@@ -94,14 +93,14 @@ export const TaskUpdates = forwardRef<
   } else if (empty) {
     body = archived ? (
       <div className="task-updates-empty">
-        <p className="task-updates-empty-text">No runs yet.</p>
+        <p className="task-updates-empty-text">No updates yet.</p>
       </div>
     ) : (
       <div className="task-updates-empty">
-        <p className="task-updates-empty-title">No runs yet</p>
+        <p className="task-updates-empty-title">No updates yet</p>
         <p className="task-updates-empty-text">
-          Each prompt you send starts a run with a fresh context that reads the brief and the
-          instructions. Its result shows here as an update.
+          Each prompt you send is worked on with a fresh context that reads the brief, and its
+          result shows here as an update.
         </p>
       </div>
     )
@@ -125,11 +124,11 @@ export const TaskUpdates = forwardRef<
           />
         ))}
         {pendingStart && (
-          <article className="task-run pending" aria-label="New run">
+          <article className="task-run pending" aria-label="New update">
             <div className="task-run-meta">
-              <span className="task-run-seq">New run</span>
+              <span className="task-run-seq">New update</span>
             </div>
-            <Message role="user" content={pendingStart.prompt} timestamp={pendingStart.startedAt} />
+            <TaskRunRequest prompt={pendingStart.prompt} />
             <TaskActivityLine label="Starting" startedAt={pendingStart.startedAt} />
           </article>
         )}

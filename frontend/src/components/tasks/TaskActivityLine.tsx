@@ -58,7 +58,7 @@ export function TaskActivityLine({
       <span className="task-activity-label" aria-live="polite" title={label}>
         {label}
       </span>
-      <span className="task-activity-elapsed" title="Time since the run started">
+      <span className="task-activity-elapsed" title="Time since the update started">
         {formatElapsed(elapsed)}
       </span>
       {stopError && (

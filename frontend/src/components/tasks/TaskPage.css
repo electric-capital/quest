@@ -6,7 +6,7 @@
  * 44% of the page on desktop, a full-screen view over the page on phones).
  * The main column is a flex column on every screen size: the header
  * (TaskHeader.css), the router-state notice, ONE scroller holding the
- * instructions row, the brief, the task files and the updates at the
+ * brief, the task files and the updates at the
  * chat's reading measure (720px plus gutters, centred), and the composer
  * footer pinned under the scroller. The browser's own scroll anchoring is
  * off on the scroller: TaskMainColumn keeps the position across a
@@ -107,68 +107,6 @@
   margin-left: auto;
 }
 
-/* --- Instructions row (TaskInstructionsRow) ---------------------------- */
-
-.task-instructions-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  width: 100%;
-  min-width: 0;
-  min-height: 2.5rem;
-  margin-bottom: -0.75rem;
-  padding: 0.4rem 0.75rem;
-  box-sizing: border-box;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background-color: var(--surface-raised);
-  color: var(--text-secondary);
-  font-family: inherit;
-  font-size: 0.8125rem;
-  text-align: left;
-  cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s;
-}
-
-.task-instructions-row:hover {
-  background-color: var(--hover);
-}
-
-.task-instructions-row:focus:not(:focus-visible) {
-  outline: none;
-}
-
-.task-instructions-row[aria-expanded='true'] {
-  border-color: rgb(var(--accent-rgb) / 0.45);
-  background-color: var(--accent-soft);
-}
-
-.task-instructions-row--empty {
-  border-style: dashed;
-  background-color: transparent;
-}
-
-.task-instructions-row-icon,
-.task-instructions-row-chevron {
-  flex-shrink: 0;
-  color: var(--text-muted);
-}
-
-.task-instructions-row-label {
-  flex-shrink: 0;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.task-instructions-row-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-muted);
-}
-
 /* --- Brief (TaskBrief) ------------------------------------------------- */
 
 .task-brief-empty {
@@ -210,14 +148,13 @@
 
 /* --- Task files -------------------------------------------------------- */
 
-/* The FileBrowser card (`hideTitle`): as tall as its rows up to a bound,
-   then the list scrolls inside it. FileBrowser fills it (flex, min-height
-   0), its toolbar on top. */
+/* The FileBrowser card (`hideTitle`, `compact`): as tall as its rows up to
+   a bound, then the list scrolls inside it; an empty space is one line.
+   FileBrowser fills it (flex, min-height 0), its toolbar on top. */
 .task-files-card {
   display: flex;
   flex-direction: column;
-  min-height: 9rem;
-  max-height: 24rem;
+  max-height: 22rem;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -226,6 +163,13 @@
 }
 
 /* --- Composer footer --------------------------------------------------- */
+
+/* The shared composer, a little less like a chat box here: a squarer field
+   flush with the column, without the floating shadow. */
+.task-page-footer .composer-bubble {
+  border-radius: 12px;
+  box-shadow: none;
+}
 
 .task-page-footer {
   flex: none;
@@ -317,6 +261,6 @@
   }
 
   .task-files-card {
-    max-height: min(22rem, 60vh);
+    max-height: min(20rem, 55vh);
   }
 }

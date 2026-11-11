@@ -56,7 +56,7 @@ function TaskRowStatus({ task }: { task: TaskListRow }) {
   }
   if (status === 'waiting') {
     return (
-      <span className="task-row-status task-row-needs-you" title="A run is waiting for you">
+      <span className="task-row-status task-row-needs-you" title="Waiting for you">
         Needs you
       </span>
     );

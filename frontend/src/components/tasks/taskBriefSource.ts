@@ -24,15 +24,16 @@ export function parseBriefSource(source: TaskBriefSource): ParsedBriefSource {
 }
 
 /**
- * The current brief's attribution: "Updated by run N" ("Updated by a run"
- * when the run is gone), "Edited by you", "Restored from version n"; null
- * when there is no (known) source, e.g. an empty brief at version 0.
+ * The current brief's attribution: "Update N" ("An update" when the run is
+ * gone), "Edited by you", "Restored from version n"; null when there is no
+ * (known) source, e.g. an empty brief at version 0. TaskBrief puts the time
+ * first for an update ("Updated 3h ago · update 2"), see briefByline.
  */
 export function briefAttribution(source: TaskBriefSource, runSeq: number | null): string | null {
   const parsed = parseBriefSource(source)
   switch (parsed.kind) {
     case 'run':
-      return runSeq !== null ? `Updated by run ${runSeq}` : 'Updated by a run'
+      return runSeq !== null ? `Update ${runSeq}` : 'An update'
     case 'ui':
       return 'Edited by you'
     case 'restore':
@@ -43,14 +44,14 @@ export function briefAttribution(source: TaskBriefSource, runSeq: number | null)
 }
 
 /**
- * A History row's source: "Run N" ("A run" when the run is gone), "Edited
+ * A History row's source: "Update N" ("An update" when the run is gone), "Edited
  * by you", "Restored from version n"; null for an unknown source.
  */
 export function versionSourceLabel(source: TaskBriefSource, runSeq: number | null): string | null {
   const parsed = parseBriefSource(source)
   switch (parsed.kind) {
     case 'run':
-      return runSeq !== null ? `Run ${runSeq}` : 'A run'
+      return runSeq !== null ? `Update ${runSeq}` : 'An update'
     case 'ui':
       return 'Edited by you'
     case 'restore':
@@ -62,12 +63,12 @@ export function versionSourceLabel(source: TaskBriefSource, runSeq: number | nul
 
 /**
  * Who moved the brief, for "This brief was updated <phrase> while you were
- * editing": "by run N", "by a run", "by a restore", else "elsewhere" (an
+ * editing": "by update N", "by an update", "by a restore", else "elsewhere" (an
  * edit in another tab or window).
  */
 export function briefWriterPhrase(source: TaskBriefSource, runSeq: number | null): string {
   const parsed = parseBriefSource(source)
-  if (parsed.kind === 'run') return runSeq !== null ? `by run ${runSeq}` : 'by a run'
+  if (parsed.kind === 'run') return runSeq !== null ? `by update ${runSeq}` : 'by an update'
   if (parsed.kind === 'restore') return 'by a restore'
   return 'elsewhere'
 }

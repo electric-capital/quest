@@ -1,6 +1,6 @@
 /* TaskDetailPanel (and the run panel's own parts, TaskRunPanel) -- the task
- * page's detail panel: a run's transcript, the brief History or the
- * instructions, one at a time.
+ * page's detail panel: a run's transcript or the brief History, one at a
+ * time.
  *
  * Desktop: a column on the right of the main column (TaskPage.css lays the
  * page out as a row), about 44% of the page with a floor wide enough for a
@@ -8,9 +8,9 @@
  * over the task page (positioned against .task-page), with "Back to task".
  *
  * The header (title, meta, close) and the optional toolbar stay put; the
- * body either scrolls (History, Instructions) or is a flex column whose
- * child scrolls itself (a run's ChatPanel, which pins its read-only
- * notice under the transcript like a chat). */
+ * body either scrolls (History) or is a flex column whose
+ * child scrolls itself (a run's ChatPanel, with its one-line notice
+ * footer under the transcript). */
 
 .task-detail-panel {
   flex: 0 0 44%;
@@ -125,17 +125,6 @@
   margin: 0;
 }
 
-.task-instructions-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  min-width: 0;
-}
-
-.task-instructions-panel-actions {
-  justify-content: flex-start;
-}
-
 /* --- Run panel (TaskRunPanel) --------------------------------------------- */
 
 .task-run-panel-meta {
@@ -224,9 +213,9 @@
   padding-right: 1.25rem;
 }
 
-.task-run-panel-transcript .input-area.composer {
-  padding-left: 1.25rem;
-  padding-right: 1.25rem;
+.task-run-panel-transcript .chat-panel-notice-footer {
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
 }
 
 /* Chat Files: the FileBrowser card fills the body. */
@@ -316,6 +305,15 @@
   .task-run-panel-transcript .messages-container {
     padding-left: 16px;
     padding-right: 16px;
+  }
+
+  /* No floating composer to clear at the end of the transcript. */
+  .task-run-panel-transcript .messages-list {
+    padding-bottom: 1.5rem;
+  }
+
+  .task-run-panel-transcript .chat-panel-notice-footer {
+    padding: 0.5rem 16px calc(0.625rem + env(safe-area-inset-bottom, 0px));
   }
 
   .task-run-panel-transcript .task-run-panel-error,
