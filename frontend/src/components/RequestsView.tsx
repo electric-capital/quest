@@ -19,6 +19,9 @@ import {
 } from '../api/client';
 import type { EnrichedActionRequest, ActionRequestCountsResponse } from '../api/types';
 import { useNavigationState } from '../contexts/NavigationContext';
+import { useAuth } from '../contexts/AuthContext';
+import { TASKS_FEATURE } from '../api/tasksApi';
+import { taskRunPath, taskThreadPath } from '../utils/tasksRoute';
 import {
   totalPendingSuggestions,
   usePendingSuggestionCounts,
@@ -85,6 +88,8 @@ function formatTimestamp(isoTimestamp: string): string {
 
 export function RequestsView() {
   const { setShowRequestsView } = useNavigationState();
+  const { enabledFeatures } = useAuth();
+  const tasksEnabled = enabledFeatures.includes(TASKS_FEATURE);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -367,6 +372,18 @@ export function RequestsView() {
     }
   };
 
+  // A request a Quest Task run proposed (tasks gate open): an open one is
+  // answered in the task's thread, which shows the run's open cards; a
+  // resolved one opens its run's transcript.
+  const handleGoToTask = (taskId: string, request: EnrichedActionRequest) => {
+    setShowRequestsView(false);
+    navigate(
+      request.status === 'open'
+        ? taskThreadPath(taskId)
+        : taskRunPath(taskId, request.conversation_id),
+    );
+  };
+
   const handleBannerClick = async () => {
     if (bannerLoading) return;
     setBannerLoading(true);
@@ -554,13 +571,24 @@ export function RequestsView() {
                   </div>
                 )}
 
-                {/* Conversation link */}
-                <span
-                  className="request-conversation-link"
-                  onClick={() => handleGoToConversation(request.conversation_id, request.project_id)}
-                >
-                  Go to conversation
-                </span>
+                {/* Conversation link (the task, for a task run's request) */}
+                {request.task_id && tasksEnabled ? (
+                  <span
+                    className="request-conversation-link"
+                    onClick={() => handleGoToTask(request.task_id!, request)}
+                  >
+                    {request.status === 'open'
+                      ? `Go to task: ${request.task_title || 'Untitled task'}`
+                      : 'Go to task run'}
+                  </span>
+                ) : (
+                  <span
+                    className="request-conversation-link"
+                    onClick={() => handleGoToConversation(request.conversation_id, request.project_id)}
+                  >
+                    Go to conversation
+                  </span>
+                )}
 
                 {/* Reasoning */}
                 {request.reasoning && (

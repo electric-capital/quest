@@ -477,6 +477,10 @@ export interface EnrichedActionRequest extends ActionRequest {
   routine_name?: string | null;
   project_name?: string | null;
   project_id?: string | null;
+  /** The Quest Task whose run proposed the request, and its title; null
+   *  outside task runs. Present even while the tasks gate is closed. */
+  task_id?: string | null;
+  task_title?: string | null;
 }
 
 export interface EnrichedActionRequestsListResponse {
