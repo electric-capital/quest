@@ -17,7 +17,10 @@
  * - the model is seeded on mount (and on a draft key change) with the
  *   `initialModel` when given (a thread passes the task's model), else the
  *   user's last-used private model from a fresh GET /me, and picks are
- *   draft-safe (setDraftModelForConversation: no PATCH);
+ *   draft-safe (setDraftModelForConversation: no conversation PATCH). A
+ *   user's pick in the selector is then reported to `onModelChange` (the
+ *   thread persists it as the task's default model, the New Task page
+ *   passes it to the create); the seed never is;
  * - a draft key never keeps "loaded" skills (each run starts from a fresh
  *   context), so the skill picker always offers every skill again.
  *
@@ -55,6 +58,8 @@ export interface TaskComposerProps {
   initialModel?: string | null;
   /** Thinking level seeded with `initialModel`. */
   initialThinkingEffort?: string | null;
+  /** A model / thinking level the user picked in the selector (after the draft pick is applied). */
+  onModelChange?: (model: string, thinkingEffort: string | null) => void;
 }
 
 export function TaskComposer({
@@ -66,6 +71,7 @@ export function TaskComposer({
   placeholder,
   initialModel = null,
   initialThinkingEffort = null,
+  onModelChange,
 }: TaskComposerProps) {
   const {
     getModelForConversation,
@@ -139,6 +145,16 @@ export function TaskComposer({
     ],
   );
 
+  // Only the selector calls this (the seed above goes straight to the
+  // context), so the host hears user picks only.
+  const handleModelChange = useCallback(
+    (model: string, thinkingEffort: string | null) => {
+      setDraftModelForConversation(draftKey, model, 'private', thinkingEffort);
+      onModelChange?.(model, thinkingEffort);
+    },
+    [draftKey, onModelChange, setDraftModelForConversation],
+  );
+
   return (
     <Composer
       conversationId={draftKey}
@@ -150,7 +166,7 @@ export function TaskComposer({
       deferImageUpload
       hideFlags
       placeholder={placeholder}
-      onModelChange={(m, effort) => setDraftModelForConversation(draftKey, m, 'private', effort)}
+      onModelChange={handleModelChange}
     />
   );
 }

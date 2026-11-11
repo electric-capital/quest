@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import './NewTaskPage.css'
+import { ApiClientError } from '../../api/request'
 import { createTask } from '../../api/tasksApi'
 import type { Task } from '../../api/types'
 import { TASK_DRAFT_KEY } from '../../constants/drafts'
@@ -18,14 +19,45 @@ import {
 
 const PLACEHOLDER = 'What should this task do?'
 
+/** Create refusals about the model alone: retried without it, so they never block the task. */
+const MODEL_REFUSALS = new Set(['model_not_allowed', 'invalid_model', 'invalid_thinking_effort'])
+
+/**
+ * POST /tasks for a first Send. A model the user picked in the composer
+ * becomes the task's default; when the server refuses that model the task
+ * is created without one (the run still carries the pick, and the send path
+ * reports a model it refuses).
+ */
+async function createTaskForSubmission(
+  submission: TaskComposerSubmission,
+  modelPicked: boolean,
+): Promise<Task> {
+  if (!modelPicked || !submission.model) return createTask({ prompt: submission.text })
+  try {
+    return await createTask({
+      prompt: submission.text,
+      model: submission.model,
+      thinking_effort: submission.thinkingEffort,
+    })
+  } catch (err) {
+    if (!(err instanceof ApiClientError) || !MODEL_REFUSALS.has(err.errorCode ?? '')) throw err
+    console.warn('The task was created without its default model', err)
+    return createTask({ prompt: submission.text })
+  }
+}
+
 /**
  * The New Task page (/tasks/new): an empty thread whose composer creates
  * the task on the first Send (spec 8.1), the tasks twin of the home
  * screen's deferred-create flow (HomeComposer):
  *
  * 1. POST /tasks with the prompt: the server cuts the title from it and
- *    keeps `title_is_default`, so the first run may rename the task. The
- *    composer's model goes to the run, not to the task. A refusal (e.g. 409
+ *    keeps `title_is_default`, so the first run may rename the task. When
+ *    the user picked a model in the composer, it (with its thinking level)
+ *    also becomes the task's default model, as later picks in the thread
+ *    do; a refused model is dropped from the create, never blocking it
+ *    (createTaskForSubmission). Without a pick the task keeps no default and
+ *    the run takes the composer's seeded model. A refusal (e.g. 409
  *    `tasks_cap_reached`) shows inline and nothing else happens; the
  *    composer has already cleared the text (it cannot be re-seeded, as on
  *    the home screen), but the queued skills are put back.
@@ -45,6 +77,11 @@ export function NewTaskPage() {
   const submittingRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [uploadStatus, setUploadStatus] = useState<UploadStatus | null>(null)
+  // Set once the user picks a model in the selector (the seed does not count).
+  const modelPickedRef = useRef(false)
+  const onModelChange = useCallback(() => {
+    modelPickedRef.current = true
+  }, [])
 
   const handleSubmit = useCallback(
     async (submission: TaskComposerSubmission) => {
@@ -61,7 +98,7 @@ export function NewTaskPage() {
 
       let task: Task
       try {
-        task = await createTask({ prompt: submission.text })
+        task = await createTaskForSubmission(submission, modelPickedRef.current)
       } catch (err) {
         setError(err instanceof Error && err.message ? err.message : 'The task could not be created.')
         // The composer cleared its queued skills on Send (after this call
@@ -122,6 +159,7 @@ export function NewTaskPage() {
             onSubmit={onSubmit}
             busy={submitting}
             placeholder={PLACEHOLDER}
+            onModelChange={onModelChange}
           />
         </div>
       </div>
