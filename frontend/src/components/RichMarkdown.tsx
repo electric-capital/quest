@@ -11,16 +11,27 @@
  * fence or a `$`: markdown with neither renders identically without them, so
  * it never waits for the chunk. Markdown that has them renders plain until
  * the chunk lands, then re-renders; ChatPanel re-pins its scroll then.
+ *
+ * URLs pass react-markdown's default sanitiser, except the workspace
+ * references (`chat://`, `proj://`, `task://`, utils/workspaceRefs.ts),
+ * which it would blank as unknown protocols: they reach the `a` / `img`
+ * renderers as written, and MarkdownLink / MarkdownImage resolve them.
  */
 import { useMemo } from 'react';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import remarkMath from 'remark-math';
 import { useCodeAndMath } from '../hooks/useCodeAndMath';
 import remarkMathCurrencyGuard from '../utils/remarkMathCurrencyGuard';
+import { isWorkspaceRef } from '../utils/workspaceRefs';
 
 const REMARK_PLUGINS = [remarkGfm, remarkBreaks, remarkMath, remarkMathCurrencyGuard];
+
+/** The default URL sanitiser, keeping workspace references for the renderers. */
+function urlTransform(url: string): string {
+  return isWorkspaceRef(url) ? url : defaultUrlTransform(url);
+}
 
 /**
  * Whether the rehype plugins would change this markdown: rehype-highlight
@@ -46,7 +57,12 @@ export function RichMarkdown({ children, components, highlight = true }: RichMar
   }, [chunk, highlight]);
 
   return (
-    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={rehypePlugins} components={components}>
+    <ReactMarkdown
+      remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={rehypePlugins}
+      components={components}
+      urlTransform={urlTransform}
+    >
       {children}
     </ReactMarkdown>
   );

@@ -550,6 +550,8 @@ export interface ConversationDetail {
   thinking_effort?: string | null;
   routine_id?: string | null;
   project_id?: string | null;
+  /** The Quest Task this conversation is a run of; null for any other conversation. */
+  task_id?: string | null;
   origin?: 'web' | 'slack' | 'user_subagent' | 'inference_api';
   slack_channel_id?: string;
   slack_thread_ts?: string;

