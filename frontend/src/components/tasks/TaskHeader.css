@@ -1,0 +1,244 @@
+/* Task page title unit (TaskHeader). The title button, chevron, inline
+ * rename input and dropdown follow DocHeader.css under a task-header-
+ * prefix. `.task-header` (padding, bottom border), `.task-header-title`
+ * (the title text) and `.task-header-chip` (Archived) are in TaskPage.css;
+ * the overrides below turn the header into a column (the title row, then
+ * the rename error / notice). Tokens only, except the red of the Delete
+ * item and the rename error (the app has no error colour token). */
+
+header.task-header {
+  position: relative;
+  /* Above the page body so the dropdown floats over it. */
+  z-index: 20;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+
+.task-header-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.task-header-unit {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  /* Pull the button's hover padding into the gutter so the title text lines
+     up with the page body below. */
+  margin-left: -0.5rem;
+}
+
+.task-header-heading {
+  margin: 0;
+  min-width: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.task-header-title-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 100%;
+  padding: 0.2rem 0.25rem 0.2rem 0.5rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.task-header-title-button:hover,
+.task-header-title-button.open {
+  background-color: var(--hover);
+}
+
+/* Keyboard focus keeps the ring; a mouse click doesn't leave one behind. */
+.task-header-title-button:focus:not(:focus-visible),
+.task-header-menu-item:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.task-header-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background-color: var(--hover);
+  color: var(--text-secondary);
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.task-header-title-button:hover .task-header-chevron,
+.task-header-title-button.open .task-header-chevron {
+  background-color: var(--pressed);
+  color: var(--text);
+}
+
+/* Inline rename input replaces the title while editing. */
+.task-header-rename {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.task-header-rename-input {
+  width: 420px;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background-color: var(--surface-raised);
+  color: var(--text);
+  font-size: 1rem;
+  font-family: inherit;
+  outline: none;
+}
+
+.task-header-rename-input[aria-busy='true'] {
+  opacity: 0.7;
+}
+
+.task-header-rename-count {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-header-rename-count.at-cap {
+  color: var(--text-secondary);
+}
+
+.task-header-rename-error {
+  margin: 0.375rem 0 0;
+  color: #fca5a5;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+/* Dropdown */
+.task-header-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 220px;
+  padding: 0.375rem;
+  background-color: var(--surface-overlay);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-menu);
+  z-index: 30;
+}
+
+.task-header-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.5rem 0.625rem;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font-size: 0.875rem;
+  font-family: inherit;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.12s;
+}
+
+.task-header-menu-item:hover:not(:disabled) {
+  background-color: var(--hover);
+}
+
+.task-header-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.task-header-menu-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.task-header-menu-key {
+  margin-left: auto;
+  padding-left: 1.5rem;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+}
+
+.task-header-menu-separator {
+  height: 1px;
+  margin: 0.25rem 0.375rem;
+  background-color: var(--border);
+}
+
+.task-header-menu-item--danger,
+.task-header-menu-item--danger .task-header-menu-icon {
+  color: #ff6b6b;
+}
+
+.task-header-menu-item--danger:hover:not(:disabled) {
+  background-color: rgba(255, 107, 107, 0.1);
+}
+
+/* Transient status line (archive confirmation). */
+.task-header-notice {
+  margin-top: 0.5rem;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: var(--hover);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+/* Failures: a dismissible TaskNotice. */
+.task-header-error {
+  margin-top: 0.5rem;
+}
+
+@media (prefers-color-scheme: light) {
+  .task-header-menu-item--danger,
+  .task-header-menu-item--danger .task-header-menu-icon {
+    color: #d32f2f;
+  }
+
+  .task-header-menu-item--danger:hover:not(:disabled) {
+    background-color: rgba(211, 47, 47, 0.08);
+  }
+
+  .task-header-rename-error {
+    color: #b91c1c;
+  }
+}
+
+/* Phone: the title ellipsizes before the chip; the menu stays a popover
+   under the title, kept inside the 16px gutters (the rename input shrinks
+   with the row, since the unit has min-width 0). */
+@media (max-width: 768px) {
+  .task-header-menu {
+    max-width: calc(100vw - 32px);
+  }
+}
