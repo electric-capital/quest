@@ -6,9 +6,9 @@ import {
   TaskCharCounter,
   TaskDiscardConfirm,
   isOverCap,
-  taskPanelErrorMessage,
+  taskSaveErrorMessage,
   taskTextLength,
-} from './TaskPanelControls'
+} from './TaskControls'
 
 /** The brief version a save is based on, and its text as the user was shown it. */
 interface BriefBase {
@@ -23,7 +23,7 @@ interface MergeText {
 }
 
 /**
- * The brief editor (TaskBriefSection's edit mode): a monospace markdown
+ * The brief editor (TaskBrief's edit mode, in place in the main column): a monospace markdown
  * textarea (focused on open) with an `n / 12,000` counter (TaskCharCounter:
  * no truncation, Save disabled over the cap), Save and Cancel.
  *
@@ -121,7 +121,7 @@ export function TaskBriefEditor({
         onStale()
         return
       }
-      setError(taskPanelErrorMessage(err, 'Failed to save the brief.'))
+      setError(taskSaveErrorMessage(err, 'Failed to save the brief.'))
     }
   }
 
@@ -165,28 +165,28 @@ export function TaskBriefEditor({
   const activeRun = task.active_run
 
   return (
-    <div className="task-panel-editor">
+    <div className="task-ctl-editor">
       {activeRun && (
-        <p className="task-panel-hint">
+        <p className="task-ctl-hint">
           Run {activeRun.seq} is working; if it also rewrites the brief, it will merge your edit.
         </p>
       )}
       <div aria-live="polite">
         {newer && (
-          <div className="task-panel-note">
+          <div className="task-ctl-note">
             <span>
               This brief was updated {briefWriterPhrase(task.brief_source, task.brief_run_seq)} while
               you were editing. Saving will show you the new version so you can merge.
             </span>
-            <button type="button" className="task-panel-link-button" onClick={showNewer}>
+            <button type="button" className="task-ctl-link-button" onClick={showNewer}>
               Show the new version
             </button>
           </div>
         )}
         {replaced !== null && (
-          <div className="task-panel-note">
+          <div className="task-ctl-note">
             <span>Your draft was replaced with the newer brief.</span>
-            <button type="button" className="task-panel-link-button" onClick={undoReplace}>
+            <button type="button" className="task-ctl-link-button" onClick={undoReplace}>
               Undo
             </button>
           </div>
@@ -204,23 +204,23 @@ export function TaskBriefEditor({
             Merge what you need into your draft below. Saving now replaces version {merge.brief_version}{' '}
             with your draft.
           </p>
-          <div className="task-panel-editor-actions">
-            <button type="button" className="task-panel-button" onClick={keepDraft}>
+          <div className="task-ctl-editor-actions">
+            <button type="button" className="task-ctl-button" onClick={keepDraft}>
               Keep my draft
             </button>
-            <button type="button" className="task-panel-button" onClick={replaceDraft}>
+            <button type="button" className="task-ctl-button" onClick={replaceDraft}>
               Replace my draft with this
             </button>
           </div>
         </section>
       )}
-      <label htmlFor={textareaId} className="task-panel-sr-only">
+      <label htmlFor={textareaId} className="task-ctl-sr-only">
         Edit brief (markdown)
       </label>
       <textarea
         ref={textareaRef}
         id={textareaId}
-        className="task-panel-textarea task-panel-textarea--mono"
+        className="task-ctl-textarea task-ctl-textarea--mono"
         value={draft}
         rows={14}
         spellCheck
@@ -236,25 +236,25 @@ export function TaskBriefEditor({
         }}
         onKeyDown={onKeyDown}
       />
-      <p id={hintId} className="task-panel-sr-only">
+      <p id={hintId} className="task-ctl-sr-only">
         Markdown. Runs read the brief when they start and may rewrite it.
       </p>
       <TaskCharCounter id={counterId} overId={overId} length={length} cap={TASK_BRIEF_MAX_CHARS} />
       {error && (
-        <p id={errorId} className="task-panel-error" role="alert">
+        <p id={errorId} className="task-ctl-error" role="alert">
           {error}
         </p>
       )}
       {confirmDiscard ? (
         <TaskDiscardConfirm onDiscard={onCancel} onKeepEditing={keepEditing} />
       ) : (
-        <div className="task-panel-editor-actions">
-          <button type="button" className="task-panel-button" onClick={onCancel} disabled={saving}>
+        <div className="task-ctl-editor-actions">
+          <button type="button" className="task-ctl-button" onClick={onCancel} disabled={saving}>
             Cancel
           </button>
           <button
             type="button"
-            className="task-panel-button task-panel-button--primary"
+            className="task-ctl-button task-ctl-button--primary"
             onClick={() => void save()}
             disabled={!canSave}
           >

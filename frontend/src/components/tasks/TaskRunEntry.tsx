@@ -1,6 +1,5 @@
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { ChevronRight, MoreHorizontal, Trash2 } from 'lucide-react'
+import { ChevronRight, MoreHorizontal, PanelRight, Trash2 } from 'lucide-react'
 import type {
   ActionRequestMessage as ActionRequestMessageType,
   ConnectRequestMessage as ConnectRequestMessageType,
@@ -8,7 +7,6 @@ import type {
 } from '../../api/types'
 import type { FileSource } from '../../api/fileApi'
 import { formatTimestamp } from '../../utils/formatters'
-import { taskRunPath } from '../../utils/tasksRoute'
 import { ActionRequestMessage } from '../ActionRequestMessage'
 import { ConnectRequestMessage } from '../ConnectRequestMessage'
 import { MarkdownWorkspaceContext, Message, markdownComponents } from '../Message'
@@ -35,27 +33,30 @@ export interface TaskRunActivityView {
 }
 
 /**
- * One run of the task thread (spec 8.2), top to bottom:
+ * One update of the task page: one run (TaskUpdates lists them oldest
+ * first), top to bottom:
  *
- * - a header: "Run N", its start time and, on a finished run, the row menu
- *   ("Delete entry", confirmed by the thread);
+ * - a header: "Run N", its start time, "View run" (opens the run's
+ *   transcript in the page's detail panel; "Close run" while it is the one
+ *   showing there, `isOpen`, which also marks the update) and, on a
+ *   finished run, the row menu ("Delete entry", confirmed by the page);
  * - the prompt, rendered as Message.tsx renders a user message, clamped
  *   with a "Show full prompt" toggle when it is long (TaskRunPrompt);
  * - its questions (TaskQuestionCard, oldest first; answered / cancelled
  *   ones keep showing on finished runs);
- * - the approval and connect cards the thread keeps for it (`cards`: the
+ * - the approval and connect cards the page keeps for it (`cards`: the
  *   open ones plus, while the run is active, those resolved since they were
  *   first seen, which flip themselves to their resolved state);
  * - for the active run the activity line, else the outcome: the `result` as
  *   the assistant reply (with a "Handoff notes" disclosure for the notes),
  *   the handoff-missing, failed (TaskRunError: one line plus "Show
- *   details") or stopped line, and a quiet "Open run".
+ *   details") or stopped line.
  *
  * Everything is inside a MarkdownWorkspaceContext for the RUN's
  * conversation and its task, so workspace images and relative links in the
  * prompt, cards, result and notes resolve against that run's workspace,
  * `task://` references against the task's, and both open through the
- * thread's one file viewer (`onOpenFile`, told the file's space).
+ * page's one file viewer (`onOpenFile`, told the file's space).
  */
 export const TaskRunEntry = memo(function TaskRunEntry({
   taskId,
@@ -67,6 +68,8 @@ export const TaskRunEntry = memo(function TaskRunEntry({
   onQuestionAnswered,
   onOpenFile,
   onDelete,
+  isOpen,
+  onView,
 }: {
   taskId: string
   run: TaskRun
@@ -78,6 +81,10 @@ export const TaskRunEntry = memo(function TaskRunEntry({
   onQuestionAnswered: () => void
   onOpenFile: (workspacePath: string, filename: string, source: FileSource) => void
   onDelete: (run: TaskRun) => void
+  /** This run's transcript is the one showing in the detail panel. */
+  isOpen: boolean
+  /** View run / Close run: the page toggles the run's panel. */
+  onView: (conversationId: string) => void
 }) {
   const conversationId = run.conversation_id
   const workspaceCtx = useMemo(
@@ -85,14 +92,28 @@ export const TaskRunEntry = memo(function TaskRunEntry({
     [conversationId, taskId, onOpenFile],
   )
   const finished = activity === null && !isActiveRunStatus(run.status)
-  const runPath = taskRunPath(taskId, conversationId)
 
   return (
     <MarkdownWorkspaceContext.Provider value={workspaceCtx}>
-      <article className="task-run" data-run-id={run.id} aria-label={`Run ${run.seq}`}>
+      <article
+        className={`task-run${isOpen ? ' is-open' : ''}`}
+        data-run-id={run.id}
+        data-conversation-id={conversationId}
+        aria-label={`Run ${run.seq}`}
+        aria-current={isOpen ? 'true' : undefined}
+      >
         <div className="task-run-meta">
           <span className="task-run-seq">Run {run.seq}</span>
           <span className="task-run-time">{formatTimestamp(run.started_at)}</span>
+          <button
+            type="button"
+            className="task-run-view"
+            aria-pressed={isOpen}
+            onClick={() => onView(conversationId)}
+          >
+            <PanelRight size={14} aria-hidden="true" />
+            {isOpen ? 'Close run' : 'View run'}
+          </button>
           {finished && <TaskRunMenu seq={run.seq} onDelete={() => onDelete(run)} />}
         </div>
 
@@ -132,18 +153,17 @@ export const TaskRunEntry = memo(function TaskRunEntry({
             onStop={() => onStop(conversationId)}
             stopping={activity.stopping}
             stopError={activity.stopError}
-            openRunPath={runPath}
           />
         ) : (
-          <TaskRunOutcome run={run} runPath={runPath} />
+          <TaskRunOutcome run={run} />
         )}
       </article>
     </MarkdownWorkspaceContext.Provider>
   )
 })
 
-/** A finished run's result, notes and state line, with the quiet Open run link. */
-function TaskRunOutcome({ run, runPath }: { run: TaskRun; runPath: string }) {
+/** A finished run's result, notes and state line. */
+function TaskRunOutcome({ run }: { run: TaskRun }) {
   const result = run.result?.trim() ? run.result : null
   const notes = run.notes?.trim() ? run.notes : null
   const finishedAt = run.finished_at ?? run.started_at
@@ -164,9 +184,6 @@ function TaskRunOutcome({ run, runPath }: { run: TaskRun; runPath: string }) {
         <p className="task-run-state">This run finished without a result.</p>
       )}
       {notes && <TaskRunNotes notes={notes} />}
-      <Link to={runPath} className="task-run-open">
-        Open run
-      </Link>
     </div>
   )
 }

@@ -22,11 +22,11 @@ export function summarizeRunError(error: string): { line: string; truncated: boo
 }
 
 /**
- * A failed run's error (task thread and run view): "Run failed: <one
+ * A failed run's error (its update on the task page and its run panel): "Run failed: <one
  * line>", and when the raw text (often a long provider error) is longer
  * than that line, a "Show details" toggle that reveals the whole text in a
  * bounded, scrollable block. `role="alert"` is left to the caller's
- * context: the thread renders finished runs, so it stays a plain line.
+ * context: the updates render finished runs, so it stays a plain line.
  */
 export function TaskRunError({ error, className = '' }: { error: string | null; className?: string }) {
   const [open, setOpen] = useState(false)

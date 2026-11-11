@@ -1,37 +1,28 @@
-/* TaskPage (/tasks/<id>) -- rendered inside .docs-main.tasks-main (App.css).
- * Desktop: the page fills the pane's height; the header sits on top, the
- * thread column (flex 1) and the panel column (fixed 340px, border-left)
- * each scroll on their own: the thread column is a flex column whose
- * TaskThread scrolls its runs above a pinned composer (TaskThread.css owns
- * every .task-thread-* rule), the panel column scrolls as a whole.
+/* TaskPage (/tasks/<id>, and a run open in its panel) -- rendered inside
+ * .docs-main.tasks-main (App.css; MobileShell's pane on phones).
  *
- * Phone (768px, same as useIsMobile / MobileShell): one column that the
- * pane scrolls as a whole: the header (sticky at the pane's top,
- * TaskHeader.css), the notice, the panel (its sections collapse to
- * disclosure rows), then the thread. TaskPage renders the panel before the
- * thread in the DOM, so the thread's sticky composer, which cannot leave
- * the thread column, never covers panel content. TaskPage keeps the sticky
- * header's height in --task-page-header-height; every element of the body
- * takes it as scroll-margin-top, so focusing or scrolling to a panel row or
- * a run never leaves it under the header.
+ * The page fills the pane as a row: the main column (TaskMainColumn) and,
+ * while a detail view is open, the detail panel (TaskDetailPanel.css: about
+ * 44% of the page on desktop, a full-screen view over the page on phones).
+ * The main column is a flex column on every screen size: the header
+ * (TaskHeader.css), the router-state notice, ONE scroller holding the
+ * instructions row, the brief, the task files and the updates at the
+ * chat's reading measure (720px plus gutters, centred), and the composer
+ * footer pinned under the scroller. The browser's own scroll anchoring is
+ * off on the scroller: TaskMainColumn keeps the position across a
+ * prepended page of older updates itself.
  *
- * The panel's own rules (.task-panel-*, .task-brief-*) live in
- * TaskPanel.css. */
+ * Section chrome (.task-section-*) is shared by the brief, the task files
+ * and the updates (TaskUpdates.css styles the updates themselves). */
 
 .task-page {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.task-page-body {
+  position: relative;
   flex: 1 1 0;
   min-height: 0;
   display: flex;
 }
 
-.task-page-thread {
+.task-page-main {
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
@@ -39,58 +30,293 @@
   flex-direction: column;
 }
 
-.task-page-panel {
-  flex: 0 0 340px;
-  width: 340px;
-  min-height: 0;
-  overflow-y: auto;
-  border-left: 1px solid var(--border);
-  background-color: var(--surface);
+.task-page-main > .task-header {
+  flex-shrink: 0;
 }
 
-/* Router-state notice (TaskNotice) between the header and the body */
+.task-page-scroller {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-anchor: none;
+  /* Insets the scrollbar from the column edge, as .messages-container. */
+  border-right: 6px solid transparent;
+}
+
+.task-page-column {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(720px + 4rem);
+  margin: 0 auto;
+  padding: 1.25rem 2rem 2rem;
+}
+
+/* Router-state notice (TaskNotice) between the header and the scroller. */
 .task-page-notice {
   flex-shrink: 0;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(720px + 4rem);
+  margin: 0 auto;
   padding: 0.75rem 2rem 0;
 }
 
+/* --- Sections -------------------------------------------------------- */
+
+.task-section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.task-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  min-height: 1.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.task-section-heading {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.task-section-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.task-section-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.375rem;
+  margin-left: auto;
+}
+
+/* --- Instructions row (TaskInstructionsRow) ---------------------------- */
+
+.task-instructions-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+  min-height: 2.5rem;
+  margin-bottom: -0.75rem;
+  padding: 0.4rem 0.75rem;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background-color: var(--surface-raised);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.task-instructions-row:hover {
+  background-color: var(--hover);
+}
+
+.task-instructions-row:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.task-instructions-row[aria-expanded='true'] {
+  border-color: rgb(var(--accent-rgb) / 0.45);
+  background-color: var(--accent-soft);
+}
+
+.task-instructions-row--empty {
+  border-style: dashed;
+  background-color: transparent;
+}
+
+.task-instructions-row-icon,
+.task-instructions-row-chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.task-instructions-row-label {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.task-instructions-row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+/* --- Brief (TaskBrief) ------------------------------------------------- */
+
+.task-brief-empty {
+  margin: 0;
+  padding: 1rem 1.125rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* Phones: a long brief is clamped to about a screenful with a fade (a
+   mask, so it follows the theme), until "Show full brief". */
+.task-brief-body.clamp {
+  max-height: 22rem;
+  overflow: hidden;
+}
+
+.task-brief-body.clamped {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 4rem), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 4rem), transparent);
+}
+
+.task-brief-toggle {
+  align-self: flex-start;
+  min-height: 2.5rem;
+  margin-top: 0.25rem;
+  padding: 0 0.25rem;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--accent-text);
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/* --- Task files -------------------------------------------------------- */
+
+/* The FileBrowser card (`hideTitle`): as tall as its rows up to a bound,
+   then the list scrolls inside it. FileBrowser fills it (flex, min-height
+   0), its toolbar on top. */
+.task-files-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 9rem;
+  max-height: 24rem;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background-color: var(--surface-raised);
+}
+
+/* --- Composer footer --------------------------------------------------- */
+
+.task-page-footer {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  background-color: var(--surface);
+}
+
+/* Label, notices and the archived line: the composer bubble's inset and
+   measure (2rem strip, 720px). */
+.task-page-footer-column {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(720px + 4rem);
+  margin: 0 auto;
+  padding: 0 2rem;
+}
+
+.task-composer-label,
+.task-composer-notice,
+.task-composer-upload {
+  margin-bottom: 0.375rem;
+}
+
+.task-composer-label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.8125rem;
+}
+
+.task-composer-label-main {
+  flex: none;
+  font-weight: 600;
+  color: var(--accent-text);
+}
+
+.task-composer-label-question {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.task-composer-archived {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.25rem 0 1rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.task-composer-archived-error {
+  flex-basis: 100%;
+}
+
 @media (max-width: 768px) {
-  .task-page {
-    flex: 1 0 auto;
-    min-height: auto;
+  .task-page-scroller {
+    border-right: none;
   }
 
-  .task-page-body {
-    flex: 1 0 auto;
-    flex-direction: column;
+  .task-page-column {
+    gap: 1.75rem;
+    max-width: none;
+    padding: 1rem 16px 1.5rem;
   }
 
-  .task-page-thread,
-  .task-page-panel {
-    overflow-y: visible;
-  }
-
-  /* The panel takes its content height above the thread; the pane scrolls. */
-  .task-page-panel {
-    flex: 0 0 auto;
-    width: auto;
-    border-left: none;
-    border-bottom: 1px solid var(--border);
-  }
-
-  /* The thread takes its content height too. */
-  .task-page-thread {
-    flex: 0 0 auto;
-    min-height: auto;
-  }
-
-  .task-page-notice {
+  .task-page-notice,
+  .task-page-footer-column {
+    max-width: none;
     padding-left: 16px;
     padding-right: 16px;
   }
 
-  .task-page-body,
-  .task-page-body * {
-    scroll-margin-top: var(--task-page-header-height, 0px);
+  .task-page-footer {
+    padding-top: 0.375rem;
+  }
+
+  .task-page-footer .input-area.composer {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .task-files-card {
+    max-height: min(22rem, 60vh);
   }
 }

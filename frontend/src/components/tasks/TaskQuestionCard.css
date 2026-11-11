@@ -148,7 +148,7 @@
   color: var(--text-muted);
 }
 
-/* "in the task" in the run view's hint (TaskQuestionMessage). */
+/* "in the task" in the run panel's hint (TaskQuestionMessage). */
 .task-question-hint-link {
   color: var(--accent-text);
   text-decoration: none;

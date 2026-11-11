@@ -41,11 +41,12 @@ interface ChatPanelProps {
   onConversationUpdate?: () => void;
   onProjectIdLoaded?: (conversationId: string, projectId: string) => void;
   /** The loaded detail names the Quest Task this conversation is a run of
-   *  (App redirects /chats/<run id> to the run view). */
+   *  (App redirects /chats/<run id> to the task page with that run open). */
   onTaskIdLoaded?: (conversationId: string, taskId: string) => void;
   /** Shown in place of the conversation's title unit (ConversationHeader),
-   *  inside the panel's column above the message list: the task run view
-   *  supplies its own "Back to task" header. */
+   *  inside the panel's column above the message list; `null` shows none.
+   *  The task page's run panel supplies its own (a failed run's error) or
+   *  none, its panel header naming the run. */
   header?: ReactNode;
 }
 
@@ -245,7 +246,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   // focused it counts as read (the sidebar's unread dot).
   useMarkConversationViewed(conversationId, isLoaded);
 
-  // Report a Quest Task run to the host (URL correction to the run view).
+  // Report a Quest Task run to the host (URL correction to its task page).
   useEffect(() => {
     if (taskId) onTaskIdLoaded?.(conversationId, taskId);
   }, [conversationId, taskId, onTaskIdLoaded]);
@@ -836,8 +837,8 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
     <div className="chat-panel">
       <MarkdownWorkspaceContext.Provider value={markdownWorkspaceCtx}>
       {/* Title unit + rename / archive menu (Claude-style), unless the
-          host supplies its own header (the task run view). */}
-      {header ?? (
+          host supplies its own header or none (the task run panel). */}
+      {header !== undefined ? header : (
         <ConversationHeader
           conversationId={conversationId}
           title={customName || conversationTitle}

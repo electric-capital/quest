@@ -32,7 +32,7 @@ export interface TasksSectionProps {
   loading: boolean;
   // useTasks().error: the first load failed (no tasks to show).
   error?: string | null;
-  // The task whose thread or run view is showing, so its row is highlighted.
+  // The task whose page is showing (with or without a run open), so its row is highlighted.
   activeTaskId: string | null;
   onOpenTask: (id: string) => void;
   // The unarchived tasks list (the header and "Show all").

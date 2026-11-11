@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, type ReactNode } from 'react'
+import { useEffect, useCallback, type ReactNode } from 'react'
 import { Routes, Route, Navigate, useParams, useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
 import { AppProviders } from './contexts/AppProviders'
@@ -70,25 +70,12 @@ function AppContent() {
   // same URL-only main-pane takeover as the docs views.
   const tablesRoute = parseTablesRoute(location.pathname, location.search)
   const tablesEnabled = enabledFeatures.includes(TABLES_FEATURE)
-  // Quest Tasks views (/tasks, /tasks/new, /tasks/<id>, the run view
-  // /tasks/<id>/runs/<conversation id>): the same URL-only takeover. The run
-  // view's conversation id is not mirrored into activeConversationId.
+  // Quest Tasks views (/tasks, /tasks/new, /tasks/<id>, and a run open in
+  // the task page's detail panel /tasks/<id>/runs/<conversation id>): the
+  // same URL-only takeover. A run's conversation id is not mirrored into
+  // activeConversationId.
   const tasksRoute = parseTasksRoute(location.pathname, location.search)
   const tasksEnabled = enabledFeatures.includes(TASKS_FEATURE)
-  // The run view's workspace (the RightPanel here, the workspace drawer in
-  // MobileShell) shows only once the route's run resolved (TaskRunView's
-  // onRunResolved): not while it loads, and not beside a not-found run (a
-  // run of another task, a deleted or unknown conversation), whose cards
-  // would only show errors. Stored with the route's key, so a resolved
-  // previous run never counts for the next one.
-  const runRouteKey = tasksRoute?.kind === 'run' && tasksEnabled
-    ? `${tasksRoute.taskId}\n${tasksRoute.conversationId}`
-    : null
-  const [resolvedRunKey, setResolvedRunKey] = useState<string | null>(null)
-  const handleRunResolved = useCallback((resolved: boolean) => {
-    setResolvedRunKey(resolved ? runRouteKey : null)
-  }, [runRouteKey])
-  const runResolved = runRouteKey !== null && resolvedRunKey === runRouteKey
 
   // Sync URL -> inbox state. /inbox (Requests tab), /inbox/memories
   // (Memories tab) and /inbox/other (Other tab) are the deep-linkable
@@ -158,10 +145,10 @@ function AppContent() {
   }, [params.projectId, params.conversationId, navigate])
 
   // A Quest Task run opened by its conversation URL (/chats/<id>, e.g. an
-  // inbox "Go to conversation" or a doc's "written by" link): show it in the
-  // task's run view instead. With the tasks gate closed the run stays on
-  // /chats/<id> as a read-only transcript (the run view would only say the
-  // feature is off).
+  // inbox "Go to conversation" or a doc's "written by" link): show it on its
+  // task's page, open in the detail panel, instead. With the tasks gate
+  // closed the run stays on /chats/<id> as a read-only transcript (the task
+  // page would only say the feature is off).
   const handleTaskIdLoaded = useCallback((conversationId: string, taskId: string) => {
     if (tasksEnabled && params.conversationId === conversationId) {
       navigate(taskRunPath(taskId, conversationId), { replace: true })
@@ -208,8 +195,6 @@ function AppContent() {
         tablesEnabled={tablesEnabled}
         tasksRoute={tasksRoute}
         tasksEnabled={tasksEnabled}
-        runResolved={runResolved}
-        onRunResolved={handleRunResolved}
       />
     )
   }
@@ -249,26 +234,10 @@ function AppContent() {
             />
           )}
         </div>
-      ) : tasksRoute?.kind === 'run' && tasksEnabled ? (
-        // The run view: the run's transcript beside the RightPanel for the
-        // run's conversation (its Chat Files, plus the task's files with
-        // copy and move between them), like a chat. No RightPanel until the
-        // run resolved (runResolved above).
-        <>
-          <div className="main-content docs-main tasks-main">
-            <TasksMain route={tasksRoute} enabled={tasksEnabled} onRunResolved={handleRunResolved} />
-          </div>
-          {runResolved && (
-            <RightPanel
-              conversationId={tasksRoute.conversationId}
-              projectId={null}
-              taskId={tasksRoute.taskId}
-            />
-          )}
-        </>
       ) : tasksRoute ? (
-        // Full takeover: no RightPanel beside the other task views. TaskPage
-        // lays out its own panel column in the RightPanel's place (spec 8.3).
+        // Full takeover: no RightPanel beside the task views. The task page
+        // opens its own detail panel (a run, the brief History, the
+        // instructions) beside its main column.
         <div className="main-content docs-main tasks-main">
           <TasksMain route={tasksRoute} enabled={tasksEnabled} />
         </div>
@@ -348,8 +317,9 @@ function App() {
         {/* Quest Tables: All Tables (?project=<id> filter) and the viewer. */}
         <Route path="/tables" element={<AppContent />} />
         <Route path="/tables/:tableId" element={<AppContent />} />
-        {/* Quest Tasks: the list (?archived=true), New Task, the thread and
-            the run view. The run param is deliberately not `conversationId`:
+        {/* Quest Tasks: the list (?archived=true), New Task, the task page
+            and the task page with one run open in its detail panel. The run
+            param is deliberately not `conversationId`:
             AppContent mirrors that into activeConversationId, and a run
             conversation never becomes the active sidebar conversation. */}
         <Route path="/tasks" element={<AppContent />} />

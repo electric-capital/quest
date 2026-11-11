@@ -30,8 +30,8 @@
  * task detail and the read response only: there is no task unread event;
  * `task_list_changed` / `task_changed` make the task hooks refetch, and
  * they merge the refetched rows and detail here (hooks/useTasks.ts,
- * hooks/useTask.ts). The viewed task (the thread on screen, reported by
- * hooks/useTaskUnread.ts) is acknowledged by `acknowledgeViewed` exactly
+ * hooks/useTask.ts). The viewed task (its newest update on screen, reported
+ * by hooks/useTaskUnread.ts) is acknowledged by `acknowledgeViewed` exactly
  * like the viewed conversation, through POST /tasks/{id}/read.
  */
 

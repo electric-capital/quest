@@ -150,8 +150,8 @@ export const Sidebar = React.memo(function Sidebar({
 
   // Quest Tasks: the user's unarchived tasks on the main panel only (tasks
   // are top-level, no drill-down block), while the `tasks` feature gate is
-  // open. The URL says which task / tasks list is showing; a run view
-  // highlights its task's row too.
+  // open. The URL says which task / tasks list is showing; a task page with
+  // a run open highlights its task's row too.
   const tasksEnabled = enabledFeatures.includes(TASKS_FEATURE);
   const userTasks = useTasks({ enabled: tasksEnabled });
   const tasksRoute = parseTasksRoute(location.pathname, location.search);

@@ -4,9 +4,9 @@
  * hooks/useConversationUnread.ts:
  *
  * - useTaskUnread: whether a task row shows the unread dot.
- * - useMarkTaskViewed: called by the task thread to say which task it is
- *   showing; while it is on screen in a focused window it is acknowledged
- *   as read.
+ * - useMarkTaskViewed: called by the task page while the task's newest
+ *   update is on screen; then, in a focused window, the task is
+ *   acknowledged as read.
  *
  * The focus / visibility re-check needs no second listener:
  * useUnreadTracking already calls `unreadStore.acknowledgeViewed()`, which
@@ -26,13 +26,16 @@ export function useTaskUnread(row: Pick<TaskListRow, 'id' | 'unread_seq' | 'read
 }
 
 /**
- * Report the task the main view is showing, once its detail has loaded (so
- * the store knows its seqs).
+ * Report the task whose newest update the main view is showing. `seen` is
+ * the page's rule (TaskPage): the detail has loaded (so the store knows its
+ * seqs) and the newest update is on screen, or the run panel shows the
+ * newest run. While it is false the task is not acknowledged, so a page
+ * opened at the brief never marks an update read that was never shown.
  */
-export function useMarkTaskViewed(taskId: string | null, isLoaded: boolean): void {
+export function useMarkTaskViewed(taskId: string | null, seen: boolean): void {
   useEffect(() => {
-    if (!taskId || !isLoaded) return;
+    if (!taskId || !seen) return;
     unreadStore.setViewedTask(taskId);
     return () => unreadStore.clearViewedTask(taskId);
-  }, [taskId, isLoaded]);
+  }, [taskId, seen]);
 }
