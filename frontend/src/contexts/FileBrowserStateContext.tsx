@@ -2,8 +2,9 @@
  * Per-file-space file-browser state (current path + history + the dotfile
  * toggle), kept across conversation switches so returning to a chat restores
  * where the user was browsing. Keyed by `fileSourceKey()` --
- * `conversation:<id>` / `project:<id>` -- so a Chat Files card and a Project
- * Files card shown side by side keep separate paths and toggles. Changes on
+ * `conversation:<id>` / `project:<id>` / `task:<id>` -- so a Chat Files card
+ * and a Project Files or Task files card shown side by side keep separate
+ * paths and toggles. Changes on
  * every folder click, which is why it is its own context: nothing else
  * should re-render for it.
  */
