@@ -30,7 +30,7 @@ import { useIsMobile } from './hooks/useIsMobile'
 import { useUnreadTracking } from './hooks/useConversationUnread'
 import { parseDocsRoute } from './utils/docsRoute'
 import { parseTablesRoute } from './utils/tablesRoute'
-import { parseTasksRoute } from './utils/tasksRoute'
+import { parseTasksRoute, taskRunPath } from './utils/tasksRoute'
 import { LazyBoundary, lazyNamed } from './components/LazyBoundary'
 
 // Admin-only page: a separate chunk, fetched on the first visit.
@@ -143,6 +143,17 @@ function AppContent() {
     }
   }, [params.projectId, params.conversationId, navigate])
 
+  // A Quest Task run opened by its conversation URL (/chats/<id>, e.g. an
+  // inbox "Go to conversation" or a doc's "written by" link): show it in the
+  // task's run view instead. With the tasks gate closed the run stays on
+  // /chats/<id> as a read-only transcript (the run view would only say the
+  // feature is off).
+  const handleTaskIdLoaded = useCallback((conversationId: string, taskId: string) => {
+    if (tasksEnabled && params.conversationId === conversationId) {
+      navigate(taskRunPath(taskId, conversationId), { replace: true })
+    }
+  }, [tasksEnabled, params.conversationId, navigate])
+
   // Show loading state while checking session auth
   if (isCheckingAuth) {
     return (
@@ -176,6 +187,7 @@ function AppContent() {
         onConversationSelect={handleConversationSelect}
         onNewConversation={handleNewConversation}
         onProjectIdLoaded={handleProjectIdLoaded}
+        onTaskIdLoaded={handleTaskIdLoaded}
         docsRoute={docsRoute}
         docsEnabled={docsEnabled}
         tablesRoute={tablesRoute}
@@ -221,9 +233,23 @@ function AppContent() {
             />
           )}
         </div>
+      ) : tasksRoute?.kind === 'run' && tasksEnabled ? (
+        // The run view: the run's transcript beside the RightPanel for the
+        // run's conversation (its Chat Files, plus the task's files with
+        // copy and move between them), like a chat.
+        <>
+          <div className="main-content docs-main tasks-main">
+            <TasksMain route={tasksRoute} enabled={tasksEnabled} />
+          </div>
+          <RightPanel
+            conversationId={tasksRoute.conversationId}
+            projectId={null}
+            taskId={tasksRoute.taskId}
+          />
+        </>
       ) : tasksRoute ? (
-        // Full takeover: no RightPanel beside a task view. TaskPage lays out
-        // its own panel column in the RightPanel's place (spec 8.3).
+        // Full takeover: no RightPanel beside the other task views. TaskPage
+        // lays out its own panel column in the RightPanel's place (spec 8.3).
         <div className="main-content docs-main tasks-main">
           <TasksMain route={tasksRoute} enabled={tasksEnabled} />
         </div>
@@ -234,6 +260,7 @@ function AppContent() {
               <ChatPanel
                 conversationId={activeConversationId}
                 onProjectIdLoaded={handleProjectIdLoaded}
+                onTaskIdLoaded={handleTaskIdLoaded}
               />
             ) : (
               <HomeComposer onNewConversation={handleNewConversation} />
