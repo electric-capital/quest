@@ -472,6 +472,14 @@ export function ToolUseMessage({ toolUse, toolResult, childToolCalls, subAgentRe
   let displayName: string;
   let displayIntent: string;
 
+  // A task run's ask_task_question suspends the run; its result goes back
+  // to the model on resume but is never written to the transcript, so the
+  // call would read "running..." forever. The task_question card that
+  // follows it shows whether the question is pending, answered or cancelled.
+  const isTaskQuestionCall = (toolUse.tool_name === 'tool_call'
+    ? toolUse.tool_input.tool_name
+    : toolUse.tool_name) === 'ask_task_question';
+
   if (isAgentTask) {
     displayName = (toolUse.tool_input.name as string) || 'Sub-Agent';
     displayIntent = (toolUse.tool_input.description as string) || '';
@@ -658,7 +666,7 @@ export function ToolUseMessage({ toolUse, toolResult, childToolCalls, subAgentRe
               {toolResult && (
                 <span className="tool-status completed">completed</span>
               )}
-              {!toolResult && (
+              {!toolResult && !isTaskQuestionCall && (
                 <span className="tool-status running">running...</span>
               )}
             </>
