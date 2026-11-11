@@ -14,7 +14,7 @@ import {
   fetchConversationTail,
   ApiClientError,
 } from '../api/client';
-import type { MessageContent, SubAgentToolCallInfo, SubAgentFinishedInfo, ToolResultMessage, SubAgentToolUseMessage, SubAgentToolResultMessage, StatsMessage, ComposerAttachmentRef, ActionRequestMessage as ActionRequestMessageType, ConnectRequestMessage as ConnectRequestMessageType, PendingWaitInfo, ExpensiveResumeInfo, SubagentRunInfo } from '../api/types';
+import type { MessageContent, SubAgentToolCallInfo, SubAgentFinishedInfo, ToolResultMessage, SubAgentToolUseMessage, SubAgentToolResultMessage, StatsMessage, ComposerAttachmentRef, ActionRequestMessage as ActionRequestMessageType, ConnectRequestMessage as ConnectRequestMessageType, PendingWaitInfo, ExpensiveResumeInfo, SubagentRunInfo, ConversationOrigin } from '../api/types';
 
 /**
  * Reconstruct the subAgentToolCalls map from persisted tool_result messages.
@@ -174,7 +174,7 @@ interface UseConversationOptions {
   onLoadedSkills?: (conversationId: string, skillIds: string[]) => void;
   onModelLoaded?: (conversationId: string, model: string, thinkingEffort: string | null) => void;
   onProjectIdLoaded?: (conversationId: string, projectId: string) => void;
-  onOriginLoaded?: (conversationId: string, origin: 'web' | 'slack' | 'user_subagent' | 'inference_api') => void;
+  onOriginLoaded?: (conversationId: string, origin: ConversationOrigin) => void;
 }
 
 interface UseConversationResult {
@@ -192,7 +192,7 @@ interface UseConversationResult {
   subAgentReturned: Map<string, Map<string, SubAgentFinishedInfo>>;
   contextTokens: number | null;
   maxContextTokens: number | null;
-  origin: 'web' | 'slack' | 'user_subagent' | 'inference_api';
+  origin: ConversationOrigin;
   /** Caller identity + status of the cross-user subagent run, when
    *  origin === 'user_subagent'; null otherwise. Drives the read-only
    *  composer notice. */
@@ -265,7 +265,7 @@ function newClientSendId(): string {
 
 export function useConversation(conversationId: string, options?: UseConversationOptions): UseConversationResult {
   const prevConversationIdRef = useRef<string | null>(null);
-  const [origin, setOrigin] = useState<'web' | 'slack' | 'user_subagent' | 'inference_api'>('web');
+  const [origin, setOrigin] = useState<ConversationOrigin>('web');
   const [subagentRun, setSubagentRun] = useState<SubagentRunInfo | null>(null);
   const [slackChannelId, setSlackChannelId] = useState<string | null>(null);
   const [slackThreadTs, setSlackThreadTs] = useState<string | null>(null);
@@ -405,11 +405,13 @@ export function useConversation(conversationId: string, options?: UseConversatio
         }
 
         // Track origin so the composer can be locked for Slack-driven,
-        // cross-user subagent, and inference API conversations.
-        const nextOrigin: 'web' | 'slack' | 'user_subagent' | 'inference_api' =
+        // cross-user subagent, inference API and Quest Task run
+        // conversations.
+        const nextOrigin: ConversationOrigin =
           response.origin === 'slack'
             || response.origin === 'user_subagent'
             || response.origin === 'inference_api'
+            || response.origin === 'task'
             ? response.origin
             : 'web';
         setOrigin(nextOrigin);

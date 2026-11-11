@@ -675,3 +675,16 @@
     color: #208020;
   }
 }
+
+/* complete_task_run's text fields (summary, result, notes, brief) as
+   labelled blocks instead of escaped JSON strings (see ToolInputContent). */
+.tool-text-field + .tool-text-field {
+  margin-top: 0.5rem;
+}
+
+.tool-text-field-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 0.25rem;
+}

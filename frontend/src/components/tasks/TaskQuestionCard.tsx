@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { LoaderCircle, MessageCircleQuestionMark } from 'lucide-react'
 import { answerTaskQuestion, taskErrorDetail } from '../../api/tasksApi'
 import { ApiClientError } from '../../api/request'
@@ -7,13 +7,17 @@ import { formatTimestamp } from '../../utils/formatters'
 import './TaskQuestionCard.css'
 
 export interface TaskQuestionCardProps {
-  taskId: string
+  /** The task to answer through; null shows the question read-only (option buttons disabled). */
+  taskId: string | null
   question: TaskQuestion
   /** Locks the option buttons (e.g. the composer is sending an answer). */
   disabled?: boolean
   /** After a successful answer (or a 409 question_resolved): the server's Question when known.
    *  The thread refreshes its runs here. */
   onAnswered?: (question: TaskQuestion | null) => void
+  /** Replaces the pending question's hint under the options (by default it
+   *  points at the thread composer below the card). */
+  hint?: ReactNode
 }
 
 /** The outcome this card learned from the server before the thread refetched. */
@@ -55,6 +59,7 @@ export function TaskQuestionCard({
   question,
   disabled = false,
   onAnswered,
+  hint,
 }: TaskQuestionCardProps) {
   // Index of the option being sent, or null.
   const [sending, setSending] = useState<number | null>(null)
@@ -71,7 +76,7 @@ export function TaskQuestionCard({
 
   const answerWith = async (index: number) => {
     const option = question.options[index]
-    if (sending !== null || option === undefined) return
+    if (taskId === null || sending !== null || option === undefined) return
     setSending(index)
     setError(null)
     try {
@@ -97,7 +102,7 @@ export function TaskQuestionCard({
   }
 
   const options = question.options
-  const locked = disabled || sending !== null
+  const locked = disabled || taskId === null || sending !== null
 
   return (
     <section className={`task-question-card ${status}`} aria-label="Question from the run">
@@ -135,9 +140,9 @@ export function TaskQuestionCard({
             </div>
           )}
           <p className="task-question-hint">
-            {options.length > 0
+            {hint ?? (options.length > 0
               ? 'Or type your answer in the box below.'
-              : 'Type your answer in the box below.'}
+              : 'Type your answer in the box below.')}
           </p>
           {error && (
             <p className="task-question-error" role="alert">

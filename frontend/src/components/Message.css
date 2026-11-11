@@ -545,9 +545,11 @@
 }
 
 /* Routine-nudge notice: a routine run ended without routine_completed and
-   the server ran one follow-up turn (see chat/routine_runs.py). Neutral
-   teal so it reads as "the system stepped in", not as an error. */
-.message-routine-nudge {
+   the server ran one follow-up turn (see chat/routine_runs.py); the task
+   nudge is the same notice for a Quest Task run (chat/tasks/runs.py).
+   Neutral teal so it reads as "the system stepped in", not as an error. */
+.message-routine-nudge,
+.message-task-nudge {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -561,15 +563,18 @@
   color: #2dd4bf;
 }
 
-.routine-nudge-icon {
+.routine-nudge-icon,
+.task-nudge-icon {
   font-size: 0.8rem;
 }
 
-.routine-nudge-text {
+.routine-nudge-text,
+.task-nudge-text {
   font-weight: 500;
 }
 
-.routine-nudge-timestamp {
+.routine-nudge-timestamp,
+.task-nudge-timestamp {
   font-size: 0.7rem;
   color: rgba(45, 212, 191, 0.7);
 }
@@ -1018,13 +1023,15 @@
   }
 
   /* Light mode routine-nudge notice */
-  .message-routine-nudge {
+  .message-routine-nudge,
+  .message-task-nudge {
     background-color: rgba(13, 148, 136, 0.06);
     border-color: rgba(13, 148, 136, 0.3);
     color: #0d9488;
   }
 
-  .routine-nudge-timestamp {
+  .routine-nudge-timestamp,
+  .task-nudge-timestamp {
     color: rgba(13, 148, 136, 0.7);
   }
 }

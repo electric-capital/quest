@@ -137,6 +137,16 @@
   color: var(--text-muted);
 }
 
+/* "in the task" in the run view's hint (TaskQuestionMessage). */
+.task-question-hint-link {
+  color: var(--accent-text);
+  text-decoration: none;
+}
+
+.task-question-hint-link:hover {
+  text-decoration: underline;
+}
+
 .task-question-error {
   margin: 0.6rem 0 0;
   padding: 0.45rem 0.7rem;

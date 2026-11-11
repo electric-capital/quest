@@ -2,17 +2,19 @@
  * ChatPanel component for displaying and sending messages in a conversation
  */
 
-import React, { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type ReactNode } from 'react';
 import { RichMarkdown } from './RichMarkdown';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useCodeAndMathLoaded } from '../hooks/useCodeAndMath';
 import { useConversation } from '../hooks/useConversation';
 import { useMarkConversationViewed } from '../hooks/useConversationUnread';
+import { useAuth } from '../contexts/AuthContext';
 import { useConversationModels } from '../contexts/ConversationModelsContext';
 import { useConversationSkills } from '../contexts/ConversationSkillsContext';
 import { useNavigationState } from '../contexts/NavigationContext';
 import { webSocketManager } from '../services/WebSocketManager';
 import { compactConversation, duplicateConversationWorkspace, fetchProject } from '../api/client';
+import { TASKS_FEATURE } from '../api/tasksApi';
 import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, ComposerAttachmentRef } from '../api/types';
 import { MessageContentRenderer, markdownComponents, MarkdownWorkspaceContext } from './Message';
 import { ToolCallGroup } from './ToolCallGroup';
@@ -31,12 +33,20 @@ import { isCsvFile, isImageFile, isJsonFile, isPdfFile, isViewableFile } from '.
 import { useWorkspaceDownload } from '../hooks/useWorkspaceDownload';
 import { buildSlackThreadUrl } from '../utils/slackLinks';
 import { seedNewConversation } from '../utils/newConversation';
+import { taskThreadPath } from '../utils/tasksRoute';
 import './ChatPanel.css';
 
 interface ChatPanelProps {
   conversationId: string;
   onConversationUpdate?: () => void;
   onProjectIdLoaded?: (conversationId: string, projectId: string) => void;
+  /** The loaded detail names the Quest Task this conversation is a run of
+   *  (App redirects /chats/<run id> to the run view). */
+  onTaskIdLoaded?: (conversationId: string, taskId: string) => void;
+  /** Shown in place of the conversation's title unit (ConversationHeader),
+   *  inside the panel's column above the message list: the task run view
+   *  supplies its own "Back to task" header. */
+  header?: ReactNode;
 }
 
 /**
@@ -122,7 +132,7 @@ function groupConsecutiveToolCalls(messages: MessageContent[]): GroupedMessage[]
  * Since conversationId is the only meaningful prop, this prevents re-renders
  * caused by parent re-renders that don't change the active conversation.
  */
-export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProjectIdLoaded }: ChatPanelProps) {
+export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProjectIdLoaded, onTaskIdLoaded, header }: ChatPanelProps) {
   const [wasNearBottom, setWasNearBottom] = useState(true);
   // A workspace file open in the in-app viewer: a composer attachment, an
   // inline markdown image, or a markdown link in an assistant reply, with
@@ -156,6 +166,8 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
     scrollToMessageIndex, setScrollToMessageIndex,
   } = useNavigationState();
   const { setQueuedSkillsForConversation, setLoadedSkillsForConversation } = useConversationSkills();
+  const { enabledFeatures } = useAuth();
+  const tasksEnabled = enabledFeatures.includes(TASKS_FEATURE);
   const selectedModel = getModelForConversation(conversationId);
 
   // Callback to hydrate loaded skills when conversation is loaded from the server
@@ -233,13 +245,21 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   // focused it counts as read (the sidebar's unread dot).
   useMarkConversationViewed(conversationId, isLoaded);
 
+  // Report a Quest Task run to the host (URL correction to the run view).
+  useEffect(() => {
+    if (taskId) onTaskIdLoaded?.(conversationId, taskId);
+  }, [conversationId, taskId, onTaskIdLoaded]);
+
   // Slack-driven conversations are read-only in the web UI; the user is
   // conversing via Slack DMs and the model replies through the
   // send_slack_reply_and_get_response tool. Cross-user subagent
   // conversations are read-only too: the owner watches the headless run and
   // only interacts through the subagent_return approval card. Inference API
   // conversations are one-shot transcripts driven by POST /api/inference.
-  const isReadOnly = origin === 'slack' || origin === 'user_subagent' || origin === 'inference_api';
+  // A Quest Task run takes exactly one user message (its prompt); the user
+  // continues in the task's thread, which starts the next run.
+  const isReadOnly = origin === 'slack' || origin === 'user_subagent' || origin === 'inference_api'
+    || origin === 'task';
 
   // Build a deep link to the driving Slack thread, when we have all three
   // identifiers. When default_team_id is missing we simply omit the link
@@ -256,11 +276,20 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       ? `${subagentRun.caller_name} (${subagentRun.caller_email})`
       : subagentRun.caller_email)
     : 'another user';
-  const readOnlyNotice = origin === 'user_subagent'
+  const readOnlyNotice: ReactNode = origin === 'user_subagent'
     ? `Subagent run by ${subagentCallerDisplay} — read-only. Interact via the approval card when it appears.`
     : origin === 'inference_api'
       ? 'Inference API run — a read-only transcript of a one-shot request made by an application with your API key.'
-      : null;
+      : origin === 'task'
+        ? (
+          <>
+            This is one run of a task.{' '}
+            {taskId && tasksEnabled
+              ? <Link to={taskThreadPath(taskId)}>Continue in the task.</Link>
+              : 'Continue in the task.'}
+          </>
+        )
+        : null;
 
   // (The composer's disabled state and placeholder copy now live in
   // <Composer>, derived from the isStreaming/isReadOnly/hasPendingWait props
@@ -739,8 +768,8 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       // Regular streaming message
       const msg = entry.message;
 
-      // Handle action_request / connect_request cards
-      if (msg.type === 'action_request' || msg.type === 'connect_request') {
+      // Handle action_request / connect_request cards and task questions
+      if (msg.type === 'action_request' || msg.type === 'connect_request' || msg.type === 'task_question') {
         return (
           <MessageContentRenderer
             key={`streaming-${msg.type}-${entry.index}`}
@@ -781,6 +810,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   if (isLoading && !isLoaded) {
     return (
       <div className="chat-panel">
+        {header}
         <div className="chat-loading">
           Loading conversation...
         </div>
@@ -792,6 +822,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   if (error && !messages.length) {
     return (
       <div className="chat-panel">
+        {header}
         <div className="chat-error">
           {error}
         </div>
@@ -802,15 +833,18 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   return (
     <div className="chat-panel">
       <MarkdownWorkspaceContext.Provider value={markdownWorkspaceCtx}>
-      {/* Title unit + rename / archive menu (Claude-style). */}
-      <ConversationHeader
-        conversationId={conversationId}
-        title={customName || conversationTitle}
-        customName={customName}
-        archived={archived}
-        onRenamed={setCustomName}
-        onArchivedChange={setArchived}
-      />
+      {/* Title unit + rename / archive menu (Claude-style), unless the
+          host supplies its own header (the task run view). */}
+      {header ?? (
+        <ConversationHeader
+          conversationId={conversationId}
+          title={customName || conversationTitle}
+          customName={customName}
+          archived={archived}
+          onRenamed={setCustomName}
+          onArchivedChange={setArchived}
+        />
+      )}
       {/* Messages container */}
       <div
         className="messages-container"
