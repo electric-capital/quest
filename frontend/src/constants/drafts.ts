@@ -13,8 +13,9 @@ export const HOME_DRAFT_KEY = '__home_draft__';
 // The Quest Tasks composers (components/tasks/TaskComposer.tsx) never send on
 // a conversation they are bound to: every send creates a fresh run
 // conversation. The New Task page binds its composer to TASK_DRAFT_KEY; a
-// task thread binds its own to taskDraftKey(taskId), so a model pick or a
-// queued skill stays with that task. Like HOME_DRAFT_KEY these keys must never
+// task thread binds its own to taskDraftKey(taskId), so a model pick, a
+// queued skill or unsent text (store/taskDrafts.ts) stays with that task.
+// Like HOME_DRAFT_KEY these keys must never
 // get a provider lock (the composer runs with skipSendLocks).
 export const TASK_DRAFT_KEY = '__task_draft__';
 
