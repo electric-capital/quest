@@ -269,23 +269,28 @@ export function FileBrowser({ source, hideTitle = false, onListing, rowActions, 
   // global. Filters by scope/id so only events for this card's own space
   // trigger a refetch (see fileListEventMatchesSource). A short debounce
   // coalesces bursts (e.g. several write_file calls in one turn) into a
-  // single silent fetch.
+  // single silent fetch. A socket reconnect refreshes the same way: events
+  // published while it was down are lost.
   useEffect(() => {
     if (!sourceKind || !sourceId) return;
     const watched: FileSource = { kind: sourceKind, id: sourceId };
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const unsubscribe = persistentWebSocket.onGlobalEvent((event) => {
-      if (event.type !== 'file_list_changed') return;
-      if (!fileListEventMatchesSource(event, watched)) return;
-
+    const schedule = () => {
       if (timer !== null) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
         silentRefresh();
       }, FILE_LIST_REFRESH_DEBOUNCE_MS);
+    };
+    const unsubscribeEvents = persistentWebSocket.onGlobalEvent((event) => {
+      if (event.type !== 'file_list_changed') return;
+      if (!fileListEventMatchesSource(event, watched)) return;
+      schedule();
     });
+    const unsubscribeReconnect = persistentWebSocket.onReconnect(schedule);
     return () => {
-      unsubscribe();
+      unsubscribeEvents();
+      unsubscribeReconnect();
       if (timer !== null) clearTimeout(timer);
     };
   }, [sourceKind, sourceId, silentRefresh]);

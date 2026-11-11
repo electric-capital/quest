@@ -13,14 +13,18 @@
  *
  * The caller passes useTask's `changeSeq`: every `task_changed` of the task
  * (run status changes, answers, deletes) re-reads the run, so its status
- * moves live. Fetches coalesce as in useTask: one in flight; a change during
- * it sets a dirty flag and one more fetch runs when it lands.
+ * moves live. A socket reconnect re-reads it too (useTask re-fetches then
+ * but does not bump `changeSeq`). Neither re-reads a task this tab is
+ * deleting (`isTaskDeleting`). Fetches coalesce as in useTask: one in
+ * flight; a change during it sets a dirty flag and one more fetch runs when
+ * it lands.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { listTaskRuns, TASK_RUNS_MAX_PAGE_SIZE } from '../api/tasksApi';
+import { isTaskDeleting, listTaskRuns, TASK_RUNS_MAX_PAGE_SIZE } from '../api/tasksApi';
 import { ApiClientError } from '../api/request';
 import type { TaskRun } from '../api/types';
+import { persistentWebSocket } from '../services/PersistentWebSocket';
 
 export interface TaskRunLookup {
   run: TaskRun | null;
@@ -127,13 +131,23 @@ export function useTaskRun(taskId: string, conversationId: string, changeSeq: nu
     void refresh();
   }, [refresh, commit]);
 
-  // A task_changed of this task: re-read the run (now, or once the fetch in
-  // flight lands).
-  useEffect(() => {
-    if (changeSeq === 0) return;
+  // Re-read the run now, or once the fetch in flight lands (never for a
+  // task this tab is deleting).
+  const requestRefresh = useCallback(() => {
+    if (isTaskDeleting(taskId)) return;
     if (pendingSeqRef.current !== null) dirtyRef.current = true;
     else void refreshRef.current();
-  }, [changeSeq]);
+  }, [taskId]);
+
+  // A task_changed of this task (useTask resets changeSeq to 0 on a task
+  // change, so a new requestRefresh alone never re-reads here).
+  useEffect(() => {
+    if (changeSeq === 0) return;
+    requestRefresh();
+  }, [changeSeq, requestRefresh]);
+
+  // Socket reconnect: changes missed while it was down are lost.
+  useEffect(() => persistentWebSocket.onReconnect(requestRefresh), [requestRefresh]);
 
   const current = state.key === key ? state : EMPTY;
   return {
