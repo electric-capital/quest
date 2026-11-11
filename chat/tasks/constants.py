@@ -12,7 +12,6 @@ from datetime import timedelta
 # --- Task text (``tasks`` row) ---------------------------------------------
 
 TASK_TITLE_MAX_CHARS = 120
-TASK_INSTRUCTIONS_MAX_CHARS = 8_000
 TASK_BRIEF_MAX_CHARS = 12_000
 
 # Stored brief versions per task (``task_brief_versions``); the oldest are
@@ -79,13 +78,14 @@ TASK_RUN_ERROR_EXCERPT_CHARS = 300
 # Asserted upper bound of the whole task context block.
 TASK_CONTEXT_MAX_CHARS = 50_000
 # Worst case, every field at its cap:
-#   title 120 + instructions 8 000 + brief 12 000 + window 20 000 = 40 120,
-#   + fixed prose, headings and tags (~2 100)                     ~ 42 200,
-#   leaving ~7 800 of the 50 000 for the index and its count line.
-# A 100-line index at 120 characters a line would be ~15 000, so the index
-# gets min(TASK_LOG_INDEX_MAX_CHARS, what is left) and the count line takes
-# the rest of the runs; the builder also hard-cuts at the bound as a last
-# resort (chat/tasks/context.py).
+#   title 120 + brief 12 000 + window 20 000          = 32 120,
+#   + fixed prose, headings and tags (~2 300)         ~ 34 400,
+#   + index 8 000 and its framing and count (~400)    ~ 42 800,
+#   about 7 000 under the 50 000 bound. The index gets
+# min(TASK_LOG_INDEX_MAX_CHARS, what is left), so at these caps it always
+# gets its own cap, and the count line takes the rest of the runs; the
+# builder also hard-cuts at the bound as a last resort
+# (chat/tasks/context.py).
 
 # --- Questions (ask_task_question) -----------------------------------------
 

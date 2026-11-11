@@ -4,9 +4,8 @@ Revision ID: 4b57cca1158c
 Revises: a3d9e5c7f2b4
 Create Date: 2026-11-10 12:00:00.000000
 
-Quest Tasks: a ``tasks`` row holds a task's title, the user's instructions,
-the model-maintained brief (with its version counter) and the counters the
-thread and the unread dot run on. Each prompt is answered by a run, a
+Quest Tasks: a ``tasks`` row holds a task's title, the brief (with its
+version counter) and the counters the thread and the unread dot run on. Each prompt is answered by a run, a
 ``task_runs`` row numbered per task by ``seq`` and tied one-to-one to its own
 conversation; ``task_brief_versions`` keeps the recent brief texts. A run's
 conversation carries ``conversations.task_id``.
@@ -46,7 +45,6 @@ def upgrade() -> None:
             'title_is_default', sa.Boolean(), nullable=False,
             server_default=sa.true(),
         ),
-        sa.Column('instructions', sa.Text(), nullable=False, server_default=''),
         sa.Column('brief', sa.Text(), nullable=False, server_default=''),
         sa.Column(
             'brief_version', sa.Integer(), nullable=False, server_default='0',

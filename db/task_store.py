@@ -46,7 +46,6 @@ from chat.tasks.constants import (
     TASK_BRIEF_MAX_CHARS,
     TASK_BRIEF_MAX_VERSIONS,
     TASK_CONTEXT_MAX_CHARS,
-    TASK_INSTRUCTIONS_MAX_CHARS,
     TASK_RUN_ACTIVE_STATUSES,
     TASK_RUN_FINISHED_STATUSES,
     TASK_RUN_NOTES_MAX_CHARS,
@@ -331,25 +330,6 @@ def title_from_prompt(prompt: str) -> str:
     return clean[: TASK_TITLE_MAX_CHARS - 1].rstrip() + "…"
 
 
-def validate_instructions(text) -> str:
-    """Return the stripped instructions (None -> "").
-
-    Raises:
-        TaskValidationError ``invalid_instructions``: not a string or over
-            ``TASK_INSTRUCTIONS_MAX_CHARS``.
-    """
-    if text is None:
-        return ""
-    if not isinstance(text, str):
-        raise TaskValidationError(
-            "invalid_instructions", "The task instructions must be a string."
-        )
-    return _check_len(
-        text.strip(), TASK_INSTRUCTIONS_MAX_CHARS, "invalid_instructions",
-        "The task instructions",
-    )
-
-
 def validate_brief(content) -> str:
     """Return the stripped brief (empty allowed).
 
@@ -461,7 +441,7 @@ def _task_to_dict(task: Task) -> dict:
 
     Shape::
 
-        {"id", "user_id", "title", "title_is_default", "instructions",
+        {"id", "user_id", "title", "title_is_default",
          "brief", "brief_version", "brief_updated_at", "model",
          "thinking_effort", "archived", "next_run_seq", "event_seq",
          "unread_seq", "read_seq", "created_at", "updated_at",
@@ -473,7 +453,6 @@ def _task_to_dict(task: Task) -> dict:
         "user_id": task.user_id,
         "title": task.title,
         "title_is_default": bool(task.title_is_default),
-        "instructions": task.instructions,
         "brief": task.brief,
         "brief_version": task.brief_version,
         "brief_updated_at": _iso(task.brief_updated_at),
@@ -609,7 +588,6 @@ async def create_task(
     *,
     title: str,
     title_is_default: bool = False,
-    instructions: str = "",
     model: Optional[str] = None,
     thinking_effort: Optional[str] = None,
     task_id: Optional[str] = None,
@@ -622,7 +600,6 @@ async def create_task(
         title_is_default: True when ``title`` was cut from the first prompt
             (:func:`title_from_prompt`), so the first run may still name the
             task.
-        instructions: Through :func:`validate_instructions`.
         model, thinking_effort: Defaults for new runs (None = the user's
             default); shape-checked only.
         task_id: Optional pre-generated id (lets a service lay out the task
@@ -638,7 +615,6 @@ async def create_task(
         slip under the cap).
     """
     clean_title = normalize_title(title)
-    clean_instructions = validate_instructions(instructions)
     clean_model = _validate_model(model)
     clean_effort = _validate_thinking_effort(thinking_effort)
     now = _now()
@@ -650,7 +626,6 @@ async def create_task(
             user_id=user_id,
             title=clean_title,
             title_is_default=bool(title_is_default),
-            instructions=clean_instructions,
             model=clean_model,
             thinking_effort=clean_effort,
             created_at=now,
@@ -729,7 +704,6 @@ async def update_task(
     task_id: str,
     *,
     title: Any = UNSET,
-    instructions: Any = UNSET,
     model: Any = UNSET,
     thinking_effort: Any = UNSET,
 ) -> dict:
@@ -749,8 +723,6 @@ async def update_task(
     values: dict = {}
     if title is not UNSET:
         values["title"] = normalize_title(title)
-    if instructions is not UNSET:
-        values["instructions"] = validate_instructions(instructions)
     if model is not UNSET:
         values["model"] = _validate_model(model)
     if thinking_effort is not UNSET:
