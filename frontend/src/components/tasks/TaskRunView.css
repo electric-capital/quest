@@ -1,16 +1,27 @@
 /* TaskRunView (/tasks/<id>/runs/<conversation id>) -- inside
- * .docs-main.tasks-main (App.css). The header is the lasting "Back to task"
- * bar; .task-run-view-placeholder is the B1 body that B5 replaces with
- * ChatPanel. */
+ * .docs-main.tasks-main (App.css), which scrolls as a whole. The run view
+ * instead fills the pane with ChatPanel, which scrolls its own message list
+ * under the header (.task-run-view-header, passed to ChatPanel as its
+ * `header`) and above the read-only composer, as in a chat. The .chat-panel
+ * override keeps the panel inside the pane instead of its desktop 100vh
+ * (and MobileShell's 100%), so a long transcript never scrolls the pane. */
 
 .task-run-view {
-  flex: 1 0 auto;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
   display: flex;
-  flex-direction: column;
+}
+
+.tasks-main .task-run-view > .chat-panel {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 0;
   min-width: 0;
 }
 
 .task-run-view-header {
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -51,21 +62,42 @@
   color: var(--text);
 }
 
-.task-run-view-placeholder {
-  margin: 0;
-  padding: 2rem;
-  font-size: 0.9375rem;
+.task-run-view-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
   color: var(--text-secondary);
-  overflow-wrap: anywhere;
+}
+
+.task-run-view-seq {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Outline pill, like the task header's chip; "Needs you" takes the accent
+ * the sidebar uses for a waiting run, a failed run the error red. */
+.task-run-view-status {
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.task-run-view-status.waiting {
+  color: var(--accent);
+}
+
+.task-run-view-status.failed {
+  color: #e5484d;
 }
 
 @media (max-width: 768px) {
   .task-run-view-header {
     padding-left: 16px;
     padding-right: 16px;
-  }
-
-  .task-run-view-placeholder {
-    padding: 1.5rem 16px;
   }
 }

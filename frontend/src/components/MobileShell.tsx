@@ -28,6 +28,8 @@ interface MobileShellProps {
   onConversationSelect: (id: string, projectId?: string | null) => void
   onNewConversation: (id: string, projectId?: string | null) => void
   onProjectIdLoaded: (conversationId: string, projectId: string) => void
+  /** A conversation opened by its URL turned out to be a Quest Task run. */
+  onTaskIdLoaded: (conversationId: string, taskId: string) => void
   /** Parsed /docs URL (parseDocsRoute), or null off the docs routes. */
   docsRoute: DocsRoute | null
   /** Whether the `docs` feature gate is open for the current user. */
@@ -52,7 +54,10 @@ interface ConversationSelectOpts {
  * same data layer — only the layout tree differs: a fixed top bar, a slide-in
  * drawer hosting the existing Sidebar, and a single main pane (chat, home
  * composer, requests, or a Quest Docs, Tables or Tasks view). The
- * desktop-only RightPanel is intentionally absent.
+ * RightPanel lives in the workspace drawer behind the top bar's folder
+ * button, for a chat and for a task run view (with the run's task, as
+ * beside the desktop run view); the other docs, tables and tasks views
+ * have no workspace.
  */
 export function MobileShell({
   activeConversationId,
@@ -60,6 +65,7 @@ export function MobileShell({
   onConversationSelect,
   onNewConversation,
   onProjectIdLoaded,
+  onTaskIdLoaded,
   docsRoute,
   docsEnabled,
   tablesRoute,
@@ -183,6 +189,10 @@ export function MobileShell({
     setWorkspaceOpen(false)
   }, [tasksRouteKey])
 
+  // The task run view has a workspace: the run's conversation and its task.
+  const runRoute = tasksRoute?.kind === 'run' && tasksEnabled ? tasksRoute : null
+  const hasWorkspace = runRoute !== null || (!docsRoute && !tablesRoute && !tasksRoute)
+
   const closeOverlays = useCallback(() => {
     setDrawerOpen(false)
     setWorkspaceOpen(false)
@@ -246,9 +256,10 @@ export function MobileShell({
             <span className="mobile-topbar-title-text">{appName}</span>
           )}
         </div>
-        {/* No workspace beside a docs, tables or tasks view (desktop hides
-            the RightPanel there too); keep the slot so the title stays put. */}
-        {docsRoute || tablesRoute || tasksRoute ? (
+        {/* No workspace beside a docs, tables or tasks view other than the
+            task run view (desktop hides the RightPanel there too); keep the
+            slot so the title stays put. */}
+        {!hasWorkspace ? (
           <span className="mobile-topbar-button mobile-topbar-button-end" aria-hidden="true" />
         ) : (
           <button
@@ -299,6 +310,7 @@ export function MobileShell({
           <ChatPanel
             conversationId={activeConversationId}
             onProjectIdLoaded={onProjectIdLoaded}
+            onTaskIdLoaded={onTaskIdLoaded}
           />
         ) : (
           <HomeComposer onNewConversation={handleNewConversation} />
@@ -318,10 +330,18 @@ export function MobileShell({
         />
       </div>
       <div className={`mobile-workspace-drawer${workspaceOpen ? ' open' : ''}`}>
-        <RightPanel
-          conversationId={activeConversationId}
-          projectId={projectId}
-        />
+        {runRoute ? (
+          <RightPanel
+            conversationId={runRoute.conversationId}
+            projectId={null}
+            taskId={runRoute.taskId}
+          />
+        ) : (
+          <RightPanel
+            conversationId={activeConversationId}
+            projectId={projectId}
+          />
+        )}
       </div>
 
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setSettingsOpen(false)} />
