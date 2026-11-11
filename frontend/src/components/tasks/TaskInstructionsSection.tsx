@@ -69,7 +69,10 @@ export function TaskInstructionsSection({
   const editing = edit !== null
   useEffect(() => {
     if (editing) {
-      textareaRef.current?.focus()
+      // Open with the caret after the text, ready to add to it.
+      const el = textareaRef.current
+      el?.focus()
+      el?.setSelectionRange(el.value.length, el.value.length)
     } else if (returnFocusRef.current) {
       returnFocusRef.current = false
       openerRef.current?.focus()
