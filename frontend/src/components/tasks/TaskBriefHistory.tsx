@@ -390,7 +390,7 @@ export function TaskBriefHistory({
     if (body !== undefined) {
       if (showChanges && !isCurrent) detailBody = <BriefDiff before={body} after={task.brief} />
       else if (body.trim() === '') detailBody = <p className="task-panel-muted">This version is empty.</p>
-      else detailBody = <TaskBriefMarkdown content={body} />
+      else detailBody = <TaskBriefMarkdown taskId={taskId} content={body} />
     } else if (error) {
       detailBody = (
         <div className="task-brief-history-state">

@@ -6,6 +6,7 @@ import type {
   ConnectRequestMessage as ConnectRequestMessageType,
   TaskRun,
 } from '../../api/types'
+import type { FileSource } from '../../api/fileApi'
 import { formatTimestamp } from '../../utils/formatters'
 import { taskRunPath } from '../../utils/tasksRoute'
 import { ActionRequestMessage } from '../ActionRequestMessage'
@@ -48,9 +49,10 @@ export interface TaskRunActivityView {
  *   the handoff-missing, failed or stopped line, and a quiet "Open run".
  *
  * Everything is inside a MarkdownWorkspaceContext for the RUN's
- * conversation, so workspace images and relative links in the prompt,
- * cards, result and notes resolve against that run's workspace, and open
- * through the thread's one file viewer (`onOpenFile`).
+ * conversation and its task, so workspace images and relative links in the
+ * prompt, cards, result and notes resolve against that run's workspace,
+ * `task://` references against the task's, and both open through the
+ * thread's one file viewer (`onOpenFile`, told the file's space).
  */
 export const TaskRunEntry = memo(function TaskRunEntry({
   taskId,
@@ -71,16 +73,13 @@ export const TaskRunEntry = memo(function TaskRunEntry({
   answeringHandleId: string | null
   onStop: (conversationId: string) => void
   onQuestionAnswered: () => void
-  onOpenFile: (conversationId: string, workspacePath: string, filename: string) => void
+  onOpenFile: (workspacePath: string, filename: string, source: FileSource) => void
   onDelete: (run: TaskRun) => void
 }) {
   const conversationId = run.conversation_id
   const workspaceCtx = useMemo(
-    () => ({
-      conversationId,
-      onOpenFile: (path: string, filename: string) => onOpenFile(conversationId, path, filename),
-    }),
-    [conversationId, onOpenFile],
+    () => ({ conversationId, taskId, onOpenFile }),
+    [conversationId, taskId, onOpenFile],
   )
   const finished = activity === null && !isActiveRunStatus(run.status)
   const runPath = taskRunPath(taskId, conversationId)

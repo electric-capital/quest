@@ -26,7 +26,7 @@ import { UploadProgress, describeUpload, uploadPercent, type UploadStatus } from
 import { MemorySuggestionsBar } from './MemorySuggestions';
 import { ConversationHeader } from './ConversationHeader';
 import { LazyFileViewerModal } from './LazyFileViewerModal';
-import { uploadFiles } from '../api/fileApi';
+import { conversationSource, uploadFiles, type FileSource } from '../api/fileApi';
 import { isCsvFile, isImageFile, isJsonFile, isPdfFile, isViewableFile } from './FileBrowser';
 import { useWorkspaceDownload } from '../hooks/useWorkspaceDownload';
 import { buildSlackThreadUrl } from '../utils/slackLinks';
@@ -124,13 +124,13 @@ function groupConsecutiveToolCalls(messages: MessageContent[]): GroupedMessage[]
  */
 export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProjectIdLoaded }: ChatPanelProps) {
   const [wasNearBottom, setWasNearBottom] = useState(true);
-  // Workspace file open in the viewer modal: composer attachments and inline
-  // markdown images share it, so only the two fields the modal needs are kept.
   // A workspace file open in the in-app viewer: a composer attachment, an
-  // inline markdown image, or a relative markdown link in an assistant reply.
+  // inline markdown image, or a markdown link in an assistant reply, with
+  // the space it is in (the conversation's own workspace, or the project or
+  // task space a `proj://` / `task://` reference names).
   // `isImage` is pinned for composer attachments, whose display name (the
   // pasted file's original name) may carry no extension to sniff.
-  const [attachmentViewer, setAttachmentViewer] = useState<{ workspace_path: string; filename: string; isImage?: boolean } | null>(null);
+  const [attachmentViewer, setAttachmentViewer] = useState<{ source: FileSource; workspace_path: string; filename: string; isImage?: boolean } | null>(null);
   // Queued files uploading ahead of a send (see handleComposerSend): the
   // composer has already cleared its chips, so this strip above it is the
   // only sign a large upload is still running.
@@ -177,7 +177,12 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   useEffect(() => {
     setIsPublicProject(false);
   }, [conversationId]);
+  // The project the loaded conversation belongs to, for `proj://` references
+  // in its replies; tagged with the conversation so a switch never resolves
+  // against the previous one's project.
+  const [loadedProject, setLoadedProject] = useState<{ conversationId: string; projectId: string } | null>(null);
   const handleProjectIdLoaded = useCallback((convId: string, projId: string) => {
+    setLoadedProject({ conversationId: convId, projectId: projId });
     onProjectIdLoaded?.(convId, projId);
     fetchProject(projId)
       .then((p) => {
@@ -205,6 +210,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
     slackChannelId,
     slackThreadTs,
     slackTeamId,
+    taskId,
     conversationModel,
     conversationFlags,
     hasPendingWait,
@@ -591,6 +597,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
 
   const handleConvertedToProject = useCallback((projectId: string, convId: string) => {
     setIsConvertModalOpen(false);
+    setLoadedProject({ conversationId: convId, projectId });
     navigate(`/projects/${projectId}/${convId}`);
   }, [navigate]);
 
@@ -614,28 +621,41 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   }, [scrollToBottom]);
 
   const handleOpenAttachment = useCallback((att: ComposerAttachmentRef) => {
-    setAttachmentViewer({ workspace_path: att.workspace_path, filename: att.filename, isImage: true });
-  }, []);
+    setAttachmentViewer({
+      source: conversationSource(conversationId),
+      workspace_path: att.workspace_path,
+      filename: att.filename,
+      isImage: true,
+    });
+  }, [conversationId]);
 
   // Files the model references in a reply (inline images, `[name](path)`
-  // links) open in the viewer when it has a view for the type; anything
-  // else goes through the regular download flow with its warning dialog.
-  const handleOpenMarkdownFile = useCallback((workspacePath: string, filename: string) => {
+  // links, `task://` / `proj://` references) open in the viewer when it has
+  // a view for the type; anything else goes through the regular download
+  // flow with its warning dialog. Both read from the file's own space.
+  const handleOpenMarkdownFile = useCallback((workspacePath: string, filename: string, source: FileSource) => {
     if (isViewableFile(filename)) {
-      setAttachmentViewer({ workspace_path: workspacePath, filename });
+      setAttachmentViewer({ source, workspace_path: workspacePath, filename });
     } else {
-      void downloadWorkspaceFile(conversationId, workspacePath).catch(() => {
+      void downloadWorkspaceFile(source, workspacePath).catch(() => {
         // Swallow; the link stays clickable and the user can retry.
       });
     }
-  }, [conversationId, downloadWorkspaceFile]);
+  }, [downloadWorkspaceFile]);
 
   // Lets the shared markdown renderer resolve `![alt](path.png)` image refs
-  // and `[name](path)` links against this conversation's workspace (see
-  // MarkdownImage / MarkdownLink in Message.tsx).
+  // and `[name](path)` links against this conversation's workspace, and
+  // `proj://` / `task://` references against its project or its task (a
+  // task run) -- see MarkdownImage / MarkdownLink in Message.tsx.
+  const conversationProjectId = loadedProject?.conversationId === conversationId ? loadedProject.projectId : null;
   const markdownWorkspaceCtx = useMemo(
-    () => ({ conversationId, onOpenFile: handleOpenMarkdownFile }),
-    [conversationId, handleOpenMarkdownFile]
+    () => ({
+      conversationId,
+      projectId: conversationProjectId ?? undefined,
+      taskId: taskId ?? undefined,
+      onOpenFile: handleOpenMarkdownFile,
+    }),
+    [conversationId, conversationProjectId, taskId, handleOpenMarkdownFile]
   );
 
   const handleCloseAttachmentViewer = useCallback(() => {
@@ -645,11 +665,11 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   const handleDownloadAttachment = useCallback(async () => {
     if (!attachmentViewer) return;
     try {
-      await downloadWorkspaceFile(conversationId, attachmentViewer.workspace_path);
+      await downloadWorkspaceFile(attachmentViewer.source, attachmentViewer.workspace_path);
     } catch {
       // Swallow; the modal stays open and the user can retry.
     }
-  }, [downloadWorkspaceFile, attachmentViewer, conversationId]);
+  }, [downloadWorkspaceFile, attachmentViewer]);
 
   // Render messages with consecutive tool calls grouped into collapsible units
   const renderGroupedMessages = (allMessages: MessageContent[]) => {
@@ -920,7 +940,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       {attachmentViewer && (
         <LazyFileViewerModal
           isOpen={!!attachmentViewer}
-          conversationId={conversationId}
+          source={attachmentViewer.source}
           filePath={attachmentViewer.workspace_path}
           fileName={attachmentViewer.filename}
           isImage={attachmentViewer.isImage ?? isImageFile(attachmentViewer.filename)}

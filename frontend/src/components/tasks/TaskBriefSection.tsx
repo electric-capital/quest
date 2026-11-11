@@ -138,7 +138,7 @@ export function TaskBriefSection({
             {updatedAt && <TaskTimeAgo iso={updatedAt} />}
           </p>
         )}
-        <TaskBriefMarkdown content={task.brief} />
+        <TaskBriefMarkdown taskId={task.id} content={task.brief} />
       </>
     )
   } else {

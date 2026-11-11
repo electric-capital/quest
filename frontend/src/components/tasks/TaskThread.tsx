@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import '../ChatPanel.css'
 import './TaskThread.css'
+import type { FileSource } from '../../api/fileApi'
 import { ApiClientError } from '../../api/request'
 import { answerTaskQuestion, deleteTaskRun, unarchiveTask, updateTask } from '../../api/tasksApi'
 import type { Task, TaskRun } from '../../api/types'
@@ -51,9 +52,9 @@ interface PendingStart {
   conversationId: string | null
 }
 
-/** A workspace file of some run open in the thread's viewer. */
+/** A workspace file open in the thread's viewer: of some run, or of the task (`task://`). */
 interface ViewerFile {
-  conversationId: string
+  source: FileSource
   path: string
   filename: string
 }
@@ -564,13 +565,14 @@ export function TaskThread({
   }, [deleteTarget, taskId, removeRun])
 
   // One viewer for the whole thread; each run's markdown opens files of
-  // its own conversation workspace (same rule as ChatPanel).
+  // its own conversation workspace, or of the task workspace for a
+  // `task://` reference (same rule as ChatPanel).
   const handleOpenFile = useCallback(
-    (conversationId: string, path: string, filename: string) => {
+    (path: string, filename: string, source: FileSource) => {
       if (isViewableFile(filename)) {
-        setViewer({ conversationId, path, filename })
+        setViewer({ source, path, filename })
       } else {
-        void downloadWorkspaceFile(conversationId, path).catch(() => {
+        void downloadWorkspaceFile(source, path).catch(() => {
           // Swallow; the link stays clickable and the user can retry.
         })
       }
@@ -581,7 +583,7 @@ export function TaskThread({
   const handleDownloadViewerFile = useCallback(async () => {
     if (!viewer) return
     try {
-      await downloadWorkspaceFile(viewer.conversationId, viewer.path)
+      await downloadWorkspaceFile(viewer.source, viewer.path)
     } catch {
       // Swallow; the modal stays open and the user can retry.
     }
@@ -749,7 +751,7 @@ export function TaskThread({
       {viewer && (
         <LazyFileViewerModal
           isOpen
-          conversationId={viewer.conversationId}
+          source={viewer.source}
           filePath={viewer.path}
           fileName={viewer.filename}
           isImage={isImageFile(viewer.filename)}

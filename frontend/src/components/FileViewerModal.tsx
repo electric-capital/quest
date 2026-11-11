@@ -2,7 +2,8 @@
  * Modal for viewing text file content, images, and PDFs from workspace files.
  * Reads from one file space: a conversation's workspace (`conversationId`,
  * the chat-side hosts -- attachments, doc image cards, subagent returns) or
- * any `source` (the FileBrowser cards, incl. Project Files).
+ * any `source` (the FileBrowser cards, incl. Project Files and Task files,
+ * and markdown references into another space such as `task://`).
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -10,7 +11,7 @@ import { RichMarkdown } from './RichMarkdown';
 import { errorMessage } from '../utils/errorMessage';
 import { fetchFileContent, fileDownloadUrl, saveFileToDrive, type FileSource } from '../api/fileApi';
 import { JsonTreeViewer } from './JsonTreeViewer';
-import { markdownComponents, MarkdownWorkspaceContext } from './Message';
+import { markdownComponents, MarkdownWorkspaceContext, type MarkdownWorkspaceContextValue } from './Message';
 import { parseCsv } from '../utils/csv';
 import { LazyBoundary, lazyNamed } from './LazyBoundary';
 import { ModalShell } from './ModalShell';
@@ -84,12 +85,19 @@ export function FileViewerModal({ isOpen, source: sourceProp, conversationId, fi
   // Markdown preview view mode: rendered HTML (default, switch ON) vs. raw source (switch OFF).
   const [showRendered, setShowRendered] = useState(true);
 
-  // Resolves workspace-relative markdown image refs in the .md preview
-  // against the file's own space.
-  const markdownCtx = useMemo(
-    () => (source.kind === 'project' ? { projectId: source.id } : { conversationId: source.id }),
-    [source],
-  );
+  // Resolves workspace-relative markdown image refs and links in the .md
+  // preview against the file's own space (and that space's scheme refs,
+  // e.g. `task://` inside a Task files entry).
+  const markdownCtx = useMemo((): MarkdownWorkspaceContextValue => {
+    switch (source.kind) {
+      case 'conversation':
+        return { conversationId: source.id };
+      case 'project':
+        return { projectId: source.id };
+      case 'task':
+        return { taskId: source.id };
+    }
+  }, [source]);
 
   // CSV preview view mode: styled table (default, switch OFF) vs. raw source (switch ON).
   const [showRaw, setShowRaw] = useState(false);
@@ -470,7 +478,7 @@ export function FileViewerModal({ isOpen, source: sourceProp, conversationId, fi
             ) : isMarkdownFile(fileName) && showRendered ? (
               <div className="file-viewer-markdown">
                 {/* Workspace-relative image refs in .md files resolve against
-                    this conversation's workspace (no click-to-open here). */}
+                    the file's own space (no click-to-open here). */}
                 <MarkdownWorkspaceContext.Provider value={markdownCtx}>
                   <RichMarkdown components={markdownComponents}>{content || ''}</RichMarkdown>
                 </MarkdownWorkspaceContext.Provider>
