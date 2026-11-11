@@ -16,6 +16,17 @@
   color: var(--text);
 }
 
+/* Focused by script after an answer (tabIndex -1): a ring only when the
+   answer was given from the keyboard. */
+.task-question-card:focus {
+  outline: none;
+}
+
+.task-question-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .task-question-card.pending {
   border-color: var(--accent);
   box-shadow: 0 0 8px rgb(var(--accent-rgb) / 0.15);
