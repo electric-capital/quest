@@ -339,3 +339,29 @@
     padding: 0;
   }
 }
+
+/* Touch screens: the row buttons and the Archived / Active switch are at
+ * least 40px tall (and the icon buttons 40px wide); after the phone block
+ * so it wins there too. */
+@media (pointer: coarse) {
+  .tasks-list-switch {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.5rem;
+  }
+
+  .tasks-list-row-button {
+    height: 2.5rem;
+    min-width: 2.5rem;
+  }
+
+  .tasks-list-row-button.icon-only {
+    width: 2.5rem;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 768px) {
+  .tasks-list-row-button {
+    width: 2.5rem;
+  }
+}
