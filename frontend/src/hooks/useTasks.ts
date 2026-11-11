@@ -12,7 +12,8 @@
  * one re-fetch, TASKS_REFRESH_DEBOUNCE_MS after the last event; a failed
  * background refresh keeps the list on screen. Every row's unread seqs are
  * merged into the unread store, which is how a task's dot follows a run
- * (there is no task unread event).
+ * (there is no task unread event). A socket reconnect re-fetches the same
+ * debounced way (globals published while it was down are lost).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -100,20 +101,25 @@ export function useTasks({ archived = false, enabled = true }: UseTasksOptions =
     void refresh();
   }, [refresh, commit]);
 
-  // Realtime: trailing-debounced so a burst costs one re-fetch.
+  // Realtime and socket reconnects: trailing-debounced so a burst costs one
+  // re-fetch.
   useEffect(() => {
     if (key === null) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const unsubscribe = persistentWebSocket.onGlobalEvent((event) => {
-      if (event.type !== 'task_list_changed') return;
+    const schedule = () => {
       if (timer !== null) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
         void refresh();
       }, TASKS_REFRESH_DEBOUNCE_MS);
+    };
+    const unsubscribeEvents = persistentWebSocket.onGlobalEvent((event) => {
+      if (event.type === 'task_list_changed') schedule();
     });
+    const unsubscribeReconnect = persistentWebSocket.onReconnect(schedule);
     return () => {
-      unsubscribe();
+      unsubscribeEvents();
+      unsubscribeReconnect();
       if (timer !== null) clearTimeout(timer);
     };
   }, [key, refresh]);

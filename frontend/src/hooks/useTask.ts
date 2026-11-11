@@ -10,10 +10,15 @@
  *   shown one already has the event's `event_seq`, `brief_version` and
  *   `active_run` (id and status). A delete sends a last `task_changed` with
  *   a bumped `event_seq` and `active_run: null`; its re-fetch 404s, which
- *   is how a deleted task turns into `notFound`.
+ *   is how a task deleted elsewhere turns into `notFound`.
  * - `task_list_changed` (rename and the other PATCH fields, archive,
  *   unarchive and delete send only this one): a debounced silent re-fetch.
  *   The event names no task, so any task's list change costs one GET.
+ *
+ * A socket reconnect re-fetches too (globals published while it was down are
+ * lost). None of these re-fetch a task this tab is deleting
+ * (`isTaskDeleting`): the delete's own `task_changed` lands before the DELETE
+ * returns, and its re-fetch would only 404 on the page about to close.
  *
  * Fetches are coalesced as in useTable: one in flight at a time; an event
  * during it sets a dirty flag and one more fetch runs when it lands, never
@@ -29,7 +34,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getTask, parseTaskActiveRun } from '../api/tasksApi';
+import { getTask, isTaskDeleting, parseTaskActiveRun } from '../api/tasksApi';
 import { ApiClientError } from '../api/request';
 import type { Task, TaskActiveRun, TaskBriefState, TaskChangedEvent } from '../api/types';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
@@ -140,11 +145,13 @@ export function useTask(taskId: string | null): TaskView {
   }, [taskId, commit]);
   refreshRef.current = refresh;
 
-  // Re-fetch now, or once the fetch in flight lands.
+  // Re-fetch now, or once the fetch in flight lands (never for a task this
+  // tab is deleting).
   const requestRefresh = useCallback(() => {
+    if (taskId === null || isTaskDeleting(taskId)) return;
     if (pendingSeqRef.current !== null) dirtyRef.current = true;
     else void refreshRef.current();
-  }, []);
+  }, [taskId]);
 
   // Load on mount and whenever the task id changes, dropping the previous
   // task (and any in-flight response for it) first.
@@ -237,6 +244,12 @@ export function useTask(taskId: string | null): TaskView {
       unsubscribe();
       if (timer !== null) clearTimeout(timer);
     };
+  }, [taskId, requestRefresh]);
+
+  // Socket reconnect: events missed while it was down are lost.
+  useEffect(() => {
+    if (taskId === null) return;
+    return persistentWebSocket.onReconnect(requestRefresh);
   }, [taskId, requestRefresh]);
 
   const current = taskId !== null && state.id === taskId ? state : EMPTY;

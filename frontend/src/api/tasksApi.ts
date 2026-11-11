@@ -100,9 +100,26 @@ export function unarchiveTask(id: string): Promise<Task> {
   return apiPut(`${taskEndpoint(id)}/unarchive`);
 }
 
+// Ids of tasks this tab is deleting or has deleted. The server publishes a
+// last `task_changed` for the task before the DELETE returns; the task hooks
+// skip re-fetching such an id (isTaskDeleting), which would only 404 while
+// the page is still mounted. An id leaves the set again when its delete fails.
+const deletingTaskIds = new Set<string>();
+
+/** True while (and after) this tab deletes the task: its hooks skip re-fetches. */
+export function isTaskDeleting(id: string): boolean {
+  return deletingTaskIds.has(id);
+}
+
 /** Delete the task with its runs, their conversations and its files (stops an active run first). */
-export function deleteTask(id: string): Promise<{ success: boolean }> {
-  return apiDelete(taskEndpoint(id));
+export async function deleteTask(id: string): Promise<{ success: boolean }> {
+  deletingTaskIds.add(id);
+  try {
+    return await apiDelete(taskEndpoint(id));
+  } catch (err) {
+    deletingTaskIds.delete(id);
+    throw err;
+  }
 }
 
 /**

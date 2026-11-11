@@ -24,6 +24,10 @@
  * A run deleted below the newest page is not seen by the merge; the caller
  * drops it with `removeRun` after its successful deleteTaskRun.
  *
+ * A socket reconnect re-fetches the newest page too (globals published while
+ * it was down are lost). Neither an event nor a reconnect re-fetches a task
+ * this tab is deleting (`isTaskDeleting`): it would only 404.
+ *
  * Fetches of the newest page are coalesced as in useTable: an event during
  * a fetch sets a dirty flag and one more fetch runs when it lands. A
  * superseded response, or one for a task no longer open, is dropped; an
@@ -32,7 +36,12 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { TASK_RUNS_MAX_PAGE_SIZE, TASK_RUNS_PAGE_SIZE, listTaskRuns } from '../api/tasksApi';
+import {
+  TASK_RUNS_MAX_PAGE_SIZE,
+  TASK_RUNS_PAGE_SIZE,
+  isTaskDeleting,
+  listTaskRuns,
+} from '../api/tasksApi';
 import { ApiClientError } from '../api/request';
 import type { TaskRun, TaskRunsPage } from '../api/types';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
@@ -250,14 +259,24 @@ export function useTaskRuns(
     [taskId, commit],
   );
 
-  // task_changed for this task: re-fetch the newest page (coalesced).
+  // task_changed for this task, or a socket reconnect: re-fetch the newest
+  // page (coalesced; never for a task this tab is deleting).
   useEffect(() => {
     if (taskId === null) return;
-    return persistentWebSocket.onGlobalEvent((event) => {
-      if (event.type !== 'task_changed' || event.task_id !== taskId) return;
+    const requestRefresh = () => {
+      if (isTaskDeleting(taskId)) return;
       if (pendingSeqRef.current !== null) dirtyRef.current = true;
       else void refreshRef.current();
+    };
+    const unsubscribeEvents = persistentWebSocket.onGlobalEvent((event) => {
+      if (event.type !== 'task_changed' || event.task_id !== taskId) return;
+      requestRefresh();
     });
+    const unsubscribeReconnect = persistentWebSocket.onReconnect(requestRefresh);
+    return () => {
+      unsubscribeEvents();
+      unsubscribeReconnect();
+    };
   }, [taskId]);
 
   const current = taskId !== null && state.id === taskId ? state : EMPTY;
