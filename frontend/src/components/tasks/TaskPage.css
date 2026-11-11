@@ -44,40 +44,6 @@
   background-color: var(--surface);
 }
 
-/* Header */
-.task-header {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  min-width: 0;
-  padding: 1rem 2rem 0.75rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.task-header-title {
-  margin: 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 1.25rem;
-  font-weight: 600;
-  line-height: 1.3;
-  color: var(--text);
-}
-
-/* Same outline pill as the tables list's public badge. */
-.task-header-chip {
-  flex-shrink: 0;
-  font-size: 0.7rem;
-  font-weight: 600;
-  padding: 0.1rem 0.45rem;
-  border-radius: 999px;
-  border: 1px solid currentColor;
-  color: var(--text-secondary);
-  opacity: 0.8;
-}
-
 /* Router-state notice (TaskNotice) between the header and the body */
 .task-page-notice {
   flex-shrink: 0;
@@ -114,7 +80,6 @@
     min-height: auto;
   }
 
-  .task-header,
   .task-page-notice {
     padding-left: 16px;
     padding-right: 16px;

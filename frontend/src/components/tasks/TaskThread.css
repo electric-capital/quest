@@ -7,10 +7,10 @@
  * pinned under it.
  *
  * Phone (768px, the useIsMobile breakpoint): the scroller does not scroll;
- * the whole pane (.docs-main) scrolls, the thread first and the panel under
- * it (TaskPage.css), and the composer footer is sticky at the bottom of the
- * viewport while the thread is on screen. It scrolls away with the end of
- * the thread once the user moves on into the panel. 16px side gutters.
+ * the whole pane (.docs-main) scrolls, the panel's collapsible sections
+ * above the thread (TaskPage.css), and the composer footer is sticky at the
+ * bottom of the viewport while the thread is on screen. It cannot leave the
+ * thread column, so it never covers the panel above. 16px side gutters.
  *
  * Colours come from the theme tokens only; error text uses
  * --diff-removed-text, the theme's red. */

@@ -86,7 +86,7 @@ export function TaskPage({ taskId }: { taskId: string }) {
 
   return (
     <div className="task-page">
-      <TaskHeader task={task} />
+      <TaskHeader task={task} onTaskDetail={view.applyDetail} />
       {notice && (
         <div className="task-page-notice">
           <TaskNotice message={notice} onDismiss={dismissNotice} />

@@ -1,18 +1,39 @@
 /* Task page title unit (TaskHeader). The title button, chevron, inline
  * rename input and dropdown follow DocHeader.css under a task-header-
- * prefix. `.task-header` (padding, bottom border), `.task-header-title`
- * (the title text) and `.task-header-chip` (Archived) are in TaskPage.css;
- * the overrides below turn the header into a column (the title row, then
- * the rename error / notice). Tokens only, except the red of the Delete
+ * prefix. The header is a column: the title row, then the rename error /
+ * notice. Tokens only, except the red of the Delete
  * item and the rename error (the app has no error colour token). */
 
-header.task-header {
+.task-header {
   position: relative;
   /* Above the page body so the dropdown floats over it. */
   z-index: 20;
+  display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 0;
+  min-width: 0;
+  padding: 1rem 2rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.task-header-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+/* Same outline pill as the tables list's public badge. */
+.task-header-chip {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  color: var(--text-secondary);
+  opacity: 0.8;
 }
 
 .task-header-bar {
@@ -238,6 +259,11 @@ header.task-header {
    under the title, kept inside the 16px gutters (the rename input shrinks
    with the row, since the unit has min-width 0). */
 @media (max-width: 768px) {
+  .task-header {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
   .task-header-menu {
     max-width: calc(100vw - 32px);
   }
