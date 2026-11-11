@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { LoaderCircle, MessageCircleQuestionMark } from 'lucide-react'
 import { answerTaskQuestion, taskErrorDetail } from '../../api/tasksApi'
 import { ApiClientError } from '../../api/request'
@@ -53,6 +53,10 @@ function resolvedOutcome(err: unknown, handleId: string): LocalOutcome | null {
  * posts the answer; once the server accepts it the card shows it at once,
  * before the thread's refetch brings the answered question. Answered: the
  * answer and its time. Cancelled: the run was stopped first.
+ *
+ * The option buttons unmount once the answer lands, so focus would fall to
+ * the page: when the answer came from a click here and focus was still in
+ * the card, the card itself (tabIndex -1) takes it.
  */
 export function TaskQuestionCard({
   taskId,
@@ -65,6 +69,9 @@ export function TaskQuestionCard({
   const [sending, setSending] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [outcome, setOutcome] = useState<LocalOutcome | null>(null)
+  const cardRef = useRef<HTMLElement>(null)
+  // Set by an answer sent from this card; the card takes focus once it is resolved.
+  const refocusRef = useRef(false)
 
   const handleId = question.handle_id
   // The prop wins once it is resolved; a local outcome only covers the gap
@@ -74,11 +81,23 @@ export function TaskQuestionCard({
   const answer = local ? local.answer : question.answer
   const answeredAt = local ? local.answeredAt : question.answered_at
 
+  useEffect(() => {
+    if (status === 'pending' || !refocusRef.current) return
+    refocusRef.current = false
+    const card = cardRef.current
+    const active = document.activeElement
+    // Only while focus is still here (or already fell to the page).
+    if (card && (active === null || active === document.body || card.contains(active))) {
+      card.focus({ preventScroll: true })
+    }
+  }, [status])
+
   const answerWith = async (index: number) => {
     const option = question.options[index]
     if (taskId === null || sending !== null || option === undefined) return
     setSending(index)
     setError(null)
+    refocusRef.current = true
     try {
       const updated = await answerTaskQuestion(taskId, handleId, option)
       setOutcome({
@@ -94,6 +113,7 @@ export function TaskQuestionCard({
         setOutcome(resolved)
         onAnswered?.(null)
       } else {
+        refocusRef.current = false
         setError(err instanceof Error && err.message ? err.message : SEND_FAILED)
       }
     } finally {
@@ -105,7 +125,12 @@ export function TaskQuestionCard({
   const locked = disabled || taskId === null || sending !== null
 
   return (
-    <section className={`task-question-card ${status}`} aria-label="Question from the run">
+    <section
+      ref={cardRef}
+      tabIndex={-1}
+      className={`task-question-card ${status}`}
+      aria-label="Question from the run"
+    >
       <div className="task-question-header">
         <MessageCircleQuestionMark size={14} aria-hidden="true" />
         <span className="task-question-label">Question</span>
