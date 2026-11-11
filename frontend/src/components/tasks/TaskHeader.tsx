@@ -25,12 +25,24 @@
  * title until dismissed or the next menu action; the archive confirmation is
  * a transient status line (NOTICE_MS).
  *
+ * Keyboard: opening the menu with the keyboard (Enter / Space, or
+ * ArrowDown / ArrowUp on the title) focuses its first (last) enabled item;
+ * ArrowDown / ArrowUp move between the items (wrapping), Home / End jump to
+ * the ends, Tab closes the menu (focus continues from the title), Escape
+ * closes it and returns focus to the title. Focus also comes back to the
+ * title after a rename ended with Enter or Escape and after a menu action
+ * that leaves nothing to focus (archive; Delete's dialog returns there).
+ *
+ * Phones: TaskPage passes `jump`, a button at the end of the title row that
+ * moves between the task panel and the newest run (TaskHeaderJump). The
+ * header is sticky at the top of the scrolling pane there.
+ *
  * Styles in TaskHeader.css.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type Ref } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Archive, ArchiveRestore, ChevronDown, Pencil, Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, ChevronDown, Pencil, Trash2 } from 'lucide-react'
 import {
   archiveTask,
   deleteTask,
@@ -72,18 +84,41 @@ interface HeaderNotice {
   seq: number
 }
 
+/** Where the phone jump button goes: up to the task panel, or down to the newest run. */
+export type TaskHeaderJumpTarget = 'brief' | 'latest'
+
+/** The phone header's jump button (TaskPage owns the panel and the thread). */
+export interface TaskHeaderJump {
+  /** `brief` while the panel is out of view, `latest` while it is in view. */
+  target: TaskHeaderJumpTarget
+  onJump: (target: TaskHeaderJumpTarget) => void
+}
+
 export interface TaskHeaderProps {
   task: Task
   /** A Task returned by rename / archive / unarchive (useTask.applyDetail). */
   onTaskDetail?: (task: Task) => void
+  /** Phones only: the jump between the panel and the newest run. */
+  jump?: TaskHeaderJump
+  /** The <header> element (TaskPage measures it for the sticky offset). */
+  headerRef?: Ref<HTMLElement>
 }
 
-export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
+/** Which menu item to focus once the menu has opened. */
+type MenuFocus = 'first' | 'last' | null
+
+const MENU_ITEM_SELECTOR = '[role="menuitem"]:not(:disabled)'
+
+export function TaskHeader({ task, onTaskDetail, jump, headerRef }: TaskHeaderProps) {
   const navigate = useNavigate()
   const activeRun = task.active_run
   const canArchive = !task.archived && activeRun === null
 
   const [menuOpen, setMenuOpen] = useState(false)
+  const titleButtonRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  // Set by a keyboard open; read once the menu is in the DOM.
+  const menuFocusRef = useRef<MenuFocus>(null)
   const [renaming, setRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const [renameSaving, setRenameSaving] = useState(false)
@@ -93,6 +128,8 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
   const renameSubmittedRef = useRef(false)
   // The last title the server refused while the input stayed open.
   const rejectedTitleRef = useRef<string | null>(null)
+  // A rename ended from the keyboard (Enter / Escape): focus the title again.
+  const restoreTitleFocusRef = useRef(false)
 
   const [archiving, setArchiving] = useState(false)
 
@@ -121,9 +158,42 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
     return () => document.removeEventListener('click', close)
   }, [menuOpen])
 
-  const toggleMenu = useCallback(() => {
+  const toggleMenu = useCallback((focus: MenuFocus) => {
     setNotice(null)
-    setMenuOpen((open) => !open)
+    menuFocusRef.current = menuOpen ? null : focus
+    setMenuOpen(!menuOpen)
+  }, [menuOpen])
+
+  const openMenu = useCallback((focus: MenuFocus) => {
+    setNotice(null)
+    menuFocusRef.current = focus
+    setMenuOpen(true)
+  }, [])
+
+  const menuItems = useCallback(
+    (): HTMLElement[] => Array.from(menuRef.current?.querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR) ?? []),
+    [],
+  )
+
+  // A keyboard open puts focus on the first (or last) enabled item.
+  useEffect(() => {
+    if (!menuOpen) return
+    const focus = menuFocusRef.current
+    menuFocusRef.current = null
+    if (!focus) return
+    const items = menuItems()
+    const item = focus === 'first' ? items[0] : items[items.length - 1]
+    item?.focus()
+  }, [menuOpen, menuItems])
+
+  /**
+   * Close the menu from one of its actions. Focus on an item would be lost
+   * with the menu, so it moves to the title first (Delete's dialog then
+   * returns focus there when it closes).
+   */
+  const closeMenuFromItem = useCallback(() => {
+    if (menuRef.current?.contains(document.activeElement)) titleButtonRef.current?.focus()
+    setMenuOpen(false)
   }, [])
 
   // --- Rename ---------------------------------------------------------------
@@ -131,6 +201,7 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
   const startRename = useCallback(() => {
     setMenuOpen(false)
     setNotice(null)
+    restoreTitleFocusRef.current = false
     setRenameError(null)
     renameSubmittedRef.current = false
     rejectedTitleRef.current = null
@@ -142,10 +213,15 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
     if (renaming) {
       renameInputRef.current?.focus()
       renameInputRef.current?.select()
+    } else if (restoreTitleFocusRef.current) {
+      restoreTitleFocusRef.current = false
+      titleButtonRef.current?.focus()
     }
   }, [renaming])
 
-  const cancelRename = useCallback(() => {
+  /** End the rename; `restoreFocus` (Enter / Escape) puts focus back on the title. */
+  const cancelRename = useCallback((restoreFocus = false) => {
+    restoreTitleFocusRef.current = restoreFocus
     renameSubmittedRef.current = true
     rejectedTitleRef.current = null
     setRenaming(false)
@@ -156,9 +232,10 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
   const submitRename = useCallback(
     async (trigger: 'enter' | 'blur') => {
       if (renameSubmittedRef.current) return
+      const fromKeyboard = trigger === 'enter'
       const title = renameValue.trim()
       if (!title || title === task.title) {
-        cancelRename()
+        cancelRename(fromKeyboard)
         return
       }
       if (trigger === 'blur' && title === rejectedTitleRef.current) {
@@ -172,6 +249,7 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
       try {
         const updated = await updateTask(task.id, { title })
         onTaskDetail?.(updated)
+        restoreTitleFocusRef.current = fromKeyboard
         setRenaming(false)
         setRenameValue('')
       } catch (err) {
@@ -183,6 +261,7 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
           if (trigger === 'enter') renameInputRef.current?.focus()
         } else {
           showNotice(errorMessage(err, 'The task could not be renamed.'), 'error')
+          restoreTitleFocusRef.current = fromKeyboard
           setRenaming(false)
           setRenameValue('')
         }
@@ -197,7 +276,7 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
 
   const runArchive = useCallback(
     async (action: 'archive' | 'unarchive') => {
-      setMenuOpen(false)
+      closeMenuFromItem()
       setNotice(null)
       if (archiving) return
       setArchiving(true)
@@ -219,17 +298,17 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
         setArchiving(false)
       }
     },
-    [activeRun?.seq, archiving, onTaskDetail, showNotice, task.id],
+    [activeRun?.seq, archiving, closeMenuFromItem, onTaskDetail, showNotice, task.id],
   )
 
   // --- Delete ---------------------------------------------------------------
 
   const openDelete = useCallback(() => {
-    setMenuOpen(false)
+    closeMenuFromItem()
     setNotice(null)
     setDeleteError(null)
     setDeleteOpen(true)
-  }, [])
+  }, [closeMenuFromItem])
 
   const leaveDeleted = useCallback(() => {
     setDeleteOpen(false)
@@ -257,9 +336,21 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
 
   // --- Keys -------------------------------------------------------------------
 
-  // Single-key shortcuts while the menu is open (mirror the hint letters).
+  // While the menu is open: single-key shortcuts (mirror the hint letters)
+  // and the menu's keyboard navigation.
   useEffect(() => {
     if (!menuOpen) return
+    const moveFocus = (to: 'next' | 'prev' | 'first' | 'last') => {
+      const items = menuItems()
+      if (items.length === 0) return
+      const at = items.indexOf(document.activeElement as HTMLElement)
+      let next: number
+      if (to === 'first') next = 0
+      else if (to === 'last') next = items.length - 1
+      else if (to === 'next') next = at < 0 ? 0 : (at + 1) % items.length
+      else next = at < 0 ? items.length - 1 : (at - 1 + items.length) % items.length
+      items[next].focus()
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return
       const key = e.key.toLowerCase()
@@ -267,16 +358,29 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
       else if (key === 'a' && canArchive && !archiving) { e.preventDefault(); void runArchive('archive') }
       else if (key === 'u' && task.archived && !archiving) { e.preventDefault(); void runArchive('unarchive') }
       else if (key === 'd') { e.preventDefault(); openDelete() }
-      else if (key === 'escape') { setMenuOpen(false) }
+      else if (key === 'arrowdown') { e.preventDefault(); moveFocus('next') }
+      else if (key === 'arrowup') { e.preventDefault(); moveFocus('prev') }
+      else if (key === 'home') { e.preventDefault(); moveFocus('first') }
+      else if (key === 'end') { e.preventDefault(); moveFocus('last') }
+      else if (key === 'escape') {
+        e.preventDefault()
+        titleButtonRef.current?.focus()
+        setMenuOpen(false)
+      } else if (key === 'tab') {
+        // No preventDefault: Tab carries on from the title, as if the menu
+        // had never been entered.
+        if (menuRef.current?.contains(document.activeElement)) titleButtonRef.current?.focus()
+        setMenuOpen(false)
+      }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [menuOpen, canArchive, archiving, task.archived, startRename, runArchive, openDelete])
+  }, [menuOpen, canArchive, archiving, task.archived, startRename, runArchive, openDelete, menuItems])
 
   const titleLength = renameValue.length
 
   return (
-    <header className="task-header">
+    <header className="task-header" ref={headerRef}>
       <div className="task-header-bar">
         <div className="task-header-unit">
           {renaming ? (
@@ -297,7 +401,7 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') { e.preventDefault(); void submitRename('enter') }
-                  else if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
+                  else if (e.key === 'Escape') { e.preventDefault(); cancelRename(true) }
                 }}
                 onBlur={() => void submitRename('blur')}
                 aria-label="Rename task"
@@ -312,11 +416,18 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
           ) : (
             <h1 className="task-header-heading">
               <button
+                ref={titleButtonRef}
                 type="button"
                 className={`task-header-title-button${menuOpen ? ' open' : ''}`}
                 onClick={(e) => {
                   e.stopPropagation()
-                  toggleMenu()
+                  // detail 0: activated from the keyboard (Enter / Space).
+                  toggleMenu(e.detail === 0 ? 'first' : null)
+                }}
+                onKeyDown={(e) => {
+                  if (menuOpen || e.metaKey || e.ctrlKey || e.altKey) return
+                  if (e.key === 'ArrowDown') { e.preventDefault(); openMenu('first') }
+                  else if (e.key === 'ArrowUp') { e.preventDefault(); openMenu('last') }
                 }}
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
@@ -332,12 +443,13 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
 
           {menuOpen && (
             <div
+              ref={menuRef}
               className="task-header-menu"
               role="menu"
               aria-label="Task actions"
               onClick={(e) => e.stopPropagation()}
             >
-              <button type="button" className="task-header-menu-item" role="menuitem" onClick={startRename}>
+              <button type="button" className="task-header-menu-item" role="menuitem" tabIndex={-1} onClick={startRename}>
                 <Pencil size={16} className="task-header-menu-icon" aria-hidden="true" />
                 <span>Rename</span>
                 <span className="task-header-menu-key">R</span>
@@ -347,6 +459,7 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
                   type="button"
                   className="task-header-menu-item"
                   role="menuitem"
+                  tabIndex={-1}
                   disabled={archiving}
                   onClick={() => void runArchive('unarchive')}
                   title="Move this task back to the active list"
@@ -360,6 +473,7 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
                   type="button"
                   className="task-header-menu-item"
                   role="menuitem"
+                  tabIndex={-1}
                   disabled={!canArchive || archiving}
                   onClick={() => void runArchive('archive')}
                   title={
@@ -378,6 +492,7 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
                 type="button"
                 className="task-header-menu-item task-header-menu-item--danger"
                 role="menuitem"
+                tabIndex={-1}
                 onClick={openDelete}
               >
                 <Trash2 size={16} className="task-header-menu-icon" aria-hidden="true" />
@@ -389,6 +504,23 @@ export function TaskHeader({ task, onTaskDetail }: TaskHeaderProps) {
         </div>
 
         {task.archived && <span className="task-header-chip">Archived</span>}
+
+        {jump && !renaming && (
+          <button
+            type="button"
+            className={`task-header-jump task-header-jump--${jump.target}`}
+            data-jump-target={jump.target}
+            aria-label={jump.target === 'brief' ? 'Show brief, instructions and files' : 'Jump to the newest run'}
+            onClick={() => jump.onJump(jump.target)}
+          >
+            {jump.target === 'brief' ? (
+              <ArrowUp size={16} aria-hidden="true" />
+            ) : (
+              <ArrowDown size={16} aria-hidden="true" />
+            )}
+            <span>{jump.target === 'brief' ? 'Brief' : 'Latest'}</span>
+          </button>
+        )}
       </div>
 
       {renaming && renameError && (
