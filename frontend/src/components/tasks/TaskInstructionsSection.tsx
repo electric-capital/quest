@@ -4,6 +4,7 @@ import { TASK_INSTRUCTIONS_MAX_CHARS, updateTask } from '../../api/tasksApi'
 import type { Task } from '../../api/types'
 import {
   TaskCharCounter,
+  TaskDiscardConfirm,
   isOverCap,
   taskPanelErrorMessage,
   taskTextLength,
@@ -32,6 +33,9 @@ interface InstructionsEdit {
  * `invalid_instructions` included) shows inline under the textarea and the
  * editor stays open. Cancel, or Escape while the draft is unchanged,
  * closes the editor and puts focus back on the control that opened it.
+ * Escape over a changed draft asks first (TaskDiscardConfirm in place of
+ * the Cancel / Save row): Discard closes as Cancel does, Keep editing (or
+ * Escape again) goes back to the textarea with the draft intact.
  *
  * The draft is never replaced from outside: if the task's instructions
  * change while editing (another tab), a quiet note says that saving
@@ -51,6 +55,7 @@ export function TaskInstructionsSection({
   const [edit, setEdit] = useState<InstructionsEdit | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // The Edit / Add instructions control, to take focus back after the editor closes.
   const openerRef = useRef<HTMLButtonElement>(null)
@@ -73,6 +78,7 @@ export function TaskInstructionsSection({
 
   const startEdit = () => {
     setError(null)
+    setConfirmDiscard(false)
     setEdit({ draft: task.instructions, base: task.instructions })
   }
 
@@ -80,6 +86,12 @@ export function TaskInstructionsSection({
     returnFocusRef.current = true
     setEdit(null)
     setError(null)
+    setConfirmDiscard(false)
+  }
+
+  const keepEditing = () => {
+    setConfirmDiscard(false)
+    textareaRef.current?.focus()
   }
 
   const length = edit ? taskTextLength(edit.draft) : 0
@@ -103,10 +115,10 @@ export function TaskInstructionsSection({
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Escape' && edit && edit.draft === edit.base && !saving) {
-      e.preventDefault()
-      close()
-    }
+    if (e.key !== 'Escape' || !edit || saving) return
+    e.preventDefault()
+    if (edit.draft === edit.base) close()
+    else setConfirmDiscard(true)
   }
 
   const changedUnderneath = edit !== null && !saving && task.instructions !== edit.base
@@ -118,7 +130,13 @@ export function TaskInstructionsSection({
 
   const actions =
     !editing && task.instructions ? (
-      <button ref={openerRef} type="button" className="task-panel-button" onClick={startEdit}>
+      <button
+        ref={openerRef}
+        type="button"
+        className="task-panel-button"
+        onClick={startEdit}
+        aria-label="Edit instructions"
+      >
         <Pencil size={13} aria-hidden="true" />
         Edit
       </button>
@@ -147,7 +165,10 @@ export function TaskInstructionsSection({
           aria-busy={saving}
           aria-invalid={over || error !== null}
           aria-describedby={`${counterId} ${overId}${error ? ` ${errorId}` : ''}`}
-          onChange={(e) => setEdit({ ...edit, draft: e.target.value })}
+          onChange={(e) => {
+            setEdit({ ...edit, draft: e.target.value })
+            setConfirmDiscard(false)
+          }}
           onKeyDown={onKeyDown}
         />
         <TaskCharCounter
@@ -161,19 +182,23 @@ export function TaskInstructionsSection({
             {error}
           </p>
         )}
-        <div className="task-panel-editor-actions">
-          <button type="button" className="task-panel-button" onClick={close} disabled={saving}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="task-panel-button task-panel-button--primary"
-            onClick={() => void save()}
-            disabled={!canSave}
-          >
-            {saving ? 'Saving...' : 'Save'}
-          </button>
-        </div>
+        {confirmDiscard ? (
+          <TaskDiscardConfirm onDiscard={close} onKeepEditing={keepEditing} />
+        ) : (
+          <div className="task-panel-editor-actions">
+            <button type="button" className="task-panel-button" onClick={close} disabled={saving}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="task-panel-button task-panel-button--primary"
+              onClick={() => void save()}
+              disabled={!canSave}
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        )}
       </div>
     )
   } else if (task.instructions) {
