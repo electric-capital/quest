@@ -4,6 +4,7 @@ import type { Task, TaskBriefState } from '../../api/types'
 import { briefWriterPhrase } from './taskBriefSource'
 import {
   TaskCharCounter,
+  TaskDiscardConfirm,
   isOverCap,
   taskPanelErrorMessage,
   taskTextLength,
@@ -49,8 +50,11 @@ interface MergeText {
  *
  * Errors other than the conflict (400 `brief_too_long` with its extras
  * mapped to a sentence, network, ...) show inline; the editor stays open.
- * Cancel discards; Escape cancels only while the draft equals the base text
- * and no merge box is open. A successful save hands the new brief state to
+ * Cancel discards; Escape cancels at once only while the draft equals the
+ * base text and no merge box is open, otherwise it asks first
+ * (TaskDiscardConfirm in place of the Cancel / Save row): Discard cancels
+ * as Cancel does, Keep editing (or Escape again) goes back to the textarea
+ * with the draft intact. A successful save hands the new brief state to
  * `onSaved` (useTask's applyBrief), and the parent closes the editor.
  */
 export function TaskBriefEditor({
@@ -73,6 +77,7 @@ export function TaskBriefEditor({
   const [replaced, setReplaced] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const ids = useId()
   const textareaId = `${ids}-textarea`
@@ -142,10 +147,15 @@ export function TaskBriefEditor({
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Escape' && unchanged && merge === null && !saving) {
-      e.preventDefault()
-      onCancel()
-    }
+    if (e.key !== 'Escape' || saving) return
+    e.preventDefault()
+    if (unchanged && merge === null) onCancel()
+    else setConfirmDiscard(true)
+  }
+
+  const keepEditing = () => {
+    setConfirmDiscard(false)
+    textareaRef.current?.focus()
   }
 
   const activeRun = task.active_run
@@ -218,6 +228,7 @@ export function TaskBriefEditor({
         onChange={(e) => {
           setDraft(e.target.value)
           setReplaced(null)
+          setConfirmDiscard(false)
         }}
         onKeyDown={onKeyDown}
       />
@@ -230,19 +241,23 @@ export function TaskBriefEditor({
           {error}
         </p>
       )}
-      <div className="task-panel-editor-actions">
-        <button type="button" className="task-panel-button" onClick={onCancel} disabled={saving}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="task-panel-button task-panel-button--primary"
-          onClick={() => void save()}
-          disabled={!canSave}
-        >
-          {saving ? 'Saving...' : 'Save'}
-        </button>
-      </div>
+      {confirmDiscard ? (
+        <TaskDiscardConfirm onDiscard={onCancel} onKeepEditing={keepEditing} />
+      ) : (
+        <div className="task-panel-editor-actions">
+          <button type="button" className="task-panel-button" onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="task-panel-button task-panel-button--primary"
+            onClick={() => void save()}
+            disabled={!canSave}
+          >
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

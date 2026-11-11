@@ -461,6 +461,36 @@
   gap: 0.5rem;
 }
 
+/* "Discard your changes?" (TaskDiscardConfirm), in place of Cancel / Save. */
+.task-panel-discard {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem 0.75rem;
+  padding: 0.4rem 0.4rem 0.4rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: var(--hover);
+}
+
+.task-panel-discard-text {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.task-panel-discard-confirm {
+  color: var(--diff-removed-text);
+}
+
+.task-panel-discard-confirm:hover:not(:disabled) {
+  color: var(--diff-removed-text);
+}
+
 /* The newer brief shown above the draft after a conflict. */
 .task-brief-merge {
   display: flex;

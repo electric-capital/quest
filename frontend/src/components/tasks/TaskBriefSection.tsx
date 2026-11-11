@@ -90,6 +90,7 @@ export function TaskBriefSection({
             type="button"
             className="task-panel-button"
             onClick={() => setMode('edit')}
+            aria-label="Edit brief"
           >
             <Pencil size={13} aria-hidden="true" />
             Edit
@@ -101,6 +102,7 @@ export function TaskBriefSection({
             type="button"
             className="task-panel-button"
             onClick={() => setMode('history')}
+            aria-label="Brief history"
           >
             <History size={13} aria-hidden="true" />
             History

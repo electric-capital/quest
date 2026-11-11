@@ -1,3 +1,4 @@
+import { useEffect, useId, useRef, type KeyboardEvent } from 'react'
 import { ApiClientError } from '../../api/request'
 import { taskErrorDetail } from '../../api/tasksApi'
 import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatters'
@@ -17,6 +18,8 @@ import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatte
  * - `taskPanelErrorMessage`: the inline message for a failed save or
  *   restore, mapping 400 `brief_too_long` (its `cap` / `actual` extras) to a
  *   sentence and anything else to the server's message or a fallback.
+ * - `TaskDiscardConfirm`: the "Discard your changes?" row an editor shows
+ *   in place of its Cancel / Save row when Escape is pressed with changes.
  */
 
 /** Share of the cap from which the counter takes its warning tone. */
@@ -90,4 +93,59 @@ export function taskPanelErrorMessage(err: unknown, fallback: string): string {
     return 'The brief is over the length limit.'
   }
   return err instanceof Error && err.message ? err.message : fallback
+}
+
+/**
+ * The inline "Discard your changes?" row of the Instructions and Brief
+ * editors, shown when Escape is pressed over a changed draft (the Cancel
+ * button still cancels at once). Focus moves to "Keep editing" when it
+ * appears; "Keep editing" or Escape anywhere in the row calls
+ * `onKeepEditing` (the editor hides the row and focuses its textarea, the
+ * draft intact); "Discard" calls `onDiscard` (the editor cancels as Cancel
+ * does, returning focus to the control that opened it).
+ */
+export function TaskDiscardConfirm({
+  onDiscard,
+  onKeepEditing,
+}: {
+  onDiscard: () => void
+  onKeepEditing: () => void
+}) {
+  const keepRef = useRef<HTMLButtonElement>(null)
+  const textId = useId()
+  useEffect(() => {
+    keepRef.current?.focus()
+  }, [])
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Escape') return
+    e.preventDefault()
+    e.stopPropagation()
+    onKeepEditing()
+  }
+
+  return (
+    <div className="task-panel-discard" role="group" aria-labelledby={textId} onKeyDown={onKeyDown}>
+      <p id={textId} className="task-panel-discard-text">
+        Discard your changes?
+      </p>
+      <div className="task-panel-editor-actions">
+        <button
+          type="button"
+          className="task-panel-button task-panel-discard-confirm"
+          onClick={onDiscard}
+        >
+          Discard
+        </button>
+        <button
+          ref={keepRef}
+          type="button"
+          className="task-panel-button task-panel-button--primary task-panel-discard-keep"
+          onClick={onKeepEditing}
+        >
+          Keep editing
+        </button>
+      </div>
+    </div>
+  )
 }
