@@ -103,8 +103,8 @@ async def build_task_detail(task: dict) -> dict:
 
     Shape::
 
-        {id, title, title_is_default, archived, instructions, brief,
-         brief_version, brief_updated_at, brief_source, brief_run_seq,
+        {id, title, title_is_default, archived, brief, brief_version,
+         brief_updated_at, brief_source, brief_run_seq,
          model, thinking_effort, run_count, active_run: {id, seq, status}
          | None, event_seq, unread_seq, read_seq, unread, created_at,
          updated_at, last_activity_at}
@@ -118,7 +118,6 @@ async def build_task_detail(task: dict) -> dict:
         "title": task["title"],
         "title_is_default": task["title_is_default"],
         "archived": task["archived"],
-        "instructions": task["instructions"],
         "brief": task["brief"],
         "brief_version": task["brief_version"],
         "brief_updated_at": task["brief_updated_at"],

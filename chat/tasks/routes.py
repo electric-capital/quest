@@ -19,14 +19,14 @@ Routes
 
 - ``GET /tasks?archived=false|true`` -> ``{"tasks": [list row]}``, newest
   activity first.
-- ``POST /tasks`` ``{title?, prompt?, instructions?, model?,
-  thinking_effort?}`` -> 201 task detail. 400 ``invalid_title`` /
-  ``invalid_instructions`` / ``invalid_model`` / ``invalid_thinking_effort``
-  / ``model_not_allowed``, 409 ``tasks_cap_reached``.
+- ``POST /tasks`` ``{title?, prompt?, model?, thinking_effort?}`` -> 201
+  task detail. 400 ``invalid_title`` / ``invalid_model`` /
+  ``invalid_thinking_effort`` / ``model_not_allowed``, 409
+  ``tasks_cap_reached``.
 - ``GET /tasks/{id}`` -> task detail.
-- ``PATCH /tasks/{id}`` ``{title?, instructions?, model?,
-  thinking_effort?}`` (absent stays; null clears model / thinking_effort;
-  null title is 400 ``invalid_title``) -> task detail.
+- ``PATCH /tasks/{id}`` ``{title?, model?, thinking_effort?}`` (absent
+  stays; null clears model / thinking_effort; null title is 400
+  ``invalid_title``) -> task detail.
 - ``PUT /tasks/{id}/brief`` ``{brief, expected_brief_version}`` -> brief
   state. 409 ``stale_brief`` with ``current``; 400 ``brief_too_long`` /
   ``invalid_brief``.
@@ -78,7 +78,6 @@ class CreateTaskRequest(BaseModel):
     title: Optional[str] = None
     # The New Task composer's first message: names the task only.
     prompt: Optional[str] = None
-    instructions: Optional[str] = None
     model: Optional[str] = None
     thinking_effort: Optional[str] = None
 
@@ -86,7 +85,6 @@ class CreateTaskRequest(BaseModel):
 class UpdateTaskRequest(BaseModel):
     # Only the fields present in the body are applied (model_fields_set).
     title: Optional[str] = None
-    instructions: Optional[str] = None
     model: Optional[str] = None
     thinking_effort: Optional[str] = None
 
@@ -145,7 +143,6 @@ async def create_task_endpoint(
             user,
             title=body.title,
             prompt=body.prompt,
-            instructions=body.instructions,
             model=body.model,
             thinking_effort=body.thinking_effort,
         )
@@ -170,11 +167,11 @@ async def update_task_endpoint(
     body: UpdateTaskRequest,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """Edit title, instructions, default model or thinking level."""
+    """Edit title, default model or thinking level."""
     await require_task_for_route(user, task_id)
     fields = {
         name: getattr(body, name)
-        for name in ("title", "instructions", "model", "thinking_effort")
+        for name in ("title", "model", "thinking_effort")
         if name in body.model_fields_set
     }
     try:

@@ -4169,8 +4169,9 @@ _COMPLETE_TASK_RUN: ToolSpec = {
                 "description": (
                     "The whole new brief, only when this run changed the "
                     "state of the work: the current state rewritten (goal, "
-                    "facts, decisions, open questions, next steps), not a "
-                    "history with this run appended. Omit it to leave the "
+                    "facts, decisions, the user's lasting preferences, open "
+                    "questions, next steps), not a history with this run "
+                    "appended. Omit it to leave the "
                     "brief as it is. At most "
                     f"{TASK_BRIEF_MAX_CHARS:,} characters."
                 ),

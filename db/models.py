@@ -1131,7 +1131,7 @@ class Task(Base):
 
     Every prompt is answered by a run (``task_runs``) that starts from a
     fresh model context; what carries over between runs lives on this row
-    (the user's ``instructions`` and the model-maintained ``brief``), in the
+    (the ``brief``, kept by the runs and editable by the user), in the
     runs' log entries and in the task workspace on disk
     (``TASKS_DIR/<id>/workspace``). Private and owned by one user; every
     write goes through db/task_store.py, and the caps come from
@@ -1166,11 +1166,6 @@ class Task(Base):
     # rename by the user or the run's naming clears it for good.
     title_is_default: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=True, server_default=sa.true()
-    )
-
-    # Standing rules written by the user only; no model path writes them.
-    instructions: Mapped[str] = mapped_column(
-        Text, nullable=False, default="", server_default=""
     )
 
     # The current state of the work (markdown), rewritten by runs and

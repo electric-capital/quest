@@ -452,7 +452,6 @@ async def create_task(
     *,
     title: Optional[str] = None,
     prompt: Optional[str] = None,
-    instructions: Optional[str] = None,
     model: Optional[str] = None,
     thinking_effort: Optional[str] = None,
 ) -> dict:
@@ -469,8 +468,8 @@ async def create_task(
 
     Raises:
         TasksDisabledError, TaskModelNotAllowedError, TaskValidationError
-        (``invalid_title``, ``invalid_instructions``, ``invalid_model``,
-        ``invalid_thinking_effort``), TaskCapReachedError.
+        (``invalid_title``, ``invalid_model``, ``invalid_thinking_effort``),
+        TaskCapReachedError.
     """
     require_tasks_enabled(user)
     if title is not None:
@@ -484,7 +483,6 @@ async def create_task(
         user["id"],
         title=task_title,
         title_is_default=title_is_default,
-        instructions=instructions or "",
         model=model,
         thinking_effort=thinking_effort,
     )
@@ -500,7 +498,6 @@ async def update_task(
     task_id: str,
     *,
     title: Any = task_store.UNSET,
-    instructions: Any = task_store.UNSET,
     model: Any = task_store.UNSET,
     thinking_effort: Any = task_store.UNSET,
 ) -> dict:
@@ -521,8 +518,7 @@ async def update_task(
         _check_model_allowed(model)
     task = await task_store.update_task(
         user["id"], task_id,
-        title=title, instructions=instructions,
-        model=model, thinking_effort=thinking_effort,
+        title=title, model=model, thinking_effort=thinking_effort,
     )
     if task["event_seq"] != before["event_seq"]:
         from chat.tasks.events import publish_task_state
