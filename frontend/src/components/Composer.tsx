@@ -250,6 +250,16 @@ export interface ComposerProps {
    * expensive-resume and voice-input placeholders keep their own text.
    */
   placeholder?: string;
+  /**
+   * Seeds the input text on mount only (a later change is ignored). Set by
+   * the Quest Tasks composer to restore a per-task draft. Defaults to empty.
+   */
+  initialText?: string;
+  /**
+   * Called whenever the input text changes (typing, dictation, the clear on
+   * Send, a restore after a failed upload), not for the `initialText` seed.
+   */
+  onTextChange?: (text: string) => void;
 }
 
 /**
@@ -286,8 +296,10 @@ export function Composer({
   onModelChange,
   hideFlags = false,
   placeholder,
+  initialText = '',
+  onTextChange,
 }: ComposerProps) {
-  const [inputValue, setInputValue] = useState('');
+  const [inputValue, setInputValue] = useState(initialText);
   const [pendingAttachments, setPendingAttachments] = useState<PastedImage[]>([]);
   // Generic workspace files queued for upload-before-send (distinct from the
   // image paste queue above). The host owns the actual upload; the composer
@@ -433,6 +445,25 @@ export function Composer({
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, isMobile ? 160 : 200)}px`;
   }, [isMobile]);
+
+  // A seeded draft may span several lines: size the input to it once.
+  const seededRef = useRef(initialText.length > 0);
+  useEffect(() => {
+    if (!seededRef.current) return;
+    seededRef.current = false;
+    resizeInput();
+  }, [resizeInput]);
+
+  // Report text changes to the host (onTextChange). Compared with the last
+  // reported text, so the seed and a re-run of the effect stay silent.
+  const onTextChangeRef = useRef(onTextChange);
+  onTextChangeRef.current = onTextChange;
+  const reportedTextRef = useRef(initialText);
+  useEffect(() => {
+    if (inputValue === reportedTextRef.current) return;
+    reportedTextRef.current = inputValue;
+    onTextChangeRef.current?.(inputValue);
+  }, [inputValue]);
 
   const handleRecordingComplete = useCallback(async (recording: VoiceRecording) => {
     setIsTranscribing(true);

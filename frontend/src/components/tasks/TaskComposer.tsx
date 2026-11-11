@@ -22,12 +22,17 @@
  *   thread persists it as the task's default model, the New Task page
  *   passes it to the create); the seed never is;
  * - a draft key never keeps "loaded" skills (each run starts from a fresh
- *   context), so the skill picker always offers every skill again.
+ *   context), so the skill picker always offers every skill again;
+ * - the unsent text is kept per draft key (store/taskDrafts.ts: in memory,
+ *   mirrored to sessionStorage): the composer is seeded from it on mount
+ *   (and remounted on a draft key change) and writes every change back, so
+ *   switching tasks and coming back keeps what was typed. Attachments are
+ *   not kept.
  *
  * Send builds a TaskComposerSubmission and hands it to `onSubmit`; the host
  * creates what it needs and calls startTaskRunFromComposer. The composer
- * clears its text and attachments as Send is pressed and cannot be
- * re-seeded, so a failed start loses the typed text (as on the home
+ * clears its text and attachments as Send is pressed, which drops the kept
+ * draft too, so a failed start loses the typed text (as on the home
  * screen); the host shows the error.
  *
  * Lock states: `busy` (a submit is in flight) and `disabled` (e.g. a run
@@ -39,6 +44,7 @@ import { useCallback, useEffect } from 'react';
 import type { ComposerAttachmentRef } from '../../api/types';
 import { useConversationModels } from '../../contexts/ConversationModelsContext';
 import { useConversationSkills } from '../../contexts/ConversationSkillsContext';
+import { getTaskDraft, setTaskDraft } from '../../store/taskDrafts';
 import { Composer } from '../Composer';
 import type { TaskComposerSubmission } from './taskComposerSend';
 
@@ -155,9 +161,18 @@ export function TaskComposer({
     [draftKey, onModelChange, setDraftModelForConversation],
   );
 
+  const handleTextChange = useCallback(
+    (text: string) => setTaskDraft(draftKey, text),
+    [draftKey],
+  );
+
   return (
     <Composer
+      // Remount per draft key so each key's kept text seeds its own input.
+      key={draftKey}
       conversationId={draftKey}
+      initialText={getTaskDraft(draftKey)}
+      onTextChange={handleTextChange}
       onSend={handleSend}
       onStop={disabled ? onStop : undefined}
       isFirstMessage
