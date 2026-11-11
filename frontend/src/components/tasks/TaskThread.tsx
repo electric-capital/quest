@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import '../ChatPanel.css'
 import './TaskThread.css'
 import { ApiClientError } from '../../api/request'
-import { answerTaskQuestion, deleteTaskRun, unarchiveTask } from '../../api/tasksApi'
+import { answerTaskQuestion, deleteTaskRun, unarchiveTask, updateTask } from '../../api/tasksApi'
 import type { Task, TaskRun } from '../../api/types'
 import { taskDraftKey } from '../../constants/drafts'
 import { useConversationSkills } from '../../contexts/ConversationSkillsContext'
@@ -140,6 +140,14 @@ function contentTop(el: Element, parent: HTMLElement): number {
  * The composer's state comes from deriveTaskThreadComposer
  * (taskThreadComposer.ts): start a run, answer the pending question, or
  * locked with Stop; an archived task gets an Unarchive notice instead.
+ *
+ * The composer's model selector persists per task, as a conversation's
+ * selector persists per conversation: it is seeded with the task's default
+ * (`tasks.model` / `thinking_effort`), and a user's pick is PATCHed back as
+ * the default for later runs (skipped when it equals the current one; the
+ * returned Task goes to `onTaskDetail`). A refused PATCH (e.g. 400
+ * `model_not_allowed`) is only logged: the run still uses the composer's
+ * pick, and the send path reports a model it refuses.
  */
 export function TaskThread({
   taskId,
@@ -150,7 +158,7 @@ export function TaskThread({
   taskId: string
   task: Task
   runs: TaskRunsView
-  /** Merge a Task returned by unarchive into the page's task view. */
+  /** Merge a Task returned by unarchive or the default-model PATCH into the page's task view. */
   onTaskDetail?: (task: Task) => void
 }) {
   const draftKey = taskDraftKey(taskId)
@@ -504,6 +512,27 @@ export function TaskThread({
     }
   }, [taskId, onTaskDetail])
 
+  // The task's default model follows the composer's picks. The ref holds the
+  // latest default so a pick compares against it, not a stale closure; the
+  // seq drops a response overtaken by a later pick.
+  const taskModelRef = useRef({ model: task.model, thinkingEffort: task.thinking_effort })
+  taskModelRef.current = { model: task.model, thinkingEffort: task.thinking_effort }
+  const modelPatchSeqRef = useRef(0)
+  const handleModelChange = useCallback(
+    (model: string, thinkingEffort: string | null) => {
+      const current = taskModelRef.current
+      if (current.model === model && (current.thinkingEffort ?? null) === thinkingEffort) return
+      const seq = ++modelPatchSeqRef.current
+      updateTask(taskId, { model, thinking_effort: thinkingEffort }).then(
+        (updated) => {
+          if (seq === modelPatchSeqRef.current) onTaskDetail?.(updated)
+        },
+        (err: unknown) => console.warn('Could not save the task default model', err),
+      )
+    },
+    [taskId, onTaskDetail],
+  )
+
   const openDelete = useCallback((run: TaskRun) => {
     setDeleteError(null)
     setDeleteTarget(run)
@@ -697,6 +726,7 @@ export function TaskThread({
               placeholder={composer.placeholder}
               initialModel={task.model}
               initialThinkingEffort={task.thinking_effort}
+              onModelChange={handleModelChange}
             />
           </>
         )}
