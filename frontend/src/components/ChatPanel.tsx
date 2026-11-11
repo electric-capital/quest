@@ -343,11 +343,20 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   // after a message_appended event lands AFTER the streaming bubble cleared).
   // Without this, the post-stream scroll position predates the new content and
   // the last message hangs below the viewport.
+  //
+  // ``wasNearBottom`` is read through a ref so the effect fires only when the
+  // tail grows. As a dependency it would also fire whenever the user scrolls
+  // back into the near-bottom zone, and the scroll anchor sits above the
+  // list's trailing padding, so that pulled the view up off the true bottom.
+  const wasNearBottomRef = useRef(wasNearBottom);
   useEffect(() => {
-    if (isLoaded && !isLoading && wasNearBottom && messages.length > 0) {
+    wasNearBottomRef.current = wasNearBottom;
+  }, [wasNearBottom]);
+  useEffect(() => {
+    if (isLoaded && !isLoading && wasNearBottomRef.current && messages.length > 0) {
       scrollToBottom('smooth');
     }
-  }, [messages.length, isLoaded, isLoading, wasNearBottom, scrollToBottom]);
+  }, [messages.length, isLoaded, isLoading, scrollToBottom]);
 
   // Scroll to bottom after loading conversation (instant)
   useEffect(() => {
