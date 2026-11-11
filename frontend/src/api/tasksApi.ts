@@ -46,7 +46,6 @@ export const TASK_RUNS_MAX_PAGE_SIZE = 100;
 // Hand-mirrored caps of chat/tasks/constants.py, for the editors' counters.
 // The server enforces them; keep these in step when one changes there.
 export const TASK_TITLE_MAX_CHARS = 120;
-export const TASK_INSTRUCTIONS_MAX_CHARS = 8000;
 export const TASK_BRIEF_MAX_CHARS = 12000;
 export const TASK_ANSWER_MAX_CHARS = 8000;
 
@@ -68,8 +67,7 @@ export function listTasks(opts: { archived?: boolean } = {}): Promise<ListTasksR
 }
 
 /**
- * Create a task (201). Rejects 400 `invalid_title` / `invalid_instructions`
- * / `invalid_model` / `invalid_thinking_effort` / `model_not_allowed`, 409
+ * Create a task (201). Rejects 400 `invalid_title` / `invalid_model` / `invalid_thinking_effort` / `model_not_allowed`, 409
  * `tasks_cap_reached`.
  */
 export function createTask(body: CreateTaskRequest): Promise<Task> {
@@ -82,7 +80,7 @@ export function getTask(id: string): Promise<Task> {
 }
 
 /**
- * Edit title, instructions, default model or thinking level. Only the keys
+ * Edit the title, default model or thinking level. Only the keys
  * present are applied; null clears model / thinking_effort. Same 400 codes
  * as createTask.
  */

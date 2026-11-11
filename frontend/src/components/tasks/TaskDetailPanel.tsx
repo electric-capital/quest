@@ -16,7 +16,7 @@ function escapeOwnedElsewhere(event: KeyboardEvent): boolean {
 }
 
 export interface TaskDetailPanelProps {
-  /** The panel's heading ("Run 3", "Brief history", "Instructions"); also its accessible name. */
+  /** The panel's heading ("Update 3", "Brief history"); also its accessible name. */
   title: string
   /** A line beside or under the heading (a run's status and time). */
   meta?: ReactNode
@@ -29,7 +29,7 @@ export interface TaskDetailPanelProps {
    */
   onClose: () => void
   /**
-   * `scroll`: the body scrolls as a whole (History, Instructions); `fill`:
+   * `scroll`: the body scrolls as a whole (History); `fill`:
    * the body is a flex column its child fills, scrolling itself (a run's
    * transcript, which pins its own composer).
    */
@@ -38,9 +38,9 @@ export interface TaskDetailPanelProps {
 }
 
 /**
- * The task page's detail panel (TaskPage): one of a run's transcript, the
- * brief History or the instructions, beside the main column. Closed by
- * default; the page renders it only while a detail view is open.
+ * The task page's detail panel (TaskPage): a run's transcript or the brief
+ * History, beside the main column. Closed by default; the page renders it
+ * only while a detail view is open.
  *
  * Desktop: a column on the right of the main column (TaskDetailPanel.css,
  * about 44% of the page), with the title, the optional meta line and a
@@ -49,11 +49,12 @@ export interface TaskDetailPanelProps {
  * button.
  *
  * Escape closes it (through `onClose`) unless a modal or a menu is open,
- * or something already handled the key (an editor's own Escape, which asks
- * to discard a changed draft, calls preventDefault). The listener sits on
- * window in the bubble phase, so every document-level handler (menus,
- * ModalShell) runs before it; whether a modal or menu was open is taken
- * when the event starts, since its handler may already have closed it. On open the heading takes focus; on close
+ * or something already handled the key (the brief editor's own Escape,
+ * which asks to discard a changed draft, calls preventDefault). The
+ * listener sits on window in the bubble phase, so every document-level
+ * handler (menus, ModalShell) runs before it; whether a modal or menu was
+ * open is taken when the event starts, since its handler may already have
+ * closed it. On open the heading takes focus; on close
  * focus goes back to the control that opened the panel when it is still
  * on the page.
  */

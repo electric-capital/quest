@@ -256,6 +256,19 @@
   padding: 0 0.25rem;
 }
 
+/* A Quest Task run's footer: its notice line alone, no input box (ChatPanel). */
+.chat-panel-notice-footer {
+  flex-shrink: 0;
+  padding: 0.625rem 2rem 0.875rem;
+  border-top: 1px solid var(--border);
+}
+
+.chat-panel-notice-footer > .slack-thread-link-note {
+  margin: 0;
+  max-width: 720px;
+  margin-inline: auto;
+}
+
 .slack-thread-link-note a {
   color: var(--accent-text);
   text-decoration: none;

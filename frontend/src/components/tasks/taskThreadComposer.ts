@@ -9,12 +9,16 @@
  *   shows up in the runs list) the input is `busy`: locked, and no Stop,
  *   since the run conversation is not known yet.
  * - `answer`: the active run is `waiting` with a pending question; Send
- *   answers the OLDEST pending question ("Answering run N" as the label,
- *   ANSWER_PLACEHOLDER in the input). `busy` while the answer is in flight.
+ *   answers the OLDEST pending question ("Answering the question" as the
+ *   label, ANSWER_PLACEHOLDER in the input). `busy` while the answer is in
+ *   flight.
  * - `locked`: the active run is `running`, or `waiting` only on approval /
  *   connect cards: the input is `disabled` and Stop is offered on the run's
- *   conversation ("Run N is working" / "Run N is waiting for your
- *   approval").
+ *   conversation ("Working..." / "Waiting for your approval").
+ *
+ * User-visible wording says "update" for a run, and mostly drops the noun
+ * (the page shows one active update at a time); `appName` is the deployment's
+ * configured name (useAppConfig), as in the home composer's footer.
  *
  * The active run comes from the loaded runs (the newest one that is
  * `running` or `waiting`). The task detail's `active_run` (seq and status
@@ -37,6 +41,8 @@ export interface TaskThreadComposerInput {
   starting: boolean;
   /** An answer to the pending question is in flight. */
   answering: boolean;
+  /** The app's configured name, for the start placeholder ("What should Quest do next?"). */
+  appName: string;
 }
 
 export interface TaskThreadComposerView {
@@ -48,7 +54,7 @@ export interface TaskThreadComposerView {
   /** The run conversation Stop acts on, when Stop is offered. */
   stopConversationId: string | null;
   placeholder: string;
-  /** Short label above the composer ("Answering run N"), or null. */
+  /** Short label above the composer ("Answering the question"), or null. */
   label: string | null;
   /** The pending question an answer goes to (mode `answer`). */
   question: TaskQuestion | null;
@@ -56,7 +62,10 @@ export interface TaskThreadComposerView {
   activeRun: TaskRun | null;
 }
 
-export const START_PLACEHOLDER = 'What should the next run do?';
+/** The composer's placeholder while it starts the next update. */
+export function startPlaceholder(appName: string): string {
+  return `What should ${appName} do next?`;
+}
 export const ANSWER_PLACEHOLDER = 'Type your answer';
 
 export function isActiveRunStatus(status: TaskRun['status']): boolean {
@@ -93,7 +102,7 @@ export function deriveTaskThreadComposer(input: TaskThreadComposerInput): TaskTh
     busy: false,
     disabled: false,
     stopConversationId: null,
-    placeholder: START_PLACEHOLDER,
+    placeholder: startPlaceholder(input.appName),
     label: null,
     question: null,
     activeRun: null,
@@ -107,7 +116,8 @@ export function deriveTaskThreadComposer(input: TaskThreadComposerInput): TaskTh
   if (activeRun) {
     const question = activeRun.status === 'waiting' ? oldestPendingQuestion(activeRun) : null;
     if (question) {
-      const label = `Answering run ${activeRun.seq}`;
+      const pending = activeRun.questions.filter((q) => q.status === 'pending').length;
+      const label = pending > 1 ? 'Answering the oldest question' : 'Answering the question';
       return {
         ...base,
         mode: 'answer',
@@ -125,8 +135,8 @@ export function deriveTaskThreadComposer(input: TaskThreadComposerInput): TaskTh
       stopConversationId: activeRun.conversation_id,
       placeholder:
         activeRun.status === 'waiting'
-          ? `Run ${activeRun.seq} is waiting for ${waitingOnPhrase(activeRun)}`
-          : `Run ${activeRun.seq} is working`,
+          ? `Waiting for ${waitingOnPhrase(activeRun)}`
+          : 'Working...',
       activeRun,
     };
   }
@@ -141,13 +151,13 @@ export function deriveTaskThreadComposer(input: TaskThreadComposerInput): TaskTh
       busy: true,
       placeholder:
         fallback.status === 'waiting'
-          ? `Run ${fallback.seq} is waiting for you`
-          : `Run ${fallback.seq} is working`,
+          ? 'Waiting for you'
+          : 'Working...',
     };
   }
 
   if (input.starting) {
-    return { ...base, busy: true, placeholder: 'Starting the run...' };
+    return { ...base, busy: true, placeholder: 'Starting...' };
   }
   return base;
 }

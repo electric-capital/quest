@@ -287,11 +287,11 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
         ? (taskId && tasksEnabled
           ? (
             <>
-              This is one run of a task.{' '}
+              This is the work behind one update of a task.{' '}
               <Link to={taskThreadPath(taskId)}>Continue in the task.</Link>
             </>
           )
-          : 'This is one run of a task.')
+          : 'This is the work behind one update of a task.')
         : null;
 
   // (The composer's disabled state and placeholder copy now live in
@@ -944,7 +944,15 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
 
       {/* Shared composer footer (textarea + Send/Stop + model selector +
           Skill button + Flags popover + attachments + ContextIndicator).
-          Reused by the root home screen via HomeComposer. */}
+          Reused by the root home screen via HomeComposer. A Quest Task run
+          shows only its notice line instead: it never takes another
+          message, and the task page shows it in a side panel where a
+          disabled input box would only look like a chat. */}
+      {origin === 'task' ? (
+        <div className="chat-panel-notice-footer">
+          <p className="slack-thread-link-note">{readOnlyNotice}</p>
+        </div>
+      ) : (
       <Composer
         conversationId={conversationId}
         onSend={handleComposerSend}
@@ -965,6 +973,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
         isPublicProject={isPublicProject}
         readOnlyNotice={readOnlyNotice}
       />
+      )}
 
       <ConvertToProjectModal
         isOpen={isConvertModalOpen}

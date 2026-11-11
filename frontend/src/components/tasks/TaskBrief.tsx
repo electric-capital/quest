@@ -5,19 +5,19 @@ import type { Task, TaskBriefState } from '../../api/types'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { TaskBriefEditor } from './TaskBriefEditor'
 import { TaskBriefMarkdown } from './TaskBriefMarkdown'
-import { briefAttribution } from './taskBriefSource'
+import { briefAttribution, parseBriefSource } from './taskBriefSource'
 import { TaskTimeAgo } from './TaskControls'
 
-const EMPTY_TEXT = 'No brief yet. The first run writes it, or write one yourself.'
+const EMPTY_TEXT = 'No brief yet. The first update writes it, or write one yourself.'
 
 /**
  * The brief, the main content of the task page (TaskPage's main column,
- * under the instructions row): the task's markdown brief, written by runs
+ * under the header): the task's markdown brief, written by runs
  * and editable by the user in place.
  *
- * View: a "Brief" heading row with the attribution ("Updated by run N",
- * "Edited by you", "Restored from version n", and when, full time on
- * hover) and Edit and History, then the rendered brief (TaskBriefMarkdown;
+ * View: a "Brief" heading row with the byline ("Updated 3h ago · update
+ * N", "Edited by you · 3h ago", "Restored from version n · 3h ago", full
+ * time on hover) and Edit and History, then the rendered brief (TaskBriefMarkdown;
  * `task://` links open in the page's file viewer through `onOpenFile`). An
  * empty brief says the first run writes it and offers Edit. History opens
  * the version list, diff and restore in the detail panel beside the brief
@@ -68,6 +68,7 @@ export function TaskBrief({
 
   const hasBrief = task.brief.trim() !== ''
   const attribution = briefAttribution(task.brief_source, task.brief_run_seq)
+  const byUpdate = parseBriefSource(task.brief_source).kind === 'run'
   const updatedAt = task.brief_updated_at
 
   let body
@@ -97,9 +98,23 @@ export function TaskBrief({
         </h2>
         {hasBrief && !editing && (attribution || updatedAt) && (
           <p className="task-section-meta">
-            {attribution}
-            {attribution && updatedAt && <span aria-hidden="true"> · </span>}
-            {updatedAt && <TaskTimeAgo iso={updatedAt} />}
+            {byUpdate && updatedAt ? (
+              <>
+                Updated <TaskTimeAgo iso={updatedAt} />
+                {attribution && (
+                  <>
+                    <span aria-hidden="true"> · </span>
+                    {attribution.toLowerCase()}
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                {attribution}
+                {attribution && updatedAt && <span aria-hidden="true"> · </span>}
+                {updatedAt && <TaskTimeAgo iso={updatedAt} />}
+              </>
+            )}
           </p>
         )}
         <div className="task-section-actions">

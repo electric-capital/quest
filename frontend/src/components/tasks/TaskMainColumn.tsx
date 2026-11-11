@@ -13,6 +13,7 @@ import { ApiClientError } from '../../api/request'
 import { answerTaskQuestion, deleteTaskRun, unarchiveTask, updateTask } from '../../api/tasksApi'
 import type { Task, TaskRun } from '../../api/types'
 import { taskDraftKey } from '../../constants/drafts'
+import { useAppConfig } from '../../contexts/AppConfigContext'
 import { useConversationSkills } from '../../contexts/ConversationSkillsContext'
 import { useTaskRunActivity } from '../../hooks/useTaskRunActivity'
 import type { TaskRunsView } from '../../hooks/useTaskRuns'
@@ -86,7 +87,7 @@ function updateElements(section: HTMLElement | null): HTMLElement[] {
 /**
  * The task page's main column (TaskPage), on every screen size: the
  * header, the page's notice, one scroller holding the `lead` content (the
- * instructions row, the brief and the task files, from TaskPage) and the
+ * brief and the task files, from TaskPage) and the
  * Updates section (TaskUpdates), and under the scroller the composer,
  * pinned at the bottom of the column. The page opens at the TOP, on the
  * brief.
@@ -152,17 +153,18 @@ export function TaskMainColumn({
   onTaskDetail: (task: Task) => void
   /** The page's router-state notice, shown under the header. */
   notice?: ReactNode
-  /** The content above the updates: the instructions row, the brief, the task files. */
+  /** The content above the updates: the brief and the task files. */
   lead: ReactNode
   /** The run whose transcript the detail panel shows, or null. */
   openRunConversationId: string | null
-  /** "View run" / "Close run" on an update. */
+  /** "View details" / "Close details" on an update. */
   onViewRun: (conversationId: string) => void
   onOpenFile: (workspacePath: string, filename: string, source: FileSource) => void
   onNewestVisibleChange: (visible: boolean) => void
 }) {
   const draftKey = taskDraftKey(taskId)
   const { setQueuedSkillsForConversation } = useConversationSkills()
+  const { appName } = useAppConfig()
 
   const [pendingStart, setPendingStart] = useState<PendingStart | null>(null)
   const pendingKeyRef = useRef(0)
@@ -196,6 +198,7 @@ export function TaskMainColumn({
     taskActiveRun: task.active_run,
     starting: pendingVisible,
     answering: answeringHandleId !== null,
+    appName,
   })
   const composerRef = useRef(composer)
   composerRef.current = composer
@@ -415,7 +418,7 @@ export function TaskMainColumn({
     async (submission: TaskComposerSubmission) => {
       if (submittingRef.current) return
       if (!submission.text) {
-        setNotice('Write a prompt to start a run.')
+        setNotice('Write a prompt first.')
         return
       }
       submittingRef.current = true
@@ -568,9 +571,9 @@ export function TaskMainColumn({
         removeRun(run.id)
         setDeleteTarget(null)
       } else if (code === 'task_run_active') {
-        setDeleteError('This run is still active. Stop it before deleting its entry.')
+        setDeleteError('This update is still in progress. Stop it before deleting it.')
       } else {
-        setDeleteError(errorText(err, 'The entry could not be deleted.'))
+        setDeleteError(errorText(err, 'The update could not be deleted.'))
       }
     } finally {
       setDeleting(false)
@@ -698,8 +701,8 @@ export function TaskMainColumn({
 
       <DocConfirmDialog
         isOpen={deleteTarget !== null}
-        title={`Delete the entry of run ${deleteTarget?.seq ?? ''}?`}
-        confirmLabel="Delete entry"
+        title={`Delete update ${deleteTarget?.seq ?? ''}?`}
+        confirmLabel="Delete update"
         busyLabel="Deleting..."
         tone="danger"
         busy={deleting}
@@ -707,7 +710,7 @@ export function TaskMainColumn({
         onConfirm={() => void confirmDelete()}
         onClose={() => setDeleteTarget(null)}
       >
-        <p>Its log entry and transcript are deleted. Later runs no longer see its notes.</p>
+        <p>The update and the work behind it are deleted. Later updates no longer see its notes.</p>
       </DocConfirmDialog>
     </div>
   )

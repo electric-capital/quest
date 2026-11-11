@@ -5,13 +5,13 @@ import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatte
 import './TaskControls.css'
 
 /**
- * Small shared pieces of the task page's editors and detail panel
+ * Small shared pieces of the task page's brief editor and detail panel
  * (TaskControls.css, which also styles the brief's markdown, the editors
  * and the brief History):
  *
- * - `taskTextLength`: the length the server checks a brief or instructions
- *   text against: after stripping, in code points (Python `len`), so an
- *   emoji counts once and trailing blank lines do not count.
+ * - `taskTextLength`: the length the server checks a brief against: after
+ *   stripping, in code points (Python `len`), so an emoji counts once and
+ *   trailing blank lines do not count.
  * - `TaskCharCounter`: the `n / cap` counter under an editor. It never
  *   truncates (a paste or a merged text may go over); it turns to a warning
  *   tone at 90% of the cap and an error tone over it, with an "N characters
@@ -22,9 +22,7 @@ import './TaskControls.css'
  *   restore, mapping 400 `brief_too_long` (its `cap` / `actual` extras) to a
  *   sentence and anything else to the server's message or a fallback.
  * - `TaskDiscardConfirm`: the "Discard your changes?" row an editor shows
- *   in place of its Cancel / Save row when Escape is pressed with changes
- *   (or, for the instructions editor, when the detail panel is closed over
- *   them).
+ *   in place of its Cancel / Save row when Escape is pressed with changes.
  */
 
 /** Share of the cap from which the counter takes its warning tone. */
@@ -101,11 +99,10 @@ export function taskSaveErrorMessage(err: unknown, fallback: string): string {
 }
 
 /**
- * The inline "Discard your changes?" row of the Instructions and Brief
- * editors, shown when Escape is pressed over a changed draft, or when the
- * detail panel holding the instructions editor is asked to close (the
- * Cancel button still cancels at once). Focus moves to "Keep editing" when it
- * appears; "Keep editing" or Escape anywhere in the row calls
+ * The inline "Discard your changes?" row of the brief editor, shown when
+ * Escape is pressed over a changed draft (the Cancel button still cancels
+ * at once). Focus moves to "Keep editing" when it appears; "Keep editing"
+ * or Escape anywhere in the row calls
  * `onKeepEditing` (the editor hides the row and focuses its textarea, the
  * draft intact); "Discard" calls `onDiscard` (the editor cancels as Cancel
  * does, returning focus to the control that opened it).
