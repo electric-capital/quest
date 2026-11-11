@@ -225,11 +225,11 @@ export interface ComposerProps {
    */
   isPublicProject?: boolean;
   /**
-   * Non-Slack read-only banner copy (cross-user subagent conversations).
-   * When set, the read-only banner shows this text instead of the Slack
-   * copy/link.
+   * Non-Slack read-only banner copy (cross-user subagent, inference API and
+   * task run conversations; may carry a link). When set, the read-only
+   * banner shows it instead of the Slack copy/link.
    */
-  readOnlyNotice?: string | null;
+  readOnlyNotice?: React.ReactNode;
   /**
    * Draft-safe model setter override. The home screen passes a setter that
    * updates only the in-memory model map + defaultModel (no PATCH to a

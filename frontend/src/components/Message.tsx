@@ -10,10 +10,11 @@ import { getModelDisplayName } from '../constants/models';
 import { API_BASE_URL } from '../api/config';
 import { conversationSource, fileDownloadUrl, projectSource, taskSource, type FileSource } from '../api/fileApi';
 import { isWorkspaceRef, parseWorkspaceRef, type WorkspaceRef } from '../utils/workspaceRefs';
-import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, StatsMessage as StatsMessageType, ErrorMessage as ErrorMessageType, InterruptedMessage as InterruptedMessageType, ActionRequestMessage as ActionRequestMessageType, ConnectRequestMessage as ConnectRequestMessageType, CompactionMessage as CompactionMessageType, ModelFallbackMessage as ModelFallbackMessageType, RoutineNudgeMessage as RoutineNudgeMessageType, ComposerAttachmentRef } from '../api/types';
+import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, StatsMessage as StatsMessageType, ErrorMessage as ErrorMessageType, InterruptedMessage as InterruptedMessageType, ActionRequestMessage as ActionRequestMessageType, ConnectRequestMessage as ConnectRequestMessageType, CompactionMessage as CompactionMessageType, ModelFallbackMessage as ModelFallbackMessageType, RoutineNudgeMessage as RoutineNudgeMessageType, TaskQuestionTranscriptMessage, TaskNudgeMessage as TaskNudgeMessageType, ComposerAttachmentRef } from '../api/types';
 import { ToolUseMessage } from './ToolUseMessage';
 import { ActionRequestMessage } from './ActionRequestMessage';
 import { ConnectRequestMessage } from './ConnectRequestMessage';
+import { TaskQuestionMessage } from './tasks/TaskQuestionMessage';
 import { webSocketManager } from '../services/WebSocketManager';
 import './Message.css';
 
@@ -539,6 +540,11 @@ export const MessageContentRenderer = React.memo(function MessageContentRenderer
     return <ConnectRequestMessage message={message as ConnectRequestMessageType} />;
   }
 
+  // A Quest Task run's question to the user (ask_task_question)
+  if (message.type === 'task_question') {
+    return <TaskQuestionMessage message={message as TaskQuestionTranscriptMessage} />;
+  }
+
   // Handle tool_use messages
   if (message.type === 'tool_use') {
     return (
@@ -738,6 +744,26 @@ export const MessageContentRenderer = React.memo(function MessageContentRenderer
           Routine run ended without calling routine_completed — asked the model to check its work and finish
         </span>
         <span className="routine-nudge-timestamp">
+          {nudgeMsg.timestamp ? formatTimestamp(nudgeMsg.timestamp) : ''}
+        </span>
+      </div>
+    );
+  }
+
+  // Handle task-nudge notices - a Quest Task run's turn ended without
+  // complete_task_run (or with its brief conflict unsettled) and the server
+  // ran one follow-up turn asking the model to finish the run and hand off
+  // (see chat/tasks/runs.py). The exact text the model received is in the
+  // tooltip.
+  if (message.type === 'task_nudge') {
+    const nudgeMsg = message as TaskNudgeMessageType;
+    return (
+      <div className="message-task-nudge" title={nudgeMsg.content || undefined}>
+        <span className="task-nudge-icon" aria-hidden="true">&#8635;</span>
+        <span className="task-nudge-text">
+          Task run did not finish — asked the model to call complete_task_run and hand off
+        </span>
+        <span className="task-nudge-timestamp">
           {nudgeMsg.timestamp ? formatTimestamp(nudgeMsg.timestamp) : ''}
         </span>
       </div>

@@ -1,3 +1,7 @@
+/** Who drives a conversation (GET /conversations/{id} `origin`). Every
+ *  origin but `web` is shown read-only in the chat panel. */
+export type ConversationOrigin = 'web' | 'slack' | 'user_subagent' | 'inference_api' | 'task';
+
 export interface Conversation {
   id: string;
   title: string;
@@ -187,6 +191,33 @@ export interface ModelFallbackMessage {
  *  chat/routine_runs.py). `content` is the exact text the model received. */
 export interface RoutineNudgeMessage {
   type: 'routine_nudge';
+  role?: string;
+  content?: string;
+  attempt?: number;
+  timestamp?: string;
+  seq?: number;
+}
+
+/** A question a Quest Task run asked with `ask_task_question`, as its
+ *  durable transcript row (chat/tasks/questions.py). Rewritten in place
+ *  when the question is answered (adds `answer`) or cancelled. */
+export interface TaskQuestionTranscriptMessage {
+  type: 'task_question';
+  wait_handle_id: string;
+  status: 'pending' | 'answered' | 'cancelled';
+  question: string;
+  options: string[];
+  answer?: string | null;
+  timestamp?: string;
+  seq?: number;
+}
+
+/** Notice appended to a task run's transcript when the run's turn ended
+ *  without `complete_task_run` and the server sent one follow-up turn asking
+ *  the model to finish (chat/tasks/runs.py). `content` is the exact text the
+ *  model received. */
+export interface TaskNudgeMessage {
+  type: 'task_nudge';
   role?: string;
   content?: string;
   attempt?: number;
@@ -507,7 +538,8 @@ export interface SubAgentToolCallInfo {
 // Union type for all message content types
 export type MessageContent = Message | ToolUseMessage | ToolResultMessage | StatsMessage
   | ErrorMessage | InterruptedMessage | ActionRequestMessage | ConnectRequestMessage
-  | CompactionMessage | ModelFallbackMessage | RoutineNudgeMessage;
+  | CompactionMessage | ModelFallbackMessage | RoutineNudgeMessage
+  | TaskQuestionTranscriptMessage | TaskNudgeMessage;
 
 /** Server verdict that resuming this conversation is expensive (long-idle,
  *  long-context, costly model). Mirrors the dict built by
@@ -552,7 +584,8 @@ export interface ConversationDetail {
   project_id?: string | null;
   /** The Quest Task this conversation is a run of; null for any other conversation. */
   task_id?: string | null;
-  origin?: 'web' | 'slack' | 'user_subagent' | 'inference_api';
+  /** `task` exactly when `task_id` is set (a Quest Task run). */
+  origin?: ConversationOrigin;
   slack_channel_id?: string;
   slack_thread_ts?: string;
   slack_team_id?: string;
