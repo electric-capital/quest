@@ -27,13 +27,14 @@ import { TaskNotice, readTaskNotice } from './TaskNotice'
  *
  * Phones open scrolled to the newest run, so the panel starts out of view
  * above. The header is sticky there (TaskHeader.css) and carries a jump
- * button (TaskHeader `jump`): "Brief" while the panel is out of view
- * scrolls it back below the header and focuses its first disclosure row;
- * "Latest" while it shows scrolls to the end of the thread. An
- * IntersectionObserver on the panel, over the pane that scrolls, decides
- * which; the header's height is kept in `--task-page-header-height` for
- * that observer and for scroll-margin-top (TaskPage.css), so nothing that
- * scrolls into view lands under the sticky header.
+ * button (TaskHeader `jump`): "Brief" while the panel's top is hidden
+ * under the header scrolls it back below the header and focuses its first
+ * disclosure row; otherwise "Latest", while the pane can still scroll down,
+ * scrolls to the end of the thread; with everything on screen there is no
+ * button. The scroll position decides (re-checked on scroll, resize and
+ * content growth); the header's height is kept in
+ * `--task-page-header-height` for scroll-margin-top (TaskPage.css), so
+ * nothing that scrolls into view lands under the sticky header.
  *
  * This shell is the lasting page frame: it owns the one useTask and the one
  * useTaskRuns of the page and passes them down, and acknowledges an unread
@@ -50,11 +51,8 @@ import { TaskNotice, readTaskNotice } from './TaskNotice'
  * body until dismissed; dismissing replaces the history entry's state so a
  * reload does not bring it back.
  */
-/**
- * How much of the panel must show below the sticky header for it to count as
- * in view (a sliver of its bottom border does not).
- */
-const PANEL_IN_VIEW_MIN_PX = 40
+/** Rounding slack (px) for "the panel's top is hidden" and "the pane can scroll further". */
+const PANEL_HIDDEN_SLACK_PX = 2
 
 /** The nearest ancestor of `el` that scrolls vertically, or null for the document. */
 function scrollParentOf(el: HTMLElement): HTMLElement | null {
@@ -97,7 +95,7 @@ export function TaskPage({ taskId }: { taskId: string }) {
   const pageRef = useRef<HTMLDivElement>(null)
   const headerRef = useRef<HTMLElement>(null)
   const panelRef = useRef<HTMLElement>(null)
-  const [panelInView, setPanelInView] = useState(false)
+  const [jumpTarget, setJumpTarget] = useState<TaskHeaderJumpTarget | null>(null)
   const pageShown = task !== null
 
   useEffect(() => {
@@ -106,32 +104,42 @@ export function TaskPage({ taskId }: { taskId: string }) {
     const header = headerRef.current
     const panel = panelRef.current
     if (!page || !header || !panel) return
-    const root = scrollParentOf(panel)
-    let observer: IntersectionObserver | null = null
+    const parent = scrollParentOf(panel)
+    const scroller = parent ?? (document.scrollingElement as HTMLElement | null) ?? document.documentElement
     let height = -1
-    // (Re)measure the header; its height moves the observer's top edge.
+    let frame: number | null = null
+    // The header's height (for scroll-margin-top), then which jump makes
+    // sense from here: "Brief" while the panel's top is hidden under the
+    // header, else "Latest" while the pane can still scroll down, else none
+    // (everything is on screen, e.g. a task with no runs).
     const sync = () => {
+      frame = null
       const next = header.offsetHeight
-      if (next === height) return
-      height = next
-      page.style.setProperty('--task-page-header-height', `${height}px`)
-      if (typeof IntersectionObserver === 'undefined') return
-      observer?.disconnect()
-      observer = new IntersectionObserver(
-        (entries) => {
-          const entry = entries[entries.length - 1]
-          if (entry) setPanelInView(entry.isIntersecting)
-        },
-        { root, rootMargin: `-${height + PANEL_IN_VIEW_MIN_PX}px 0px 0px 0px` },
-      )
-      observer.observe(panel)
+      if (next !== height) {
+        height = next
+        page.style.setProperty('--task-page-header-height', `${height}px`)
+      }
+      const headerBottom = header.getBoundingClientRect().bottom
+      const panelHidden = panel.getBoundingClientRect().top < headerBottom - PANEL_HIDDEN_SLACK_PX
+      const moreBelow = scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - PANEL_HIDDEN_SLACK_PX
+      setJumpTarget(panelHidden ? 'brief' : moreBelow ? 'latest' : null)
+    }
+    const schedule = () => {
+      if (frame === null) frame = window.requestAnimationFrame(sync)
     }
     sync()
-    const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(sync)
+    const scrollTarget: HTMLElement | Window = parent ?? window
+    scrollTarget.addEventListener('scroll', schedule, { passive: true })
+    window.addEventListener('resize', schedule)
+    // Content growth (a run landing, a section expanding) changes "more below".
+    const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule)
     resize?.observe(header)
+    resize?.observe(page)
     return () => {
-      observer?.disconnect()
+      scrollTarget.removeEventListener('scroll', schedule)
+      window.removeEventListener('resize', schedule)
       resize?.disconnect()
+      if (frame !== null) window.cancelAnimationFrame(frame)
       page.style.removeProperty('--task-page-header-height')
     }
   }, [isMobile, pageShown])
@@ -194,7 +202,7 @@ export function TaskPage({ taskId }: { taskId: string }) {
         task={task}
         onTaskDetail={view.applyDetail}
         headerRef={headerRef}
-        jump={isMobile ? { target: panelInView ? 'latest' : 'brief', onJump: handleJump } : undefined}
+        jump={isMobile && jumpTarget ? { target: jumpTarget, onJump: handleJump } : undefined}
       />
       {notice && (
         <div className="task-page-notice">
