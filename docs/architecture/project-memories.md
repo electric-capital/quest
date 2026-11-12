@@ -17,7 +17,7 @@ Every project, public ones included, keeps its own memories beside each user's p
 - `chat/project_memory_routes.py` -- owner CRUD under `/app/api/projects/{id}/memories` and the suggestion review routes, mirroring `chat/memory_routes.py`.
 - `chat/routes/conversations.py` -- `pending_project_memory_suggestions` on `GET /conversations/{id}`.
 - `frontend/src/components/MemorySuggestions.tsx` -- `kind="project"` renders the project bubble and panel; `MemorySuggestionsBar` shows it beside the personal and doc note bubbles above the composer. The project kind has its own icon, wording and a fixed amber colour so it never reads as another kind's suggestion under any colour theme.
-- `frontend/src/components/settings/MemoriesSection.tsx` -- the memories table; with a `projectId` it manages the project's memories and is the Memories section of `ProjectSettingsModal.tsx`.
+- `frontend/src/components/settings/MemoriesSection.tsx` -- the memories table; with a `projectId` it manages the project's memories and is the Memories section of `ProjectSettingsModal.tsx`. A collapsed row shows up to two lines of the text. Its filter box matches a memory's text or, from four characters up, any part of its id (the model quotes ids in its replies); a row found by id prints the id, as does every expanded row.
 
 ## Flow
 
