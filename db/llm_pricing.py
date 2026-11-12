@@ -23,6 +23,10 @@ ESTIMATE, not billing truth:
   rather than a lower rate; the table carries the $4/$20 (cached $0.20)
   list rate that starts 2026-12-01, so estimates run high until then. The
   global-endpoint rate is used; the us/eu multi-regions bill 10% more.
+- Gemini 4 Carbon (GA 2026-11-10) has the same schedule: introductory
+  $2/$10 (cached input $0.10) through 2026-11-30, then $4/$20 (cached
+  $0.20); the table carries the list rate, so estimates run high until
+  then. Global-endpoint rate; the us/eu multi-regions bill 10% more.
 - Gemini explicit-cache storage ($/1M-token-hours) is not modeled -- only
   per-call token rates.
 - Fireworks AI publishes no prices through its API, so its rows are priced
@@ -91,6 +95,8 @@ _GEMINI_PRICING: dict[str, dict] = {
     # Global-endpoint list rate; no long-context tier (every input token
     # bills at the same rate). Thinking tokens bill at the output rate.
     "gemini-4-argon": {"input": 4.00, "output": 20.00, "cache_read": 0.20},
+    # Same list rate and shape as Argon (no long-context tier).
+    "gemini-4-carbon": {"input": 4.00, "output": 20.00, "cache_read": 0.20},
 }
 
 # Anthropic rates per 1M tokens. Cache rates derive from the input rate via
