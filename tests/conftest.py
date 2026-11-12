@@ -55,6 +55,7 @@ def _isolated_inference_provider_files(tmp_path, monkeypatch):
     import chat.llm.fireworks_catalog as fireworks_catalog
     import chat.llm.nearai_catalog as nearai_catalog
     import chat.llm.trustedrouter_catalog as trustedrouter_catalog
+    import chat.llm.uberllm_catalog as uberllm_catalog
     import chat.llm.anthropic_catalog as anthropic_catalog
     import chat.llm.gemini_catalog as gemini_catalog
     import chat.llm.openai_catalog as openai_catalog
@@ -68,6 +69,7 @@ def _isolated_inference_provider_files(tmp_path, monkeypatch):
     monkeypatch.setattr(
         trustedrouter_catalog, "TRUSTEDROUTER_CATALOG_FILE", tmp_path / "trustedrouter_catalog.json"
     )
+    monkeypatch.setattr(uberllm_catalog, "UBERLLM_CATALOG_FILE", tmp_path / "uberllm_catalog.json")
     monkeypatch.setattr(anthropic_catalog, "ANTHROPIC_CATALOG_FILE", tmp_path / "anthropic_catalog.json")
     monkeypatch.setattr(gemini_catalog, "GEMINI_CATALOG_FILE", tmp_path / "gemini_catalog.json")
     monkeypatch.setattr(openai_catalog, "OPENAI_CATALOG_FILE", tmp_path / "openai_catalog.json")

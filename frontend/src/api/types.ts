@@ -2830,13 +2830,13 @@ export interface VertexProviderStatus {
 }
 
 // One admin-configured provider instance (an OpenRouter, Fireworks AI or
-// NEAR AI / TrustedRouter configuration, or a self-hosted inference server)
+// NEAR AI / TrustedRouter / UberLLM configuration, or a self-hosted inference server)
 export interface InferenceInstanceStatus {
   id: string;
   kind: string;
   kind_label: string;
   label: string;
-  // Usable at all: a stored key (OpenRouter, Fireworks, NEAR AI, TrustedRouter) or a
+  // Usable at all: a stored key (OpenRouter, Fireworks, NEAR AI, TrustedRouter, UberLLM) or a
   // server URL (self-hosted)
   configured: boolean;
   // "store" = key file in the data directory, null = no key yet
@@ -2860,10 +2860,10 @@ export interface InferenceApiType {
 
 // Where a kind's "Add model" typeahead looks: the shared OpenRouter
 // catalog, the instance's own key-fetched vendor catalog (Anthropic,
-// OpenAI, Gemini, Fireworks), NEAR AI's or TrustedRouter's public model
-// list, or the self-hosted server's live model list
+// OpenAI, Gemini, Fireworks), NEAR AI's, TrustedRouter's or UberLLM's public
+// model list, or the self-hosted server's live model list
 export type InferenceCatalogSource =
-  | 'openrouter' | 'fireworks' | 'nearai' | 'trustedrouter'
+  | 'openrouter' | 'fireworks' | 'nearai' | 'trustedrouter' | 'uberllm'
   | 'anthropic' | 'openai' | 'gemini' | 'server';
 
 // Catalogs read with the instance's own key (the typeahead waits for a
