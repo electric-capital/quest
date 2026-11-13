@@ -567,10 +567,12 @@ export function Composer({
   // immediately), and on mount when the composer is fresh (covers the home
   // "pre-focused on load" case and a freshly-created empty conversation).
   // Never on mobile: programmatic focus would pop the software keyboard (and
-  // expand the floating bar) without a user tap.
+  // expand the floating bar) without a user tap. Never scrolling: a host
+  // that places the composer inside a scrolling page (the task page) must
+  // not be scrolled back to it when a run ends.
   useEffect(() => {
     if (!isMobile && !isStreaming && prevStreamingRef.current) {
-      inputRef.current?.focus();
+      inputRef.current?.focus({ preventScroll: true });
     }
     prevStreamingRef.current = isStreaming;
   }, [isStreaming, isMobile]);
@@ -578,7 +580,7 @@ export function Composer({
   // Focus on mount when there are no messages yet (home screen + fresh chat).
   useEffect(() => {
     if (isFirstMessage && !inputDisabled && !isMobile) {
-      inputRef.current?.focus();
+      inputRef.current?.focus({ preventScroll: true });
     }
     // Intentionally mount-only (and on conversation switch via the key below);
     // we don't want to steal focus on every render.

@@ -7,10 +7,10 @@
  * The main column is a flex column on every screen size: the header
  * (TaskHeader.css), the router-state notice, ONE scroller holding the
  * Brief, Task files and Updates cards at the chat's reading measure (720px
- * plus gutters, centred), and the composer
- * footer pinned under the scroller. The browser's own scroll anchoring is
- * off on the scroller: TaskMainColumn keeps the position across a
- * prepended page of older updates itself.
+ * plus gutters, centred), with the composer in the flow between the Task
+ * files and Updates cards; nothing is pinned to the bottom. The browser's
+ * own scroll anchoring is off on the scroller: TaskMainColumn keeps the
+ * position across a prepended page of older updates itself.
  *
  * Card chrome (.task-card-*) is shared by the Brief, Task files and
  * Updates cards (TaskUpdates.css styles the updates themselves). */
@@ -197,32 +197,26 @@
   padding: 0.75rem 1.25rem 0.875rem;
 }
 
-/* --- Composer footer --------------------------------------------------- */
+/* --- Composer (in the page flow, between Task files and Updates) ------ */
 
-/* The shared composer, a little less like a chat box here: a squarer field
-   flush with the column, without the floating shadow. */
-.task-page-footer .composer-bubble {
-  border-radius: 12px;
-  box-shadow: none;
-}
-
-.task-page-footer {
-  flex: none;
+/* The shared composer as one more block in the column: no strip around
+   it, the bubble at the cards' width with the cards' radius, border and
+   shadow, so it reads as part of the page rather than a floating chat box.
+   Its label, notices and the archived line sit just above it. */
+.task-composer-block {
   display: flex;
   flex-direction: column;
-  padding-top: 0.5rem;
-  border-top: 1px solid var(--border);
-  background-color: var(--surface);
+  min-width: 0;
 }
 
-/* Label, notices and the archived line: the composer bubble's inset and
-   measure (2rem strip, 720px). */
-.task-page-footer-column {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: calc(720px + 4rem);
-  margin: 0 auto;
-  padding: 0 2rem;
+.task-composer-block .input-area.composer {
+  padding: 0;
+}
+
+.task-composer-block .composer-bubble {
+  max-width: none;
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
 }
 
 .task-composer-label,
@@ -254,12 +248,30 @@
   color: var(--text-secondary);
 }
 
+.task-composer-label-show {
+  flex: none;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent-text);
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.task-composer-label-show:hover {
+  text-decoration: underline;
+}
+
 .task-composer-archived {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem;
-  margin: 0.25rem 0 1rem;
+  padding: 0.75rem 1rem 0.75rem 1.25rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
   font-size: 0.875rem;
   color: var(--text-secondary);
 }
@@ -279,18 +291,8 @@
     padding: 1rem 16px 1.5rem;
   }
 
-  .task-page-notice,
-  .task-page-footer-column {
+  .task-page-notice {
     max-width: none;
-    padding-left: 16px;
-    padding-right: 16px;
-  }
-
-  .task-page-footer {
-    padding-top: 0.375rem;
-  }
-
-  .task-page-footer .input-area.composer {
     padding-left: 16px;
     padding-right: 16px;
   }

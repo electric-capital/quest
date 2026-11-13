@@ -47,8 +47,8 @@ interface ViewerFile {
  * three cards: the Brief, the page's main content (TaskBrief, edited in
  * place), Task files (a compact FileBrowser over the task workspace whose
  * toolbar is the card's header row) and Updates (one per run, in the
- * viewer's sort order, TaskUpdates), and the composer pinned at the bottom
- * outside the cards. The page opens at the top. Without a
+ * viewer's sort order, TaskUpdates), with the composer in the page flow
+ * between the Task files and Updates cards. The page opens at the top. Without a
  * detail view the column takes the whole width at the chat's reading
  * measure, centred.
  *

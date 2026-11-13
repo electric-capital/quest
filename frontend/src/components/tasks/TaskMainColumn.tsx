@@ -94,11 +94,10 @@ function newestElement(section: HTMLElement | null, order: TaskUpdatesOrder): HT
 
 /**
  * The task page's main column (TaskPage), on every screen size: the
- * header, the page's notice, one scroller holding the `lead` content (the
- * brief and the task files, from TaskPage) and the
- * Updates section (TaskUpdates), and under the scroller the composer,
- * pinned at the bottom of the column. The page opens at the TOP, on the
- * brief.
+ * header, the page's notice, and one scroller holding the `lead` content
+ * (the Brief and Task files cards, from TaskPage), the composer in the page
+ * flow, and the Updates card (TaskUpdates) under it. Nothing is pinned to
+ * the bottom. The page opens at the TOP, on the brief.
  *
  * It owns the run side of the page: the composer's state
  * (deriveTaskThreadComposer: start a run, answer the pending question, or
@@ -129,11 +128,15 @@ function newestElement(section: HTMLElement | null, order: TaskUpdatesOrder): HT
  *   scrolled down, scrolling back to the top; no button with both in view.
  * - `onNewestVisibleChange` reports whether the newest update reaches into
  *   the view, for the page's mark-as-read rule.
- * - Sending a prompt or an answer scrolls to the newest update. Oldest
- *   first that is the end, and the column then follows growth at the bottom
- *   (the run's activity, its result) for as long as the user stays there;
- *   recent first it is the top of the Updates card, where the update grows
- *   downward in place. Opening at the top never pins it.
+ * - Sending a prompt or an answer shows the newest update. Oldest first
+ *   that is the end, and the column then follows growth at the bottom (the
+ *   run's activity, its result) for as long as the user stays there; recent
+ *   first it is the top of the Updates card, right under the composer, so
+ *   the view moves only to keep the composer and the update together.
+ *   Opening at the top never pins it.
+ * - While a question waits, the composer's "Answering the question" label
+ *   quotes it and offers "Show question", which scrolls its card into view
+ *   (oldest first it can be far below the composer).
  * - "Show earlier updates" sits at the old end. Oldest first it keeps the
  *   previously first update where it was on screen once the older page is
  *   prepended (measured before and after in a layout effect; the browser's
@@ -271,6 +274,7 @@ export function TaskMainColumn({
   const scrollerRef = useRef<HTMLDivElement>(null)
   const columnRef = useRef<HTMLDivElement>(null)
   const updatesRef = useRef<HTMLElement>(null)
+  const composerBlockRef = useRef<HTMLDivElement>(null)
   // Following the end: only after the user scrolled there or sent something.
   const pinnedRef = useRef(false)
   // The first update before an older page is prepended, to keep it in place.
@@ -300,7 +304,12 @@ export function TaskMainColumn({
     pinnedRef.current = true
   }, [])
 
-  /** After a send: to the end oldest first (and follow it), to the newest update recent first. */
+  /**
+   * After a send: oldest first, to the end (and follow it). Recent first the
+   * new update sits right under the composer: keep both in view, moving
+   * only when the update's top would be under the bottom edge (then the
+   * composer goes to the top of the view).
+   */
   const scrollToNewest = useCallback(() => {
     const scroller = scrollerRef.current
     if (!scroller) return
@@ -310,8 +319,22 @@ export function TaskMainColumn({
     }
     pinnedRef.current = false
     const newest = newestElement(updatesRef.current, 'recent')
-    if (newest) scroller.scrollTop = Math.max(0, contentTop(newest, scroller) - REVEAL_MARGIN_PX)
+    const block = composerBlockRef.current
+    if (!newest || !block) return
+    const view = scroller.getBoundingClientRect()
+    if (newest.getBoundingClientRect().top < view.bottom - REVEAL_MIN_VISIBLE_PX) return
+    scroller.scrollTop = Math.max(0, contentTop(block, scroller) - REVEAL_MARGIN_PX)
   }, [scrollToEnd])
+
+  /** "Show question": the pending question's card on the active update. */
+  const showQuestion = useCallback(() => {
+    const id = composerRef.current.activeRun?.id
+    const article = id
+      ? updatesRef.current?.querySelector<HTMLElement>(`.task-run[data-run-id="${CSS.escape(id)}"]`)
+      : null
+    const card = article?.querySelector<HTMLElement>('section[aria-label="Question"]') ?? article
+    card?.scrollIntoView({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
+  }, [])
 
   // Where the newest update is relative to the view, and what follows from it.
   const sync = useCallback(() => {
@@ -669,6 +692,65 @@ export function TaskMainColumn({
       <div className="task-page-scroller" ref={scrollerRef}>
         <div className="task-page-column" ref={columnRef}>
           {lead}
+          <div className="task-composer-block" ref={composerBlockRef}>
+            {composer.mode === 'archived' ? (
+              <div className="task-composer-archived">
+                <span className="task-composer-archived-text">This task is archived.</span>
+                <button
+                  type="button"
+                  className="task-ctl-button"
+                  onClick={() => void handleUnarchive()}
+                  disabled={unarchiving}
+                >
+                  {unarchiving ? 'Unarchiving...' : 'Unarchive'}
+                </button>
+                {unarchiveError && (
+                  <div className="task-composer-archived-error">
+                    <TaskNotice message={unarchiveError} onDismiss={() => setUnarchiveError(null)} />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
+                {composer.label && (
+                  <div className="task-composer-label">
+                    <span className="task-composer-label-main">{composer.label}</span>
+                    {composer.question && (
+                      <span className="task-composer-label-question" title={composer.question.question}>
+                        {composer.question.question}
+                      </span>
+                    )}
+                    {composer.question && (
+                      <button type="button" className="task-composer-label-show" onClick={showQuestion}>
+                        Show question
+                      </button>
+                    )}
+                  </div>
+                )}
+                {notice && (
+                  <div className="task-composer-notice">
+                    <TaskNotice message={notice} onDismiss={() => setNotice(null)} />
+                  </div>
+                )}
+                {uploadStatus && (
+                  <div className="task-composer-upload">
+                    <UploadProgress status={uploadStatus} />
+                  </div>
+                )}
+                <TaskComposer
+                  draftKey={draftKey}
+                  onSubmit={handleSubmit}
+                  busy={composer.busy}
+                  disabled={composer.disabled}
+                  onStop={composer.disabled && stopConversationId ? handleComposerStop : undefined}
+                  placeholder={composer.placeholder}
+                  initialModel={task.model}
+                  initialThinkingEffort={task.thinking_effort}
+                  onModelChange={handleModelChange}
+                />
+              </>
+            )}
+          </div>
           <TaskUpdates
             ref={updatesRef}
             taskId={taskId}
@@ -691,65 +773,6 @@ export function TaskMainColumn({
             onView={onViewRun}
           />
         </div>
-      </div>
-
-      <div className="task-page-footer">
-        <div className="task-page-footer-column">
-          {composer.mode === 'archived' ? (
-            <div className="task-composer-archived">
-              <span className="task-composer-archived-text">This task is archived.</span>
-              <button
-                type="button"
-                className="task-ctl-button"
-                onClick={() => void handleUnarchive()}
-                disabled={unarchiving}
-              >
-                {unarchiving ? 'Unarchiving...' : 'Unarchive'}
-              </button>
-              {unarchiveError && (
-                <div className="task-composer-archived-error">
-                  <TaskNotice message={unarchiveError} onDismiss={() => setUnarchiveError(null)} />
-                </div>
-              )}
-            </div>
-          ) : (
-            <>
-              {composer.label && (
-                <div className="task-composer-label">
-                  <span className="task-composer-label-main">{composer.label}</span>
-                  {composer.question && (
-                    <span className="task-composer-label-question" title={composer.question.question}>
-                      {composer.question.question}
-                    </span>
-                  )}
-                </div>
-              )}
-              {notice && (
-                <div className="task-composer-notice">
-                  <TaskNotice message={notice} onDismiss={() => setNotice(null)} />
-                </div>
-              )}
-              {uploadStatus && (
-                <div className="task-composer-upload">
-                  <UploadProgress status={uploadStatus} />
-                </div>
-              )}
-            </>
-          )}
-        </div>
-        {composer.mode !== 'archived' && (
-          <TaskComposer
-            draftKey={draftKey}
-            onSubmit={handleSubmit}
-            busy={composer.busy}
-            disabled={composer.disabled}
-            onStop={composer.disabled && stopConversationId ? handleComposerStop : undefined}
-            placeholder={composer.placeholder}
-            initialModel={task.model}
-            initialThinkingEffort={task.thinking_effort}
-            onModelChange={handleModelChange}
-          />
-        )}
       </div>
 
       <DocConfirmDialog
