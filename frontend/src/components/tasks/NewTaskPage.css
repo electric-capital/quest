@@ -69,3 +69,11 @@
     font-size: 0.9rem;
   }
 }
+
+/* Phones: the composer is a one-line pill until focused; give the
+   placeholder (a whole sentence here) room for two lines. */
+@media (max-width: 768px) {
+  .task-new-page-composer .composer-input {
+    min-height: 3em;
+  }
+}
